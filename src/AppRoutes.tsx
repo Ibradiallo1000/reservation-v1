@@ -100,7 +100,7 @@ const AppRoutes = () => {
         <Route path="statistiques" element={<CompagnieStatistiquesMensuellesPage />} />
         <Route path="finances" element={<CompagnieFinancesTabsPage />} />
         <Route path="images" element={<BibliothequeImagesPage />} />
-        <Route path="/auto-generate" element={<AutoGeneratePage />} />
+        <Route path="auto-generate" element={<AutoGeneratePage />} />
       </Route>
 
       {/* Agence */}
