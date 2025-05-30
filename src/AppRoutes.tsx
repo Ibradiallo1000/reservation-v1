@@ -1,5 +1,3 @@
-// ✅ src/AppRoutes.tsx corrigé avec reçu guichet dans /agence et suppression du fallback /compagnie/:slug/receipt/:id
-
 import React from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
@@ -11,7 +9,6 @@ import HomePage from './pages/HomePage';
 import FormulaireReservationClient from './pages/FormulaireReservationClient';
 import ReceiptGuichetPage from './pages/ReceiptGuichetPage';
 import ReceiptEnLignePage from './pages/ReceiptEnLignePage';
-import TicketPage from './pages/TicketPage';
 import PlatformSearchResultsPage from './pages/PlatformSearchResultsPage';
 import MesReservationsPage from './pages/MesReservationsPage';
 import LoginPage from './pages/LoginPage';
@@ -63,7 +60,6 @@ const AppRoutes = () => {
       {/* Public */}
       <Route path="/" element={<HomePage />} />
       <Route path="/booking" element={<FormulaireReservationClient />} />
-      <Route path="/ticket/:id" element={<TicketPage />} />
       <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
       <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
       <Route path="/resultats" element={<PlatformSearchResultsPage />} />
@@ -126,6 +122,7 @@ const AppRoutes = () => {
         <Route path="receipt/:id" element={<ReceiptGuichetPage />} />
       </Route>
 
+      {/* 404 */}
       <Route path="*" element={<div>404 - Page non trouvée</div>} />
     </Routes>
   );
