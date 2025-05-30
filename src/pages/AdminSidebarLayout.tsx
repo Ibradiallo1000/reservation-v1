@@ -1,12 +1,9 @@
 import React from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, Outlet, useNavigate } from 'react-router-dom';
 
-interface Props {
-  children: React.ReactNode;
-}
-
-const AdminSidebarLayout: React.FC<Props> = ({ children }) => {
+const AdminSidebarLayout: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
 
   const links = [
     { label: 'Tableau de bord', path: '/admin/dashboard' },
@@ -24,19 +21,27 @@ const AdminSidebarLayout: React.FC<Props> = ({ children }) => {
 
   return (
     <div className="flex h-screen">
-      <aside className="w-64 bg-white border-r">
-        <nav className="p-4">
+      <aside className="w-64 bg-white border-r shadow">
+        <nav className="p-4 space-y-2">
           {links.map((link, idx) => (
             <div
               key={idx}
-              className={`mb-2 ${location.pathname === link.path ? 'font-semibold text-blue-600' : ''}`}
+              className={`cursor-pointer px-3 py-2 rounded transition ${
+                location.pathname === link.path
+                  ? 'bg-blue-100 text-blue-700 font-semibold'
+                  : 'hover:bg-gray-100'
+              }`}
+              onClick={() => navigate(link.path)}
             >
-              <a href={link.path}>{link.label}</a>
+              {link.label}
             </div>
           ))}
         </nav>
       </aside>
-      <main className="flex-1 bg-gray-100 p-6 overflow-auto">{children}</main>
+
+      <main className="flex-1 bg-gray-50 p-6 overflow-auto">
+        <Outlet /> {/* ✅ Ici s'affiche le contenu de chaque sous-route */}
+      </main>
     </div>
   );
 };

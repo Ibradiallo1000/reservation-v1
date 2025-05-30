@@ -2,7 +2,6 @@ import React from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
-import ListeVillesPage from './pages/ListeVillesPage';
 
 // Pages publiques
 import HomePage from './pages/HomePage';
@@ -19,6 +18,11 @@ import ClientMesReservationsPage from './pages/ClientMesReservationsPage';
 import ReservationConfirmationPage from './pages/ReservationConfirmationPage';
 import MentionsPage from './pages/MentionsPage';
 import ConfidentialitePage from './pages/ConfidentialitePage';
+import ListeVillesPage from './pages/ListeVillesPage';
+
+// Admin plateforme
+import AdminSidebarLayout from './pages/AdminSidebarLayout';
+import AdminDashboardPage from './pages/AdminDashboard';
 
 // Compagnie
 import CompagnieLayout from './pages/CompagnieLayout';
@@ -57,7 +61,7 @@ const AppRoutes = () => {
 
   return (
     <Routes>
-      {/* Public */}
+      {/* PUBLIC */}
       <Route path="/" element={<HomePage />} />
       <Route path="/booking" element={<FormulaireReservationClient />} />
       <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
@@ -75,7 +79,19 @@ const AppRoutes = () => {
       <Route path="/compagnie/:slug/confidentialite" element={<ConfidentialitePage />} />
       <Route path="/villes" element={<ListeVillesPage />} />
 
-      {/* Compagnie */}
+      {/* ADMIN PLATFORME */}
+      <Route
+        path="/admin"
+        element={
+          <PrivateRoute allowedRoles={["admin_platforme"]}>
+            <AdminSidebarLayout />
+          </PrivateRoute>
+        }
+      >
+        <Route path="dashboard" element={<AdminDashboardPage />} />
+      </Route>
+
+      {/* COMPAGNIE */}
       <Route
         path="/compagnie"
         element={
@@ -99,7 +115,7 @@ const AppRoutes = () => {
         <Route path="auto-generate" element={<AutoGeneratePage />} />
       </Route>
 
-      {/* Agence */}
+      {/* AGENCE */}
       <Route
         path="/agence"
         element={
