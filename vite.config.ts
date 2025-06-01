@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig({
-  base: '/', // ✅ Très important pour que le site fonctionne sur Netlify
+  base: '/',
   plugins: [react()],
   resolve: {
     alias: {
