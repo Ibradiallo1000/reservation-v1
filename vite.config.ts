@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
+import * as path from 'path';
 
 export default defineConfig({
   base: '/',
@@ -12,5 +12,51 @@ export default defineConfig({
   },
   css: {
     postcss: './postcss.config.cjs',
+    preprocessorOptions: {
+      scss: {
+        additionalData: `@import "@/assets/styles/_variables.scss";`
+      }
+    }
   },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // ✅ Utilise une fonction pour regrouper les chunks dynamiquement
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-router-dom')) return 'react';
+            if (id.includes('firebase')) return 'firebase';
+            if (id.includes('lodash') || id.includes('axios') || id.includes('date-fns')) return 'vendor';
+          }
+          if (id.includes('/src/pages/Compagnie/')) return 'compagnie';
+          if (id.includes('/src/pages/Agence/')) return 'agence';
+          if (id.includes('/src/pages/Admin/')) return 'admin';
+        },
+        chunkFileNames: 'assets/js/[name]-[hash].js',
+        assetFileNames: 'assets/[ext]/[name]-[hash].[ext]'
+      }
+    },
+    chunkSizeWarningLimit: 1500
+  },
+  server: {
+    port: 3000,
+    strictPort: true,
+    open: true,
+    fs: {
+      strict: false
+    },
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false
+      }
+    }
+  },
+  preview: {
+    port: 3000,
+    strictPort: true
+  }
 });
