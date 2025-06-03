@@ -1,17 +1,8 @@
 [build]
   command = "npm install --legacy-peer-deps && npm run build"
-  publish = "dist"  # Ou "build" selon votre configuration Vite
-  environment = { NODE_VERSION = "18.16.0" }
+  publish = "dist"
 
-  [[redirects]]
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
-  force = true
-  conditions = {Role = "all"}
-
-[[headers]]
-  for = "/*"
-  [headers.values]
-    Cache-Control = "no-cache"
-    Vary = "User-Agent, Accept-Encoding"
