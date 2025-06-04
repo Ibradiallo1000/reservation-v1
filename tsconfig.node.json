@@ -5,12 +5,12 @@
     "module": "ESNext",
     "skipLibCheck": true,
 
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
+    /* Résolution compatible TypeScript */
+    "moduleResolution": "Node",
     "isolatedModules": true,
     "moduleDetection": "force",
-    "noEmit": true,
+    "composite": true,
+    "esModuleInterop": true,
 
     /* Linting */
     "strict": true,

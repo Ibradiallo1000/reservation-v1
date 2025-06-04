@@ -161,32 +161,49 @@ const PublicCompanyPage = () => {
   const [debouncedArrival] = useDebounce(arrival, 300);
 
   const fetchData = useCallback(async () => {
-    if (!slug) return;
+  console.log("Valeur du slug reçue :", slug);
 
-    try {
-      setLoading(true);
-      const q = query(collection(db, 'companies'), where('slug', '==', slug));
-      const snap = await getDocs(q);
+  if (!slug || slug.trim() === '') {
+    console.warn('Le slug est manquant ou vide');
+    setError(t('companyNotFound'));
+    setLoading(false);
+    return;
+  }
 
-      if (snap.empty) {
-        setError(t('companyNotFound'));
-        return;
-      }
+  try {
+    setLoading(true);
 
-      const doc = snap.docs[0];
-      const companyData = { id: doc.id, ...doc.data() } as Company;
-      setCompany(companyData);
+    const q = query(collection(db, 'companies'), where('slug', '==', slug));
+    const snap = await getDocs(q);
 
-      const agQ = query(collection(db, 'agences'), where('companyId', '==', doc.id));
-      const agSnap = await getDocs(agQ);
-      setAgences(agSnap.docs.map(d => ({ id: d.id, ...d.data() } as Agence)));
-    } catch (err) {
-      console.error('Erreur de chargement:', err);
-      setError(t('loadingError'));
-    } finally {
-      setLoading(false);
+    if (snap.empty) {
+      console.warn(`Aucune compagnie trouvée pour le slug : ${slug}`);
+      setError(t('companyNotFound'));
+      return;
     }
-  }, [slug, t]);
+
+    const doc = snap.docs[0];
+    const data = doc.data();
+
+    if (!data || typeof data !== 'object') {
+      console.warn('Données de compagnie invalides');
+      setError(t('loadingError'));
+      return;
+    }
+    const companyData = { id: doc.id, ...data } as Company;
+    setCompany(companyData);
+
+    const agQ = query(collection(db, 'agences'), where('companyId', '==', doc.id));
+    const agSnap = await getDocs(agQ);
+    setAgences(agSnap.docs.map(d => ({ id: d.id, ...d.data() } as Agence)));
+
+  } catch (err) {
+    console.error('Erreur de chargement:', err);
+    setError(t('loadingError'));
+  } finally {
+    setLoading(false);
+  }
+}, [slug, t]);
 
   useEffect(() => {
     fetchData();
@@ -300,6 +317,13 @@ const PublicCompanyPage = () => {
   }
 
   if (!company) return null;
+  if (!slug) {
+  return (
+    <div className="text-center p-8">
+      <p>Slug manquant. Veuillez réessayer plus tard.</p>
+    </div>
+  );
+}
 
   return (
     <div

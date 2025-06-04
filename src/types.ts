@@ -82,3 +82,12 @@ export type SocialPlatform =
   | 'tiktok'
   | 'linkedin'
   | 'youtube';
+
+  // src/types.ts
+export {}
+
+declare global {
+  interface Window {
+    __NETLIFY_FIX_APPLIED?: boolean;
+  }
+}
