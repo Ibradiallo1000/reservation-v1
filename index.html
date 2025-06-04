@@ -12,11 +12,3 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
-<script>
-  // Fix nucléaire pour Netlify mobile
-  if(window.location.pathname !== '/' && !sessionStorage.getItem('netlify_redirect')) {
-    sessionStorage.setItem('netlify_redirect', '1');
-    window.location.href = '/?redirect=' + encodeURIComponent(window.location.pathname);
-  }
-</script>
