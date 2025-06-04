@@ -141,6 +141,7 @@ interface FooterProps {
  */
 const PublicCompanyPage = () => {
   const { slug } = useParams<{ slug: string }>();
+  console.log("📦 Slug extrait via useParams:", slug);
   const navigate = useNavigate();
   const { t } = useTranslation();
   const [company, setCompany] = useState<Company | null>(null);
@@ -316,7 +317,15 @@ const PublicCompanyPage = () => {
     );
   }
 
-  if (!company) return null;
+  if (!company) {
+  console.log('⛔ Company est null. Pas de rendu possible.');
+  return (
+    <div className="text-center p-10 text-red-500">
+      Impossible de charger les données. Vérifiez le lien ou réessayez plus tard.
+    </div>
+  );
+}
+
   if (!slug) {
   return (
     <div className="text-center p-8">
