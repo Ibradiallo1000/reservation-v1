@@ -1,3 +1,5 @@
+// ✅ generateDailyTripsForWeeklyTrip.ts — version corrigée et prête pour la production
+
 import {
   collection,
   getDoc,
@@ -22,7 +24,18 @@ export const generateDailyTripsForWeeklyTrip = async (weeklyTripId: string) => {
   const { companyId, agencyId, departure, arrival, price, horaires } = data;
   const capacity = data.places || 30;
 
-  // 🔁 Récupérer le nom de la compagnie depuis Firestore
+  // ✅ Vérification que 'horaires' est bien un objet
+  if (!horaires || typeof horaires !== 'object') {
+    console.warn("⛔ Horaires invalides ou absents pour ce WeeklyTrip.");
+    return;
+  }
+
+  // ✅ Nettoyage des horaires vides
+  for (const jour in horaires) {
+    horaires[jour] = horaires[jour].filter((h: string) => h && h.trim() !== '');
+  }
+
+  // 🔁 Récupérer le nom de la compagnie
   let companyName = 'Compagnie';
   if (companyId) {
     const companySnap = await getDoc(doc(db, 'compagnies', companyId));
@@ -48,13 +61,18 @@ export const generateDailyTripsForWeeklyTrip = async (weeklyTripId: string) => {
       const q = query(
         collection(db, 'dailyTrips'),
         where('companyId', '==', companyId),
-        where('agencyId', '==', agencyId), // ✅ pour éviter collision inter-agence
+        where('agencyId', '==', agencyId),
         where('departure', '==', departure),
         where('arrival', '==', arrival),
         where('date', '==', dateStr),
         where('time', '==', heure)
       );
+
       const snapshot = await getDocs(q);
+
+      if (snapshot.docs.length > 1) {
+        console.warn(`⚠️ Plusieurs dailyTrips identiques trouvés pour ${dateStr} ${heure}`);
+      }
 
       if (!snapshot.empty) {
         const docId = snapshot.docs[0].id;
@@ -63,13 +81,13 @@ export const generateDailyTripsForWeeklyTrip = async (weeklyTripId: string) => {
           places: capacity,
           companyName,
           weeklyTripId,
-          agencyId // ✅ on conserve dans la mise à jour aussi
+          agencyId
         });
         console.log(`✅ Mis à jour : ${departure} → ${arrival} à ${heure} le ${dateStr}`);
       } else {
         await addDoc(collection(db, "dailyTrips"), {
           companyId,
-          agencyId, // ✅ Ajouté ici
+          agencyId,
           companyName,
           departure,
           arrival,
