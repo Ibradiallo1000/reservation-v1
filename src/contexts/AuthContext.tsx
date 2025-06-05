@@ -4,7 +4,6 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
-// Types globaux (à mettre dans src/types.ts)
 export interface CustomUser {
   uid: string;
   email: string;
@@ -35,27 +34,19 @@ const AuthContext = createContext<AuthContextType>({
   hasPermission: () => false
 });
 
-// Rôles et permissions (à externaliser dans un fichier séparé si nécessaire)
 const ROLES_PERMISSIONS: Record<string, string[]> = {
   admin: ['view_dashboard', 'manage_routes', 'manage_staff', 'view_finances'],
   manager: ['view_dashboard', 'manage_routes', 'view_finances'],
   agent: ['view_dashboard', 'access_ticketing'],
   superviseur: [
-  'dashboard', 'reservations', 'guichet',
-  'courriers', 'trajets', 'finances', 'statistiques'
-],
+    'dashboard', 'reservations', 'guichet',
+    'courriers', 'trajets', 'finances', 'statistiques'
+  ],
   chefAgence: [
-    'view_dashboard',
-    'access_ticketing',
-    'manage_routes',
-    'manage_mail',
-    'mail_send',
-    'mail_receive',
-    'view_finances',
-    'manage_income',
-    'manage_expenses',
-    'manage_staff',
-    'manage_bookings'
+    'view_dashboard', 'access_ticketing', 'manage_routes',
+    'manage_mail', 'mail_send', 'mail_receive',
+    'view_finances', 'manage_income', 'manage_expenses',
+    'manage_staff', 'manage_bookings'
   ],
   user: []
 };
@@ -118,11 +109,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const hasPermission = useCallback((permission: string): boolean => {
     if (!user) return false;
-    if (user.role === 'admin') return true; // Les admins ont tous les droits
+    if (user.role === 'admin') return true;
     return user.permissions?.includes(permission) || false;
   }, [user]);
 
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
         if (firebaseUser) {
@@ -134,21 +127,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error('Erreur auth state:', error);
         setUser(null);
       } finally {
+        clearTimeout(timeoutId); // stop timeout si onAuthStateChanged répond avant
         setLoading(false);
       }
     });
 
-    return () => unsubscribe();
+    // Sécurité : force loading à false après 2.5 secondes (évite blocage infini)
+    timeoutId = setTimeout(() => {
+      setLoading(false);
+    }, 2500);
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timeoutId);
+    };
   }, [fetchUserData]);
 
   return (
-    <AuthContext.Provider value={{ 
-      user, 
-      loading, 
-      logout,
-      refreshUser,
-      hasPermission
-    }}>
+    <AuthContext.Provider value={{ user, loading, logout, refreshUser, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );
@@ -161,4 +157,5 @@ export const useAuth = () => {
   }
   return context;
 };
+
 export { AuthContext };

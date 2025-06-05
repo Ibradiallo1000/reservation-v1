@@ -1,12 +1,13 @@
-
 import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
 
-// Chargement dynamique des composants publics
-const HomePage = lazy(() => import('./pages/HomePage'));
+// ✅ Import direct temporaire pour test
+import HomePage from './pages/HomePage';
+
+// Pages publiques (lazy load)
 const FormulaireReservationClient = lazy(() => import('./pages/FormulaireReservationClient'));
 const ReceiptEnLignePage = lazy(() => import('./pages/ReceiptEnLignePage'));
 const PlatformSearchResultsPage = lazy(() => import('./pages/PlatformSearchResultsPage'));
@@ -21,11 +22,11 @@ const MentionsPage = lazy(() => import('./pages/MentionsPage'));
 const ConfidentialitePage = lazy(() => import('./pages/ConfidentialitePage'));
 const ListeVillesPage = lazy(() => import('./pages/ListeVillesPage'));
 
-// Chargement dynamique des composants admin
+// Admin plateforme
 const AdminSidebarLayout = lazy(() => import('./pages/AdminSidebarLayout'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 
-// Chargement dynamique des composants compagnie
+// Espace compagnie
 const CompagnieLayout = lazy(() => import('./pages/CompagnieLayout'));
 const CompagnieDashboard = lazy(() => import('./pages/CompagnieDashboard'));
 const CompagnieAgencesPage = lazy(() => import('./pages/CompagnieAgencesPage'));
@@ -40,7 +41,7 @@ const CompagnieFinancesTabsPage = lazy(() => import('./pages/CompagnieFinancesTa
 const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
 const AutoGeneratePage = lazy(() => import('./pages/AutoGeneratePage'));
 
-// Chargement dynamique des composants agence
+// Espace agence
 const AgenceLayout = lazy(() => import('./pages/AgenceLayout'));
 const DashboardAgencePage = lazy(() => import('./pages/DashboardAgencePage'));
 const AgenceReservationPage = lazy(() => import('./pages/AgenceReservationsPage'));
@@ -58,13 +59,14 @@ const ReceiptGuichetPage = lazy(() => import('./pages/ReceiptGuichetPage'));
 const AppRoutes = () => {
   const { loading } = useAuth();
 
-if (loading) return <PageLoader fullScreen />;
+  if (loading) return <PageLoader fullScreen />;
 
   return (
     <Suspense fallback={<PageLoader fullScreen />}>
       <Routes>
-        {/* PUBLIC ROUTES */}
+        {/* ✅ HomePage sans lazy pour test */}
         <Route path="/" element={<HomePage />} />
+
         <Route path="/booking" element={<FormulaireReservationClient />} />
         <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
         <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
@@ -81,7 +83,7 @@ if (loading) return <PageLoader fullScreen />;
         <Route path="/compagnie/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
 
-        {/* ADMIN PLATFORME */}
+        {/* Admin plateforme */}
         <Route
           path="/admin"
           element={
@@ -94,7 +96,7 @@ if (loading) return <PageLoader fullScreen />;
           <Route path="dashboard" element={<AdminDashboard />} />
         </Route>
 
-        {/* COMPAGNIE */}
+        {/* Espace compagnie */}
         <Route
           path="/compagnie"
           element={
@@ -118,7 +120,7 @@ if (loading) return <PageLoader fullScreen />;
           <Route path="auto-generate" element={<AutoGeneratePage />} />
         </Route>
 
-        {/* AGENCE */}
+        {/* Espace agence */}
         <Route
           path="/agence"
           element={
@@ -131,12 +133,10 @@ if (loading) return <PageLoader fullScreen />;
           <Route path="dashboard" element={<DashboardAgencePage />} />
           <Route path="reservations" element={<AgenceReservationPage />} />
           <Route path="guichet" element={<AgenceGuichetPage />} />
-          <Route path="ajouter-trajet" element={<AgenceTrajetsPage />} />
+          <Route path="trajets" element={<AgenceTrajetsPage />} />
           <Route path="courriers" element={<AgenceCourriersPage />} />
           <Route path="courriers/envoi" element={<FormulaireEnvoiCourrier />} />
-
-Ibrahim Diallo, [03/06/2025 21:16]
-<Route path="courriers/reception" element={<ReceptionCourrierPage />} />
+          <Route path="courriers/reception" element={<ReceptionCourrierPage />} />
           <Route path="finances" element={<AgenceFinancesPage />} />
           <Route path="recettes" element={<AgenceRecettesPage />} />
           <Route path="depenses" element={<AgenceDepensesPage />} />
@@ -144,7 +144,7 @@ Ibrahim Diallo, [03/06/2025 21:16]
           <Route path="receipt/:id" element={<ReceiptGuichetPage />} />
         </Route>
 
-        {/* 404 - Page améliorée */}
+        {/* Page 404 */}
         <Route
           path="*"
           element={

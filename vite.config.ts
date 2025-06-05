@@ -14,16 +14,15 @@ export default defineConfig({
     postcss: './postcss.config.cjs',
     preprocessorOptions: {
       scss: {
-        additionalData: `@import "@/assets/styles/_variables.scss";`
-      }
-    }
+        additionalData: `@import "@/assets/styles/_variables.scss";`,
+      },
+    },
   },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        // ✅ Utilise une fonction pour regrouper les chunks dynamiquement
         manualChunks(id) {
           if (id.includes('node_modules')) {
             if (id.includes('react') || id.includes('react-router-dom')) return 'react';
@@ -35,28 +34,28 @@ export default defineConfig({
           if (id.includes('/src/pages/Admin/')) return 'admin';
         },
         chunkFileNames: 'assets/js/[name]-[hash].js',
-        assetFileNames: 'assets/[ext]/[name]-[hash].[ext]'
-      }
+        assetFileNames: 'assets/[ext]/[name]-[hash].[ext]',
+      },
     },
-    chunkSizeWarningLimit: 1500
+    chunkSizeWarningLimit: 1500,
   },
   server: {
-    port: 3000,
+    port: 5188,
     strictPort: true,
     open: true,
     fs: {
-      strict: false
+      strict: false,
     },
     proxy: {
       '/api': {
         target: 'http://localhost:5000',
         changeOrigin: true,
-        secure: false
-      }
-    }
+        secure: false,
+      },
+    },
   },
   preview: {
-    port: 3000,
-    strictPort: true
-  }
+    port: 5188,
+    strictPort: true,
+  },
 });

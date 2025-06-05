@@ -1,10 +1,11 @@
-import { BrowserRouter } from 'react-router-dom';
+// src/App.tsx
+
+import React, { useEffect } from 'react';
+import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import AppRoutes from './AppRoutes';
-import { useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
 
-// Déclaration TypeScript pour la variable window
+// ✅ Correction Netlify (F5 sur une route dynamique)
 declare global {
   interface Window {
     __netlifyFixApplied?: boolean;
@@ -16,15 +17,13 @@ function NetlifyRouterFix({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   useEffect(() => {
-    // Solution améliorée pour Netlify
     if (location.pathname !== '/' && !window.__netlifyFixApplied) {
       window.__netlifyFixApplied = true;
-      
-      // Délai minimal pour garantir l'hydratation complète
+
       const timer = setTimeout(() => {
         navigate(location.pathname, {
           replace: true,
-          state: { ...location.state, fromNetlify: true }
+          state: { ...location.state, fromNetlify: true },
         });
       }, 50);
 
@@ -36,7 +35,7 @@ function NetlifyRouterFix({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
-  // Gestion spécifique mobile
+  console.log("✅ App.tsx monté !");
   useEffect(() => {
     const mobilePath = sessionStorage.getItem('mobileRedirect');
     if (mobilePath && mobilePath !== '/') {

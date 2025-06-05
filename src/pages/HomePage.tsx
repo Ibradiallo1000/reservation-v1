@@ -1,6 +1,7 @@
 // src/pages/HomePage.tsx
+console.log("✅ HomePage est bien monté !");
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bus, MapPin, Search, Settings } from 'lucide-react';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
@@ -12,8 +13,12 @@ const HomePage: React.FC = () => {
     arrival: '',
   });
 
-  const auth = getAuth();
-  onAuthStateChanged(auth, () => {});
+  // ✅ Corrigé : onAuthStateChanged mis dans un useEffect
+  useEffect(() => {
+    const auth = getAuth();
+    const unsubscribe = onAuthStateChanged(auth, () => {});
+    return () => unsubscribe();
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
