@@ -1,8 +1,15 @@
+// ✅ src/App.tsx
 import React from 'react';
-import AppRoutes from './AppRoutes';
+import { BrowserRouter } from 'react-router-dom';
+import { AuthProvider } from './contexts/AuthContext'; // ✅ Fournit user + loading
+import AppRoutes from './AppRoutes'; // ✅ Toutes les routes centralisées
 
 const App: React.FC = () => {
-  return <AppRoutes />;
+  return (
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+  );
 };
 
 export default App;
