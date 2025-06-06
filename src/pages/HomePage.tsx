@@ -1,19 +1,18 @@
-// src/pages/HomePage.tsx
-console.log("✅ HomePage est bien monté !");
-
+// ✅ src/pages/HomePage.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bus, MapPin, Search, Settings } from 'lucide-react';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
+console.log("✅ HomePage est bien monté !");
+
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{ departure: string; arrival: string }>({
     departure: '',
     arrival: '',
   });
 
-  // ✅ Corrigé : onAuthStateChanged mis dans un useEffect
   useEffect(() => {
     const auth = getAuth();
     const unsubscribe = onAuthStateChanged(auth, () => {});
@@ -32,6 +31,7 @@ const HomePage: React.FC = () => {
 
   return (
     <>
+      {/* En-tête */}
       <header className="bg-white shadow-md p-4">
         <div className="flex justify-between items-center max-w-7xl mx-auto">
           <div className="flex items-center space-x-2">
@@ -50,6 +50,7 @@ const HomePage: React.FC = () => {
         </div>
       </header>
 
+      {/* Section principale avec image */}
       <div
         className="relative bg-cover bg-center h-[450px] md:h-[500px]"
         style={{
@@ -59,10 +60,15 @@ const HomePage: React.FC = () => {
       >
         <div className="absolute inset-0 bg-black bg-opacity-50 flex flex-col justify-center px-4">
           <div className="text-center text-white">
-            <h1 className="text-3xl md:text-5xl font-bold">Réservez votre voyage en toute simplicité</h1>
-            <p className="mt-2 text-lg md:text-xl">Trouvez et achetez vos billets de bus partout au Mali et en Afrique</p>
+            <h1 className="text-3xl md:text-5xl font-bold">
+              Réservez votre voyage en toute simplicité
+            </h1>
+            <p className="mt-2 text-lg md:text-xl">
+              Trouvez et achetez vos billets de bus partout au Mali et en Afrique
+            </p>
           </div>
 
+          {/* Formulaire de recherche */}
           <form
             onSubmit={handleSubmit}
             className="bg-white/20 backdrop-blur rounded-xl shadow-lg mt-6 p-6 w-full max-w-4xl mx-auto text-left"
@@ -112,6 +118,7 @@ const HomePage: React.FC = () => {
             </div>
           </form>
 
+          {/* Boutons d'action */}
           <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm text-white">
             <button
               onClick={() => navigate('/ClientMesReservationsPage')}
