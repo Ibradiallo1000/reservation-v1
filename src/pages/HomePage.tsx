@@ -1,4 +1,4 @@
-// ✅ src/pages/HomePage.tsx
+// ✅ src/pages/HomePage.tsx — version corrigée
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bus, MapPin, Search, Settings } from 'lucide-react';
@@ -26,12 +26,21 @@ const HomePage: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    navigate('/resultats', { state: { ...formData } });
+
+    // ✅ Vérification anti JSON "undefined"
+    const departure = formData.departure?.trim();
+    const arrival = formData.arrival?.trim();
+
+    if (!departure || !arrival || departure === "undefined" || arrival === "undefined") {
+      alert("Veuillez saisir une ville de départ et d'arrivée valides.");
+      return;
+    }
+
+    navigate('/resultats', { state: { departure, arrival } });
   };
 
   return (
     <>
-      {/* En-tête */}
       <header className="bg-white shadow-md p-4">
         <div className="flex justify-between items-center max-w-7xl mx-auto">
           <div className="flex items-center space-x-2">
@@ -50,7 +59,6 @@ const HomePage: React.FC = () => {
         </div>
       </header>
 
-      {/* Section principale avec image */}
       <div
         className="relative bg-cover bg-center h-[450px] md:h-[500px]"
         style={{
@@ -68,7 +76,6 @@ const HomePage: React.FC = () => {
             </p>
           </div>
 
-          {/* Formulaire de recherche */}
           <form
             onSubmit={handleSubmit}
             className="bg-white/20 backdrop-blur rounded-xl shadow-lg mt-6 p-6 w-full max-w-4xl mx-auto text-left"
@@ -118,7 +125,6 @@ const HomePage: React.FC = () => {
             </div>
           </form>
 
-          {/* Boutons d'action */}
           <div className="mt-6 flex flex-wrap justify-center gap-4 text-sm text-white">
             <button
               onClick={() => navigate('/ClientMesReservationsPage')}

@@ -1,5 +1,4 @@
-// ✅ PlatformSearchResultsPage.tsx – version finale avec affichage propre du trajet et du prix
-
+// ✅ PlatformSearchResultsPage.tsx – version corrigée avec protection navigation
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { collection, getDocs, query, doc, getDoc } from 'firebase/firestore';
@@ -26,6 +25,7 @@ interface Trajet {
 const PlatformSearchResultsPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+
   const criteres = location.state as SearchCriteria | null;
 
   const [groupedTrajets, setGroupedTrajets] = useState<Record<string, Trajet[]>>({});
@@ -33,12 +33,13 @@ const PlatformSearchResultsPage: React.FC = () => {
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
-    const fetchTrajets = async () => {
-      if (!criteres?.departure || !criteres?.arrival) {
-        navigate('/');
-        return;
-      }
+    if (!criteres?.departure || !criteres?.arrival) {
+      console.warn("🔁 Redirection car critères absents :", criteres);
+      navigate('/');
+      return;
+    }
 
+    const fetchTrajets = async () => {
       const capitalize = (text: string) =>
         text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
       const dep = capitalize(criteres.departure);
@@ -91,6 +92,10 @@ const PlatformSearchResultsPage: React.FC = () => {
 
     fetchTrajets();
   }, [criteres, navigate]);
+
+  if (!criteres?.departure || !criteres?.arrival) {
+    return null; // protection de rendu
+  }
 
   return (
     <div className="p-6">
