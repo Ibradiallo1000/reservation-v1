@@ -260,17 +260,21 @@ const PublicCompanyPage = () => {
   };
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validateInput(departure) || !validateInput(arrival)) {
-      setError(t('invalidCity'));
-      return;
+  e.preventDefault();
+  
+  if (!validateInput(departure) || !validateInput(arrival)) {
+    setError(t('invalidCity'));
+    return;
+  }
+
+  navigate(`/compagnie/${slug}/resultats`, {
+    state: {
+      departure: departure.trim(),
+      arrival: arrival.trim(),
+      companyInfo: company
     }
-    
-    const dep = encodeURIComponent(departure.trim());
-    const arr = encodeURIComponent(arrival.trim());
-    navigate(`/compagnie/${slug}/resultats?departure=${dep}&arrival=${arr}`);
-  };
+  });
+};
 
   const toggleVille = (ville: string) => {
     setOpenVilles(prev => ({ ...prev, [ville]: !prev[ville] }));

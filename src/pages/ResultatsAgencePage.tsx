@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { ChevronLeft, Clock, MapPin, Calendar, Users, Ticket } from 'lucide-react';
@@ -52,11 +52,18 @@ interface ThemeClasses {
 
 const ResultatsAgencePage: React.FC = () => {
   const navigate = useNavigate();
-  const { slug } = useParams<{ slug: string }>();
+  const { slug } = useParams<{ slug?: string }>();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const state = location.state as {
+    departure?: string;
+    arrival?: string;
+    companyInfo?: CompanyInfo;
+  };
 
-  const departureParam = searchParams.get('departure') || '';
-  const arrivalParam = searchParams.get('arrival') || '';
+  const departureParam = state?.departure || searchParams.get('departure') || '';
+  const arrivalParam = state?.arrival || searchParams.get('arrival') || '';
+
   if (!slug || !departureParam || !arrivalParam) {
   return (
     <div className="flex flex-col items-center justify-center min-h-screen text-center p-4 bg-white">
@@ -114,7 +121,10 @@ const ResultatsAgencePage: React.FC = () => {
   };
 
   useEffect(() => {
-    const fetchCompanyAndAgence = async () => {
+  const fetchCompanyAndAgence = async () => {
+    if (state?.companyInfo) {
+      setCompany(state.companyInfo);
+    } else {
       if (!slug) {
         setError('Compagnie non trouvée');
         setLoading(false);
@@ -124,7 +134,7 @@ const ResultatsAgencePage: React.FC = () => {
       try {
         const q = query(collection(db, 'companies'), where('slug', '==', slug));
         const snapshot = await getDocs(q);
-        
+
         if (snapshot.empty) {
           setError('Compagnie non trouvée');
           setLoading(false);
@@ -133,10 +143,10 @@ const ResultatsAgencePage: React.FC = () => {
 
         const doc = snapshot.docs[0];
         const data = doc.data();
-        setCompany({ 
-          id: doc.id, 
-          nom: data.nom, 
-          pays: data.pays, 
+        setCompany({
+          id: doc.id,
+          nom: data.nom,
+          pays: data.pays,
           slug: data.slug,
           couleurPrimaire: data.couleurPrimaire,
           couleurSecondaire: data.couleurSecondaire,
@@ -147,7 +157,7 @@ const ResultatsAgencePage: React.FC = () => {
 
         const agenceQuery = query(collection(db, 'agences'), where('companyId', '==', doc.id));
         const agencesSnapshot = await getDocs(agenceQuery);
-        
+
         if (!agencesSnapshot.empty) {
           const agenceDoc = agencesSnapshot.docs[0];
           const agenceData = agenceDoc.data();
@@ -160,16 +170,18 @@ const ResultatsAgencePage: React.FC = () => {
             nomAgence: agenceData.nomAgence,
           });
         }
+
       } catch (err) {
         console.error('Erreur Firestore:', err);
         setError('Erreur lors du chargement');
       } finally {
         setLoading(false);
       }
-    };
+    }
+  };
 
-    fetchCompanyAndAgence();
-  }, [slug]);
+  fetchCompanyAndAgence();
+}, [slug, state?.companyInfo]);
 
   // ✅ Ajoute cette ligne avant le useEffect (par exemple après les useState)
 
