@@ -78,13 +78,13 @@ const ResultatsAgencePage: React.FC = () => {
 
   const [company, setCompany] = useState<CompanyInfo | null>(null);
   const [agence, setAgence] = useState<AgenceInfo | null>(null);
+  const agenceId = agence?.id || null;
   const [groupedTrajets, setGroupedTrajets] = useState<Record<string, Trajet[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dates, setDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [selectedTime, setSelectedTime] = useState<string>('');
-
   const themeConfig = useMemo(() => {
     return {
       colors: {
@@ -171,74 +171,81 @@ const ResultatsAgencePage: React.FC = () => {
     fetchCompanyAndAgence();
   }, [slug]);
 
-  useEffect(() => {
-    const fetchTrajets = async () => {
-      if (!departure || !arrival || !agence?.id) return;
-      setLoading(true);
+  // ✅ Ajoute cette ligne avant le useEffect (par exemple après les useState)
 
-      try {
-        const allDates = getNextNDates(8);
-        const q = query(collection(db, 'dailyTrips'));
-        const snapshot = await getDocs(q);
-        const allTrajets = snapshot.docs.map(doc => ({ 
-          id: doc.id, 
-          ...doc.data() 
-        } as Trajet));
+useEffect(() => {
+  const fetchTrajets = async () => {
+    if (!departure || !arrival || !agenceId) {
+      console.warn("Données incomplètes pour charger les trajets", { departure, arrival, agenceId });
+      return;
+    }
 
-        const reservationsSnap = await getDocs(collection(db, 'reservations'));
-        const reservations = reservationsSnap.docs.map(doc => doc.data());
+    console.log("Lancement du fetch des trajets avec agenceId :", agenceId);
+    setLoading(true);
 
-        const trajetsValides = allTrajets.filter(doc =>
-          doc.departure?.trim().toLowerCase() === departure.toLowerCase() &&
-          doc.arrival?.trim().toLowerCase() === arrival.toLowerCase() &&
-          doc.agencyId === agence.id &&
-          allDates.includes(doc.date)
-        ).map(trajet => {
-          const reserved = reservations
-            .filter(r => r.trajetId === trajet.id && r.statut === 'payé')
-            .reduce((acc, r) => acc + (r.seatsGo || 1), 0);
-          return {
-            ...trajet,
-            places: (trajet.places || 30) - reserved
-          };
-        });
+    try {
+      const allDates = getNextNDates(8);
+      const q = query(collection(db, 'dailyTrips'));
+      const snapshot = await getDocs(q);
+      const allTrajets = snapshot.docs.map(doc => ({ 
+        id: doc.id, 
+        ...doc.data() 
+      } as Trajet));
 
-        const trajetsParDate: Record<string, Trajet[]> = {};
-        trajetsValides.forEach(trajet => {
-          if (!trajetsParDate[trajet.date]) trajetsParDate[trajet.date] = [];
-          trajetsParDate[trajet.date].push(trajet);
-        });
+      const reservationsSnap = await getDocs(collection(db, 'reservations'));
+      const reservations = reservationsSnap.docs.map(doc => doc.data());
 
-        const now = new Date();
-        const availableDates = allDates.filter(date => {
-          const trajets = trajetsParDate[date];
-          if (!trajets) return false;
-          return trajets.some(t => new Date(`${t.date}T${t.time}`) > now);
-        });
+      const trajetsValides = allTrajets.filter(doc =>
+        doc.departure?.trim().toLowerCase() === departure.toLowerCase() &&
+        doc.arrival?.trim().toLowerCase() === arrival.toLowerCase() &&
+        doc.agencyId === agenceId &&
+        allDates.includes(doc.date)
+      ).map(trajet => {
+        const reserved = reservations
+          .filter(r => r.trajetId === trajet.id && r.statut === 'payé')
+          .reduce((acc, r) => acc + (r.seatsGo || 1), 0);
+        return {
+          ...trajet,
+          places: (trajet.places || 30) - reserved
+        };
+      });
 
-        setDates(availableDates);
-        setSelectedDate(prev => (availableDates.includes(prev) ? prev : availableDates[0] || ''));
+      const trajetsParDate: Record<string, Trajet[]> = {};
+      trajetsValides.forEach(trajet => {
+        if (!trajetsParDate[trajet.date]) trajetsParDate[trajet.date] = [];
+        trajetsParDate[trajet.date].push(trajet);
+      });
 
-        const grouped: Record<string, Trajet[]> = {};
-        for (const t of trajetsValides) {
-          if (new Date(`${t.date}T${t.time}`) > now) {
-            const key = `${t.companyId}`;
-            if (!grouped[key]) grouped[key] = [];
-            grouped[key].push(t);
-          }
+      const now = new Date();
+      const availableDates = allDates.filter(date => {
+        const trajets = trajetsParDate[date];
+        if (!trajets) return false;
+        return trajets.some(t => new Date(`${t.date}T${t.time}`) > now);
+      });
+
+      setDates(availableDates);
+      setSelectedDate(prev => (availableDates.includes(prev) ? prev : availableDates[0] || ''));
+
+      const grouped: Record<string, Trajet[]> = {};
+      for (const t of trajetsValides) {
+        if (new Date(`${t.date}T${t.time}`) > now) {
+          const key = `${t.companyId}`;
+          if (!grouped[key]) grouped[key] = [];
+          grouped[key].push(t);
         }
-
-        setGroupedTrajets(grouped);
-      } catch (err) {
-        console.error('Erreur Firestore:', err);
-        setError('Erreur lors du chargement des trajets');
-      } finally {
-        setLoading(false);
       }
-    };
 
-    fetchTrajets();
-  }, [departure, arrival, agence]);
+      setGroupedTrajets(grouped);
+    } catch (err) {
+      console.error('Erreur Firestore:', err);
+      setError('Erreur lors du chargement des trajets');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  fetchTrajets();
+}, [departure, arrival, agenceId]); // ✅ agenceId est dans les dépendances
 
   const filteredGrouped = useMemo(() => {
     return Object.fromEntries(
