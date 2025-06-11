@@ -186,13 +186,12 @@ const ResultatsAgencePage: React.FC = () => {
   // ✅ Ajoute cette ligne avant le useEffect (par exemple après les useState)
 
 useEffect(() => {
-  const fetchTrajets = async () => {
-    if (!departure || !arrival || !agenceId) {
-      console.warn("Données incomplètes pour charger les trajets", { departure, arrival, agenceId });
-      return;
-    }
+  if (!departure || !arrival || !agenceId) {
+    console.warn("⏳ Attente des données pour charger les trajets", { departure, arrival, agenceId });
+    return;
+  }
 
-    console.log("Lancement du fetch des trajets avec agenceId :", agenceId);
+  const fetchTrajets = async () => {
     setLoading(true);
 
     try {
@@ -257,7 +256,7 @@ useEffect(() => {
   };
 
   fetchTrajets();
-}, [departure, arrival, agenceId]); // ✅ agenceId est dans les dépendances
+}, [departure, arrival, agenceId]);
 
   const filteredGrouped = useMemo(() => {
     return Object.fromEntries(
