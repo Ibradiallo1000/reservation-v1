@@ -3,7 +3,8 @@ import * as React from "react";
 
 interface RadioGroupProps extends React.HTMLAttributes<HTMLDivElement> {
   value: string;
-  onValueChange: (value: any) => void;
+  onValueChange: (value: string) => void;
+  children: React.ReactNode;
 }
 
 export const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(
@@ -25,7 +26,10 @@ export const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(
 );
 RadioGroup.displayName = "RadioGroup";
 
-interface RadioGroupItemProps extends React.InputHTMLAttributes<HTMLInputElement> {}
+interface RadioGroupItemProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  id: string;
+  value: string;
+}
 
 export const RadioGroupItem = React.forwardRef<HTMLInputElement, RadioGroupItemProps>(
   ({ id, value, ...props }, ref) => (
