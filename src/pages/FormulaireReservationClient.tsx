@@ -1,9 +1,11 @@
-// ✅ FormulaireReservationClient.tsx – anciennement BookingPage.tsx
-
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { collection, addDoc, Timestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
+import { ChevronLeft, Clock, MapPin, Calendar, Users, Ticket, User, Phone, Mail } from 'lucide-react';
+import { LazyLoadImage } from 'react-lazy-load-image-component';
+import 'react-lazy-load-image-component/src/effects/blur.css';
+import { hexToRgba, safeTextColor } from '../utils/color';
 
 interface PassengerData {
   fullName: string;
@@ -15,58 +17,90 @@ const FormulaireReservationClient: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { slug = '' } = useParams();
-  const tripData = location.state;
 
+  const { tripData, companyInfo } = location.state || {};
+  const [loading, setLoading] = useState(false);
   const [passengerData, setPassengerData] = useState<PassengerData>({
     fullName: '',
     phone: '',
     email: '',
   });
 
-  const [seatsGo, setSeatsGo] = useState<number>(1);
-  const [seatsReturn, setSeatsReturn] = useState<number>(1);
+  const [seatsGo, setSeatsGo] = useState(1);
+  const [seatsReturn, setSeatsReturn] = useState(1);
   const [tripType, setTripType] = useState<'aller_simple' | 'aller_retour'>('aller_simple');
-  const [isPaying, setIsPaying] = useState(false);
-  const [totalCost, setTotalCost] = useState<number>(tripData?.price || 0);
   const unitPrice = Number(tripData?.price || 0);
+  const [totalCost, setTotalCost] = useState(unitPrice);
+
+  // Configuration du thème basée sur companyInfo
+  const themeConfig = {
+    colors: {
+      primary: companyInfo?.primaryColor || '#3b82f6',
+      secondary: companyInfo?.secondaryColor || '#93c5fd',
+      text: companyInfo?.primaryColor ? safeTextColor(companyInfo.primaryColor) : '#ffffff',
+      background: '#ffffff'
+    },
+    classes: {
+      card: 'bg-white rounded-xl shadow-sm border border-gray-200',
+      button: 'transition-all hover:scale-105 active:scale-95',
+      animations: 'transition-all duration-300 ease-in-out',
+      header: 'sticky top-0 z-50 px-4 py-3'
+    }
+  };
+
+  const { colors, classes } = themeConfig;
 
   useEffect(() => {
     const go = seatsGo || 0;
     const ret = tripType === 'aller_retour' ? (seatsReturn || 0) : 0;
-    const total = unitPrice * (go + ret);
-    setTotalCost(total);
-  }, [seatsGo, seatsReturn, tripType, tripData]);
+    setTotalCost(unitPrice * (go + ret));
+  }, [seatsGo, seatsReturn, tripType, unitPrice]);
 
-  if (!tripData || !tripData.tripId) {
-    return <div className="text-center p-8 text-red-600 font-semibold">Données du voyage introuvables.</div>;
+  if (!tripData || !tripData.id) {
+    return (
+      <div className="flex items-center justify-center min-h-screen" style={{ background: colors.background }}>
+        <div className={`p-6 rounded-xl text-center ${classes.card}`}>
+          <div className="bg-gray-100 p-4 rounded-full inline-flex mb-3">
+            <Clock className="h-6 w-6 text-gray-500" />
+          </div>
+          <h3 className="text-lg font-medium mb-1">Données du voyage introuvables</h3>
+          <button
+            onClick={() => navigate('/')}
+            className={`mt-4 px-4 py-2 rounded-lg ${classes.button}`}
+            style={{ backgroundColor: colors.primary, color: colors.text }}
+          >
+            Retour à l'accueil
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const handlePassengerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setPassengerData((prev) => ({ ...prev, [name]: value }));
+    setPassengerData(prev => ({ ...prev, [name]: value }));
   };
 
-  const increment = (setter: React.Dispatch<React.SetStateAction<number>>, value: number) => {
-    if (value < 10) setter(value + 1);
-  };
-  const decrement = (setter: React.Dispatch<React.SetStateAction<number>>, value: number) => {
-    if (value > 1) setter(value - 1);
+  const handleSeatsChange = (type: 'go' | 'return', value: number) => {
+    const clampedValue = Math.max(1, Math.min(10, value));
+    if (type === 'go') setSeatsGo(clampedValue);
+    else setSeatsReturn(clampedValue);
   };
 
   const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passengerData.fullName || !passengerData.phone || seatsGo < 1 || (tripType === 'aller_retour' && seatsReturn < 1)) {
-      alert('Veuillez remplir correctement tous les champs obligatoires.');
-      return;
-    }
-
-    setIsPaying(true);
+    setLoading(true);
+    
     try {
-      const trajetRef = doc(db, 'dailyTrips', tripData.tripId);
+      if (!passengerData.fullName || !passengerData.phone) {
+        throw new Error('Veuillez remplir tous les champs obligatoires');
+      }
+
+      const trajetRef = doc(db, 'dailyTrips', tripData.id);
       const trajetSnap = await getDoc(trajetRef);
+      
       if (!trajetSnap.exists()) {
-        alert('Trajet introuvable.');
-        return;
+        throw new Error('Trajet introuvable');
       }
 
       const trajet = trajetSnap.data();
@@ -74,29 +108,17 @@ const FormulaireReservationClient: React.FC = () => {
       const totalPlacesDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
 
       if (placesRestantes < totalPlacesDemandées) {
-        alert(`Il ne reste que ${placesRestantes} place(s) disponible(s) pour ce trajet.`);
-        return;
+        throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
       }
-
-      const agenceRef = doc(db, 'agences', tripData.agencyId);
-      const agenceSnap = await getDoc(agenceRef);
-      if (!agenceSnap.exists()) {
-        alert("Agence introuvable.");
-        return;
-      }
-
-      const agenceData = agenceSnap.data();
-      const commissionRate = agenceData.commissionRate || 0.05;
-      const companySlug = agenceData.slug || slug;
 
       const booking = {
         nomClient: passengerData.fullName,
         telephone: passengerData.phone,
         email: passengerData.email,
-        depart: tripData.departure || '',
-        arrivee: tripData.arrival || '',
-        date: tripData.date || '',
-        heure: tripData.time || '',
+        depart: tripData.departure,
+        arrivee: tripData.arrival,
+        date: tripData.date,
+        heure: tripData.time,
         montant: totalCost,
         seatsGo,
         seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
@@ -104,12 +126,12 @@ const FormulaireReservationClient: React.FC = () => {
         canal: 'en_ligne',
         statut: 'payé',
         createdAt: Timestamp.now(),
-        companyId: tripData.companyId || null,
-        agencyId: tripData.agencyId || null,
-        trajetId: tripData.tripId,
+        companyId: tripData.companyId,
+        agencyId: tripData.agencyId,
+        trajetId: tripData.id,
         paiement: 'mobile_money',
-        commission: totalCost * commissionRate,
-        companySlug: slug || agenceData.slug || '',
+        commission: totalCost * 0.05,
+        companySlug: slug,
       };
 
       const docRef = await addDoc(collection(db, 'reservations'), booking);
@@ -117,76 +139,300 @@ const FormulaireReservationClient: React.FC = () => {
         places: placesRestantes - totalPlacesDemandées
       });
 
-     navigate(`/reservation-confirmation/${docRef.id}`, { state: { slug: companySlug } });
+      navigate(`/reservation-confirmation/${docRef.id}`, { 
+        state: { 
+          slug: slug,
+          reservation: {
+            ...booking,
+            id: docRef.id,
+            companyName: companyInfo?.nom
+          }
+        } 
+      });
 
     } catch (error: any) {
-      console.error('Erreur Firestore complète :', error);
-      alert('Erreur Firestore : ' + (error?.message || 'inconnue'));
+      alert(error.message);
     } finally {
-      setIsPaying(false);
+      setLoading(false);
     }
   };
 
+  const formatDateDisplay = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('fr-FR', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short'
+    });
+  };
+
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="bg-white rounded-lg shadow-md p-6 mb-6 text-center">
-        {tripData.logoUrl && (
-          <img src={tripData.logoUrl} alt="Logo Compagnie" className="h-20 mx-auto mb-2" />
-        )}
-        <h2 className="text-xl font-bold mb-2">{tripData.company}</h2>
-        <p className="text-gray-600 mb-1">{tripData.departure} → {tripData.arrival}</p>
-        <p className="text-gray-600 mb-1">Date : {tripData.date} — Heure : {tripData.time}</p>
-        <p className="text-gray-600 mb-1">Durée : {tripData.duration || 'Non précisée'}</p>
-        <p className="text-lg font-bold mt-2">Prix unitaire : {unitPrice.toLocaleString()} FCFA</p>
-      </div>
-
-      <form onSubmit={handlePayment} className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-semibold mb-4">Informations du passager principal</h2>
-        <div className="space-y-4">
-          <input type="text" name="fullName" value={passengerData.fullName} onChange={handlePassengerChange} placeholder="Nom complet *" className="block w-full rounded border px-3 py-2" required />
-          <input type="tel" name="phone" value={passengerData.phone} onChange={handlePassengerChange} placeholder="Téléphone *" className="block w-full rounded border px-3 py-2" required />
-          <input type="email" name="email" value={passengerData.email} onChange={handlePassengerChange} placeholder="Email" className="block w-full rounded border px-3 py-2" />
-
-          <div className="flex items-center gap-3">
-            <span className="text-sm">Lieux (aller)</span>
-            <button type="button" className="px-2 py-1 bg-gray-200 rounded" onClick={() => decrement(setSeatsGo, seatsGo)}>-</button>
-            <span className="font-semibold">{seatsGo}</span>
-            <button type="button" className="px-2 py-1 bg-gray-200 rounded" onClick={() => increment(setSeatsGo, seatsGo)}>+</button>
-          </div>
-
-          {tripType === 'aller_retour' && (
-            <div className="flex items-center gap-3">
-              <span className="text-sm">Lieux (retour)</span>
-              <button type="button" className="px-2 py-1 bg-gray-200 rounded" onClick={() => decrement(setSeatsReturn, seatsReturn)}>-</button>
-              <span className="font-semibold">{seatsReturn}</span>
-              <button type="button" className="px-2 py-1 bg-gray-200 rounded" onClick={() => increment(setSeatsReturn, seatsReturn)}>+</button>
-            </div>
-          )}
-
-          <div className="flex gap-4 mt-2">
-            <label className="inline-flex items-center">
-              <input type="radio" value="aller_simple" checked={tripType === 'aller_simple'} onChange={() => setTripType('aller_simple')} />
-              <span className="ml-2">Aller simple</span>
-            </label>
-            <label className="inline-flex items-center">
-              <input type="radio" value="aller_retour" checked={tripType === 'aller_retour'} onChange={() => setTripType('aller_retour')} />
-              <span className="ml-2">Aller-retour</span>
-            </label>
-          </div>
-        </div>
-
-        <div className="mt-6">
-          <p className="text-sm text-gray-600 mb-1">{unitPrice.toLocaleString()} FCFA x {tripType === 'aller_retour' ? `${seatsGo} + ${seatsReturn}` : seatsGo} place(s)</p>
-          <p className="text-lg font-bold mb-2">Total : {totalCost.toLocaleString()} FCFA</p>
-          <button type="submit" disabled={isPaying} className="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700">
-            {isPaying ? 'Traitement en cours...' : 'Réserver maintenant'}
+    <div 
+      className="min-h-screen" 
+      style={{ 
+        background: colors.background,
+        color: safeTextColor(colors.background)
+      }}
+    >
+      <header 
+        className={classes.header}
+        style={{
+          backgroundColor: hexToRgba(colors.primary, 0.95),
+          backdropFilter: 'blur(10px)'
+        }}
+      >
+        <div className="flex items-center gap-4 max-w-7xl mx-auto">
+          <button 
+            onClick={() => navigate(-1)}
+            className="p-2 rounded-full hover:bg-white/10 transition"
+            style={{ color: safeTextColor(colors.primary) }}
+          >
+            <ChevronLeft className="h-5 w-5" />
           </button>
+          
+          <div className="flex items-center gap-2">
+            {companyInfo?.logoUrl && (
+              <LazyLoadImage 
+                src={companyInfo.logoUrl} 
+                alt={`Logo ${companyInfo.nom}`}
+                effect="blur"
+                className="h-8 w-8 rounded-full object-cover border-2"
+                style={{ 
+                  borderColor: safeTextColor(colors.primary),
+                  backgroundColor: hexToRgba(colors.primary, 0.2)
+                }}
+              />
+            )}
+            <h1 
+              className="text-lg font-bold"
+              style={{ color: safeTextColor(colors.primary) }}
+            >
+              Réservation
+            </h1>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto p-4">
+        {/* Récapitulatif compact du trajet */}
+        <div className={`p-4 rounded-xl mb-4 ${classes.card}`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h1 className="text-lg font-bold" style={{ color: colors.primary }}>
+                {tripData.departure} → {tripData.arrival}
+              </h1>
+              <div className="flex items-center gap-2 text-sm mt-1">
+                <Calendar className="h-4 w-4 opacity-70" />
+                <span>{formatDateDisplay(tripData.date)}</span>
+                <Clock className="h-4 w-4 opacity-70 ml-2" />
+                <span>{tripData.time}</span>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-sm opacity-80">Prix unitaire</div>
+              <div className="font-bold">{unitPrice.toLocaleString()} FCFA</div>
+            </div>
+          </div>
         </div>
 
-        <div className="mt-4 text-sm text-gray-500">
-          <p className="italic">Moyen de paiement mobile money obligatoire (intégration de SinetPay à venir)</p>
+        {/* Formulaire compact */}
+        <div className={`rounded-xl overflow-hidden ${classes.card}`}>
+          <div className="p-4">
+            <h2 className="text-lg font-bold mb-4" style={{ color: colors.primary }}>
+              Informations du passager
+            </h2>
+            
+            <form onSubmit={handlePayment} className="space-y-4">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Nom complet *</label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 opacity-70" />
+                    <input
+                      type="text"
+                      name="fullName"
+                      value={passengerData.fullName}
+                      onChange={handlePassengerChange}
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:outline-none"
+                      style={{ 
+                        borderColor: hexToRgba(colors.primary, 0.3),
+                      }}
+                      required
+                    />
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-1">Téléphone *</label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 opacity-70" />
+                    <input
+                      type="tel"
+                      name="phone"
+                      value={passengerData.phone}
+                      onChange={handlePassengerChange}
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:outline-none"
+                      style={{ 
+                        borderColor: hexToRgba(colors.primary, 0.3),
+                      }}
+                      required
+                    />
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-1">Email</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 opacity-70" />
+                    <input
+                      type="email"
+                      name="email"
+                      value={passengerData.email}
+                      onChange={handlePassengerChange}
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:outline-none"
+                      style={{ 
+                        borderColor: hexToRgba(colors.primary, 0.3),
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <h3 className="text-sm font-medium mb-2">Type de voyage</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    className={`py-2 px-3 rounded-lg text-sm border ${
+                      tripType === 'aller_simple' ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-200'
+                    }`}
+                    onClick={() => setTripType('aller_simple')}
+                    style={{
+                      borderColor: tripType === 'aller_simple' ? colors.primary : undefined,
+                      backgroundColor: tripType === 'aller_simple' ? hexToRgba(colors.primary, 0.1) : undefined
+                    }}
+                  >
+                    Aller simple
+                  </button>
+                  <button
+                    type="button"
+                    className={`py-2 px-3 rounded-lg text-sm border ${
+                      tripType === 'aller_retour' ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-200'
+                    }`}
+                    onClick={() => setTripType('aller_retour')}
+                    style={{
+                      borderColor: tripType === 'aller_retour' ? colors.primary : undefined,
+                      backgroundColor: tripType === 'aller_retour' ? hexToRgba(colors.primary, 0.1) : undefined
+                    }}
+                  >
+                    Aller-retour
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <h3 className="text-sm font-medium mb-2">Nombre de places</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs mb-1 opacity-80">Aller</label>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="p-1 w-8 h-8 rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                        onClick={() => handleSeatsChange('go', seatsGo - 1)}
+                        disabled={seatsGo <= 1}
+                      >
+                        -
+                      </button>
+                      <div className="flex-1 text-center font-medium py-1 border border-gray-200 rounded-lg">
+                        {seatsGo}
+                      </div>
+                      <button
+                        type="button"
+                        className="p-1 w-8 h-8 rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                        onClick={() => handleSeatsChange('go', seatsGo + 1)}
+                        disabled={seatsGo >= 10}
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {tripType === 'aller_retour' && (
+                    <div>
+                      <label className="block text-xs mb-1 opacity-80">Retour</label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="p-1 w-8 h-8 rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                          onClick={() => handleSeatsChange('return', seatsReturn - 1)}
+                          disabled={seatsReturn <= 1}
+                        >
+                          -
+                        </button>
+                        <div className="flex-1 text-center font-medium py-1 border border-gray-200 rounded-lg">
+                          {seatsReturn}
+                        </div>
+                        <button
+                          type="button"
+                          className="p-1 w-8 h-8 rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                          onClick={() => handleSeatsChange('return', seatsReturn + 1)}
+                          disabled={seatsReturn >= 10}
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-4">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="font-medium">Total:</span>
+                  <span className="text-lg font-bold">{totalCost.toLocaleString()} FCFA</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-3">
+                  {unitPrice.toLocaleString()} FCFA × {seatsGo} place(s){' '}
+                  {tripType === 'aller_retour' && `+ ${seatsReturn} place(s)`}
+                </div>
+                
+                <button
+                  type="submit"
+                  className={`w-full py-3 px-4 rounded-lg font-medium ${classes.button}`}
+                  style={{
+                    backgroundColor: colors.primary,
+                    color: colors.text
+                  }}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Traitement...
+                    </span>
+                  ) : (
+                    'Payer avec Mobile Money'
+                  )}
+                </button>
+                
+                <div className="mt-2 text-center text-xs text-gray-500">
+                  <p>Moyen de paiement mobile money obligatoire</p>
+                  <div className="mt-1 inline-flex items-center gap-1 px-2 py-1 rounded-full border border-gray-200">
+                    <svg className="h-3 w-3 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    Paiement sécurisé
+                  </div>
+                </div>
+              </div>
+            </form>
+          </div>
         </div>
-      </form>
+      </main>
     </div>
   );
 };

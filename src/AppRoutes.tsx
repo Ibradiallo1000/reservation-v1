@@ -63,7 +63,6 @@ const AppRoutes = () => {
       <Routes>
         {/* Public */}
         <Route path="/" element={<HomePage />} />
-        <Route path="/booking" element={<FormulaireReservationClient />} />
         <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
         <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
