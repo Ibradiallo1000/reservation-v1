@@ -19,6 +19,22 @@ const FormulaireReservationClient: React.FC = () => {
   const { slug = '' } = useParams();
 
   const { tripData, companyInfo } = location.state || {};
+  if (!location.state || !tripData || !companyInfo) {
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-white p-4">
+      <div className="text-center max-w-sm">
+        <h2 className="text-lg font-semibold mb-2 text-red-600">Erreur</h2>
+        <p className="text-gray-600 mb-4">Données de trajet manquantes. Veuillez recommencer depuis la page d’accueil.</p>
+        <button
+          onClick={() => navigate('/')}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+        >
+          Retour à l'accueil
+        </button>
+      </div>
+    </div>
+  );
+}
   const [loading, setLoading] = useState(false);
   const [passengerData, setPassengerData] = useState<PassengerData>({
     fullName: '',

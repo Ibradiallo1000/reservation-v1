@@ -57,6 +57,20 @@ const ResultatsAgencePage: React.FC = () => {
 
   const departureParam = searchParams.get('departure') || '';
   const arrivalParam = searchParams.get('arrival') || '';
+  if (!slug || !departureParam || !arrivalParam) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen text-center p-4 bg-white">
+      <h2 className="text-xl font-bold mb-2 text-red-600">Erreur</h2>
+      <p className="text-gray-700 mb-4">Les paramètres de recherche sont incomplets ou manquants.</p>
+      <button
+        onClick={() => navigate('/')}
+        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+      >
+        Retour à l'accueil
+      </button>
+    </div>
+  );
+}
 
   const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
   const departure = capitalize(departureParam);
