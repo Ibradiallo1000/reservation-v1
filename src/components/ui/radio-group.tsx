@@ -1,4 +1,4 @@
-// src/components/ui/radio-group.tsx
+// src/components/radio-group.tsx
 import * as React from "react";
 
 interface RadioGroupProps extends React.HTMLAttributes<HTMLDivElement> {
