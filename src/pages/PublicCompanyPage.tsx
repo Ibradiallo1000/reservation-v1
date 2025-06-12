@@ -267,13 +267,7 @@ const PublicCompanyPage = () => {
     return;
   }
 
-  navigate(`/compagnie/${slug}/resultats`, {
-    state: {
-      departure: departure.trim(),
-      arrival: arrival.trim(),
-      companyInfo: company
-    }
-  });
+  navigate(`/compagnie/${slug}/resultats?departure=${encodeURIComponent(departure.trim())}&arrival=${encodeURIComponent(arrival.trim())}`);
 };
 
   const toggleVille = (ville: string) => {
