@@ -150,6 +150,7 @@ const FormulaireReservationClient: React.FC = () => {
         companySlug: slug,
       };
 
+      
       const docRef = await addDoc(collection(db, 'reservations'), booking);
       await updateDoc(trajetRef, {
         places: placesRestantes - totalPlacesDemandées
