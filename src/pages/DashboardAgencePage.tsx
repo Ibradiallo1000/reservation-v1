@@ -1,16 +1,52 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, Timestamp, orderBy, limit, QueryDocumentSnapshot } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasPermission } from '../roles-permissions';
 import type { Role } from '../roles-permissions';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
+import { 
+  BarChart, 
+  Bar, 
+  PieChart, 
+  Pie, 
+  Cell, 
+  XAxis, 
+  YAxis, 
+  Tooltip, 
+  ResponsiveContainer, 
+  LineChart, 
+  Line,
+  Legend 
+} from 'recharts';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { motion } from 'framer-motion';
-import { DocumentArrowDownIcon, Cog6ToothIcon, ChartBarIcon, UserGroupIcon, TicketIcon, ArrowUpTrayIcon, ArrowDownTrayIcon, ClockIcon, MapPinIcon, CalendarIcon } from '@heroicons/react/24/outline';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  DocumentArrowDownIcon, 
+  ChartBarIcon, 
+  UserGroupIcon, 
+  TicketIcon, 
+  ArrowUpTrayIcon, 
+  ArrowDownTrayIcon, 
+  ClockIcon, 
+  MapPinIcon, 
+  CalendarIcon,
+  CurrencyDollarIcon,
+  UsersIcon,
+  TruckIcon,
+  ChatBubbleBottomCenterTextIcon,
+  CheckBadgeIcon
+} from '@heroicons/react/24/outline';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 
+// Types
 interface DailyStat {
   date: string;
   reservations: number;
@@ -22,6 +58,7 @@ interface Agent {
   nom: string;
   role: string;
   lastActive: string;
+  avatar?: string;
 }
 
 interface DestinationStat {
@@ -29,7 +66,295 @@ interface DestinationStat {
   value: number;
 }
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
+interface DashboardStats {
+  ventes: number;
+  totalEncaisse: number;
+  courriersEnvoyes: number;
+  courriersRecus: number;
+  courriersEnAttente: number;
+  retards: number;
+  satisfaction: number;
+  occupation: number;
+  agents: Agent[];
+  topDestination: string;
+  prochainDepart: string;
+  dailyStats: DailyStat[];
+  destinations: DestinationStat[];
+}
+
+const COLORS = ['#6366F1', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981'];
+
+// Components
+const MetricCard = React.memo(({
+  title,
+  value,
+  icon,
+  color = 'primary',
+  isCurrency = false,
+  unit = '',
+  link,
+  isLoading = false
+}: {
+  title: string;
+  value: number | string;
+  icon: React.ReactNode;
+  color?: 'primary' | 'success' | 'warning' | 'danger' | 'info';
+  isCurrency?: boolean;
+  unit?: string;
+  link?: string;
+  isLoading?: boolean;
+}) => {
+  const colorClasses = {
+    primary: 'bg-indigo-100 text-indigo-600',
+    success: 'bg-emerald-100 text-emerald-600',
+    warning: 'bg-amber-100 text-amber-600',
+    danger: 'bg-rose-100 text-rose-600',
+    info: 'bg-blue-100 text-blue-600'
+  };
+
+  const formattedValue = isCurrency 
+    ? `${Number(value).toLocaleString()} FCFA` 
+    : typeof value === 'number' 
+      ? `${value.toLocaleString()}${unit}` 
+      : value;
+
+  const content = (
+    <Card className="h-full transition-all hover:shadow-md">
+      <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+        <CardTitle className="text-sm font-medium text-muted-foreground">
+          {title}
+        </CardTitle>
+        <div className={`p-2 rounded-lg ${colorClasses[color]}`}>
+          {icon}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-8 w-3/4" />
+        ) : (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="text-2xl font-bold"
+          >
+            {formattedValue}
+          </motion.div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  return link ? (
+    <a href={link} className="block h-full">
+      {content}
+    </a>
+  ) : content;
+});
+
+const AgentCard = ({ agent }: { agent: Agent }) => {
+  const displayName = agent.nom || 'Inconnu';
+  const role = agent.role || 'Non défini';
+  const initials = displayName.split(' ').map(n => n[0]).join('').toUpperCase();
+
+  return (
+    <motion.div
+      whileHover={{ scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
+      className="flex items-center gap-4 p-4 transition-colors hover:bg-muted/50 rounded-lg"
+    >
+      <div className="relative">
+        <div className="h-10 w-10 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center text-white font-medium">
+          {initials}
+        </div>
+        <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-green-500 ring-2 ring-white"></span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="font-medium truncate">{displayName}</p>
+        <p className="text-sm text-muted-foreground capitalize">{role.toLowerCase()}</p>
+      </div>
+      <div className="text-sm text-muted-foreground">
+        {agent.lastActive || 'Inconnu'}
+      </div>
+    </motion.div>
+  );
+};
+
+const RevenueChart = ({ data, isLoading }: { data: DailyStat[]; isLoading: boolean }) => {
+  const [showReservations, setShowReservations] = useState(false);
+
+  if (isLoading) {
+    return <Skeleton className="w-full h-64 rounded-lg" />;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex justify-between items-center">
+          <CardTitle>Performance sur 7 jours</CardTitle>
+          <div className="flex items-center space-x-2">
+            <Label htmlFor="reservations-toggle">Réservations</Label>
+            <Switch 
+              id="reservations-toggle"
+              checked={showReservations}
+              onCheckedChange={setShowReservations}
+            />
+            <Label htmlFor="reservations-toggle">Revenus</Label>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data}>
+              <XAxis 
+                dataKey="date" 
+                tick={{ fill: '#6B7280' }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis 
+                tick={{ fill: '#6B7280' }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <Tooltip 
+                contentStyle={{
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #E5E7EB',
+                  borderRadius: '0.5rem',
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                }}
+                formatter={(value) => [
+                  showReservations 
+                    ? `${value} réservations` 
+                    : `${Number(value).toLocaleString()} FCFA`,
+                  showReservations ? 'Réservations' : 'Revenus'
+                ]}
+              />
+              <Bar 
+                dataKey={showReservations ? "reservations" : "revenus"} 
+                fill="#6366F1" 
+                radius={[4, 4, 0, 0]} 
+                animationDuration={1500}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+const DestinationsChart = ({ data, isLoading }: { data: DestinationStat[]; isLoading: boolean }) => {
+  if (isLoading) {
+    return <Skeleton className="w-full h-64 rounded-lg" />;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Destinations populaires</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={data}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                outerRadius={80}
+                fill="#8884d8"
+                dataKey="value"
+                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                animationDuration={1500}
+              >
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip 
+                formatter={(value) => [value, 'réservations']}
+                contentStyle={{
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #E5E7EB',
+                  borderRadius: '0.5rem',
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                }}
+              />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+const NextDepartureCard = ({ departure, isLoading }: { departure: string; isLoading: boolean }) => {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex justify-between items-center">
+          <CardTitle>Prochain départ</CardTitle>
+          <TruckIcon className="h-5 w-5 text-muted-foreground" />
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-12 w-full" />
+        ) : (
+          <div className="text-center py-4">
+            <AnimatePresence mode="wait">
+              <motion.p
+                key={departure}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="text-2xl font-bold text-foreground"
+              >
+                {departure}
+              </motion.p>
+            </AnimatePresence>
+            {departure !== '—' && (
+              <p className="text-muted-foreground mt-2">Prochain départ programmé</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const AgentsList = ({ agents, isLoading }: { agents: Agent[]; isLoading: boolean }) => {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex justify-between items-center">
+          <CardTitle>Équipe active</CardTitle>
+          <Badge variant="outline">{agents.length} membres</Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-4">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full" />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {agents.map((agent) => (
+              <AgentCard key={agent.id} agent={agent} />
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
 
 const DashboardAgencePage: React.FC = () => {
   const { user } = useAuth();
@@ -38,7 +363,7 @@ const DashboardAgencePage: React.FC = () => {
     new Date(new Date().setDate(new Date().getDate() - 7)),
     new Date()
   ]);
-  const [stats, setStats] = useState({
+  const [stats, setStats] = useState<DashboardStats>({
     ventes: 0,
     totalEncaisse: 0,
     courriersEnvoyes: 0,
@@ -47,16 +372,20 @@ const DashboardAgencePage: React.FC = () => {
     retards: 0,
     satisfaction: 0,
     occupation: 0,
-    agents: [] as Agent[],
+    agents: [],
     topDestination: '',
     prochainDepart: '',
-    dailyStats: [] as DailyStat[],
-    destinations: [] as DestinationStat[],
+    dailyStats: [],
+    destinations: [],
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchStats = async (startDate: Date, endDate: Date) => {
+  const formatDate = (date: Date) => {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
+
+  const fetchStats = useCallback(async (startDate: Date, endDate: Date) => {
     const agencyIdFromQuery = searchParams.get('aid');
     const agencyId = agencyIdFromQuery || user?.agencyId;
     if (!agencyId) return;
@@ -68,113 +397,115 @@ const DashboardAgencePage: React.FC = () => {
       const startTimestamp = Timestamp.fromDate(startDate);
       const endTimestamp = Timestamp.fromDate(endDate);
 
-      const [
-        reservationsSnap,
-        courriersEnvSnap,
-        courriersRecSnap,
-        courriersAttenteSnap,
-        retardsSnap,
-        satisfactionSnap,
-        occupationSnap,
-        usersSnap,
-        tripsSnap,
-        dailyStatsSnap,
-        destinationsSnap
-      ] = await Promise.all([
-        getDocs(query(
-          collection(db, 'reservations'),
-          where('agencyId', '==', agencyId),
-          where('createdAt', '>=', startTimestamp),
-          where('createdAt', '<=', endTimestamp)
-        )),
-        getDocs(query(
-          collection(db, 'courriers'),
-          where('agencyId', '==', agencyId),
-          where('type', '==', 'envoi'),
-          where('createdAt', '>=', startTimestamp),
-          where('createdAt', '<=', endTimestamp)
-        )),
-        getDocs(query(
-          collection(db, 'courriers'),
-          where('agencyId', '==', agencyId),
-          where('type', '==', 'retrait'),
-          where('createdAt', '>=', startTimestamp),
-          where('createdAt', '<=', endTimestamp)
-        )),
-        getDocs(query(
-          collection(db, 'courriers'),
-          where('agencyId', '==', agencyId),
-          where('statut', '==', 'en_attente')
-        )),
-        getDocs(query(
-          collection(db, 'trips'),
-          where('agencyId', '==', agencyId),
-          where('statut', '==', 'retard')
-        )),
-        getDocs(query(
-          collection(db, 'feedback'),
-          where('agencyId', '==', agencyId),
-          where('createdAt', '>=', startTimestamp),
-          where('createdAt', '<=', endTimestamp)
-        )),
-        getDocs(query(
-          collection(db, 'vehicles'),
-          where('agencyId', '==', agencyId)
-        )),
-        getDocs(query(
-          collection(db, 'users'),
-          where('agencyId', '==', agencyId)
-        )),
-        getDocs(query(
-          collection(db, 'dailyTrips'),
-          where('agencyId', '==', agencyId),
-          where('date', '==', new Date().toISOString().split('T')[0])
-        )),
-        getDocs(query(
-          collection(db, 'dailyStats'),
-          where('agencyId', '==', agencyId),
-          where('date', '>=', Timestamp.fromDate(new Date(new Date().setDate(new Date().getDate() - 7)))),
-          where('date', '<=', Timestamp.fromDate(new Date()))
-        )),
-        getDocs(query(
-          collection(db, 'destinations'),
-          where('agencyId', '==', agencyId)
-        ))
-      ]);
+      // Requête pour les réservations
+      const reservationsQuery = query(
+        collection(db, 'reservations'),
+        where('agencyId', '==', agencyId),
+        where('createdAt', '>=', startTimestamp),
+        where('createdAt', '<=', endTimestamp)
+      );
+      const reservationsSnap = await getDocs(reservationsQuery);
 
-      // Calcul des indicateurs
-      const totalRevenue = reservationsSnap.docs.reduce((sum, doc) => sum + (doc.data().montant || 0), 0);
-      const satisfactionAvg = satisfactionSnap.size > 0 
-        ? satisfactionSnap.docs.reduce((sum, doc) => sum + (doc.data().rating || 0), 0) / satisfactionSnap.size
-        : 0;
-      const occupationRate = occupationSnap.size > 0
-        ? occupationSnap.docs.reduce((sum, doc) => sum + (doc.data().occupation || 0), 0) / occupationSnap.size
-        : 0;
-
-      // Destinations populaires
-      const destinationCounts: Record<string, number> = {};
-      reservationsSnap.docs.forEach(doc => {
-        const arrival = doc.data().arrival;
-        if (arrival) destinationCounts[arrival] = (destinationCounts[arrival] || 0) + 1;
+      // Calcul du revenu total
+      let totalRevenue = 0;
+      reservationsSnap.forEach(doc => {
+        totalRevenue += doc.data().price || 0;
       });
 
-      const topDestinations = Object.entries(destinationCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([name, value]) => ({ name, value }));
+      // Requête pour les courriers envoyés
+      const courriersEnvQuery = query(
+        collection(db, 'courriers'),
+        where('agencyId', '==', agencyId),
+        where('type', '==', 'envoi'),
+        where('date', '>=', startTimestamp),
+        where('date', '<=', endTimestamp)
+      );
+      const courriersEnvSnap = await getDocs(courriersEnvQuery);
 
-      // Prochain départ
-      const now = new Date();
-      const prochain = tripsSnap.docs
-        .map(doc => doc.data())
-        .flatMap(trip => (trip.horaires || []).map((heure: string) => ({ ...trip, heure })))
-        .filter(t => {
-          const [h, m] = t.heure.split(':');
-          const tripTime = new Date();
-          tripTime.setHours(parseInt(h), parseInt(m), 0, 0);
-          return tripTime > now;
-        })
-        .sort((a, b) => a.heure.localeCompare(b.heure))[0];
+      // Requête pour les courriers reçus
+      const courriersRecQuery = query(
+        collection(db, 'courriers'),
+        where('agencyId', '==', agencyId),
+        where('type', '==', 'reception'),
+        where('date', '>=', startTimestamp),
+        where('date', '<=', endTimestamp)
+      );
+      const courriersRecSnap = await getDocs(courriersRecQuery);
+
+      // Requête pour les courriers en attente
+      const courriersAttenteQuery = query(
+        collection(db, 'courriers'),
+        where('agencyId', '==', agencyId),
+        where('status', '==', 'en_attente')
+      );
+      const courriersAttenteSnap = await getDocs(courriersAttenteQuery);
+
+      // Requête pour les retards
+      const retardsQuery = query(
+        collection(db, 'reservations'),
+        where('agencyId', '==', agencyId),
+        where('isDelayed', '==', true)
+      );
+      const retardsSnap = await getDocs(retardsQuery);
+
+      // Requête pour les statistiques de satisfaction
+      const satisfactionQuery = query(
+        collection(db, 'feedbacks'),
+        where('agencyId', '==', agencyId)
+      );
+      const satisfactionSnap = await getDocs(satisfactionQuery);
+      
+      let satisfactionAvg = 0;
+      if (!satisfactionSnap.empty) {
+        const total = satisfactionSnap.docs.reduce((sum, doc) => sum + (doc.data().rating || 0), 0);
+        satisfactionAvg = total / satisfactionSnap.size;
+      }
+
+      // Calcul du taux d'occupation (exemple simplifié)
+      const totalCapacity = 100; // À remplacer par votre logique métier
+      const occupationRate = reservationsSnap.size / totalCapacity;
+
+      // Requête pour les agents
+      const usersQuery = query(
+        collection(db, 'users'),
+        where('agencyId', '==', agencyId),
+        where('isActive', '==', true)
+      );
+      const usersSnap = await getDocs(usersQuery);
+
+      // Requête pour les destinations populaires
+      const destinationsQuery = query(
+        collection(db, 'destinations'),
+        where('agencyId', '==', agencyId),
+        orderBy('reservationCount', 'desc'),
+        limit(5)
+      );
+      const destinationsSnap = await getDocs(destinationsQuery);
+      const topDestinations = destinationsSnap.docs.map(doc => ({
+        name: doc.data().name,
+        value: doc.data().reservationCount
+      }));
+
+      // Requête pour le prochain départ
+      const prochainDepartQuery = query(
+        collection(db, 'departures'),
+        where('agencyId', '==', agencyId),
+        where('date', '>=', Timestamp.now()),
+        orderBy('date', 'asc'),
+        limit(1)
+      );
+      const prochainDepartSnap = await getDocs(prochainDepartQuery);
+      const prochain = prochainDepartSnap.docs[0]?.data();
+
+      // Requête pour les statistiques quotidiennes
+      const dailyStatsQuery = query(
+        collection(db, 'dailyStats'),
+        where('agencyId', '==', agencyId),
+        where('date', '>=', formatDate(startDate)),
+        where('date', '<=', formatDate(endDate)),
+        orderBy('date', 'asc')
+      );
+      const dailyStatsSnap = await getDocs(dailyStatsQuery);
 
       setStats({
         ventes: reservationsSnap.size,
@@ -185,7 +516,7 @@ const DashboardAgencePage: React.FC = () => {
         retards: retardsSnap.size,
         satisfaction: parseFloat(satisfactionAvg.toFixed(1)),
         occupation: parseFloat((occupationRate * 100).toFixed(1)),
-        agents: usersSnap.docs.map(doc => ({
+        agents: usersSnap.docs.map((doc: QueryDocumentSnapshot) => ({
           id: doc.id,
           nom: doc.data().displayName || 'Inconnu',
           role: doc.data().role || 'agent',
@@ -193,7 +524,7 @@ const DashboardAgencePage: React.FC = () => {
         })),
         topDestination: topDestinations[0]?.name || '—',
         prochainDepart: prochain ? `${prochain.departure || '?'} → ${prochain.arrival || '?'} à ${prochain.heure || '?'}` : '—',
-        dailyStats: dailyStatsSnap.docs.map(doc => {
+        dailyStats: dailyStatsSnap.docs.map((doc: QueryDocumentSnapshot) => {
           const rawDate = doc.data().date;
           const [year, month, day] = rawDate.split('-');
           return {
@@ -210,11 +541,11 @@ const DashboardAgencePage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, searchParams]);
 
   useEffect(() => {
     fetchStats(dateRange[0], dateRange[1]);
-  }, [user, searchParams, dateRange]);
+  }, [fetchStats, dateRange]);
 
   const handleExport = () => {
     console.log("Export des données");
@@ -222,69 +553,98 @@ const DashboardAgencePage: React.FC = () => {
 
   if (!user || !hasPermission(user.role as Role, 'reservations')) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center p-6 bg-white rounded-xl shadow-md max-w-md">
-          <div className="text-red-500 text-5xl mb-4">⛔</div>
-          <h2 className="text-xl font-bold mb-2">Accès refusé</h2>
-          <p className="text-gray-600">Vous n'avez pas les permissions nécessaires pour accéder à ce tableau de bord.</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-gray-600">Chargement des données...</p>
-        </div>
+      <div className="flex items-center justify-center min-h-screen">
+        <Card className="w-full max-w-md text-center">
+          <CardHeader>
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+              <svg
+                className="h-6 w-6 text-red-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth="1.5"
+                stroke="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
+                />
+              </svg>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <h3 className="text-lg font-medium">Accès refusé</h3>
+            <p className="text-muted-foreground mt-2">
+              Vous n'avez pas les permissions nécessaires pour accéder à ce tableau de bord.
+            </p>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center p-6 bg-white rounded-xl shadow-md max-w-md">
-          <div className="text-red-500 text-5xl mb-4">⚠️</div>
-          <h2 className="text-xl font-bold mb-2">Erreur de chargement</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
-          <button 
-            onClick={() => fetchStats(dateRange[0], dateRange[1])}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-          >
-            Réessayer
-          </button>
-        </div>
+      <div className="flex items-center justify-center min-h-screen">
+        <Card className="w-full max-w-md text-center">
+          <CardHeader>
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
+              <svg
+                className="h-6 w-6 text-amber-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth="1.5"
+                stroke="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
+                />
+              </svg>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <h3 className="text-lg font-medium">Erreur de chargement</h3>
+            <p className="text-muted-foreground mt-2">{error}</p>
+          </CardContent>
+          <CardFooter className="justify-center">
+            <Button onClick={() => fetchStats(dateRange[0], dateRange[1])}>
+              Réessayer
+            </Button>
+          </CardFooter>
+        </Card>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-muted/40 p-4 md:p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Tableau de bord</h1>
-            <p className="text-gray-500">
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground">Tableau de bord</h1>
+            <p className="text-muted-foreground">
               {user.agencyName} • Mis à jour à {new Date().toLocaleTimeString()}
             </p>
           </div>
+          
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-            <div className="flex items-center gap-2 bg-white p-2 rounded-lg shadow-xs border border-gray-200">
-              <CalendarIcon className="h-5 w-5 text-gray-400" />
+            <div className="flex items-center gap-2 bg-background p-2 rounded-lg border">
+              <CalendarIcon className="h-5 w-5 text-muted-foreground" />
               <DatePicker
                 selected={dateRange[0]}
                 onChange={(date) => setDateRange([date as Date, dateRange[1]])}
                 selectsStart
                 startDate={dateRange[0]}
                 endDate={dateRange[1]}
-                className="w-28 border-none text-sm focus:ring-0"
+                className="w-28 border-none text-sm focus:ring-0 bg-transparent"
                 dateFormat="dd/MM"
               />
-              <span className="text-gray-400">à</span>
+              <span className="text-muted-foreground">à</span>
               <DatePicker
                 selected={dateRange[1]}
                 onChange={(date) => setDateRange([dateRange[0], date as Date])}
@@ -292,237 +652,108 @@ const DashboardAgencePage: React.FC = () => {
                 startDate={dateRange[0]}
                 endDate={dateRange[1]}
                 minDate={dateRange[0]}
-                className="w-28 border-none text-sm focus:ring-0"
+                className="w-28 border-none text-sm focus:ring-0 bg-transparent"
                 dateFormat="dd/MM"
               />
             </div>
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
+            
+            <Button 
+              variant="outline"
               onClick={handleExport}
-              className="flex items-center justify-center gap-2 bg-white text-blue-600 px-4 py-2 rounded-lg shadow-xs border border-gray-200 hover:bg-blue-50 transition"
+              className="gap-2"
             >
               <DocumentArrowDownIcon className="h-5 w-5" />
               <span className="hidden sm:inline">Exporter</span>
-            </motion.button>
+            </Button>
           </div>
         </div>
 
-        {/* Cartes de statistiques */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <MetricCard
             title="Billets vendus"
             value={stats.ventes}
-            icon={<TicketIcon className="h-6 w-6" />}
-            color="blue"
+            icon={<TicketIcon className="h-5 w-5" />}
+            color="primary"
             link="/reservations"
+            isLoading={loading}
           />
           <MetricCard
             title="Revenus totaux"
             value={stats.totalEncaisse}
-            icon={<ChartBarIcon className="h-6 w-6" />}
-            color="green"
+            icon={<CurrencyDollarIcon className="h-5 w-5" />}
+            color="success"
             isCurrency
+            isLoading={loading}
           />
           <MetricCard
             title="Courriers envoyés"
             value={stats.courriersEnvoyes}
-            icon={<ArrowUpTrayIcon className="h-6 w-6" />}
-            color="orange"
+            icon={<ArrowUpTrayIcon className="h-5 w-5" />}
+            color="info"
             link="/courriers?type=envoi"
+            isLoading={loading}
           />
           <MetricCard
             title="Courriers reçus"
             value={stats.courriersRecus}
-            icon={<ArrowDownTrayIcon className="h-6 w-6" />}
-            color="purple"
+            icon={<ArrowDownTrayIcon className="h-5 w-5" />}
+            color="warning"
             link="/courriers?type=retrait"
+            isLoading={loading}
           />
           <MetricCard
             title="En attente"
             value={stats.courriersEnAttente}
-            icon={<ClockIcon className="h-6 w-6" />}
-            color="red"
+            icon={<ClockIcon className="h-5 w-5" />}
+            color="danger"
             link="/courriers?statut=en_attente"
+            isLoading={loading}
           />
           <MetricCard
             title="Agents actifs"
             value={stats.agents.length}
-            icon={<UserGroupIcon className="h-6 w-6" />}
-            color="indigo"
+            icon={<UsersIcon className="h-5 w-5" />}
+            color="primary"
             link="/agents"
+            isLoading={loading}
           />
           <MetricCard
             title="Taux d'occupation"
             value={stats.occupation}
-            icon={<ChartBarIcon className="h-6 w-6" />}
-            color="teal"
+            icon={<ChartBarIcon className="h-5 w-5" />}
+            color="success"
             unit="%"
+            isLoading={loading}
           />
           <MetricCard
             title="Satisfaction"
             value={stats.satisfaction}
-            icon={<ChartBarIcon className="h-6 w-6" />}
-            color="amber"
+            icon={<ChatBubbleBottomCenterTextIcon className="h-5 w-5" />}
+            color="warning"
             unit="/5"
+            isLoading={loading}
           />
         </div>
 
-        {/* Graphiques principaux */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-          <div className="lg:col-span-2 bg-white p-5 rounded-xl shadow-xs border border-gray-100">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold">Performance sur 7 jours</h3>
-              <div className="flex gap-2">
-                <button className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded">
-                  Revenus
-                </button>
-                <button className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-                  Réservations
-                </button>
-              </div>
-            </div>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.dailyStats}>
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip 
-                    formatter={(value) => [Number(value).toLocaleString(), 'Revenus (FCFA)']}
-                  />
-                  <Bar dataKey="revenus" fill="#4f46e5" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+        {/* Charts Section */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <RevenueChart data={stats.dailyStats} isLoading={loading} />
           </div>
-
-          <div className="bg-white p-5 rounded-xl shadow-xs border border-gray-100">
-            <h3 className="text-lg font-semibold mb-4">Destinations populaires</h3>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={stats.destinations}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  >
-                    {stats.destinations.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value) => [value, 'réservations']} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+          <div>
+            <DestinationsChart data={stats.destinations} isLoading={loading} />
           </div>
         </div>
 
-        {/* Tableaux et listes */}
+        {/* Bottom Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white p-5 rounded-xl shadow-xs border border-gray-100">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold">Prochain départ</h3>
-              <MapPinIcon className="h-5 w-5 text-gray-400" />
-            </div>
-            <div className="text-center py-8">
-              <p className="text-2xl font-bold text-gray-800">{stats.prochainDepart}</p>
-              {stats.prochainDepart !== '—' && (
-                <p className="text-gray-500 mt-2">Prochain départ programmé</p>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white p-5 rounded-xl shadow-xs border border-gray-100">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold">Agents actifs</h3>
-              <span className="text-sm text-gray-500">{stats.agents.length} agents</span>
-            </div>
-            <div className="space-y-3">
-              {stats.agents.map((agent) => {
-                const displayName = agent.nom || 'Inconnu';
-                const role = agent.role || 'Non défini';
-                
-                return (
-                  <motion.div
-                    key={agent.id}
-                    whileHover={{ x: 2 }}
-                    className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-lg transition"
-                  >
-                    <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-medium">
-                      {displayName.charAt(0)}
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium">{displayName}</p>
-                      <p className="text-sm text-gray-500 capitalize">{role.toLowerCase()}</p>
-                    </div>
-                    <div className="text-sm text-gray-400">
-                      {agent.lastActive || 'Inconnu'}
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
-          </div>
+          <NextDepartureCard departure={stats.prochainDepart} isLoading={loading} />
+          <AgentsList agents={stats.agents} isLoading={loading} />
         </div>
       </div>
     </div>
   );
-};
-
-const MetricCard: React.FC<{
-  title: string;
-  value: number | string;
-  icon: React.ReactNode;
-  color?: string;
-  isCurrency?: boolean;
-  unit?: string;
-  link?: string;
-}> = ({ title, value, icon, color = 'blue', isCurrency = false, unit = '', link }) => {
-  const colorClasses = {
-    blue: 'bg-blue-100 text-blue-600',
-    green: 'bg-green-100 text-green-600',
-    orange: 'bg-orange-100 text-orange-600',
-    purple: 'bg-purple-100 text-purple-600',
-    red: 'bg-red-100 text-red-600',
-    indigo: 'bg-indigo-100 text-indigo-600',
-    teal: 'bg-teal-100 text-teal-600',
-    amber: 'bg-amber-100 text-amber-600',
-    gray: 'bg-gray-100 text-gray-600'
-  };
-
-  const content = (
-    <motion.div
-      whileHover={{ y: -2 }}
-      className={`bg-white p-4 rounded-xl shadow-xs border border-gray-100 h-full ${link ? 'cursor-pointer' : ''}`}
-    >
-      <div className="flex justify-between items-start">
-        <div>
-          <p className="text-sm font-medium text-gray-500">{title}</p>
-          <p className="text-2xl font-bold text-gray-800 mt-1">
-            {isCurrency 
-              ? `${Number(value).toLocaleString()} FCFA` 
-              : typeof value === 'number' 
-                ? `${value.toLocaleString()}${unit}` 
-                : value}
-          </p>
-        </div>
-        <div className={`p-2 rounded-lg ${colorClasses[color as keyof typeof colorClasses]}`}>
-          {icon}
-        </div>
-      </div>
-    </motion.div>
-  );
-
-  return link ? (
-    <a href={link}>
-      {content}
-    </a>
-  ) : content;
 };
 
 export default DashboardAgencePage;

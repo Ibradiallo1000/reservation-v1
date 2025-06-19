@@ -1,11 +1,21 @@
 import { ThemeConfig } from '../types';
 
-export const getThemeConfig = (themeStyle: string): ThemeConfig => {
+interface CompanyColors {
+  couleurPrimaire?: string;
+  couleurSecondaire?: string;
+  couleurAccent?: string;
+}
+
+export const getThemeConfig = (
+  themeStyle: string,
+  companyColors?: CompanyColors
+): ThemeConfig => {
   const themes: Record<string, ThemeConfig> = {
     moderne: {
       colors: {
         primary: '#3B82F6',
         secondary: '#10B981',
+        accent: '#8B5CF6',
         background: '#F9FAFB',
         text: '#111827',
       },
@@ -19,6 +29,7 @@ export const getThemeConfig = (themeStyle: string): ThemeConfig => {
       colors: {
         primary: '#2563EB',
         secondary: '#1E40AF',
+        accent: '#4B5563',
         background: '#FFFFFF',
         text: '#1F2937',
       },
@@ -32,6 +43,7 @@ export const getThemeConfig = (themeStyle: string): ThemeConfig => {
       colors: {
         primary: '#F59E0B',
         secondary: '#F97316',
+        accent: '#F43F5E',
         background: '#111827',
         text: '#F3F4F6',
       },
@@ -45,6 +57,7 @@ export const getThemeConfig = (themeStyle: string): ThemeConfig => {
       colors: {
         primary: '#EF4444',
         secondary: '#F59E0B',
+        accent: '#22D3EE',
         background: '#FFFFFF',
         text: '#000000',
       },
@@ -58,6 +71,7 @@ export const getThemeConfig = (themeStyle: string): ThemeConfig => {
       colors: {
         primary: '#6B7280',
         secondary: '#9CA3AF',
+        accent: '#D1D5DB',
         background: '#FFFFFF',
         text: '#374151',
       },
@@ -71,6 +85,7 @@ export const getThemeConfig = (themeStyle: string): ThemeConfig => {
       colors: {
         primary: 'rgba(59, 130, 246, 0.8)',
         secondary: 'rgba(16, 185, 129, 0.8)',
+        accent: 'rgba(255, 255, 255, 0.3)',
         background: 'rgba(255, 255, 255, 0.1)',
         text: '#FFFFFF',
       },
@@ -82,5 +97,15 @@ export const getThemeConfig = (themeStyle: string): ThemeConfig => {
     },
   };
 
-  return themes[themeStyle] || themes.moderne;
+  const base = themes[themeStyle] || themes['moderne'];
+
+  return {
+    ...base,
+    colors: {
+      ...base.colors,
+      primary: companyColors?.couleurPrimaire || base.colors.primary,
+      secondary: companyColors?.couleurSecondaire || base.colors.secondary,
+      accent: companyColors?.couleurAccent || base.colors.accent || base.colors.primary,
+    },
+  };
 };

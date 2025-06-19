@@ -1,6 +1,6 @@
 // ✅ src/pages/AgenceTrajetsPage.tsx
 console.log("🚍 AgenceTrajetsPage affichée !");
-
+import { sendNotification } from '../services/sendNotification';
 import React, { useState, useEffect } from 'react';
 import {
   collection,
@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { generateWeeklyTrips } from '../services/generateWeeklyTrips';
-import { generateDailyTripsForWeeklyTrip } from '../services/generateDailyTripsForWeeklyTrip';
+
 import { useAuth } from '@/contexts/AuthContext';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -76,8 +76,6 @@ const AgenceTrajetsPage: React.FC = () => {
     setLoading(true);
     try {
       await deleteDoc(doc(db, 'weeklyTrips', id));
-      const snap = await getDocs(query(collection(db, 'dailyTrips'), where('weeklyTripId', '==', id)));
-      for (const d of snap.docs) await deleteDoc(doc(db, 'dailyTrips', d.id));
       fetchTrajets();
       setMessage('🗑️ Trajet supprimé avec succès.');
     } catch (err) {
@@ -160,10 +158,10 @@ const AgenceTrajetsPage: React.FC = () => {
           places: parseInt(places),
           horaires: horairesFiltres,
         });
-        await generateDailyTripsForWeeklyTrip(modifierId);
+       
         setMessage('✅ Trajet modifié avec succès.');
       } else {
-        await generateWeeklyTrips(
+        const newTripId = await generateWeeklyTrips(
           user.companyId,
           dep,
           arr,
@@ -172,13 +170,18 @@ const AgenceTrajetsPage: React.FC = () => {
           parseInt(places),
           user.agencyId
         );
-        await ajouterVillesDepuisTrajet(dep, arr);
-        const snapshot = await getDocs(query(collection(db, 'weeklyTrips'), where('agencyId', '==', user.agencyId)));
-        const latestTrip = snapshot.docs
-          .filter(doc => doc.data().departure === dep && doc.data().arrival === arr)
-          .sort((a, b) => (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0))[0];
-        if (latestTrip) await generateDailyTripsForWeeklyTrip(latestTrip.id);
-        setMessage('✅ Trajet ajouté avec succès !');
+         await sendNotification(
+           `🚌 Nouveau trajet ${dep} → ${arr} ajouté avec succès !`,
+           `/admin/trajets/${newTripId}`,
+           'success'
+        );
+
+        console.log("✅ Nouveau trajet ajouté avec ID :", newTripId);
+
+       // (optionnel) Ajouter directement les villes :
+      await ajouterVillesDepuisTrajet(dep, arr);
+
+      setMessage('✅ Trajet ajouté avec succès !');
       }
       resetForm();
       fetchTrajets();

@@ -1,7 +1,7 @@
 // ✅ CompagnieLayout.tsx - version rapide avec Link + icônes harmonisées
 import React from 'react';
 import { Outlet, Link } from 'react-router-dom';
-import { LayoutDashboard, Building, MapPinned, Mail, Users, ClipboardList, Settings, Image, Wallet, BarChart2 } from 'lucide-react';
+import { LayoutDashboard, Building, MapPinned, Mail, Users, ClipboardList, Settings, Image, Wallet, BarChart2, MessageSquare } from 'lucide-react';
 
 const CompagnieLayout: React.FC = () => {
   return (
@@ -20,6 +20,9 @@ const CompagnieLayout: React.FC = () => {
           </Link>
           <Link to="/compagnie/courriers" className="flex items-center gap-2">
             <Mail className="w-4 h-4" /> Courriers
+          </Link>
+          <Link to="/compagnie/messages" className="flex items-center gap-2">
+            <MessageSquare className="w-4 h-4" /> Messages clients
           </Link>
           <Link to="/compagnie/personnel" className="flex items-center gap-2">
             <Users className="w-4 h-4" /> Personnel

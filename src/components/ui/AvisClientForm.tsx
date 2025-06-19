@@ -1,4 +1,4 @@
-// ✅ Fichier : AvisClientForm.tsx — Permet aux visiteurs de laisser un avis
+// ✅ Fichier : AvisClientForm.tsx — Formulaire d'avis client avec couleur dynamique
 
 import React, { useState } from 'react';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
@@ -8,9 +8,10 @@ import { Star } from 'lucide-react';
 interface Props {
   companyId: string;
   onSuccess?: () => void;
+  primaryColor: string;
 }
 
-const AvisClientForm: React.FC<Props> = ({ companyId, onSuccess }) => {
+const AvisClientForm: React.FC<Props> = ({ companyId, onSuccess, primaryColor }) => {
   const [nom, setNom] = useState('');
   const [note, setNote] = useState(0);
   const [commentaire, setCommentaire] = useState('');
@@ -30,7 +31,7 @@ const AvisClientForm: React.FC<Props> = ({ companyId, onSuccess }) => {
         nom,
         note,
         commentaire,
-        visible: false, // Par défaut invisible
+        visible: false,
         companyId,
         createdAt: serverTimestamp(),
       });
@@ -90,7 +91,8 @@ const AvisClientForm: React.FC<Props> = ({ companyId, onSuccess }) => {
       <button
         type="submit"
         disabled={loading}
-        className="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700"
+        className="text-white px-4 py-2 rounded hover:opacity-90 transition"
+        style={{ backgroundColor: primaryColor }}
       >
         {loading ? 'Envoi en cours...' : 'Envoyer mon avis'}
       </button>

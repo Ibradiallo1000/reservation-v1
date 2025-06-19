@@ -55,7 +55,7 @@ export default defineConfig({
     },
   },
   preview: {
-    port: 5188,
+    port: 5199,
     strictPort: true,
   },
 });

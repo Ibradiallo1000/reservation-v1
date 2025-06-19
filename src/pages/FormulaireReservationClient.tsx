@@ -6,6 +6,7 @@ import { ChevronLeft, Clock, MapPin, Calendar, Users, Ticket, User, Phone, Mail 
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { hexToRgba, safeTextColor } from '../utils/color';
+import { getDocs } from 'firebase/firestore';
 
 interface PassengerData {
   fullName: string;
@@ -104,75 +105,77 @@ const FormulaireReservationClient: React.FC = () => {
   };
 
   const handlePayment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    
-    try {
-      if (!passengerData.fullName || !passengerData.phone) {
-        throw new Error('Veuillez remplir tous les champs obligatoires');
-      }
+  e.preventDefault();
+  setLoading(true);
 
-      const trajetRef = doc(db, 'dailyTrips', tripData.id);
-      const trajetSnap = await getDoc(trajetRef);
-      
-      if (!trajetSnap.exists()) {
-        throw new Error('Trajet introuvable');
-      }
-
-      const trajet = trajetSnap.data();
-      const placesRestantes = trajet.places || 0;
-      const totalPlacesDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
-
-      if (placesRestantes < totalPlacesDemandées) {
-        throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
-      }
-
-      const booking = {
-        nomClient: passengerData.fullName,
-        telephone: passengerData.phone,
-        email: passengerData.email,
-        depart: tripData.departure,
-        arrivee: tripData.arrival,
-        date: tripData.date,
-        heure: tripData.time,
-        montant: totalCost,
-        seatsGo,
-        seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
-        tripType,
-        canal: 'en_ligne',
-        statut: 'payé',
-        createdAt: Timestamp.now(),
-        companyId: tripData.companyId,
-        agencyId: tripData.agencyId,
-        trajetId: tripData.id,
-        paiement: 'mobile_money',
-        commission: totalCost * 0.05,
-        companySlug: slug,
-      };
-
-      
-      const docRef = await addDoc(collection(db, 'reservations'), booking);
-      await updateDoc(trajetRef, {
-        places: placesRestantes - totalPlacesDemandées
-      });
-
-      navigate(`/reservation-confirmation/${docRef.id}`, { 
-        state: { 
-          slug: slug,
-          reservation: {
-            ...booking,
-            id: docRef.id,
-            companyName: companyInfo?.nom
-          }
-        } 
-      });
-
-    } catch (error: any) {
-      alert(error.message);
-    } finally {
-      setLoading(false);
+  try {
+    if (!passengerData.fullName || !passengerData.phone) {
+      throw new Error('Veuillez remplir tous les champs obligatoires');
     }
-  };
+
+    const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
+
+    // 🔍 Recalcul dynamique des places restantes depuis les réservations
+    const reservationsSnap = await getDocs(collection(db, 'reservations'));
+    const reservations = reservationsSnap.docs.map((doc: any) => doc.data());
+
+    const réservées = reservations
+      .filter((res: any) =>
+        res.trajetId === tripData.id &&
+        res.date === tripData.date &&
+        res.heure === tripData.time &&
+        res.statut === 'payé'
+      )
+      .reduce((acc: number, res: any) => acc + (res.seatsGo || 1), 0);
+
+    const placesRestantes = (tripData.places || 0) - réservées;
+
+    if (placesRestantes < totalDemandées) {
+      throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
+    }
+
+    const booking = {
+      nomClient: passengerData.fullName,
+      telephone: passengerData.phone,
+      email: passengerData.email,
+      depart: tripData.departure,
+      arrivee: tripData.arrival,
+      date: tripData.date,
+      heure: tripData.time,
+      montant: totalCost,
+      seatsGo,
+      seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
+      tripType,
+      canal: 'en_ligne',
+      statut: 'payé',
+      createdAt: Timestamp.now(),
+      companyId: tripData.companyId,
+      agencyId: tripData.agencyId,
+      trajetId: tripData.id,
+      paiement: 'mobile_money',
+      commission: totalCost * 0.05,
+      companySlug: slug,
+    };
+
+    const docRef = await addDoc(collection(db, 'reservations'), booking);
+
+    navigate(`/reservation-confirmation/${docRef.id}`, {
+      state: {
+        slug: slug,
+        reservation: {
+          ...booking,
+          id: docRef.id,
+          companyName: companyInfo?.nom
+        }
+      }
+    });
+
+  } catch (error: any) {
+    alert(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const formatDateDisplay = (dateStr: string) => {
     const date = new Date(dateStr);

@@ -1,20 +1,18 @@
-// ✅ Correction du fichier generateWeeklyTrips.ts avec bon ID compagnie
-
 import { addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
 export const generateWeeklyTrips = async (
-  companyId: string, // ⚠️ Doit être l'ID de la compagnie, pas le uid de l'utilisateur
+  companyId: string,
   departure: string,
   arrival: string,
   price: number,
   horaires: { [key: string]: string[] },
   places: number,
   agencyId: string
-) => {
+): Promise<string> => {
   try {
-    await addDoc(collection(db, 'weeklyTrips'), {
-      companyId, // ✅ ID de la compagnie
+    const docRef = await addDoc(collection(db, 'weeklyTrips'), {
+      companyId,
       agencyId,
       departure,
       arrival,
@@ -24,6 +22,8 @@ export const generateWeeklyTrips = async (
       active: true,
       createdAt: Timestamp.now(),
     });
+
+    return docRef.id; // ✅ Retourne l'ID du trajet créé
   } catch (error) {
     console.error('Erreur lors de la création du trajet hebdomadaire :', error);
     throw error;

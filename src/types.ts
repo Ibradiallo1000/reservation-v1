@@ -58,6 +58,8 @@ export interface Company {
   themeStyle?: string; // moderne | classique | sombre | ...
   couleurPrimaire?: string;
   couleurSecondaire?: string;
+  couleurAccent?: string;
+  couleurTertiaire?: string;
   police?: string;
 }
 
@@ -65,6 +67,7 @@ export interface ThemeConfig {
   colors: {
     primary: string;
     secondary: string;
+    accent?: string; // ✅ Accent ajouté (facultatif)
     background: string;
     text: string;
   };

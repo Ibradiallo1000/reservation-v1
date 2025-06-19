@@ -178,38 +178,52 @@ const ResultatsAgencePage: React.FC = () => {
 
     try {
       const allDates = getNextNDates(8);
-      console.log("📅 Dates valides attendues:", allDates);
+      const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 
-      const q = query(collection(db, 'dailyTrips'));
+      const q = query(
+        collection(db, 'weeklyTrips'),
+        where('agencyId', '==', agence.id),
+        where('departure', '==', departure),
+        where('arrival', '==', arrival),
+        where('active', '==', true)
+      );
+
       const snapshot = await getDocs(q);
+      console.log(`📦 ${snapshot.docs.length} weeklyTrips récupérés depuis Firestore`);
 
-      console.log(`📦 ${snapshot.docs.length} trajets récupérés depuis Firestore`);
+      const virtualTrajets: Trajet[] = [];
 
-      snapshot.docs.forEach(doc => {
+      for (const doc of snapshot.docs) {
         const data = doc.data();
-        console.log("🚌 Trajet brut :", {
-          id: doc.id,
-          departure: data.departure,
-          arrival: data.arrival,
-          agencyId: data.agencyId,
-          date: data.date
-        });
-      });
+        const { departure, arrival, horaires, price, places = 30, agencyId, companyId } = data;
 
-      const allTrajets = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Trajet));
+        for (const dateStr of allDates) {
+          const d = new Date(dateStr);
+          const dayName = DAYS[d.getDay()];
+          const heures = horaires?.[dayName] || [];
+
+          for (const heure of heures) {
+            virtualTrajets.push({
+              id: `${doc.id}-${dateStr}-${heure}`,
+              departure,
+              arrival,
+              date: dateStr,
+              time: heure,
+              price,
+              places,
+              companyId,
+              agencyId,
+              compagnieNom: company?.nom,
+              logoUrl: company?.logoUrl
+            });
+          }
+        }
+      }
 
       const reservationsSnap = await getDocs(collection(db, 'reservations'));
       const reservations = reservationsSnap.docs.map(doc => doc.data());
 
-      const trajetsValides = allTrajets.filter(doc =>
-        doc.departure?.trim().toLowerCase() === departure.toLowerCase() &&
-        doc.arrival?.trim().toLowerCase() === arrival.toLowerCase() &&
-        doc.agencyId === agence.id &&
-        allDates.includes(doc.date)
-      ).map(trajet => {
+      const trajetsValides = virtualTrajets.map(trajet => {
         const reserved = reservations
           .filter(r => r.trajetId === trajet.id && r.statut === 'payé')
           .reduce((acc, r) => acc + (r.seatsGo || 1), 0);
@@ -218,16 +232,6 @@ const ResultatsAgencePage: React.FC = () => {
           ...trajet,
           places: (trajet.places || 30) - reserved
         };
-      });
-
-      console.log(`✅ Trajets valides trouvés: ${trajetsValides.length}`);
-      trajetsValides.forEach(t => {
-        console.log("✅ Trajet filtré :", {
-          id: t.id,
-          date: t.date,
-          time: t.time,
-          places: t.places
-        });
       });
 
       const trajetsParDate: Record<string, Trajet[]> = {};
@@ -269,15 +273,14 @@ const ResultatsAgencePage: React.FC = () => {
   }
 }, [departure, arrival, agence?.id]);
 
-
-  const filteredGrouped = useMemo(() => {
-    return Object.fromEntries(
-      Object.entries(groupedTrajets).map(([key, trajets]) => [
-        key,
-        trajets.filter((t) => t.date === selectedDate),
-      ])
-    );
-  }, [groupedTrajets, selectedDate]);
+const filteredGrouped = useMemo(() => {
+  return Object.fromEntries(
+    Object.entries(groupedTrajets).map(([key, trajets]) => [
+      key,
+      trajets.filter((t) => t.date === selectedDate),
+    ])
+  );
+}, [groupedTrajets, selectedDate]);
 
   useEffect(() => {
     const todayTrips = Object.values(filteredGrouped).flat().filter(t => t.date === selectedDate);

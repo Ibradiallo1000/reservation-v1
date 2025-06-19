@@ -23,6 +23,15 @@ interface Trip {
   places?: number;
   remainingSeats?: number;
 }
+type WeeklyTrip = {
+  id: string;
+  departure: string;
+  arrival: string;
+  active: boolean;
+  horaires: { [key: string]: string[] };
+  price: number;
+  places?: number;
+};
 
 type TripType = 'aller_simple' | 'aller_retour';
 type PaymentMethod = 'espèces' | 'mobile_money';
@@ -76,31 +85,25 @@ const AgenceGuichetPage: React.FC = () => {
 
   // Verify user company on component mount
   useEffect(() => {
-    if (user && !user.companyId) {
-      console.error('Aucune compagnie associée à cet utilisateur');
-      alert('Votre compte n\'est associé à aucune compagnie. Contactez l\'administrateur.');
+  const loadCities = async () => {
+    try {
+      const snapshot = await getDocs(
+        query(collection(db, 'weeklyTrips'), where('active', '==', true))
+      );
+      const allTrips = snapshot.docs.map(doc => doc.data());
+
+      const uniqueDepartures = Array.from(new Set(allTrips.map((t: any) => t.departure)));
+      const uniqueArrivals = Array.from(new Set(allTrips.map((t: any) => t.arrival)));
+
+      setAllDepartures(uniqueDepartures);
+      setAllArrivals(uniqueArrivals);
+    } catch (error) {
+      console.error('Erreur chargement des villes:', error);
     }
-  }, [user]);
+  };
 
-  // Load all available cities
-  useEffect(() => {
-    const loadCities = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, 'dailyTrips'));
-        const allTrips = snapshot.docs.map(doc => doc.data());
-        
-        const uniqueDepartures = Array.from(new Set(allTrips.map((t: any) => t.departure)));
-        const uniqueArrivals = Array.from(new Set(allTrips.map((t: any) => t.arrival)));
-        
-        setAllDepartures(uniqueDepartures);
-        setAllArrivals(uniqueArrivals);
-      } catch (error) {
-        console.error('Error loading cities:', error);
-      }
-    };
-
-    loadCities();
-  }, []);
+  loadCities();
+}, []);
 
   // Calculate total price when relevant values change
   useEffect(() => {
@@ -119,68 +122,103 @@ const AgenceGuichetPage: React.FC = () => {
     setTotalPrice(calculatedTotal);
   }, [places, placesRetour, tripType, selectedTrip]);
 
-  // Handle search for trips
-  const handleSearch = useCallback(async () => {
-    if (!departure || !arrival) {
-      alert('Veuillez sélectionner une ville de départ et une ville d\'arrivée');
-      return;
-    }
+ // ✅ Nouvelle version de handleSearch utilisant weeklyTrips
+const handleSearch = useCallback(async () => {
+  if (!departure || !arrival) {
+    alert('Veuillez sélectionner une ville de départ et une ville d\'arrivée');
+    return;
+  }
 
-    try {
-      const depLower = departure.trim().toLowerCase();
-      const arrLower = arrival.trim().toLowerCase();
+  try {
+    const depLower = departure.trim().toLowerCase();
+    const arrLower = arrival.trim().toLowerCase();
 
-      // Get all trips matching the departure and arrival
-      const snapshot = await getDocs(collection(db, 'dailyTrips'));
-      const allTrips: Trip[] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Trip[];
-      
-      const matchingTrips = allTrips.filter(trip => 
-        trip.departure?.toLowerCase() === depLower &&
-        trip.arrival?.toLowerCase() === arrLower
-      );
+    // Charger les weeklyTrips de cette agence
+    const q = query(
+      collection(db, 'weeklyTrips'),
+      where('agencyId', '==', user?.agencyId || '')
+    );
+    const snapshot = await getDocs(q);
+    const weeklyTrips = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    })) as WeeklyTrip[];
 
-      // Get reservations to calculate remaining seats
-      const reservationsSnap = await getDocs(collection(db, 'reservations'));
-      const reservations = reservationsSnap.docs.map(doc => doc.data());
+    // Générer dynamiquement les trajets à venir sur 8 jours
+    const generatedTrips: Trip[] = [];
+    const now = new Date();
 
-      // Process trips: filter valid dates, calculate remaining seats, exclude past times
-      const processedTrips = matchingTrips
-        .filter(trip => trip.date && availableDates.includes(trip.date))
-        .map(trip => {
-          const reservedSeats = reservations
-            .filter((res: any) => res.trajetId === trip.id && res.statut === 'payé')
-            .reduce((acc, res: any) => acc + (res.seatsGo || 1), 0);
-          
-          return {
-            ...trip,
-            remainingSeats: (trip.places || MAX_SEATS) - reservedSeats
-          };
-        })
-        .filter(trip => !isPastTime(trip.date, trip.time))
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    for (let i = 0; i < DAYS_IN_ADVANCE; i++) {
+      const date = new Date(now);
+      date.setDate(now.getDate() + i);
+      const jourSemaine = date
+        .toLocaleDateString('fr-FR', { weekday: 'long' })
+        .toLowerCase(); // ex: "lundi"
 
-      setTrips(processedTrips);
-      
-      // Set default selected date to the first available date
-      const firstAvailableDate = processedTrips.length > 0 ? processedTrips[0].date : '';
-      setSelectedDate(firstAvailableDate);
-      
-      // Filter trips for the selected date
-      if (firstAvailableDate) {
-        const tripsForDate = processedTrips
-          .filter(trip => trip.date === firstAvailableDate)
-          .sort((a, b) => a.time.localeCompare(b.time));
-        setFilteredTrips(tripsForDate);
-      } else {
-        setFilteredTrips([]);
+      for (const trip of weeklyTrips) {
+        if (
+          trip.departure?.toLowerCase() === depLower &&
+          trip.arrival?.toLowerCase() === arrLower &&
+          trip.active &&
+          trip.horaires?.[jourSemaine]?.length > 0
+        ) {
+          for (const heure of trip.horaires[jourSemaine]) {
+            generatedTrips.push({
+              id: `${trip.id}_${date.toISOString().split('T')[0]}_${heure}`,
+              date: date.toISOString().split('T')[0],
+              time: heure,
+              departure: trip.departure,
+              arrival: trip.arrival,
+              price: trip.price,
+              places: trip.places || MAX_SEATS,
+            });
+          }
+        }
       }
-      
-      setSelectedTrip(null);
-    } catch (error) {
-      console.error('Error searching trips:', error);
-      alert('Une erreur est survenue lors de la recherche des trajets');
     }
-  }, [departure, arrival, availableDates, isPastTime]);
+
+    // Récupérer les réservations payées pour calculer les places restantes
+    const reservationsSnap = await getDocs(collection(db, 'reservations'));
+    const reservations = reservationsSnap.docs.map(doc => doc.data());
+
+    const enrichedTrips = generatedTrips
+      .map(trip => {
+        const reservedSeats = reservations
+          .filter(res =>
+            res.trajetId === trip.id &&
+            res.statut === 'payé'
+          )
+          .reduce((acc, res) => acc + (res.seatsGo || 1), 0);
+
+        return {
+          ...trip,
+          remainingSeats: (trip.places || MAX_SEATS) - reservedSeats
+        };
+      })
+      .filter(trip => !isPastTime(trip.date, trip.time));
+
+    setTrips(enrichedTrips);
+
+    // Sélectionner la première date disponible
+    const firstAvailableDate = enrichedTrips.length > 0 ? enrichedTrips[0].date : '';
+    setSelectedDate(firstAvailableDate);
+
+    if (firstAvailableDate) {
+      const tripsForDate = enrichedTrips
+        .filter(trip => trip.date === firstAvailableDate)
+        .sort((a, b) => a.time.localeCompare(b.time));
+      setFilteredTrips(tripsForDate);
+    } else {
+      setFilteredTrips([]);
+    }
+
+    setSelectedTrip(null);
+
+  } catch (error) {
+    console.error('Erreur lors de la recherche :', error);
+    alert('Une erreur est survenue lors de la recherche des trajets');
+  }
+}, [departure, arrival, user?.agencyId, isPastTime]);
 
   // Handle date selection
   const handleSelectDate = useCallback((date: string) => {
