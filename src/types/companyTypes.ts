@@ -7,6 +7,9 @@ export interface Company {
   banniereUrl?: string;
   couleurPrimaire?: string;
   couleurSecondaire?: string;
+  couleurAccent?: string;         // ✅ Ajoute ça
+  couleurTertiaire?: string;      // ✅ Et ça
+  themeStyle?: string;            // ✅ Et ça
   email?: string;
   telephone?: string;
   adresse?: string;        // ✅ à ajouter
