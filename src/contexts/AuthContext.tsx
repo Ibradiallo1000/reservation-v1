@@ -16,6 +16,7 @@ export interface CustomUser {
   agencyName: string;
   lastLogin?: Date | null;
   permissions?: string[];
+  companyColor?: string;
 }
 
 interface AuthContextType {

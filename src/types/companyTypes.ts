@@ -2,33 +2,39 @@ export interface Company {
   id: string;
   nom: string;
   slug: string;
-  description: string;
-  logoUrl: string;
+  description?: string;
+  logoUrl?: string;
   banniereUrl?: string;
   couleurPrimaire?: string;
   couleurSecondaire?: string;
-  couleurAccent?: string;
-  couleurTertiaire?: string;
-  themeStyle?: string;
-  accroche?: string;
-  instructionRecherche?: string; // ✅ nouveau champ ajouté
-  telephone?: string;
   email?: string;
+  telephone?: string;
+  adresse?: string;        // ✅ à ajouter
+  horaires?: string;       // ✅ à ajouter
   socialMedia?: {
     facebook?: string;
     instagram?: string;
     twitter?: string;
-    tiktok?: string;
     linkedin?: string;
     youtube?: string;
   };
-  footerConfig?: {
-    showSocialMedia?: boolean;
-    showTestimonials?: boolean;
-    showContactForm?: boolean;
-    showLegalLinks?: boolean;
-  };
-  imagesSlider?: string[];
+  footerConfig?: FooterConfig; // ✅ assure-toi que c’est bien lié
+  accroche?: string; // ✅ phrase marketing ou titre sur la bannière
+  instructionRecherche?: string; // ✅ phrase courte sous le titre
+}
+
+export interface FooterConfig {
+  showAbout?: boolean;
+  showContact?: boolean;
+  showSocial?: boolean;
+  showTestimonials?: boolean;
+  showLegalLinks?: boolean;
+  customLinks?: { label: string; url: string; external?: boolean }[];
+  testimonialButtonText?: string;
+  aboutTitle?: string;
+  contactTitle?: string;
+  socialTitle?: string;
+  testimonialsTitle?: string;
 }
 
 export interface Agence {

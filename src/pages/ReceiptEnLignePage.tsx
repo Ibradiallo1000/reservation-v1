@@ -31,6 +31,8 @@ interface ReservationData {
   canal: 'en ligne' | 'agence' | 'téléphone';
   createdAt: { seconds: number; nanoseconds: number } | Date;
   companySlug: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 interface CompanyData {
@@ -107,12 +109,17 @@ const ReceiptEnLignePage: React.FC = () => {
         // Fetch agency data if exists
         let agenceNom = '';
         let agenceTelephone = '';
+        let latitude: number | undefined;
+        let longitude: number | undefined;
+        
         if (reservationData.agencyId) {
           const agencySnap = await getDoc(doc(db, 'agences', reservationData.agencyId));
           if (agencySnap.exists()) {
             const agencyData = agencySnap.data();
             agenceNom = agencyData.nomAgence || '';
             agenceTelephone = agencyData.telephone || '';
+            latitude = agencyData.latitude;
+            longitude = agencyData.longitude;
           }
         }
 
@@ -121,7 +128,9 @@ const ReceiptEnLignePage: React.FC = () => {
           id: reservationSnap.id,
           createdAt: reservationData.createdAt instanceof Date ? 
             reservationData.createdAt : 
-            new Date(reservationData.createdAt.seconds * 1000)
+            new Date(reservationData.createdAt.seconds * 1000),
+          latitude,
+          longitude
         });
 
         setCompany({
@@ -143,18 +152,18 @@ const ReceiptEnLignePage: React.FC = () => {
   const handlePDF = () => {
     if (receiptRef.current) {
       const opt = {
-        margin: 2, // Marges réduites
+        margin: 2,
         filename: `recu-${generateReceiptNumber()}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
         html2canvas: { 
-          scale: 1.5, // Échelle réduite
+          scale: 1.5,
           useCORS: true,
           letterRendering: true,
-          width: 340 // Largeur fixe pour contrôler la taille
+          width: 340
         },
         jsPDF: { 
           unit: 'mm', 
-          format: 'a6', // Format plus petit que A5
+          format: 'a6',
           orientation: 'portrait' 
         }
       };
@@ -237,7 +246,6 @@ const ReceiptEnLignePage: React.FC = () => {
         }
       `}</style>
 
-      {/* Header - Only visible in app, not in print */}
       <header 
         className="sticky top-0 z-50 px-4 py-3 shadow-sm no-print"
         style={{
@@ -272,14 +280,12 @@ const ReceiptEnLignePage: React.FC = () => {
         </div>
       </header>
 
-      {/* Receipt Content - Compact version */}
       <div className="max-w-lg mx-auto p-4 print:p-0 print:max-w-none">
         <div 
           ref={receiptRef}
           className="receipt-container bg-white rounded-xl shadow-sm overflow-hidden print:shadow-none print:rounded-none"
           style={{ borderTop: `4px solid ${primaryColor}` }}
         >
-          {/* Compact Company Header */}
           <div 
             className="p-3 print:p-2 flex justify-between items-center print-py-1"
             style={{ backgroundColor: primaryColor, color: textColor }}
@@ -302,9 +308,7 @@ const ReceiptEnLignePage: React.FC = () => {
             )}
           </div>
 
-          {/* Compact Receipt Body */}
           <div className="p-3 print:p-2 print-py-1">
-            {/* Receipt Header - Compact */}
             <div className="flex justify-between items-start mb-3 pb-1 border-b border-gray-200 compact-section">
               <div>
                 <p className="text-sm text-gray-500 print-text-sm">
@@ -327,7 +331,6 @@ const ReceiptEnLignePage: React.FC = () => {
               </div>
             </div>
 
-            {/* Client Info - Compact */}
             <div className="mb-3 compact-section">
               <h3 className="text-sm font-semibold mb-1 print-text-sm" style={{ color: primaryColor }}>
                 Client
@@ -350,7 +353,6 @@ const ReceiptEnLignePage: React.FC = () => {
               </div>
             </div>
 
-            {/* Trip Details - Compact */}
             <div className="mb-3 compact-section">
               <h3 className="text-sm font-semibold mb-1 print-text-sm" style={{ color: primaryColor }}>
                 Voyage
@@ -379,7 +381,6 @@ const ReceiptEnLignePage: React.FC = () => {
               </div>
             </div>
 
-            {/* Payment Info - Compact */}
             <div className="mb-3 compact-section">
               <h3 className="text-sm font-semibold mb-1 print-text-sm" style={{ color: primaryColor }}>
                 Paiement
@@ -398,7 +399,6 @@ const ReceiptEnLignePage: React.FC = () => {
               </div>
             </div>
 
-            {/* QR Code - Compact */}
             <div className="mt-3 p-2 rounded border border-gray-200 flex flex-col items-center compact-section">
               <h3 className="text-sm font-semibold mb-1 print-text-sm" style={{ color: primaryColor }}>
                 Code d'embarquement
@@ -416,7 +416,6 @@ const ReceiptEnLignePage: React.FC = () => {
               </p>
             </div>
 
-            {/* Footer Note - Compact */}
             <div className="mt-2 pt-1 border-t border-gray-200 text-center text-xs text-gray-500 compact-section print-text-sm">
               <p>Reçu valable uniquement pour le trajet indiqué</p>
               <p className="mt-1">Merci d'avoir choisi {company.nom}</p>
@@ -424,8 +423,7 @@ const ReceiptEnLignePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="no-print mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <div className="no-print mt-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
           <button
             onClick={handlePDF}
             className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow transition-colors text-sm"
@@ -437,6 +435,7 @@ const ReceiptEnLignePage: React.FC = () => {
             <Download className="h-4 w-4" />
             Télécharger
           </button>
+
           <button
             onClick={() => window.print()}
             className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg shadow hover:bg-gray-700 transition-colors text-sm"
@@ -444,6 +443,7 @@ const ReceiptEnLignePage: React.FC = () => {
             <Printer className="h-4 w-4" />
             Imprimer
           </button>
+
           <button
             onClick={() => navigate('/')}
             className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition-colors text-sm"
@@ -451,6 +451,17 @@ const ReceiptEnLignePage: React.FC = () => {
             <Home className="h-4 w-4" />
             Accueil
           </button>
+
+          {reservation.latitude && reservation.longitude && (
+            <a
+              href={`https://www.google.com/maps/dir/?api=1&destination=${reservation.latitude},${reservation.longitude}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg shadow hover:bg-green-700 transition-colors text-sm"
+            >
+              📍 Itinéraire
+            </a>
+          )}
         </div>
       </div>
     </div>

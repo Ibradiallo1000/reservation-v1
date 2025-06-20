@@ -38,7 +38,6 @@ const CompagnieStatistiquesMensuellesPage = lazy(() => import('./pages/Compagnie
 const CompagnieFinancesTabsPage = lazy(() => import('./pages/CompagnieFinancesTabsPage'));
 const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
 
-
 // Agence
 const AgenceLayout = lazy(() => import('./pages/AgenceLayout'));
 const DashboardAgencePage = lazy(() => import('./pages/DashboardAgencePage'));
@@ -61,7 +60,7 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={<PageLoader fullScreen />}>
       <Routes>
-        {/* Public */}
+        {/* Pages publiques */}
         <Route path="/" element={<HomePage />} />
         <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
         <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
@@ -127,7 +126,7 @@ const AppRoutes = () => {
           <Route path="dashboard" element={<DashboardAgencePage />} />
           <Route path="reservations" element={<AgenceReservationPage />} />
           <Route path="guichet" element={<AgenceGuichetPage />} />
-          <Route path="trajets" element={<AgenceTrajetsPage />} /> {/* ✅ */}
+          <Route path="trajets" element={<AgenceTrajetsPage />} />
           <Route path="courriers" element={<AgenceCourriersPage />} />
           <Route path="courriers/envoi" element={<FormulaireEnvoiCourrier />} />
           <Route path="courriers/reception" element={<ReceptionCourrierPage />} />
@@ -137,6 +136,16 @@ const AppRoutes = () => {
           <Route path="personnel" element={<AgencePersonnelPage />} />
           <Route path="receipt/:id" element={<ReceiptGuichetPage />} />
         </Route>
+
+        {/* ✅ Route dynamique pour accéder au dashboard d’une agence précise */}
+        <Route
+          path="/agence/:agenceId/dashboard"
+          element={
+            <PrivateRoute allowedRoles={["admin_compagnie", "chefAgence"]}>
+              <DashboardAgencePage />
+            </PrivateRoute>
+          }
+        />
 
         {/* 404 */}
         <Route
