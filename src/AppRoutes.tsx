@@ -37,7 +37,7 @@ const CompagnieVentesJournalieresPage = lazy(() => import('./pages/CompagnieVent
 const CompagnieStatistiquesMensuellesPage = lazy(() => import('./pages/CompagnieStatistiquesMensuellesPage'));
 const CompagnieFinancesTabsPage = lazy(() => import('./pages/CompagnieFinancesTabsPage'));
 const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
-const AutoGeneratePage = lazy(() => import('./pages/AutoGeneratePage'));
+
 
 // Agence
 const AgenceLayout = lazy(() => import('./pages/AgenceLayout'));
@@ -112,7 +112,6 @@ const AppRoutes = () => {
           <Route path="statistiques" element={<CompagnieStatistiquesMensuellesPage />} />
           <Route path="finances" element={<CompagnieFinancesTabsPage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
-          <Route path="auto-generate" element={<AutoGeneratePage />} />
         </Route>
 
         {/* Agence */}
