@@ -46,7 +46,7 @@ export default function ServicesCarousel({ colors }: { colors: { primary: string
 
   return (
     <motion.section 
-     className="mt-[-400px] px-4 pb-10 bg-gradient-to-b from-black/20 to-black/40"
+     className="mt-[-220px] px-4 pb-10 bg-gradient-to-b from-black/20 to-black/40"
       initial={{ opacity: 0 }}
       whileInView={{ opacity: 1 }}
       viewport={{ once: true }}
@@ -74,7 +74,7 @@ export default function ServicesCarousel({ colors }: { colors: { primary: string
                 <div className="p-3 rounded-full" style={{ background: hexToRgba(colors.primary, 0.2) }}>
                   <Icon className="h-6 w-6" style={{ color: colors.primary }} />
                 </div>
-                <h3 className="text-xl font-semibold text-white">{currentService.title}</h3>
+                <h3 className="text-2xl font-semibold text-white">{currentService.title}</h3>
               </div>
               <p className="text-gray-300 text-sm md:text-base">
                 {currentService.description}
