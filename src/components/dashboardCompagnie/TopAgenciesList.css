@@ -1,0 +1,64 @@
+/* TopAgenciesList.css */
+
+.top-agencies-card {
+  background: rgba(10, 10, 40, 0.7);
+  border: 1px solid rgba(0, 150, 255, 0.3);
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 0 15px rgba(0, 200, 255, 0.2);
+}
+
+.top-agencies-title {
+  color: #00ffff;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: 15px;
+}
+
+.top-agencies-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.agency-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(0, 200, 255, 0.1);
+}
+
+.agency-item:last-child {
+  border-bottom: none;
+}
+
+.rank {
+  font-weight: bold;
+  color: #00ffff;
+  margin-right: 10px;
+}
+
+.agency-info {
+  flex: 1;
+}
+
+.agency-name {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.agency-ville {
+  font-size: 0.85rem;
+  color: #999;
+}
+
+.agency-performance {
+  text-align: right;
+}
+
+.agency-performance span {
+  display: block;
+  font-size: 0.85rem;
+  color: #00ffff;
+}

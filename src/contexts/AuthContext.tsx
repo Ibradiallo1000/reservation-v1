@@ -1,6 +1,5 @@
-// src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
@@ -25,6 +24,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   hasPermission: (permission: string) => boolean;
+  company?: any;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -32,17 +32,15 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   logout: async () => {},
   refreshUser: async () => {},
-  hasPermission: () => false
+  hasPermission: () => false,
+  company: null,
 });
 
 const ROLES_PERMISSIONS: Record<string, string[]> = {
   admin: ['view_dashboard', 'manage_routes', 'manage_staff', 'view_finances'],
   manager: ['view_dashboard', 'manage_routes', 'view_finances'],
   agent: ['view_dashboard', 'access_ticketing'],
-  superviseur: [
-    'dashboard', 'reservations', 'guichet',
-    'courriers', 'trajets', 'finances', 'statistiques'
-  ],
+  superviseur: ['dashboard', 'reservations', 'guichet', 'courriers', 'trajets', 'finances', 'statistiques'],
   chefAgence: [
     'view_dashboard', 'access_ticketing', 'manage_routes',
     'manage_mail', 'mail_send', 'mail_receive',
@@ -55,41 +53,42 @@ const ROLES_PERMISSIONS: Record<string, string[]> = {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<CustomUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [company, setCompany] = useState<any | null>(null);
 
   const fetchUserData = useCallback(async (firebaseUser: any) => {
-    try {
-      const docRef = doc(db, 'users', firebaseUser.uid);
-      const docSnap = await getDoc(docRef);
+    const docRef = doc(db, 'users', firebaseUser.uid);
+    const docSnap = await getDoc(docRef);
 
-      if (!docSnap.exists()) {
-        throw new Error('Document utilisateur non trouvé');
+    if (!docSnap.exists()) throw new Error('Document utilisateur non trouvé');
+
+    const data = docSnap.data();
+
+    const userData: CustomUser = {
+      uid: firebaseUser.uid,
+      email: firebaseUser.email || '',
+      displayName: firebaseUser.displayName || data.nom || '',
+      companyId: data.companyId || '',
+      role: data.role || 'user',
+      nom: data.nom || '',
+      ville: data.ville || '',
+      agencyId: data.agencyId || '',
+      agencyName: data.agencyName || `${data.ville || 'Agence'} Principale`,
+      lastLogin: data.lastLogin?.toDate() || null,
+      permissions: [...(data.permissions || []), ...(ROLES_PERMISSIONS[data.role] || [])]
+    };
+
+    setUser(userData);
+
+    // Récupération de la compagnie
+    if (userData.companyId) {
+      const companyRef = doc(db, 'companies', userData.companyId);
+      const companySnap = await getDoc(companyRef);
+      if (companySnap.exists()) {
+        setCompany(companySnap.data());
       }
-
-      const data = docSnap.data();
-
-      const userData: CustomUser = {
-        uid: firebaseUser.uid,
-        email: firebaseUser.email || '',
-        displayName: firebaseUser.displayName || data.nom || '',
-        companyId: data.companyId || '',
-        role: data.role || 'user',
-        nom: data.nom || '',
-        ville: data.ville || '',
-        agencyId: data.agencyId || '',
-        agencyName: data.agencyName || `${data.ville || 'Agence'} Principale`,
-        lastLogin: data.lastLogin?.toDate() || null,
-        permissions: [...(data.permissions || []), ...(ROLES_PERMISSIONS[data.role] || [])]
-      };
-
-      setUser(userData);
-      setLoading(false);
-      return userData;
-    } catch (error) {
-      console.error('Erreur de chargement utilisateur:', error);
-      setUser(null);
-      setLoading(false);
-      throw error;
     }
+
+    return userData;
   }, []);
 
   const refreshUser = useCallback(async () => {
@@ -99,13 +98,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [fetchUserData]);
 
   const logout = useCallback(async () => {
-    try {
-      await signOut(auth);
-      setUser(null);
-    } catch (error) {
-      console.error('Erreur lors de la déconnexion:', error);
-      throw error;
-    }
+    await signOut(auth);
+    setUser(null);
+    setCompany(null);
   }, []);
 
   const hasPermission = useCallback((permission: string): boolean => {
@@ -117,35 +112,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      try {
-        if (firebaseUser) {
-          await fetchUserData(firebaseUser);
-        } else {
-          setUser(null);
-        }
-      } catch (error) {
-        console.error('Erreur auth state:', error);
-        setUser(null);
-      } finally {
-        clearTimeout(timeoutId); // stop timeout si onAuthStateChanged répond avant
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+          try {
+            if (firebaseUser) {
+              await fetchUserData(firebaseUser);
+            } else {
+              setUser(null);
+              setCompany(null);
+            }
+          } catch (error) {
+            console.error('Erreur auth state:', error);
+            setUser(null);
+            setCompany(null);
+          } finally {
+            clearTimeout(timeoutId);
+            setLoading(false);
+          }
+        });
+
+        timeoutId = setTimeout(() => setLoading(false), 2500);
+
+        return () => {
+          unsubscribe();
+          clearTimeout(timeoutId);
+        };
+      })
+      .catch((error) => {
+        console.error('Erreur de persistance Firebase:', error);
         setLoading(false);
-      }
-    });
-
-    // Sécurité : force loading à false après 2.5 secondes (évite blocage infini)
-    timeoutId = setTimeout(() => {
-      setLoading(false);
-    }, 2500);
-
-    return () => {
-      unsubscribe();
-      clearTimeout(timeoutId);
-    };
+      });
   }, [fetchUserData]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, logout, refreshUser, hasPermission }}>
+    <AuthContext.Provider value={{ user, loading, logout, refreshUser, hasPermission, company }}>
       {children}
     </AuthContext.Provider>
   );
@@ -153,9 +154,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth doit être utilisé dans un AuthProvider');
-  }
+  if (!context) throw new Error('useAuth doit être utilisé dans un AuthProvider');
   return context;
 };
 

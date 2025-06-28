@@ -1,0 +1,11 @@
+.line-chart-container {
+  background: #0a0a1a;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0,255,255,0.2);
+}
+
+.line-chart-container h3 {
+  color: #0ff;
+  margin-bottom: 10px;
+}

@@ -1,8 +1,10 @@
+// ✅ src/AppRoutes.tsx — version complète et corrigée
 import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
+import ReservationPrintPage from '@/pages/ReservationPrintPage';
 
 // Pages publiques
 const HomePage = lazy(() => import('./pages/HomePage'));
@@ -25,7 +27,7 @@ const AdminSidebarLayout = lazy(() => import('./pages/AdminSidebarLayout'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 
 // Compagnie
-const CompagnieLayout = lazy(() => import('./pages/CompagnieLayout'));
+const CompagnieLayout = lazy(() => import('./components/layout/CompagnieLayout'));
 const CompagnieDashboard = lazy(() => import('./pages/CompagnieDashboard'));
 const CompagnieAgencesPage = lazy(() => import('./pages/CompagnieAgencesPage'));
 const CompagnieCourrierPage = lazy(() => import('./pages/CompagnieCourrierPage'));
@@ -41,7 +43,7 @@ const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage
 // Agence
 const AgenceLayout = lazy(() => import('./pages/AgenceLayout'));
 const DashboardAgencePage = lazy(() => import('./pages/DashboardAgencePage'));
-const AgenceReservationPage = lazy(() => import('./pages/AgenceReservationsPage'));
+const AgenceReservationsPage = lazy(() => import('./pages/AgenceReservationsPage'));
 const AgenceGuichetPage = lazy(() => import('./pages/AgenceGuichetPage'));
 const AgenceTrajetsPage = lazy(() => import('./pages/AgenceTrajetsPage'));
 const AgenceCourriersPage = lazy(() => import('./pages/AgenceCourriersPage'));
@@ -124,7 +126,7 @@ const AppRoutes = () => {
         >
           <Route index element={<DashboardAgencePage />} />
           <Route path="dashboard" element={<DashboardAgencePage />} />
-          <Route path="reservations" element={<AgenceReservationPage />} />
+          <Route path="reservations" element={<AgenceReservationsPage />} />
           <Route path="guichet" element={<AgenceGuichetPage />} />
           <Route path="trajets" element={<AgenceTrajetsPage />} />
           <Route path="courriers" element={<AgenceCourriersPage />} />
@@ -137,11 +139,14 @@ const AppRoutes = () => {
           <Route path="receipt/:id" element={<ReceiptGuichetPage />} />
         </Route>
 
-        {/* ✅ Route dynamique pour accéder au dashboard d’une agence précise */}
+        {/* Impression SANS layout */}
+        <Route path="/agence/reservations/impression-reservations" element={<ReservationPrintPage />} />
+
+        {/* Accès admin_compagnie au dashboard d'agence spécifique */}
         <Route
-          path="/agence/:agenceId/dashboard"
+          path="/admin/agence/:id/dashboard"
           element={
-            <PrivateRoute allowedRoles={["admin_compagnie", "chefAgence"]}>
+            <PrivateRoute allowedRoles={["admin_compagnie"]}>
               <DashboardAgencePage />
             </PrivateRoute>
           }

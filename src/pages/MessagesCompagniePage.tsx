@@ -1,11 +1,11 @@
-// ✅ MessagesCompagniePage.tsx – Affichage des messages client pour une compagnie
-
+// ✅ src/pages/MessagesCompagniePage.tsx
 import React, { useEffect, useState } from 'react';
 import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
+import MessagesList from '@/components/messages/MessagesList';
 
-interface MessageClient {
+export interface MessageClient {
   id: string;
   nom: string;
   email: string;
@@ -36,7 +36,6 @@ const MessagesCompagniePage: React.FC = () => {
         setLoading(false);
       }
     };
-
     fetchMessages();
   }, [user?.companyId]);
 
@@ -47,21 +46,7 @@ const MessagesCompagniePage: React.FC = () => {
   return (
     <div className="max-w-4xl mx-auto p-4">
       <h1 className="text-2xl font-bold mb-4">Messages des clients</h1>
-      {loading ? (
-        <p>Chargement...</p>
-      ) : messages.length === 0 ? (
-        <p>Aucun message pour l'instant.</p>
-      ) : (
-        <ul className="space-y-4">
-          {messages.map((msg) => (
-            <li key={msg.id} className="bg-white rounded shadow p-4">
-              <p className="font-semibold">{msg.nom} ({msg.email})</p>
-              <p className="text-sm text-gray-500 mb-2">{msg.createdAt?.toDate().toLocaleString()}</p>
-              <p>{msg.message}</p>
-            </li>
-          ))}
-        </ul>
-      )}
+      <MessagesList messages={messages} loading={loading} />
     </div>
   );
 };

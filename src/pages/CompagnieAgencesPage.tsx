@@ -220,8 +220,8 @@ const CompagnieAgencesPage: React.FC = () => {
     fetchAgences();
   };
 
-  const goToDashboard = (agenceId: string) => {
-    navigate(`/agence/${agenceId}/dashboard`);
+  const goToDashboard = (agencyId: string) => {
+    navigate(`/agence/dashboard?aid=${agencyId}`);
   };
 
   return (

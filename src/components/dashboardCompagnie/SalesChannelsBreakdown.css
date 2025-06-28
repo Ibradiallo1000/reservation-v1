@@ -1,0 +1,54 @@
+/* SalesChannelsBreakdown.css */
+
+.channels-card {
+  background: rgba(10, 10, 40, 0.7);
+  border: 1px solid rgba(0, 255, 255, 0.3);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.channels-title {
+  color: #00ffff;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: 15px;
+}
+
+.channels-content {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.channels-chart {
+  flex: 1;
+}
+
+.channels-list {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.channels-item {
+  display: flex;
+  justify-content: space-between;
+  color: #e0e0e0;
+  margin-bottom: 8px;
+}
+
+.channel-name {
+  flex: 1;
+}
+
+.channel-value {
+  flex: 0 0 40px;
+  text-align: right;
+}
+
+.channel-percent {
+  flex: 0 0 40px;
+  text-align: right;
+  color: #00ffff;
+}

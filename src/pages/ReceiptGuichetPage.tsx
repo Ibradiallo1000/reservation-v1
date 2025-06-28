@@ -468,14 +468,14 @@ const ReceiptGuichetPage: React.FC = () => {
           Télécharger PDF
         </button>
         <button 
-          onClick={() => navigate(`/compagnie/${compagnie.slug}/guichet`)}
+          onClick={() => navigate('/agence/guichet')}
           className="flex items-center gap-2 px-5 py-2.5 bg-gray-600 text-white rounded-lg shadow hover:bg-gray-700 transition-colors"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-          Retour au guichet
-        </button>
+         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+        </svg>
+        Retour au guichet
+      </button>
       </div>
     </div>
   );

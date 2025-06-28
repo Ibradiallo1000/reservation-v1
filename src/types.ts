@@ -37,6 +37,7 @@ export interface SocialMediaLinks {
 }
 
 export interface Company {
+  accroche: string;
   id: string;
   nom: string;
   email: string;

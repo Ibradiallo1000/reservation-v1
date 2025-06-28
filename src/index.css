@@ -121,3 +121,19 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* === Effets SCI-FI === */
+@keyframes glow {
+  0%, 100% {
+    text-shadow: 0 0 8px rgba(0, 255, 255, 0.7),
+                 0 0 16px rgba(0, 255, 255, 0.5);
+  }
+  50% {
+    text-shadow: 0 0 16px rgba(0, 255, 255, 1),
+                 0 0 32px rgba(0, 255, 255, 0.7);
+  }
+}
+
+.animate-glow {
+  animation: glow 3s ease-in-out infinite alternate;
+}

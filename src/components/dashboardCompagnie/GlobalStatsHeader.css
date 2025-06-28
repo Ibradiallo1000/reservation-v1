@@ -1,0 +1,50 @@
+/* src/components/dashboardCompagnie/GlobalStatsHeader.css */
+
+.global-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(90deg, #0a0a1a, #0a0a3a);
+  padding: 20px 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 200, 255, 0.1);
+  box-shadow: 0 0 20px rgba(0, 200, 255, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.header-left {
+  z-index: 1;
+}
+
+.header-title {
+  font-size: 1.8rem;
+  color: #67e8f9;
+  letter-spacing: 1px;
+  margin: 0;
+  text-shadow: 0 0 10px rgba(0, 200, 255, 0.6);
+}
+
+.header-subtitle {
+  margin: 5px 0 0;
+  font-size: 0.9rem;
+  color: #bae6fd;
+}
+
+.header-right .date-picker {
+  background: transparent;
+  border: 1px solid rgba(0, 200, 255, 0.3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #e0f2fe;
+  cursor: pointer;
+}
+
+.header-right .date-picker:focus {
+  outline: none;
+  box-shadow: 0 0 8px rgba(0, 200, 255, 0.5);
+}
+/* ✅ Forcer un z-index élevé pour éviter que le calendrier ne passe derrière */
+.react-datepicker-popper {
+  z-index: 9999 !important;
+}
