@@ -1,9 +1,12 @@
-// ✅ src/AppRoutes.tsx — version complète et corrigée
+// ✅ src/AppRoutes.tsx
+
 import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
+
+// Impression PDF
 import ReservationPrintPage from '@/pages/ReservationPrintPage';
 
 // Pages publiques
@@ -16,11 +19,12 @@ const LoginPage = lazy(() => import('./pages/LoginPage'));
 const Register = lazy(() => import('./pages/Register'));
 const PublicCompanyPage = lazy(() => import('./pages/PublicCompanyPage'));
 const ResultatsAgencePage = lazy(() => import('./pages/ResultatsAgencePage'));
-const ReservationConfirmationPage = lazy(() => import('./pages/ReservationConfirmationPage'));
+const ReservationConfirmationPage = lazy(() => import('./pages/ReservationDetailsPage'));
 const ClientMesReservationsPage = lazy(() => import('./pages/ClientMesReservationsPage'));
 const MentionsPage = lazy(() => import('./pages/MentionsPage'));
 const ConfidentialitePage = lazy(() => import('./pages/ConfidentialitePage'));
 const ListeVillesPage = lazy(() => import('./pages/ListeVillesPage'));
+const UploadPreuvePage = lazy(() => import('./pages/UploadPreuvePage'));
 
 // Admin plateforme
 const AdminSidebarLayout = lazy(() => import('./pages/AdminSidebarLayout'));
@@ -39,6 +43,8 @@ const CompagnieVentesJournalieresPage = lazy(() => import('./pages/CompagnieVent
 const CompagnieStatistiquesMensuellesPage = lazy(() => import('./pages/CompagnieStatistiquesMensuellesPage'));
 const CompagnieFinancesTabsPage = lazy(() => import('./pages/CompagnieFinancesTabsPage'));
 const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
+const ReservationsEnLignePage = lazy(() => import('./pages/ReservationsEnLignePage'));
+const CompanyPaymentSettingsPage = lazy(() => import('./pages/CompanyPaymentSettingsPage'));
 
 // Agence
 const AgenceLayout = lazy(() => import('./pages/AgenceLayout'));
@@ -66,6 +72,8 @@ const AppRoutes = () => {
         <Route path="/" element={<HomePage />} />
         <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
         <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
+        <Route path="/compagnie/:slug/preuve/:id" element={<UploadPreuvePage />} />
+        <Route path="/reservation/:id/preuve" element={<UploadPreuvePage />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/mes-reservations" element={<MesReservationsPage />} />
         <Route path="/login" element={<LoginPage />} />
@@ -73,7 +81,7 @@ const AppRoutes = () => {
         <Route path="/compagnie/:slug" element={<PublicCompanyPage />} />
         <Route path="/compagnie/:slug/resultats" element={<ResultatsAgencePage />} />
         <Route path="/compagnie/:slug/booking" element={<FormulaireReservationClient />} />
-        <Route path="/reservation-confirmation/:id" element={<ReservationConfirmationPage />} />
+        <Route path="/reservation/:id" element={<ReservationConfirmationPage />} />
         <Route path="/compagnie/:slug/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/compagnie/:slug/mentions" element={<MentionsPage />} />
         <Route path="/compagnie/:slug/confidentialite" element={<ConfidentialitePage />} />
@@ -83,7 +91,7 @@ const AppRoutes = () => {
         <Route
           path="/admin"
           element={
-            <PrivateRoute allowedRoles={["admin_platforme"]}>
+            <PrivateRoute allowedRoles={['admin_platforme']}>
               <AdminSidebarLayout />
             </PrivateRoute>
           }
@@ -96,7 +104,7 @@ const AppRoutes = () => {
         <Route
           path="/compagnie"
           element={
-            <PrivateRoute allowedRoles={["admin_compagnie"]}>
+            <PrivateRoute allowedRoles={['admin_compagnie']}>
               <CompagnieLayout />
             </PrivateRoute>
           }
@@ -108,18 +116,38 @@ const AppRoutes = () => {
           <Route path="personnel" element={<CompagniePersonnelPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
+          <Route path="reservations-en-ligne" element={<ReservationsEnLignePage />} />
           <Route path="statistiques-agences" element={<CompagnieAgencesStatistiquesPage />} />
           <Route path="ventes-journalieres" element={<CompagnieVentesJournalieresPage />} />
           <Route path="statistiques" element={<CompagnieStatistiquesMensuellesPage />} />
           <Route path="finances" element={<CompagnieFinancesTabsPage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
+          <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
         </Route>
 
-        {/* Agence */}
+        {/* Dashboard spécifique agence pour admin compagnie */}
+        <Route
+          path="/compagnie/agence/:id/dashboard"
+          element={
+            <PrivateRoute allowedRoles={['admin_compagnie']}>
+              <DashboardAgencePage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/compagnie/agence/:id/reservations"
+          element={
+            <PrivateRoute allowedRoles={['admin_compagnie']}>
+              <AgenceReservationsPage />
+            </PrivateRoute>
+          }
+        />
+
+        {/* Agence (chefAgence, guichetier, agentCourrier) */}
         <Route
           path="/agence"
           element={
-            <PrivateRoute allowedRoles={["chefAgence", "guichetier", "agentCourrier"]}>
+            <PrivateRoute allowedRoles={['chefAgence', 'guichetier', 'agentCourrier']}>
               <AgenceLayout />
             </PrivateRoute>
           }
@@ -139,18 +167,8 @@ const AppRoutes = () => {
           <Route path="receipt/:id" element={<ReceiptGuichetPage />} />
         </Route>
 
-        {/* Impression SANS layout */}
+        {/* Impression sans layout */}
         <Route path="/agence/reservations/impression-reservations" element={<ReservationPrintPage />} />
-
-        {/* Accès admin_compagnie au dashboard d'agence spécifique */}
-        <Route
-          path="/admin/agence/:id/dashboard"
-          element={
-            <PrivateRoute allowedRoles={["admin_compagnie"]}>
-              <DashboardAgencePage />
-            </PrivateRoute>
-          }
-        />
 
         {/* 404 */}
         <Route

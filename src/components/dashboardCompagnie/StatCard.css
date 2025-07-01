@@ -1,106 +1,45 @@
-/* src/components/dashboardCompagnie/StatCard.css */
+/* ✅ StatCard.css */
 
 .stat-card {
+  background: white;
   border-radius: 10px;
   padding: 20px;
-  background: #0a0a1a;
-  color: #e0f2fe;
-  box-shadow: 0 0 15px rgba(0, 200, 255, 0.1);
-  display: flex;
-  align-items: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  text-align: center;
   transition: all 0.3s ease;
-  position: relative;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+}
+
+.stat-card-title {
+  font-size: 0.9rem;
+  color: #555;
+  margin-bottom: 5px;
+}
+
+.stat-card-value {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #111;
 }
 
 .stat-card-icon {
   font-size: 2rem;
-  margin-right: 15px;
-}
-
-.stat-card-title {
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  color: #a5f3fc;
-}
-
-.stat-card-value {
-  font-size: 1.7rem;
-  font-weight: bold;
+  margin-bottom: 10px;
 }
 
 .stat-card-trend {
   font-size: 0.8rem;
-  margin-left: 8px;
+  margin-left: 6px;
 }
 
-.trend-up {
-  color: #4ade80;
+.stat-card-trend.trend-up {
+  color: #16a34a; /* green */
 }
 
-.trend-down {
-  color: #f87171;
-}
-
-.neon-blue {
-  border: 1px solid #0ea5e9;
-}
-
-.neon-purple {
-  border: 1px solid #8b5cf6;
-}
-
-.neon-green {
-  border: 1px solid #22c55e;
-}
-
-.neon-orange {
-  border: 1px solid #f97316;
-}
-
-.glow {
-  box-shadow: 0 0 20px rgba(14, 165, 233, 0.6);
-}
-
-.pulse {
-  animation: pulseAnim 1.5s infinite;
-}
-
-@keyframes pulseAnim {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.02); }
-  100% { transform: scale(1); }
-}
-
-.shimmer {
-  background: linear-gradient(135deg, #0a0a1a 25%, #0ea5e9 50%, #0a0a1a 75%);
-  background-size: 200% 100%;
-  animation: shimmerAnim 2s linear infinite;
-}
-
-@keyframes shimmerAnim {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-.animated-border {
-  border: 2px solid transparent;
-  background-clip: padding-box;
-  position: relative;
-}
-
-.animated-border::before {
-  content: '';
-  position: absolute;
-  top: -2px; left: -2px; right: -2px; bottom: -2px;
-  background: linear-gradient(45deg, #0ea5e9, #8b5cf6, #22c55e, #f97316);
-  background-size: 400% 400%;
-  z-index: -1;
-  filter: blur(5px);
-  animation: borderAnim 5s linear infinite;
-}
-
-@keyframes borderAnim {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+.stat-card-trend.trend-down {
+  color: #dc2626; /* red */
 }

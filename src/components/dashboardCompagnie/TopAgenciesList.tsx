@@ -1,8 +1,7 @@
-// src/components/dashboardCompagnie/TopAgenciesList.tsx
+// ✅ src/components/dashboardCompagnie/TopAgenciesList.tsx
 import React from 'react';
-import './TopAgenciesList.css'; // 💥 Ton style sci-fi
 
-interface TopAgency {
+interface AgencyStats {
   id: string;
   nom: string;
   ville: string;
@@ -10,25 +9,22 @@ interface TopAgency {
   revenus: number;
 }
 
-interface TopAgenciesListProps {
-  agencies: TopAgency[];
+interface Props {
+  agencies: AgencyStats[];
 }
 
-const TopAgenciesList: React.FC<TopAgenciesListProps> = ({ agencies }) => {
+const TopAgenciesList: React.FC<Props> = ({ agencies }) => {
+  const sorted = [...agencies].sort((a, b) => b.revenus - a.revenus).slice(0, 5);
+
   return (
-    <div className="top-agencies-card">
-      <h3 className="top-agencies-title">Top Agences Performantes</h3>
-      <ul className="top-agencies-list">
-        {agencies.map((agency, index) => (
-          <li key={agency.id} className="agency-item">
-            <span className="rank">#{index + 1}</span>
-            <div className="agency-info">
-              <p className="agency-name">{agency.nom}</p>
-              <p className="agency-ville">{agency.ville}</p>
-            </div>
-            <div className="agency-performance">
-              <span className="reservations">{agency.reservations} réservations</span>
-              <span className="revenus">{agency.revenus.toLocaleString()} FCFA</span>
+    <div className="bg-white rounded shadow p-4">
+      <h3 className="font-semibold mb-2">Top agences</h3>
+      <ul>
+        {sorted.map((a, i) => (
+          <li key={a.id} className="py-2 border-b last:border-b-0">
+            <div className="flex justify-between">
+              <span>{i + 1}. {a.nom} ({a.ville})</span>
+              <span>{a.revenus.toLocaleString()} FCFA</span>
             </div>
           </li>
         ))}

@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { format } from 'date-fns';
 import ModifierReservationForm from './ModifierReservationForm';
 import { useNavigate } from 'react-router-dom';
-
+import { useParams } from 'react-router-dom';
 interface Reservation {
   id: string;
   nomClient: string;
@@ -87,27 +87,32 @@ const AgenceReservationsPage: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!user?.agencyId) return;
-      setIsLoading(true);
-      try {
-        const q = query(
-          collection(db, 'reservations'),
-          where('agencyId', '==', user.agencyId),
-          where('statut', '==', 'payé')
-        );
-        const snapshot = await getDocs(q);
-        const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Reservation[];
-        setReservations(data);
-      } catch (error) {
-        console.error("Erreur de chargement:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchData();
-  }, [user?.agencyId]);
+const { id: agencyIdFromURL } = useParams();
+
+useEffect(() => {
+  const fetchData = async () => {
+    const agencyId = agencyIdFromURL || user?.agencyId;
+    if (!agencyId) return;
+
+    setIsLoading(true);
+    try {
+      const q = query(
+        collection(db, 'reservations'),
+        where('agencyId', '==', agencyId),
+        where('statut', '==', 'payé')
+      );
+      const snapshot = await getDocs(q);
+      const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Reservation[];
+      setReservations(data);
+    } catch (error) {
+      console.error("Erreur de chargement:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  fetchData();
+}, [user?.agencyId, agencyIdFromURL]);
+
 
   const filteredReservations = useMemo(() => {
     return reservations.filter((res) => {

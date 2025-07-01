@@ -1,58 +1,74 @@
-// src/components/dashboardCompagnie/StatCard.tsx
 import React from 'react';
-import './StatCard.css'; // ⚡ Ton style à créer à côté
 
 interface StatCardProps {
   title: string;
   value: number;
-  icon?: string;
-  trend?: string;
+  icon?: React.ReactNode; // Icone custom
   isCurrency?: boolean;
-  theme?: 'neon-blue' | 'neon-purple' | 'neon-green' | 'neon-orange';
-  glow?: boolean;
-  pulse?: boolean;
-  shimmer?: boolean;
-  animatedBorder?: boolean;
+  trend?: string;
+  trendType?: 'positive' | 'negative';
+  content?: React.ReactNode;
+  themeColor?: string;
+  className?: string;
+  onClick?: () => void; // ✅ Cliquable
 }
 
 const StatCard: React.FC<StatCardProps> = ({
   title,
   value,
   icon,
+  isCurrency = false,
   trend,
-  isCurrency,
-  theme = 'neon-blue',
-  glow,
-  pulse,
-  shimmer,
-  animatedBorder,
+  trendType,
+  content,
+  themeColor,
+  className = '',
+  onClick, // ✅ Prend le click
 }) => {
+  const formattedValue = isCurrency
+    ? `${value.toLocaleString('fr-FR')} FCFA`
+    : value.toLocaleString('fr-FR');
+
   return (
     <div
-      className={`
-        stat-card 
-        ${theme} 
-        ${glow ? 'glow' : ''} 
-        ${pulse ? 'pulse' : ''} 
-        ${shimmer ? 'shimmer' : ''} 
-        ${animatedBorder ? 'animated-border' : ''}
-      `}
+      onClick={onClick} // ✅ Ajoute le onClick ici !
+      className={`cursor-pointer rounded-xl p-6 shadow-sm border border-gray-100 transition-all duration-300 hover:shadow-md ${className}`}
+      style={themeColor ? { borderTop: `4px solid ${themeColor}` } : {}}
     >
-      <div className="stat-card-icon">{icon}</div>
-      <div className="stat-card-content">
-        <h4 className="stat-card-title">{title}</h4>
-        <div className="stat-card-value">
-          {isCurrency ? `${value.toLocaleString()} FCFA` : value.toLocaleString()}
-          {trend && (
-            <span
-              className={`stat-card-trend ${
-                trend.startsWith('+') ? 'trend-up' : 'trend-down'
-              }`}
-            >
-              {trend}
-            </span>
+      <div className="flex justify-between items-start">
+        <div>
+          <h4 className="text-sm font-medium text-gray-500 uppercase tracking-wider">
+            {title}
+          </h4>
+
+          {content ? (
+            <div className="mt-2">{content}</div>
+          ) : (
+            <div className="mt-2 flex items-baseline">
+              <p className="text-2xl font-semibold text-gray-900">
+                {formattedValue}
+              </p>
+              {trend && (
+                <span
+                  className={`ml-2 text-sm font-medium ${
+                    trendType === 'positive' ? 'text-green-600' : 'text-red-600'
+                  }`}
+                >
+                  {trend}
+                </span>
+              )}
+            </div>
           )}
         </div>
+
+        {icon && (
+          <div
+            className="p-3 rounded-lg bg-opacity-10"
+            style={{ backgroundColor: themeColor }}
+          >
+            {icon}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,3 +1,5 @@
+// ✅ src/types/companyTypes.ts
+
 export interface Company {
   id: string;
   nom: string;
@@ -7,23 +9,26 @@ export interface Company {
   banniereUrl?: string;
   couleurPrimaire?: string;
   couleurSecondaire?: string;
-  couleurAccent?: string;         // ✅ Ajoute ça
-  couleurTertiaire?: string;      // ✅ Et ça
-  themeStyle?: string;            // ✅ Et ça
+  couleurAccent?: string;
+  couleurTertiaire?: string;
+  themeStyle?: string;
   email?: string;
+  pays?: string;
   telephone?: string;
-  adresse?: string;        // ✅ à ajouter
-  horaires?: string;       // ✅ à ajouter
-  socialMedia?: {
-    facebook?: string;
-    instagram?: string;
-    twitter?: string;
-    linkedin?: string;
-    youtube?: string;
-  };
-  footerConfig?: FooterConfig; // ✅ assure-toi que c’est bien lié
-  accroche?: string; // ✅ phrase marketing ou titre sur la bannière
-  instructionRecherche?: string; // ✅ phrase courte sous le titre
+  adresse?: string;
+  horaires?: string;
+  socialMedia?: SocialMediaLinks;
+  footerConfig?: FooterConfig;
+  accroche?: string;
+  instructionRecherche?: string;
+}
+
+export interface SocialMediaLinks {
+  facebook?: string;
+  instagram?: string;
+  twitter?: string;
+  linkedin?: string;
+  youtube?: string;
 }
 
 export interface FooterConfig {
@@ -67,11 +72,15 @@ export interface CityInputProps {
   placeholder: string;
   classes: any;
 }
+
 export interface HeroSectionProps {
   company: Company;
   departure: string;
   arrival: string;
-  suggestions: { departure: string[]; arrival: string[] };
+  suggestions: {
+    departure: string[];
+    arrival: string[];
+  };
   setDeparture: (value: string) => void;
   setArrival: (value: string) => void;
   setSuggestions: (value: { departure: string[]; arrival: string[] }) => void;

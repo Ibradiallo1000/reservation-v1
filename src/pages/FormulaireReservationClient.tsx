@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { collection, addDoc, Timestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, Timestamp, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
-import { ChevronLeft, Clock, MapPin, Calendar, Users, Ticket, User, Phone, Mail } from 'lucide-react';
+import { ChevronLeft, Clock, Calendar, User, Phone, Mail } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { hexToRgba, safeTextColor } from '../utils/color';
-import { getDocs } from 'firebase/firestore';
 
 interface PassengerData {
   fullName: string;
@@ -21,21 +20,22 @@ const FormulaireReservationClient: React.FC = () => {
 
   const { tripData, companyInfo } = location.state || {};
   if (!location.state || !tripData || !companyInfo) {
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-white p-4">
-      <div className="text-center max-w-sm">
-        <h2 className="text-lg font-semibold mb-2 text-red-600">Erreur</h2>
-        <p className="text-gray-600 mb-4">Données de trajet manquantes. Veuillez recommencer depuis la page d’accueil.</p>
-        <button
-          onClick={() => navigate('/')}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
-        >
-          Retour à l'accueil
-        </button>
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-white p-4">
+        <div className="text-center max-w-sm">
+          <h2 className="text-lg font-semibold mb-2 text-red-600">Erreur</h2>
+          <p className="text-gray-600 mb-4">Données de trajet manquantes. Veuillez recommencer depuis la page d'accueil.</p>
+          <button
+            onClick={() => navigate('/')}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+          >
+            Retour à l'accueil
+          </button>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
+
   const [loading, setLoading] = useState(false);
   const [passengerData, setPassengerData] = useState<PassengerData>({
     fullName: '',
@@ -73,26 +73,6 @@ const FormulaireReservationClient: React.FC = () => {
     setTotalCost(unitPrice * (go + ret));
   }, [seatsGo, seatsReturn, tripType, unitPrice]);
 
-  if (!tripData || !tripData.id) {
-    return (
-      <div className="flex items-center justify-center min-h-screen" style={{ background: colors.background }}>
-        <div className={`p-6 rounded-xl text-center ${classes.card}`}>
-          <div className="bg-gray-100 p-4 rounded-full inline-flex mb-3">
-            <Clock className="h-6 w-6 text-gray-500" />
-          </div>
-          <h3 className="text-lg font-medium mb-1">Données du voyage introuvables</h3>
-          <button
-            onClick={() => navigate('/')}
-            className={`mt-4 px-4 py-2 rounded-lg ${classes.button}`}
-            style={{ backgroundColor: colors.primary, color: colors.text }}
-          >
-            Retour à l'accueil
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const handlePassengerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setPassengerData(prev => ({ ...prev, [name]: value }));
@@ -104,78 +84,74 @@ const FormulaireReservationClient: React.FC = () => {
     else setSeatsReturn(clampedValue);
   };
 
-  const handlePayment = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setLoading(true);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
 
-  try {
-    if (!passengerData.fullName || !passengerData.phone) {
-      throw new Error('Veuillez remplir tous les champs obligatoires');
-    }
-
-    const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
-
-    // 🔍 Recalcul dynamique des places restantes depuis les réservations
-    const reservationsSnap = await getDocs(collection(db, 'reservations'));
-    const reservations = reservationsSnap.docs.map((doc: any) => doc.data());
-
-    const réservées = reservations
-      .filter((res: any) =>
-        res.trajetId === tripData.id &&
-        res.date === tripData.date &&
-        res.heure === tripData.time &&
-        res.statut === 'payé'
-      )
-      .reduce((acc: number, res: any) => acc + (res.seatsGo || 1), 0);
-
-    const placesRestantes = (tripData.places || 0) - réservées;
-
-    if (placesRestantes < totalDemandées) {
-      throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
-    }
-
-    const booking = {
-      nomClient: passengerData.fullName,
-      telephone: passengerData.phone,
-      email: passengerData.email,
-      depart: tripData.departure,
-      arrivee: tripData.arrival,
-      date: tripData.date,
-      heure: tripData.time,
-      montant: totalCost,
-      seatsGo,
-      seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
-      tripType,
-      canal: 'en_ligne',
-      statut: 'payé',
-      createdAt: Timestamp.now(),
-      companyId: tripData.companyId,
-      agencyId: tripData.agencyId,
-      trajetId: tripData.id,
-      paiement: 'mobile_money',
-      commission: totalCost * 0.05,
-      companySlug: slug,
-    };
-
-    const docRef = await addDoc(collection(db, 'reservations'), booking);
-
-    navigate(`/reservation-confirmation/${docRef.id}`, {
-      state: {
-        slug: slug,
-        reservation: {
-          ...booking,
-          id: docRef.id,
-          companyName: companyInfo?.nom
-        }
+    try {
+      if (!passengerData.fullName || !passengerData.phone) {
+        throw new Error('Veuillez remplir tous les champs obligatoires');
       }
-    });
 
-  } catch (error: any) {
-    alert(error.message);
-  } finally {
-    setLoading(false);
-  }
-};
+      const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
+      const referenceCode = `RES${Date.now()}`;
+
+      // Vérification places disponibles
+      const reservationsSnap = await getDocs(collection(db, 'reservations'));
+      const reservations = reservationsSnap.docs.map(doc => doc.data());
+      const réservées = reservations
+        .filter(res => res.trajetId === tripData.id && res.date === tripData.date && res.heure === tripData.time && res.statut === 'payé')
+        .reduce((acc, res) => acc + (res.seatsGo || 1), 0);
+      const placesRestantes = (tripData.places || 0) - réservées;
+
+      if (placesRestantes < totalDemandées) {
+        throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
+      }
+
+      const booking = {
+        nomClient: passengerData.fullName,
+        telephone: passengerData.phone,
+        email: passengerData.email,
+        depart: tripData.departure,
+        arrivee: tripData.arrival,
+        date: tripData.date,
+        heure: tripData.time,
+        montant: totalCost,
+        seatsGo,
+        seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
+        tripType,
+        canal: 'en_ligne',
+        statut: 'en_attente',
+        createdAt: Timestamp.now(),
+        companyId: tripData.companyId,
+        agencyId: tripData.agencyId,
+        trajetId: tripData.id,
+        referenceCode,
+        commission: totalCost * 0.05,
+        companySlug: slug,
+      };
+
+      const docRef = await addDoc(collection(db, 'reservations'), booking);
+
+      navigate(`/reservation/${docRef.id}`, {
+        state: {
+          slug: slug,
+          reservation: {
+            ...booking,
+            id: docRef.id,
+            companyName: companyInfo?.nom
+          },
+          tripData,
+          companyInfo
+        }
+      });
+
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const formatDateDisplay = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -262,7 +238,7 @@ const FormulaireReservationClient: React.FC = () => {
               Informations du passager
             </h2>
             
-            <form onSubmit={handlePayment} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-3">
                 <div>
                   <label className="block text-sm font-medium mb-1">Nom complet *</label>
@@ -435,19 +411,9 @@ const FormulaireReservationClient: React.FC = () => {
                       Traitement...
                     </span>
                   ) : (
-                    'Payer avec Mobile Money'
+                    'Confirmer la réservation'
                   )}
                 </button>
-                
-                <div className="mt-2 text-center text-xs text-gray-500">
-                  <p>Moyen de paiement mobile money obligatoire</p>
-                  <div className="mt-1 inline-flex items-center gap-1 px-2 py-1 rounded-full border border-gray-200">
-                    <svg className="h-3 w-3 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
-                    Paiement sécurisé
-                  </div>
-                </div>
               </div>
             </form>
           </div>

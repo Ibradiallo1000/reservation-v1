@@ -5,7 +5,6 @@ import { db } from '../firebaseConfig';
 import { ChevronLeft, Clock, MapPin, Calendar, Users, Ticket } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
-import { hexToRgba, safeTextColor } from '../utils/color';
 
 interface CompanyInfo {
   id: string;
@@ -50,6 +49,31 @@ interface ThemeClasses {
   header: string;
 }
 
+// Fonctions utilitaires pour la gestion des couleurs
+const hexToRgba = (hex: string, alpha: number = 1): string => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const safeTextColor = (hexColor: string): string => {
+  return getContrastColor(hexColor);
+};
+
+const getContrastColor = (hexColor: string, relativeTo = '#ffffff'): string => {
+  if (!hexColor || hexColor.length < 7) return '#000000';
+  
+  const r = parseInt(hexColor.slice(1, 3), 16);
+  const g = parseInt(hexColor.slice(3, 5), 16);
+  const b = parseInt(hexColor.slice(5, 7), 16);
+  
+  // Calcul de la luminance (formule WCAG)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  
+  return luminance > 0.5 ? '#000000' : '#ffffff';
+};
+
 const ResultatsAgencePage: React.FC = () => {
   const navigate = useNavigate();
   const { slug } = useParams<{ slug: string }>();
@@ -72,11 +96,15 @@ const ResultatsAgencePage: React.FC = () => {
   const [selectedTime, setSelectedTime] = useState<string>('');
 
   const themeConfig = useMemo(() => {
+    const primary = company?.couleurPrimaire || '#3b82f6';
+    const secondary = company?.couleurSecondaire || '#93c5fd';
+    
     return {
       colors: {
-        primary: company?.couleurPrimaire || '#3b82f6',
-        secondary: company?.couleurSecondaire || '#93c5fd',
-        text: company?.couleurPrimaire ? safeTextColor(company.couleurPrimaire) : '#ffffff',
+        primary,
+        secondary,
+        text: getContrastColor(primary),
+        textOnPrimary: getContrastColor(primary),
         background: '#ffffff'
       },
       classes: {
@@ -158,129 +186,114 @@ const ResultatsAgencePage: React.FC = () => {
   }, [slug]);
 
   useEffect(() => {
-  const fetchTrajets = async () => {
-    console.log("🎯 FETCH TRIGGERED with:", {
-      departure,
-      arrival,
-      agenceId: agence?.id
-    });
+    const fetchTrajets = async () => {
+      if (!departure || !arrival || !agence?.id) return;
 
-    if (!departure || !arrival || !agence?.id) {
-      console.warn("⛔ Données manquantes. Abandon du fetch.", {
-        departure,
-        arrival,
-        agenceId: agence?.id
-      });
-      return;
-    }
+      setLoading(true);
 
-    setLoading(true);
+      try {
+        const allDates = getNextNDates(8);
+        const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 
-    try {
-      const allDates = getNextNDates(8);
-      const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+        const q = query(
+          collection(db, 'weeklyTrips'),
+          where('agencyId', '==', agence.id),
+          where('departure', '==', departure),
+          where('arrival', '==', arrival),
+          where('active', '==', true)
+        );
 
-      const q = query(
-        collection(db, 'weeklyTrips'),
-        where('agencyId', '==', agence.id),
-        where('departure', '==', departure),
-        where('arrival', '==', arrival),
-        where('active', '==', true)
-      );
+        const snapshot = await getDocs(q);
+        const virtualTrajets: Trajet[] = [];
 
-      const snapshot = await getDocs(q);
-      console.log(`📦 ${snapshot.docs.length} weeklyTrips récupérés depuis Firestore`);
+        for (const doc of snapshot.docs) {
+          const data = doc.data();
+          const { departure, arrival, horaires, price, places = 30, agencyId, companyId } = data;
 
-      const virtualTrajets: Trajet[] = [];
+          for (const dateStr of allDates) {
+            const d = new Date(dateStr);
+            const dayName = DAYS[d.getDay()];
+            const heures = horaires?.[dayName] || [];
 
-      for (const doc of snapshot.docs) {
-        const data = doc.data();
-        const { departure, arrival, horaires, price, places = 30, agencyId, companyId } = data;
-
-        for (const dateStr of allDates) {
-          const d = new Date(dateStr);
-          const dayName = DAYS[d.getDay()];
-          const heures = horaires?.[dayName] || [];
-
-          for (const heure of heures) {
-            virtualTrajets.push({
-              id: `${doc.id}-${dateStr}-${heure}`,
-              departure,
-              arrival,
-              date: dateStr,
-              time: heure,
-              price,
-              places,
-              companyId,
-              agencyId,
-              compagnieNom: company?.nom,
-              logoUrl: company?.logoUrl
-            });
+            for (const heure of heures) {
+              virtualTrajets.push({
+                id: `${doc.id}-${dateStr}-${heure}`,
+                departure,
+                arrival,
+                date: dateStr,
+                time: heure,
+                price,
+                places,
+                companyId,
+                agencyId,
+                compagnieNom: company?.nom,
+                logoUrl: company?.logoUrl
+              });
+            }
           }
         }
-      }
 
-      const reservationsSnap = await getDocs(collection(db, 'reservations'));
-      const reservations = reservationsSnap.docs.map(doc => doc.data());
+        const reservationsSnap = await getDocs(collection(db, 'reservations'));
+        const reservations = reservationsSnap.docs.map(doc => doc.data());
 
-      const trajetsValides = virtualTrajets.map(trajet => {
-        const reserved = reservations
-          .filter(r => r.trajetId === trajet.id && r.statut === 'payé')
-          .reduce((acc, r) => acc + (r.seatsGo || 1), 0);
+        const trajetsValides = virtualTrajets.map(trajet => {
+          const reserved = reservations
+            .filter(r => r.trajetId === trajet.id && r.statut === 'payé')
+            .reduce((acc, r) => acc + (r.seatsGo || 1), 0);
 
-        return {
-          ...trajet,
-          places: (trajet.places || 30) - reserved
-        };
-      });
+          return {
+            ...trajet,
+            places: (trajet.places || 30) - reserved
+          };
+        });
 
-      const trajetsParDate: Record<string, Trajet[]> = {};
-      trajetsValides.forEach(trajet => {
-        if (!trajetsParDate[trajet.date]) trajetsParDate[trajet.date] = [];
-        trajetsParDate[trajet.date].push(trajet);
-      });
+        const trajetsParDate: Record<string, Trajet[]> = {};
+        trajetsValides.forEach(trajet => {
+          if (!trajetsParDate[trajet.date]) trajetsParDate[trajet.date] = [];
+          trajetsParDate[trajet.date].push(trajet);
+        });
 
-      const now = new Date();
-      const availableDates = allDates.filter(date => {
-        const trajets = trajetsParDate[date];
-        if (!trajets) return false;
-        return trajets.some(t => new Date(`${t.date}T${t.time}`) > now);
-      });
+        const now = new Date();
+        const availableDates = allDates.filter(date => {
+          const trajets = trajetsParDate[date];
+          if (!trajets) return false;
+          return trajets.some(t => new Date(`${t.date}T${t.time}`) > now);
+        });
 
-      setDates(availableDates);
-      setSelectedDate(prev => (availableDates.includes(prev) ? prev : availableDates[0] || ''));
+        setDates(availableDates);
+        setSelectedDate(prev => (availableDates.includes(prev) ? prev : availableDates[0] || ''));
 
-      const grouped: Record<string, Trajet[]> = {};
-      for (const t of trajetsValides) {
-        if (new Date(`${t.date}T${t.time}`) > now) {
-          const key = `${t.companyId}`;
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(t);
+        const grouped: Record<string, Trajet[]> = {};
+        for (const t of trajetsValides) {
+          if (new Date(`${t.date}T${t.time}`) > now) {
+            const key = `${t.companyId}`;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(t);
+          }
         }
+
+        setGroupedTrajets(grouped);
+      } catch (err) {
+        console.error('Erreur Firestore:', err);
+        setError('Erreur lors du chargement des trajets');
+      } finally {
+        setLoading(false);
       }
+    };
 
-      setGroupedTrajets(grouped);
-    } catch (err) {
-      console.error('🔥 Erreur Firestore dans fetchTrajets:', err);
-      setError('Erreur lors du chargement des trajets');
-    } finally {
-      setLoading(false);
+    if (agence?.id) {
+      fetchTrajets();
     }
-  };
+  }, [departure, arrival, agence?.id]);
 
-  if (agence?.id) {
-    fetchTrajets();
-  }
-}, [departure, arrival, agence?.id]);
-
-const filteredGrouped = useMemo(() => {
-  return Object.fromEntries(
-    Object.entries(groupedTrajets).map(([key, trajets]) => [
-      key,
-      trajets.filter((t) => t.date === selectedDate),
-    ])
-  );
-}, [groupedTrajets, selectedDate]);
+  const filteredGrouped = useMemo(() => {
+    return Object.fromEntries(
+      Object.entries(groupedTrajets).map(([key, trajets]) => [
+        key,
+        trajets.filter((t) => t.date === selectedDate),
+      ])
+    );
+  }, [groupedTrajets, selectedDate]);
 
   useEffect(() => {
     const todayTrips = Object.values(filteredGrouped).flat().filter(t => t.date === selectedDate);
@@ -349,15 +362,15 @@ const filteredGrouped = useMemo(() => {
     return (
       <div
         className="flex flex-col items-center justify-center min-h-screen p-4 text-center"
-        style={{ background: colors.background, color: colors.text }}
+        style={{ background: colors.background }}
       >
         <div className={`p-4 rounded-lg max-w-md ${classes.card}`}>
-          <h2 className="text-xl font-bold mb-2">Erreur</h2>
-          <p>{error}</p>
+          <h2 className="text-xl font-bold mb-2 text-gray-900">Erreur</h2>
+          <p className="text-gray-700">{error}</p>
           <button
             onClick={() => navigate(`/compagnie/${slug}`)}
             className={`mt-4 px-4 py-2 rounded ${classes.button}`}
-            style={{ backgroundColor: colors.primary, color: colors.text }}
+            style={{ backgroundColor: colors.primary, color: colors.textOnPrimary }}
           >
             Retour à la compagnie
           </button>
@@ -378,6 +391,7 @@ const filteredGrouped = useMemo(() => {
         className={classes.header}
         style={{
           backgroundColor: hexToRgba(colors.primary, 0.95),
+          color: colors.textOnPrimary,
           backdropFilter: 'blur(10px)'
         }}
       >
@@ -385,7 +399,7 @@ const filteredGrouped = useMemo(() => {
           <button 
             onClick={() => navigate(`/compagnie/${slug}`)}
             className="p-2 rounded-full hover:bg-white/10 transition"
-            style={{ color: safeTextColor(colors.primary) }}
+            style={{ color: colors.textOnPrimary }}
           >
             <ChevronLeft className="h-5 w-5" />
           </button>
@@ -398,15 +412,12 @@ const filteredGrouped = useMemo(() => {
                 effect="blur"
                 className="h-8 w-8 rounded-full object-cover border-2"
                 style={{ 
-                  borderColor: safeTextColor(colors.primary),
+                  borderColor: colors.textOnPrimary,
                   backgroundColor: hexToRgba(colors.primary, 0.2)
                 }}
               />
             )}
-            <h1 
-              className="text-lg font-bold"
-              style={{ color: safeTextColor(colors.primary) }}
-            >
+            <h1 className="text-lg font-bold">
               {company?.nom}
             </h1>
           </div>
@@ -415,16 +426,22 @@ const filteredGrouped = useMemo(() => {
 
       <main className="max-w-4xl mx-auto p-4 sm:p-6">
         <div className={`p-4 rounded-xl mb-6 ${classes.card}`}>
-          <h1 className="text-xl sm:text-2xl font-bold mb-2" style={{ color: colors.primary }}>
+          <h1 className="text-xl sm:text-2xl font-bold mb-2 text-gray-900">
             {departure} → {arrival}
           </h1>
           
           {agence && (
             <div className="flex items-center gap-3 mt-3">
-              <div className="p-2 rounded-full" style={{ backgroundColor: hexToRgba(colors.primary, 0.1) }}>
-                <MapPin className="h-5 w-5" style={{ color: colors.primary }} />
+              <div 
+                className="p-2 rounded-full" 
+                style={{ 
+                  backgroundColor: hexToRgba(colors.primary, 0.1),
+                  color: colors.primary 
+                }}
+              >
+                <MapPin className="h-5 w-5" />
               </div>
-              <div>
+              <div className="text-gray-800">
                 <h3 className="font-semibold">{agence.nomAgence}</h3>
                 <p className="text-sm opacity-80">
                   {agence.ville}, {agence.quartier} • ☎ {agence.telephone}
@@ -435,7 +452,7 @@ const filteredGrouped = useMemo(() => {
         </div>
 
         <div className="mb-6">
-          <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-gray-800">
             <Calendar className="h-5 w-5" style={{ color: colors.primary }} />
             Dates disponibles
           </h2>
@@ -446,12 +463,13 @@ const filteredGrouped = useMemo(() => {
                 onClick={() => setSelectedDate(date)}
                 className={`flex flex-col items-center min-w-[90px] p-3 rounded-xl border transition-all flex-shrink-0 ${
                   selectedDate === date
-                    ? 'text-white shadow-md'
-                    : 'bg-white hover:bg-gray-50 border-gray-200'
+                    ? 'shadow-md'
+                    : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-800'
                 }`}
                 style={{
                   backgroundColor: selectedDate === date ? colors.primary : undefined,
-                  borderColor: selectedDate === date ? colors.primary : undefined
+                  borderColor: selectedDate === date ? colors.primary : undefined,
+                  color: selectedDate === date ? colors.textOnPrimary : undefined
                 }}
               >
                 <span className="text-xs font-medium">
@@ -466,7 +484,7 @@ const filteredGrouped = useMemo(() => {
         </div>
 
         {Object.keys(filteredGrouped).length === 0 ? (
-          <div className={`p-6 rounded-xl text-center ${classes.card}`}>
+          <div className={`p-6 rounded-xl text-center ${classes.card} text-gray-800`}>
             <div className="bg-gray-100 p-4 rounded-full inline-flex mb-3">
               <Clock className="h-6 w-6 text-gray-500" />
             </div>
@@ -478,7 +496,7 @@ const filteredGrouped = useMemo(() => {
             {Object.entries(filteredGrouped).map(([key, trajets]) => (
               <div key={key} className={`rounded-xl overflow-hidden ${classes.card}`}>
                 <div className="p-4 border-b" style={{ borderColor: hexToRgba(colors.primary, 0.1) }}>
-                  <h2 className="font-semibold flex items-center gap-2 mb-3">
+                  <h2 className="font-semibold flex items-center gap-2 mb-3 text-gray-800">
                     <Clock className="h-5 w-5" style={{ color: colors.primary }} />
                     Heures de départ
                   </h2>
@@ -496,7 +514,7 @@ const filteredGrouped = useMemo(() => {
                               ? 'bg-blue-50 text-blue-600'
                               : isPastTime(trajet.date, trajet.time)
                               ? 'bg-gray-50 text-gray-400'
-                              : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
+                              : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-800'
                           }`}
                           style={{
                             borderColor: selectedTime === trajet.time ? colors.primary : undefined,
@@ -516,22 +534,34 @@ const filteredGrouped = useMemo(() => {
                   .filter(trajet => trajet.time === selectedTime && !isPastTime(trajet.date, trajet.time))
                   .map(trajet => (
                     <div key={trajet.id} className="p-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 text-gray-800">
                         <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-full" style={{ backgroundColor: hexToRgba(colors.primary, 0.1) }}>
-                            <Ticket className="h-5 w-5" style={{ color: colors.primary }} />
+                          <div 
+                            className="p-2 rounded-full" 
+                            style={{ 
+                              backgroundColor: hexToRgba(colors.primary, 0.1),
+                              color: colors.primary 
+                            }}
+                          >
+                            <Ticket className="h-5 w-5" />
                           </div>
                           <div>
                             <h3 className="text-sm font-medium opacity-80">Prix</h3>
-                            <p className="text-lg font-bold">
+                            <p className="text-lg font-bold text-gray-900">
                               {trajet.price.toLocaleString()} FCFA
                             </p>
                           </div>
                         </div>
                         
                         <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-full" style={{ backgroundColor: hexToRgba(colors.primary, 0.1) }}>
-                            <Users className="h-5 w-5" style={{ color: colors.primary }} />
+                          <div 
+                            className="p-2 rounded-full" 
+                            style={{ 
+                              backgroundColor: hexToRgba(colors.primary, 0.1),
+                              color: colors.primary 
+                            }}
+                          >
+                            <Users className="h-5 w-5" />
                           </div>
                           <div>
                             <h3 className="text-sm font-medium opacity-80">Places disponibles</h3>
@@ -555,7 +585,7 @@ const filteredGrouped = useMemo(() => {
                         }`}
                         style={{
                           backgroundColor: trajet.places === 0 ? '#e5e7eb' : colors.primary,
-                          color: trajet.places === 0 ? '#6b7280' : colors.text
+                          color: trajet.places === 0 ? '#6b7280' : colors.textOnPrimary
                         }}
                       >
                         {trajet.places === 0 ? 'Complet' : 'Réserver maintenant'}

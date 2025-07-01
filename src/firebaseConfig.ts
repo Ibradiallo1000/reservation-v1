@@ -1,8 +1,11 @@
 // src/firebaseConfig.ts
+
 import { initializeApp, getApps } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import { getStorage } from 'firebase/storage'; // ✅ AJOUT pour Storage
 
+// ✅ Ton objet de configuration Firebase
 const firebaseConfig = {
   apiKey: "AIzaSyB9sGzgvdzhxxhIshtPprPix7oBfCB2OuM",
   authDomain: "monbillet-95b77.firebaseapp.com",
@@ -13,12 +16,14 @@ const firebaseConfig = {
   measurementId: "G-G96GYRYS76"
 };
 
-// ✅ Initialisation avec sécurité
+// ✅ Initialisation sécurisée (évite les erreurs hot reload)
 const app = getApps().length === 0
   ? initializeApp(firebaseConfig)
   : getApps()[0];
 
+// ✅ Exports clairs pour tout ton projet
 const db = getFirestore(app);
 const auth = getAuth(app);
+const storage = getStorage(app);
 
-export { db, auth };
+export { db, auth, storage };

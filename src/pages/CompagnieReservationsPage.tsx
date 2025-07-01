@@ -1,30 +1,26 @@
-// ✅ src/pages/CompagnieReservationsPage.tsx (corrigé complet)
-
 import React, { useEffect, useState } from 'react';
 import {
   collection,
   getDocs,
   query,
   where,
-  doc,
-  getDoc
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { FaChevronLeft, FaChevronRight, FaFilter, FaDownload, FaPrint } from 'react-icons/fa';
+import { saveAs } from 'file-saver';
 
 interface Reservation {
   id: string;
+  agencyId: string;
   nomClient: string;
   telephone: string;
-  depart: string;
-  arrivee: string;
-  date: string;
-  heure: string;
+  montant?: number;
   canal: string;
   statut: string;
-  seatsGo?: number;
-  montant?: number;
+  depart?: string;
+  arrivee?: string;
+  createdAt?: any;
 }
 
 interface Agence {
@@ -34,200 +30,364 @@ interface Agence {
 
 const CompagnieReservationsPage: React.FC = () => {
   const { user } = useAuth();
-  const navigate = useNavigate();
 
   const [agences, setAgences] = useState<Agence[]>([]);
-  const [agencyId, setAgencyId] = useState('');
-  const [depart, setDepart] = useState('');
-  const [arrivee, setArrivee] = useState('');
-  const [selectedDate, setSelectedDate] = useState('');
-  const [datesDisponibles, setDatesDisponibles] = useState<string[]>([]);
-  const [horaires, setHoraires] = useState<string[]>([]);
-  const [selectedHoraire, setSelectedHoraire] = useState('');
-  const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [companyName, setCompanyName] = useState('');
+  const [groupedData, setGroupedData] = useState<
+    { agencyId: string; reservations: Reservation[] }[]
+  >([]);
+  const [selectedAgencyId, setSelectedAgencyId] = useState<string | null>(null);
+  const [loading, setLoading] = useState({ agences: true, reservations: true });
+  const [showFilters, setShowFilters] = useState(false);
 
-  const normalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
-
-  const generateNext8Days = (): string[] => {
-    const today = new Date();
-    return Array.from({ length: 8 }, (_, i) => {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      return d.toISOString().split('T')[0];
-    });
-  };
+  // Filtres
+  const [filterDepart, setFilterDepart] = useState('');
+  const [filterArrivee, setFilterArrivee] = useState('');
+  const [filterStart, setFilterStart] = useState('');
+  const [filterEnd, setFilterEnd] = useState('');
+  const [filterCanal, setFilterCanal] = useState<string>('tous');
+  const [currentPage, setCurrentPage] = useState(1);
+  const perPage = 10;
 
   const loadAgences = async () => {
     if (!user?.companyId) return;
-    const q = query(collection(db, 'agences'), where('companyId', '==', user.companyId));
-    const snap = await getDocs(q);
-    const data = snap.docs.map(doc => ({ id: doc.id, nom: doc.data().ville }));
-    setAgences(data);
+    try {
+      const q = query(
+        collection(db, 'agences'),
+        where('companyId', '==', user.companyId)
+      );
+      const snap = await getDocs(q);
+      const data = snap.docs.map(doc => ({
+        id: doc.id,
+        nom: doc.data().ville || doc.data().nom,
+      }));
+      setAgences(data);
+    } finally {
+      setLoading(prev => ({ ...prev, agences: false }));
+    }
   };
 
-  const handleSearch = async () => {
-    if (!agencyId || !depart || !arrivee || !user?.companyId) return;
-    const q = query(
-      collection(db, 'dailyTrips'),
-      where('agencyId', '==', agencyId),
-      where('departure', '==', normalize(depart)),
-      where('arrival', '==', normalize(arrivee))
-    );
-    const snap = await getDocs(q);
-    const foundDates = new Set<string>();
-    snap.forEach(doc => {
-      const data = doc.data();
-      if (data.date) foundDates.add(data.date);
-    });
-    const filteredDates = Array.from(foundDates).filter(d => generateNext8Days().includes(d)).sort();
-    setDatesDisponibles(filteredDates);
-    setSelectedDate(filteredDates[0] || '');
-    setHoraires([]);
-    setSelectedHoraire('');
-    setReservations([]);
+  const loadReservations = async () => {
+    if (!user?.companyId) return;
+    try {
+      const q = query(
+        collection(db, 'reservations'),
+        where('companyId', '==', user.companyId),
+        where('statut', '==', 'payé')
+      );
+      const snap = await getDocs(q);
+      const all: Reservation[] = snap.docs.map(doc => ({
+        id: doc.id,
+        agencyId: doc.data().agencyId,
+        nomClient: doc.data().nomClient,
+        telephone: doc.data().telephone,
+        montant: doc.data().montant || 0,
+        canal: doc.data().canal || '',
+        statut: doc.data().statut,
+        depart: doc.data().depart || '',
+        arrivee: doc.data().arrivee || '',
+        createdAt: doc.data().createdAt?.toDate() || null,
+      }));
+
+      // Grouper
+      const groups: { [key: string]: Reservation[] } = {};
+      all.forEach(r => {
+        if (!groups[r.agencyId]) groups[r.agencyId] = [];
+        groups[r.agencyId].push(r);
+      });
+
+      const grouped = Object.keys(groups).map(agencyId => ({
+        agencyId,
+        reservations: groups[agencyId],
+      }));
+      setGroupedData(grouped);
+    } finally {
+      setLoading(prev => ({ ...prev, reservations: false }));
+    }
   };
-
-  const loadHoraires = async () => {
-    if (!selectedDate || !agencyId || !depart || !arrivee) return;
-    const q = query(
-      collection(db, 'dailyTrips'),
-      where('agencyId', '==', agencyId),
-      where('departure', '==', normalize(depart)),
-      where('arrival', '==', normalize(arrivee)),
-      where('date', '==', selectedDate)
-    );
-    const snap = await getDocs(q);
-    const times: string[] = [];
-    snap.forEach(doc => times.push(doc.data().time));
-    setHoraires(times);
-    setSelectedHoraire(times[0] || '');
-  };
-
-  const fetchReservations = async () => {
-    if (!selectedHoraire || !selectedDate) return;
-    const qTrip = query(
-      collection(db, 'dailyTrips'),
-      where('agencyId', '==', agencyId),
-      where('departure', '==', normalize(depart)),
-      where('arrival', '==', normalize(arrivee)),
-      where('date', '==', selectedDate),
-      where('time', '==', selectedHoraire)
-    );
-    const tripSnap = await getDocs(qTrip);
-    if (tripSnap.empty) return;
-    const tripId = tripSnap.docs[0].id;
-
-    const qRes = query(
-      collection(db, 'reservations'),
-      where('trajetId', '==', tripId),
-      where('statut', '==', 'payé')
-    );
-    const resSnap = await getDocs(qRes);
-    const data = resSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Reservation[];
-    setReservations(data);
-  };
-
-  useEffect(() => {
-    if (selectedDate) loadHoraires();
-  }, [selectedDate]);
-
-  useEffect(() => {
-    if (selectedHoraire) fetchReservations();
-  }, [selectedHoraire]);
 
   useEffect(() => {
     loadAgences();
-    if (user?.companyId) {
-      getDoc(doc(db, 'companies', user.companyId)).then(snap => {
-        if (snap.exists()) setCompanyName(snap.data().nom);
-      });
-    }
-  }, []);
+    loadReservations();
+  }, [user]);
 
-  const totalPlaces = reservations.reduce((total, r) => total + (r.seatsGo || 1), 0);
-  const totalEncaisse = reservations.reduce((total, r) => total + (r.montant || 0), 0);
+  const findAgencyName = (id: string) => {
+    const found = agences.find(a => a.id === id);
+    return found ? found.nom : 'Agence inconnue';
+  };
 
-  if (!user) return <div className="p-6">Chargement des données...</div>;
+  const filteredDetails = () => {
+    let data = groupedData.find(g => g.agencyId === selectedAgencyId)?.reservations || [];
+    
+    if (filterDepart)
+      data = data.filter(r => r.depart?.toLowerCase().includes(filterDepart.toLowerCase()));
+    if (filterArrivee)
+      data = data.filter(r => r.arrivee?.toLowerCase().includes(filterArrivee.toLowerCase()));
+    if (filterStart)
+      data = data.filter(r => r.createdAt && new Date(r.createdAt) >= new Date(filterStart));
+    if (filterEnd)
+      data = data.filter(r => r.createdAt && new Date(r.createdAt) <= new Date(filterEnd));
+    if (filterCanal !== 'tous')
+      data = data.filter(r => r.canal.toLowerCase() === filterCanal.toLowerCase());
+    
+    return data;
+  };
+
+  const paginated = filteredDetails().slice(
+    (currentPage - 1) * perPage,
+    currentPage * perPage
+  );
+
+  const totalPages = Math.ceil(filteredDetails().length / perPage);
+
+  const exportToCSV = () => {
+    const data = filteredDetails();
+    if (data.length === 0) return;
+
+    const csvHeader = 'Nom,Téléphone,Départ,Arrivée,Canal,Montant,Date\n';
+    const csvRows = data.map(r =>
+      [
+        `"${r.nomClient}"`,
+        r.telephone,
+        `"${r.depart}"`,
+        `"${r.arrivee}"`,
+        r.canal,
+        r.montant || 0,
+        r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''
+      ].join(',')
+    ).join('\n');
+
+    const csvContent = csvHeader + csvRows;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    saveAs(blob, `reservations-${findAgencyName(selectedAgencyId || '')}-${new Date().toISOString().split('T')[0]}.csv`);
+  };
+
+  const totalMontant = filteredDetails().reduce((sum, r) => sum + (r.montant || 0), 0);
 
   return (
-    <div className="p-6 bg-white min-h-screen">
-      <h1 className="text-2xl font-bold mb-4">Toutes les réservations de la compagnie</h1>
-
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
-        <select value={agencyId} onChange={e => setAgencyId(e.target.value)} className="border p-2 rounded">
-          <option value="">Sélectionner une agence</option>
-          {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
-        </select>
-        <input value={depart} onChange={e => setDepart(e.target.value)} placeholder="Départ" className="border p-2 rounded" />
-        <input value={arrivee} onChange={e => setArrivee(e.target.value)} placeholder="Arrivée" className="border p-2 rounded" />
-        <button onClick={handleSearch} className="bg-yellow-500 text-white rounded px-4">Rechercher</button>
-      </div>
-
-      {datesDisponibles.length > 0 && (
-        <div className="flex gap-2 flex-wrap mb-4">
-          {datesDisponibles.map(date => (
-            <button key={date} onClick={() => setSelectedDate(date)}
-              className={`px-3 py-1 rounded-full text-sm border ${selectedDate === date ? 'bg-yellow-600 text-white' : 'bg-yellow-100 text-yellow-800'}`}>{date}</button>
-          ))}
-        </div>
-      )}
-
-      {horaires.length > 0 && (
-        <div className="mb-4">
-          <label className="text-sm">Choisir une heure :</label>
-          <select value={selectedHoraire} onChange={e => setSelectedHoraire(e.target.value)} className="border p-2 rounded">
-            {horaires.map(h => <option key={h} value={h}>{h}</option>)}
-          </select>
-        </div>
-      )}
-
-      <div className="mb-4 flex justify-between">
-        <button onClick={() => navigate(-1)} className="text-sm text-blue-500 underline">← Retour</button>
-        <button onClick={() => window.print()} className="bg-blue-600 text-white px-4 py-2 rounded">Imprimer</button>
-      </div>
-
-      <div className="border rounded-xl p-4">
-        <h2 className="text-center font-bold text-lg mb-2">{(companyName || 'COMPAGNIE').toUpperCase()} - LISTE GLOBALE DES RÉSERVATIONS</h2>
-        <div className="text-center text-sm text-gray-600 mb-4">
-          {selectedDate && selectedHoraire && (
-            <span>{selectedDate} • {selectedHoraire} • {depart} → {arrivee}</span>
-          )}<br />
-          <span>{reservations.length} réservations — {totalPlaces} passagers — {totalEncaisse} FCFA</span>
-        </div>
-
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="border p-2">#</th>
-              <th className="border p-2">Nom</th>
-              <th className="border p-2">Téléphone</th>
-              <th className="border p-2">Trajet</th>
-              <th className="border p-2">Date</th>
-              <th className="border p-2">Heure</th>
-              <th className="border p-2">Canal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {reservations.length === 0 ? (
-              <tr><td colSpan={7} className="text-center p-4 text-gray-500">Aucune réservation trouvée.</td></tr>
-            ) : (
-              reservations.map((r, i) => (
-                <tr key={r.id}>
-                  <td className="border p-2 text-center">{i + 1}</td>
-                  <td className="border p-2">{r.nomClient}</td>
-                  <td className="border p-2">{r.telephone}</td>
-                  <td className="border p-2">{r.depart} → {r.arrivee}</td>
-                  <td className="border p-2">{r.date}</td>
-                  <td className="border p-2">{r.heure}</td>
-                  <td className="border p-2 text-center">{r.canal === 'guichet' ? '🧾 Guichet' : '🌐 En ligne'}</td>
-                </tr>
-              ))
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-bold text-gray-800">Gestion des Réservations</h1>
+          <div className="flex space-x-2">
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className="flex items-center px-4 py-2 bg-white border rounded-lg text-gray-700 hover:bg-gray-50"
+            >
+              <FaFilter className="mr-2" />
+              Filtres
+            </button>
+            {selectedAgencyId && (
+              <>
+                <button
+                  onClick={exportToCSV}
+                  disabled={filteredDetails().length === 0}
+                  className="flex items-center px-4 py-2 bg-white border rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  <FaDownload className="mr-2" />
+                  Exporter
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  <FaPrint className="mr-2" />
+                  Imprimer
+                </button>
+              </>
             )}
-          </tbody>
-        </table>
+          </div>
+        </div>
 
-        <div className="mt-6 text-right text-sm italic">Signature et cachet de la compagnie</div>
+        {loading.agences || loading.reservations ? (
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+              {groupedData.map(group => {
+                const total = group.reservations.reduce((sum, r) => sum + (r.montant || 0), 0);
+                return (
+                  <div
+                    key={group.agencyId}
+                    onClick={() => {
+                      setSelectedAgencyId(selectedAgencyId === group.agencyId ? null : group.agencyId);
+                      setCurrentPage(1);
+                      setFilterDepart('');
+                      setFilterArrivee('');
+                      setFilterStart('');
+                      setFilterEnd('');
+                    }}
+                    className={`p-6 bg-white rounded-xl shadow-sm border transition-all cursor-pointer hover:shadow-md ${
+                      selectedAgencyId === group.agencyId ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+                    }`}
+                  >
+                    <h2 className="font-bold text-lg text-gray-800 mb-2">
+                      {findAgencyName(group.agencyId)}
+                    </h2>
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>{group.reservations.length} réservations</span>
+                      <span className="font-medium">{total.toLocaleString()} FCFA</span>
+                    </div>
+                    <div className="mt-4 h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500"
+                        style={{ width: `${Math.min(100, (group.reservations.length / 50) * 100)}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {selectedAgencyId && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 border-b border-gray-200">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xl font-semibold text-gray-800">
+                      {findAgencyName(selectedAgencyId)}
+                      <span className="ml-2 text-sm font-normal text-gray-500">
+                        ({filteredDetails().length} réservations - {totalMontant.toLocaleString()} FCFA)
+                      </span>
+                    </h3>
+                  </div>
+
+                  {showFilters && (
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Départ</label>
+                        <input
+                          placeholder="Filtrer par départ"
+                          value={filterDepart}
+                          onChange={e => setFilterDepart(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Arrivée</label>
+                        <input
+                          placeholder="Filtrer par arrivée"
+                          value={filterArrivee}
+                          onChange={e => setFilterArrivee(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Date début</label>
+                        <input
+                          type="date"
+                          value={filterStart}
+                          onChange={e => setFilterStart(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Date fin</label>
+                        <input
+                          type="date"
+                          value={filterEnd}
+                          onChange={e => setFilterEnd(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Canal</label>
+                        <select
+                          value={filterCanal}
+                          onChange={e => setFilterCanal(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          <option value="tous">Tous les canaux</option>
+                          <option value="guichet">Guichet</option>
+                          <option value="en ligne">En ligne</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Client</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Téléphone</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Trajet</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Canal</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Montant</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {paginated.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-6 py-4 text-center text-gray-500">
+                            {Object.values({
+                              filterDepart,
+                              filterArrivee,
+                              filterStart,
+                              filterEnd,
+                              filterCanal
+                            }).some(Boolean) 
+                              ? "Aucune réservation ne correspond aux filtres" 
+                              : "Aucune réservation trouvée"}
+                          </td>
+                        </tr>
+                      ) : (
+                        paginated.map(r => (
+                          <tr key={r.id} className="hover:bg-gray-50">
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{r.nomClient}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{r.telephone}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              <span className="font-medium">{r.depart}</span> → <span className="font-medium">{r.arrivee}</span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                r.canal === 'guichet' 
+                                  ? 'bg-blue-100 text-blue-800' 
+                                  : 'bg-green-100 text-green-800'
+                              }`}>
+                                {r.canal}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{r.montant?.toLocaleString()} FCFA</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {r.createdAt ? new Date(r.createdAt).toLocaleDateString('fr-FR') : ''}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {filteredDetails().length > perPage && (
+                  <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      className="flex items-center px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <FaChevronLeft className="mr-1" />
+                      Précédent
+                    </button>
+                    <span className="text-sm text-gray-700">
+                      Page {currentPage} sur {totalPages}
+                    </span>
+                    <button
+                      onClick={() => setCurrentPage(prev => prev + 1)}
+                      disabled={currentPage === totalPages}
+                      className="flex items-center px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Suivant
+                      <FaChevronRight className="ml-1" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

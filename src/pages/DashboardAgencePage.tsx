@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { collection, query, where, getDocs, Timestamp, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -65,10 +65,12 @@ interface DashboardStats {
 }
 
 const DashboardAgencePage: React.FC = () => {
-  // Contextes et états
   const { user } = useAuth();
-  const [searchParams] = useSearchParams();
-  const [dateRange, setDateRange] = useState<[Date, Date]>([new Date(new Date().setDate(new Date().getDate() - 7)), new Date()]);
+  const { id: agencyIdFromRoute } = useParams(); // ✅ prend l'ID de l'URL
+  const [dateRange, setDateRange] = useState<[Date, Date]>([
+    new Date(new Date().setDate(new Date().getDate() - 7)),
+    new Date()
+  ]);
   const [timeRange, setTimeRange] = useState('week');
   const [stats, setStats] = useState<DashboardStats>({
     sales: 0,
@@ -81,17 +83,14 @@ const DashboardAgencePage: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(true);
 
-  // Formate la date en JJ/MM
   const formatDate = (date: Date) => {
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
     return `${day}/${month}`;
   };
 
-  // Fonction principale pour récupérer les statistiques
   const fetchStats = useCallback(async (startDate: Date, endDate: Date) => {
-    const agencyIdFromQuery = searchParams.get('aid');
-    const agencyId = agencyIdFromQuery || user?.agencyId;
+    const agencyId = agencyIdFromRoute || user?.agencyId;
     if (!agencyId) return;
 
     setIsLoading(true);
@@ -99,7 +98,6 @@ const DashboardAgencePage: React.FC = () => {
       const startTimestamp = Timestamp.fromDate(startDate);
       const endTimestamp = Timestamp.fromDate(endDate);
 
-      // Requête pour récupérer les réservations
       const reservationsQuery = query(
         collection(db, 'reservations'),
         where('agencyId', '==', agencyId),
@@ -113,10 +111,8 @@ const DashboardAgencePage: React.FC = () => {
         id: doc.id
       }));
 
-      // Récupération des trajets hebdomadaires pour les noms des routes
       const weeklyTripsSnap = await getDocs(collection(db, 'weeklyTrips'));
       const weeklyTripsMap: Record<string, { departure: string; arrival: string }> = {};
-
       weeklyTripsSnap.forEach(doc => {
         weeklyTripsMap[doc.id] = {
           departure: doc.data().departure,
@@ -124,12 +120,12 @@ const DashboardAgencePage: React.FC = () => {
         };
       });
 
-      // Initialisation des compteurs
       let totalRevenue = 0;
       const channelCounts: Record<string, number> = { online: 0, counter: 0 };
       const destinationCounts: Record<string, number> = {};
       const trajetStats: Record<string, { count: number; revenue: number; departure?: string; arrival?: string }> = {};
       const dailyStatsMap: Record<string, { count: number; revenue: number }> = {};
+
 
       // Traitement de chaque réservation
       reservations.forEach(reservation => {
@@ -256,7 +252,7 @@ const DashboardAgencePage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [user, searchParams]);
+    }, [user, agencyIdFromRoute]);
 
   // Effet pour charger les stats quand la plage de dates change
   useEffect(() => {

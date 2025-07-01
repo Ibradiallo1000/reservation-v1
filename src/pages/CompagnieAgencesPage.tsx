@@ -221,7 +221,8 @@ const CompagnieAgencesPage: React.FC = () => {
   };
 
   const goToDashboard = (agencyId: string) => {
-    navigate(`/agence/dashboard?aid=${agencyId}`);
+    console.log("Naviguer vers :", `/agence/${agencyId}/dashboard`);
+    navigate(`/compagnie/agence/${agencyId}/dashboard`);
   };
 
   return (
