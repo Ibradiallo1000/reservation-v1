@@ -12,10 +12,12 @@ const CompagnieLayout: React.FC = () => {
   const { user, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
+  const companyInfo = location.state?.companyInfo || null;
+
   const isActive = (path: string) => location.pathname === path;
 
   const colors = {
-    primary: 'bg-indigo-600',
+    primary: companyInfo?.couleurPrimaire ? `bg-[${companyInfo.couleurPrimaire}]` : 'bg-indigo-600',
     primaryHover: 'hover:bg-indigo-700',
     primaryLight: 'bg-indigo-50',
     primaryText: 'text-indigo-600',
@@ -65,7 +67,6 @@ const CompagnieLayout: React.FC = () => {
               Réservations
             </NavItem>
 
-            {/* ✅ AJOUTS */}
             <NavItem to="/compagnie/reservations-en-ligne" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations-en-ligne')}>
               Réservations en ligne
             </NavItem>
@@ -76,6 +77,11 @@ const CompagnieLayout: React.FC = () => {
 
             <NavItem to="/compagnie/payment-settings" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/payment-settings')}>
               Moyens de paiement
+            </NavItem>
+
+            {/* ✅ AJOUT DU PARAMÈTRES */}
+            <NavItem to="/compagnie/parametres" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/parametres')}>
+              Paramètres
             </NavItem>
 
             <div className="mt-4 pt-4 border-t border-slate-700">
@@ -170,7 +176,6 @@ const CompagnieLayout: React.FC = () => {
                 Réservations
               </MobileNavItem>
 
-              {/* ✅ AJOUTS MOBILE */}
               <MobileNavItem to="/compagnie/reservations-en-ligne" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations-en-ligne')}>
                 Réservations en ligne
               </MobileNavItem>
@@ -181,6 +186,11 @@ const CompagnieLayout: React.FC = () => {
 
               <MobileNavItem to="/compagnie/payment-settings" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/payment-settings')}>
                 Moyens de paiement
+              </MobileNavItem>
+
+              {/* ✅ AJOUT DU PARAMÈTRES MOBILE */}
+              <MobileNavItem to="/compagnie/parametres" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/parametres')}>
+                Paramètres
               </MobileNavItem>
 
               <div className="mt-2 pt-2 border-t border-slate-700">
