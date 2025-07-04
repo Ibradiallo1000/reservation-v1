@@ -6,8 +6,9 @@ import { ChevronLeft, Clock, MapPin, Calendar, CheckCircle, XCircle, Loader2, Us
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { motion } from 'framer-motion';
+import { hexToRgba, safeTextColor } from '../utils/color';
 
-type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_reçue' | 'payé' | 'annulé';
+type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'paye' | 'annule';
 
 interface Reservation {
   id: string;
@@ -26,6 +27,7 @@ interface Reservation {
   companyId: string;
   companySlug: string;
   companyName?: string;
+  primaryColor?: string;
 }
 
 interface PaymentMethod {
@@ -35,6 +37,13 @@ interface PaymentMethod {
   merchantNumber: string;
   defaultPaymentUrl: string;
   companyId: string;
+}
+
+interface CompanyInfo {
+  id: string;
+  name: string;
+  primaryColor?: string;
+  logoUrl?: string;
 }
 
 const STATUS_DISPLAY: Record<ReservationStatus, { text: string; color: string; icon: React.ReactNode }> = {
@@ -48,17 +57,17 @@ const STATUS_DISPLAY: Record<ReservationStatus, { text: string; color: string; i
     color: 'bg-blue-50 text-blue-800 border-blue-200',
     icon: <Loader2 className="h-5 w-5 animate-spin" />
   },
-  'preuve_reçue': {
+  'preuve_recue': {
     text: 'Preuve reçue',
     color: 'bg-violet-50 text-violet-800 border-violet-200',
     icon: <Upload className="h-5 w-5" />
   },
-  'payé': {
+  'paye': {
     text: 'Paiement confirmé',
     color: 'bg-emerald-50 text-emerald-800 border-emerald-200',
     icon: <CheckCircle className="h-5 w-5" />
   },
-  'annulé': {
+  'annule': {
     text: 'Annulé',
     color: 'bg-red-50 text-red-800 border-red-200',
     icon: <XCircle className="h-5 w-5" />
@@ -81,11 +90,17 @@ const ReservationDetailsPage: React.FC = () => {
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadingPayment, setLoadingPayment] = useState(false);
 
-  useEffect(() => {
-    if (!slug) console.error("Slug manquant dans location.state", location.state);
-    if (!companyInfo) console.error("CompanyInfo manquant dans location.state", location.state);
-  }, [slug, companyInfo, location.state]);
+  // Theme configuration
+  const themeConfig = {
+    colors: {
+      primary: reservation?.primaryColor || companyInfo?.primaryColor || '#3b82f6',
+      text: reservation?.primaryColor || companyInfo?.primaryColor 
+        ? safeTextColor(reservation?.primaryColor || companyInfo?.primaryColor) 
+        : '#ffffff',
+    }
+  };
 
   useEffect(() => {
     if (!id) {
@@ -134,27 +149,29 @@ const ReservationDetailsPage: React.FC = () => {
   }, [reservation?.companyId]);
 
   const handlePayment = async () => {
-    if (!selectedMethod || !reservation) return;
+    if (!selectedMethod || !reservation || !id) return;
 
     try {
-      setLoading(true);
+      setLoadingPayment(true);
       
-      await updateDoc(doc(db, 'reservations', id!), {
+      const paymentUrl = selectedMethod.defaultPaymentUrl
+        .replace('{amount}', reservation.montant.toString())
+        .replace('{reference}', reservation.referenceCode);
+      
+      // Open payment in new tab first
+      window.open(paymentUrl, '_blank');
+
+      // Then update status
+      await updateDoc(doc(db, 'reservations', id), {
         statut: 'paiement_en_cours',
         paymentMethod: selectedMethod.name,
         paymentMethodId: selectedMethod.id,
         updatedAt: new Date()
       });
 
-      const paymentUrl = selectedMethod.defaultPaymentUrl
-        .replace('{amount}', reservation.montant.toString())
-        .replace('{reference}', reservation.referenceCode);
-      
-      window.open(paymentUrl, '_blank');
-
       navigate(`/reservation/${id}/preuve`, {
         state: {
-          slug,
+          slug: slug || reservation.companySlug,
           reservation,
           paymentMethod: selectedMethod,
           companyInfo
@@ -165,7 +182,7 @@ const ReservationDetailsPage: React.FC = () => {
       console.error("Erreur lors du paiement:", err);
       alert("Une erreur est survenue lors du paiement");
     } finally {
-      setLoading(false);
+      setLoadingPayment(false);
     }
   };
 
@@ -216,35 +233,47 @@ const ReservationDetailsPage: React.FC = () => {
   }
 
   const statusInfo = STATUS_DISPLAY[reservation.statut];
+  const realSlug = slug || reservation.companySlug;
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header moderne avec effet de verre */}
-      <header className="bg-white/80 backdrop-blur-md shadow-sm sticky top-0 z-10 border-b border-gray-100">
+      {/* Header with dynamic theme */}
+      <header 
+        className="bg-white/80 backdrop-blur-md shadow-sm sticky top-0 z-10 border-b border-gray-100"
+        style={{
+          backgroundColor: hexToRgba(themeConfig.colors.primary, 0.95),
+          color: themeConfig.colors.text
+        }}
+      >
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center gap-4">
           <button 
             onClick={() => navigate(-1)}
-            className="p-2 rounded-full hover:bg-gray-100 transition"
+            className="p-2 rounded-full hover:bg-white/10 transition"
+            style={{ color: themeConfig.colors.text }}
           >
             <ChevronLeft className="h-5 w-5" />
           </button>
           <div className="flex-1">
-            <h1 className="text-xl font-bold text-gray-900">Détails de réservation</h1>
-            <p className="text-sm text-gray-500">{reservation.referenceCode}</p>
+            <h1 className="text-xl font-bold">Détails de réservation</h1>
+            <p className="text-sm opacity-90">{reservation.referenceCode}</p>
           </div>
           {companyInfo?.logoUrl && (
             <LazyLoadImage 
               src={companyInfo.logoUrl}
-              alt={companyInfo.nom}
+              alt={companyInfo.name}
               effect="blur"
-              className="h-10 w-10 rounded-lg object-cover border border-gray-200"
+              className="h-10 w-10 rounded-lg object-cover border-2"
+              style={{ 
+                borderColor: themeConfig.colors.text,
+                backgroundColor: hexToRgba(themeConfig.colors.primary, 0.2)
+              }}
             />
           )}
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto p-4 space-y-6 pb-20">
-        {/* Carte de statut avec animation */}
+        {/* Status card */}
         <motion.div 
           initial="hidden"
           animate="visible"
@@ -257,16 +286,16 @@ const ReservationDetailsPage: React.FC = () => {
           <div>
             <h2 className="font-bold">{statusInfo.text}</h2>
             <p className="text-sm opacity-90">
-              {reservation.statut === 'payé' 
+              {reservation.statut === 'paye' 
                 ? 'Votre réservation est confirmée' 
-                : reservation.statut === 'preuve_reçue' 
+                : reservation.statut === 'preuve_recue' 
                   ? 'Votre preuve est en cours de vérification' 
                   : 'Suivez les étapes pour compléter votre réservation'}
             </p>
           </div>
         </motion.div>
 
-        {/* Carte de trajet avec design moderne */}
+        {/* Trip details card */}
         <motion.div 
           initial="hidden"
           animate="visible"
@@ -285,6 +314,7 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
           
           <div className="space-y-5">
+            {/* Trip route visualization */}
             <div className="flex items-center justify-between">
               <div className="flex-1">
                 <div className="h-12 w-12 rounded-lg bg-blue-50 flex items-center justify-center mb-2">
@@ -307,6 +337,7 @@ const ReservationDetailsPage: React.FC = () => {
               </div>
             </div>
 
+            {/* Date and time */}
             <div className="grid grid-cols-2 gap-4 pt-5 border-t border-gray-100">
               <div className="flex items-start gap-3">
                 <div className="h-10 w-10 rounded-lg bg-blue-50 flex items-center justify-center">
@@ -328,6 +359,7 @@ const ReservationDetailsPage: React.FC = () => {
               </div>
             </div>
 
+            {/* Passengers and amount */}
             <div className="grid grid-cols-2 gap-4 pt-5 border-t border-gray-100">
               <div className="flex items-start gap-3">
                 <div className="h-10 w-10 rounded-lg bg-blue-50 flex items-center justify-center">
@@ -354,7 +386,7 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Carte informations passager */}
+        {/* Passenger info card */}
         <motion.div 
           initial="hidden"
           animate="visible"
@@ -389,6 +421,7 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
+        {/* Payment section (only if pending) */}
         {reservation.statut === 'en_attente' && paymentMethods.length > 0 && (
           <motion.div 
             initial="hidden"
@@ -432,10 +465,14 @@ const ReservationDetailsPage: React.FC = () => {
                 whileHover={{ scale: 1.01 }}
                 whileTap={{ scale: 0.99 }}
                 onClick={handlePayment}
-                disabled={!selectedMethod || loading}
+                disabled={!selectedMethod || loadingPayment}
                 className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-medium hover:shadow-md transition-all flex items-center justify-center gap-2"
+                style={{
+                  backgroundColor: themeConfig.colors.primary,
+                  color: themeConfig.colors.text
+                }}
               >
-                {loading ? (
+                {loadingPayment ? (
                   <>
                     <Loader2 className="h-5 w-5 animate-spin" />
                     <span>Redirection...</span>
@@ -453,7 +490,7 @@ const ReservationDetailsPage: React.FC = () => {
                 whileTap={{ scale: 0.99 }}
                 onClick={() => navigate(`/reservation/${id}/preuve`, {
                   state: {
-                    slug,
+                    slug: realSlug,
                     reservation,
                     companyInfo
                   }
@@ -467,42 +504,40 @@ const ReservationDetailsPage: React.FC = () => {
           </motion.div>
         )}
 
+        {/* Upload proof button (if payment in progress) */}
         {reservation.statut === 'paiement_en_cours' && (
           <motion.button
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
             onClick={() => navigate(`/reservation/${id}/preuve`, {
               state: {
-                slug,
+                slug: realSlug,
                 reservation,
                 companyInfo
               }
             })}
             className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-medium hover:shadow-md transition-all flex items-center justify-center gap-2"
+            style={{
+              backgroundColor: themeConfig.colors.primary,
+              color: themeConfig.colors.text
+            }}
           >
             <Upload className="h-4 w-4" />
             <span>Téléverser la preuve de paiement</span>
           </motion.button>
         )}
 
-        {reservation.statut === 'payé' && (
+        {/* View receipt button (if paid) */}
+        {reservation.statut === 'paye' && (
           <motion.button
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
-            onClick={() => {
-              const realSlug = slug || reservation.companySlug;
-              if (!realSlug) {
-                console.error("Navigation impossible : slug manquant");
-                alert("Erreur : slug manquant.");
-                return;
+            onClick={() => navigate(`/compagnie/${realSlug}/receipt/${id}`, {
+              state: {
+                reservation,
+                companyInfo
               }
-              navigate(`/compagnie/${realSlug}/receipt/${id}`, {
-                state: {
-                  reservation,
-                  companyInfo
-                }
-              });
-            }}
+            })}
             className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-xl font-medium hover:shadow-md transition-all flex items-center justify-center gap-2"
           >
             <CheckCircle className="h-4 w-4" />

@@ -4,6 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
 export interface CustomUser {
+  companyLogo: string | undefined;
   uid: string;
   email: string;
   displayName?: string;
@@ -74,7 +75,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       agencyId: data.agencyId || '',
       agencyName: data.agencyName || `${data.ville || 'Agence'} Principale`,
       lastLogin: data.lastLogin?.toDate() || null,
-      permissions: [...(data.permissions || []), ...(ROLES_PERMISSIONS[data.role] || [])]
+      permissions: [...(data.permissions || []), ...(ROLES_PERMISSIONS[data.role] || [])],
+      companyLogo: undefined
     };
 
     setUser(userData);

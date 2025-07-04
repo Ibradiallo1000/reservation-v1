@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { collection, addDoc, Timestamp, getDocs } from 'firebase/firestore';
+import { addDoc, collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { ChevronLeft, Clock, Calendar, User, Phone, Mail } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
@@ -14,11 +14,52 @@ interface PassengerData {
 }
 
 const FormulaireReservationClient: React.FC = () => {
-  const navigate = useNavigate();
   const location = useLocation();
-  const { slug = '' } = useParams();
+  const navigate = useNavigate();
+  const { tripData, companyInfo: originalCompanyInfo } = location.state || {};
+  const [companyInfo, setCompanyInfo] = useState(originalCompanyInfo);
+  
+  const { slug: slugFromUrl } = useParams();
+  const slug = slugFromUrl || companyInfo?.slug || '';
 
-  const { tripData, companyInfo } = location.state || {};
+ useEffect(() => {
+  const fetchCompanyPaymentMethods = async () => {
+    if (!originalCompanyInfo?.id) return;
+
+    const q = collection(db, 'paymentMethods');
+    const snap = await getDocs(q);
+    const list = snap.docs
+      .map(doc => doc.data())
+      .filter(pm => pm.companyId === originalCompanyInfo.id);
+
+    const methods: Record<string, {
+      url: string,
+      logoUrl: string,
+      ussdPattern: string,
+      merchantNumber: string
+    }> = {}; // ✅ Typage correct
+
+    list.forEach(pm => {
+      const key = pm.name.toLowerCase().replace(/\s+/g, '_');
+      methods[key] = {
+        url: pm.defaultPaymentUrl || '',
+        logoUrl: pm.logoUrl || '',
+        ussdPattern: pm.ussdPattern || '',
+        merchantNumber: pm.merchantNumber || ''
+      };
+    });
+
+    setCompanyInfo({
+      ...originalCompanyInfo,
+      paymentMethods: methods
+    });
+
+    console.log('✅ Méthodes de paiement chargées :', methods);
+  };
+
+  fetchCompanyPaymentMethods();
+}, [originalCompanyInfo]);
+  
   if (!location.state || !tripData || !companyInfo) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-white p-4">
@@ -49,7 +90,6 @@ const FormulaireReservationClient: React.FC = () => {
   const unitPrice = Number(tripData?.price || 0);
   const [totalCost, setTotalCost] = useState(unitPrice);
 
-  // Configuration du thème basée sur companyInfo
   const themeConfig = {
     colors: {
       primary: companyInfo?.primaryColor || '#3b82f6',
@@ -96,19 +136,18 @@ const FormulaireReservationClient: React.FC = () => {
       const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
       const referenceCode = `RES${Date.now()}`;
 
-      // Vérification places disponibles
       const reservationsSnap = await getDocs(collection(db, 'reservations'));
       const reservations = reservationsSnap.docs.map(doc => doc.data());
       const réservées = reservations
-        .filter(res => res.trajetId === tripData.id && res.date === tripData.date && res.heure === tripData.time && res.statut === 'payé')
+        .filter(res => res.trajetId === tripData.id && res.date === tripData.date && res.heure === tripData.time && (res.statut === 'payé' || res.statut === 'preuve_recue'))
         .reduce((acc, res) => acc + (res.seatsGo || 1), 0);
-      const placesRestantes = (tripData.places || 0) - réservées;
 
+      const placesRestantes = (tripData.places || 0) - réservées;
       if (placesRestantes < totalDemandées) {
         throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
       }
 
-      const booking = {
+      const reservationDraft = {
         nomClient: passengerData.fullName,
         telephone: passengerData.phone,
         email: passengerData.email,
@@ -122,27 +161,26 @@ const FormulaireReservationClient: React.FC = () => {
         tripType,
         canal: 'en_ligne',
         statut: 'en_attente',
-        createdAt: Timestamp.now(),
         companyId: tripData.companyId,
         agencyId: tripData.agencyId,
         trajetId: tripData.id,
         referenceCode,
         commission: totalCost * 0.05,
         companySlug: slug,
+        companyName: companyInfo?.nom,
+        tripData,
+        createdAt: new Date(),
+        updatedAt: new Date()
       };
 
-      const docRef = await addDoc(collection(db, 'reservations'), booking);
+      const docRef = await addDoc(collection(db, 'reservations'), reservationDraft);
+      console.log('slug:', slug);
+      console.log('docRef.id:', docRef.id);
 
-      navigate(`/reservation/${docRef.id}`, {
+      navigate(`/compagnie/${slug}/reservation/upload-preuve/${docRef.id}`, {
         state: {
-          slug: slug,
-          reservation: {
-            ...booking,
-            id: docRef.id,
-            companyName: companyInfo?.nom
-          },
-          tripData,
-          companyInfo
+          companyInfo, // Utilise le state à jour
+          draft: reservationDraft
         }
       });
 
@@ -163,20 +201,11 @@ const FormulaireReservationClient: React.FC = () => {
   };
 
   return (
-    <div 
-      className="min-h-screen" 
-      style={{ 
-        background: colors.background,
-        color: safeTextColor(colors.background)
-      }}
-    >
-      <header 
-        className={classes.header}
-        style={{
-          backgroundColor: hexToRgba(colors.primary, 0.95),
-          backdropFilter: 'blur(10px)'
-        }}
-      >
+    <div className="min-h-screen" style={{ background: colors.background }}>
+      <header className={classes.header} style={{
+        backgroundColor: hexToRgba(colors.primary, 0.95),
+        backdropFilter: 'blur(10px)'
+      }}>
         <div className="flex items-center gap-4 max-w-7xl mx-auto">
           <button 
             onClick={() => navigate(-1)}
@@ -199,10 +228,7 @@ const FormulaireReservationClient: React.FC = () => {
                 }}
               />
             )}
-            <h1 
-              className="text-lg font-bold"
-              style={{ color: safeTextColor(colors.primary) }}
-            >
+            <h1 className="text-lg font-bold" style={{ color: safeTextColor(colors.primary) }}>
               Réservation
             </h1>
           </div>
@@ -210,7 +236,6 @@ const FormulaireReservationClient: React.FC = () => {
       </header>
 
       <main className="max-w-4xl mx-auto p-4">
-        {/* Récapitulatif compact du trajet */}
         <div className={`p-4 rounded-xl mb-4 ${classes.card}`}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
@@ -231,7 +256,6 @@ const FormulaireReservationClient: React.FC = () => {
           </div>
         </div>
 
-        {/* Formulaire compact */}
         <div className={`rounded-xl overflow-hidden ${classes.card}`}>
           <div className="p-4">
             <h2 className="text-lg font-bold mb-4" style={{ color: colors.primary }}>
@@ -411,7 +435,7 @@ const FormulaireReservationClient: React.FC = () => {
                       Traitement...
                     </span>
                   ) : (
-                    'Confirmer la réservation'
+                    'Passer au paiement'
                   )}
                 </button>
               </div>

@@ -1,5 +1,3 @@
-// ✅ src/AppRoutes.tsx
-
 import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
@@ -19,7 +17,7 @@ const LoginPage = lazy(() => import('./pages/LoginPage'));
 const Register = lazy(() => import('./pages/Register'));
 const PublicCompanyPage = lazy(() => import('./pages/PublicCompanyPage'));
 const ResultatsAgencePage = lazy(() => import('./pages/ResultatsAgencePage'));
-const ReservationConfirmationPage = lazy(() => import('./pages/ReservationDetailsPage'));
+const ReservationDetailsPage = lazy(() => import('./pages/ReservationDetailsPage'));
 const ClientMesReservationsPage = lazy(() => import('./pages/ClientMesReservationsPage'));
 const MentionsPage = lazy(() => import('./pages/MentionsPage'));
 const ConfidentialitePage = lazy(() => import('./pages/ConfidentialitePage'));
@@ -68,12 +66,15 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={<PageLoader fullScreen />}>
       <Routes>
-        {/* Pages publiques */}
+
+        {/* ✅ Pages publiques */}
         <Route path="/" element={<HomePage />} />
         <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
         <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
-        <Route path="/compagnie/:slug/preuve/:id" element={<UploadPreuvePage />} />
-        <Route path="/reservation/:id/preuve" element={<UploadPreuvePage />} />
+
+        {/* ✅ Upload preuve : version unique et RESTful */}
+        <Route path="/compagnie/:slug/reservation/upload-preuve/:id" element={<UploadPreuvePage />} />
+
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/mes-reservations" element={<MesReservationsPage />} />
         <Route path="/login" element={<LoginPage />} />
@@ -81,13 +82,13 @@ const AppRoutes = () => {
         <Route path="/compagnie/:slug" element={<PublicCompanyPage />} />
         <Route path="/compagnie/:slug/resultats" element={<ResultatsAgencePage />} />
         <Route path="/compagnie/:slug/booking" element={<FormulaireReservationClient />} />
-        <Route path="/reservation/:id" element={<ReservationConfirmationPage />} />
+        <Route path="/reservation/:id" element={<ReservationDetailsPage />} />
         <Route path="/compagnie/:slug/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/compagnie/:slug/mentions" element={<MentionsPage />} />
         <Route path="/compagnie/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
 
-        {/* Admin plateforme */}
+        {/* ✅ Admin plateforme */}
         <Route
           path="/admin"
           element={
@@ -100,7 +101,7 @@ const AppRoutes = () => {
           <Route path="dashboard" element={<AdminDashboard />} />
         </Route>
 
-        {/* Compagnie */}
+        {/* ✅ Compagnie */}
         <Route
           path="/compagnie"
           element={
@@ -125,7 +126,7 @@ const AppRoutes = () => {
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
         </Route>
 
-        {/* Dashboard spécifique agence pour admin compagnie */}
+        {/* ✅ Dashboard spécifique agence pour admin compagnie */}
         <Route
           path="/compagnie/agence/:id/dashboard"
           element={
@@ -143,7 +144,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* Agence (chefAgence, guichetier, agentCourrier) */}
+        {/* ✅ Agence */}
         <Route
           path="/agence"
           element={
@@ -167,10 +168,10 @@ const AppRoutes = () => {
           <Route path="receipt/:id" element={<ReceiptGuichetPage />} />
         </Route>
 
-        {/* Impression sans layout */}
-        <Route path="/agence/reservations/impression-reservations" element={<ReservationPrintPage />} />
+        {/* ✅ Impression réservations — version courte et claire */}
+        <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
-        {/* 404 */}
+        {/* ✅ 404 */}
         <Route
           path="*"
           element={
