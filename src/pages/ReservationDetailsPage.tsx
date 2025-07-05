@@ -83,7 +83,7 @@ const ReservationDetailsPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { id } = useParams<{ id: string }>();
-  const { slug, companyInfo } = location.state || {};
+  const { slug, companyInfo: locationCompanyInfo } = location.state || {};
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
@@ -92,13 +92,22 @@ const ReservationDetailsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loadingPayment, setLoadingPayment] = useState(false);
 
-  // Theme configuration
+  // Get safe company info from either location state or reservation
+  const companyInfo = locationCompanyInfo || (reservation ? {
+    id: reservation.companyId,
+    name: reservation.companyName || '',
+    primaryColor: reservation.primaryColor,
+    logoUrl: undefined
+  } : null);
+
+  // Theme configuration with safe defaults
+  const fallbackColor = '#3b82f6';
+  const primaryColor = companyInfo?.primaryColor || fallbackColor;
+  
   const themeConfig = {
     colors: {
-      primary: reservation?.primaryColor || companyInfo?.primaryColor || '#3b82f6',
-      text: reservation?.primaryColor || companyInfo?.primaryColor 
-        ? safeTextColor(reservation?.primaryColor || companyInfo?.primaryColor) 
-        : '#ffffff',
+      primary: primaryColor,
+      text: safeTextColor(primaryColor)
     }
   };
 
@@ -158,10 +167,8 @@ const ReservationDetailsPage: React.FC = () => {
         .replace('{amount}', reservation.montant.toString())
         .replace('{reference}', reservation.referenceCode);
       
-      // Open payment in new tab first
       window.open(paymentUrl, '_blank');
 
-      // Then update status
       await updateDoc(doc(db, 'reservations', id), {
         statut: 'paiement_en_cours',
         paymentMethod: selectedMethod.name,
@@ -174,7 +181,11 @@ const ReservationDetailsPage: React.FC = () => {
           slug: slug || reservation.companySlug,
           reservation,
           paymentMethod: selectedMethod,
-          companyInfo
+          companyInfo: companyInfo || {
+            id: reservation.companyId,
+            name: reservation.companyName || '',
+            primaryColor: reservation.primaryColor
+          }
         }
       });
 
@@ -232,7 +243,11 @@ const ReservationDetailsPage: React.FC = () => {
     );
   }
 
-  const statusInfo = STATUS_DISPLAY[reservation.statut];
+  const statusInfo = STATUS_DISPLAY[reservation.statut] || {
+    text: 'Statut inconnu',
+    color: 'bg-gray-100 text-gray-700 border-gray-300',
+    icon: <XCircle className="h-5 w-5" />
+  };
   const realSlug = slug || reservation.companySlug;
 
   return (
@@ -492,7 +507,11 @@ const ReservationDetailsPage: React.FC = () => {
                   state: {
                     slug: realSlug,
                     reservation,
-                    companyInfo
+                    companyInfo: companyInfo || {
+                      id: reservation.companyId,
+                      name: reservation.companyName || '',
+                      primaryColor: reservation.primaryColor
+                    }
                   }
                 })}
                 className="w-full py-3.5 px-4 bg-white text-gray-800 rounded-xl font-medium border border-gray-200 hover:border-gray-300 hover:shadow-md transition-all flex items-center justify-center gap-2"
@@ -513,7 +532,11 @@ const ReservationDetailsPage: React.FC = () => {
               state: {
                 slug: realSlug,
                 reservation,
-                companyInfo
+                companyInfo: companyInfo || {
+                  id: reservation.companyId,
+                  name: reservation.companyName || '',
+                  primaryColor: reservation.primaryColor
+                }
               }
             })}
             className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-medium hover:shadow-md transition-all flex items-center justify-center gap-2"
@@ -535,7 +558,11 @@ const ReservationDetailsPage: React.FC = () => {
             onClick={() => navigate(`/compagnie/${realSlug}/receipt/${id}`, {
               state: {
                 reservation,
-                companyInfo
+                companyInfo: companyInfo || {
+                  id: reservation.companyId,
+                  name: reservation.companyName || '',
+                  primaryColor: reservation.primaryColor
+                }
               }
             })}
             className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-xl font-medium hover:shadow-md transition-all flex items-center justify-center gap-2"

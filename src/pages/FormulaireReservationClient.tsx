@@ -124,72 +124,73 @@ const FormulaireReservationClient: React.FC = () => {
     else setSeatsReturn(clampedValue);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setLoading(true);
 
-    try {
-      if (!passengerData.fullName || !passengerData.phone) {
-        throw new Error('Veuillez remplir tous les champs obligatoires');
-      }
-
-      const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
-      const referenceCode = `RES${Date.now()}`;
-
-      const reservationsSnap = await getDocs(collection(db, 'reservations'));
-      const reservations = reservationsSnap.docs.map(doc => doc.data());
-      const réservées = reservations
-        .filter(res => res.trajetId === tripData.id && res.date === tripData.date && res.heure === tripData.time && (res.statut === 'payé' || res.statut === 'preuve_recue'))
-        .reduce((acc, res) => acc + (res.seatsGo || 1), 0);
-
-      const placesRestantes = (tripData.places || 0) - réservées;
-      if (placesRestantes < totalDemandées) {
-        throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
-      }
-
-      const reservationDraft = {
-        nomClient: passengerData.fullName,
-        telephone: passengerData.phone,
-        email: passengerData.email,
-        depart: tripData.departure,
-        arrivee: tripData.arrival,
-        date: tripData.date,
-        heure: tripData.time,
-        montant: totalCost,
-        seatsGo,
-        seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
-        tripType,
-        canal: 'en_ligne',
-        statut: 'en_attente',
-        companyId: tripData.companyId,
-        agencyId: tripData.agencyId,
-        trajetId: tripData.id,
-        referenceCode,
-        commission: totalCost * 0.05,
-        companySlug: slug,
-        companyName: companyInfo?.nom,
-        tripData,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-
-      const docRef = await addDoc(collection(db, 'reservations'), reservationDraft);
-      console.log('slug:', slug);
-      console.log('docRef.id:', docRef.id);
-
-      navigate(`/compagnie/${slug}/reservation/upload-preuve/${docRef.id}`, {
-        state: {
-          companyInfo, // Utilise le state à jour
-          draft: reservationDraft
-        }
-      });
-
-    } catch (error: any) {
-      alert(error.message);
-    } finally {
-      setLoading(false);
+  try {
+    if (!passengerData.fullName || !passengerData.phone) {
+      throw new Error('Veuillez remplir tous les champs obligatoires');
     }
-  };
+
+    const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
+    const referenceCode = `RES${Date.now()}`;
+
+    const reservationsSnap = await getDocs(collection(db, 'reservations'));
+    const reservations = reservationsSnap.docs.map(doc => doc.data());
+    const réservées = reservations
+      .filter(res => res.trajetId === tripData.id && res.date === tripData.date && res.heure === tripData.time && (res.statut === 'payé' || res.statut === 'preuve_recue'))
+      .reduce((acc, res) => acc + (res.seatsGo || 1), 0);
+
+    const placesRestantes = (tripData.places || 0) - réservées;
+    if (placesRestantes < totalDemandées) {
+      throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
+    }
+
+    const reservationDraft = {
+      nomClient: passengerData.fullName,
+      telephone: passengerData.phone,
+      email: passengerData.email,
+      depart: tripData.departure,
+      arrivee: tripData.arrival,
+      date: tripData.date,
+      heure: tripData.time,
+      montant: totalCost,
+      seatsGo,
+      seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
+      tripType,
+      canal: 'en_ligne',
+      statut: 'en_attente',
+      companyId: tripData.companyId,
+      agencyId: tripData.agencyId,
+      trajetId: tripData.id,
+      referenceCode,
+      commission: totalCost * 0.05,
+      companySlug: slug,
+      companyName: companyInfo?.name || '', // ✅ CORRECT
+      primaryColor: companyInfo?.primaryColor || '', // ✅ AJOUTÉ
+      tripData,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const docRef = await addDoc(collection(db, 'reservations'), reservationDraft);
+    console.log('slug:', slug);
+    console.log('docRef.id:', docRef.id);
+
+    navigate(`/compagnie/${slug}/reservation/upload-preuve/${docRef.id}`, {
+      state: {
+        companyInfo, // ✅ Garde le state à jour
+        draft: reservationDraft
+      }
+    });
+
+  } catch (error: any) {
+    alert(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const formatDateDisplay = (dateStr: string) => {
     const date = new Date(dateStr);
