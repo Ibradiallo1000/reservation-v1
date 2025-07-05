@@ -1,5 +1,5 @@
 import type { Reservation } from '@/types/index';
-
+import { toJSDate } from '@/utils/toJSDate';
 export function calculateDailyStats(reservations: Reservation[], start: Date, end: Date) {
   const days: Record<string, { sales: number; revenue: number }> = {};
 
@@ -11,7 +11,7 @@ export function calculateDailyStats(reservations: Reservation[], start: Date, en
 
   // Remplir les valeurs par date
   reservations.forEach(res => {
-    const dateKey = res.createdAt.toDate().toISOString().slice(0, 10);
+    const dateKey = toJSDate(res.createdAt).toISOString().slice(0, 10);
     if (days[dateKey]) {
       days[dateKey].sales += 1;
       days[dateKey].revenue += res.montant || 0;

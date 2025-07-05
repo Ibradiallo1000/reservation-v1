@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { hasPermission } from '../roles-permissions';
 import type { Role } from '../roles-permissions';
 import type { Reservation } from '@/types/index';
+import { toJSDate } from '@/utils/toJSDate';
 
 // Import des composants UI
 import {
@@ -166,7 +167,8 @@ const DashboardAgencePage: React.FC = () => {
 
         // Statistiques journalières
         if (reservation.createdAt) {
-          const date = reservation.createdAt.toDate();
+          const date = toJSDate(reservation.createdAt);
+
           const dateKey = formatDate(date);
           if (!dailyStatsMap[dateKey]) {
             dailyStatsMap[dateKey] = { count: 0, revenue: 0 };
