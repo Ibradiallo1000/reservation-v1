@@ -20,6 +20,6 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src"],
+  "include": ["src", "functions"], // ✅ On inclut aussi "functions"
   "exclude": ["node_modules"]
 }

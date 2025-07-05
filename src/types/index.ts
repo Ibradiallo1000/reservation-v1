@@ -1,21 +1,37 @@
-// ✅ src/types/index.ts
-
 import type { Timestamp } from 'firebase/firestore';
 
+// ✅ Statuts possibles pour les réservations
+export type ReservationStatus = 'en_attente' | 'payé' | 'preuve_recue' | 'refusé' | 'annulé';
+
+// ✅ Canaux possibles
+export type Channel = 'en ligne' | 'agence' | 'téléphone';
+
+// ✅ Reservation complète pour le hook
 export interface Reservation {
-  trajetId: string;
-  canal: string;
   id: string;
+  trajetId?: string; // optionnel si pas toujours utilisé
+  canal: Channel; // 🔥 Type précis au lieu de string
   montant: number;
-  createdAt: Timestamp;
+  createdAt: Timestamp | Date;
   agenceId?: string;
   clientNom?: string;
-  statut?: string;
-  date?: string; // 🔥 à ajouter
-  heure?: string; // 🔥 à ajouter
-  depart?: string; // 🔥 à ajouter
-  arrivee?: string; // 🔥 à ajouter
-  // 🔁 Ajoute ici d'autres champs si ton Firestore contient plus d'infos (ex: tripId, telephone, etc.)
+  nomClient?: string; // pour compatibilité
+  telephone?: string; // recommandé
+  email?: string;
+  statut: ReservationStatus; // 🔥 Type précis au lieu de string
+  date?: string;
+  heure?: string;
+  depart?: string;
+  arrivee?: string;
+  referenceCode?: string;
+  seatsGo?: number;
+  seatsReturn?: number;
+  compagnieId?: string;
+  companySlug?: string;
+  agenceNom?: string;
+  agenceTelephone?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface ThemeConfig {
@@ -98,8 +114,6 @@ export interface MessageClient {
   companyId: string;
   createdAt: any;
 }
-
-// ✅ Ajout des types pour le dashboard compagnie
 
 export interface Agency {
   id: string;

@@ -11,8 +11,8 @@ import {
   QueryDocumentSnapshot,
   getDocs
 } from 'firebase/firestore';
-import { db } from '../../../src/firebaseConfig';
-import { Reservation, ReservationStatus, Channel } from '../types';
+import { db } from '../../src/firebaseConfig';
+import { Reservation, ReservationStatus, Channel } from '@/types/index';
 
 interface UseReservationsOptions {
   companyId: string;
