@@ -88,13 +88,34 @@ const PublicCompanyPage = () => {
     fetchData();
   }, [fetchData]);
 
-  if (loading) return <LoadingScreen message={t('loading')} colors={{
-    primary: '',
-    text: '',
-    background: ''
-  }} />;
-  if (error) return <ErrorScreen error={error} colors={colors} classes={classes} t={t} />;
-  if (!company || !slug) return <NotFoundScreen primaryColor={colors.primary} />;
+  if (loading) {
+    return (
+      <LoadingScreen
+        message={t('loading')}
+        colors={{
+          primary: colors.primary,
+          text: colors.text,
+          background: colors.background
+        }}
+      />
+    );
+  }
+
+  if (error) {
+    return (
+      <ErrorScreen
+        error={error}
+        navigate={navigate} // ✅ IMPORTANT : maintenant tu passes navigate
+        colors={colors}
+        classes={classes}
+        t={t}
+      />
+    );
+  }
+
+  if (!company || !slug) {
+    return <NotFoundScreen primaryColor={colors.primary} />;
+  }
 
   return (
     <div
