@@ -8,6 +8,9 @@ interface ErrorScreenProps {
   error: string;
   navigate: NavigateFunction;
   slug?: string;
+  colors?: any;     // ✅ nouveau
+  classes?: any;    // ✅ nouveau
+  t?: any;          // ✅ nouveau
 }
 
 const ErrorScreen: React.FC<ErrorScreenProps> = ({ error, navigate, slug }) => (
