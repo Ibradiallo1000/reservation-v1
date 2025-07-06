@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db, storage } from '../firebaseConfig';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, updateDoc, doc, getDocs, query, where } from 'firebase/firestore';
 import { Upload, CheckCircle, XCircle, Loader2, ChevronLeft, Info } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -227,56 +227,63 @@ const UploadPreuvePage: React.FC = () => {
     }
   };
 
-  const handleUpload = async () => {
-    if (!validateForm()) return;
+const handleUpload = async () => {
+  if (!reservationDraft || !reservationDraft.id) {
+    setError('Réservation introuvable.');
+    return;
+  }
+  if (!paymentMethod) {
+    setError('Veuillez sélectionner un moyen de paiement.');
+    return;
+  }
+  if (!message && !file) {
+    setError('Veuillez fournir une preuve ou un message.');
+    return;
+  }
 
-    setUploading(true);
-    setError(null);
+  setUploading(true);
+  setError(null);
 
-    try {
-      let preuveUrl: string | null = null;
+  try {
+    let preuveUrl: string | null = null;
 
-      if (file) {
-        const fileExt = file.name.split('.').pop();
-        const timestamp = Date.now();
-        const fileName = `preuve_${timestamp}.${fileExt}`;
-        const storageRef = ref(storage, `preuves/${fileName}`);
-        
-        const snapshot = await uploadBytes(storageRef, file);
-        preuveUrl = await getDownloadURL(snapshot.ref);
-      }
-
-      const docRef = await addDoc(collection(db, 'reservations'), {
-        ...reservationDraft,
-        statut: 'preuve_recue',
-        paymentMethod,
-        preuveUrl: preuveUrl || null,
-        preuveMessage: message.trim(),
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-
-      sessionStorage.removeItem('reservationDraft');
-      sessionStorage.removeItem('companyInfo');
-      setSuccess(true);
-      
-      setTimeout(() => {
-        navigate(`/reservation/${docRef.id}`, {
-          state: {
-            slug,
-            companyInfo
-          }
-        });
-
-      }, 1500);
-
-    } catch (err) {
-      console.error('Erreur:', err);
-      setError('Une erreur est survenue lors de la création de la réservation');
-    } finally {
-      setUploading(false);
+    if (file) {
+      const ext = file.name.split('.').pop();
+      const filename = `preuves/preuve_${Date.now()}.${ext}`;
+      const fileRef = ref(storage, filename);
+      const snap = await uploadBytes(fileRef, file);
+      preuveUrl = await getDownloadURL(snap.ref);
     }
-  };
+
+    // ✅ Au lieu de addDoc, on UPDATE le doc existant :
+    await updateDoc(doc(db, 'reservations', reservationDraft.id), {
+      statut: 'preuve_recue',
+      paymentMethod: paymentMethod,
+      preuveMessage: message.trim(),
+      preuveUrl: preuveUrl || null,
+      updatedAt: new Date(),
+    });
+
+    sessionStorage.removeItem('reservationDraft');
+    sessionStorage.removeItem('companyInfo');
+    setSuccess(true);
+
+ setTimeout(() => {
+  navigate(`/reservation/${reservationDraft.id}`, {
+    state: {
+      slug: slug,
+      companyInfo: companyInfo,
+    }
+  });
+}, 1500);
+
+  } catch (err) {
+    console.error('Erreur:', err);
+    setError('Une erreur est survenue lors de l\'envoi.');
+  } finally {
+    setUploading(false);
+  }
+};
 
   if (loadingData) {
     return <LoadingScreen colors={{

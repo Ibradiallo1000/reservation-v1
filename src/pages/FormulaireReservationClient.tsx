@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { addDoc, collection, getDocs } from 'firebase/firestore';
+import { addDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { ChevronLeft, Clock, Calendar, User, Phone, Mail } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
@@ -22,43 +22,41 @@ const FormulaireReservationClient: React.FC = () => {
   const { slug: slugFromUrl } = useParams();
   const slug = slugFromUrl || companyInfo?.slug || '';
 
- useEffect(() => {
-  const fetchCompanyPaymentMethods = async () => {
-    if (!originalCompanyInfo?.id) return;
+  useEffect(() => {
+    const fetchCompanyPaymentMethods = async () => {
+      if (!originalCompanyInfo?.id) return;
 
-    const q = collection(db, 'paymentMethods');
-    const snap = await getDocs(q);
-    const list = snap.docs
-      .map(doc => doc.data())
-      .filter(pm => pm.companyId === originalCompanyInfo.id);
+      const q = collection(db, 'paymentMethods');
+      const snap = await getDocs(q);
+      const list = snap.docs
+        .map(doc => doc.data())
+        .filter(pm => pm.companyId === originalCompanyInfo.id);
 
-    const methods: Record<string, {
-      url: string,
-      logoUrl: string,
-      ussdPattern: string,
-      merchantNumber: string
-    }> = {}; // ✅ Typage correct
+      const methods: Record<string, {
+        url: string,
+        logoUrl: string,
+        ussdPattern: string,
+        merchantNumber: string
+      }> = {};
 
-    list.forEach(pm => {
-      const key = pm.name.toLowerCase().replace(/\s+/g, '_');
-      methods[key] = {
-        url: pm.defaultPaymentUrl || '',
-        logoUrl: pm.logoUrl || '',
-        ussdPattern: pm.ussdPattern || '',
-        merchantNumber: pm.merchantNumber || ''
-      };
-    });
+      list.forEach(pm => {
+        const key = pm.name.toLowerCase().replace(/\s+/g, '_');
+        methods[key] = {
+          url: pm.defaultPaymentUrl || '',
+          logoUrl: pm.logoUrl || '',
+          ussdPattern: pm.ussdPattern || '',
+          merchantNumber: pm.merchantNumber || ''
+        };
+      });
 
-    setCompanyInfo({
-      ...originalCompanyInfo,
-      paymentMethods: methods
-    });
+      setCompanyInfo({
+        ...originalCompanyInfo,
+        paymentMethods: methods
+      });
+    };
 
-    console.log('✅ Méthodes de paiement chargées :', methods);
-  };
-
-  fetchCompanyPaymentMethods();
-}, [originalCompanyInfo]);
+    fetchCompanyPaymentMethods();
+  }, [originalCompanyInfo]);
   
   if (!location.state || !tripData || !companyInfo) {
     return (
@@ -124,7 +122,7 @@ const FormulaireReservationClient: React.FC = () => {
     else setSeatsReturn(clampedValue);
   };
 
-const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
   setLoading(true);
 
@@ -135,12 +133,19 @@ const handleSubmit = async (e: React.FormEvent) => {
 
     const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
     const referenceCode = `RES${Date.now()}`;
+    const trajetId = `${tripData.id}-${tripData.date}-${tripData.time.replace(/\s+/g, '')}`;
 
-    const reservationsSnap = await getDocs(collection(db, 'reservations'));
-    const reservations = reservationsSnap.docs.map(doc => doc.data());
-    const réservées = reservations
-      .filter(res => res.trajetId === tripData.id && res.date === tripData.date && res.heure === tripData.time && (res.statut === 'payé' || res.statut === 'preuve_recue'))
-      .reduce((acc, res) => acc + (res.seatsGo || 1), 0);
+    const reservationsQuery = query(
+      collection(db, 'reservations'),
+      where('trajetId', '==', trajetId),
+      where('statut', 'in', ['payé', 'preuve_recue'])
+    );
+
+    const reservationsSnap = await getDocs(reservationsQuery);
+    const réservées = reservationsSnap.docs.reduce((acc, doc) => {
+      const res = doc.data();
+      return acc + (res.seatsGo || 1) + (res.seatsReturn || 0);
+    }, 0);
 
     const placesRestantes = (tripData.places || 0) - réservées;
     if (placesRestantes < totalDemandées) {
@@ -163,25 +168,30 @@ const handleSubmit = async (e: React.FormEvent) => {
       statut: 'en_attente',
       companyId: tripData.companyId,
       agencyId: tripData.agencyId,
-      trajetId: tripData.id,
+      trajetId,
       referenceCode,
       commission: totalCost * 0.05,
       companySlug: slug,
-      companyName: companyInfo?.name || '', // ✅ CORRECT
-      primaryColor: companyInfo?.primaryColor || '', // ✅ AJOUTÉ
+      companyName: companyInfo.nom,
+      primaryColor: companyInfo.primaryColor,
       tripData,
       createdAt: new Date(),
       updatedAt: new Date()
     };
 
+    // Ajout du document et récupération de la référence
     const docRef = await addDoc(collection(db, 'reservations'), reservationDraft);
-    console.log('slug:', slug);
-    console.log('docRef.id:', docRef.id);
+    
+    // Mise à jour cruciale : ajout de l'ID au draft avant navigation
+    const draftWithId = {
+      ...reservationDraft,
+      id: docRef.id // Ajout de l'ID généré par Firestore
+    };
 
     navigate(`/compagnie/${slug}/reservation/upload-preuve/${docRef.id}`, {
       state: {
-        companyInfo, // ✅ Garde le state à jour
-        draft: reservationDraft
+        companyInfo,
+        draft: draftWithId // Envoi du draft COMPLET avec ID
       }
     });
 

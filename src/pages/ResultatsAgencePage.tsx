@@ -49,7 +49,6 @@ interface ThemeClasses {
   header: string;
 }
 
-// Fonctions utilitaires pour la gestion des couleurs
 const hexToRgba = (hex: string, alpha: number = 1): string => {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
@@ -57,20 +56,14 @@ const hexToRgba = (hex: string, alpha: number = 1): string => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-const safeTextColor = (hexColor: string): string => {
-  return getContrastColor(hexColor);
-};
-
-const getContrastColor = (hexColor: string, relativeTo = '#ffffff'): string => {
+const getContrastColor = (hexColor: string): string => {
   if (!hexColor || hexColor.length < 7) return '#000000';
   
   const r = parseInt(hexColor.slice(1, 3), 16);
   const g = parseInt(hexColor.slice(3, 5), 16);
   const b = parseInt(hexColor.slice(5, 7), 16);
   
-  // Calcul de la luminance (formule WCAG)
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  
   return luminance > 0.5 ? '#000000' : '#ffffff';
 };
 
@@ -81,7 +74,6 @@ const ResultatsAgencePage: React.FC = () => {
 
   const departureParam = searchParams.get('departure') || '';
   const arrivalParam = searchParams.get('arrival') || '';
-
   const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
   const departure = capitalize(departureParam);
   const arrival = capitalize(arrivalParam);
@@ -216,8 +208,10 @@ const ResultatsAgencePage: React.FC = () => {
             const heures = horaires?.[dayName] || [];
 
             for (const heure of heures) {
+              const trajetId = `${doc.id}-${dateStr}-${heure.replace(/\s+/g, '')}`;
+              
               virtualTrajets.push({
-                id: `${doc.id}-${dateStr}-${heure}`,
+                id: trajetId,
                 departure,
                 arrival,
                 date: dateStr,
@@ -233,17 +227,21 @@ const ResultatsAgencePage: React.FC = () => {
           }
         }
 
-        const reservationsSnap = await getDocs(collection(db, 'reservations'));
+        const reservationsQuery = query(
+          collection(db, 'reservations'),
+          where('statut', 'in', ['payé', 'preuve_recue'])
+        );
+        const reservationsSnap = await getDocs(reservationsQuery);
         const reservations = reservationsSnap.docs.map(doc => doc.data());
 
         const trajetsValides = virtualTrajets.map(trajet => {
           const reserved = reservations
-            .filter(r => r.trajetId === trajet.id && r.statut === 'payé')
-            .reduce((acc, r) => acc + (r.seatsGo || 1), 0);
+            .filter(r => r.trajetId === trajet.id)
+            .reduce((acc, r) => acc + (r.seatsGo || 1) + (r.seatsReturn || 0), 0);
 
           return {
             ...trajet,
-            places: (trajet.places || 30) - reserved
+            places: Math.max(0, (trajet.places || 30) - reserved)
           };
         });
 
@@ -284,7 +282,7 @@ const ResultatsAgencePage: React.FC = () => {
     if (agence?.id) {
       fetchTrajets();
     }
-  }, [departure, arrival, agence?.id]);
+  }, [departure, arrival, agence?.id, company?.nom, company?.logoUrl]);
 
   const filteredGrouped = useMemo(() => {
     return Object.fromEntries(
@@ -341,7 +339,8 @@ const ResultatsAgencePage: React.FC = () => {
           id: company?.id,
           nom: company?.nom,
           logoUrl: company?.logoUrl,
-          primaryColor: colors.primary
+          primaryColor: colors.primary,
+          slug: company?.slug
         }
       }
     });
