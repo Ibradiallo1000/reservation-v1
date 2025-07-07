@@ -132,8 +132,7 @@ const FormulaireReservationClient: React.FC = () => {
     }
 
     // Construire l'ID trajet aller
-    const trajetIdAller = `${tripData.id}-${tripData.date}-${tripData.time.replace(/\s+/g, '')}`;
-
+    const trajetIdAller = `${tripData.id}_${tripData.date}_${tripData.time.replace(/\s+/g, '')}`;
     // Vérifier places aller
     const reservationsQueryAller = query(
       collection(db, 'reservations'),
@@ -154,7 +153,7 @@ const FormulaireReservationClient: React.FC = () => {
     let trajetIdRetour = '';
     if (tripType === 'aller_retour' && location.state?.returnTrip) {
       const returnTrip = location.state.returnTrip;
-      trajetIdRetour = `${returnTrip.id}-${returnTrip.date}-${returnTrip.time.replace(/\s+/g, '')}`;
+      trajetIdRetour = `${returnTrip.id}_${returnTrip.date}_${returnTrip.time.replace(/\s+/g, '')}`;
 
       // Vérifier cohérence date retour
       const dateAller = new Date(tripData.date);
