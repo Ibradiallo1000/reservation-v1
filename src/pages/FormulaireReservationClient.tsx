@@ -131,28 +131,60 @@ const FormulaireReservationClient: React.FC = () => {
       throw new Error('Veuillez remplir tous les champs obligatoires');
     }
 
-    const totalDemandées = seatsGo + (tripType === 'aller_retour' ? seatsReturn : 0);
-    const referenceCode = `RES${Date.now()}`;
-    const trajetId = `${tripData.id}-${tripData.date}-${tripData.time.replace(/\s+/g, '')}`;
+    // Construire l'ID trajet aller
+    const trajetIdAller = `${tripData.id}-${tripData.date}-${tripData.time.replace(/\s+/g, '')}`;
 
-    const reservationsQuery = query(
+    // Vérifier places aller
+    const reservationsQueryAller = query(
       collection(db, 'reservations'),
-      where('trajetId', '==', trajetId),
+      where('trajetId', '==', trajetIdAller),
       where('statut', 'in', ['payé', 'preuve_recue'])
     );
-
-    const reservationsSnap = await getDocs(reservationsQuery);
-    const réservées = reservationsSnap.docs.reduce((acc, doc) => {
+    const snapAller = await getDocs(reservationsQueryAller);
+    const reservedAller = snapAller.docs.reduce((acc, doc) => {
       const res = doc.data();
-      return acc + (res.seatsGo || 1) + (res.seatsReturn || 0);
+      return acc + (res.seatsGo || 0);
     }, 0);
-
-    const placesRestantes = (tripData.places || 0) - réservées;
-    if (placesRestantes < totalDemandées) {
-      throw new Error(`Il ne reste que ${placesRestantes} place(s) disponible(s)`);
+    const placesRestantesAller = (tripData.places || 0) - reservedAller;
+    if (placesRestantesAller < seatsGo) {
+      throw new Error(`Il ne reste que ${placesRestantesAller} place(s) pour l'aller.`);
     }
 
-    const reservationDraft = {
+    // Si aller-retour ➜ Vérifier retour
+    let trajetIdRetour = '';
+    if (tripType === 'aller_retour' && location.state?.returnTrip) {
+      const returnTrip = location.state.returnTrip;
+      trajetIdRetour = `${returnTrip.id}-${returnTrip.date}-${returnTrip.time.replace(/\s+/g, '')}`;
+
+      // Vérifier cohérence date retour
+      const dateAller = new Date(tripData.date);
+      const dateRetour = new Date(returnTrip.date);
+      if (dateRetour <= dateAller) {
+        throw new Error("La date de retour doit être après la date d'aller");
+      }
+
+      // Vérifier places retour
+      const reservationsQueryRetour = query(
+        collection(db, 'reservations'),
+        where('trajetId', '==', trajetIdRetour),
+        where('statut', 'in', ['payé', 'preuve_recue'])
+      );
+      const snapRetour = await getDocs(reservationsQueryRetour);
+      const reservedRetour = snapRetour.docs.reduce((acc, doc) => {
+        const res = doc.data();
+        return acc + (res.seatsGo || 0);
+      }, 0);
+      const placesRestantesRetour = (returnTrip.places || 0) - reservedRetour;
+      if (placesRestantesRetour < seatsReturn) {
+        throw new Error(`Il ne reste que ${placesRestantesRetour} place(s) pour le retour.`);
+      }
+    }
+
+    // Générer code référence
+    const referenceCode = `RES${Date.now()}`;
+
+    // Préparer docs
+    const allerDoc = {
       nomClient: passengerData.fullName,
       telephone: passengerData.phone,
       email: passengerData.email,
@@ -160,17 +192,17 @@ const FormulaireReservationClient: React.FC = () => {
       arrivee: tripData.arrival,
       date: tripData.date,
       heure: tripData.time,
-      montant: totalCost,
+      montant: unitPrice * seatsGo,
       seatsGo,
-      seatsReturn: tripType === 'aller_retour' ? seatsReturn : 0,
+      seatsReturn: 0,
       tripType,
       canal: 'en_ligne',
       statut: 'en_attente',
       companyId: tripData.companyId,
       agencyId: tripData.agencyId,
-      trajetId,
+      trajetId: trajetIdAller,
       referenceCode,
-      commission: totalCost * 0.05,
+      commission: unitPrice * seatsGo * 0.05,
       companySlug: slug,
       companyName: companyInfo.nom,
       primaryColor: companyInfo.primaryColor,
@@ -179,24 +211,58 @@ const FormulaireReservationClient: React.FC = () => {
       updatedAt: new Date()
     };
 
-    // Ajout du document et récupération de la référence
-    const docRef = await addDoc(collection(db, 'reservations'), reservationDraft);
-    
-    // Mise à jour cruciale : ajout de l'ID au draft avant navigation
-    const draftWithId = {
-      ...reservationDraft,
-      id: docRef.id // Ajout de l'ID généré par Firestore
-    };
+    let retourDoc = null;
+    if (tripType === 'aller_retour' && location.state?.returnTrip) {
+      const returnTrip = location.state.returnTrip;
+      retourDoc = {
+        nomClient: passengerData.fullName,
+        telephone: passengerData.phone,
+        email: passengerData.email,
+        depart: returnTrip.departure,
+        arrivee: returnTrip.arrival,
+        date: returnTrip.date,
+        heure: returnTrip.time,
+        montant: unitPrice * seatsReturn,
+        seatsGo: seatsReturn,
+        seatsReturn: 0,
+        tripType,
+        canal: 'en_ligne',
+        statut: 'en_attente',
+        companyId: returnTrip.companyId,
+        agencyId: returnTrip.agencyId,
+        trajetId: trajetIdRetour,
+        referenceCode,
+        commission: unitPrice * seatsReturn * 0.05,
+        companySlug: slug,
+        companyName: companyInfo.nom,
+        primaryColor: companyInfo.primaryColor,
+        tripData: returnTrip,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+    }
 
-    navigate(`/compagnie/${slug}/reservation/upload-preuve/${docRef.id}`, {
+    // Créer doc aller
+    const allerRef = await addDoc(collection(db, 'reservations'), allerDoc);
+
+    let retourRef = null;
+    if (retourDoc) {
+      retourRef = await addDoc(collection(db, 'reservations'), retourDoc);
+    }
+
+    navigate(`/compagnie/${slug}/reservation/upload-preuve/${allerRef.id}`, {
       state: {
         companyInfo,
-        draft: draftWithId // Envoi du draft COMPLET avec ID
+        draft: {
+          ...allerDoc,
+          id: allerRef.id,
+          returnReservationId: retourRef?.id || null
+        }
       }
     });
 
-  } catch (error: any) {
-    alert(error.message);
+  } catch (err: any) {
+    alert(err.message);
   } finally {
     setLoading(false);
   }

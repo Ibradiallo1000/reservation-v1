@@ -187,9 +187,15 @@ const ResultatsAgencePage: React.FC = () => {
       const allDates = getNextNDates(8);
       const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 
-      // ✅ Déclaration propre
-      const virtualTrajets: Trajet[] = [];
+      // 🔑 1) Charger toutes les réservations PAYÉES
+      const reservationsQuery = query(
+        collection(db, 'reservations'),
+        where('statut', '==', 'payé')
+      );
+      const reservationsSnap = await getDocs(reservationsQuery);
+      const reservations = reservationsSnap.docs.map(doc => doc.data());
 
+      // 🔑 2) Charger les weeklyTrips actifs
       const q = query(
         collection(db, 'weeklyTrips'),
         where('agencyId', '==', agence.id),
@@ -197,82 +203,69 @@ const ResultatsAgencePage: React.FC = () => {
         where('arrival', '==', arrival),
         where('active', '==', true)
       );
-
       const snapshot = await getDocs(q);
+      const virtualTrajets: Trajet[] = [];
 
-      for (const docSnap of snapshot.docs) {
-        const data = docSnap.data();
+      // 🔑 3) Boucle pour générer les trajets virtuels AVEC calcul correct
+      for (const doc of snapshot.docs) {
+        const data = doc.data();
         const { horaires, price, places = 30, agencyId, companyId } = data;
 
         for (const dateStr of allDates) {
           const d = new Date(dateStr);
           const dayName = DAYS[d.getDay()];
+
           const heures = horaires?.[dayName] || [];
+          if (heures.length === 0) continue; // 🚫 Pas d'horaire => skip
 
           for (const heure of heures) {
-            const trajetId = `${docSnap.id}-${dateStr}-${heure.replace(/\s+/g, '')}`;
+            const trajetId = `${doc.id}_${dateStr}_${heure.replace(/\s+/g, '')}`;
+            const tripDateTime = new Date(`${dateStr}T${heure}`);
 
-            virtualTrajets.push({
-              id: trajetId,
-              departure: data.departure,
-              arrival: data.arrival,
-              date: dateStr,
-              time: heure,
-              price: price,
-              places: places,
-              companyId: companyId,
-              agencyId: agencyId,
-              compagnieNom: company?.nom,
-              logoUrl: company?.logoUrl
-            });
+            const reservedSeats = reservations
+              .filter(r => r.trajetId === trajetId)
+              .reduce((acc, r) => acc + (r.seatsGo || 1) + (r.seatsReturn || 0), 0);
+
+            const remainingSeats = Math.max(0, places - reservedSeats);
+
+            // ✅ Debug pour bien suivre
+            console.log('-----------');
+            console.log('Jour =>', dayName, dateStr);
+            console.log('Horaire =>', heure);
+            console.log('trajetId =>', trajetId);
+            console.log('Réservations trouvées =>', reservedSeats);
+            console.log('Places finales =>', remainingSeats);
+
+            if (tripDateTime > new Date()) {
+              virtualTrajets.push({
+                id: trajetId,
+                departure: data.departure,
+                arrival: data.arrival,
+                date: dateStr,
+                time: heure,
+                price,
+                places: remainingSeats,
+                companyId,
+                agencyId,
+                compagnieNom: company?.nom,
+                logoUrl: company?.logoUrl,
+                remainingSeats
+              });
+            }
           }
         }
       }
 
-      // ✅ Requête réservations liées
-      const reservationsQuery = query(
-        collection(db, 'reservations'),
-        where('statut', 'in', ['payé', 'preuve_recue'])
-      );
-      const reservationsSnap = await getDocs(reservationsQuery);
-      const reservations = reservationsSnap.docs.map(doc => doc.data());
-
-      const trajetsValides: Trajet[] = virtualTrajets.map(trajet => {
-        const reserved = reservations
-          .filter(r => r.trajetId === trajet.id)
-          .reduce((acc, r) => acc + (r.seatsGo || 1) + (r.seatsReturn || 0), 0);
-
-        return {
-          ...trajet,
-          places: Math.max(0, trajet.places - reserved)
-        };
-      });
-
+      // 🔑 Grouper et filtrer
       const trajetsParDate: Record<string, Trajet[]> = {};
-      trajetsValides.forEach(t => {
+      virtualTrajets.forEach(t => {
         if (!trajetsParDate[t.date]) trajetsParDate[t.date] = [];
         trajetsParDate[t.date].push(t);
       });
 
-      const now = new Date();
-      const availableDates = allDates.filter(date => {
-        const trajets = trajetsParDate[date];
-        return trajets ? trajets.some(t => new Date(`${t.date}T${t.time}`) > now) : false;
-      });
-
-      setDates(availableDates);
-      setSelectedDate(prev => (availableDates.includes(prev) ? prev : availableDates[0] || ''));
-
-      const grouped: Record<string, Trajet[]> = {};
-      for (const t of trajetsValides) {
-        if (new Date(`${t.date}T${t.time}`) > now) {
-          const key = `${t.companyId}`;
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(t);
-        }
-      }
-
-      setGroupedTrajets(grouped);
+      setDates(Object.keys(trajetsParDate));
+      setSelectedDate(prev => trajetsParDate[prev] ? prev : Object.keys(trajetsParDate)[0] || '');
+      setGroupedTrajets({ [company?.id || 'default']: virtualTrajets });
 
     } catch (err) {
       console.error('Erreur Firestore:', err);
@@ -566,7 +559,7 @@ const ResultatsAgencePage: React.FC = () => {
                             <Users className="h-5 w-5" />
                           </div>
                           <div>
-                            <h3 className="text-sm font-medium opacity-80">Places disponibles</h3>
+                            <h3 className="text-sm font-medium opacity-90">Places disponibles</h3>
                             <p
                               className={`text-lg font-bold ${
                                 trajet.places === 0 ? 'text-red-600' :
