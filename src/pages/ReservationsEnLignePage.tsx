@@ -158,7 +158,7 @@ const ReservationsEnLignePage: React.FC = () => {
     if (window.confirm('Confirmer la validation de cette réservation ? Le client sera notifié.')) {
       try {
         await updateDoc(doc(db, 'reservations', id), {
-          statut: 'paye',
+          statut: 'payé',
           validatedAt: new Date(),
           validatedBy: user?.uid
         });
