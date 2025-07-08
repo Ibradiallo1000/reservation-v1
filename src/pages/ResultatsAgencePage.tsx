@@ -58,11 +58,9 @@ const hexToRgba = (hex: string, alpha: number = 1): string => {
 
 const getContrastColor = (hexColor: string): string => {
   if (!hexColor || hexColor.length < 7) return '#000000';
-  
   const r = parseInt(hexColor.slice(1, 3), 16);
   const g = parseInt(hexColor.slice(3, 5), 16);
   const b = parseInt(hexColor.slice(5, 7), 16);
-  
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.5 ? '#000000' : '#ffffff';
 };
@@ -79,13 +77,19 @@ const ResultatsAgencePage: React.FC = () => {
   const arrival = capitalize(arrivalParam);
 
   const [company, setCompany] = useState<CompanyInfo | null>(null);
-  const [agence, setAgence] = useState<AgenceInfo | null>(null);
-  const [groupedTrajets, setGroupedTrajets] = useState<Record<string, Trajet[]>>({});
+  const [agenceAller, setAgenceAller] = useState<AgenceInfo | null>(null);
+  const [agenceRetour, setAgenceRetour] = useState<AgenceInfo | null>(null);
+  const [trajetsAller, setTrajetsAller] = useState<Trajet[]>([]);
+  const [trajetsRetour, setTrajetsRetour] = useState<Trajet[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dates, setDates] = useState<string[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>('');
-  const [selectedTime, setSelectedTime] = useState<string>('');
+  const [datesAller, setDatesAller] = useState<string[]>([]);
+  const [datesRetour, setDatesRetour] = useState<string[]>([]);
+  const [selectedDateAller, setSelectedDateAller] = useState<string>('');
+  const [selectedDateRetour, setSelectedDateRetour] = useState<string>('');
+  const [selectedTimeAller, setSelectedTimeAller] = useState<string>('');
+  const [selectedTimeRetour, setSelectedTimeRetour] = useState<string>('');
+  const [tripType, setTripType] = useState<'aller_simple' | 'aller_retour'>('aller_simple');
 
   const themeConfig = useMemo(() => {
     const primary = company?.couleurPrimaire || '#3b82f6';
@@ -119,8 +123,9 @@ const ResultatsAgencePage: React.FC = () => {
     });
   };
 
+  // Chargement de la compagnie et des agences
   useEffect(() => {
-    const fetchCompanyAndAgence = async () => {
+    const fetchCompanyAndAgences = async () => {
       if (!slug) {
         setError('Compagnie non trouvée');
         setLoading(false);
@@ -128,6 +133,7 @@ const ResultatsAgencePage: React.FC = () => {
       }
 
       try {
+        // Charger la compagnie
         const q = query(collection(db, 'companies'), where('slug', '==', slug));
         const snapshot = await getDocs(q);
         
@@ -146,18 +152,22 @@ const ResultatsAgencePage: React.FC = () => {
           slug: data.slug,
           couleurPrimaire: data.couleurPrimaire,
           couleurSecondaire: data.couleurSecondaire,
-          themeStyle: data.themeStyle,
           logoUrl: data.logoUrl,
           banniereUrl: data.banniereUrl
         });
 
-        const agenceQuery = query(collection(db, 'agences'), where('companyId', '==', doc.id));
-        const agencesSnapshot = await getDocs(agenceQuery);
+        // Charger l'agence aller (departure)
+        const agenceAllerQuery = query(
+          collection(db, 'agences'),
+          where('ville', '==', departure),
+          where('companyId', '==', doc.id)
+        );
+        const agenceAllerSnap = await getDocs(agenceAllerQuery);
         
-        if (!agencesSnapshot.empty) {
-          const agenceDoc = agencesSnapshot.docs[0];
+        if (!agenceAllerSnap.empty) {
+          const agenceDoc = agenceAllerSnap.docs[0];
           const agenceData = agenceDoc.data();
-          setAgence({
+          setAgenceAller({
             id: agenceDoc.id,
             ville: agenceData.ville,
             quartier: agenceData.quartier,
@@ -165,6 +175,29 @@ const ResultatsAgencePage: React.FC = () => {
             telephone: agenceData.telephone,
             nomAgence: agenceData.nomAgence,
           });
+        }
+
+        // Charger l'agence retour (arrival) si différent
+        if (departure !== arrival) {
+          const agenceRetourQuery = query(
+            collection(db, 'agences'),
+            where('ville', '==', arrival),
+            where('companyId', '==', doc.id)
+          );
+          const agenceRetourSnap = await getDocs(agenceRetourQuery);
+          
+          if (!agenceRetourSnap.empty) {
+            const agenceDoc = agenceRetourSnap.docs[0];
+            const agenceData = agenceDoc.data();
+            setAgenceRetour({
+              id: agenceDoc.id,
+              ville: agenceData.ville,
+              quartier: agenceData.quartier,
+              pays: agenceData.pays,
+              telephone: agenceData.telephone,
+              nomAgence: agenceData.nomAgence,
+            });
+          }
         }
       } catch (err) {
         console.error('Erreur Firestore:', err);
@@ -174,134 +207,226 @@ const ResultatsAgencePage: React.FC = () => {
       }
     };
 
-    fetchCompanyAndAgence();
-  }, [slug]);
+    fetchCompanyAndAgences();
+  }, [slug, departure, arrival]);
 
+  // Chargement des trajets aller
   useEffect(() => {
-  const fetchTrajets = async () => {
-    if (!departure || !arrival || !agence?.id) return;
+    const fetchTrajetsAller = async () => {
+      if (!agenceAller?.id) return;
 
-    setLoading(true);
+      setLoading(true);
+      try {
+        const allDates = getNextNDates(8);
+        const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 
-    try {
-      const allDates = getNextNDates(8);
-      const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+        // Charger les réservations
+        const reservationsQuery = query(
+          collection(db, 'reservations'),
+          where('statut', '==', 'payé')
+        );
+        const reservationsSnap = await getDocs(reservationsQuery);
+        const reservations = reservationsSnap.docs.map(doc => doc.data());
 
-      // 🔑 1) Charger toutes les réservations PAYÉES
-      const reservationsQuery = query(
-        collection(db, 'reservations'),
-        where('statut', '==', 'payé')
-      );
-      const reservationsSnap = await getDocs(reservationsQuery);
-      const reservations = reservationsSnap.docs.map(doc => doc.data());
+        // Charger les weeklyTrips pour l'aller
+        const q = query(
+          collection(db, 'weeklyTrips'),
+          where('agencyId', '==', agenceAller.id),
+          where('departure', '==', departure),
+          where('arrival', '==', arrival),
+          where('active', '==', true)
+        );
+        const snapshot = await getDocs(q);
+        const virtualTrajets: Trajet[] = [];
 
-      // 🔑 2) Charger les weeklyTrips actifs
-      const q = query(
-        collection(db, 'weeklyTrips'),
-        where('agencyId', '==', agence.id),
-        where('departure', '==', departure),
-        where('arrival', '==', arrival),
-        where('active', '==', true)
-      );
-      const snapshot = await getDocs(q);
-      const virtualTrajets: Trajet[] = [];
+        for (const doc of snapshot.docs) {
+          const data = doc.data();
+          const { horaires, price, places = 30, agencyId, companyId } = data;
 
-      // 🔑 3) Boucle pour générer les trajets virtuels AVEC calcul correct
-      for (const doc of snapshot.docs) {
-        const data = doc.data();
-        const { horaires, price, places = 30, agencyId, companyId } = data;
+          for (const dateStr of allDates) {
+            const d = new Date(dateStr);
+            const dayName = DAYS[d.getDay()];
 
-        for (const dateStr of allDates) {
-          const d = new Date(dateStr);
-          const dayName = DAYS[d.getDay()];
+            const heures = horaires?.[dayName] || [];
+            if (heures.length === 0) continue;
 
-          const heures = horaires?.[dayName] || [];
-          if (heures.length === 0) continue; // 🚫 Pas d'horaire => skip
+            for (const heure of heures) {
+              const trajetId = `${doc.id}_${dateStr}_${heure.replace(/\s+/g, '')}`;
+              const tripDateTime = new Date(`${dateStr}T${heure}`);
 
-          for (const heure of heures) {
-            const trajetId = `${doc.id}_${dateStr}_${heure.replace(/\s+/g, '')}`;
-            const tripDateTime = new Date(`${dateStr}T${heure}`);
+              const reservedSeats = reservations
+                .filter(r => r.trajetId === trajetId)
+                .reduce((acc, r) => acc + (r.seatsGo || 1) + (r.seatsReturn || 0), 0);
 
-            const reservedSeats = reservations
-              .filter(r => r.trajetId === trajetId)
-              .reduce((acc, r) => acc + (r.seatsGo || 1) + (r.seatsReturn || 0), 0);
+              const remainingSeats = Math.max(0, places - reservedSeats);
 
-            const remainingSeats = Math.max(0, places - reservedSeats);
-
-            // ✅ Debug pour bien suivre
-            console.log('-----------');
-            console.log('Jour =>', dayName, dateStr);
-            console.log('Horaire =>', heure);
-            console.log('trajetId =>', trajetId);
-            console.log('Réservations trouvées =>', reservedSeats);
-            console.log('Places finales =>', remainingSeats);
-
-            if (tripDateTime > new Date()) {
-              virtualTrajets.push({
-                id: trajetId,
-                departure: data.departure,
-                arrival: data.arrival,
-                date: dateStr,
-                time: heure,
-                price,
-                places: remainingSeats,
-                companyId,
-                agencyId,
-                compagnieNom: company?.nom,
-                logoUrl: company?.logoUrl,
-                remainingSeats
-              });
+              if (tripDateTime > new Date()) {
+                virtualTrajets.push({
+                  id: trajetId,
+                  departure: data.departure,
+                  arrival: data.arrival,
+                  date: dateStr,
+                  time: heure,
+                  price,
+                  places: remainingSeats,
+                  companyId,
+                  agencyId,
+                  compagnieNom: company?.nom,
+                  logoUrl: company?.logoUrl,
+                  remainingSeats
+                });
+              }
             }
           }
         }
+
+        // Grouper par date
+        const trajetsParDate: Record<string, Trajet[]> = {};
+        virtualTrajets.forEach(t => {
+          if (!trajetsParDate[t.date]) trajetsParDate[t.date] = [];
+          trajetsParDate[t.date].push(t);
+        });
+
+        setDatesAller(Object.keys(trajetsParDate));
+        setSelectedDateAller(prev => trajetsParDate[prev] ? prev : Object.keys(trajetsParDate)[0] || '');
+        setTrajetsAller(virtualTrajets);
+      } catch (err) {
+        console.error('Erreur Firestore:', err);
+        setError('Erreur lors du chargement des trajets aller');
+      } finally {
+        setLoading(false);
       }
+    };
 
-      // 🔑 Grouper et filtrer
-      const trajetsParDate: Record<string, Trajet[]> = {};
-      virtualTrajets.forEach(t => {
-        if (!trajetsParDate[t.date]) trajetsParDate[t.date] = [];
-        trajetsParDate[t.date].push(t);
-      });
+    fetchTrajetsAller();
+  }, [agenceAller?.id, departure, arrival, company?.nom, company?.logoUrl]);
 
-      setDates(Object.keys(trajetsParDate));
-      setSelectedDate(prev => trajetsParDate[prev] ? prev : Object.keys(trajetsParDate)[0] || '');
-      setGroupedTrajets({ [company?.id || 'default']: virtualTrajets });
-
-    } catch (err) {
-      console.error('Erreur Firestore:', err);
-      setError('Erreur lors du chargement des trajets');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (agence?.id) {
-    fetchTrajets();
-  }
-}, [departure, arrival, agence?.id, company?.nom, company?.logoUrl]);
-
-  const filteredGrouped = useMemo(() => {
-    return Object.fromEntries(
-      Object.entries(groupedTrajets).map(([key, trajets]) => [
-        key,
-        trajets.filter((t) => t.date === selectedDate),
-      ])
-    );
-  }, [groupedTrajets, selectedDate]);
-
+  // Chargement des trajets retour (seulement si aller_retour)
   useEffect(() => {
-    const todayTrips = Object.values(filteredGrouped).flat().filter(t => t.date === selectedDate);
-    if (todayTrips.length > 0) {
-      const sorted = todayTrips.sort((a, b) => a.time.localeCompare(b.time));
+    const fetchTrajetsRetour = async () => {
+      if (tripType !== 'aller_retour' || !agenceRetour?.id) return;
+
+      setLoading(true);
+      try {
+        const allDates = getNextNDates(8);
+        const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+
+        // Charger les réservations
+        const reservationsQuery = query(
+          collection(db, 'reservations'),
+          where('statut', '==', 'payé')
+        );
+        const reservationsSnap = await getDocs(reservationsQuery);
+        const reservations = reservationsSnap.docs.map(doc => doc.data());
+
+        // Charger les weeklyTrips pour le retour (sens inverse)
+        const q = query(
+          collection(db, 'weeklyTrips'),
+          where('agencyId', '==', agenceRetour.id),
+          where('departure', '==', arrival), // Inversé !
+          where('arrival', '==', departure), // Inversé !
+          where('active', '==', true)
+        );
+        const snapshot = await getDocs(q);
+        const virtualTrajets: Trajet[] = [];
+
+        for (const doc of snapshot.docs) {
+          const data = doc.data();
+          const { horaires, price, places = 30, agencyId, companyId } = data;
+
+          for (const dateStr of allDates) {
+            const d = new Date(dateStr);
+            const dayName = DAYS[d.getDay()];
+
+            const heures = horaires?.[dayName] || [];
+            if (heures.length === 0) continue;
+
+            for (const heure of heures) {
+              const trajetId = `${doc.id}_${dateStr}_${heure.replace(/\s+/g, '')}_retour`;
+              const tripDateTime = new Date(`${dateStr}T${heure}`);
+
+              const reservedSeats = reservations
+                .filter(r => r.trajetId === trajetId)
+                .reduce((acc, r) => acc + (r.seatsGo || 1) + (r.seatsReturn || 0), 0);
+
+              const remainingSeats = Math.max(0, places - reservedSeats);
+
+              if (tripDateTime > new Date()) {
+                virtualTrajets.push({
+                  id: trajetId,
+                  departure: data.departure,
+                  arrival: data.arrival,
+                  date: dateStr,
+                  time: heure,
+                  price,
+                  places: remainingSeats,
+                  companyId,
+                  agencyId,
+                  compagnieNom: company?.nom,
+                  logoUrl: company?.logoUrl,
+                  remainingSeats
+                });
+              }
+            }
+          }
+        }
+
+        // Grouper par date
+        const trajetsParDate: Record<string, Trajet[]> = {};
+        virtualTrajets.forEach(t => {
+          if (!trajetsParDate[t.date]) trajetsParDate[t.date] = [];
+          trajetsParDate[t.date].push(t);
+        });
+
+        setDatesRetour(Object.keys(trajetsParDate));
+        setSelectedDateRetour(prev => trajetsParDate[prev] ? prev : Object.keys(trajetsParDate)[0] || '');
+        setTrajetsRetour(virtualTrajets);
+      } catch (err) {
+        console.error('Erreur Firestore:', err);
+        setError('Erreur lors du chargement des trajets retour');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTrajetsRetour();
+  }, [agenceRetour?.id, departure, arrival, company?.nom, company?.logoUrl, tripType]);
+
+  // Filtrer les trajets par date sélectionnée
+  const filteredTrajetsAller = useMemo(() => {
+    return trajetsAller.filter(t => t.date === selectedDateAller);
+  }, [trajetsAller, selectedDateAller]);
+
+  const filteredTrajetsRetour = useMemo(() => {
+    return trajetsRetour.filter(t => t.date === selectedDateRetour);
+  }, [trajetsRetour, selectedDateRetour]);
+
+  // Gérer la sélection des heures
+  useEffect(() => {
+    if (filteredTrajetsAller.length > 0) {
+      const sorted = [...filteredTrajetsAller].sort((a, b) => a.time.localeCompare(b.time));
       const defaultTime = sorted[0]?.time || '';
-      setSelectedTime(prev => {
-        const isStillValid = todayTrips.some(t => t.time === prev);
+      setSelectedTimeAller(prev => {
+        const isStillValid = filteredTrajetsAller.some(t => t.time === prev);
         return isStillValid ? prev : defaultTime;
       });
     } else {
-      setSelectedTime('');
+      setSelectedTimeAller('');
     }
-  }, [selectedDate, filteredGrouped]);
+  }, [selectedDateAller, filteredTrajetsAller]);
+
+  useEffect(() => {
+    if (filteredTrajetsRetour.length > 0) {
+      const sorted = [...filteredTrajetsRetour].sort((a, b) => a.time.localeCompare(b.time));
+      const defaultTime = sorted[0]?.time || '';
+      setSelectedTimeRetour(prev => {
+        const isStillValid = filteredTrajetsRetour.some(t => t.time === prev);
+        return isStillValid ? prev : defaultTime;
+      });
+    } else {
+      setSelectedTimeRetour('');
+    }
+  }, [selectedDateRetour, filteredTrajetsRetour]);
 
   const isPastTime = (date: string, time: string) => {
     const dt = new Date(`${date}T${time}`);
@@ -317,30 +442,33 @@ const ResultatsAgencePage: React.FC = () => {
     });
   };
 
-  const handleBooking = (trajet: Trajet) => {
+  const handleBooking = (trajetAller: Trajet | null, trajetRetour: Trajet | null = null) => {
+    if (!trajetAller) return;
+
     navigate(`/compagnie/${slug}/booking`, {
       state: {
-        tripData: {
-          id: trajet.id,
-          departure: trajet.departure,
-          arrival: trajet.arrival,
-          date: trajet.date,
-          time: trajet.time,
-          price: trajet.price,
-          places: trajet.places,
-          companyId: trajet.companyId,
-          agencyId: trajet.agencyId
-        },
+        tripData: trajetAller,
+        returnTripData: trajetRetour,
         companyInfo: {
           id: company?.id,
           nom: company?.nom,
           logoUrl: company?.logoUrl,
           primaryColor: colors.primary,
           slug: company?.slug
-        }
+        },
+        tripType: tripType
       }
     });
   };
+
+  // Calcul du prix total
+  const totalPrice = useMemo(() => {
+    const allerPrice = filteredTrajetsAller.find(t => t.time === selectedTimeAller)?.price || 0;
+    const retourPrice = tripType === 'aller_retour' 
+      ? (filteredTrajetsRetour.find(t => t.time === selectedTimeRetour)?.price || 0)
+      : 0;
+    return allerPrice + retourPrice;
+  }, [selectedTimeAller, selectedTimeRetour, tripType, filteredTrajetsAller, filteredTrajetsRetour]);
 
   if (loading) {
     return (
@@ -373,6 +501,184 @@ const ResultatsAgencePage: React.FC = () => {
       </div>
     );
   }
+
+  const renderTripSection = (
+    title: string,
+    trajets: Trajet[],
+    selectedDate: string,
+    setSelectedDate: React.Dispatch<React.SetStateAction<string>>,
+    dates: string[],
+    selectedTime: string,
+    setSelectedTime: React.Dispatch<React.SetStateAction<string>>,
+    isReturn: boolean = false
+  ) => {
+    const currentAgence = isReturn ? agenceRetour : agenceAller;
+    const hasTrips = trajets.length > 0;
+
+    return (
+      <div className={`p-4 rounded-xl mb-6 ${classes.card}`}>
+        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+          {isReturn ? (
+            <span>{arrival} → {departure}</span>
+          ) : (
+            <span>{departure} → {arrival}</span>
+          )}
+        </h2>
+
+        {currentAgence && (
+          <div className="flex items-center gap-3 mb-4">
+            <div 
+              className="p-2 rounded-full" 
+              style={{ 
+                backgroundColor: hexToRgba(colors.primary, 0.1),
+                color: colors.primary 
+              }}
+            >
+              <MapPin className="h-5 w-5" />
+            </div>
+            <div className="text-gray-800">
+              <h3 className="font-semibold">{currentAgence.nomAgence}</h3>
+              <p className="text-sm opacity-80">
+                {currentAgence.ville}, {currentAgence.quartier} • ☎ {currentAgence.telephone}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2 text-gray-800">
+            <Calendar className="h-5 w-5" style={{ color: colors.primary }} />
+            Dates disponibles
+          </h3>
+          <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide">
+            {dates.map(date => (
+              <button
+                key={date}
+                onClick={() => setSelectedDate(date)}
+                className={`flex flex-col items-center min-w-[90px] p-3 rounded-xl border transition-all flex-shrink-0 ${
+                  selectedDate === date
+                    ? 'shadow-md'
+                    : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-800'
+                }`}
+                style={{
+                  backgroundColor: selectedDate === date ? colors.primary : undefined,
+                  borderColor: selectedDate === date ? colors.primary : undefined,
+                  color: selectedDate === date ? colors.textOnPrimary : undefined
+                }}
+              >
+                <span className="text-xs font-medium">
+                  {formatDateDisplay(date)}
+                </span>
+                <span className="text-sm mt-1">
+                  {new Date(date).toLocaleDateString('fr-FR', { day: 'numeric' })}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {!hasTrips ? (
+          <div className={`p-6 rounded-xl text-center ${classes.card} text-gray-800`}>
+            <div className="bg-gray-100 p-4 rounded-full inline-flex mb-3">
+              <Clock className="h-6 w-6 text-gray-500" />
+            </div>
+            <h3 className="text-lg font-medium mb-1">
+              Aucun trajet disponible pour cette date
+            </h3>
+            <p className="text-sm opacity-80">Veuillez choisir une autre date</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className={`rounded-xl overflow-hidden ${classes.card}`}>
+              <div className="p-4 border-b" style={{ borderColor: hexToRgba(colors.primary, 0.1) }}>
+                <h3 className="font-semibold flex items-center gap-2 mb-3 text-gray-800">
+                  <Clock className="h-5 w-5" style={{ color: colors.primary }} />
+                  Heures de départ
+                </h3>
+                
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                  {trajets
+                    .sort((a, b) => a.time.localeCompare(b.time))
+                    .map(trajet => (
+                      <button
+                        key={trajet.id}
+                        onClick={() => setSelectedTime(trajet.time)}
+                        disabled={isPastTime(trajet.date, trajet.time)}
+                        className={`p-3 rounded-lg border flex flex-col items-center transition ${
+                          selectedTime === trajet.time
+                            ? 'bg-blue-50 text-blue-600'
+                            : isPastTime(trajet.date, trajet.time)
+                            ? 'bg-gray-50 text-gray-400'
+                            : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-800'
+                        }`}
+                        style={{
+                          borderColor: selectedTime === trajet.time ? colors.primary : undefined,
+                          backgroundColor: selectedTime === trajet.time ? hexToRgba(colors.primary, 0.1) : undefined
+                        }}
+                      >
+                        <span className="font-medium">{trajet.time}</span>
+                        <span className="text-xs mt-1">
+                          {trajet.places} places
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              </div>
+
+              {trajets
+                .filter(trajet => trajet.time === selectedTime && !isPastTime(trajet.date, trajet.time))
+                .map(trajet => (
+                  <div key={trajet.id} className="p-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 text-gray-800">
+                      <div className="flex items-center gap-3">
+                        <div 
+                          className="p-2 rounded-full" 
+                          style={{ 
+                            backgroundColor: hexToRgba(colors.primary, 0.1),
+                            color: colors.primary 
+                          }}
+                        >
+                          <Ticket className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-medium opacity-80">Prix</h3>
+                          <p className="text-lg font-bold text-gray-900">
+                            {trajet.price.toLocaleString()} FCFA
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-3">
+                        <div 
+                          className="p-2 rounded-full" 
+                          style={{ 
+                            backgroundColor: hexToRgba(colors.primary, 0.1),
+                            color: colors.primary 
+                          }}
+                        >
+                          <Users className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-medium opacity-90">Places disponibles</h3>
+                          <p
+                            className={`text-lg font-bold ${
+                              trajet.places === 0 ? 'text-red-600' :
+                              trajet.places <= 10 ? 'text-yellow-600' : 'text-green-600'
+                            }`}
+                          >
+                            {trajet.places}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div 
@@ -419,178 +725,91 @@ const ResultatsAgencePage: React.FC = () => {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto p-4 sm:p-6">
-        <div className={`p-4 rounded-xl mb-6 ${classes.card}`}>
-          <h1 className="text-xl sm:text-2xl font-bold mb-2 text-gray-900">
-            {departure} → {arrival}
-          </h1>
-          
-          {agence && (
-            <div className="flex items-center gap-3 mt-3">
-              <div 
-                className="p-2 rounded-full" 
-                style={{ 
-                  backgroundColor: hexToRgba(colors.primary, 0.1),
-                  color: colors.primary 
-                }}
-              >
-                <MapPin className="h-5 w-5" />
-              </div>
-              <div className="text-gray-800">
-                <h3 className="font-semibold">{agence.nomAgence}</h3>
-                <p className="text-sm opacity-80">
-                  {agence.ville}, {agence.quartier} • ☎ {agence.telephone}
-                </p>
-              </div>
-            </div>
-          )}
+      <main className="max-w-4xl mx-auto p-4 sm:p-6 pb-24"> {/* Ajout de pb-24 pour laisser de la place au bouton sticky */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setTripType('aller_simple')}
+            className={`px-4 py-2 rounded-lg ${tripType === 'aller_simple' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-800'}`}
+          >
+            Aller simple
+          </button>
+          <button
+            onClick={() => setTripType('aller_retour')}
+            className={`px-4 py-2 rounded-lg ${tripType === 'aller_retour' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-800'}`}
+          >
+            Aller-retour
+          </button>
         </div>
 
-        <div className="mb-6">
-          <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-gray-800">
-            <Calendar className="h-5 w-5" style={{ color: colors.primary }} />
-            Dates disponibles
-          </h2>
-          <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide">
-            {dates.map(date => (
+        {/* Section Aller */}
+        {renderTripSection(
+          `${departure} → ${arrival}`,
+          filteredTrajetsAller,
+          selectedDateAller,
+          setSelectedDateAller,
+          datesAller,
+          selectedTimeAller,
+          setSelectedTimeAller
+        )}
+
+        {/* Section Retour (seulement si aller-retour) */}
+        {tripType === 'aller_retour' && renderTripSection(
+          `${arrival} → ${departure}`,
+          filteredTrajetsRetour,
+          selectedDateRetour,
+          setSelectedDateRetour,
+          datesRetour,
+          selectedTimeRetour,
+          setSelectedTimeRetour,
+          true
+        )}
+
+        {/* Bouton de réservation global */}
+        <div className="fixed bottom-0 left-0 right-0 bg-white shadow-lg p-4 border-t border-gray-200">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <div>
+              <p className="text-sm text-gray-600">Total</p>
+              <p className="text-xl font-bold text-gray-900">
+                {totalPrice.toLocaleString()} FCFA
+              </p>
+            </div>
+            
+            {tripType === 'aller_simple' ? (
               <button
-                key={date}
-                onClick={() => setSelectedDate(date)}
-                className={`flex flex-col items-center min-w-[90px] p-3 rounded-xl border transition-all flex-shrink-0 ${
-                  selectedDate === date
-                    ? 'shadow-md'
-                    : 'bg-white hover:bg-gray-50 border-gray-200 text-gray-800'
+                onClick={() => handleBooking(
+                  filteredTrajetsAller.find(t => t.time === selectedTimeAller) || null
+                )}
+                disabled={!selectedTimeAller}
+                className={`px-6 py-3 rounded-lg font-bold ${classes.button} ${
+                  !selectedTimeAller ? 'opacity-50 cursor-not-allowed' : ''
                 }`}
                 style={{
-                  backgroundColor: selectedDate === date ? colors.primary : undefined,
-                  borderColor: selectedDate === date ? colors.primary : undefined,
-                  color: selectedDate === date ? colors.textOnPrimary : undefined
+                  backgroundColor: colors.primary,
+                  color: colors.textOnPrimary
                 }}
               >
-                <span className="text-xs font-medium">
-                  {formatDateDisplay(date)}
-                </span>
-                <span className="text-sm mt-1">
-                  {new Date(date).toLocaleDateString('fr-FR', { day: 'numeric' })}
-                </span>
+                Réserver maintenant
               </button>
-            ))}
+            ) : (
+              <button
+                onClick={() => handleBooking(
+                  filteredTrajetsAller.find(t => t.time === selectedTimeAller) || null,
+                  filteredTrajetsRetour.find(t => t.time === selectedTimeRetour) || null
+                )}
+                disabled={!selectedTimeAller || !selectedTimeRetour}
+                className={`px-6 py-3 rounded-lg font-bold ${classes.button} ${
+                  !selectedTimeAller || !selectedTimeRetour ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+                style={{
+                  backgroundColor: colors.primary,
+                  color: colors.textOnPrimary
+                }}
+              >
+                Réserver aller-retour
+              </button>
+            )}
           </div>
         </div>
-
-        {Object.keys(filteredGrouped).length === 0 ? (
-          <div className={`p-6 rounded-xl text-center ${classes.card} text-gray-800`}>
-            <div className="bg-gray-100 p-4 rounded-full inline-flex mb-3">
-              <Clock className="h-6 w-6 text-gray-500" />
-            </div>
-            <h3 className="text-lg font-medium mb-1">Aucun trajet disponible</h3>
-            <p className="text-sm opacity-80">Veuillez choisir une autre date</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {Object.entries(filteredGrouped).map(([key, trajets]) => (
-              <div key={key} className={`rounded-xl overflow-hidden ${classes.card}`}>
-                <div className="p-4 border-b" style={{ borderColor: hexToRgba(colors.primary, 0.1) }}>
-                  <h2 className="font-semibold flex items-center gap-2 mb-3 text-gray-800">
-                    <Clock className="h-5 w-5" style={{ color: colors.primary }} />
-                    Heures de départ
-                  </h2>
-                  
-                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                    {trajets
-                      .sort((a, b) => a.time.localeCompare(b.time))
-                      .map(trajet => (
-                        <button
-                          key={trajet.id}
-                          onClick={() => setSelectedTime(trajet.time)}
-                          disabled={isPastTime(trajet.date, trajet.time)}
-                          className={`p-3 rounded-lg border flex flex-col items-center transition ${
-                            selectedTime === trajet.time
-                              ? 'bg-blue-50 text-blue-600'
-                              : isPastTime(trajet.date, trajet.time)
-                              ? 'bg-gray-50 text-gray-400'
-                              : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-800'
-                          }`}
-                          style={{
-                            borderColor: selectedTime === trajet.time ? colors.primary : undefined,
-                            backgroundColor: selectedTime === trajet.time ? hexToRgba(colors.primary, 0.1) : undefined
-                          }}
-                        >
-                          <span className="font-medium">{trajet.time}</span>
-                          <span className="text-xs mt-1">
-                            {trajet.places} places
-                          </span>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-
-                {trajets
-                  .filter(trajet => trajet.time === selectedTime && !isPastTime(trajet.date, trajet.time))
-                  .map(trajet => (
-                    <div key={trajet.id} className="p-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 text-gray-800">
-                        <div className="flex items-center gap-3">
-                          <div 
-                            className="p-2 rounded-full" 
-                            style={{ 
-                              backgroundColor: hexToRgba(colors.primary, 0.1),
-                              color: colors.primary 
-                            }}
-                          >
-                            <Ticket className="h-5 w-5" />
-                          </div>
-                          <div>
-                            <h3 className="text-sm font-medium opacity-80">Prix</h3>
-                            <p className="text-lg font-bold text-gray-900">
-                              {trajet.price.toLocaleString()} FCFA
-                            </p>
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-3">
-                          <div 
-                            className="p-2 rounded-full" 
-                            style={{ 
-                              backgroundColor: hexToRgba(colors.primary, 0.1),
-                              color: colors.primary 
-                            }}
-                          >
-                            <Users className="h-5 w-5" />
-                          </div>
-                          <div>
-                            <h3 className="text-sm font-medium opacity-90">Places disponibles</h3>
-                            <p
-                              className={`text-lg font-bold ${
-                                trajet.places === 0 ? 'text-red-600' :
-                                trajet.places <= 10 ? 'text-yellow-600' : 'text-green-600'
-                              }`}
-                            >
-                              {trajet.places}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => handleBooking(trajet)}
-                        disabled={trajet.places === 0}
-                        className={`w-full py-3 font-bold rounded-lg ${classes.button} ${
-                          trajet.places === 0 ? 'opacity-70 cursor-not-allowed' : ''
-                        }`}
-                        style={{
-                          backgroundColor: trajet.places === 0 ? '#e5e7eb' : colors.primary,
-                          color: trajet.places === 0 ? '#6b7280' : colors.textOnPrimary
-                        }}
-                      >
-                        {trajet.places === 0 ? 'Complet' : 'Réserver maintenant'}
-                      </button>
-                    </div>
-                  ))}
-              </div>
-            ))}
-          </div>
-        )}
       </main>
     </div>
   );
