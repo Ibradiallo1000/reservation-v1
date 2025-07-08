@@ -43,6 +43,8 @@ interface Reservation {
   seatsGo: number;
   seatsReturn?: number;
   companyName?: string;
+  agencyNom?: string;
+  agencyTelephone?: string;
 }
 
 const ITEMS_PER_PAGE = 8;
@@ -158,7 +160,7 @@ const ReservationsEnLignePage: React.FC = () => {
     if (window.confirm('Confirmer la validation de cette réservation ? Le client sera notifié.')) {
       try {
         await updateDoc(doc(db, 'reservations', id), {
-          statut: 'paye',
+          statut: 'payé',
           validatedAt: new Date(),
           validatedBy: user?.uid
         });
@@ -350,7 +352,7 @@ const ReservationsEnLignePage: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-4">
                     <div>
                       <p className="text-sm text-gray-500">Trajet</p>
                       <p className="font-medium">{reservation.depart} → {reservation.arrivee}</p>
@@ -358,6 +360,11 @@ const ReservationsEnLignePage: React.FC = () => {
                     <div>
                       <p className="text-sm text-gray-500">Date</p>
                       <p className="font-medium">{reservation.date} à {reservation.heure}</p>
+                      </div>
+                     <div>
+                      <p className="text-sm text-gray-500">Agence</p>
+                      <p className="font-medium">{reservation.agencyNom || '--'}</p>
+                      <p className="text-sm text-gray-500">{reservation.agencyTelephone || '--'}</p> 
                     </div>
                   </div>
 

@@ -240,79 +240,86 @@ const AgenceGuichetPage: React.FC = () => {
 
   // Handle reservation submission
   const handleReservation = useCallback(async () => {
-    if (!selectedTrip || !nomClient || !telephone || places < 1) {
-      alert('Veuillez remplir tous les champs obligatoires');
-      return;
+  if (!selectedTrip || !nomClient || !telephone || places < 1) {
+    alert('Veuillez remplir tous les champs obligatoires');
+    return;
+  }
+
+  if (!user?.companyId) {
+    alert('Votre compte n\'est pas associé à une compagnie valide');
+    return;
+  }
+
+  const totalSeats = tripType === 'aller_retour' ? places + placesRetour : places;
+
+  if (selectedTrip.remainingSeats !== undefined && totalSeats > selectedTrip.remainingSeats) {
+    alert(`Désolé, il ne reste que ${selectedTrip.remainingSeats} places disponibles.`);
+    return;
+  }
+
+  setIsProcessing(true);
+
+  try {
+    let companySlug = DEFAULT_COMPANY_SLUG;
+    let companyName = 'Compagnie';
+
+    // Charger compagnie
+    const compagnieRef = doc(db, 'compagnies', user.companyId);
+    const compagnieSnap = await getDoc(compagnieRef);
+
+    if (compagnieSnap.exists()) {
+      companySlug = compagnieSnap.data().slug || DEFAULT_COMPANY_SLUG;
+      companyName = compagnieSnap.data().nom || 'Compagnie';
     }
 
-    if (!user?.companyId) {
-      alert('Votre compte n\'est pas associé à une compagnie valide');
-      return;
-    }
+    // ⚡️ Charger agence pour avoir le TEL
+    let agencyName = '';
+    let agencyTelephone = '';
 
-    const totalSeats = tripType === 'aller_retour' ? places + placesRetour : places;
-    
-    if (selectedTrip.remainingSeats !== undefined && totalSeats > selectedTrip.remainingSeats) {
-      alert(`Désolé, il ne reste que ${selectedTrip.remainingSeats} places disponibles.`);
-      return;
-    }
-
-    setIsProcessing(true);
-
-    try {
-      let companySlug = DEFAULT_COMPANY_SLUG;
-      let companyName = 'Compagnie';
-
-      // Try to get company info if available
-      const compagnieRef = doc(db, 'compagnies', user.companyId);
-      const compagnieSnap = await getDoc(compagnieRef);
-      
-      if (compagnieSnap.exists()) {
-        companySlug = compagnieSnap.data().slug || DEFAULT_COMPANY_SLUG;
-        companyName = compagnieSnap.data().nom || 'Compagnie';
-      } else {
-        console.warn(`Compagnie ${user.companyId} non trouvée, utilisation des valeurs par défaut`);
+    if (user.agencyId) {
+      const agencyRef = doc(db, 'agences', user.agencyId);
+      const agencySnap = await getDoc(agencyRef);
+      if (agencySnap.exists()) {
+        const agencyData = agencySnap.data();
+        agencyName = agencyData.nomAgence || agencyData.nom || '';
+        agencyTelephone = agencyData.telephone || '';
       }
-
-      // Create reservation document
-      const reservationData = {
-        trajetId: selectedTrip.id,
-        nomClient,
-        telephone,
-        seatsGo: places,
-        seatsReturn: tripType === 'aller_retour' ? placesRetour : 0,
-        date: selectedTrip.date,
-        heure: selectedTrip.time,
-        depart: selectedTrip.departure,
-        arrivee: selectedTrip.arrival,
-        montant: totalPrice,
-        statut: 'payé',
-        compagnieId: user.companyId,
-        compagnieNom: companyName,
-        agencyId: user.agencyId || null,
-        createdAt: Timestamp.now(),
-        canal: 'guichet',
-        tripType,
-        paiement,
-        companySlug: companySlug
-      };
-
-      const docRef = await addDoc(collection(db, 'reservations'), reservationData);
-      navigate(`/agence/receipt/${docRef.id}`);
-
-    } catch (error) {
-      console.error('Erreur création réservation:', error);
-      
-      let errorMessage = 'Erreur lors de la réservation';
-      if (error instanceof Error) {
-        errorMessage += `: ${error.message}`;
-      }
-      
-      alert(errorMessage);
-    } finally {
-      setIsProcessing(false);
     }
-  }, [selectedTrip, nomClient, telephone, user, places, placesRetour, tripType, totalPrice, paiement, navigate]);
+
+    const reservationData = {
+      trajetId: selectedTrip.id,
+      nomClient,
+      telephone,
+      seatsGo: places,
+      seatsReturn: tripType === 'aller_retour' ? placesRetour : 0,
+      date: selectedTrip.date,
+      heure: selectedTrip.time,
+      depart: selectedTrip.departure,
+      arrivee: selectedTrip.arrival,
+      montant: totalPrice,
+      statut: 'payé',
+      compagnieId: user.companyId,
+      compagnieNom: companyName,
+      agencyId: user.agencyId || null,
+      agencyNom: agencyName,
+      agencyTelephone: agencyTelephone,
+      createdAt: Timestamp.now(),
+      canal: 'guichet',
+      tripType,
+      paiement,
+      companySlug: companySlug
+    };
+
+    const docRef = await addDoc(collection(db, 'reservations'), reservationData);
+    navigate(`/agence/receipt/${docRef.id}`);
+
+  } catch (error) {
+    console.error('Erreur création réservation:', error);
+    alert('Erreur lors de la réservation');
+  } finally {
+    setIsProcessing(false);
+  }
+}, [selectedTrip, nomClient, telephone, user, places, placesRetour, tripType, totalPrice, paiement, navigate]);
 
   // Get unique available dates from trips
   const availableTripDates = Array.from(new Set(trips.map(trip => trip.date)));

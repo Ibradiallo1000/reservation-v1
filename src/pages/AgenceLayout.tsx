@@ -36,6 +36,7 @@ interface CustomUser {
   email?: string;
   role?: string;
   agencyName?: string;
+  agencyLogoUrl?: string; // ✅ Logo ajouté
   permissions?: string[];
 }
 
@@ -59,7 +60,6 @@ const AgenceLayout: React.FC = () => {
       icon: <LayoutDashboard className="w-5 h-5" />,
       permission: 'view_dashboard'
     },
-    
     {
       label: 'Guichet',
       path: '/agence/guichet',
@@ -72,28 +72,24 @@ const AgenceLayout: React.FC = () => {
       icon: <ClipboardList className="w-5 h-5" />,
       permission: 'manage_bookings'
     },
-
     {
       label: 'Trajets',
       path: '/agence/trajets',
       icon: <MapPinned className="w-5 h-5" />,
       permission: 'manage_routes'
     },
-  
     {
       label: 'Recettes',
       path: '/agence/recettes',
       icon: <Coins className="w-5 h-5" />,
       permission: 'manage_income'
     },
-    
     {
       label: 'Personnel',
       path: '/agence/personnel',
       icon: <Users className="w-5 h-5" />,
       permission: 'manage_staff'
     },
-
   ], []);
 
   const toggleSubMenu = (label: string) => {
@@ -109,9 +105,26 @@ const AgenceLayout: React.FC = () => {
   return (
     <div className="flex min-h-screen bg-[#f4f6fc]">
       <aside className="w-64 bg-white shadow-md text-gray-900 flex flex-col fixed h-full">
-        <div className="p-4 border-b">
-          <h1 className="text-xl font-bold text-blue-800">{user?.agencyName || 'Tableau de bord'}</h1>
-          <p className="text-xs text-gray-500 mt-1">Version {import.meta.env.VITE_APP_VERSION || '1.0.0'}</p>
+        {/* ✅ Bloc header logo + nom */}
+        <div className="p-4 border-b flex items-center gap-3">
+          {user?.agencyLogoUrl ? (
+            <img
+              src={user.agencyLogoUrl}
+              alt={user.agencyName}
+              className="h-10 w-10 rounded-full object-cover border border-gray-200"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = '/default-company.png';
+              }}
+            />
+          ) : (
+            <div className="h-10 w-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 font-bold">
+              {user?.agencyName?.charAt(0) || 'A'}
+            </div>
+          )}
+          <div>
+            <h1 className="text-lg font-bold text-blue-800">{user?.agencyName || 'Tableau de bord'}</h1>
+            <p className="text-xs text-gray-500 mt-1">Version {import.meta.env.VITE_APP_VERSION || '1.0.0'}</p>
+          </div>
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4">
@@ -209,7 +222,6 @@ const AgenceLayout: React.FC = () => {
           </div>
         </div>
       </aside>
-
       <main className="flex-1 ml-64 p-6 overflow-auto bg-[#f4f6fc]">
         <div className="max-w-7xl mx-auto">
           <Outlet />

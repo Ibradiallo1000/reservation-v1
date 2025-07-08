@@ -8,7 +8,7 @@ import 'react-lazy-load-image-component/src/effects/blur.css';
 import { motion } from 'framer-motion';
 import { hexToRgba, safeTextColor } from '../utils/color';
 
-type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'paye' | 'annule';
+type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'payé' | 'annule';
 
 interface Reservation {
   id: string;
@@ -62,7 +62,7 @@ const STATUS_DISPLAY: Record<ReservationStatus, { text: string; color: string; i
     color: 'bg-violet-50 text-violet-800 border-violet-200',
     icon: <Upload className="h-5 w-5" />
   },
-  'paye': {
+  'payé': {
     text: 'Paiement confirmé',
     color: 'bg-emerald-50 text-emerald-800 border-emerald-200',
     icon: <CheckCircle className="h-5 w-5" />
@@ -301,7 +301,7 @@ const ReservationDetailsPage: React.FC = () => {
           <div>
             <h2 className="font-bold">{statusInfo.text}</h2>
             <p className="text-sm opacity-90">
-              {reservation.statut === 'paye' 
+              {reservation.statut === 'payé' 
                 ? 'Votre réservation est confirmée' 
                 : reservation.statut === 'preuve_recue' 
                   ? 'Votre preuve est en cours de vérification' 
@@ -551,7 +551,7 @@ const ReservationDetailsPage: React.FC = () => {
         )}
 
         {/* View receipt button (if paid) */}
-        {reservation.statut === 'paye' && (
+        {reservation.statut === 'payé' && (
           <motion.button
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.99 }}

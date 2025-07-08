@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import QRCode from 'react-qr-code';
 import html2pdf from 'html2pdf.js';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, Download, Home, MapPin } from 'lucide-react';
+import { ChevronLeft, Download, Home, MapPin, Printer } from 'lucide-react';
 import { hexToRgba, safeTextColor } from '../utils/color';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
@@ -31,8 +31,8 @@ interface ReservationData {
   paiement: PaymentMethod;
   compagnieId: string;
   compagnieNom: string;
-  compagnieLogo: string;
-  compagnieCouleur: string;
+  compagnieLogo?: string;
+  compagnieCouleur?: string;
   agencyId?: string;
   agenceNom?: string;
   agenceTelephone?: string;
@@ -51,9 +51,13 @@ interface CompanyData {
   couleurPrimaire: string;
   couleurSecondaire?: string;
   slug: string;
-  agenceNom?: string;
   telephone?: string;
   banniereUrl?: string;
+  theme?: {
+    primary?: string;
+    secondary?: string;
+    text?: string;
+  };
 }
 
 interface LocationState {
@@ -121,30 +125,25 @@ const ReceiptEnLignePage: React.FC = () => {
         throw new Error("URL invalide pour cette réservation");
       }
 
-      // Fetch agency data if exists
       let agenceNom = '';
       let agenceTelephone = '';
-      let latitude: number | undefined;
-      let longitude: number | undefined;
-      
+
       if (reservationData.agencyId) {
-        const agencySnap = await getDoc(doc(db, 'agences', reservationData.agencyId));
+        const agencyRef = doc(db, 'agences', reservationData.agencyId);
+        const agencySnap = await getDoc(agencyRef);
+        
         if (agencySnap.exists()) {
           const agencyData = agencySnap.data();
-          agenceNom = agencyData.nomAgence || agencyData.nom || agencyData.name || '';
-          agenceTelephone = agencyData.telephone || agencyData.phone || '';
-          latitude = agencyData.latitude;
-          longitude = agencyData.longitude;
+          agenceNom = agencyData.nomAgence || agencyData.nom || '';
+          agenceTelephone = agencyData.telephone || '';
         }
       }
 
       return {
         ...reservationData,
         id: reservationSnap.id,
-        agenceNom: agenceNom || undefined,
-        agenceTelephone: agenceTelephone || undefined,
-        latitude,
-        longitude,
+        agenceNom,
+        agenceTelephone,
         createdAt: reservationData.createdAt instanceof Date ? 
           reservationData.createdAt : 
           new Date(reservationData.createdAt.seconds * 1000),
@@ -155,25 +154,26 @@ const ReceiptEnLignePage: React.FC = () => {
     }
   }, [id, slug]);
 
-  const fetchCompany = useCallback(async (companySlug: string) => {
+  const fetchCompany = useCallback(async (companyId: string) => {
     try {
-      const companyQuery = query(collection(db, 'companies'), where('slug', '==', companySlug));
-      const companySnapshot = await getDocs(companyQuery);
+      const companyRef = doc(db, 'companies', companyId);
+      const companySnap = await getDoc(companyRef);
       
-      if (companySnapshot.empty) {
+      if (!companySnap.exists()) {
         throw new Error("Compagnie non trouvée");
       }
-      
-      const companyDoc = companySnapshot.docs[0];
-      const rawData = companyDoc.data();
 
+      const companyData = companySnap.data();
+      
       return {
-        id: companyDoc.id,
-        ...rawData,
-        couleurPrimaire: rawData.couleurPrimaire || rawData.primaryColor || '#3b82f6',
-        couleurSecondaire: rawData.couleurSecondaire || rawData.secondaryColor || '#93c5fd',
-        agenceNom: rawData.agenceNom || rawData.agencyName,
-        telephone: rawData.telephone || rawData.phone
+        id: companySnap.id,
+        nom: companyData.nom,
+        logoUrl: companyData.logoUrl,
+        couleurPrimaire: companyData.theme?.primary?.trim() || companyData.couleurPrimaire?.trim() || '#3b82f6',
+        couleurSecondaire: companyData.theme?.secondary?.trim() || companyData.couleurSecondaire?.trim() || '#93c5fd',
+        slug: companyData.slug,
+        telephone: companyData.telephone,
+        banniereUrl: companyData.banniereUrl
       } as CompanyData;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur lors du chargement de la compagnie');
@@ -199,17 +199,7 @@ const ReceiptEnLignePage: React.FC = () => {
         const reservationData = await fetchReservation();
         if (!reservationData) return;
 
-        if (companyInfoFromState) {
-          setReservation(reservationData);
-          setCompany(companyInfoFromState);
-          setLoading(false);
-          return;
-        }
-
-        const companySlug = slug || reservationData.companySlug;
-        if (!companySlug) throw new Error("Impossible de déterminer la compagnie");
-
-        const companyData = await fetchCompany(companySlug);
+        const companyData = await fetchCompany(reservationData.compagnieId);
         if (!companyData) return;
 
         setReservation(reservationData);
@@ -273,14 +263,18 @@ const ReceiptEnLignePage: React.FC = () => {
   }
 
   const qrContent = `${window.location.origin}/compagnie/${company.slug}/receipt/${reservation.id}`;
-  const primaryColor = company.couleurPrimaire || '#3b82f6';
-  const secondaryColor = company.couleurSecondaire || '#93c5fd';
+  const primaryColor = company?.couleurPrimaire?.trim() || '#3b82f6';
+  const secondaryColor = company?.couleurSecondaire?.trim() || '#93c5fd';
   const textColor = safeTextColor(primaryColor);
 
   return (
     <div 
       className="min-h-screen bg-gray-50 print:bg-white"
-      style={{ '--primary': primaryColor, '--secondary': secondaryColor } as React.CSSProperties}
+      style={{ 
+        '--primary': primaryColor,
+        '--secondary': secondaryColor,
+        '--text-on-primary': textColor
+      } as React.CSSProperties}
     >
       {/* Styles d'impression */}
       <style>{`
@@ -320,7 +314,7 @@ const ReceiptEnLignePage: React.FC = () => {
             display: none !important;
           }
           .print-border-top {
-            border-top: 4px solid ${primaryColor} !important;
+            border-top: 4px solid var(--primary) !important;
           }
         }
       `}</style>
@@ -378,9 +372,9 @@ const ReceiptEnLignePage: React.FC = () => {
           >
             <div>
               <h1 className="text-lg font-bold print-text-sm">{company.nom}</h1>
-              {(reservation.agenceNom || company.agenceNom) && (
+              {reservation.agenceNom && (
                 <p className="text-xs opacity-90 mt-1 print-text-sm">
-                  Agence: {reservation.agenceNom || company.agenceNom}
+                  Agence: {reservation.agenceNom}
                 </p>
               )}
               {(reservation.agenceTelephone || company.telephone) && (
@@ -547,6 +541,18 @@ const ReceiptEnLignePage: React.FC = () => {
             Télécharger
           </button>
 
+          <button
+            onClick={() => window.print()}
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow transition-colors text-sm"
+            style={{
+              backgroundColor: secondaryColor || hexToRgba(primaryColor, 0.8),
+              color: safeTextColor(secondaryColor || primaryColor)
+            }}
+          >
+            <Printer className="h-4 w-4" />
+            Imprimer
+          </button>
+
           {reservation.latitude && reservation.longitude && (
             <a
               href={`https://www.google.com/maps/dir/?api=1&destination=${reservation.latitude},${reservation.longitude}`}
@@ -561,7 +567,7 @@ const ReceiptEnLignePage: React.FC = () => {
 
           <button
             onClick={() => navigate(`/compagnie/${company.slug}`)}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition-colors text-sm"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition-colors text-sm col-span-full"
           >
             <Home className="h-4 w-4" />
             Retour à la compagnie

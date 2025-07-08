@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { addDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { ChevronLeft, Clock, Calendar, User, Phone, Mail } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
@@ -122,7 +122,7 @@ const FormulaireReservationClient: React.FC = () => {
     else setSeatsReturn(clampedValue);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
   setLoading(true);
 
@@ -131,9 +131,8 @@ const FormulaireReservationClient: React.FC = () => {
       throw new Error('Veuillez remplir tous les champs obligatoires');
     }
 
-    // Construire l'ID trajet aller
+    // Vérification du nombre de places
     const trajetIdAller = tripData.id;
-    // Vérifier places aller
     const reservationsQueryAller = query(
       collection(db, 'reservations'),
       where('trajetId', '==', trajetIdAller),
@@ -149,20 +148,18 @@ const FormulaireReservationClient: React.FC = () => {
       throw new Error(`Il ne reste que ${placesRestantesAller} place(s) pour l'aller.`);
     }
 
-    // Si aller-retour ➜ Vérifier retour
+    // Vérif aller-retour
     let trajetIdRetour = '';
     if (tripType === 'aller_retour' && location.state?.returnTrip) {
       const returnTrip = location.state.returnTrip;
       trajetIdRetour = returnTrip.id;
 
-      // Vérifier cohérence date retour
       const dateAller = new Date(tripData.date);
       const dateRetour = new Date(returnTrip.date);
       if (dateRetour <= dateAller) {
         throw new Error("La date de retour doit être après la date d'aller");
       }
 
-      // Vérifier places retour
       const reservationsQueryRetour = query(
         collection(db, 'reservations'),
         where('trajetId', '==', trajetIdRetour),
@@ -179,10 +176,24 @@ const FormulaireReservationClient: React.FC = () => {
       }
     }
 
-    // Générer code référence
+    // 🔑 ➜ Aller chercher agencyNom & telephone proprement
+    let agencyNom = '';
+    let agencyTelephone = '';
+
+    if (tripData.agencyId) {
+      const agenceRef = doc(db, 'agences', tripData.agencyId);
+      const agenceSnap = await getDoc(agenceRef);
+      if (agenceSnap.exists()) {
+        const agenceData = agenceSnap.data();
+        agencyNom = agenceData.nomAgence || agenceData.nom || agenceData.name || '';
+        agencyTelephone = agenceData.telephone || agenceData.phone || '';
+      }
+    }
+
+    // Générer référence
     const referenceCode = `RES${Date.now()}`;
 
-    // Préparer docs
+    // DOC ALLER
     const allerDoc = {
       nomClient: passengerData.fullName,
       telephone: passengerData.phone,
@@ -199,6 +210,8 @@ const FormulaireReservationClient: React.FC = () => {
       statut: 'en_attente',
       companyId: tripData.companyId,
       agencyId: tripData.agencyId,
+      agencyNom: agencyNom,
+      agencyTelephone: agencyTelephone,
       trajetId: trajetIdAller,
       referenceCode,
       commission: unitPrice * seatsGo * 0.05,
@@ -229,6 +242,8 @@ const FormulaireReservationClient: React.FC = () => {
         statut: 'en_attente',
         companyId: returnTrip.companyId,
         agencyId: returnTrip.agencyId,
+        agencyNom: agencyNom, // même logique
+        agencyTelephone: agencyTelephone,
         trajetId: trajetIdRetour,
         referenceCode,
         commission: unitPrice * seatsReturn * 0.05,
@@ -241,7 +256,6 @@ const FormulaireReservationClient: React.FC = () => {
       };
     }
 
-    // Créer doc aller
     const allerRef = await addDoc(collection(db, 'reservations'), allerDoc);
 
     let retourRef = null;

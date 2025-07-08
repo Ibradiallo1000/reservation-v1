@@ -1,16 +1,25 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import QRCode from 'react-qr-code';
 import html2pdf from 'html2pdf.js';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { ChevronLeft, Download, Home, MapPin, Phone, Printer, Calendar } from 'lucide-react';
+import { hexToRgba, safeTextColor } from '../utils/color';
+import LoadingSpinner from '../components/LoadingSpinner';
+import ErrorMessage from '../components/ErrorMessage';
+
+type ReservationStatus = 'confirmé' | 'annulé' | 'en attente';
+type PaymentMethod = 'espèces' | 'mobile_money' | 'carte' | string;
+type BookingChannel = 'en ligne' | 'agence' | 'téléphone';
 
 interface ReservationData {
   id: string;
   nomClient: string;
   telephone: string;
+  email?: string;
   date: string;
   heure: string;
   depart: string;
@@ -18,464 +27,516 @@ interface ReservationData {
   seatsGo: number;
   seatsReturn?: number;
   montant: number;
-  statut: string;
-  paiement: 'espèces' | 'mobile_money';
+  statut: ReservationStatus;
+  paiement: PaymentMethod;
   compagnieId: string;
-  agenceId?: string;
-  guichetier?: string;
-  createdAt: { seconds: number; nanoseconds: number };
-  canal: string;
+  compagnieNom: string;
+  compagnieLogo?: string;
+  compagnieCouleur?: string;
+  agencyId?: string;
+  agenceNom?: string;
+  agenceTelephone?: string;
+  canal: BookingChannel;
+  createdAt: { seconds: number; nanoseconds: number } | Date;
+  companySlug: string;
+  latitude?: number;
+  longitude?: number;
+  referenceCode?: string;
 }
 
-interface CompagnieData {
+interface CompanyData {
+  id: string;
   nom: string;
   logoUrl: string;
   couleurPrimaire: string;
+  couleurSecondaire?: string;
   slug: string;
-  signatureUrl?: string;
+  telephone?: string;
+  banniereUrl?: string;
+  theme?: {
+    primary?: string;
+    secondary?: string;
+    text?: string;
+  };
 }
 
-interface AgenceData {
-  nom: string;
-  logoUrl?: string;
-  signatureUrl?: string;
+interface LocationState {
+  companyInfo?: CompanyData;
+  reservation?: ReservationData;
+  from?: string;
 }
 
 const ReceiptGuichetPage: React.FC = () => {
-  const { id } = useParams();
+  const { id, slug } = useParams<{ id: string; slug: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { companyInfo: companyInfoFromState, reservation: reservationFromState, from } = location.state as LocationState || {};
+  
   const [reservation, setReservation] = useState<ReservationData | null>(null);
-  const [compagnie, setCompagnie] = useState<CompagnieData | null>(null);
-  const [agence, setAgence] = useState<AgenceData | null>(null);
+  const [company, setCompany] = useState<CompanyData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
 
-  // Formatage des dates en français
-  const formatDate = (dateString: string | Date, formatStr: string) => {
+  const formatDate = useCallback((dateInput: string | Date | { seconds: number; nanoseconds: number }, formatStr: string) => {
     try {
-      const date = typeof dateString === 'string' ? parseISO(dateString) : dateString;
+      let date: Date;
+      if (typeof dateInput === 'string') {
+        date = parseISO(dateInput);
+      } else if (dateInput instanceof Date) {
+        date = dateInput;
+      } else {
+        date = new Date(dateInput.seconds * 1000);
+      }
       return format(date, formatStr, { locale: fr });
     } catch {
-      return dateString.toString();
+      return 'Date invalide';
     }
-  };
+  }, []);
 
-  // Génération du numéro de reçu
-  const generateReceiptNumber = () => {
-    if (!reservation) return 'GCH-000000';
-    const date = new Date(reservation.createdAt?.seconds * 1000 || Date.now());
+  const generateReceiptNumber = useCallback(() => {
+    if (!reservation) return 'AGC-000000';
+    const date = reservation.createdAt instanceof Date ? 
+      reservation.createdAt : 
+      new Date(reservation.createdAt.seconds * 1000);
     const year = date.getFullYear();
     const num = reservation.id.slice(0, 6).toUpperCase();
-    return `GCH-${year}-${num}`;
-  };
+    return `AGC-${year}-${num}`;
+  }, [reservation]);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!id) {
-        setError('ID de réservation manquant');
-        setLoading(false);
-        return;
+  const fetchReservation = useCallback(async () => {
+    if (!id) {
+      setError("ID de réservation manquant");
+      setLoading(false);
+      return null;
+    }
+
+    try {
+      const reservationRef = doc(db, 'reservations', id);
+      const reservationSnap = await getDoc(reservationRef);
+      
+      if (!reservationSnap.exists()) {
+        throw new Error("Réservation introuvable");
+      }
+      
+      const reservationData = reservationSnap.data() as Omit<ReservationData, 'id'>;
+      
+      if (slug && reservationData.companySlug !== slug) {
+        throw new Error("URL invalide pour cette réservation");
       }
 
-      try {
-        // 1. Chargement de la réservation
-        const reservationRef = doc(db, 'reservations', id);
-        const reservationSnap = await getDoc(reservationRef);
+      return {
+        ...reservationData,
+        id: reservationSnap.id,
+        createdAt: reservationData.createdAt instanceof Date ? 
+          reservationData.createdAt : 
+          new Date(reservationData.createdAt.seconds * 1000),
+      };
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur inconnue');
+      return null;
+    }
+  }, [id, slug]);
 
-        if (!reservationSnap.exists()) {
-          setError('Réservation introuvable');
+  const fetchCompany = useCallback(async (companyId: string) => {
+    try {
+      const companyRef = doc(db, 'companies', companyId);
+      const companySnap = await getDoc(companyRef);
+      
+      if (!companySnap.exists()) {
+        throw new Error("Compagnie non trouvée");
+      }
+
+      const companyData = companySnap.data();
+      
+      return {
+        id: companySnap.id,
+        nom: companyData.nom,
+        logoUrl: companyData.logoUrl,
+        couleurPrimaire: companyData.theme?.primary || companyData.couleurPrimaire || '#3b82f6',
+        couleurSecondaire: companyData.theme?.secondary || companyData.couleurSecondaire || '#93c5fd',
+        slug: companyData.slug,
+        telephone: companyData.telephone,
+        banniereUrl: companyData.banniereUrl
+      } as CompanyData;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors du chargement de la compagnie');
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        if (reservationFromState && companyInfoFromState) {
+          setReservation(reservationFromState);
+          setCompany(companyInfoFromState);
           setLoading(false);
           return;
         }
 
-        const reservationData = reservationSnap.data() as ReservationData;
-        reservationData.id = reservationSnap.id;
+        const reservationData = await fetchReservation();
+        if (!reservationData) return;
+
+        const companyData = await fetchCompany(reservationData.compagnieId);
+        if (!companyData) return;
+
         setReservation(reservationData);
-
-        // 2. Chargement des données compagnie
-        if (reservationData.compagnieId) {
-          const compagnieRef = doc(db, 'companies', reservationData.compagnieId);
-          const compagnieSnap = await getDoc(compagnieRef);
-          
-          if (compagnieSnap.exists()) {
-            const compagnieData = compagnieSnap.data() as CompagnieData;
-            setCompagnie({
-              nom: compagnieData.nom,
-              logoUrl: compagnieData.logoUrl,
-              couleurPrimaire: compagnieData.couleurPrimaire || '#3b82f6',
-              slug: compagnieData.slug,
-              signatureUrl: compagnieData.signatureUrl
-            });
-          } else {
-            setError('Compagnie introuvable');
-          }
-        }
-
-        // 3. Chargement des données agence (optionnel)
-        if (reservationData.agenceId) {
-          const agenceRef = doc(db, 'agences', reservationData.agenceId);
-          const agenceSnap = await getDoc(agenceRef);
-          
-          if (agenceSnap.exists()) {
-            const agenceData = agenceSnap.data() as AgenceData;
-            setAgence({
-              nom: agenceData.nom,
-              logoUrl: agenceData.logoUrl,
-              signatureUrl: agenceData.signatureUrl
-            });
-          }
-        }
-
-      } catch (e) {
-        console.error('Erreur Firestore :', e);
-        setError('Erreur lors du chargement des données');
+        setCompany(companyData);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Erreur inconnue');
       } finally {
         setLoading(false);
       }
     };
 
-    fetchData();
-  }, [id]);
+    loadData();
+  }, [id, slug, companyInfoFromState, reservationFromState, fetchReservation, fetchCompany]);
 
-  const handlePDF = () => {
+  const handlePDF = useCallback(() => {
     if (receiptRef.current) {
       const opt = {
-        margin: 10,
+        margin: 2,
         filename: `recu-${generateReceiptNumber()}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
         html2canvas: { 
           scale: 2,
           useCORS: true,
-          allowTaint: true
+          letterRendering: true,
+          width: 340
         },
-        jsPDF: { unit: 'mm', format: 'a5', orientation: 'portrait' }
+        jsPDF: { 
+          unit: 'mm', 
+          format: [58, 200], // Format ticket 58mm de large
+          orientation: 'portrait' 
+        }
       };
-
+      
       html2pdf()
         .set(opt)
         .from(receiptRef.current)
         .save();
     }
-  };
+  }, [generateReceiptNumber]);
 
-  if (loading) {
+  const handleBack = useCallback(() => {
+    if (from) {
+      navigate(from);
+    } else {
+      navigate(-1);
+    }
+  }, [from, navigate]);
+
+  if (loading || !company) {
+    return <LoadingSpinner fullScreen />;
+  }
+
+  if (error || !reservation || !company) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="mt-4 text-gray-600">Chargement du reçu...</p>
-        </div>
-      </div>
+      <ErrorMessage 
+        message={error || 'Erreur de chargement'} 
+        onRetry={() => window.location.reload()}
+        onHome={() => navigate('/')}
+      />
     );
   }
 
-  if (error || !reservation || !compagnie) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center p-6 max-w-md bg-white rounded-lg shadow-md">
-          <div className="text-red-500 mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">Erreur</h2>
-          <p className="text-gray-600 mb-6">{error || 'Données introuvables'}</p>
-          <button 
-            onClick={() => navigate(`/compagnie/${compagnie?.slug || 'default'}/guichet`)}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-          >
-            Retour au guichet
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const qrContent = JSON.stringify({
-    receiptNumber: generateReceiptNumber(),
-    compagnie: compagnie.nom,
-    nom: reservation.nomClient,
-    tel: reservation.telephone,
-    date: reservation.date,
-    heure: reservation.heure,
-    depart: reservation.depart,
-    arrivee: reservation.arrivee,
-    places: `${reservation.seatsGo} aller${reservation.seatsReturn ? ` + ${reservation.seatsReturn} retour` : ''}`,
-    montant: `${reservation.montant?.toLocaleString('fr-FR')} FCFA`,
-    statut: reservation.statut,
-    paiement: reservation.paiement
-  });
+  const qrContent = `${window.location.origin}/compagnie/${company.slug}/receipt/${reservation.id}`;
+  const primaryColor = company.couleurPrimaire;
+  const secondaryColor = company.couleurSecondaire;
+  const textColor = safeTextColor(primaryColor);
 
   return (
-    <div className="bg-gray-50 min-h-screen py-8 px-4 sm:px-6 print:bg-white print:py-0">
-      <div 
-        ref={receiptRef} 
-        className="max-w-2xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden print:shadow-none print:border-none print:rounded-none"
-        style={{ borderTop: `8px solid ${compagnie.couleurPrimaire}` }}
+    <div 
+      className="min-h-screen bg-gray-50 print:bg-white"
+      style={{ 
+        '--primary': primaryColor,
+        '--secondary': secondaryColor,
+        '--text-on-primary': textColor
+      } as React.CSSProperties}
+    >
+      <style>{`
+        @media print {
+          body, html {
+            height: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: white !important;
+            width: 58mm !important;
+          }
+          .receipt-container {
+            width: 58mm !important;
+            max-width: 58mm !important;
+            padding: 2mm !important;
+            font-size: 10px !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+            border: none !important;
+            page-break-after: avoid !important;
+          }
+          .compact-section {
+            margin-bottom: 2px !important;
+            padding: 2px !important;
+          }
+          .qr-code-container {
+            width: 70px !important;
+            height: 70px !important;
+            margin: 0 auto !important;
+          }
+          .print-text-sm {
+            font-size: 9px !important;
+          }
+          .print-py-1 {
+            padding-top: 1px !important;
+            padding-bottom: 1px !important;
+          }
+          .no-print {
+            display: none !important;
+          }
+          .print-border-top {
+            border-top: 4px solid var(--primary) !important;
+          }
+        }
+      `}</style>
+
+      <header 
+        className="sticky top-0 z-50 px-4 py-3 shadow-sm no-print"
+        style={{
+          backgroundColor: primaryColor,
+          color: textColor
+        }}
       >
-        {/* En-tête avec fond coloré */}
+        <div className="flex items-center justify-between max-w-7xl mx-auto">
+          <button 
+            onClick={handleBack}
+            className="p-2 rounded-full hover:bg-white/10 transition"
+            aria-label="Retour"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          
+          <div className="flex items-center gap-3">
+            {company.logoUrl && (
+              <img 
+                src={company.logoUrl} 
+                alt={`Logo ${company.nom}`}
+                className="h-10 w-10 rounded-full object-cover border-2"
+                style={{ 
+                  borderColor: textColor,
+                  backgroundColor: hexToRgba(primaryColor, 0.2)
+                }}
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = '/default-company.png';
+                }}
+              />
+            )}
+            <div className="flex flex-col">
+              <h1 className="text-sm font-bold">Reçu de voyage</h1>
+              <p className="text-xs opacity-90">{company.nom}</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-xs mx-auto p-2 print:p-0 print:max-w-none">
         <div 
-          className="p-6"
-          style={{ backgroundColor: compagnie.couleurPrimaire }}
+          ref={receiptRef}
+          className="receipt-container bg-white rounded-lg shadow-sm overflow-hidden print-border-top"
+          style={{ width: '58mm', margin: '0 auto' }}
         >
-          <div className="flex justify-between items-start">
-            {/* Logo agence + info émission */}
-            <div className="flex flex-col items-start space-y-3">
-              {agence?.logoUrl ? (
-                <img 
-                  src={agence.logoUrl} 
-                  alt={`Agence ${agence.nom}`} 
-                  className="h-12 object-contain bg-white p-1 rounded"
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement;
-                    target.src = '/default-agency.png';
-                  }}
-                />
-              ) : agence?.nom ? (
-                <div className="bg-white px-2 py-1 rounded">
-                  <p className="text-xs font-medium">{agence.nom}</p>
+          <div 
+            className="p-2 print:p-1 flex justify-between items-center print-py-1"
+            style={{ backgroundColor: primaryColor, color: textColor }}
+          >
+            <div>
+              <h1 className="text-sm font-bold print-text-sm">{company.nom}</h1>
+              {reservation.agenceNom && (
+                <div className="flex items-center gap-1 text-xs opacity-90 print-text-sm">
+                  <MapPin className="h-3 w-3" />
+                  <span>{reservation.agenceNom}</span>
                 </div>
-              ) : null}
-              
-              <div className="text-white text-xs bg-black bg-opacity-20 px-2 py-1 rounded">
-                <p>Émis le {formatDate(new Date(reservation.createdAt.seconds * 1000), 'dd/MM/yyyy à HH:mm')}</p>
+              )}
+              {(reservation.agenceTelephone || company.telephone) && (
+                <div className="flex items-center gap-1 text-xs opacity-90 print-text-sm">
+                  <Phone className="h-3 w-3" />
+                  <span>{reservation.agenceTelephone || company.telephone}</span>
+                </div>
+              )}
+            </div>
+            {company.logoUrl && (
+              <img 
+                src={company.logoUrl} 
+                alt={company.nom}
+                className="h-8 w-8 object-contain bg-white p-1 rounded-full print:h-6 print:w-6"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = '/default-company.png';
+                }}
+              />
+            )}
+          </div>
+
+          <div className="p-2 print:p-1 print-py-1">
+            <div className="flex justify-between items-start mb-2 pb-1 border-b border-gray-200 compact-section">
+              <div>
+                <p className="text-xs text-gray-500 print-text-sm">
+                  N° {generateReceiptNumber()}
+                </p>
+                <div className="flex items-center gap-1 text-xs text-gray-500 print-text-sm">
+                  <Calendar className="h-3 w-3" />
+                  <span>{formatDate(reservation.createdAt, 'dd/MM/yyyy à HH:mm')}</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <span
+                  className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium print-text-sm"
+                  style={{
+                    backgroundColor: hexToRgba(primaryColor, 0.15),
+                    color: primaryColor
+                  }}
+                >
+                  {reservation.statut}
+                </span>
               </div>
             </div>
 
-            {/* Logo compagnie */}
-            <img 
-              src={compagnie.logoUrl} 
-              alt={compagnie.nom} 
-              className="h-16 object-contain bg-white p-2 rounded-lg shadow"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                target.src = '/default-company.png';
-              }}
-            />
-          </div>
-
-          {/* Titre principal */}
-          <div className="mt-4 text-center">
-            <h1 className="text-3xl font-extrabold text-white uppercase tracking-wide">
-              {compagnie.nom}
-            </h1>
-            {agence?.nom && (
-              <p className="text-white text-opacity-80 italic mt-1">
-                {agence.nom}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Corps du reçu */}
-        <div className="p-6 sm:p-8">
-          {/* Numéro de reçu et badge */}
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-3">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-800">Reçu de réservation</h2>
-              <p className="text-sm text-gray-500">Numéro: {generateReceiptNumber()}</p>
-            </div>
-            
-            <span 
-              className="inline-block text-sm font-semibold px-3 py-1 rounded-full"
-              style={{ 
-                backgroundColor: `${compagnie.couleurPrimaire}20`, 
-                color: compagnie.couleurPrimaire 
-              }}
-            >
-              Réservation au guichet
-            </span>
-          </div>
-
-          {/* Grille d'informations */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            {/* Section Passager */}
-            <div className="bg-gray-50 p-5 rounded-lg border">
-              <h2 
-                className="font-semibold text-lg mb-3" 
-                style={{ color: compagnie.couleurPrimaire }}
-              >
-                Informations passager
-              </h2>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Nom complet :</span>
-                  <span className="text-gray-800">{reservation.nomClient}</span>
+            <div className="mb-2 compact-section">
+              <h3 className="text-xs font-semibold mb-1" style={{ color: primaryColor }}>
+                Client
+              </h3>
+              <div className="grid grid-cols-2 gap-1 text-xs print-text-sm">
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Nom</p>
+                  <p className="truncate">{reservation.nomClient}</p>
                 </div>
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Téléphone :</span>
-                  <span className="text-gray-800">{reservation.telephone}</span>
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Téléphone</p>
+                  <p>{reservation.telephone}</p>
                 </div>
-                {reservation.guichetier && (
-                  <div className="flex justify-between border-b pb-2">
-                    <span className="font-medium text-gray-600">Guichetier :</span>
-                    <span className="text-gray-800">{reservation.guichetier}</span>
+                {reservation.email && (
+                  <div className="col-span-2">
+                    <p className="text-2xs text-gray-600 print-text-sm">Email</p>
+                    <p className="truncate">{reservation.email}</p>
+                  </div>
+                )}
+                {reservation.referenceCode && (
+                  <div className="col-span-2">
+                    <p className="text-2xs text-gray-600 print-text-sm">Référence</p>
+                    <p className="font-mono text-xs">{reservation.referenceCode}</p>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Section Voyage */}
-            <div className="bg-gray-50 p-5 rounded-lg border">
-              <h2 
-                className="font-semibold text-lg mb-3" 
-                style={{ color: compagnie.couleurPrimaire }}
-              >
-                Détails du voyage
-              </h2>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Trajet :</span>
-                  <span className="text-gray-800">{reservation.depart} → {reservation.arrivee}</span>
+            <div className="mb-2 compact-section">
+              <h3 className="text-xs font-semibold mb-1 print-text-sm" style={{ color: primaryColor }}>
+                Voyage
+              </h3>
+              <div className="grid grid-cols-2 gap-1 text-xs print-text-sm">
+                <div className="col-span-2">
+                  <p className="text-2xs text-gray-600 print-text-sm">Trajet</p>
+                  <p className="font-medium">
+                    {reservation.depart} → {reservation.arrivee}
+                  </p>
                 </div>
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Date :</span>
-                  <span className="text-gray-800">
-                    {formatDate(reservation.date, 'EEEE dd MMMM yyyy')}
-                  </span>
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Date</p>
+                  <p>{formatDate(reservation.date, 'dd/MM/yyyy')}</p>
                 </div>
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Heure :</span>
-                  <span className="text-gray-800">{reservation.heure}</span>
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Heure</p>
+                  <p>{reservation.heure}</p>
                 </div>
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Places :</span>
-                  <span className="text-gray-800">
-                    {reservation.seatsGo} aller
-                    {reservation.seatsReturn ? ` + ${reservation.seatsReturn} retour` : ''}
-                  </span>
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Places</p>
+                  <p>
+                    {reservation.seatsGo} {reservation.seatsReturn ? `(+${reservation.seatsReturn} retour)` : ''}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Canal</p>
+                  <p className="capitalize">{reservation.canal}</p>
                 </div>
               </div>
             </div>
 
-            {/* Section Paiement */}
-            <div className="bg-gray-50 p-5 rounded-lg border">
-              <h2 
-                className="font-semibold text-lg mb-3" 
-                style={{ color: compagnie.couleurPrimaire }}
-              >
-                Détails de paiement
-              </h2>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Montant total :</span>
-                  <span className="text-gray-800 font-bold">
+            <div className="mb-2 compact-section">
+              <h3 className="text-xs font-semibold mb-1 print-text-sm" style={{ color: primaryColor }}>
+                Paiement
+              </h3>
+              <div className="grid grid-cols-2 gap-1 text-xs print-text-sm">
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Montant</p>
+                  <p className="font-bold" style={{ color: primaryColor }}>
                     {reservation.montant?.toLocaleString('fr-FR')} FCFA
-                  </span>
+                  </p>
                 </div>
-                <div className="flex justify-between border-b pb-2">
-                  <span className="font-medium text-gray-600">Mode de paiement :</span>
-                  <span className="text-gray-800 capitalize">
-                    {reservation.paiement}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="font-medium text-gray-600">Statut :</span>
-                  <span 
-                    className={`px-2 py-1 rounded text-xs ${
-                      reservation.statut === 'payé' 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-yellow-100 text-yellow-800'
-                    }`}
-                  >
-                    {reservation.statut}
-                  </span>
+                <div>
+                  <p className="text-2xs text-gray-600 print-text-sm">Méthode</p>
+                  <p className="capitalize">{reservation.paiement}</p>
                 </div>
               </div>
             </div>
 
-            {/* QR Code */}
-            <div className="bg-gray-50 p-5 rounded-lg border flex flex-col items-center justify-center">
-              <div className="mb-3 text-center">
-                <h2 
-                  className="font-semibold text-lg" 
-                  style={{ color: compagnie.couleurPrimaire }}
-                >
-                  QR Code de validation
-                </h2>
-                <p className="text-xs text-gray-500 mt-1">
-                  Présentez ce code à l'embarquement
-                </p>
-              </div>
-              
-              <div 
-                className="bg-white p-3 rounded border-2" 
-                style={{ borderColor: compagnie.couleurPrimaire }}
-              >
+            <div className="mt-2 p-1 rounded border border-gray-200 flex flex-col items-center compact-section">
+              <h3 className="text-xs font-semibold mb-1 print-text-sm" style={{ color: primaryColor }}>
+                Code d'embarquement
+              </h3>
+              <div className="bg-white p-1 rounded border qr-code-container" style={{ borderColor: primaryColor }}> 
                 <QRCode 
                   value={qrContent} 
-                  size={128}
-                  fgColor={compagnie.couleurPrimaire}
+                  size={70} 
+                  fgColor={primaryColor}
+                  level="H"
                 />
               </div>
-              
-              <p className="mt-3 text-xs text-gray-500 text-center">
-                Numéro: {generateReceiptNumber()}
+              <p className="text-2xs text-gray-500 mt-1 text-center print-text-sm">
+                Présentez ce code QR au chauffeur
               </p>
             </div>
-          </div>
 
-          {/* Signature */}
-          {(agence?.signatureUrl || compagnie.signatureUrl) && (
-            <div className="mt-6 pt-4 border-t flex justify-end">
-              <div className="text-center">
-                <p className="text-sm text-gray-500 mb-1">Signature</p>
-                <img 
-                  src={agence?.signatureUrl || compagnie.signatureUrl} 
-                  alt="Signature" 
-                  className="h-16 object-contain"
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement;
-                    target.style.display = 'none';
-                  }}
-                />
-              </div>
+            <div className="mt-1 pt-1 border-t border-gray-200 text-center text-2xs text-gray-500 compact-section print-text-sm">
+              <p>Reçu valable uniquement pour le trajet indiqué</p>
+              <p className="mt-0.5">Merci d'avoir choisi {company.nom}</p>
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Pied de page */}
-        <div 
-          className="p-4 text-center text-xs text-white"
-          style={{ backgroundColor: compagnie.couleurPrimaire }}
-        >
-          <p>Merci pour votre confiance • {compagnie.nom}</p>
-          <p className="mt-1 opacity-80">
-            Ce ticket est valable uniquement pour le trajet et la date indiqués
-          </p>
-        </div>
-      </div>
+        <div className="no-print mt-3 grid grid-cols-1 gap-2">
+          <button
+            onClick={handlePDF}
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow transition-colors text-xs"
+            style={{
+              backgroundColor: primaryColor,
+              color: textColor
+            }}
+          >
+            <Download className="h-4 w-4" />
+            Télécharger
+          </button>
 
-      {/* Boutons d'actions */}
-      <div className="print:hidden flex flex-wrap justify-center gap-4 mt-8">
-        <button 
-          onClick={() => window.print()}
-          className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg shadow hover:bg-blue-700 transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-          </svg>
-          Imprimer
-        </button>
-        <button 
-          onClick={handlePDF}
-          className="flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white rounded-lg shadow hover:bg-green-700 transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
-          </svg>
-          Télécharger PDF
-        </button>
-        <button 
-          onClick={() => navigate('/agence/guichet')}
-          className="flex items-center gap-2 px-5 py-2.5 bg-gray-600 text-white rounded-lg shadow hover:bg-gray-700 transition-colors"
-        >
-         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-        </svg>
-        Retour au guichet
-      </button>
+          <button
+            onClick={() => window.print()}
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow transition-colors text-xs"
+            style={{
+              backgroundColor: secondaryColor || hexToRgba(primaryColor, 0.8),
+              color: safeTextColor(secondaryColor || primaryColor)
+            }}
+          >
+            <Printer className="h-4 w-4" />
+            Imprimer
+          </button>
+
+          <button
+            onClick={() => navigate(`/compagnie/${company.slug}`)}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition-colors text-xs"
+          >
+            <Home className="h-4 w-4" />
+            Retour à la compagnie
+          </button>
+        </div>
       </div>
     </div>
   );

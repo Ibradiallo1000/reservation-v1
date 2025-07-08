@@ -72,7 +72,7 @@ const AppRoutes = () => {
         <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
         <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
 
-        {/* ✅ Upload preuve : version unique et RESTful */}
+        {/* ✅ Upload preuve */}
         <Route path="/compagnie/:slug/reservation/upload-preuve/:id" element={<UploadPreuvePage />} />
 
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
@@ -126,7 +126,7 @@ const AppRoutes = () => {
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
         </Route>
 
-        {/* ✅ Dashboard spécifique agence pour admin compagnie */}
+        {/* ✅ Dashboard spécifique agence */}
         <Route
           path="/compagnie/agence/:id/dashboard"
           element={
@@ -165,10 +165,19 @@ const AppRoutes = () => {
           <Route path="recettes" element={<AgenceRecettesPage />} />
           <Route path="depenses" element={<AgenceDepensesPage />} />
           <Route path="personnel" element={<AgencePersonnelPage />} />
-          <Route path="receipt/:id" element={<ReceiptGuichetPage />} />
         </Route>
 
-        {/* ✅ Impression réservations — version courte et claire */}
+        {/* ✅ Reçu GUICHET hors Layout */}
+        <Route
+          path="/agence/receipt/:id"
+          element={
+            <PrivateRoute allowedRoles={['chefAgence', 'guichetier']}>
+              <ReceiptGuichetPage />
+            </PrivateRoute>
+          }
+        />
+
+        {/* ✅ Impression réservations */}
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
         {/* ✅ 404 */}
