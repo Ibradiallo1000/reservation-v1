@@ -7,6 +7,7 @@ import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { motion } from 'framer-motion';
 import { hexToRgba, safeTextColor } from '../utils/color';
+import { fadeIn } from '@/utils/animations';
 
 type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'payé' | 'annule';
 
@@ -74,10 +75,6 @@ const STATUS_DISPLAY: Record<ReservationStatus, { text: string; color: string; i
   }
 };
 
-const fadeIn = {
-  hidden: { opacity: 0, y: 20 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.3 } }
-};
 
 const ReservationDetailsPage: React.FC = () => {
   const navigate = useNavigate();

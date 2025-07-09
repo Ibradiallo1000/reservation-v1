@@ -10,6 +10,7 @@ import {
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useInView } from 'react-intersection-observer';
+import { fadeIn } from '@/utils/animations';
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -118,15 +119,7 @@ const HomePage: React.FC = () => {
     }
   ];
 
-  // Animations
-  const fadeIn = {
-    hidden: { opacity: 0, y: 20 },
-    visible: { 
-      opacity: 1, 
-      y: 0,
-      transition: { duration: 0.6, ease: "easeOut" }
-    }
-  };
+  
 
   const staggerContainer = {
     visible: {
