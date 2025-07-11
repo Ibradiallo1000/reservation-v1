@@ -46,6 +46,8 @@ export interface FooterConfig {
 }
 
 export interface Agence {
+  longitude: number;
+  latitude: number;
   id: string;
   nomAgence: string;
   ville: string;

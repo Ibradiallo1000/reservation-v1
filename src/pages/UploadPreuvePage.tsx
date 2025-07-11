@@ -189,7 +189,8 @@ const UploadPreuvePage: React.FC = () => {
           .replace('MERCHANT', method.merchantNumber)
           .replace('AMOUNT', reservationDraft.montant.toString());
 
-        setMessage(prev => prev ? `${prev}\n\nCode USSD: ${ussd}` : `Code USSD: ${ussd}`);
+        // Correction ✅ : NE PAS pré-remplir le champ `message`
+        console.log(`USSD à composer : ${ussd}`);
 
         if (method.url) {
           window.open(method.url, '_blank', 'noopener,noreferrer');
@@ -256,25 +257,45 @@ const handleUpload = async () => {
     }
 
     // ✅ Au lieu de addDoc, on UPDATE le doc existant :
-    await updateDoc(doc(db, 'reservations', reservationDraft.id), {
-      statut: 'preuve_recue',
-      paymentMethod: paymentMethod,
-      preuveMessage: message.trim(),
-      preuveUrl: preuveUrl || null,
-      updatedAt: new Date(),
-    });
+  await updateDoc(doc(db, 'reservations', reservationDraft.id), {
+  // 🔒 TOUS les champs obligatoires
+  nomClient: reservationDraft.nomClient,
+  telephone: reservationDraft.telephone,
+  depart: reservationDraft.depart,
+  arrivee: reservationDraft.arrivee,
+  date: reservationDraft.date,
+  heure: reservationDraft.heure,
+  montant: reservationDraft.montant,
+  seatsGo: reservationDraft.seatsGo,
+  seatsReturn: reservationDraft.seatsReturn || 0,
+  tripType: reservationDraft.tripType,
+  statut: 'preuve_recue',
+  referenceCode: `RES${Date.now()}`, // Génère une ref unique si tu n’en as pas déjà
+  companyId: reservationDraft.companyId || '',
+  companySlug: reservationDraft.companySlug || '',
+  paymentMethod: paymentMethod,
+  preuveMessage: message.trim(),
+  preuveUrl: preuveUrl || null,
+  updatedAt: new Date(),
+  });
 
     sessionStorage.removeItem('reservationDraft');
     sessionStorage.removeItem('companyInfo');
     setSuccess(true);
 
  setTimeout(() => {
-  navigate(`/reservation/${reservationDraft.id}`, {
-    state: {
-      slug: slug,
-      companyInfo: companyInfo,
+ navigate(`/reservation/${reservationDraft.id}`, {
+  state: {
+    slug: slug,
+    companyInfo: companyInfo,
+    reservation: {
+      ...reservationDraft,
+      id: reservationDraft.id,
+      statut: 'preuve_recue',
+      preuveMessage: message.trim(),
     }
-  });
+  }
+});
 }, 1500);
 
   } catch (err) {

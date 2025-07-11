@@ -44,6 +44,9 @@ const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage
 const ReservationsEnLignePage = lazy(() => import('./pages/ReservationsEnLignePage'));
 const CompanyPaymentSettingsPage = lazy(() => import('./pages/CompanyPaymentSettingsPage'));
 
+// ✅ Page manquante pour avis clients
+const AvisModerationPage = lazy(() => import('./pages/AvisModerationPage'));
+
 // Agence
 const AgenceLayout = lazy(() => import('./pages/AgenceLayout'));
 const DashboardAgencePage = lazy(() => import('./pages/DashboardAgencePage'));
@@ -71,10 +74,7 @@ const AppRoutes = () => {
         <Route path="/" element={<HomePage />} />
         <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
         <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
-
-        {/* ✅ Upload preuve */}
         <Route path="/compagnie/:slug/reservation/upload-preuve/:id" element={<UploadPreuvePage />} />
-
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/mes-reservations" element={<MesReservationsPage />} />
         <Route path="/login" element={<LoginPage />} />
@@ -124,6 +124,9 @@ const AppRoutes = () => {
           <Route path="finances" element={<CompagnieFinancesTabsPage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
+
+          {/* ✅ Route ajoutée pour avis clients */}
+          <Route path="avis-clients" element={<AvisModerationPage />} />
         </Route>
 
         {/* ✅ Dashboard spécifique agence */}
