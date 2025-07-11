@@ -102,13 +102,7 @@ const Header: React.FC<HeaderProps> = ({
           >
             {t('myBookings')}
           </button>
-          <button
-            onClick={() => navigate(`/compagnie/${slug}/contact`)}
-            className={`font-medium ${config.animations}`}
-            style={{ color: safeTextColor(colors.primary) }}
-          >
-            {t('contact')}
-          </button>
+
           <button
             onClick={() => navigate('/login')}
             className={`p-2 rounded-full ${classes.button}`}

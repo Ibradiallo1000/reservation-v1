@@ -8,6 +8,10 @@ export type Channel = 'en ligne' | 'agence' | 'téléphone';
 
 // ✅ Reservation complète pour le hook
 export interface Reservation {
+  preuveUrl: any;
+  preuveMessage: any;
+  agencyTelephone: string;
+  agencyNom: string;
   id: string;
   trajetId?: string; // optionnel si pas toujours utilisé
   canal: Channel; // 🔥 Type précis au lieu de string

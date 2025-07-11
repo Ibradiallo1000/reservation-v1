@@ -6,6 +6,8 @@ import {
   Menu, X
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from '@/firebaseConfig';
 
 const CompagnieLayout: React.FC = () => {
   const location = useLocation();
@@ -14,20 +16,69 @@ const CompagnieLayout: React.FC = () => {
 
   const companyInfo = location.state?.companyInfo || null;
 
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) => location.pathname.startsWith(path);
 
   const colors = {
     primary: companyInfo?.couleurPrimaire ? `bg-[${companyInfo.couleurPrimaire}]` : 'bg-indigo-600',
-    primaryHover: 'hover:bg-indigo-700',
-    primaryLight: 'bg-indigo-50',
-    primaryText: 'text-indigo-600',
-    secondary: 'bg-teal-500',
-    secondaryHover: 'hover:bg-teal-600',
-    dark: 'bg-slate-800',
+    badge: 'bg-amber-500',
     darker: 'bg-slate-900',
     light: 'bg-slate-50',
-    card: 'bg-white',
-    badge: 'bg-amber-500'
+    card: 'bg-white'
+  };
+
+  // Badge dynamique + sonnerie
+  const [onlineProofsCount, setOnlineProofsCount] = React.useState(0);
+  const proofsCountRef = React.useRef(0);
+  const [pendingReviewsCount, setPendingReviewsCount] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!user?.companyId) return;
+
+    const q = query(
+      collection(db, 'reservations'),
+      where('companyId', '==', user.companyId),
+      where('statut', '==', 'preuve_recue')
+    );
+
+    const unsubscribe = onSnapshot(q, (snap) => {
+      const newCount = snap.size;
+
+      // Déclenche la sonnerie si nouvelle preuve détectée
+      if (newCount > proofsCountRef.current) {
+        playNotificationSound();
+      }
+
+      proofsCountRef.current = newCount;
+      setOnlineProofsCount(newCount);
+    });
+
+    return () => unsubscribe();
+  }, [user?.companyId]);
+
+  React.useEffect(() => {
+    if (!user?.companyId) return;
+
+    const q = query(
+      collection(db, 'avis'),
+      where('companyId', '==', user.companyId),
+      where('visible', '==', false)
+    );
+
+    const unsubscribe = onSnapshot(q, (snap) => {
+      setPendingReviewsCount(snap.size);
+    });
+
+    return () => unsubscribe();
+  }, [user?.companyId]);
+
+  const playNotificationSound = () => {
+    try {
+      const audio = new Audio('/son.mp3');
+      audio.volume = 0.5;
+      audio.play().catch((err) => console.warn('Lecture bloquée', err));
+    } catch (e) {
+      console.error('Erreur audio', e);
+    }
   };
 
   return (
@@ -55,8 +106,13 @@ const CompagnieLayout: React.FC = () => {
               Agences
             </NavItem>
 
-            <NavItem to="/compagnie/messages" icon={<MessageSquare className="w-5 h-5" />} active={isActive('/compagnie/messages')}>
-              Messages <span className={`ml-auto ${colors.badge} text-xs text-white px-2 py-1 rounded-full animate-pulse`}>5</span>
+            <NavItem to="/compagnie/avis-clients" icon={<MessageSquare className="w-5 h-5" />} active={isActive('/compagnie/avis-clients')}>
+              Avis Clients
+              {pendingReviewsCount > 0 && (
+                <span className={`ml-auto ${colors.badge} text-xs text-white px-2 py-1 rounded-full`}>
+                  {pendingReviewsCount}
+                </span>
+              )}
             </NavItem>
 
             <NavItem to="/compagnie/personnel" icon={<Users className="w-5 h-5" />} active={isActive('/compagnie/personnel')}>
@@ -69,6 +125,11 @@ const CompagnieLayout: React.FC = () => {
 
             <NavItem to="/compagnie/reservations-en-ligne" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations-en-ligne')}>
               Réservations en ligne
+              {onlineProofsCount > 0 && (
+                <span className={`ml-auto ${colors.badge} text-xs text-white px-2 py-1 rounded-full`}>
+                  {onlineProofsCount}
+                </span>
+              )}
             </NavItem>
 
             <NavItem to="/compagnie/guichet" icon={<Wallet className="w-5 h-5" />} active={isActive('/compagnie/guichet')}>
@@ -79,7 +140,6 @@ const CompagnieLayout: React.FC = () => {
               Moyens de paiement
             </NavItem>
 
-            {/* ✅ AJOUT DU PARAMÈTRES */}
             <NavItem to="/compagnie/parametres" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/parametres')}>
               Paramètres
             </NavItem>
@@ -160,35 +220,40 @@ const CompagnieLayout: React.FC = () => {
                 Tableau de bord
               </MobileNavItem>
 
-              <MobileNavItem to="/compagnie/agences" icon={<Building className="w-5 h-5" />} active={isActive('/compagnie/agences')}>
-                Agences
+              <MobileNavItem to="/compagnie/reservations-en-ligne" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations-en-ligne')}>
+                Réservations en ligne
+                {onlineProofsCount > 0 && (
+                  <span className={`${colors.badge} text-xs text-white px-2 py-0.5 rounded-full`}>
+                    {onlineProofsCount}
+                  </span>
+                )}
               </MobileNavItem>
 
-              <MobileNavItem to="/compagnie/messages" icon={<MessageSquare className="w-5 h-5" />} active={isActive('/compagnie/messages')}>
-                Messages <span className={`${colors.badge} text-xs text-white px-2 py-0.5 rounded-full`}>5</span>
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/personnel" icon={<Users className="w-5 h-5" />} active={isActive('/compagnie/personnel')}>
-                Personnel
+              <MobileNavItem to="/compagnie/avis-clients" icon={<MessageSquare className="w-5 h-5" />} active={isActive('/compagnie/avis-clients')}>
+                Avis clients
+                {pendingReviewsCount > 0 && (
+                  <span className={`${colors.badge} text-xs text-white px-2 py-0.5 rounded-full`}>
+                    {pendingReviewsCount}
+                  </span>
+                )}
               </MobileNavItem>
 
               <MobileNavItem to="/compagnie/reservations" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations')}>
-                Réservations
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/reservations-en-ligne" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations-en-ligne')}>
-                Réservations en ligne
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/guichet" icon={<Wallet className="w-5 h-5" />} active={isActive('/compagnie/guichet')}>
-                Guichet
+                liste des Réservations
               </MobileNavItem>
 
               <MobileNavItem to="/compagnie/payment-settings" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/payment-settings')}>
                 Moyens de paiement
               </MobileNavItem>
 
-              {/* ✅ AJOUT DU PARAMÈTRES MOBILE */}
+              <MobileNavItem to="/compagnie/agences" icon={<Building className="w-5 h-5" />} active={isActive('/compagnie/agences')}>
+                Agences
+              </MobileNavItem>
+
+              <MobileNavItem to="/compagnie/personnel" icon={<Users className="w-5 h-5" />} active={isActive('/compagnie/personnel')}>
+                Personnel
+              </MobileNavItem>
+
               <MobileNavItem to="/compagnie/parametres" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/parametres')}>
                 Paramètres
               </MobileNavItem>
@@ -233,36 +298,16 @@ const CompagnieLayout: React.FC = () => {
   );
 };
 
-const NavItem: React.FC<{
-  to: string;
-  icon: React.ReactNode;
-  active?: boolean;
-  children: React.ReactNode;
-}> = ({ to, icon, active = false, children }) => (
-  <Link
-    to={to}
-    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
-      active ? 'bg-slate-700 text-white font-medium shadow-sm' : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'
-    }`}
-  >
+const NavItem: React.FC<{ to: string; icon: React.ReactNode; active?: boolean; children: React.ReactNode; }> = ({ to, icon, active = false, children }) => (
+  <Link to={to} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${active ? 'bg-slate-700 text-white font-medium shadow-sm' : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>
     <span className={`${active ? 'text-teal-400' : 'text-slate-400'}`}>{icon}</span>
     <span className="flex-1 text-sm">{children}</span>
     <ChevronRight className={`w-4 h-4 transition-transform ${active ? 'opacity-100 text-teal-400' : 'opacity-0'}`} />
   </Link>
 );
 
-const MobileNavItem: React.FC<{
-  to: string;
-  icon: React.ReactNode;
-  active?: boolean;
-  children: React.ReactNode;
-}> = ({ to, icon, active = false, children }) => (
-  <Link
-    to={to}
-    className={`flex items-center gap-3 px-3 py-3 rounded-lg mx-1 transition-colors ${
-      active ? 'bg-slate-700 text-white font-medium' : 'text-slate-300 hover:bg-slate-700/50'
-    }`}
-  >
+const MobileNavItem: React.FC<{ to: string; icon: React.ReactNode; active?: boolean; children: React.ReactNode; }> = ({ to, icon, active = false, children }) => (
+  <Link to={to} className={`flex items-center gap-3 px-3 py-3 rounded-lg mx-1 transition-colors ${active ? 'bg-slate-700 text-white font-medium' : 'text-slate-300 hover:bg-slate-700/50'}`}>
     <span className={`${active ? 'text-teal-400' : 'text-slate-400'}`}>{icon}</span>
     <span className="flex-1 text-sm">{children}</span>
   </Link>
