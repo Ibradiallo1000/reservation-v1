@@ -46,21 +46,24 @@ export default function ServicesCarousel({ colors }: { colors: { primary: string
 
   return (
     <motion.section 
-     className="mt-[-220px] px-4 pb-10 bg-gradient-to-b from-black/20 to-black/40"
+      className="px-4 py-16 bg-white relative overflow-hidden"
       initial={{ opacity: 0 }}
       whileInView={{ opacity: 1 }}
       viewport={{ once: true }}
       transition={{ duration: 0.8 }}
     >
-      <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-3">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4 text-white">
+      {/* Optionnel : décor de fond type carte */}
+      <div className="absolute inset-0 bg-[url('/world-map.svg')] bg-center bg-cover opacity-5 pointer-events-none" />
+
+      <div className="max-w-6xl mx-auto relative z-10">
+        <div className="text-center mb-8">
+          <h2 className="text-3xl md:text-4xl font-bold mb-3 text-gray-900">
             Nos services exclusifs
           </h2>
-          <div className="h-1 w-24 mx-auto rounded-full bg-gradient-to-r from-transparent via-white to-transparent" />
+          <div className="h-1 w-24 mx-auto rounded-full" style={{ backgroundColor: colors.primary }} />
         </div>
 
-        <div className="relative h-[120px] md:h-[200px] overflow-hidden rounded-xl">
+        <div className="relative h-[200px] md:h-[220px] overflow-hidden rounded-2xl border border-gray-200 shadow bg-white">
           <AnimatePresence mode="wait">
             <motion.div
               key={currentIndex}
@@ -68,15 +71,18 @@ export default function ServicesCarousel({ colors }: { colors: { primary: string
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.6 }}
-              className="absolute inset-0 p-6 flex flex-col justify-center backdrop-blur-sm bg-white/5 border border-white/10 rounded-xl"
+              className="absolute inset-0 p-6 flex flex-col justify-center text-center"
             >
-              <div className="flex items-center gap-4 mb-4">
-                <div className="p-3 rounded-full" style={{ background: hexToRgba(colors.primary, 0.2) }}>
-                  <Icon className="h-6 w-6" style={{ color: colors.primary }} />
+              <div className="flex flex-col items-center gap-4 mb-4">
+                <div
+                  className="p-4 rounded-full"
+                  style={{ background: hexToRgba(colors.primary, 0.1) }}
+                >
+                  <Icon className="h-8 w-8" style={{ color: colors.primary }} />
                 </div>
-                <h3 className="text-2xl font-semibold text-white">{currentService.title}</h3>
+                <h3 className="text-xl md:text-2xl font-semibold text-gray-900">{currentService.title}</h3>
               </div>
-              <p className="text-gray-300 text-sm md:text-base">
+              <p className="text-gray-600 text-base md:text-lg max-w-2xl mx-auto">
                 {currentService.description}
               </p>
             </motion.div>
@@ -85,27 +91,30 @@ export default function ServicesCarousel({ colors }: { colors: { primary: string
 
         <div className="flex justify-center gap-4 mt-8">
           <button 
-            className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition"
+            className="p-2 rounded-full bg-gray-100 hover:bg-gray-200 transition"
             onClick={() => handleNav('prev')}
+            aria-label="Précédent"
           >
-            <ChevronLeft className="h-5 w-5 text-white" />
+            <ChevronLeft className="h-5 w-5 text-gray-800" />
           </button>
 
           <div className="flex items-center gap-2">
             {services.map((_, index) => (
               <button
                 key={index}
-                className={`w-3 h-3 rounded-full transition ${currentIndex === index ? 'bg-white w-6' : 'bg-white/30'}`}
+                className={`h-3 rounded-full transition-all ${currentIndex === index ? 'bg-gray-800 w-6' : 'bg-gray-300 w-3'}`}
                 onClick={() => setCurrentIndex(index)}
+                aria-label={`Service ${index + 1}`}
               />
             ))}
           </div>
 
           <button 
-            className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition"
+            className="p-2 rounded-full bg-gray-100 hover:bg-gray-200 transition"
             onClick={() => handleNav('next')}
+            aria-label="Suivant"
           >
-            <ChevronRight className="h-5 w-5 text-white" />
+            <ChevronRight className="h-5 w-5 text-gray-800" />
           </button>
         </div>
       </div>

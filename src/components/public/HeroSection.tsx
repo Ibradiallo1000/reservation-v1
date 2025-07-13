@@ -18,9 +18,16 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
     onSearch(departure, arrival);
   };
 
+  const isSecondaryDark = company.couleurSecondaire
+    ? isDark(company.couleurSecondaire)
+    : false;
+
+  const inputBg = '#ffffff'; // force un fond clair
+  const inputTextColor = '#1e293b'; // texte sombre
+  const placeholderColor = '#334155'; // placeholder sombre
+
   return (
-    <section className="relative w-full min-h-[700px] md:min-h-[800px] flex items-center justify-center overflow-hidden">
-      {/* ✅ Image de fond */}
+    <section className="relative w-full min-h-[700px] md:min-h-[500px] flex items-center justify-center overflow-hidden">
       {company.banniereUrl && (
         <div className="absolute inset-0 z-0">
           <LazyLoadImage
@@ -33,9 +40,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
         </div>
       )}
 
-      {/* ✅ Contenu */}
       <div className="relative z-10 w-full max-w-6xl px-5 text-center">
-        {/* ✅ Accroche */}
         <motion.div
           initial={{ opacity: 0, y: -30 }}
           animate={{ opacity: 1, y: 0 }}
@@ -47,25 +52,26 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
           </h1>
         </motion.div>
 
-        {/* ✅ Formulaire + Instruction */}
         <motion.form
           onSubmit={handleSubmit}
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.3, duration: 0.5 }}
-          className="flex flex-col items-center justify-center gap-4 bg-white/10 backdrop-blur-xl border border-white/20 rounded-xl shadow-[inset_0_1px_4px_rgba(255,255,255,0.1)] p-4 md:p-6 max-w-4xl mx-auto"
+          className="flex flex-col items-center justify-center gap-4 border border-white/10 rounded-xl shadow-lg p-4 md:p-6 max-w-4xl mx-auto"
+          style={{
+            backgroundColor: company.couleurSecondaire || '#F8FAFC'
+          }}
         >
           {company.instructionRecherche && (
-            <p className="w-full text-base md:text-lg text-white/90 font-medium text-center mb-1 md:mb-2">
+            <p className="w-full text-base md:text-lg font-medium text-center mb-1 md:mb-2 text-white">
               {company.instructionRecherche}
             </p>
           )}
 
           <div className="flex flex-col md:flex-row w-full items-center gap-4">
-            {/* Champ départ */}
             <div className="relative w-full md:w-1/3">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <MapPin className="h-5 w-5 text-white/70" />
+                <MapPin className="h-5 w-5" style={{ color: placeholderColor }} />
               </div>
               <input
                 type="text"
@@ -73,14 +79,17 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
                 value={departure}
                 onChange={(e) => setDeparture(e.target.value)}
                 required
-                className="pl-10 pr-3 py-3 w-full bg-white/10 border border-white/20 text-white rounded-lg placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white"
+                className="pl-10 pr-3 py-3 w-full border border-gray-300 rounded-lg focus:outline-none focus:ring-2"
+                style={{
+                  backgroundColor: inputBg,
+                  color: inputTextColor
+                }}
               />
             </div>
 
-            {/* Champ arrivée */}
             <div className="relative w-full md:w-1/3">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <MapPin className="h-5 w-5 text-white/70" />
+                <MapPin className="h-5 w-5" style={{ color: placeholderColor }} />
               </div>
               <input
                 type="text"
@@ -88,11 +97,14 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
                 value={arrival}
                 onChange={(e) => setArrival(e.target.value)}
                 required
-                className="pl-10 pr-3 py-3 w-full bg-white/10 border border-white/20 text-white rounded-lg placeholder-white/70 focus:outline-none focus:ring-2 focus:ring-white"
+                className="pl-10 pr-3 py-3 w-full border border-gray-300 rounded-lg focus:outline-none focus:ring-2"
+                style={{
+                  backgroundColor: inputBg,
+                  color: inputTextColor
+                }}
               />
             </div>
 
-            {/* Bouton */}
             <motion.button
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.97 }}
@@ -108,7 +120,6 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
         </motion.form>
       </div>
 
-      {/* ✅ Indicateur Scroll */}
       <motion.div
         animate={{ y: [0, 10, 0] }}
         transition={{ repeat: Infinity, duration: 2 }}
@@ -123,10 +134,20 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
         </div>
       </motion.div>
 
-      {/* ✅ Finition bas section */}
       <div className="absolute bottom-0 w-full h-12 bg-gradient-to-t from-[#0f172a] to-transparent z-10 rounded-t-3xl" />
     </section>
   );
 };
+
+function isDark(hex: string) {
+  if (!hex) return false;
+  const c = hex.substring(1);
+  const rgb = parseInt(c, 16);
+  const r = (rgb >> 16) & 0xff;
+  const g = (rgb >> 8) & 0xff;
+  const b = (rgb >> 0) & 0xff;
+  const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luma < 140;
+}
 
 export default HeroSection;

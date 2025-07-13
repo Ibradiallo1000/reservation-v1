@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db, storage } from '../firebaseConfig';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { collection, updateDoc, doc, getDocs, query, where } from 'firebase/firestore';
+import { doc, updateDoc } from 'firebase/firestore';
 import { Upload, CheckCircle, XCircle, Loader2, ChevronLeft, Info } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -65,87 +65,63 @@ const UploadPreuvePage: React.FC = () => {
   const [success, setSuccess] = useState(false);
 
   const loadInitialData = useCallback(async () => {
-    try {
-      setLoadingData(true);
-      
-      if (locationDraft && locationCompanyInfo) {
-        setReservationDraft(locationDraft);
-        setCompanyInfo(locationCompanyInfo);
-        return;
-      }
+  try {
+    setLoadingData(true);
 
-      const savedDraft = sessionStorage.getItem('reservationDraft');
-      const savedCompanyInfo = sessionStorage.getItem('companyInfo');
-      
-      if (savedDraft && savedCompanyInfo) {
-        const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
-        const parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
-        
-        if (!parsedDraft.nomClient || !parsedDraft.telephone) {
-          throw new Error('Données de réservation incomplètes');
-        }
-        
-        setReservationDraft(parsedDraft);
-        setCompanyInfo(parsedCompanyInfo);
-        return;
-      }
+    // 🔍 LOGS DE DIAGNOSTIC : début du chargement
+    console.log('[UploadPreuvePage] location.state:', location.state);
+    console.log('[UploadPreuvePage] sessionStorage.reservationDraft:', sessionStorage.getItem('reservationDraft'));
+    console.log('[UploadPreuvePage] sessionStorage.companyInfo:', sessionStorage.getItem('companyInfo'));
 
-      if (id) {
-        throw new Error('Fonctionnalité non implémentée');
-      }
-
-      throw new Error('Aucune donnée de réservation valide trouvée');
-    } catch (error) {
-      console.error('Erreur de chargement:', error);
-      setError(error instanceof Error ? error.message : 'Erreur inconnue');
-      navigate(`/${slug || ''}`, { 
-        replace: true,
-        state: { error: 'Erreur de chargement des données' }
-      });
-    } finally {
-      setLoadingData(false);
+    if (locationDraft && locationCompanyInfo) {
+      console.log('[UploadPreuvePage] ✅ Données reçues via location.state');
+      setReservationDraft(locationDraft);
+      setCompanyInfo(locationCompanyInfo);
+      return;
     }
-  }, [locationDraft, locationCompanyInfo, navigate, slug, id]);
 
+    const savedDraft = sessionStorage.getItem('reservationDraft');
+    const savedCompanyInfo = sessionStorage.getItem('companyInfo');
+
+    if (savedDraft && savedCompanyInfo) {
+      console.log('[UploadPreuvePage] ✅ Données trouvées dans sessionStorage');
+
+      const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
+      const parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
+
+      if (!parsedDraft?.depart || !parsedDraft?.arrivee) {
+        throw new Error('Données de réservation incomplètes');
+      }
+
+      setReservationDraft(parsedDraft);
+      setCompanyInfo(parsedCompanyInfo);
+      return;
+    }
+
+    if (id) {
+      throw new Error('Fonctionnalité non implémentée');
+    }
+
+    throw new Error('Aucune donnée de réservation valide trouvée');
+  } catch (error) {
+    console.error('[UploadPreuvePage] ❌ Erreur de chargement:', error);
+    setError(error instanceof Error ? error.message : 'Erreur inconnue');
+
+    console.warn('[UploadPreuvePage] 🚨 Redirection vers la vitrine car données invalides');
+    navigate(`/${slug || ''}`, {
+      replace: true,
+      state: { error: 'Erreur de chargement des données' }
+    });
+  } finally {
+    setLoadingData(false);
+  }
+}, [locationDraft, locationCompanyInfo, navigate, slug, id]);
+
+
+  
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
-
-  useEffect(() => {
-    const fetchPaymentMethods = async () => {
-      if (!companyInfo?.id) return;
-      if (companyInfo.paymentMethods && Object.keys(companyInfo.paymentMethods).length > 0) return;
-
-      try {
-        const q = query(
-          collection(db, 'paymentMethods'),
-          where('companyId', '==', companyInfo.id)
-        );
-        const snapshot = await getDocs(q);
-        
-        const methods: PaymentMethods = {};
-        snapshot.docs.forEach(doc => {
-          const data = doc.data();
-          const key = data.name.toLowerCase().replace(/\s+/g, '_');
-          methods[key] = {
-            url: data.defaultPaymentUrl || '',
-            logoUrl: data.logoUrl || '',
-            ussdPattern: data.ussdPattern || '',
-            merchantNumber: data.merchantNumber || ''
-          };
-        });
-
-        setCompanyInfo(prev => ({
-          ...prev!,
-          paymentMethods: methods
-        }));
-      } catch (err) {
-        console.error('Erreur lors du chargement des méthodes:', err);
-      }
-    };
-
-    fetchPaymentMethods();
-  }, [companyInfo]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     try {
@@ -189,7 +165,6 @@ const UploadPreuvePage: React.FC = () => {
           .replace('MERCHANT', method.merchantNumber)
           .replace('AMOUNT', reservationDraft.montant.toString());
 
-        // Correction ✅ : NE PAS pré-remplir le champ `message`
         console.log(`USSD à composer : ${ussd}`);
 
         if (method.url) {
@@ -203,108 +178,81 @@ const UploadPreuvePage: React.FC = () => {
     }
   };
 
-  const validateForm = (): boolean => {
+  const handleUpload = async () => {
+    if (!reservationDraft || !reservationDraft.id) {
+      setError('Réservation introuvable.');
+      return;
+    }
+    if (!paymentMethod) {
+      setError('Veuillez sélectionner un moyen de paiement.');
+      return;
+    }
+    if (!message && !file) {
+      setError('Veuillez fournir une preuve ou un message.');
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+
     try {
-      if (!paymentMethod) {
-        throw new Error('Veuillez sélectionner un moyen de paiement');
+      let preuveUrl: string | null = null;
+
+      if (file) {
+        const ext = file.name.split('.').pop();
+        const filename = `preuves/preuve_${Date.now()}.${ext}`;
+        const fileRef = ref(storage, filename);
+        const snap = await uploadBytes(fileRef, file);
+        preuveUrl = await getDownloadURL(snap.ref);
       }
 
-      if (!message.trim() && !file) {
-        throw new Error('Veuillez ajouter un message ou un fichier');
-      }
+      await updateDoc(doc(db, 'reservations', reservationDraft.id), {
+        nomClient: reservationDraft.nomClient,
+        telephone: reservationDraft.telephone,
+        depart: reservationDraft.depart,
+        arrivee: reservationDraft.arrivee,
+        date: reservationDraft.date,
+        heure: reservationDraft.heure,
+        montant: reservationDraft.montant,
+        seatsGo: reservationDraft.seatsGo,
+        seatsReturn: reservationDraft.seatsReturn || 0,
+        tripType: reservationDraft.tripType,
+        statut: 'preuve_recue',
+        referenceCode: `RES${Date.now()}`,
+        companyId: reservationDraft.companyId || '',
+        companySlug: reservationDraft.companySlug || '',
+        paymentMethod: paymentMethod,
+        preuveMessage: message.trim(),
+        preuveUrl: preuveUrl || null,
+        updatedAt: new Date(),
+      });
 
-      if (!reservationDraft) {
-        throw new Error('Données de réservation manquantes');
-      }
+      sessionStorage.removeItem('reservationDraft');
+      sessionStorage.removeItem('companyInfo');
+      setSuccess(true);
 
-      if (message.trim().length > 500) {
-        throw new Error('Le message ne doit pas dépasser 500 caractères');
-      }
+      setTimeout(() => {
+        navigate(`/reservation/${reservationDraft.id}`, {
+          state: {
+            slug: slug,
+            companyInfo: companyInfo,
+            reservation: {
+              ...reservationDraft,
+              id: reservationDraft.id,
+              statut: 'preuve_recue',
+              preuveMessage: message.trim(),
+            }
+          }
+        });
+      }, 1500);
 
-      return true;
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Erreur de validation');
-      return false;
+    } catch (err) {
+      console.error('Erreur:', err);
+      setError('Une erreur est survenue lors de l\'envoi.');
+    } finally {
+      setUploading(false);
     }
   };
-
-const handleUpload = async () => {
-  if (!reservationDraft || !reservationDraft.id) {
-    setError('Réservation introuvable.');
-    return;
-  }
-  if (!paymentMethod) {
-    setError('Veuillez sélectionner un moyen de paiement.');
-    return;
-  }
-  if (!message && !file) {
-    setError('Veuillez fournir une preuve ou un message.');
-    return;
-  }
-
-  setUploading(true);
-  setError(null);
-
-  try {
-    let preuveUrl: string | null = null;
-
-    if (file) {
-      const ext = file.name.split('.').pop();
-      const filename = `preuves/preuve_${Date.now()}.${ext}`;
-      const fileRef = ref(storage, filename);
-      const snap = await uploadBytes(fileRef, file);
-      preuveUrl = await getDownloadURL(snap.ref);
-    }
-
-    // ✅ Au lieu de addDoc, on UPDATE le doc existant :
-  await updateDoc(doc(db, 'reservations', reservationDraft.id), {
-  // 🔒 TOUS les champs obligatoires
-  nomClient: reservationDraft.nomClient,
-  telephone: reservationDraft.telephone,
-  depart: reservationDraft.depart,
-  arrivee: reservationDraft.arrivee,
-  date: reservationDraft.date,
-  heure: reservationDraft.heure,
-  montant: reservationDraft.montant,
-  seatsGo: reservationDraft.seatsGo,
-  seatsReturn: reservationDraft.seatsReturn || 0,
-  tripType: reservationDraft.tripType,
-  statut: 'preuve_recue',
-  referenceCode: `RES${Date.now()}`, // Génère une ref unique si tu n’en as pas déjà
-  companyId: reservationDraft.companyId || '',
-  companySlug: reservationDraft.companySlug || '',
-  paymentMethod: paymentMethod,
-  preuveMessage: message.trim(),
-  preuveUrl: preuveUrl || null,
-  updatedAt: new Date(),
-  });
-
-    sessionStorage.removeItem('reservationDraft');
-    sessionStorage.removeItem('companyInfo');
-    setSuccess(true);
-
- setTimeout(() => {
- navigate(`/reservation/${reservationDraft.id}`, {
-  state: {
-    slug: slug,
-    companyInfo: companyInfo,
-    reservation: {
-      ...reservationDraft,
-      id: reservationDraft.id,
-      statut: 'preuve_recue',
-      preuveMessage: message.trim(),
-    }
-  }
-});
-}, 1500);
-
-  } catch (err) {
-    console.error('Erreur:', err);
-    setError('Une erreur est survenue lors de l\'envoi.');
-  } finally {
-    setUploading(false);
-  }
-};
 
   if (loadingData) {
     return <LoadingScreen colors={{

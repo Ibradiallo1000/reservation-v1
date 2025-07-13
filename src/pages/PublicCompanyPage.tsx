@@ -14,23 +14,28 @@ import AvisListePublic from '../components/public/AvisListePublic';
 import Header from '@/components/public/Header';
 
 import useCompanyTheme from '../hooks/useCompanyTheme';
+import { Company } from '@/types/companyTypes';
 
-import { Company, Agence, TripSuggestion } from '../types/companyTypes';
+import { Agence, TripSuggestion } from '../types/companyTypes';
 import LoadingScreen from '@/components/ui/LoadingScreen';
 import ErrorScreen from '@/components/ui/ErrorScreen';
 import NotFoundScreen from '@/components/ui/NotFoundScreen';
 
-const PublicCompanyPage = () => {
+type Props = {
+  company?: Company;
+};
+
+const PublicCompanyPage: React.FC<Props> = ({ company: propCompany }) => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
 
-  const [company, setCompany] = useState<Company | null>(null);
+  const [company, setCompany] = useState<Company | null>(propCompany ?? null);
   const [agences, setAgences] = useState<Agence[]>([]);
   const [suggestedTrips, setSuggestedTrips] = useState<TripSuggestion[]>([]);
   const [showAgences, setShowAgences] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!propCompany); // si on a déjà la compagnie => pas de chargement
   const [error, setError] = useState<string | null>(null);
 
   const [openVilles, setOpenVilles] = useState<Record<string, boolean>>({});
@@ -84,8 +89,10 @@ const PublicCompanyPage = () => {
   }, [slug, t]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (!propCompany) {
+      fetchData();
+    }
+  }, [fetchData, propCompany]);
 
   if (loading) {
     return (
@@ -119,7 +126,7 @@ const PublicCompanyPage = () => {
   return (
     <div
       className={`min-h-screen flex flex-col ${config.typography}`}
-      style={{ background: colors.background, color: colors.text }}
+      style={{ background: '#ffffff', color: colors.text }}
     >
       <Header
         company={company}
@@ -138,16 +145,15 @@ const PublicCompanyPage = () => {
         company={company}
         onSearch={(departure, arrival) => {
           navigate(
-            `/compagnie/${slug}/resultats?departure=${encodeURIComponent(
+            `/${slug}/resultats?departure=${encodeURIComponent(
               departure.trim()
-            )}&arrival=${encodeURIComponent(arrival.trim())}`
-          );
+           )}&arrival=${encodeURIComponent(arrival.trim())}`
+         );
+
         }}
       />
 
-      {/* ✅ Bloc AVIS CLIENTS affichage public */}
       <AvisListePublic companyId={company.id} primaryColor={colors.primary} />
-
       <SuggestionsSlider suggestedTrips={suggestedTrips} colors={colors} />
       <ServicesCarousel colors={colors} />
 

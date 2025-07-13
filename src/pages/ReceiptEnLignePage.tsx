@@ -71,47 +71,55 @@ const ReceiptEnLignePage: React.FC = () => {
   };
 
   useEffect(() => {
-    const fetchData = async () => {
-      let res = reservation;
+  const fetchData = async () => {
+    let res = reservation;
 
-      if (!res && id) {
-        const snap = await getDoc(doc(db, 'reservations', id));
-        if (snap.exists()) {
-          res = { ...(snap.data() as Reservation), id: snap.id };
-          setReservation(res);
-        }
+    // 🔁 Si aucune réservation transmise, la charger
+    if (!res && id) {
+      const snap = await getDoc(doc(db, 'reservations', id));
+      if (snap.exists()) {
+        res = { ...(snap.data() as Reservation), id: snap.id };
+        setReservation(res);
       }
+    }
 
-      if (res?.companyId && !companyInfo) {
-        const companySnap = await getDoc(doc(db, 'companies', res.companyId));
-        if (companySnap.exists()) {
-          const data = companySnap.data();
-          setCompanyInfo({
-            id: companySnap.id,
-            name: data.name || data.nom || res.companyName || 'Nom Compagnie',
-            primaryColor: data.primaryColor,
-            logoUrl: data.logoUrl,
-            telephone: data.telephone,
-          });
-        }
-      }
+    // ✅ Si companyInfo absent, le charger et l’enregistrer dans sessionStorage
+    if (res?.companyId && !companyInfo) {
+      const companySnap = await getDoc(doc(db, 'companies', res.companyId));
+      if (companySnap.exists()) {
+        const data = companySnap.data();
+        const loadedCompanyInfo = {
+          id: companySnap.id,
+          name: data.name || data.nom || res.companyName || 'Nom Compagnie',
+          primaryColor: data.primaryColor,
+          logoUrl: data.logoUrl,
+          telephone: data.telephone,
+        };
+        setCompanyInfo(loadedCompanyInfo);
 
-      if (res?.agencyId) {
-        const agencySnap = await getDoc(doc(db, 'agences', res.agencyId));
-        if (agencySnap.exists()) {
-          const data = agencySnap.data();
-          setAgencyInfo({
-            id: agencySnap.id,
-            nomAgence: data.nomAgence || 'Agence',
-            telephone: data.telephone || '',
-            latitude: data.latitude,
-            longitude: data.longitude,
-          });
-        }
+        // 💾 Sauvegarde dans sessionStorage pour usage ultérieur
+        sessionStorage.setItem('companyInfo', JSON.stringify(loadedCompanyInfo));
       }
-    };
-    fetchData();
-  }, [id, reservation, companyInfo]);
+    }
+
+    // ✅ Charger les infos d'agence si présentes
+    if (res?.agencyId) {
+      const agencySnap = await getDoc(doc(db, 'agences', res.agencyId));
+      if (agencySnap.exists()) {
+        const data = agencySnap.data();
+        setAgencyInfo({
+          id: agencySnap.id,
+          nomAgence: data.nomAgence || 'Agence',
+          telephone: data.telephone || '',
+          latitude: data.latitude,
+          longitude: data.longitude,
+        });
+      }
+    }
+  };
+
+  fetchData();
+}, [id, reservation, companyInfo]);
 
   const handlePDF = useCallback(() => {
     if (receiptRef.current) {
@@ -231,7 +239,7 @@ const ReceiptEnLignePage: React.FC = () => {
               <span className="font-mono text-sm">{reservation.referenceCode}</span>
             </div>
             <QRCode
-              value={`${window.location.origin}/compagnie/${slug}/receipt/${id}`}
+              value={`${window.location.origin}/${slug}/receipt/${id}`}
               size={80}
               fgColor={primaryColor}
               level="H"
@@ -354,7 +362,7 @@ const ReceiptEnLignePage: React.FC = () => {
         )}
         
         <button
-          onClick={() => navigate(`/compagnie/${slug}`)}
+          onClick={() => navigate(`/${slug}`)}
           className="py-3 rounded-lg font-medium flex items-center justify-center gap-2 col-span-2"
           style={{ backgroundColor: primaryColor, color: themeConfig.colors.text }}
         >
