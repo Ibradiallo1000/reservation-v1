@@ -1,27 +1,6 @@
 // ✅ src/types/companyTypes.ts
 
-export interface Company {
-  id: string;
-  nom: string;
-  slug: string;
-  description?: string;
-  logoUrl?: string;
-  banniereUrl?: string;
-  couleurPrimaire?: string;
-  couleurSecondaire?: string;
-  couleurAccent?: string;
-  couleurTertiaire?: string;
-  themeStyle?: string;
-  email?: string;
-  pays?: string;
-  telephone?: string;
-  adresse?: string;
-  horaires?: string;
-  socialMedia?: SocialMediaLinks;
-  footerConfig?: FooterConfig;
-  accroche?: string;
-  instructionRecherche?: string;
-}
+import { Timestamp } from 'firebase/firestore';
 
 export interface SocialMediaLinks {
   facebook?: string;
@@ -29,6 +8,9 @@ export interface SocialMediaLinks {
   twitter?: string;
   linkedin?: string;
   youtube?: string;
+  tiktok?: string;
+  whatsapp?: string;
+  [key: string]: string | undefined;
 }
 
 export interface FooterConfig {
@@ -37,7 +19,11 @@ export interface FooterConfig {
   showSocial?: boolean;
   showTestimonials?: boolean;
   showLegalLinks?: boolean;
-  customLinks?: { label: string; url: string; external?: boolean }[];
+  customLinks?: {
+    label: string; // ✅ c'était "title", on met "label" partout
+    url: string;
+    external?: boolean;
+  }[];
   testimonialButtonText?: string;
   aboutTitle?: string;
   contactTitle?: string;
@@ -97,4 +83,33 @@ export interface HeroSectionProps {
   };
   classes: any;
   t: (key: string) => string;
+}
+
+// ✅ Le type principal corrigé avec tous les champs optionnels et cohérents
+export interface Company {
+  id: string;
+  nom: string;
+  slug: string;
+  sousTitre?: string;
+  description?: string;
+  logoUrl?: string;
+  banniereUrl?: string;
+  couleurPrimaire?: string;
+  couleurSecondaire?: string;
+  couleurAccent?: string;
+  couleurTertiaire?: string;
+  themeStyle?: string;
+  email?: string;
+  pays?: string;
+  telephone?: string;
+  adresse?: string;
+  horaires?: string;
+  accroche?: string;
+  instructionRecherche?: string;
+  socialMedia?: SocialMediaLinks;
+  footerConfig?: FooterConfig;
+  responsable?: string;
+  plan?: 'free' | 'premium';
+  createdAt?: Timestamp;
+  commission?: number;
 }

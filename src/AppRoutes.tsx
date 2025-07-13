@@ -3,32 +3,29 @@ import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
+import RouteResolver from './pages/RouteResolver';
 
 // Impression PDF
 import ReservationPrintPage from '@/pages/ReservationPrintPage';
 
-// Pages publiques
+// Pages publiques dynamiques par compagnie (chargement statique car critiques)
+import FormulaireReservationClient from '@/pages/FormulaireReservationClient';
+import UploadPreuvePage from '@/pages/UploadPreuvePage';
+import ReservationDetailsPage from '@/pages/ReservationDetailsPage';
+import ResultatsAgencePage from '@/pages/ResultatsAgencePage';
+
+// Pages publiques globales
 const HomePage = lazy(() => import('./pages/HomePage'));
-const FormulaireReservationClient = lazy(() => import('./pages/FormulaireReservationClient'));
-const ReceiptEnLignePage = lazy(() => import('./pages/ReceiptEnLignePage'));
 const PlatformSearchResultsPage = lazy(() => import('./pages/PlatformSearchResultsPage'));
-const MesReservationsPage = lazy(() => import('./pages/MesReservationsPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const Register = lazy(() => import('./pages/Register'));
-const PublicCompanyPage = lazy(() => import('./pages/PublicCompanyPage'));
-const ResultatsAgencePage = lazy(() => import('./pages/ResultatsAgencePage'));
-const ReservationDetailsPage = lazy(() => import('./pages/ReservationDetailsPage'));
-const ClientMesReservationsPage = lazy(() => import('./pages/ClientMesReservationsPage'));
-const MentionsPage = lazy(() => import('./pages/MentionsPage'));
-const ConfidentialitePage = lazy(() => import('./pages/ConfidentialitePage'));
 const ListeVillesPage = lazy(() => import('./pages/ListeVillesPage'));
-const UploadPreuvePage = lazy(() => import('./pages/UploadPreuvePage'));
 
 // Admin plateforme
 const AdminSidebarLayout = lazy(() => import('./pages/AdminSidebarLayout'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 
-// Compagnie
+// Compagnie (privé)
 const CompagnieLayout = lazy(() => import('./components/layout/CompagnieLayout'));
 const CompagnieDashboard = lazy(() => import('./pages/CompagnieDashboard'));
 const CompagnieAgencesPage = lazy(() => import('./pages/CompagnieAgencesPage'));
@@ -43,11 +40,9 @@ const CompagnieFinancesTabsPage = lazy(() => import('./pages/CompagnieFinancesTa
 const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
 const ReservationsEnLignePage = lazy(() => import('./pages/ReservationsEnLignePage'));
 const CompanyPaymentSettingsPage = lazy(() => import('./pages/CompanyPaymentSettingsPage'));
-
-// ✅ Page manquante pour avis clients
 const AvisModerationPage = lazy(() => import('./pages/AvisModerationPage'));
 
-// Agence
+// Agence (privé)
 const AgenceLayout = lazy(() => import('./pages/AgenceLayout'));
 const DashboardAgencePage = lazy(() => import('./pages/DashboardAgencePage'));
 const AgenceReservationsPage = lazy(() => import('./pages/AgenceReservationsPage'));
@@ -69,26 +64,14 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={<PageLoader fullScreen />}>
       <Routes>
-
-        {/* ✅ Pages publiques */}
+        {/* Pages publiques globales */}
         <Route path="/" element={<HomePage />} />
-        <Route path="/compagnie/:slug/receipt/:id" element={<ReceiptEnLignePage />} />
-        <Route path="/compagnie/:slug/ticket/:id" element={<ReceiptEnLignePage />} />
-        <Route path="/compagnie/:slug/reservation/upload-preuve/:id" element={<UploadPreuvePage />} />
-        <Route path="/resultats" element={<PlatformSearchResultsPage />} />
-        <Route path="/mes-reservations" element={<MesReservationsPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/compagnie/:slug" element={<PublicCompanyPage />} />
-        <Route path="/compagnie/:slug/resultats" element={<ResultatsAgencePage />} />
-        <Route path="/compagnie/:slug/booking" element={<FormulaireReservationClient />} />
-        <Route path="/reservation/:id" element={<ReservationDetailsPage />} />
-        <Route path="/compagnie/:slug/mes-reservations" element={<ClientMesReservationsPage />} />
-        <Route path="/compagnie/:slug/mentions" element={<MentionsPage />} />
-        <Route path="/compagnie/:slug/confidentialite" element={<ConfidentialitePage />} />
+        <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
 
-        {/* ✅ Admin plateforme */}
+        {/* Admin plateforme */}
         <Route
           path="/admin"
           element={
@@ -101,7 +84,7 @@ const AppRoutes = () => {
           <Route path="dashboard" element={<AdminDashboard />} />
         </Route>
 
-        {/* ✅ Compagnie */}
+        {/* Compagnie privée */}
         <Route
           path="/compagnie"
           element={
@@ -124,12 +107,10 @@ const AppRoutes = () => {
           <Route path="finances" element={<CompagnieFinancesTabsPage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
-
-          {/* ✅ Route ajoutée pour avis clients */}
           <Route path="avis-clients" element={<AvisModerationPage />} />
         </Route>
 
-        {/* ✅ Dashboard spécifique agence */}
+        {/* Pages spécifiques à une agence */}
         <Route
           path="/compagnie/agence/:id/dashboard"
           element={
@@ -147,7 +128,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* ✅ Agence */}
+        {/* Espace agence */}
         <Route
           path="/agence"
           element={
@@ -170,7 +151,7 @@ const AppRoutes = () => {
           <Route path="personnel" element={<AgencePersonnelPage />} />
         </Route>
 
-        {/* ✅ Reçu GUICHET hors Layout */}
+        {/* Pages isolées */}
         <Route
           path="/agence/receipt/:id"
           element={
@@ -179,22 +160,23 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         />
-
-        {/* ✅ Impression réservations */}
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
-        {/* ✅ 404 */}
+        {/* ✅ Pages publiques dynamiques par compagnie */}
+        <Route path="upload-preuve/:id" element={<UploadPreuvePage />} />
+        <Route path="reservation/:id" element={<ReservationDetailsPage />} />
+
+        {/* Route dynamique par slug */}
+        <Route path="/:slug/*" element={<RouteResolver />} />
+
+        {/* 404 */}
         <Route
           path="*"
           element={
             <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gray-100">
               <h1 className="text-4xl font-bold text-red-600 mb-4">404 - Page non trouvée</h1>
-              <p className="text-lg text-gray-700 mb-6">
-                La page demandée est introuvable ou a été déplacée.
-              </p>
-              <a href="/" className="bg-blue-600 text-white px-5 py-2 rounded hover:bg-blue-700">
-                Retour à l'accueil
-              </a>
+              <p className="text-lg text-gray-700 mb-6">La page demandée est introuvable ou a été déplacée.</p>
+              <a href="/" className="bg-blue-600 text-white px-5 py-2 rounded hover:bg-blue-700">Retour à l'accueil</a>
             </div>
           }
         />

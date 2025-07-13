@@ -291,38 +291,51 @@ const ReservationDetailsPage: React.FC = () => {
         </motion.div>
 
         {/* Bouton d'action */}
-        {reservation.statut === 'payé' && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="pt-2"
-          >
-            <button
-              onClick={() => navigate(`/compagnie/${realSlug}/receipt/${id}`, {
-                state: { reservation, tripData: reservation.tripData || null, companyInfo }
-              })}
-              className="w-full py-3 rounded-xl font-medium flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all"
-              style={{ backgroundColor: primaryColor, color: textColor }}
-            >
-              <CheckCircle className="h-5 w-5" />
-              Voir mon reçu
-            </button>
-          </motion.div>
-        )}
+{reservation.statut === 'payé' && (
+  <motion.div
+    initial={{ opacity: 0, y: 10 }}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ delay: 0.3 }}
+    className="pt-2"
+  >
+    <button
+      onClick={() => {
+        // ✅ Sauvegarde fallback dans sessionStorage
+        if (companyInfo) {
+          sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
+        }
 
-        {/* Footer */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4 }}
-          className="text-center text-sm text-gray-400 pt-6"
-        >
-          <p>Merci pour votre confiance</p>
-          <p className="font-medium mt-1" style={{ color: primaryColor }}>
-            {reservation.companyName}
-          </p>
-        </motion.div>
+        // ✅ Redirection propre sans "/compagnie"
+        navigate(`/${realSlug}/receipt/${id}`, {
+          state: {
+            reservation,
+            tripData: reservation.tripData || null,
+            companyInfo
+          }
+        });
+      }}
+      className="w-full py-3 rounded-xl font-medium flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all"
+      style={{ backgroundColor: primaryColor, color: textColor }}
+    >
+      <CheckCircle className="h-5 w-5" />
+      Voir mon reçu
+    </button>
+  </motion.div>
+)}
+
+{/* Footer */}
+<motion.div
+  initial={{ opacity: 0 }}
+  animate={{ opacity: 1 }}
+  transition={{ delay: 0.4 }}
+  className="text-center text-sm text-gray-400 pt-6"
+>
+  <p>Merci pour votre confiance</p>
+  <p className="font-medium mt-1" style={{ color: primaryColor }}>
+    {reservation.companyName}
+  </p>
+</motion.div>
+
       </main>
     </div>
   );

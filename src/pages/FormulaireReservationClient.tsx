@@ -13,52 +13,110 @@ interface PassengerData {
   email: string;
 }
 
-const FormulaireReservationClient: React.FC = () => {
+interface PaymentMethod {
+  url: string;
+  logoUrl: string;
+  ussdPattern: string;
+  merchantNumber: string;
+}
+
+interface CompanyInfo {
+  id: string;
+  slug: string;
+  nom: string;
+  name?: string
+  logoUrl?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+  paymentMethods?: Record<string, PaymentMethod>;
+}
+
+interface FormulaireReservationClientProps {
+  company: CompanyInfo;
+}
+
+const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = ({ company: propCompany }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { tripData, companyInfo: originalCompanyInfo } = location.state || {};
-  const [companyInfo, setCompanyInfo] = useState(originalCompanyInfo);
-  
+  const { tripData } = location.state || {};
   const { slug: slugFromUrl } = useParams();
-  const slug = slugFromUrl || companyInfo?.slug || '';
+  const slug = slugFromUrl || propCompany?.slug || '';
+
+  const [paymentMethods, setPaymentMethods] = useState<Record<string, PaymentMethod>>({});
+  const [loading, setLoading] = useState(false);
+  const [passengerData, setPassengerData] = useState<PassengerData>({
+    fullName: '',
+    phone: '',
+    email: '',
+  });
+
+  const [seatsGo, setSeatsGo] = useState(1);
+  const [seatsReturn, setSeatsReturn] = useState(1);
+  const [tripType, setTripType] = useState<'aller_simple' | 'aller_retour'>('aller_simple');
+  const unitPrice = Number(tripData?.price || 0);
+  const [totalCost, setTotalCost] = useState(unitPrice);
+
+  // Fusion des props et des états pour avoir toujours les données à jour
+  const companyInfo = {
+    ...propCompany,
+    nom: propCompany.nom || propCompany.name || 'Nom Compagnie',
+    primaryColor: propCompany.primaryColor || '#3b82f6',
+    secondaryColor: propCompany.secondaryColor || '#93c5fd',
+    paymentMethods
+  };
+
+  const themeConfig = {
+    colors: {
+      primary: companyInfo.primaryColor,
+      secondary: companyInfo.secondaryColor,
+      text: safeTextColor(companyInfo.primaryColor),
+      background: '#ffffff'
+    },
+    classes: {
+      card: 'bg-white rounded-xl shadow-sm border border-gray-200',
+      button: 'transition-all hover:scale-105 active:scale-95',
+      animations: 'transition-all duration-300 ease-in-out',
+      header: 'sticky top-0 z-50 px-4 py-3'
+    }
+  };
+
+  const { colors, classes } = themeConfig;
 
   useEffect(() => {
-    const fetchCompanyPaymentMethods = async () => {
-      if (!originalCompanyInfo?.id) return;
+    const fetchPaymentMethods = async () => {
+      if (!propCompany.id) return;
 
-      const q = collection(db, 'paymentMethods');
+      const q = query(
+        collection(db, 'paymentMethods'),
+        where('companyId', '==', propCompany.id)
+      );
       const snap = await getDocs(q);
-      const list = snap.docs
-        .map(doc => doc.data())
-        .filter(pm => pm.companyId === originalCompanyInfo.id);
 
-      const methods: Record<string, {
-        url: string,
-        logoUrl: string,
-        ussdPattern: string,
-        merchantNumber: string
-      }> = {};
-
-      list.forEach(pm => {
-        const key = pm.name.toLowerCase().replace(/\s+/g, '_');
-        methods[key] = {
-          url: pm.defaultPaymentUrl || '',
-          logoUrl: pm.logoUrl || '',
-          ussdPattern: pm.ussdPattern || '',
-          merchantNumber: pm.merchantNumber || ''
+      const methods = snap.docs.reduce((acc, doc) => {
+        const data = doc.data();
+        const key = data.name.toLowerCase().replace(/\s+/g, '_');
+        acc[key] = {
+          url: data.defaultPaymentUrl || '',
+          logoUrl: data.logoUrl || '',
+          ussdPattern: data.ussdPattern || '',
+          merchantNumber: data.merchantNumber || ''
         };
-      });
+        return acc;
+      }, {} as Record<string, PaymentMethod>);
 
-      setCompanyInfo({
-        ...originalCompanyInfo,
-        paymentMethods: methods
-      });
+      setPaymentMethods(methods);
     };
 
-    fetchCompanyPaymentMethods();
-  }, [originalCompanyInfo]);
-  
-  if (!location.state || !tripData || !companyInfo) {
+    fetchPaymentMethods();
+  }, [propCompany]);
+
+  useEffect(() => {
+    const go = seatsGo || 0;
+    const ret = tripType === 'aller_retour' ? (seatsReturn || 0) : 0;
+    setTotalCost(unitPrice * (go + ret));
+  }, [seatsGo, seatsReturn, tripType, unitPrice]);
+
+  if (!tripData) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-white p-4">
         <div className="text-center max-w-sm">
@@ -75,42 +133,6 @@ const FormulaireReservationClient: React.FC = () => {
     );
   }
 
-  const [loading, setLoading] = useState(false);
-  const [passengerData, setPassengerData] = useState<PassengerData>({
-    fullName: '',
-    phone: '',
-    email: '',
-  });
-
-  const [seatsGo, setSeatsGo] = useState(1);
-  const [seatsReturn, setSeatsReturn] = useState(1);
-  const [tripType, setTripType] = useState<'aller_simple' | 'aller_retour'>('aller_simple');
-  const unitPrice = Number(tripData?.price || 0);
-  const [totalCost, setTotalCost] = useState(unitPrice);
-
-  const themeConfig = {
-    colors: {
-      primary: companyInfo?.primaryColor || '#3b82f6',
-      secondary: companyInfo?.secondaryColor || '#93c5fd',
-      text: companyInfo?.primaryColor ? safeTextColor(companyInfo.primaryColor) : '#ffffff',
-      background: '#ffffff'
-    },
-    classes: {
-      card: 'bg-white rounded-xl shadow-sm border border-gray-200',
-      button: 'transition-all hover:scale-105 active:scale-95',
-      animations: 'transition-all duration-300 ease-in-out',
-      header: 'sticky top-0 z-50 px-4 py-3'
-    }
-  };
-
-  const { colors, classes } = themeConfig;
-
-  useEffect(() => {
-    const go = seatsGo || 0;
-    const ret = tripType === 'aller_retour' ? (seatsReturn || 0) : 0;
-    setTotalCost(unitPrice * (go + ret));
-  }, [seatsGo, seatsReturn, tripType, unitPrice]);
-
   const handlePassengerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setPassengerData(prev => ({ ...prev, [name]: value }));
@@ -122,164 +144,166 @@ const FormulaireReservationClient: React.FC = () => {
     else setSeatsReturn(clampedValue);
   };
 
-const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setLoading(true);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
 
-  try {
-    if (!passengerData.fullName || !passengerData.phone) {
-      throw new Error('Veuillez remplir tous les champs obligatoires');
-    }
-
-    // Vérification du nombre de places
-    const trajetIdAller = tripData.id;
-    const reservationsQueryAller = query(
-      collection(db, 'reservations'),
-      where('trajetId', '==', trajetIdAller),
-      where('statut', 'in', ['payé', 'preuve_recue'])
-    );
-    const snapAller = await getDocs(reservationsQueryAller);
-    const reservedAller = snapAller.docs.reduce((acc, doc) => {
-      const res = doc.data();
-      return acc + (res.seatsGo || 0);
-    }, 0);
-    const placesRestantesAller = (tripData.places || 0) - reservedAller;
-    if (placesRestantesAller < seatsGo) {
-      throw new Error(`Il ne reste que ${placesRestantesAller} place(s) pour l'aller.`);
-    }
-
-    // Vérif aller-retour
-    let trajetIdRetour = '';
-    if (tripType === 'aller_retour' && location.state?.returnTrip) {
-      const returnTrip = location.state.returnTrip;
-      trajetIdRetour = returnTrip.id;
-
-      const dateAller = new Date(tripData.date);
-      const dateRetour = new Date(returnTrip.date);
-      if (dateRetour <= dateAller) {
-        throw new Error("La date de retour doit être après la date d'aller");
+    try {
+      if (!passengerData.fullName || !passengerData.phone) {
+        throw new Error('Veuillez remplir tous les champs obligatoires');
       }
 
-      const reservationsQueryRetour = query(
+      const trajetIdAller = tripData.id;
+      const reservationsQueryAller = query(
         collection(db, 'reservations'),
-        where('trajetId', '==', trajetIdRetour),
+        where('trajetId', '==', trajetIdAller),
         where('statut', 'in', ['payé', 'preuve_recue'])
       );
-      const snapRetour = await getDocs(reservationsQueryRetour);
-      const reservedRetour = snapRetour.docs.reduce((acc, doc) => {
+      const snapAller = await getDocs(reservationsQueryAller);
+      const reservedAller = snapAller.docs.reduce((acc, doc) => {
         const res = doc.data();
         return acc + (res.seatsGo || 0);
       }, 0);
-      const placesRestantesRetour = (returnTrip.places || 0) - reservedRetour;
-      if (placesRestantesRetour < seatsReturn) {
-        throw new Error(`Il ne reste que ${placesRestantesRetour} place(s) pour le retour.`);
+      const placesRestantesAller = (tripData.places || 0) - reservedAller;
+      if (placesRestantesAller < seatsGo) {
+        throw new Error(`Il ne reste que ${placesRestantesAller} place(s) pour l'aller.`);
       }
-    }
 
-    // 🔑 ➜ Aller chercher agencyNom & telephone proprement
-    let agencyNom = '';
-    let agencyTelephone = '';
+      let trajetIdRetour = '';
+      if (tripType === 'aller_retour' && location.state?.returnTrip) {
+        const returnTrip = location.state.returnTrip;
+        trajetIdRetour = returnTrip.id;
 
-    if (tripData.agencyId) {
-      const agenceRef = doc(db, 'agences', tripData.agencyId);
-      const agenceSnap = await getDoc(agenceRef);
-      if (agenceSnap.exists()) {
-        const agenceData = agenceSnap.data();
-        agencyNom = agenceData.nomAgence || agenceData.nom || agenceData.name || '';
-        agencyTelephone = agenceData.telephone || agenceData.phone || '';
+        const dateAller = new Date(tripData.date);
+        const dateRetour = new Date(returnTrip.date);
+        if (dateRetour <= dateAller) {
+          throw new Error("La date de retour doit être après la date d'aller");
+        }
+
+        const reservationsQueryRetour = query(
+          collection(db, 'reservations'),
+          where('trajetId', '==', trajetIdRetour),
+          where('statut', 'in', ['payé', 'preuve_recue'])
+        );
+        const snapRetour = await getDocs(reservationsQueryRetour);
+        const reservedRetour = snapRetour.docs.reduce((acc, doc) => {
+          const res = doc.data();
+          return acc + (res.seatsGo || 0);
+        }, 0);
+        const placesRestantesRetour = (returnTrip.places || 0) - reservedRetour;
+        if (placesRestantesRetour < seatsReturn) {
+          throw new Error(`Il ne reste que ${placesRestantesRetour} place(s) pour le retour.`);
+        }
       }
-    }
 
-    // Générer référence
-    const referenceCode = `RES${Date.now()}`;
+      let agencyNom = '';
+      let agencyTelephone = '';
 
-    // DOC ALLER
-    const allerDoc = {
-      nomClient: passengerData.fullName,
-      telephone: passengerData.phone,
-      email: passengerData.email,
-      depart: tripData.departure,
-      arrivee: tripData.arrival,
-      date: tripData.date,
-      heure: tripData.time,
-      montant: unitPrice * seatsGo,
-      seatsGo,
-      seatsReturn: 0,
-      tripType,
-      canal: 'en_ligne',
-      statut: 'en_attente',
-      companyId: tripData.companyId,
-      agencyId: tripData.agencyId,
-      agencyNom: agencyNom,
-      agencyTelephone: agencyTelephone,
-      trajetId: trajetIdAller,
-      referenceCode,
-      commission: unitPrice * seatsGo * 0.05,
-      companySlug: slug,
-      companyName: companyInfo.nom,
-      primaryColor: companyInfo.primaryColor,
-      tripData,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
+      if (tripData.agencyId) {
+        const agenceRef = doc(db, 'agences', tripData.agencyId);
+        const agenceSnap = await getDoc(agenceRef);
+        if (agenceSnap.exists()) {
+          const agenceData = agenceSnap.data();
+          agencyNom = agenceData.nomAgence || agenceData.nom || agenceData.name || '';
+          agencyTelephone = agenceData.telephone || agenceData.phone || '';
+        }
+      }
 
-    let retourDoc = null;
-    if (tripType === 'aller_retour' && location.state?.returnTrip) {
-      const returnTrip = location.state.returnTrip;
-      retourDoc = {
+      const referenceCode = `RES${Date.now()}`;
+
+      const allerDoc = {
         nomClient: passengerData.fullName,
         telephone: passengerData.phone,
         email: passengerData.email,
-        depart: returnTrip.departure,
-        arrivee: returnTrip.arrival,
-        date: returnTrip.date,
-        heure: returnTrip.time,
-        montant: unitPrice * seatsReturn,
-        seatsGo: seatsReturn,
+        depart: tripData.departure,
+        arrivee: tripData.arrival,
+        date: tripData.date,
+        heure: tripData.time,
+        montant: unitPrice * seatsGo,
+        seatsGo,
         seatsReturn: 0,
         tripType,
         canal: 'en_ligne',
         statut: 'en_attente',
-        companyId: returnTrip.companyId,
-        agencyId: returnTrip.agencyId,
-        agencyNom: agencyNom, // même logique
+        companyId: tripData.companyId,
+        agencyId: tripData.agencyId,
+        agencyNom: agencyNom,
         agencyTelephone: agencyTelephone,
-        trajetId: trajetIdRetour,
+        trajetId: trajetIdAller,
         referenceCode,
-        commission: unitPrice * seatsReturn * 0.05,
+        commission: unitPrice * seatsGo * 0.05,
         companySlug: slug,
         companyName: companyInfo.nom,
-        primaryColor: companyInfo.primaryColor,
-        tripData: returnTrip,
+        primaryColor: companyInfo.primaryColor, // Garanti d'avoir une valeur
+        tripData,
         createdAt: new Date(),
         updatedAt: new Date()
       };
-    }
 
-    const allerRef = await addDoc(collection(db, 'reservations'), allerDoc);
-
-    let retourRef = null;
-    if (retourDoc) {
-      retourRef = await addDoc(collection(db, 'reservations'), retourDoc);
-    }
-
-    navigate(`/compagnie/${slug}/reservation/upload-preuve/${allerRef.id}`, {
-      state: {
-        companyInfo,
-        draft: {
+      let retourDoc = null;
+      if (tripType === 'aller_retour' && location.state?.returnTrip) {
+        const returnTrip = location.state.returnTrip;
+        retourDoc = {
           ...allerDoc,
-          id: allerRef.id,
-          returnReservationId: retourRef?.id || null
-        }
+          depart: returnTrip.departure,
+          arrivee: returnTrip.arrival,
+          date: returnTrip.date,
+          heure: returnTrip.time,
+          montant: unitPrice * seatsReturn,
+          seatsGo: seatsReturn,
+          trajetId: trajetIdRetour,
+          commission: unitPrice * seatsReturn * 0.05,
+          tripData: returnTrip
+        };
       }
-    });
 
-  } catch (err: any) {
-    alert(err.message);
-  } finally {
-    setLoading(false);
+      const allerRef = await addDoc(collection(db, 'reservations'), allerDoc);
+
+let retourRef = null;
+if (retourDoc) {
+  retourRef = await addDoc(collection(db, 'reservations'), retourDoc);
+}
+
+// ✅ Après avoir créé les documents aller / retour :
+console.log('[Reservation] ID réservation aller :', allerRef.id);
+if (retourRef) {
+  console.log('[Reservation] ID réservation retour :', retourRef.id);
+}
+
+// ✅ Vérification de l’objet allerDoc :
+console.log('[Reservation] Données allerDoc :', allerDoc);
+console.log('[Reservation] Données companyInfo :', companyInfo);
+console.log('[Reservation] Slug utilisé pour navigation :', slug);
+
+// ✅ Sauvegarde sessionStorage
+sessionStorage.setItem('reservationDraft', JSON.stringify({
+  ...allerDoc,
+  id: allerRef.id,
+  returnReservationId: retourRef?.id || null
+}));
+sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
+console.log('[Reservation] Données sauvegardées dans sessionStorage');
+
+// ✅ Navigation sécurisée
+navigate(`/${slug}/upload-preuve/${allerRef.id}`, {
+  state: {
+    companyInfo,
+    draft: {
+      ...allerDoc,
+      id: allerRef.id,
+      returnReservationId: retourRef?.id || null
+    }
   }
-};
+});
+console.log('[Reservation] Navigation vers page UploadPreuvePage déclenchée');
+
+
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const formatDateDisplay = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -300,25 +324,25 @@ const handleSubmit = async (e: React.FormEvent) => {
           <button 
             onClick={() => navigate(-1)}
             className="p-2 rounded-full hover:bg-white/10 transition"
-            style={{ color: safeTextColor(colors.primary) }}
+            style={{ color: colors.text }}
           >
             <ChevronLeft className="h-5 w-5" />
           </button>
           
           <div className="flex items-center gap-2">
-            {companyInfo?.logoUrl && (
+            {companyInfo.logoUrl && (
               <LazyLoadImage 
                 src={companyInfo.logoUrl} 
                 alt={`Logo ${companyInfo.nom}`}
                 effect="blur"
                 className="h-8 w-8 rounded-full object-cover border-2"
                 style={{ 
-                  borderColor: safeTextColor(colors.primary),
+                  borderColor: colors.text,
                   backgroundColor: hexToRgba(colors.primary, 0.2)
                 }}
               />
             )}
-            <h1 className="text-lg font-bold" style={{ color: safeTextColor(colors.primary) }}>
+            <h1 className="text-lg font-bold" style={{ color: colors.text }}>
               Réservation
             </h1>
           </div>
@@ -424,19 +448,6 @@ const handleSubmit = async (e: React.FormEvent) => {
                   >
                     Aller simple
                   </button>
-                  <button
-                    type="button"
-                    className={`py-2 px-3 rounded-lg text-sm border ${
-                      tripType === 'aller_retour' ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-200'
-                    }`}
-                    onClick={() => setTripType('aller_retour')}
-                    style={{
-                      borderColor: tripType === 'aller_retour' ? colors.primary : undefined,
-                      backgroundColor: tripType === 'aller_retour' ? hexToRgba(colors.primary, 0.1) : undefined
-                    }}
-                  >
-                    Aller-retour
-                  </button>
                 </div>
               </div>
 
@@ -467,33 +478,6 @@ const handleSubmit = async (e: React.FormEvent) => {
                       </button>
                     </div>
                   </div>
-                  
-                  {tripType === 'aller_retour' && (
-                    <div>
-                      <label className="block text-xs mb-1 opacity-80">Retour</label>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="p-1 w-8 h-8 rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
-                          onClick={() => handleSeatsChange('return', seatsReturn - 1)}
-                          disabled={seatsReturn <= 1}
-                        >
-                          -
-                        </button>
-                        <div className="flex-1 text-center font-medium py-1 border border-gray-200 rounded-lg">
-                          {seatsReturn}
-                        </div>
-                        <button
-                          type="button"
-                          className="p-1 w-8 h-8 rounded-lg border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
-                          onClick={() => handleSeatsChange('return', seatsReturn + 1)}
-                          disabled={seatsReturn >= 10}
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -503,8 +487,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                   <span className="text-lg font-bold">{totalCost.toLocaleString()} FCFA</span>
                 </div>
                 <div className="text-xs text-gray-500 mb-3">
-                  {unitPrice.toLocaleString()} FCFA × {seatsGo} place(s){' '}
-                  {tripType === 'aller_retour' && `+ ${seatsReturn} place(s)`}
+                  {unitPrice.toLocaleString()} FCFA × {seatsGo} place(s)
                 </div>
                 
                 <button

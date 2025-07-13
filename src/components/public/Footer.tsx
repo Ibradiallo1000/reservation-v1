@@ -17,8 +17,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
   const [showAvisForm, setShowAvisForm] = useState(false);
   const navigate = useNavigate();
   const currentYear = new Date().getFullYear();
-  
-  // Destructuration des données de la compagnie
+
   const {
     id: companyId,
     slug,
@@ -34,7 +33,6 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
     footerConfig = {}
   } = company;
 
-  // Configuration dynamique du footer
   const {
     showAbout = true,
     showContact = true,
@@ -44,29 +42,23 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
     customLinks = []
   } = footerConfig;
 
-  // Gestionnaire d'avis client
-  const handleTestimonialSubmit = async (data: any) => {
-    try {
-      // Implémentez ici la logique d'envoi vers Firestore
-      console.log('Avis soumis:', data);
-      setShowAvisForm(false); // Fermer le formulaire après soumission
-      return { success: true };
-    } catch (error) {
-      console.error('Erreur lors de l\'envoi de l\'avis:', error);
-      return { success: false, error };
-    }
-  };
-
   return (
     <footer 
-      className="w-full"
+      className="relative w-full overflow-hidden"
       style={{ 
         backgroundColor: couleurSecondaire || '#f8fafc',
         color: '#1e293b'
       }}
     >
-      <div className="max-w-7xl mx-auto px-6 py-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-        {/* Section À propos (conditionnelle) */}
+      {/* ✅ Image superposée (ex : carte du monde) */}
+      <div 
+        className="absolute inset-0 bg-[url('/world-map.svg')] bg-center bg-cover opacity-5 pointer-events-none"
+      />
+
+      {/* ✅ Contenu principal du footer */}
+      <div className="relative z-10 max-w-7xl mx-auto px-6 py-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+        
+        {/* À propos */}
         {showAbout && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -83,7 +75,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           </motion.div>
         )}
 
-        {/* Section Contact (conditionnelle) */}
+        {/* Contact */}
         {showContact && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -98,17 +90,13 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
               {telephone && (
                 <li className="flex items-center gap-2">
                   <Phone className="h-4 w-4" />
-                  <a href={`tel:${telephone}`} className="hover:underline">
-                    {telephone}
-                  </a>
+                  <a href={`tel:${telephone}`} className="hover:underline">{telephone}</a>
                 </li>
               )}
               {email && (
                 <li className="flex items-center gap-2">
                   <Mail className="h-4 w-4" />
-                  <a href={`mailto:${email}`} className="hover:underline">
-                    {email}
-                  </a>
+                  <a href={`mailto:${email}`} className="hover:underline">{email}</a>
                 </li>
               )}
               {adresse && (
@@ -127,7 +115,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           </motion.div>
         )}
 
-        {/* Section Réseaux sociaux (conditionnelle) */}
+        {/* Réseaux sociaux */}
         {showSocial && Object.values(socialMedia).some(Boolean) && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -140,27 +128,27 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
             </div>
             <div className="flex gap-4">
               {socialMedia.facebook && (
-                <a href={socialMedia.facebook} target="_blank" rel="noopener noreferrer" aria-label="Facebook">
+                <a href={socialMedia.facebook} target="_blank" rel="noopener noreferrer">
                   <Facebook className="h-6 w-6 hover:opacity-80 transition" />
                 </a>
               )}
               {socialMedia.instagram && (
-                <a href={socialMedia.instagram} target="_blank" rel="noopener noreferrer" aria-label="Instagram">
+                <a href={socialMedia.instagram} target="_blank" rel="noopener noreferrer">
                   <Instagram className="h-6 w-6 hover:opacity-80 transition" />
                 </a>
               )}
               {socialMedia.twitter && (
-                <a href={socialMedia.twitter} target="_blank" rel="noopener noreferrer" aria-label="Twitter">
+                <a href={socialMedia.twitter} target="_blank" rel="noopener noreferrer">
                   <Twitter className="h-6 w-6 hover:opacity-80 transition" />
                 </a>
               )}
               {socialMedia.linkedin && (
-                <a href={socialMedia.linkedin} target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+                <a href={socialMedia.linkedin} target="_blank" rel="noopener noreferrer">
                   <Linkedin className="h-6 w-6 hover:opacity-80 transition" />
                 </a>
               )}
               {socialMedia.youtube && (
-                <a href={socialMedia.youtube} target="_blank" rel="noopener noreferrer" aria-label="YouTube">
+                <a href={socialMedia.youtube} target="_blank" rel="noopener noreferrer">
                   <Youtube className="h-6 w-6 hover:opacity-80 transition" />
                 </a>
               )}
@@ -168,7 +156,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           </motion.div>
         )}
 
-        {/* Section Avis clients (conditionnelle) */}
+        {/* Avis clients */}
         {showTestimonials && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -180,7 +168,6 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
                 <ThumbsUp className="h-5 w-5" style={{ color: couleurPrimaire }} />
                 <h3 className="text-lg font-semibold">Avis clients</h3>
               </div>
-              
               <motion.button
                 onClick={() => setShowAvisForm(!showAvisForm)}
                 className="flex items-center justify-between px-4 py-2 rounded-lg text-sm font-medium transition-all"
@@ -192,11 +179,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
                 whileTap={{ scale: 0.98 }}
               >
                 <span>Donner votre avis</span>
-                {showAvisForm ? (
-                  <ChevronUp className="h-4 w-4 ml-2" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 ml-2" />
-                )}
+                {showAvisForm ? <ChevronUp className="h-4 w-4 ml-2" /> : <ChevronDown className="h-4 w-4 ml-2" />}
               </motion.button>
 
               {showAvisForm && (
@@ -221,10 +204,10 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
         )}
       </div>
 
-      {/* Mentions légales (conditionnelle) */}
+      {/* Mentions légales */}
       {(showLegalLinks || customLinks?.length > 0) && (
         <div 
-          className="border-t py-6 text-center text-sm"
+          className="border-t py-6 text-center text-sm relative z-10"
           style={{ borderColor: couleurPrimaire ? `${couleurPrimaire}20` : '#e2e8f0' }}
         >
           <div className="max-w-7xl mx-auto px-6">
@@ -245,7 +228,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
                   </a>
                 </>
               )}
-              {customLinks?.map((link: { label: string; url: string; external?: boolean }, index: number) => (
+              {customLinks?.map((link, index) => (
                 <a 
                   key={index} 
                   href={link.url} 

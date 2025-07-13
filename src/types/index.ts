@@ -1,4 +1,5 @@
 import type { Timestamp } from 'firebase/firestore';
+export type { Company } from './companyTypes';
 
 // ✅ Statuts possibles pour les réservations
 export type ReservationStatus = 'en_attente' | 'payé' | 'preuve_recue' | 'refusé' | 'annulé';
@@ -6,23 +7,23 @@ export type ReservationStatus = 'en_attente' | 'payé' | 'preuve_recue' | 'refus
 // ✅ Canaux possibles
 export type Channel = 'en ligne' | 'agence' | 'téléphone';
 
-// ✅ Reservation complète pour le hook
+// ✅ Modèle de réservation complet
 export interface Reservation {
   preuveUrl: any;
   preuveMessage: any;
   agencyTelephone: string;
   agencyNom: string;
   id: string;
-  trajetId?: string; // optionnel si pas toujours utilisé
-  canal: Channel; // 🔥 Type précis au lieu de string
+  trajetId?: string;
+  canal: Channel;
   montant: number;
   createdAt: Timestamp | Date;
   agenceId?: string;
   clientNom?: string;
-  nomClient?: string; // pour compatibilité
-  telephone?: string; // recommandé
+  nomClient?: string;
+  telephone?: string;
   email?: string;
-  statut: ReservationStatus; // 🔥 Type précis au lieu de string
+  statut: ReservationStatus;
   date?: string;
   heure?: string;
   depart?: string;
@@ -38,87 +39,26 @@ export interface Reservation {
   longitude?: number;
 }
 
-export interface ThemeConfig {
-  colors: {
-    primary: string;
-    secondary: string;
-    background: string;
-    text: string;
-  };
-  typography: string;
-  buttons: string;
-  effects: string;
-  borders: string;
-  animations: string;
-}
-
-export interface FooterConfig {
-  showSocialMedia: boolean;
-  showTestimonials: boolean;
-  showLegalLinks: boolean;
-  showContactForm: boolean;
-  customLinks: {
-    title: string;
-    url: string;
-  }[];
-}
-
-export interface SocialMediaLinks {
-  facebook?: string;
-  instagram?: string;
-  twitter?: string;
-  linkedin?: string;
-  youtube?: string;
-  tiktok?: string;
-  whatsapp?: string;
-  [key: string]: string | undefined;
-}
-
-export interface Company {
-  id: string;
-  nom: string;
-  email: string;
-  pays: string;
-  telephone: string;
-  responsable: string;
-  plan: 'free' | 'premium';
-  createdAt: any;
-  commission: number;
-  slug: string;
-  logoUrl?: string;
-  banniereUrl?: string;
-  description?: string;
-  latitude?: number | null;
-  longitude?: number | null;
-  imagesSlider?: string[];
-  couleurPrimaire?: string;
-  couleurSecondaire?: string;
-  couleurAccent?: string;
-  couleurTertiaire?: string;
-  themeStyle?: string;
-  police?: string;
-  footerConfig?: FooterConfig;
-  socialMedia?: SocialMediaLinks;
-  accroche?: string;
-}
-
+// ✅ Avis client
 export interface AvisClient {
   nom: string;
   note: number;
   commentaire: string;
   visible: boolean;
   companyId: string;
-  createdAt: any;
+  createdAt?: Timestamp | Date;
 }
 
+// ✅ Message client
 export interface MessageClient {
   nom: string;
   email: string;
   message: string;
   companyId: string;
-  createdAt: any;
+  createdAt: Timestamp;
 }
 
+// ✅ Agence (simplifiée)
 export interface Agency {
   id: string;
   nom: string;
@@ -127,6 +67,7 @@ export interface Agency {
   statut?: 'active' | 'inactive';
 }
 
+// ✅ Stats étendues
 export interface AgencyStats extends Agency {
   reservations: number;
   revenus: number;
