@@ -87,6 +87,8 @@ export interface HeroSectionProps {
 
 // ✅ Le type principal corrigé avec tous les champs optionnels et cohérents
 export interface Company {
+  services?: string[]; // ✅ au lieu de never[]
+  featuredTrips?: any[]; // ✅ au lieu de "any" seul
   id: string;
   nom: string;
   slug: string;
@@ -112,4 +114,5 @@ export interface Company {
   plan?: 'free' | 'premium';
   createdAt?: Timestamp;
   commission?: number;
+  
 }

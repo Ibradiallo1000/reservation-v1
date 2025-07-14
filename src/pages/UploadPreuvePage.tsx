@@ -11,6 +11,7 @@ import ErrorScreen from '@/components/ui/ErrorScreen';
 import LoadingScreen from '@/components/ui/LoadingScreen';
 
 interface ReservationDraft {
+  preuveMessage: string;
   id?: string;
   nomClient: string;
   telephone: string;
@@ -65,60 +66,57 @@ const UploadPreuvePage: React.FC = () => {
   const [success, setSuccess] = useState(false);
 
   const loadInitialData = useCallback(async () => {
-  try {
-    setLoadingData(true);
+    try {
+      setLoadingData(true);
 
-    // 🔍 LOGS DE DIAGNOSTIC : début du chargement
-    console.log('[UploadPreuvePage] location.state:', location.state);
-    console.log('[UploadPreuvePage] sessionStorage.reservationDraft:', sessionStorage.getItem('reservationDraft'));
-    console.log('[UploadPreuvePage] sessionStorage.companyInfo:', sessionStorage.getItem('companyInfo'));
+      console.log('[UploadPreuvePage] location.state:', location.state);
+      console.log('[UploadPreuvePage] sessionStorage.reservationDraft:', sessionStorage.getItem('reservationDraft'));
+      console.log('[UploadPreuvePage] sessionStorage.companyInfo:', sessionStorage.getItem('companyInfo'));
 
-    if (locationDraft && locationCompanyInfo) {
-      console.log('[UploadPreuvePage] ✅ Données reçues via location.state');
-      setReservationDraft(locationDraft);
-      setCompanyInfo(locationCompanyInfo);
-      return;
-    }
-
-    const savedDraft = sessionStorage.getItem('reservationDraft');
-    const savedCompanyInfo = sessionStorage.getItem('companyInfo');
-
-    if (savedDraft && savedCompanyInfo) {
-      console.log('[UploadPreuvePage] ✅ Données trouvées dans sessionStorage');
-
-      const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
-      const parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
-
-      if (!parsedDraft?.depart || !parsedDraft?.arrivee) {
-        throw new Error('Données de réservation incomplètes');
+      if (locationDraft && locationCompanyInfo) {
+        console.log('[UploadPreuvePage] ✅ Données reçues via location.state');
+        setReservationDraft(locationDraft);
+        setCompanyInfo(locationCompanyInfo);
+        return;
       }
 
-      setReservationDraft(parsedDraft);
-      setCompanyInfo(parsedCompanyInfo);
-      return;
+      const savedDraft = sessionStorage.getItem('reservationDraft');
+      const savedCompanyInfo = sessionStorage.getItem('companyInfo');
+
+      if (savedDraft && savedCompanyInfo) {
+        console.log('[UploadPreuvePage] ✅ Données trouvées dans sessionStorage');
+
+        const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
+        const parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
+
+        if (!parsedDraft?.depart || !parsedDraft?.arrivee) {
+          throw new Error('Données de réservation incomplètes');
+        }
+
+        setReservationDraft(parsedDraft);
+        setCompanyInfo(parsedCompanyInfo);
+        return;
+      }
+
+      if (id) {
+        throw new Error('Fonctionnalité non implémentée');
+      }
+
+      throw new Error('Aucune donnée de réservation valide trouvée');
+    } catch (error) {
+      console.error('[UploadPreuvePage] ❌ Erreur de chargement:', error);
+      setError(error instanceof Error ? error.message : 'Erreur inconnue');
+
+      console.warn('[UploadPreuvePage] 🚨 Redirection vers la vitrine car données invalides');
+      navigate(`/${slug || ''}`, {
+        replace: true,
+        state: { error: 'Erreur de chargement des données' }
+      });
+    } finally {
+      setLoadingData(false);
     }
+  }, [locationDraft, locationCompanyInfo, navigate, slug, id]);
 
-    if (id) {
-      throw new Error('Fonctionnalité non implémentée');
-    }
-
-    throw new Error('Aucune donnée de réservation valide trouvée');
-  } catch (error) {
-    console.error('[UploadPreuvePage] ❌ Erreur de chargement:', error);
-    setError(error instanceof Error ? error.message : 'Erreur inconnue');
-
-    console.warn('[UploadPreuvePage] 🚨 Redirection vers la vitrine car données invalides');
-    navigate(`/${slug || ''}`, {
-      replace: true,
-      state: { error: 'Erreur de chargement des données' }
-    });
-  } finally {
-    setLoadingData(false);
-  }
-}, [locationDraft, locationCompanyInfo, navigate, slug, id]);
-
-
-  
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
@@ -206,6 +204,8 @@ const UploadPreuvePage: React.FC = () => {
         preuveUrl = await getDownloadURL(snap.ref);
       }
 
+      const referenceCode = `RES-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}`;
+
       await updateDoc(doc(db, 'reservations', reservationDraft.id), {
         nomClient: reservationDraft.nomClient,
         telephone: reservationDraft.telephone,
@@ -218,10 +218,10 @@ const UploadPreuvePage: React.FC = () => {
         seatsReturn: reservationDraft.seatsReturn || 0,
         tripType: reservationDraft.tripType,
         statut: 'preuve_recue',
-        referenceCode: `RES${Date.now()}`,
+        referenceCode,
         companyId: reservationDraft.companyId || '',
         companySlug: reservationDraft.companySlug || '',
-        paymentMethod: paymentMethod,
+        canal: paymentMethod,
         preuveMessage: message.trim(),
         preuveUrl: preuveUrl || null,
         updatedAt: new Date(),
@@ -230,21 +230,6 @@ const UploadPreuvePage: React.FC = () => {
       sessionStorage.removeItem('reservationDraft');
       sessionStorage.removeItem('companyInfo');
       setSuccess(true);
-
-      setTimeout(() => {
-        navigate(`/reservation/${reservationDraft.id}`, {
-          state: {
-            slug: slug,
-            companyInfo: companyInfo,
-            reservation: {
-              ...reservationDraft,
-              id: reservationDraft.id,
-              statut: 'preuve_recue',
-              preuveMessage: message.trim(),
-            }
-          }
-        });
-      }, 1500);
 
     } catch (err) {
       console.error('Erreur:', err);
@@ -255,19 +240,28 @@ const UploadPreuvePage: React.FC = () => {
   };
 
   if (loadingData) {
-    return <LoadingScreen colors={{
-      primary: '',
-      text: '',
-      background: ''
-    }} />;
+    const themeConfig = {
+      colors: {
+        primary: companyInfo?.primaryColor || '#3b82f6',
+        text: companyInfo?.primaryColor ? safeTextColor(companyInfo.primaryColor) : '#ffffff',
+      }
+    };
+    
+    return (
+      <LoadingScreen colors={{
+        primary: themeConfig.colors.primary,
+        text: themeConfig.colors.text,
+        background: '#f9fafb'
+      }} />
+    );
   }
 
   if (!reservationDraft || !companyInfo) {
-    return <ErrorScreen slug={slug} navigate={navigate} error={''} />;
+    return <ErrorScreen slug={slug} navigate={navigate} error={error || ''} />;
   }
 
   if (success) {
-    return <SuccessScreen />;
+    return <SuccessScreen reservationDraft={reservationDraft} companyInfo={companyInfo} slug={slug} />;
   }
 
   const themeConfig = {
@@ -345,7 +339,42 @@ const UploadPreuvePage: React.FC = () => {
   );
 };
 
-// ... (LoadingScreen, ErrorScreen, SuccessScreen components remain the same)
+const SuccessScreen: React.FC<{ 
+  reservationDraft: ReservationDraft;
+  companyInfo: CompanyInfo;
+  slug?: string;
+}> = ({ reservationDraft, companyInfo, slug }) => {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      navigate(`/reservation/${reservationDraft.id}`, {
+        state: {
+          slug: slug,
+          companyInfo: companyInfo,
+          reservation: {
+            ...reservationDraft,
+            id: reservationDraft.id,
+            statut: 'preuve_recue',
+            preuveMessage: reservationDraft.preuveMessage || '',
+          }
+        }
+      });
+    }, 1500);
+    
+    return () => clearTimeout(timeout);
+  }, [navigate, reservationDraft, companyInfo, slug]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4 bg-white">
+      <div className="text-center max-w-md">
+        <CheckCircle className="mx-auto h-12 w-12 text-green-500 mb-4" />
+        <h1 className="text-xl font-bold text-green-600 mb-2">Preuve envoyée !</h1>
+        <p className="text-gray-600">Redirection en cours...</p>
+      </div>
+    </div>
+  );
+};
 
 const Header: React.FC<{ companyInfo?: CompanyInfo; themeConfig: any; onBack: () => void }> = ({ 
   companyInfo, 
@@ -596,15 +625,6 @@ const SubmitButton: React.FC<{
       </span>
     )}
   </button>
-);
-const SuccessScreen: React.FC = () => (
-  <div className="min-h-screen flex items-center justify-center p-4 bg-white">
-    <div className="text-center max-w-md">
-      <CheckCircle className="mx-auto h-12 w-12 text-green-500 mb-4" />
-      <h1 className="text-xl font-bold text-green-600 mb-2">Preuve envoyée !</h1>
-      <p className="text-gray-600">Redirection en cours...</p>
-    </div>
-  </div>
 );
 
 export default UploadPreuvePage;

@@ -6,25 +6,41 @@ import { XCircle } from 'lucide-react';
 
 interface ErrorScreenProps {
   error: string;
-  navigate: NavigateFunction;
+  navigate?: NavigateFunction;
   slug?: string;
-  colors?: any;     // ✅ nouveau
-  classes?: any;    // ✅ nouveau
-  t?: any;          // ✅ nouveau
+  colors?: any;
+  classes?: any;
+  t?: any;
+  onRetry?: () => void; // ✅ ajout ici
 }
 
-const ErrorScreen: React.FC<ErrorScreenProps> = ({ error, navigate, slug }) => (
+const ErrorScreen: React.FC<ErrorScreenProps> = ({
+  error,
+  navigate,
+  slug,
+  onRetry,
+}) => (
   <div className="min-h-screen flex items-center justify-center p-4 bg-white">
     <div className="text-center max-w-md">
       <XCircle className="mx-auto h-12 w-12 text-red-500 mb-4" />
       <h1 className="text-xl font-bold text-red-600 mb-2">Une erreur est survenue</h1>
       <p className="text-gray-600 mb-6">{error}</p>
-      <button
-        onClick={() => navigate(`/${slug || ''}`)}
-        className="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition"
-      >
-        Retour à l'accueil
-      </button>
+
+      {onRetry ? (
+        <button
+          onClick={onRetry}
+          className="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition"
+        >
+          Réessayer
+        </button>
+      ) : (
+        <button
+          onClick={() => navigate?.(`/${slug || ''}`)}
+          className="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition"
+        >
+          Retour à l'accueil
+        </button>
+      )}
     </div>
   </div>
 );

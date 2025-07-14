@@ -72,10 +72,19 @@ const CompagnieDashboard: React.FC = () => {
     const doc = snap.docs[0];
     const data = doc.data();
     setCompany({
-      id: doc.id,
-      slug: data.slug || '',
-      nom: data.nom || ''
-    });
+  id: doc.id,
+  slug: data.slug || '',
+  nom: data.nom || '',
+  services: data.services || [],
+  featuredTrips: data.featuredTrips || [],
+  couleurPrimaire: data.couleurPrimaire || '#2563eb',
+  couleurSecondaire: data.couleurSecondaire || '#facc15',
+  couleurAccent: data.couleurAccent || '#10b981',
+  couleurTertiaire: data.couleurTertiaire || '#6366f1',
+  logoUrl: data.logoUrl || '',
+  ...data // si d'autres champs sont optionnels
+});
+
   }, [user?.companyId]);
 
   const fetchAgencies = async (companyId: string): Promise<Agency[]> => {

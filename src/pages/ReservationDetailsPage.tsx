@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import {
-  ChevronLeft, MapPin, Clock, Calendar, CheckCircle, XCircle, Loader2, 
+  ChevronLeft, MapPin, Clock, Calendar, CheckCircle, XCircle, Loader2,
   Users, User, Upload, CreditCard, Wallet, Phone, Navigation, Ticket
 } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
@@ -13,6 +13,7 @@ import { hexToRgba, safeTextColor } from '../utils/color';
 import { fadeIn } from '@/utils/animations';
 
 type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'payé' | 'annule';
+type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre';
 
 interface Reservation {
   id: string;
@@ -33,6 +34,8 @@ interface Reservation {
   companyName?: string;
   primaryColor?: string;
   tripData?: any;
+  canal?: PaymentMethod;
+  updatedAt?: string;
 }
 
 interface CompanyInfo {
@@ -80,6 +83,13 @@ const STATUS_DISPLAY: Record<ReservationStatus, {
   },
 };
 
+const PAYMENT_METHODS: Record<PaymentMethod, string> = {
+  mobile_money: 'Mobile Money',
+  carte_bancaire: 'Carte bancaire',
+  espèces: 'Espèces',
+  autre: 'Autre moyen'
+};
+
 const ReservationDetailsPage: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -96,17 +106,29 @@ const ReservationDetailsPage: React.FC = () => {
   const textColor = safeTextColor(primaryColor);
 
   useEffect(() => {
-    if (!id) { setError('ID manquant'); setLoading(false); return; }
+    if (!id) { 
+      setError('ID de réservation manquant'); 
+      setLoading(false); 
+      return; 
+    }
 
     const unsub = onSnapshot(doc(db, 'reservations', id), (docSnap) => {
       if (docSnap.exists()) {
-        const data = docSnap.data();
-        setReservation({ ...(data as Reservation), id: docSnap.id });
+        const data = docSnap.data() as Reservation;
+        setReservation({ 
+          ...data, 
+          id: docSnap.id,
+          updatedAt: data.updatedAt || new Date().toISOString()
+        });
       } else {
         setError('Réservation introuvable');
       }
       setLoading(false);
-    }, err => { console.error(err); setError('Erreur Firestore'); setLoading(false); });
+    }, (err) => { 
+      console.error(err); 
+      setError('Erreur de connexion au serveur'); 
+      setLoading(false); 
+    });
 
     return () => unsub();
   }, [id]);
@@ -114,12 +136,25 @@ const ReservationDetailsPage: React.FC = () => {
   useEffect(() => {
     const fetchCompany = async () => {
       if (locationCompanyInfo || !reservation?.companyId) return;
-      const docRef = await getDoc(doc(db, 'companies', reservation.companyId));
-      if (docRef.exists()) {
-        const data = docRef.data() as CompanyInfo;
-        setCompanyInfo({ id: docRef.id, name: data.name, primaryColor: data.primaryColor, logoUrl: data.logoUrl });
+      
+      try {
+        const docRef = await getDoc(doc(db, 'companies', reservation.companyId));
+        if (docRef.exists()) {
+          const data = docRef.data() as CompanyInfo;
+          setCompanyInfo({ 
+            id: docRef.id, 
+            name: data.name, 
+            primaryColor: data.primaryColor, 
+            logoUrl: data.logoUrl 
+          });
+          // Sauvegarde en sessionStorage pour usage ultérieur
+          sessionStorage.setItem('companyInfo', JSON.stringify(data));
+        }
+      } catch (err) {
+        console.error("Erreur lors de la récupération de l'entreprise", err);
       }
     };
+    
     fetchCompany();
   }, [reservation?.companyId, locationCompanyInfo]);
 
@@ -151,12 +186,17 @@ const ReservationDetailsPage: React.FC = () => {
 
   const realSlug = slug || reservation.companySlug;
   const statusInfo = STATUS_DISPLAY[reservation.statut] || STATUS_DISPLAY.annule;
+  
   const formattedDate = new Date(reservation.date).toLocaleDateString('fr-FR', {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
     year: 'numeric'
   });
+
+  const lastUpdated = reservation.updatedAt 
+    ? new Date(reservation.updatedAt).toLocaleString('fr-FR')
+    : 'Non disponible';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -196,7 +236,7 @@ const ReservationDetailsPage: React.FC = () => {
                 color: textColor
               }}
             >
-              {companyInfo?.name?.charAt(0) || 'C'}
+              {(companyInfo?.name?.charAt(0) || reservation.companyName?.charAt(0) || 'C')}
             </div>
           )}
         </div>
@@ -219,6 +259,9 @@ const ReservationDetailsPage: React.FC = () => {
             </p>
             <p className="text-sm text-gray-500 mt-1">
               Référence: <span className="font-mono">{reservation.referenceCode}</span>
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              Mis à jour: {lastUpdated}
             </p>
           </div>
         </motion.div>
@@ -247,6 +290,11 @@ const ReservationDetailsPage: React.FC = () => {
                 <p className="text-gray-600">
                   {reservation.depart} → {reservation.arrivee}
                 </p>
+                {reservation.tripType === 'aller-retour' && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Aller-retour ({reservation.seatsGo} place(s) aller, {reservation.seatsReturn} retour)
+                  </p>
+                )}
               </div>
             </div>
             
@@ -257,8 +305,8 @@ const ReservationDetailsPage: React.FC = () => {
               <div>
                 <h3 className="font-medium text-gray-900">Date</h3>
                 <p className="text-gray-600">{formattedDate}</p>
-                <p className="text-gray-600 flex items-center gap-1 mt-1">
-                  <Clock className="h-4 w-4" /> {reservation.heure}
+                <p className="text-xs text-gray-500 mt-1">
+                  Heure : {reservation.heure}
                 </p>
               </div>
             </div>
@@ -270,8 +318,8 @@ const ReservationDetailsPage: React.FC = () => {
               <div>
                 <h3 className="font-medium text-gray-900">Passager</h3>
                 <p className="text-gray-600">{reservation.nomClient}</p>
-                <p className="text-gray-600 flex items-center gap-1 mt-1">
-                  <Phone className="h-4 w-4" /> {reservation.telephone}
+                <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                  <Phone className="h-3 w-3" /> {reservation.telephone}
                 </p>
               </div>
             </div>
@@ -285,57 +333,59 @@ const ReservationDetailsPage: React.FC = () => {
                 <p className="text-gray-600">
                   {reservation.montant.toLocaleString('fr-FR')} FCFA
                 </p>
+                {reservation.canal && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Méthode: {PAYMENT_METHODS[reservation.canal] || 'Non spécifiée'}
+                  </p>
+                )}
               </div>
             </div>
           </div>
         </motion.div>
 
         {/* Bouton d'action */}
-{reservation.statut === 'payé' && (
-  <motion.div
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    transition={{ delay: 0.3 }}
-    className="pt-2"
-  >
-    <button
-      onClick={() => {
-        // ✅ Sauvegarde fallback dans sessionStorage
-        if (companyInfo) {
-          sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
-        }
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="pt-2"
+        >
+          <button
+            onClick={() => {
+              if (companyInfo) {
+                sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
+              }
 
-        // ✅ Redirection propre sans "/compagnie"
-        navigate(`/${realSlug}/receipt/${id}`, {
-          state: {
-            reservation,
-            tripData: reservation.tripData || null,
-            companyInfo
-          }
-        });
-      }}
-      className="w-full py-3 rounded-xl font-medium flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all"
-      style={{ backgroundColor: primaryColor, color: textColor }}
-    >
-      <CheckCircle className="h-5 w-5" />
-      Voir mon reçu
-    </button>
-  </motion.div>
-)}
+              navigate(`/${realSlug}/receipt/${id}`, {
+                state: {
+                  reservation,
+                  tripData: reservation.tripData || null,
+                  companyInfo
+                }
+              });
+            }}
+            className={`w-full py-3 rounded-xl font-medium flex items-center justify-center gap-2 shadow-md transition-all
+              ${reservation.statut === 'payé' ? 'hover:shadow-lg' : 'opacity-70 cursor-not-allowed'}`}
+            style={{ backgroundColor: primaryColor, color: textColor }}
+            disabled={reservation.statut !== 'payé'}
+          >
+            <CheckCircle className="h-5 w-5" />
+            {reservation.statut === 'payé' ? 'Voir mon reçu' : 'Reçu disponible après paiement'}
+          </button>
+        </motion.div>
 
-{/* Footer */}
-<motion.div
-  initial={{ opacity: 0 }}
-  animate={{ opacity: 1 }}
-  transition={{ delay: 0.4 }}
-  className="text-center text-sm text-gray-400 pt-6"
->
-  <p>Merci pour votre confiance</p>
-  <p className="font-medium mt-1" style={{ color: primaryColor }}>
-    {reservation.companyName}
-  </p>
-</motion.div>
-
+        {/* Footer */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.4 }}
+          className="text-center text-sm text-gray-400 pt-6"
+        >
+          <p>Merci pour votre confiance</p>
+          <p className="font-medium mt-1" style={{ color: primaryColor }}>
+            {reservation.companyName || companyInfo?.name || 'Votre compagnie'}
+          </p>
+        </motion.div>
       </main>
     </div>
   );

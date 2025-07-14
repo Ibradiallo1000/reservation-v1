@@ -15,6 +15,7 @@ interface Avis {
 interface Props {
   companyId: string;
   primaryColor: string;
+  isMobile?: boolean;
 }
 
 const AvisListePublic: React.FC<Props> = ({ companyId, primaryColor }) => {
