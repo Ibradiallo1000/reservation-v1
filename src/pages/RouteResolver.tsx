@@ -8,17 +8,9 @@ import { Company } from '@/types/companyTypes';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import MobileErrorScreen from '@/components/ui/MobileErrorScreen';
 
-// Configuration mobile
 const MOBILE_MAX_WIDTH = 768;
 const isMobileViewport = () => window.innerWidth <= MOBILE_MAX_WIDTH;
 
-// Types pour les composants lazy
-interface PublicCompanyPageProps {
-  company: Company;
-  isMobile?: boolean;
-}
-
-// ✅ Lazy load standard
 const PublicCompanyPage = lazy(() => import('./PublicCompanyPage'));
 const ResultatsAgencePage = lazy(() => import('./ResultatsAgencePage'));
 const FormulaireReservationClient = lazy(() => import('./FormulaireReservationClient'));
@@ -29,52 +21,23 @@ const ReceiptEnLignePage = lazy(() => import('./ReceiptEnLignePage'));
 const UploadPreuvePage = lazy(() => import('./UploadPreuvePage'));
 const ReservationDetailsPage = lazy(() => import('./ReservationDetailsPage'));
 
-// 🔒 Chemins réservés
 const reservedPaths = [
   'login', 'register', 'admin', 'agence', 'villes', 'reservation', 'contact', 'compagnie',
 ];
-
-type SubPath =
-  | 'resultats'
-  | 'booking'
-  | 'mes-reservations'
-  | 'mentions'
-  | 'confidentialite'
-  | 'receipt'
-  | 'upload-preuve'
-  | 'details'
-  | 'confirmation'
-  | string
-  | null;
 
 export default function RouteResolver() {
   const location = useLocation();
   const pathParts = location.pathname.split('/').filter(Boolean);
   const fetchController = useRef<AbortController>();
   const [cacheBuster, setCacheBuster] = useState(Date.now());
-
-  // 🚫 Redirection automatique des anciens chemins
-  if (pathParts[0] === 'compagnie') {
-    const slug = pathParts[1];
-    const rest = pathParts.slice(2).join('/');
-    if (slug) {
-      const newPath = `/${slug}${rest ? '/' + rest : ''}`;
-      console.warn('[RouteResolver] 🚧 Redirection automatique');
-      window.location.replace(newPath);
-      return null;
-    }
-    return <PageNotFound />;
-  }
-
-  // ✅ Extraire le slug dynamique et sous-chemin
-  const slugIndex = pathParts.findIndex(part => !reservedPaths.includes(part));
-  const slug = slugIndex !== -1 ? pathParts[slugIndex] : null;
-  const subPath: SubPath = pathParts.length > slugIndex + 1 ? pathParts[slugIndex + 1] : null;
-
   const [companyData, setCompanyData] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+
+  const slugIndex = pathParts.findIndex(part => !reservedPaths.includes(part));
+  const slug = slugIndex !== -1 ? pathParts[slugIndex] : null;
+  const subPath = pathParts.length > slugIndex + 1 ? pathParts[slugIndex + 1] : null;
 
   const isMobile = useMemo(() => {
     return /Android|webOS|iPhone|iPad/i.test(navigator.userAgent) || isMobileViewport();
@@ -92,36 +55,27 @@ export default function RouteResolver() {
         return;
       }
 
-      // Annule la requête précédente
       if (fetchController.current) {
         fetchController.current.abort();
       }
       fetchController.current = new AbortController();
 
       try {
-        console.log('[RouteResolver] 🔍 Recherche compagnie:', slug);
-        const q = query(
-          collection(db, 'companies'),
-          where('slug', '==', slug)
-        );
-        
+        const q = query(collection(db, 'companies'), where('slug', '==', slug));
         const snap = await getDocs(q);
 
-        if (snap.empty) {
-          throw new Error('Aucune compagnie trouvée');
-        }
+        if (snap.empty) throw new Error('Aucune compagnie trouvée');
 
         const docSnap = snap.docs[0];
         const raw = docSnap.data();
         const validatedData = validateCompanyData(raw, docSnap.id, slug);
-        
+
         setCompanyData(validatedData);
+        sessionStorage.setItem('companyInfo', JSON.stringify(validatedData));
       } catch (error) {
-        const err = error instanceof Error 
-          ? error 
+        const err = error instanceof Error
+          ? error
           : new Error(typeof error === 'string' ? error : 'Erreur inconnue');
-        
-        console.error('[RouteResolver] Erreur:', err.message);
         setError(err);
         setNotFound(true);
       } finally {
@@ -130,7 +84,9 @@ export default function RouteResolver() {
     };
 
     fetchCompany();
-    return () => fetchController.current?.abort();
+    return () => {
+      if (fetchController.current) fetchController.current.abort();
+    };
   }, [slug, cacheBuster]);
 
   function validateCompanyData(raw: any, id: string, slug: string): Company {
@@ -159,32 +115,26 @@ export default function RouteResolver() {
   if (notFound || !companyData) return <PageNotFound />;
   if (error) return <MobileErrorScreen error={error} />;
 
-  const renderContent = () => {
-    const commonProps = { company: companyData };
-    
-    switch (subPath) {
-      case 'resultats': return <ResultatsAgencePage {...commonProps} />;
-      case 'booking': return <FormulaireReservationClient {...commonProps} />;
-      case 'mes-reservations': return <ClientMesReservationsPage />;
-      case 'mentions': return <MentionsPage />;
-      case 'confidentialite': return <ConfidentialitePage />;
-      case 'receipt': return <ReceiptEnLignePage />;
-      case 'upload-preuve': return <UploadPreuvePage />;
-      case 'details': return <ReservationDetailsPage />;
-      case 'confirmation': return <ReceiptEnLignePage />;
-      case null: return <PublicCompanyPage {...commonProps} isMobile={isMobile} />;
-      default: return <PageNotFound />;
-    }
-  };
+  const commonProps = { company: companyData };
+  let Content;
+  switch (subPath) {
+    case 'resultats': Content = <ResultatsAgencePage {...commonProps} />; break;
+    case 'booking': Content = <FormulaireReservationClient {...commonProps} />; break;
+    case 'mes-reservations': Content = <ClientMesReservationsPage />; break;
+    case 'mentions': Content = <MentionsPage />; break;
+    case 'confidentialite': Content = <ConfidentialitePage />; break;
+    case 'receipt': Content = <ReceiptEnLignePage />; break;
+    case 'upload-preuve': Content = <UploadPreuvePage />; break;
+    case 'details': Content = <ReservationDetailsPage />; break;
+    case 'confirmation': Content = <ReceiptEnLignePage />; break;
+    case null: Content = <PublicCompanyPage {...commonProps} isMobile={isMobile} />; break;
+    default: Content = <PageNotFound />;
+  }
 
   return (
     <ErrorBoundary fallback={<MobileErrorScreen />}>
       <Suspense fallback={<PageLoader fullScreen />}>
-        {isMobile ? (
-          <MobileViewportHandler>
-            {renderContent()}
-          </MobileViewportHandler>
-        ) : renderContent()}
+        {isMobile ? <MobileViewportHandler>{Content}</MobileViewportHandler> : Content}
       </Suspense>
     </ErrorBoundary>
   );
@@ -193,14 +143,10 @@ export default function RouteResolver() {
 function MobileViewportHandler({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const meta = document.createElement('meta');
-    meta.setAttribute('name', 'viewport');
-    meta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
-    
+    meta.name = 'viewport';
+    meta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
     document.head.appendChild(meta);
-    
-    return () => {
-      document.head.removeChild(meta);
-    };
+    return () => { document.head.removeChild(meta); };
   }, []);
 
   return <div className="mobile-container">{children}</div>;
