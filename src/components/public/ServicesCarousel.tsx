@@ -1,9 +1,26 @@
+// ✅ src/components/public/ServicesCarousel.tsx
+
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronLeft, ChevronRight, ShieldCheck, Clock, Headphones, Car } from 'lucide-react';
+import {
+  ChevronLeft, ChevronRight, ShieldCheck, Clock, Headphones, Car
+} from 'lucide-react';
 import { hexToRgba } from '../../utils/color';
 
-const services = [
+export interface ServiceItem {
+  icon: React.ElementType;
+  title: string;
+  description: string;
+}
+
+interface ServicesCarouselProps {
+  services?: ServiceItem[]; // ✅ rend optionnel
+  colors: { primary: string };
+  isMobile?: boolean;
+}
+
+// ✅ fallback local si aucun service n'est passé
+const defaultServices: ServiceItem[] = [
   {
     icon: ShieldCheck,
     title: 'Sécurité maximale',
@@ -26,41 +43,47 @@ const services = [
   }
 ];
 
-export default function ServicesCarousel({ colors }: { colors: { primary: string } }) {
+export default function ServicesCarousel({
+  services = defaultServices, // ✅ fallback si undefined
+  colors,
+  isMobile
+}: ServicesCarouselProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   const handleNav = (direction: 'prev' | 'next') => {
-    setCurrentIndex(prev => {
-      if (direction === 'prev') return prev === 0 ? services.length - 1 : prev - 1;
-      else return prev === services.length - 1 ? 0 : prev + 1;
-    });
+    setCurrentIndex(prev =>
+      direction === 'prev'
+        ? prev === 0 ? services.length - 1 : prev - 1
+        : prev === services.length - 1 ? 0 : prev + 1
+    );
   };
 
   useEffect(() => {
     const interval = setInterval(() => handleNav('next'), 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [services.length]);
 
   const currentService = services[currentIndex];
   const Icon = currentService.icon;
 
   return (
-    <motion.section 
+    <motion.section
       className="px-4 py-16 bg-white relative overflow-hidden"
       initial={{ opacity: 0 }}
       whileInView={{ opacity: 1 }}
       viewport={{ once: true }}
       transition={{ duration: 0.8 }}
     >
-      {/* Optionnel : décor de fond type carte */}
       <div className="absolute inset-0 bg-[url('/world-map.svg')] bg-center bg-cover opacity-5 pointer-events-none" />
-
       <div className="max-w-6xl mx-auto relative z-10">
         <div className="text-center mb-8">
           <h2 className="text-3xl md:text-4xl font-bold mb-3 text-gray-900">
             Nos services exclusifs
           </h2>
-          <div className="h-1 w-24 mx-auto rounded-full" style={{ backgroundColor: colors.primary }} />
+          <div
+            className="h-1 w-24 mx-auto rounded-full"
+            style={{ backgroundColor: colors.primary }}
+          />
         </div>
 
         <div className="relative h-[200px] md:h-[220px] overflow-hidden rounded-2xl border border-gray-200 shadow bg-white">
@@ -90,7 +113,7 @@ export default function ServicesCarousel({ colors }: { colors: { primary: string
         </div>
 
         <div className="flex justify-center gap-4 mt-8">
-          <button 
+          <button
             className="p-2 rounded-full bg-gray-100 hover:bg-gray-200 transition"
             onClick={() => handleNav('prev')}
             aria-label="Précédent"
@@ -109,7 +132,7 @@ export default function ServicesCarousel({ colors }: { colors: { primary: string
             ))}
           </div>
 
-          <button 
+          <button
             className="p-2 rounded-full bg-gray-100 hover:bg-gray-200 transition"
             onClick={() => handleNav('next')}
             aria-label="Suivant"

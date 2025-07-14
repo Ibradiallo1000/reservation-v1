@@ -16,6 +16,7 @@ interface HeaderProps {
   menuOpen: boolean;
   setMenuOpen: (val: boolean) => void;
   setShowAgences: (val: boolean) => void;
+  isMobile?: boolean; // ✅ AJOUTER CECI
   navigate: (path: string) => void;
   t: (key: string) => string;
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { addDoc, collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
@@ -24,7 +24,6 @@ interface CompanyInfo {
   id: string;
   slug: string;
   nom: string;
-  name?: string
   logoUrl?: string;
   primaryColor?: string;
   secondaryColor?: string;
@@ -38,10 +37,12 @@ interface FormulaireReservationClientProps {
 const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = ({ company: propCompany }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { tripData } = location.state || {};
+  const { tripData: initialTripData } = location.state || {};
   const { slug: slugFromUrl } = useParams();
   const slug = slugFromUrl || propCompany?.slug || '';
 
+  const [tripData, setTripData] = useState(initialTripData);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(propCompany);
   const [paymentMethods, setPaymentMethods] = useState<Record<string, PaymentMethod>>({});
   const [loading, setLoading] = useState(false);
   const [passengerData, setPassengerData] = useState<PassengerData>({
@@ -56,20 +57,38 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
   const unitPrice = Number(tripData?.price || 0);
   const [totalCost, setTotalCost] = useState(unitPrice);
 
+  // Récupération des données depuis sessionStorage si perdues
+  useEffect(() => {
+    if (!tripData) {
+      const saved = sessionStorage.getItem('reservationDraft');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setTripData(parsed.tripData);
+      }
+    }
+
+    if (!propCompany?.id) {
+      const savedCompany = sessionStorage.getItem('companyInfo');
+      if (savedCompany) {
+        const parsedCompany = JSON.parse(savedCompany);
+        setCompanyInfo(prev => ({ ...prev, ...parsedCompany }));
+      }
+    }
+  }, []);
+
   // Fusion des props et des états pour avoir toujours les données à jour
-  const companyInfo = {
-    ...propCompany,
-    nom: propCompany.nom || propCompany.name || 'Nom Compagnie',
-    primaryColor: propCompany.primaryColor || '#3b82f6',
-    secondaryColor: propCompany.secondaryColor || '#93c5fd',
+  const mergedCompanyInfo = useMemo(() => ({
+    ...companyInfo,
+    primaryColor: companyInfo.primaryColor || '#3b82f6',
+    secondaryColor: companyInfo.secondaryColor || '#93c5fd',
     paymentMethods
-  };
+  }), [companyInfo, paymentMethods]);
 
   const themeConfig = {
     colors: {
-      primary: companyInfo.primaryColor,
-      secondary: companyInfo.secondaryColor,
-      text: safeTextColor(companyInfo.primaryColor),
+      primary: mergedCompanyInfo.primaryColor,
+      secondary: mergedCompanyInfo.secondaryColor,
+      text: safeTextColor(mergedCompanyInfo.primaryColor),
       background: '#ffffff'
     },
     classes: {
@@ -84,11 +103,11 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
 
   useEffect(() => {
     const fetchPaymentMethods = async () => {
-      if (!propCompany.id) return;
+      if (!mergedCompanyInfo.id) return;
 
       const q = query(
         collection(db, 'paymentMethods'),
-        where('companyId', '==', propCompany.id)
+        where('companyId', '==', mergedCompanyInfo.id)
       );
       const snap = await getDocs(q);
 
@@ -108,7 +127,7 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
     };
 
     fetchPaymentMethods();
-  }, [propCompany]);
+  }, [mergedCompanyInfo]);
 
   useEffect(() => {
     const go = seatsGo || 0;
@@ -123,7 +142,7 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
           <h2 className="text-lg font-semibold mb-2 text-red-600">Erreur</h2>
           <p className="text-gray-600 mb-4">Données de trajet manquantes. Veuillez recommencer depuis la page d'accueil.</p>
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate(`/${slug}`)}
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
           >
             Retour à l'accueil
@@ -169,33 +188,6 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
         throw new Error(`Il ne reste que ${placesRestantesAller} place(s) pour l'aller.`);
       }
 
-      let trajetIdRetour = '';
-      if (tripType === 'aller_retour' && location.state?.returnTrip) {
-        const returnTrip = location.state.returnTrip;
-        trajetIdRetour = returnTrip.id;
-
-        const dateAller = new Date(tripData.date);
-        const dateRetour = new Date(returnTrip.date);
-        if (dateRetour <= dateAller) {
-          throw new Error("La date de retour doit être après la date d'aller");
-        }
-
-        const reservationsQueryRetour = query(
-          collection(db, 'reservations'),
-          where('trajetId', '==', trajetIdRetour),
-          where('statut', 'in', ['payé', 'preuve_recue'])
-        );
-        const snapRetour = await getDocs(reservationsQueryRetour);
-        const reservedRetour = snapRetour.docs.reduce((acc, doc) => {
-          const res = doc.data();
-          return acc + (res.seatsGo || 0);
-        }, 0);
-        const placesRestantesRetour = (returnTrip.places || 0) - reservedRetour;
-        if (placesRestantesRetour < seatsReturn) {
-          throw new Error(`Il ne reste que ${placesRestantesRetour} place(s) pour le retour.`);
-        }
-      }
-
       let agencyNom = '';
       let agencyTelephone = '';
 
@@ -204,14 +196,14 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
         const agenceSnap = await getDoc(agenceRef);
         if (agenceSnap.exists()) {
           const agenceData = agenceSnap.data();
-          agencyNom = agenceData.nomAgence || agenceData.nom || agenceData.name || '';
+          agencyNom = agenceData.nom || '';
           agencyTelephone = agenceData.telephone || agenceData.phone || '';
         }
       }
 
       const referenceCode = `RES${Date.now()}`;
 
-      const allerDoc = {
+      const reservationDoc = {
         nomClient: passengerData.fullName,
         telephone: passengerData.phone,
         email: passengerData.email,
@@ -233,70 +225,32 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
         referenceCode,
         commission: unitPrice * seatsGo * 0.05,
         companySlug: slug,
-        companyName: companyInfo.nom,
-        primaryColor: companyInfo.primaryColor, // Garanti d'avoir une valeur
+        companyName: mergedCompanyInfo.nom,
+        primaryColor: mergedCompanyInfo.primaryColor,
         tripData,
         createdAt: new Date(),
         updatedAt: new Date()
       };
 
-      let retourDoc = null;
-      if (tripType === 'aller_retour' && location.state?.returnTrip) {
-        const returnTrip = location.state.returnTrip;
-        retourDoc = {
-          ...allerDoc,
-          depart: returnTrip.departure,
-          arrivee: returnTrip.arrival,
-          date: returnTrip.date,
-          heure: returnTrip.time,
-          montant: unitPrice * seatsReturn,
-          seatsGo: seatsReturn,
-          trajetId: trajetIdRetour,
-          commission: unitPrice * seatsReturn * 0.05,
-          tripData: returnTrip
-        };
-      }
+      const reservationRef = await addDoc(collection(db, 'reservations'), reservationDoc);
 
-      const allerRef = await addDoc(collection(db, 'reservations'), allerDoc);
+      // Sauvegarde des données dans sessionStorage
+      const reservationData = {
+        ...reservationDoc,
+        id: reservationRef.id
+      };
+      
+      sessionStorage.setItem('reservationDraft', JSON.stringify(reservationData));
+      sessionStorage.setItem('companyInfo', JSON.stringify(mergedCompanyInfo));
 
-let retourRef = null;
-if (retourDoc) {
-  retourRef = await addDoc(collection(db, 'reservations'), retourDoc);
-}
+      console.log("Redirection vers upload avec : ", reservationData);
 
-// ✅ Après avoir créé les documents aller / retour :
-console.log('[Reservation] ID réservation aller :', allerRef.id);
-if (retourRef) {
-  console.log('[Reservation] ID réservation retour :', retourRef.id);
-}
-
-// ✅ Vérification de l’objet allerDoc :
-console.log('[Reservation] Données allerDoc :', allerDoc);
-console.log('[Reservation] Données companyInfo :', companyInfo);
-console.log('[Reservation] Slug utilisé pour navigation :', slug);
-
-// ✅ Sauvegarde sessionStorage
-sessionStorage.setItem('reservationDraft', JSON.stringify({
-  ...allerDoc,
-  id: allerRef.id,
-  returnReservationId: retourRef?.id || null
-}));
-sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
-console.log('[Reservation] Données sauvegardées dans sessionStorage');
-
-// ✅ Navigation sécurisée
-navigate(`/${slug}/upload-preuve/${allerRef.id}`, {
-  state: {
-    companyInfo,
-    draft: {
-      ...allerDoc,
-      id: allerRef.id,
-      returnReservationId: retourRef?.id || null
-    }
-  }
-});
-console.log('[Reservation] Navigation vers page UploadPreuvePage déclenchée');
-
+      navigate(`/${slug}/upload-preuve/${reservationRef.id}`, {
+        state: {
+          companyInfo: mergedCompanyInfo,
+          draft: reservationData
+        }
+      });
 
     } catch (err: any) {
       alert(err.message);
@@ -322,7 +276,10 @@ console.log('[Reservation] Navigation vers page UploadPreuvePage déclenchée');
       }}>
         <div className="flex items-center gap-4 max-w-7xl mx-auto">
           <button 
-            onClick={() => navigate(-1)}
+            onClick={() => {
+              if (window.history.length > 1) navigate(-1);
+              else navigate(`/${slug}`);
+            }}
             className="p-2 rounded-full hover:bg-white/10 transition"
             style={{ color: colors.text }}
           >
@@ -330,10 +287,10 @@ console.log('[Reservation] Navigation vers page UploadPreuvePage déclenchée');
           </button>
           
           <div className="flex items-center gap-2">
-            {companyInfo.logoUrl && (
+            {mergedCompanyInfo.logoUrl && (
               <LazyLoadImage 
-                src={companyInfo.logoUrl} 
-                alt={`Logo ${companyInfo.nom}`}
+                src={mergedCompanyInfo.logoUrl} 
+                alt={`Logo ${mergedCompanyInfo.nom}`}
                 effect="blur"
                 className="h-8 w-8 rounded-full object-cover border-2"
                 style={{ 
@@ -432,26 +389,7 @@ console.log('[Reservation] Navigation vers page UploadPreuvePage déclenchée');
                 </div>
               </div>
 
-              <div className="pt-2">
-                <h3 className="text-sm font-medium mb-2">Type de voyage</h3>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    className={`py-2 px-3 rounded-lg text-sm border ${
-                      tripType === 'aller_simple' ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-200'
-                    }`}
-                    onClick={() => setTripType('aller_simple')}
-                    style={{
-                      borderColor: tripType === 'aller_simple' ? colors.primary : undefined,
-                      backgroundColor: tripType === 'aller_simple' ? hexToRgba(colors.primary, 0.1) : undefined
-                    }}
-                  >
-                    Aller simple
-                  </button>
-                </div>
-              </div>
-
-              <div className="pt-2">
+              <div className="pt-4">
                 <h3 className="text-sm font-medium mb-2">Nombre de places</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -508,7 +446,7 @@ console.log('[Reservation] Navigation vers page UploadPreuvePage déclenchée');
                       Traitement...
                     </span>
                   ) : (
-                    'Passer au paiement'
+                    'Réserver maintenant'
                   )}
                 </button>
               </div>

@@ -7,6 +7,7 @@ import { Company } from '@/types/companyTypes';
 interface HeroSectionProps {
   company: Company;
   onSearch: (departure: string, arrival: string) => void;
+   isMobile?: boolean; // ✅ AJOUTER CECI
 }
 
 const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {

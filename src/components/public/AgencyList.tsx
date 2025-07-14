@@ -13,6 +13,7 @@ interface AgencyListProps {
   primaryColor: string;
   classes: any;
   t: (key: string) => string;
+    isMobile?: boolean; // ✅ AJOUTER CECI
 }
 
 const AgencyList: React.FC<AgencyListProps> = ({

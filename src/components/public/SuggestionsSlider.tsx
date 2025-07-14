@@ -10,6 +10,7 @@ import { TripSuggestion } from '@/types/companyTypes';
 interface SuggestionsSliderProps {
   suggestedTrips: TripSuggestion[];
   colors: { primary: string };
+    isMobile?: boolean; // ✅ AJOUTER CECI
 }
 
 const SuggestionsSlider: React.FC<SuggestionsSliderProps> = ({ suggestedTrips, colors }) => {

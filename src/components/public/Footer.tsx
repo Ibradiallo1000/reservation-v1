@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom';
 
 interface FooterProps {
   company: Company;
+    isMobile?: boolean; // ✅ AJOUTER CECI
 }
 
 const Footer: React.FC<FooterProps> = ({ company }) => {

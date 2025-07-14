@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
@@ -14,30 +14,34 @@ import AvisListePublic from '../components/public/AvisListePublic';
 import Header from '@/components/public/Header';
 
 import useCompanyTheme from '../hooks/useCompanyTheme';
-import { Company } from '@/types/companyTypes';
+import { Company, Agence, TripSuggestion } from '@/types/companyTypes';
 
-import { Agence, TripSuggestion } from '../types/companyTypes';
 import LoadingScreen from '@/components/ui/LoadingScreen';
 import ErrorScreen from '@/components/ui/ErrorScreen';
 import NotFoundScreen from '@/components/ui/NotFoundScreen';
 
-type Props = {
+interface PublicCompanyPageProps {
   company?: Company;
-};
+  isMobile?: boolean;
+}
 
-const PublicCompanyPage: React.FC<Props> = ({ company: propCompany }) => {
+const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
+  company: propCompany,
+  isMobile = false,
+}) => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
 
-  const [company, setCompany] = useState<Company | null>(propCompany ?? null);
+  const company = propCompany;
+  const { colors, classes, config } = useCompanyTheme(company);
+
   const [agences, setAgences] = useState<Agence[]>([]);
   const [suggestedTrips, setSuggestedTrips] = useState<TripSuggestion[]>([]);
   const [showAgences, setShowAgences] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [loading, setLoading] = useState(!propCompany); // si on a déjà la compagnie => pas de chargement
+  const [loading, setLoading] = useState(!company);
   const [error, setError] = useState<string | null>(null);
-
   const [openVilles, setOpenVilles] = useState<Record<string, boolean>>({});
 
   const toggleVille = (ville: string) => {
@@ -54,45 +58,28 @@ const PublicCompanyPage: React.FC<Props> = ({ company: propCompany }) => {
     [agences]
   );
 
-  const { colors, classes, config } = useCompanyTheme(company);
-
-  const fetchData = useCallback(async () => {
-    if (!slug || slug.trim() === '') {
-      setError(t('companyNotFound'));
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const q = query(collection(db, 'companies'), where('slug', '==', slug));
-      const snap = await getDocs(q);
-
-      if (snap.empty) {
-        setError(t('companyNotFound'));
-        return;
-      }
-
-      const doc = snap.docs[0];
-      const companyData = { id: doc.id, ...doc.data() } as Company;
-      setCompany(companyData);
-
-      const agQ = query(collection(db, 'agences'), where('companyId', '==', doc.id));
-      const agSnap = await getDocs(agQ);
-      setAgences(agSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Agence)));
-    } catch (err) {
-      console.error('Erreur de chargement:', err);
-      setError(t('loadingError'));
-    } finally {
-      setLoading(false);
-    }
-  }, [slug, t]);
-
+  // 🔁 Charger uniquement les agences si non passées en props
   useEffect(() => {
-    if (!propCompany) {
-      fetchData();
+    const fetchAgences = async () => {
+      if (!company?.id) return;
+
+      try {
+        setLoading(true);
+        const agQ = query(collection(db, 'agences'), where('companyId', '==', company.id));
+        const agSnap = await getDocs(agQ);
+        setAgences(agSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Agence)));
+      } catch (err) {
+        console.error('Erreur chargement agences', err);
+        setError(t('loadingError'));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (company) {
+      fetchAgences();
     }
-  }, [fetchData, propCompany]);
+  }, [company, t]);
 
   if (loading) {
     return (
@@ -111,10 +98,11 @@ const PublicCompanyPage: React.FC<Props> = ({ company: propCompany }) => {
     return (
       <ErrorScreen
         error={error}
-        navigate={navigate}
         colors={colors}
         classes={classes}
         t={t}
+        navigate={navigate}
+        slug={slug}
       />
     );
   }
@@ -126,7 +114,10 @@ const PublicCompanyPage: React.FC<Props> = ({ company: propCompany }) => {
   return (
     <div
       className={`min-h-screen flex flex-col ${config.typography}`}
-      style={{ background: '#ffffff', color: colors.text }}
+      style={{
+        backgroundColor: colors.background || '#ffffff',
+        color: colors.text,
+      }}
     >
       <Header
         company={company}
@@ -136,42 +127,48 @@ const PublicCompanyPage: React.FC<Props> = ({ company: propCompany }) => {
         menuOpen={menuOpen}
         setMenuOpen={setMenuOpen}
         setShowAgences={setShowAgences}
-        slug={slug}
+        isMobile={isMobile}
         t={t}
+        slug={slug}
         navigate={navigate}
       />
 
-      <HeroSection
-        company={company}
-        onSearch={(departure, arrival) => {
-          navigate(
-            `/${slug}/resultats?departure=${encodeURIComponent(
-              departure.trim()
-           )}&arrival=${encodeURIComponent(arrival.trim())}`
-         );
+      <main className="flex-grow">
+        <HeroSection
+          company={company}
+          onSearch={(departure, arrival) => {
+            navigate(
+              `/${slug}/resultats?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
+            );
+          }}
+          isMobile={isMobile}
+        />
 
-        }}
-      />
+        <AvisListePublic companyId={company.id} primaryColor={colors.primary} isMobile={isMobile} />
 
-      <AvisListePublic companyId={company.id} primaryColor={colors.primary} />
-      <SuggestionsSlider suggestedTrips={suggestedTrips} colors={colors} />
-      <ServicesCarousel colors={colors} />
-
-      <AnimatePresence>
-        {showAgences && (
-          <AgencyList
-            groupedByVille={groupedByVille}
-            openVilles={openVilles}
-            toggleVille={toggleVille}
-            onClose={() => setShowAgences(false)}
-            primaryColor={colors.primary}
-            classes={classes}
-            t={t}
-          />
+        {suggestedTrips.length > 0 && (
+          <SuggestionsSlider suggestedTrips={suggestedTrips} colors={colors} isMobile={isMobile} />
         )}
-      </AnimatePresence>
 
-      <Footer company={company} />
+        <ServicesCarousel colors={colors} isMobile={isMobile} />
+
+        <AnimatePresence>
+          {showAgences && (
+            <AgencyList
+              groupedByVille={groupedByVille}
+              openVilles={openVilles}
+              toggleVille={toggleVille}
+              onClose={() => setShowAgences(false)}
+              primaryColor={colors.primary}
+              classes={classes}
+              t={t}
+              isMobile={isMobile}
+            />
+          )}
+        </AnimatePresence>
+      </main>
+
+      <Footer company={company} isMobile={isMobile} />
     </div>
   );
 };
