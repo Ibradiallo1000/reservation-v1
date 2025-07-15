@@ -36,6 +36,7 @@ interface CompanyInfo {
   id: string;
   name: string;
   primaryColor?: string;
+  couleurPrimaire?: string;
   logoUrl?: string;
   telephone?: string;
 }
@@ -62,7 +63,7 @@ const ReceiptEnLignePage: React.FC = () => {
   ? format(parseISO(reservation.date), 'dd/MM/yyyy', { locale: fr })
   : '';
   const fallbackColor = '#3b82f6';
-  const primaryColor = companyInfo?.primaryColor || fallbackColor;
+  const primaryColor = companyInfo?.couleurPrimaire || fallbackColor;
   const themeConfig = {
     colors: {
       primary: primaryColor,
@@ -91,7 +92,7 @@ const ReceiptEnLignePage: React.FC = () => {
         const loadedCompanyInfo = {
           id: companySnap.id,
           name: data.name || data.nom || res.companyName || 'Nom Compagnie',
-          primaryColor: data.primaryColor,
+          couleurPrimaire: data.couleurPrimaire,
           logoUrl: data.logoUrl,
           telephone: data.telephone,
         };
