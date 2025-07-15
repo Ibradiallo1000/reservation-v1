@@ -11,6 +11,7 @@ import MobileErrorScreen from '@/components/ui/MobileErrorScreen';
 const MOBILE_MAX_WIDTH = 768;
 const isMobileViewport = () => window.innerWidth <= MOBILE_MAX_WIDTH;
 
+// Composants lazy-loaded
 const PublicCompanyPage = lazy(() => import('./PublicCompanyPage'));
 const ResultatsAgencePage = lazy(() => import('./ResultatsAgencePage'));
 const FormulaireReservationClient = lazy(() => import('./FormulaireReservationClient'));
@@ -24,6 +25,9 @@ const ReservationDetailsPage = lazy(() => import('./ReservationDetailsPage'));
 const reservedPaths = [
   'login', 'register', 'admin', 'agence', 'villes', 'reservation', 'contact', 'compagnie',
 ];
+
+// Cache en mémoire pour éviter de refetch sur mobile
+const companyCache = new Map<string, Company>();
 
 export default function RouteResolver() {
   const location = useLocation();
@@ -39,8 +43,12 @@ export default function RouteResolver() {
   const slug = slugIndex !== -1 ? pathParts[slugIndex] : null;
   const subPath = pathParts.length > slugIndex + 1 ? pathParts[slugIndex + 1] : null;
 
+  // Détection mobile améliorée
   const isMobile = useMemo(() => {
-    return /Android|webOS|iPhone|iPad/i.test(navigator.userAgent) || isMobileViewport();
+    // Vérification plus robuste qui ne bloque pas les fonctionnalités
+    return typeof window !== 'undefined' && 
+           (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+            isMobileViewport());
   }, []);
 
   useEffect(() => {
@@ -55,24 +63,41 @@ export default function RouteResolver() {
         return;
       }
 
-      if (fetchController.current) {
-        fetchController.current.abort();
+      // Vérification du cache en mémoire d'abord
+      if (companyCache.has(slug)) {
+        setCompanyData(companyCache.get(slug)!);
+        setLoading(false);
+        return;
       }
-      fetchController.current = new AbortController();
 
       try {
+        if (fetchController.current) {
+          fetchController.current.abort();
+        }
+        fetchController.current = new AbortController();
+
         const q = query(collection(db, 'companies'), where('slug', '==', slug));
         const snap = await getDocs(q);
 
-        if (snap.empty) throw new Error('Aucune compagnie trouvée');
+        if (snap.empty) {
+          throw new Error('Aucune compagnie trouvée');
+        }
 
         const docSnap = snap.docs[0];
         const raw = docSnap.data();
         const validatedData = validateCompanyData(raw, docSnap.id, slug);
 
+        // Mise en cache
+        companyCache.set(slug, validatedData);
+        try {
+          sessionStorage.setItem(`company-${slug}`, JSON.stringify(validatedData));
+        } catch (e) {
+          console.warn('sessionStorage non disponible, utilisation du cache mémoire');
+        }
+
         setCompanyData(validatedData);
-        sessionStorage.setItem('companyInfo', JSON.stringify(validatedData));
       } catch (error) {
+        console.error('Erreur de chargement:', error);
         const err = error instanceof Error
           ? error
           : new Error(typeof error === 'string' ? error : 'Erreur inconnue');
@@ -83,9 +108,27 @@ export default function RouteResolver() {
       }
     };
 
-    fetchCompany();
+    // Tentative de récupération depuis sessionStorage d'abord
+    if (slug) {
+      try {
+        const cachedData = sessionStorage.getItem(`company-${slug}`);
+        if (cachedData) {
+          const parsed = JSON.parse(cachedData);
+          setCompanyData(parsed);
+          companyCache.set(slug, parsed);
+          setLoading(false);
+          return;
+        }
+      } catch (e) {
+        console.warn('Erreur de lecture sessionStorage', e);
+      }
+      fetchCompany();
+    }
+
     return () => {
-      if (fetchController.current) fetchController.current.abort();
+      if (fetchController.current) {
+        fetchController.current.abort();
+      }
     };
   }, [slug, cacheBuster]);
 
@@ -134,20 +177,8 @@ export default function RouteResolver() {
   return (
     <ErrorBoundary fallback={<MobileErrorScreen />}>
       <Suspense fallback={<PageLoader fullScreen />}>
-        {isMobile ? <MobileViewportHandler>{Content}</MobileViewportHandler> : Content}
+        {Content}
       </Suspense>
     </ErrorBoundary>
   );
-}
-
-function MobileViewportHandler({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    const meta = document.createElement('meta');
-    meta.name = 'viewport';
-    meta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
-    document.head.appendChild(meta);
-    return () => { document.head.removeChild(meta); };
-  }, []);
-
-  return <div className="mobile-container">{children}</div>;
 }
