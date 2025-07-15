@@ -1,10 +1,31 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import * as path from 'path';
+import { copyFileSync, existsSync } from 'fs';
+
+function copyRedirectsPlugin() {
+  return {
+    name: 'copy-redirects',
+    closeBundle() {
+      const src = path.resolve(__dirname, 'public/_redirects');
+      const dest = path.resolve(__dirname, 'dist/_redirects');
+      if (existsSync(src)) {
+        try {
+          copyFileSync(src, dest);
+          console.log('✅ Fichier _redirects copié avec succès.');
+        } catch (err) {
+          console.warn('❌ Erreur de copie _redirects :', err);
+        }
+      } else {
+        console.warn('⚠️ Aucun fichier _redirects trouvé dans /public');
+      }
+    },
+  };
+}
 
 export default defineConfig({
   base: '/',
-  plugins: [react()],
+  plugins: [react(), copyRedirectsPlugin()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -57,5 +78,5 @@ export default defineConfig({
   preview: {
     port: 5191,
     strictPort: true,
-  },
+  }
 });
