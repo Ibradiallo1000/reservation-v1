@@ -42,6 +42,7 @@ interface CompanyInfo {
   id: string;
   name: string;
   primaryColor?: string;
+  couleurPrimaire?: string;
   logoUrl?: string;
 }
 
@@ -102,7 +103,10 @@ const ReservationDetailsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const fallbackColor = '#3b82f6';
-  const primaryColor = companyInfo?.primaryColor || fallbackColor;
+  const primaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
+  const resolvedPrimaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
+  const resolvedTextColor = safeTextColor(resolvedPrimaryColor);
+
   const textColor = safeTextColor(primaryColor);
 
   useEffect(() => {

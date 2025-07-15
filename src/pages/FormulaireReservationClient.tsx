@@ -25,8 +25,8 @@ interface CompanyInfo {
   slug: string;
   nom: string;
   logoUrl?: string;
-  primaryColor?: string;
-  secondaryColor?: string;
+  couleurPrimaire?: string;
+  couleurSecondaire?: string;
   paymentMethods?: Record<string, PaymentMethod>;
 }
 
@@ -79,8 +79,8 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
   // Fusion des props et des états pour avoir toujours les données à jour
   const mergedCompanyInfo = useMemo(() => ({
     ...companyInfo,
-    primaryColor: companyInfo.primaryColor || '#3b82f6',
-    secondaryColor: companyInfo.secondaryColor || '#93c5fd',
+    primaryColor: companyInfo.couleurPrimaire || '#3b82f6',
+    secondaryColor: companyInfo.couleurSecondaire || '#93c5fd',
     paymentMethods
   }), [companyInfo, paymentMethods]);
 

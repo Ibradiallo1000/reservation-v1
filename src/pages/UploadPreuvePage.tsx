@@ -44,6 +44,7 @@ interface CompanyInfo {
   name: string;
   primaryColor?: string;
   secondaryColor?: string;
+  couleurPrimaire?: string; // ✅ Ajout ici
   logoUrl?: string;
   paymentMethods?: PaymentMethods;
   slug?: string;
@@ -242,11 +243,11 @@ const UploadPreuvePage: React.FC = () => {
   if (loadingData) {
     const themeConfig = {
       colors: {
-        primary: companyInfo?.primaryColor || '#3b82f6',
-        text: companyInfo?.primaryColor ? safeTextColor(companyInfo.primaryColor) : '#ffffff',
+        primary: companyInfo?.couleurPrimaire || '#3b82f6',
+        text: companyInfo?.couleurPrimaire ? safeTextColor(companyInfo.couleurPrimaire) : '#ffffff',
       }
     };
-    
+
     return (
       <LoadingScreen colors={{
         primary: themeConfig.colors.primary,
