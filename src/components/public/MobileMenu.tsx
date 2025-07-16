@@ -1,7 +1,8 @@
-// ✅ COMPOSANT : MobileMenu avec fond noir étoilé
+// ✅ COMPOSANT : MobileMenu avec fond noir étoilé + sélecteur de langue intégré
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { MapPin, Phone, Settings, Shield } from 'lucide-react';
+import { MapPin, Phone, Settings, Shield, Languages } from 'lucide-react';
+import LanguageSwitcher from '../ui/LanguageSwitcher';
 
 interface MobileMenuProps {
   onClose: () => void;
@@ -25,15 +26,12 @@ const StarryBackground: React.FC<{ canvasRef: React.RefObject<HTMLCanvasElement>
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Taille du canvas
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
 
-    // Fond noir
     ctx.fillStyle = 'rgba(10, 10, 20, 0.95)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Dessiner des étoiles
     const starCount = 100;
     for (let i = 0; i < starCount; i++) {
       const x = Math.random() * canvas.width;
@@ -71,14 +69,9 @@ const MobileMenu: React.FC<MobileMenuProps> = ({
       transition={{ duration: 0.3 }}
       className="fixed top-20 right-4 left-4 z-50 rounded-xl shadow-2xl overflow-hidden"
     >
-      {/* Canvas pour le fond étoilé */}
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full"
-      />
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
       <StarryBackground canvasRef={canvasRef} />
-      
-      {/* Contenu du menu */}
+
       <div className="relative z-10 p-4 text-white">
         <nav className="flex flex-col gap-2">
           <button
@@ -116,6 +109,15 @@ const MobileMenu: React.FC<MobileMenuProps> = ({
             <Settings className="h-5 w-5 text-yellow-300" />
             <span className="font-medium">{t('login')}</span>
           </button>
+
+          {/* ✅ Ajout sélecteur de langue */}
+          <div className="mt-4 pt-4 border-t border-white border-opacity-20">
+            <div className="flex items-center gap-2 mb-2 text-sm font-medium">
+              <Languages className="h-4 w-4 text-white" />
+              <span className="text-white">{t('language') || 'Langue'}</span>
+            </div>
+            <LanguageSwitcher />
+          </div>
         </nav>
       </div>
     </motion.div>

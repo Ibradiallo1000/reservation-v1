@@ -4,16 +4,14 @@ import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
 i18n
-  .use(LanguageDetector) // détecte automatiquement la langue
-  .use(initReactI18next) // connecte i18n à React
+  .use(LanguageDetector)
+  .use(initReactI18next)
   .init({
-    fallbackLng: 'fr', // langue par défaut
+    fallbackLng: 'fr',
     debug: false,
-
     interpolation: {
-      escapeValue: false // React gère déjà l'échappement
+      escapeValue: false
     },
-
     resources: {
       fr: {
         translation: {
@@ -45,10 +43,74 @@ i18n
           legalMentions: 'Mentions légales',
           privacyPolicy: 'Politique de confidentialité',
           ourCompany: 'Notre compagnie',
-          allRightsReserved: 'Tous droits réservés'
+          allRightsReserved: 'Tous droits réservés',
+          defaultSlogan: 'Votre monde, plus rapide. Plus simple.',
+          searchInstruction: 'Où souhaitez-vous partir aujourd’hui ?',
+          giveReview: 'Donner votre avis',
+          openingHours: 'Horaires',
+          legalTerms: 'Conditions générales',
+          cookiePolicy: 'Politique des cookies',
+          notFound: 'Page introuvable.',
+          backToCompany: 'Retour à la compagnie',
+          language: 'Langue',
+          exclusiveServices: 'Nos services exclusifs',
+          popularDestinations: 'Destinations populaires',
+          bookNow: 'Réserver',
+          seeMore: 'Voir plus',
+          bookInOneClick: 'Réservez vos trajets en un seul clic',
+          whatClientsSay: 'Ce que nos clients disent',
+          realExperiences: 'Les expériences authentiques de nos voyageurs'
+        }
+      },
+      en: {
+        translation: {
+          searchTitle: 'Find your trip',
+          departureCity: 'Departure city',
+          arrivalCity: 'Arrival city',
+          searchTrip: 'Search',
+          departurePlaceholder: 'Ex: Bamako',
+          arrivalPlaceholder: 'Ex: Abidjan',
+          companyNotFound: 'Company not found.',
+          loadingError: 'Loading error.',
+          invalidCity: 'Please enter valid cities.',
+          error: 'Error',
+          backToHome: 'Back to home',
+          ourAgencies: 'Our agencies',
+          myBookings: 'My bookings',
+          contact: 'Contact',
+          login: 'Login',
+          about: 'About',
+          welcomeTransport: 'Welcome to our transport platform.',
+          followUs: 'Follow us',
+          customerReviews: 'Customer reviews',
+          phone: 'Phone',
+          country: 'Country',
+          district: 'District',
+          address: 'Address',
+          notSpecified: 'Not specified',
+          close: 'Close',
+          legalMentions: 'Legal mentions',
+          privacyPolicy: 'Privacy policy',
+          ourCompany: 'Our company',
+          allRightsReserved: 'All rights reserved',
+          defaultSlogan: 'Your world, faster. Simpler.',
+          searchInstruction: 'Where do you want to go today?',
+          giveReview: 'Give your review',
+          openingHours: 'Opening hours',
+          legalTerms: 'Terms and Conditions',
+          cookiePolicy: 'Cookie Policy',
+          notFound: 'Page not found.',
+          backToCompany: 'Back to company',
+          language: 'Language',
+          exclusiveServices: 'Our exclusive services',
+          popularDestinations: 'Popular destinations',
+          bookNow: 'Book now',
+          seeMore: 'See more',
+          bookInOneClick: 'Book your trip in one click',
+          whatClientsSay: 'What our clients say',
+          realExperiences: 'Real experiences from our travelers'
         }
       }
-      // Tu peux ajouter d'autres langues ici si nécessaire
     }
   });
 
