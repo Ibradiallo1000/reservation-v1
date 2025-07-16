@@ -50,7 +50,7 @@ const TripSuggestionCard: React.FC<TripSuggestionCardProps> = ({
           {trip.departure} → {trip.arrival}
         </h3>
         <p className="text-sm text-yellow-300">
-          à partir de {trip.price.toLocaleString()} FCFA
+          à partir de {(trip.price ?? 0).toLocaleString()} FCFA
         </p>
       </div>
 
