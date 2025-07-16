@@ -3,10 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useTranslation } from 'react-i18next';
+import i18n from '@/i18n'; // ajoute cette ligne si nécessaire
 import { motion, AnimatePresence } from 'framer-motion';
 
+import VilleSuggestionBar from '../components/public/VilleSuggestionBar';
+import LanguageSuggestionPopup from '../components/public/LanguageSuggestionPopup';
 import HeroSection from '../components/public/HeroSection';
-import SuggestionsSlider from '../components/public/SuggestionsSlider';
 import ServicesCarousel from '../components/public/ServicesCarousel';
 import Footer from '../components/public/Footer';
 import AgencyList from '../components/public/AgencyList';
@@ -33,7 +35,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   const navigate = useNavigate();
   const { t } = useTranslation();
 
-  const company = propCompany;
+  const [company, setCompany] = useState<Company | undefined>(propCompany);
   const { colors, classes, config } = useCompanyTheme(company);
 
   const [agences, setAgences] = useState<Agence[]>([]);
@@ -43,6 +45,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   const [loading, setLoading] = useState(!company);
   const [error, setError] = useState<string | null>(null);
   const [openVilles, setOpenVilles] = useState<Record<string, boolean>>({});
+  const [showLangPopup, setShowLangPopup] = useState(false);
 
   const toggleVille = (ville: string) => {
     setOpenVilles((prev) => ({ ...prev, [ville]: !prev[ville] }));
@@ -58,7 +61,50 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     [agences]
   );
 
-  // 🔁 Charger uniquement les agences si non passées en props
+  useEffect(() => {
+    const timer = setTimeout(() => setShowLangPopup(true), 4000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      if (!company?.id) return;
+      try {
+        const q = query(collection(db, 'weeklyTrips'), where('companyId', '==', company.id));
+        const snap = await getDocs(q);
+        const raw = snap.docs.map(doc => doc.data());
+
+        const uniqueMap = new Map<string, TripSuggestion>();
+
+        for (const trip of raw) {
+          const departure = trip.depart || trip.departure;
+          const arrival = trip.arrivee || trip.arrival;
+          const price = trip.price ?? trip.prix ?? 0;
+
+          if (!departure || !arrival) continue;
+
+          const key = `${departure}__${arrival}`;
+
+          if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, {
+              departure,
+              arrival,
+              price,
+              frequency: trip.days?.length > 0 ? `${trip.days.length} jours / semaine` : 'Départs réguliers',
+            });
+          }
+        }
+
+        const top = Array.from(uniqueMap.values()).slice(0, 5);
+        setSuggestedTrips(top);
+      } catch (error) {
+        console.error('Erreur chargement suggestions :', error);
+      }
+    };
+
+    fetchSuggestions();
+  }, [company]);
+
   useEffect(() => {
     const fetchAgences = async () => {
       if (!company?.id) return;
@@ -137,20 +183,26 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         <HeroSection
           company={company}
           onSearch={(departure, arrival) => {
-            navigate(
-              `/${slug}/resultats?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
-            );
+            navigate(`/${slug}/resultats?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
           }}
           isMobile={isMobile}
         />
 
-        <AvisListePublic companyId={company.id} primaryColor={colors.primary} isMobile={isMobile} />
-
-        {suggestedTrips.length > 0 && (
-          <SuggestionsSlider suggestedTrips={suggestedTrips} colors={colors} isMobile={isMobile} />
-        )}
+        <VilleSuggestionBar
+          suggestions={suggestedTrips}
+          company={company}
+          onSelect={(departure: string, arrival: string) => {
+            navigate(`/${slug}/resultats?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
+          }}
+        />
 
         <ServicesCarousel colors={colors} isMobile={isMobile} />
+
+        <AvisListePublic
+          companyId={company.id}
+          primaryColor={colors.primary}
+          isMobile={isMobile}
+        />
 
         <AnimatePresence>
           {showAgences && (
@@ -166,6 +218,17 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
             />
           )}
         </AnimatePresence>
+
+        {showLangPopup && (
+          <LanguageSuggestionPopup
+            onSelectLanguage={(lang: string | undefined) => {
+            i18n.changeLanguage(lang);
+            setShowLangPopup(false);
+          }}
+          delayMs={8000}
+        />
+      )}
+
       </main>
 
       <Footer company={company} isMobile={isMobile} />

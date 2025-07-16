@@ -47,7 +47,8 @@ export interface Agence {
 export interface TripSuggestion {
   departure: string;
   arrival: string;
-  price: number;
+  price?: number;
+  frequency?: string; // ✅ Ajouté
 }
 
 export interface CityInputProps {
@@ -116,3 +117,4 @@ export interface Company {
   commission?: number;
   
 }
+

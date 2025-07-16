@@ -8,15 +8,17 @@ import {
 import { Company } from '@/types/companyTypes';
 import AvisClientForm from '../ui/AvisClientForm';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 interface FooterProps {
   company: Company;
-    isMobile?: boolean; // ✅ AJOUTER CECI
+  isMobile?: boolean;
 }
 
 const Footer: React.FC<FooterProps> = ({ company }) => {
   const [showAvisForm, setShowAvisForm] = useState(false);
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const currentYear = new Date().getFullYear();
 
   const {
@@ -51,15 +53,11 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
         color: '#1e293b'
       }}
     >
-      {/* ✅ Image superposée (ex : carte du monde) */}
       <div 
         className="absolute inset-0 bg-[url('/world-map.svg')] bg-center bg-cover opacity-5 pointer-events-none"
       />
 
-      {/* ✅ Contenu principal du footer */}
       <div className="relative z-10 max-w-7xl mx-auto px-6 py-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-        
-        {/* À propos */}
         {showAbout && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -68,15 +66,14 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           >
             <div className="flex items-center gap-2 mb-4">
               <Info className="h-5 w-5" style={{ color: couleurPrimaire }} />
-              <h3 className="text-lg font-semibold">À propos</h3>
+              <h3 className="text-lg font-semibold">{t('about')}</h3>
             </div>
             <p className="text-sm text-gray-700">
-              {description || 'Votre compagnie de transport préférée, offrant des services de qualité.'}
+              {description || t('defaultAbout')}
             </p>
           </motion.div>
         )}
 
-        {/* Contact */}
         {showContact && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -85,7 +82,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           >
             <div className="flex items-center gap-2 mb-4">
               <MessageCircle className="h-5 w-5" style={{ color: couleurPrimaire }} />
-              <h3 className="text-lg font-semibold">Contact</h3>
+              <h3 className="text-lg font-semibold">{t('contact')}</h3>
             </div>
             <ul className="space-y-2 text-sm">
               {telephone && (
@@ -116,7 +113,6 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           </motion.div>
         )}
 
-        {/* Réseaux sociaux */}
         {showSocial && Object.values(socialMedia).some(Boolean) && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -125,7 +121,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           >
             <div className="flex items-center gap-2 mb-4">
               <ThumbsUp className="h-5 w-5" style={{ color: couleurPrimaire }} />
-              <h3 className="text-lg font-semibold">Suivez-nous</h3>
+              <h3 className="text-lg font-semibold">{t('followUs')}</h3>
             </div>
             <div className="flex gap-4">
               {socialMedia.facebook && (
@@ -157,7 +153,6 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
           </motion.div>
         )}
 
-        {/* Avis clients */}
         {showTestimonials && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -167,19 +162,16 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
             <div className="flex flex-col gap-4">
               <div className="flex items-center gap-2 mb-4">
                 <ThumbsUp className="h-5 w-5" style={{ color: couleurPrimaire }} />
-                <h3 className="text-lg font-semibold">Avis clients</h3>
+                <h3 className="text-lg font-semibold">{t('customerReviews')}</h3>
               </div>
               <motion.button
                 onClick={() => setShowAvisForm(!showAvisForm)}
                 className="flex items-center justify-between px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                style={{
-                  backgroundColor: couleurPrimaire || '#3B82F6',
-                  color: 'white'
-                }}
+                style={{ backgroundColor: couleurPrimaire || '#3B82F6', color: 'white' }}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
               >
-                <span>Donner votre avis</span>
+                <span>{t('leaveReview')}</span>
                 {showAvisForm ? <ChevronUp className="h-4 w-4 ml-2" /> : <ChevronDown className="h-4 w-4 ml-2" />}
               </motion.button>
 
@@ -205,7 +197,6 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
         )}
       </div>
 
-      {/* Mentions légales */}
       {(showLegalLinks || customLinks?.length > 0) && (
         <div 
           className="border-t py-6 text-center text-sm relative z-10"
@@ -216,16 +207,16 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
               {showLegalLinks && (
                 <>
                   <a href={`/compagnie/${slug}/mentions-legales`} className="hover:underline">
-                    Mentions légales
+                    {t('legalNotice')}
                   </a>
                   <a href={`/compagnie/${slug}/confidentialite`} className="hover:underline">
-                    Politique de confidentialité
+                    {t('privacyPolicy')}
                   </a>
                   <a href={`/compagnie/${slug}/cgu`} className="hover:underline">
-                    Conditions générales
+                    {t('termsConditions')}
                   </a>
                   <a href={`/compagnie/${slug}/cookies`} className="hover:underline">
-                    Politique des cookies
+                    {t('cookiePolicy')}
                   </a>
                 </>
               )}
@@ -241,7 +232,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
                 </a>
               ))}
             </div>
-            <p>© {currentYear} {nom || 'Notre Compagnie'}. Tous droits réservés.</p>
+            <p>© {currentYear} {nom || t('ourCompany')}. {t('allRightsReserved')}</p>
           </div>
         </div>
       )}

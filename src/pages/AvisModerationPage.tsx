@@ -1,10 +1,8 @@
-// ✅ Fichier : AvisModerationPage.tsx
 import React, { useEffect, useState } from 'react';
 import {
   collection,
   query,
   where,
-  orderBy,
   limit,
   startAfter,
   getDocs,
@@ -32,7 +30,6 @@ const AvisModerationPage: React.FC = () => {
 
   const ITEMS_PER_PAGE = 10;
 
-  // 🔑 Charger par lot
   const fetchAvis = async (loadMore = false) => {
     if (!user?.companyId) return;
 
@@ -41,8 +38,7 @@ const AvisModerationPage: React.FC = () => {
     let q = query(
       collection(db, 'avis'),
       where('companyId', '==', user.companyId),
-      where('visible', '==', false), // 👉 On filtre les non-validés seulement
-      orderBy('nom'),
+      where('visible', '==', false),
       limit(ITEMS_PER_PAGE)
     );
 
@@ -51,24 +47,33 @@ const AvisModerationPage: React.FC = () => {
         collection(db, 'avis'),
         where('companyId', '==', user.companyId),
         where('visible', '==', false),
-        orderBy('nom'),
         startAfter(lastDoc),
         limit(ITEMS_PER_PAGE)
       );
     }
 
-    const snap = await getDocs(q);
-    const newData = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Avis[];
+    try {
+      const snap = await getDocs(q);
+      const newData = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data()
+      })) as Avis[];
 
-    if (loadMore) {
-      setAvisList((prev) => [...prev, ...newData]);
-    } else {
-      setAvisList(newData);
+      const sortedData = newData.sort((a, b) => a.nom.localeCompare(b.nom));
+
+      if (loadMore) {
+        setAvisList((prev) => [...prev, ...sortedData]);
+      } else {
+        setAvisList(sortedData);
+      }
+
+      setLastDoc(snap.docs[snap.docs.length - 1] || null);
+      setHasMore(snap.size === ITEMS_PER_PAGE);
+    } catch (err) {
+      console.error('Erreur de récupération des avis :', err);
+    } finally {
+      setLoading(false);
     }
-
-    setLastDoc(snap.docs[snap.docs.length - 1] || null);
-    setHasMore(snap.size === ITEMS_PER_PAGE);
-    setLoading(false);
   };
 
   useEffect(() => {
@@ -77,7 +82,7 @@ const AvisModerationPage: React.FC = () => {
 
   const toggleVisibility = async (id: string, visible: boolean) => {
     await updateDoc(doc(db, 'avis', id), { visible: !visible });
-    fetchAvis(); // Recharge la liste
+    fetchAvis();
   };
 
   const handleDelete = async (id: string) => {
