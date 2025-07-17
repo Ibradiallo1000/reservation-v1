@@ -45,6 +45,7 @@ export interface Agence {
 }
 
 export interface TripSuggestion {
+  duration: string;
   departure: string;
   arrival: string;
   price?: number;
