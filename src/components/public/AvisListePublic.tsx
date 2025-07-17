@@ -84,10 +84,10 @@ const AvisListePublic: React.FC<Props> = ({ companyId, primaryColor, secondaryCo
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-6">
           <h2 className="text-2xl font-bold mb-1" style={{ color: primaryColor }}>
-            {t('whatCustomersSay')}
+            {t('whatClientsSay')}
           </h2>
           <p className="text-gray-600 text-sm">
-            {t('authenticExperience')}
+            {t('realExperiences')}
           </p>
         </div>
 

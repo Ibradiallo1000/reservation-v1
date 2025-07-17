@@ -47,9 +47,6 @@ const LanguageSuggestionPopup: React.FC<LanguageSuggestionPopupProps> = ({
             <X className="w-4 h-4" />
           </button>
         </div>
-        <p className="text-sm text-gray-600 mb-3">
-          Ce site est disponible en plusieurs langues. Choisissez votre préférence.
-        </p>
         <div className="flex justify-end gap-2">
           <button
             onClick={() => handleLanguageChange('fr')}

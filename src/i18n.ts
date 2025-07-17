@@ -59,7 +59,17 @@ i18n
           seeMore: 'Voir plus',
           bookInOneClick: 'Réservez vos trajets en un seul clic',
           whatClientsSay: 'Ce que nos clients disent',
-          realExperiences: 'Les expériences authentiques de nos voyageurs'
+          realExperiences: 'Les expériences authentiques de nos voyageurs',
+
+          // 🟢 Clés manquantes ajoutées pour ServicesCarousel
+          serviceSecurityTitle: 'Sécurité',
+          serviceSecurityDesc: 'Votre sécurité est notre priorité à chaque trajet.',
+          servicePunctualityTitle: 'Ponctualité',
+          servicePunctualityDesc: 'Des départs et arrivées toujours à l’heure.',
+          serviceSupportTitle: 'Support client',
+          serviceSupportDesc: 'Une assistance réactive, où que vous soyez.',
+          serviceComfortTitle: 'Confort',
+          serviceComfortDesc: 'Des véhicules spacieux et climatisés pour votre confort.'
         }
       },
       en: {
@@ -108,7 +118,17 @@ i18n
           seeMore: 'See more',
           bookInOneClick: 'Book your trip in one click',
           whatClientsSay: 'What our clients say',
-          realExperiences: 'Real experiences from our travelers'
+          realExperiences: 'Real experiences from our travelers',
+
+          // 🟢 Clés manquantes ajoutées pour ServicesCarousel
+          serviceSecurityTitle: 'Security',
+          serviceSecurityDesc: 'Your safety is our top priority on every trip.',
+          servicePunctualityTitle: 'Punctuality',
+          servicePunctualityDesc: 'Departures and arrivals always on time.',
+          serviceSupportTitle: 'Customer support',
+          serviceSupportDesc: 'Responsive assistance, wherever you are.',
+          serviceComfortTitle: 'Comfort',
+          serviceComfortDesc: 'Spacious and air-conditioned vehicles for your comfort.'
         }
       }
     }
