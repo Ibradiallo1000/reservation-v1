@@ -308,7 +308,7 @@ const FormulaireReservationClient: React.FC<FormulaireReservationClientProps> = 
 
       <main className="max-w-4xl mx-auto p-4">
         <div className={`p-4 rounded-xl mb-4 ${classes.card}`}>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex flex-row flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-lg font-bold" style={{ color: colors.primary }}>
                 {tripData.departure} → {tripData.arrival}

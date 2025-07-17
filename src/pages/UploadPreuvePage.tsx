@@ -44,7 +44,7 @@ interface CompanyInfo {
   name: string;
   primaryColor?: string;
   secondaryColor?: string;
-  couleurPrimaire?: string; // ✅ Ajout ici
+  couleurPrimaire?: string;
   logoUrl?: string;
   paymentMethods?: PaymentMethods;
   slug?: string;
@@ -70,12 +70,7 @@ const UploadPreuvePage: React.FC = () => {
     try {
       setLoadingData(true);
 
-      console.log('[UploadPreuvePage] location.state:', location.state);
-      console.log('[UploadPreuvePage] sessionStorage.reservationDraft:', sessionStorage.getItem('reservationDraft'));
-      console.log('[UploadPreuvePage] sessionStorage.companyInfo:', sessionStorage.getItem('companyInfo'));
-
       if (locationDraft && locationCompanyInfo) {
-        console.log('[UploadPreuvePage] ✅ Données reçues via location.state');
         setReservationDraft(locationDraft);
         setCompanyInfo(locationCompanyInfo);
         return;
@@ -85,8 +80,6 @@ const UploadPreuvePage: React.FC = () => {
       const savedCompanyInfo = sessionStorage.getItem('companyInfo');
 
       if (savedDraft && savedCompanyInfo) {
-        console.log('[UploadPreuvePage] ✅ Données trouvées dans sessionStorage');
-
         const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
         const parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
 
@@ -107,8 +100,6 @@ const UploadPreuvePage: React.FC = () => {
     } catch (error) {
       console.error('[UploadPreuvePage] ❌ Erreur de chargement:', error);
       setError(error instanceof Error ? error.message : 'Erreur inconnue');
-
-      console.warn('[UploadPreuvePage] 🚨 Redirection vers la vitrine car données invalides');
       navigate(`/${slug || ''}`, {
         replace: true,
         state: { error: 'Erreur de chargement des données' }
@@ -163,8 +154,6 @@ const UploadPreuvePage: React.FC = () => {
         const ussd = method.ussdPattern
           .replace('MERCHANT', method.merchantNumber)
           .replace('AMOUNT', reservationDraft.montant.toString());
-
-        console.log(`USSD à composer : ${ussd}`);
 
         if (method.url) {
           window.open(method.url, '_blank', 'noopener,noreferrer');
@@ -283,20 +272,6 @@ const UploadPreuvePage: React.FC = () => {
       <main className="max-w-4xl mx-auto p-4 space-y-6">
         <ReservationSummaryCard reservationDraft={reservationDraft} />
         
-        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-          <div className="flex items-start gap-3">
-            <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-            <div>
-              <h3 className="font-medium text-blue-800 mb-1">Instructions de paiement</h3>
-              <p className="text-sm text-blue-700">
-                1. Choisissez un moyen de paiement ci-dessous.<br />
-                2. Effectuez le paiement dans l'application.<br />
-                3. Revenez ici pour envoyer votre preuve.
-              </p>
-            </div>
-          </div>
-        </div>
-
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="p-6 space-y-6">
             <AmountSection 
@@ -304,18 +279,37 @@ const UploadPreuvePage: React.FC = () => {
               primaryColor={themeConfig.colors.primary} 
             />
             
-            <PaymentMethodSection
-              paymentMethod={paymentMethod}
-              onPaymentMethodSelect={handlePaymentMethodSelect}
-              companyInfo={companyInfo}
-              reservationAmount={reservationDraft.montant}
-            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Choisissez un moyen de paiement ci-dessous :
+              </label>
+              <PaymentMethodSection
+                paymentMethod={paymentMethod}
+                onPaymentMethodSelect={handlePaymentMethodSelect}
+                companyInfo={companyInfo}
+                reservationAmount={reservationDraft.montant}
+              />
+            </div>
             
-            <MessageSection 
-              message={message}
-              setMessage={setMessage}
-              primaryColor={themeConfig.colors.primary}
-            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Entrez les détails du paiement que vous avez effectué :
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                (Exemple: "Paiement MTN Mobile Money - Réf: 5X8T9K - 05/07/2024")
+              </p>
+              <textarea
+                placeholder="Coller les détails du paiement..."
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:outline-none"
+                style={{ 
+                  borderColor: hexToRgba(themeConfig.colors.primary, 0.3),
+                }}
+                rows={4}
+                required
+              />
+            </div>
             
             <FileUploadSection 
               handleFileChange={handleFileChange}

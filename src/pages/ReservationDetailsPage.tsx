@@ -4,13 +4,12 @@ import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import {
   ChevronLeft, MapPin, Clock, Calendar, CheckCircle, XCircle, Loader2,
-  Users, User, Upload, CreditCard, Wallet, Phone, Navigation, Ticket
+  User, Phone, CreditCard, Ticket, Heart
 } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { motion } from 'framer-motion';
 import { hexToRgba, safeTextColor } from '../utils/color';
-import { fadeIn } from '@/utils/animations';
 
 type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'payé' | 'annule';
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre';
@@ -53,34 +52,34 @@ const STATUS_DISPLAY: Record<ReservationStatus, {
   bgColor: string;
 }> = {
   en_attente: { 
-    text: 'En attente de paiement', 
+    text: 'En attente', 
     color: 'text-amber-600',
-    bgColor: 'bg-amber-50',
-    icon: <Loader2 className="h-5 w-5 animate-spin" /> 
+    bgColor: 'bg-amber-50/80',
+    icon: <Loader2 className="h-4 w-4 animate-spin" /> 
   },
   paiement_en_cours: { 
     text: 'Paiement en cours', 
     color: 'text-blue-600',
-    bgColor: 'bg-blue-50',
-    icon: <Loader2 className="h-5 w-5 animate-spin" /> 
+    bgColor: 'bg-blue-50/80',
+    icon: <Loader2 className="h-4 w-4 animate-spin" /> 
   },
   preuve_recue: { 
     text: 'Preuve reçue', 
     color: 'text-violet-600',
-    bgColor: 'bg-violet-50',
-    icon: <Upload className="h-5 w-5" /> 
+    bgColor: 'bg-violet-50/80',
+    icon: <CheckCircle className="h-4 w-4" /> 
   },
   payé: { 
-    text: 'Paiement confirmé', 
+    text: 'Confirmé', 
     color: 'text-emerald-600',
-    bgColor: 'bg-emerald-50',
-    icon: <CheckCircle className="h-5 w-5" /> 
+    bgColor: 'bg-emerald-50/80',
+    icon: <CheckCircle className="h-4 w-4" /> 
   },
   annule: { 
     text: 'Annulé', 
     color: 'text-red-600',
-    bgColor: 'bg-red-50',
-    icon: <XCircle className="h-5 w-5" /> 
+    bgColor: 'bg-red-50/80',
+    icon: <XCircle className="h-4 w-4" /> 
   },
 };
 
@@ -89,6 +88,14 @@ const PAYMENT_METHODS: Record<PaymentMethod, string> = {
   carte_bancaire: 'Carte bancaire',
   espèces: 'Espèces',
   autre: 'Autre moyen'
+};
+
+const formatCompactDate = (dateString: string) => {
+  return new Date(dateString).toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
 };
 
 const ReservationDetailsPage: React.FC = () => {
@@ -104,9 +111,6 @@ const ReservationDetailsPage: React.FC = () => {
 
   const fallbackColor = '#3b82f6';
   const primaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
-  const resolvedPrimaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
-  const resolvedTextColor = safeTextColor(resolvedPrimaryColor);
-
   const textColor = safeTextColor(primaryColor);
 
   useEffect(() => {
@@ -130,7 +134,7 @@ const ReservationDetailsPage: React.FC = () => {
       setLoading(false);
     }, (err) => { 
       console.error(err); 
-      setError('Erreur de connexion au serveur'); 
+      setError('Erreur de connexion'); 
       setLoading(false); 
     });
 
@@ -151,11 +155,9 @@ const ReservationDetailsPage: React.FC = () => {
             primaryColor: data.primaryColor, 
             logoUrl: data.logoUrl 
           });
-          // Sauvegarde en sessionStorage pour usage ultérieur
-          sessionStorage.setItem('companyInfo', JSON.stringify(data));
         }
       } catch (err) {
-        console.error("Erreur lors de la récupération de l'entreprise", err);
+        console.error("Erreur entreprise", err);
       }
     };
     
@@ -163,23 +165,23 @@ const ReservationDetailsPage: React.FC = () => {
   }, [reservation?.companyId, locationCompanyInfo]);
 
   if (loading) return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6">
-      <div className="flex flex-col items-center justify-center space-y-4">
-        <Loader2 className="h-12 w-12 animate-spin" style={{ color: primaryColor }} />
-        <p className="text-gray-600">Chargement de votre réservation...</p>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50/50">
+      <div className="flex flex-col items-center space-y-3">
+        <Loader2 className="h-8 w-8 animate-spin" style={{ color: primaryColor }} />
+        <p className="text-gray-600 text-sm">Chargement de votre réservation...</p>
       </div>
     </div>
   );
 
   if (error || !reservation) return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6">
-      <div className="bg-white rounded-xl shadow-sm p-8 max-w-md w-full text-center">
-        <XCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-        <h3 className="text-xl font-semibold text-gray-900 mb-2">Erreur</h3>
-        <p className="text-gray-600 mb-6">{error || 'Réservation introuvable'}</p>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50/50">
+      <div className="bg-white rounded-xl shadow-sm p-6 max-w-md w-full text-center">
+        <XCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">Erreur</h3>
+        <p className="text-gray-600 mb-5">{error || 'Réservation introuvable'}</p>
         <button
           onClick={() => navigate(-1)}
-          className="px-6 py-2 rounded-lg font-medium"
+          className="px-5 py-2 rounded-lg text-sm font-medium shadow-sm"
           style={{ backgroundColor: primaryColor, color: textColor }}
         >
           Retour
@@ -190,203 +192,190 @@ const ReservationDetailsPage: React.FC = () => {
 
   const realSlug = slug || reservation.companySlug;
   const statusInfo = STATUS_DISPLAY[reservation.statut] || STATUS_DISPLAY.annule;
-  
-  const formattedDate = new Date(reservation.date).toLocaleDateString('fr-FR', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric'
-  });
-
   const lastUpdated = reservation.updatedAt 
-    ? new Date(reservation.updatedAt).toLocaleString('fr-FR')
+    ? new Date(reservation.updatedAt).toLocaleString('fr-FR', { timeStyle: 'short' })
     : 'Non disponible';
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header avec effet glassmorphism */}
+    <div className="min-h-screen bg-gradient-to-b from-gray-50/70 to-white">
+      {/* Header élégant avec ombre douce */}
       <header
-        className="sticky top-0 z-20 px-6 py-4 backdrop-blur-sm border-b"
+        className="sticky top-0 z-10 px-5 py-3 shadow-sm"
         style={{ 
-          backgroundColor: hexToRgba(primaryColor, 0.9),
-          borderColor: hexToRgba(primaryColor, 0.2),
+          backgroundColor: hexToRgba(primaryColor, 0.98),
           color: textColor
         }}
       >
-        <div className="flex items-center justify-between max-w-2xl mx-auto">
+        <div className="flex items-center justify-between max-w-md mx-auto">
           <button 
             onClick={() => navigate(-1)} 
-            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            className="p-1.5 rounded-full hover:bg-white/10 transition-colors"
             aria-label="Retour"
           >
-            <ChevronLeft className="h-6 w-6" />
+            <ChevronLeft className="h-5 w-5" />
           </button>
           
-          <h1 className="font-bold text-xl">Détails de réservation</h1>
+          <h1 className="font-semibold text-base tracking-tight">Détails de réservation</h1>
           
           {companyInfo?.logoUrl ? (
             <LazyLoadImage 
               src={companyInfo.logoUrl} 
-              alt="Logo compagnie" 
-              className="h-10 w-10 rounded-full object-cover border-2"
+              alt="Logo" 
+              className="h-8 w-8 rounded-full object-cover border"
               style={{ borderColor: hexToRgba(textColor, 0.2) }}
               effect="blur"
             />
           ) : (
-            <div className="h-10 w-10 rounded-full flex items-center justify-center font-semibold border-2"
+            <div className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium border"
               style={{ 
                 backgroundColor: hexToRgba(textColor, 0.1),
                 borderColor: hexToRgba(textColor, 0.2),
                 color: textColor
               }}
             >
-              {(companyInfo?.name?.charAt(0) || reservation.companyName?.charAt(0) || 'C')}
+              {companyInfo?.name?.charAt(0) || 'C'}
             </div>
           )}
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-        {/* Carte de statut */}
+      <main className="max-w-md mx-auto px-4 py-5 space-y-5">
+        {/* Carte de statut élégante */}
         <motion.div 
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className={`p-4 rounded-xl ${statusInfo.bgColor} flex items-center gap-3 shadow-sm`}
+          className={`p-3.5 rounded-xl ${statusInfo.bgColor} backdrop-blur-sm flex items-center gap-3 shadow-xs border`}
         >
-          <div className={`p-2 rounded-full ${statusInfo.color}`}>
+          <div className={`p-2 rounded-lg ${statusInfo.color} bg-white/80`}>
             {statusInfo.icon}
           </div>
           <div>
-            <p className="font-semibold" style={{ color: statusInfo.color }}>
+            <p className="font-medium text-sm" style={{ color: statusInfo.color }}>
               {statusInfo.text}
             </p>
-            <p className="text-sm text-gray-500 mt-1">
-              Référence: <span className="font-mono">{reservation.referenceCode}</span>
-            </p>
-            <p className="text-xs text-gray-400 mt-1">
-              Mis à jour: {lastUpdated}
-            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-gray-500 font-mono bg-gray-100/70 px-2 py-0.5 rounded">
+                {reservation.referenceCode}
+              </span>
+              <span className="text-xs text-gray-400">
+                {lastUpdated}
+              </span>
+            </div>
           </div>
         </motion.div>
 
-        {/* Carte d'informations */}
+        {/* Carte d'informations compacte et élégante */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="bg-white rounded-xl shadow-sm overflow-hidden"
+          className="bg-white rounded-xl shadow-xs border overflow-hidden"
         >
-          <div className="p-5 border-b">
-            <h2 className="font-bold text-lg flex items-center gap-2">
-              <Ticket className="h-5 w-5" style={{ color: primaryColor }} />
-              Informations du voyage
+          <div className="p-4 border-b">
+            <h2 className="font-semibold text-sm flex items-center gap-2">
+              <Ticket className="h-4 w-4" style={{ color: primaryColor }} />
+              Détails du voyage
             </h2>
           </div>
           
-          <div className="divide-y divide-gray-100">
-            <div className="p-5 flex items-start gap-4">
-              <div className="p-2 rounded-full bg-gray-100 mt-0.5">
-                <MapPin className="h-5 w-5 text-gray-600" />
-              </div>
-              <div>
-                <h3 className="font-medium text-gray-900">Itinéraire</h3>
-                <p className="text-gray-600">
+          <div className="p-4 space-y-3.5">
+            {/* Ligne 1 - Itinéraire et Date */}
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                <span className="text-sm font-medium text-gray-800">
                   {reservation.depart} → {reservation.arrivee}
-                </p>
-                {reservation.tripType === 'aller-retour' && (
-                  <p className="text-xs text-gray-500 mt-1">
-                    Aller-retour ({reservation.seatsGo} place(s) aller, {reservation.seatsReturn} retour)
-                  </p>
-                )}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                <span className="text-sm text-gray-600">
+                  {formatCompactDate(reservation.date)}
+                </span>
               </div>
             </div>
-            
-            <div className="p-5 flex items-start gap-4">
-              <div className="p-2 rounded-full bg-gray-100 mt-0.5">
-                <Calendar className="h-5 w-5 text-gray-600" />
+
+            {/* Ligne 2 - Heure et Passager */}
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                <span className="text-sm text-gray-600">
+                  {reservation.heure}
+                </span>
               </div>
-              <div>
-                <h3 className="font-medium text-gray-900">Date</h3>
-                <p className="text-gray-600">{formattedDate}</p>
-                <p className="text-xs text-gray-500 mt-1">
-                  Heure : {reservation.heure}
-                </p>
-              </div>
-            </div>
-            
-            <div className="p-5 flex items-start gap-4">
-              <div className="p-2 rounded-full bg-gray-100 mt-0.5">
-                <User className="h-5 w-5 text-gray-600" />
-              </div>
-              <div>
-                <h3 className="font-medium text-gray-900">Passager</h3>
-                <p className="text-gray-600">{reservation.nomClient}</p>
-                <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                  <Phone className="h-3 w-3" /> {reservation.telephone}
-                </p>
+              <div className="flex items-center gap-2">
+                <User className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                <span className="text-sm text-gray-600">
+                  {reservation.nomClient}
+                </span>
               </div>
             </div>
-            
-            <div className="p-5 flex items-start gap-4">
-              <div className="p-2 rounded-full bg-gray-100 mt-0.5">
-                <CreditCard className="h-5 w-5 text-gray-600" />
-              </div>
-              <div>
-                <h3 className="font-medium text-gray-900">Paiement</h3>
-                <p className="text-gray-600">
+
+            {/* Ligne 3 - Téléphone */}
+            <div className="flex items-center gap-2">
+              <Phone className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <span className="text-sm text-gray-600">
+                {reservation.telephone}
+              </span>
+            </div>
+
+            {/* Ligne 4 - Paiement */}
+            <div className="flex justify-between items-center pt-2 border-t border-gray-100">
+              <div className="flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                <span className="text-sm font-medium text-gray-800">
                   {reservation.montant.toLocaleString('fr-FR')} FCFA
-                </p>
-                {reservation.canal && (
-                  <p className="text-xs text-gray-500 mt-1">
-                    Méthode: {PAYMENT_METHODS[reservation.canal] || 'Non spécifiée'}
-                  </p>
-                )}
+                </span>
               </div>
+              {reservation.canal && (
+                <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                  {PAYMENT_METHODS[reservation.canal]}
+                </span>
+              )}
             </div>
+
+            {/* Aller-retour si applicable */}
+            {reservation.tripType === 'aller-retour' && (
+              <div className="text-xs text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
+                Aller-retour • {reservation.seatsGo} place(s) aller • {reservation.seatsReturn} place(s) retour
+              </div>
+            )}
           </div>
         </motion.div>
 
-        {/* Bouton d'action */}
+        {/* Bouton avec animation subtile */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          className="pt-2"
         >
           <button
-            onClick={() => {
-              if (companyInfo) {
-                sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
-              }
-
-              navigate(`/${realSlug}/receipt/${id}`, {
-                state: {
-                  reservation,
-                  tripData: reservation.tripData || null,
-                  companyInfo
-                }
-              });
-            }}
-            className={`w-full py-3 rounded-xl font-medium flex items-center justify-center gap-2 shadow-md transition-all
-              ${reservation.statut === 'payé' ? 'hover:shadow-lg' : 'opacity-70 cursor-not-allowed'}`}
+            onClick={() => navigate(`/${realSlug}/receipt/${id}`, {
+              state: { reservation, companyInfo }
+            })}
+            className={`w-full py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all
+              ${reservation.statut === 'payé' ? 'hover:opacity-90' : 'opacity-70 cursor-not-allowed'}`}
             style={{ backgroundColor: primaryColor, color: textColor }}
             disabled={reservation.statut !== 'payé'}
           >
-            <CheckCircle className="h-5 w-5" />
+            <CheckCircle className="h-4 w-4" />
             {reservation.statut === 'payé' ? 'Voir mon reçu' : 'Reçu disponible après paiement'}
           </button>
         </motion.div>
 
-        {/* Footer */}
+        {/* Message de remerciement élégant */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.4 }}
-          className="text-center text-sm text-gray-400 pt-6"
+          className="text-center pt-4"
         >
-          <p>Merci pour votre confiance</p>
-          <p className="font-medium mt-1" style={{ color: primaryColor }}>
+          <div className="flex items-center justify-center gap-1 text-sm text-gray-500">
+            <Heart className="h-3.5 w-3.5 text-rose-400 fill-rose-400" />
+            <span>Merci pour votre confiance</span>
+          </div>
+          <p className="text-sm font-medium mt-1" style={{ color: primaryColor }}>
             {reservation.companyName || companyInfo?.name || 'Votre compagnie'}
           </p>
         </motion.div>
