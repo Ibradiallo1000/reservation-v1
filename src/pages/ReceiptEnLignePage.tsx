@@ -315,7 +315,7 @@ const ReceiptEnLignePage: React.FC = () => {
       </main>
 
       {/* Action Buttons - Fixed at bottom */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t py-20 px-4 shadow-lg grid grid-cols-2 gap-3"
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t py-4 px-4 shadow-lg grid grid-cols-2 gap-3"
            style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
         <button
           onClick={handlePDF}
