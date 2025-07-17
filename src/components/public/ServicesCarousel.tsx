@@ -20,37 +20,41 @@ interface ServicesCarouselProps {
 
 export default function ServicesCarousel({
   services,
-  colors,
-  isMobile
+  colors
 }: ServicesCarouselProps) {
   const { t } = useTranslation();
-
-  const defaultServices: ServiceItem[] = [
-    {
-      icon: ShieldCheck,
-      title: t('serviceSecurityTitle'),
-      description: t('serviceSecurityDesc')
-    },
-    {
-      icon: Clock,
-      title: t('servicePunctualityTitle'),
-      description: t('servicePunctualityDesc')
-    },
-    {
-      icon: Headphones,
-      title: t('serviceSupportTitle'),
-      description: t('serviceSupportDesc')
-    },
-    {
-      icon: Car,
-      title: t('serviceComfortTitle'),
-      description: t('serviceComfortDesc')
-    }
-  ];
-
-  const finalServices = services && services.length > 0 ? services : defaultServices;
-
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [finalServices, setFinalServices] = useState<ServiceItem[]>([]);
+
+  // ✅ Générer dynamiquement les services traduits
+  useEffect(() => {
+    if (services && services.length > 0) {
+      setFinalServices(services);
+    } else {
+      setFinalServices([
+        {
+          icon: ShieldCheck,
+          title: t('serviceSecurityTitle'),
+          description: t('serviceSecurityDesc')
+        },
+        {
+          icon: Clock,
+          title: t('servicePunctualityTitle'),
+          description: t('servicePunctualityDesc')
+        },
+        {
+          icon: Headphones,
+          title: t('serviceSupportTitle'),
+          description: t('serviceSupportDesc')
+        },
+        {
+          icon: Car,
+          title: t('serviceComfortTitle'),
+          description: t('serviceComfortDesc')
+        }
+      ]);
+    }
+  }, [t]); // t change automatiquement quand la langue change
 
   const handleNav = (direction: 'prev' | 'next') => {
     setCurrentIndex(prev =>
@@ -63,8 +67,9 @@ export default function ServicesCarousel({
   useEffect(() => {
     const interval = setInterval(() => handleNav('next'), 6000);
     return () => clearInterval(interval);
-  }, [finalServices.length]);
+  }, [finalServices]);
 
+  if (finalServices.length === 0) return null;
   const currentService = finalServices[currentIndex];
   const Icon = currentService.icon;
 

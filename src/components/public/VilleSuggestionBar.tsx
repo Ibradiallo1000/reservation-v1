@@ -1,7 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, MapPin } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
 import { Company, TripSuggestion } from '@/types/companyTypes';
 
 interface VilleSuggestionBarProps {
@@ -15,7 +14,6 @@ const VilleSuggestionBar: React.FC<VilleSuggestionBarProps> = ({
   company,
   onSelect,
 }) => {
-  const { t } = useTranslation();
   const couleurPrimaire = company.couleurPrimaire || '#3b82f6';
   const couleurSecondaire = company.couleurSecondaire || '#e0f2fe';
 
@@ -25,14 +23,15 @@ const VilleSuggestionBar: React.FC<VilleSuggestionBarProps> = ({
         <div className="mb-6">
           <h2 className="text-xl font-bold text-gray-900 flex items-center">
             <MapPin className="mr-2" size={20} />
-            {t('popularDestinations')}
+            Destinations populaires
           </h2>
           <p className="text-sm text-gray-600 mt-1">
-            {t('bookInOneClick')}
+            Réservez vos trajets en un clic
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        {/* ✅ Responsive : 1 col mobile, 2 sur sm, 3 sur lg */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {suggestions.slice(0, 6).map((trip, index) => (
             <motion.div
               key={index}
@@ -41,12 +40,19 @@ const VilleSuggestionBar: React.FC<VilleSuggestionBarProps> = ({
             >
               <div 
                 className="flex items-center bg-white rounded-lg border border-gray-200 p-3 cursor-pointer transition-all duration-200 hover:border-transparent hover:shadow-md"
-                style={{ borderLeft: `4px solid ${couleurSecondaire}` }}
+                style={{ 
+                  borderLeft: `4px solid ${couleurPrimaire}`,
+                }}
                 onClick={() => onSelect(trip.departure, trip.arrival)}
               >
-                {/* Illustration de trajet */}
-                <div className="relative mr-3 hidden md:block">
-                  <svg width="60" height="40" viewBox="0 0 60 40" className="text-gray-300">
+                {/* Mini illustration visible sur écran moyen+ */}
+                <div className="relative mr-4 hidden md:block">
+                  <svg 
+                    width="60" 
+                    height="40" 
+                    viewBox="0 0 60 40"
+                    className="text-gray-300"
+                  >
                     <path 
                       d="M5,20 Q30,5 55,20" 
                       stroke="currentColor" 
@@ -60,22 +66,26 @@ const VilleSuggestionBar: React.FC<VilleSuggestionBarProps> = ({
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold text-gray-800 truncate mb-1">
-                    {trip.departure}
-                    <ArrowRight className="inline h-4 w-4 mx-2 text-gray-400" />
-                    {trip.arrival}
-                  </h3>
+                  <div className="flex items-center mb-1">
+                    <h3 className="text-sm font-semibold text-gray-800 truncate">
+                      {trip.departure}
+                      <ArrowRight className="inline h-3 w-3 mx-1" />
+                      {trip.arrival}
+                    </h3>
+                  </div>
 
                   <div className="flex items-center justify-between">
-                    <span 
-                      className="text-xs font-bold px-2 py-0.5 rounded"
-                      style={{ 
-                        backgroundColor: couleurSecondaire,
-                        color: couleurPrimaire
-                      }}
-                    >
-                      {(trip.price ?? 0).toLocaleString()} FCFA
-                    </span>
+                    {trip.price && (
+                      <span 
+                        className="text-xs font-bold px-2 py-0.5 rounded"
+                        style={{ 
+                          backgroundColor: couleurSecondaire,
+                          color: couleurPrimaire
+                        }}
+                      >
+                        {trip.price.toLocaleString()} FCFA
+                      </span>
+                    )}
 
                     <button
                       className="text-xs font-semibold px-2 py-1 rounded hover:opacity-90 transition-opacity"
@@ -84,7 +94,7 @@ const VilleSuggestionBar: React.FC<VilleSuggestionBarProps> = ({
                         color: 'white'
                       }}
                     >
-                      {t('bookNow')}
+                      Réserver
                     </button>
                   </div>
                 </div>
@@ -102,7 +112,7 @@ const VilleSuggestionBar: React.FC<VilleSuggestionBarProps> = ({
                 color: couleurPrimaire
               }}
             >
-              {t('seeMore')}
+              + Voir plus
             </button>
           </div>
         )}
