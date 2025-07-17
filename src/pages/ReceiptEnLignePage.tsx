@@ -13,7 +13,6 @@ import { hexToRgba, safeTextColor } from '../utils/color';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
-
 interface Reservation {
   id: string;
   nomClient: string;
@@ -60,8 +59,8 @@ const ReceiptEnLignePage: React.FC = () => {
   const [agencyInfo, setAgencyInfo] = useState<AgencyInfo | null>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
   const formattedDate = reservation?.date
-  ? format(parseISO(reservation.date), 'dd/MM/yyyy', { locale: fr })
-  : '';
+    ? format(parseISO(reservation.date), 'dd/MM/yyyy', { locale: fr })
+    : '';
   const fallbackColor = '#3b82f6';
   const primaryColor = companyInfo?.couleurPrimaire || fallbackColor;
   const themeConfig = {
@@ -70,57 +69,53 @@ const ReceiptEnLignePage: React.FC = () => {
       text: safeTextColor(primaryColor),
     },
   };
+  const nomCompagnieAffiche = companyInfo?.name || reservation?.companyName || 'Votre compagnie';
 
   useEffect(() => {
-  const fetchData = async () => {
-    let res = reservation;
+    const fetchData = async () => {
+      let res = reservation;
 
-    // 🔁 Si aucune réservation transmise, la charger
-    if (!res && id) {
-      const snap = await getDoc(doc(db, 'reservations', id));
-      if (snap.exists()) {
-        res = { ...(snap.data() as Reservation), id: snap.id };
-        setReservation(res);
+      if (!res && id) {
+        const snap = await getDoc(doc(db, 'reservations', id));
+        if (snap.exists()) {
+          res = { ...(snap.data() as Reservation), id: snap.id };
+          setReservation(res);
+        }
       }
-    }
 
-    // ✅ Si companyInfo absent, le charger et l’enregistrer dans sessionStorage
-    if (res?.companyId && !companyInfo) {
-      const companySnap = await getDoc(doc(db, 'companies', res.companyId));
-      if (companySnap.exists()) {
-        const data = companySnap.data();
-        const loadedCompanyInfo = {
-          id: companySnap.id,
-          name: data.name || data.nom || res.companyName || 'Nom Compagnie',
-          couleurPrimaire: data.couleurPrimaire,
-          logoUrl: data.logoUrl,
-          telephone: data.telephone,
-        };
-        setCompanyInfo(loadedCompanyInfo);
-
-        // 💾 Sauvegarde dans sessionStorage pour usage ultérieur
-        sessionStorage.setItem('companyInfo', JSON.stringify(loadedCompanyInfo));
+      if (res?.companyId && !companyInfo) {
+        const companySnap = await getDoc(doc(db, 'companies', res.companyId));
+        if (companySnap.exists()) {
+          const data = companySnap.data();
+          const loadedCompanyInfo = {
+            id: companySnap.id,
+            name: data.name || data.nom || res.companyName || 'Nom Compagnie',
+            couleurPrimaire: data.couleurPrimaire,
+            logoUrl: data.logoUrl,
+            telephone: data.telephone,
+          };
+          setCompanyInfo(loadedCompanyInfo);
+          sessionStorage.setItem('companyInfo', JSON.stringify(loadedCompanyInfo));
+        }
       }
-    }
 
-    // ✅ Charger les infos d'agence si présentes
-    if (res?.agencyId) {
-      const agencySnap = await getDoc(doc(db, 'agences', res.agencyId));
-      if (agencySnap.exists()) {
-        const data = agencySnap.data();
-        setAgencyInfo({
-          id: agencySnap.id,
-          nomAgence: data.nomAgence || 'Agence',
-          telephone: data.telephone || '',
-          latitude: data.latitude,
-          longitude: data.longitude,
-        });
+      if (res?.agencyId) {
+        const agencySnap = await getDoc(doc(db, 'agences', res.agencyId));
+        if (agencySnap.exists()) {
+          const data = agencySnap.data();
+          setAgencyInfo({
+            id: agencySnap.id,
+            nomAgence: data.nomAgence || 'Agence',
+            telephone: data.telephone || '',
+            latitude: data.latitude,
+            longitude: data.longitude,
+          });
+        }
       }
-    }
-  };
+    };
 
-  fetchData();
-}, [id, reservation, companyInfo]);
+    fetchData();
+  }, [id, reservation, companyInfo]);
 
   const handlePDF = useCallback(() => {
     if (receiptRef.current) {
@@ -151,8 +146,8 @@ const ReceiptEnLignePage: React.FC = () => {
       <header
         className="sticky top-0 z-20 px-4 py-4 shadow-sm"
         style={{
-          backgroundColor: primaryColor, // 👉 couleur primaire direct
-          color: '#ffffff', // 👉 texte blanc forcé
+          backgroundColor: primaryColor,
+          color: '#ffffff',
           borderBottom: `1px solid ${hexToRgba(primaryColor, 0.2)}`,
         }}
       >
@@ -203,7 +198,7 @@ const ReceiptEnLignePage: React.FC = () => {
             )}
             <div>
               <h2 className="font-bold text-lg" style={{ color: primaryColor }}>
-                 {companyInfo.name || reservation.companyName || 'Nom Compagnie'}
+                {nomCompagnieAffiche}
               </h2>
               <div className="flex flex-wrap items-center gap-4 text-sm mt-1">
                 {agencyInfo?.nomAgence && (
@@ -216,7 +211,6 @@ const ReceiptEnLignePage: React.FC = () => {
                    <MapPin className="h-4 w-4" />
                    <span>{agencyInfo.nomAgence}</span>
                  </a>
-
                 )}
                 {(agencyInfo?.telephone || companyInfo.telephone) && (
                   <a
@@ -226,92 +220,84 @@ const ReceiptEnLignePage: React.FC = () => {
                     <Phone className="h-4 w-4" />
                     <span>{agencyInfo?.telephone || companyInfo.telephone}</span>
                   </a>
-
                 )}
               </div>
             </div>
           </div>
 
           {/* Reference & QR Code */}
-          <div className="p-4 flex justify-between items-center border-b"
+          <div className="p-3 flex justify-between items-center border-b text-sm"
                style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
-            <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-gray-100">
-              <Hash size={16} className="text-gray-500" />
-              <span className="font-mono text-sm">{reservation.referenceCode}</span>
+            <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100">
+              <Hash size={14} className="text-gray-500" />
+              <span className="font-mono">{reservation.referenceCode}</span>
             </div>
             <QRCode
               value={`${window.location.origin}/${slug}/receipt/${id}`}
-              size={80}
+              size={70}
               fgColor={primaryColor}
               level="H"
             />
           </div>
 
           {/* Client Info */}
-          <div className="p-4 border-b" style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-gray-500 mb-1">Nom client</p>
-                <p className="font-medium">{reservation.nomClient}</p>
-              </div>
-              <div>
-                <p className="text-gray-500 mb-1">Téléphone</p>
-                <p className="font-medium">{reservation.telephone}</p>
-              </div>
+          <div className="p-3 border-b grid grid-cols-2 gap-2 text-sm"
+               style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
+            <div>
+              <p className="text-gray-500 text-xs">Client</p>
+              <p className="font-medium">{reservation.nomClient}</p>
+            </div>
+            <div>
+              <p className="text-gray-500 text-xs">Téléphone</p>
+              <p className="font-medium">{reservation.telephone}</p>
             </div>
           </div>
 
           {/* Trip Details */}
-          <div className="p-4 border-b" style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
-            <div className="mb-3 p-3 rounded-lg flex justify-between items-center"
-                 style={{ backgroundColor: hexToRgba(primaryColor, 0.05) }}>
+          <div className="p-3 border-b text-sm"
+               style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
+            <div className="grid grid-cols-2 gap-2 items-center mb-2">
               <div>
                 <p className="font-bold">{reservation.depart}</p>
                 <p className="text-xs text-gray-500">Départ</p>
               </div>
-              <ArrowRight size={20} className="text-gray-400 mx-2" />
               <div className="text-right">
                 <p className="font-bold">{reservation.arrivee}</p>
                 <p className="text-xs text-gray-500">Destination</p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="grid grid-cols-2 gap-2">
               <div>
-                <p className="text-gray-500 mb-1">Date</p>
-                <p className="font-medium">{reservation.date}</p>
+                <p className="text-gray-500 text-xs">Date</p>
+                <p>{formattedDate}</p>
               </div>
               <div>
-                <p className="text-gray-500 mb-1">Heure</p>
-                <p className="font-medium">{formattedDate}</p>
+                <p className="text-gray-500 text-xs">Heure</p>
+                <p>{reservation.heure}</p>
               </div>
             </div>
           </div>
 
-      {/* Payment */}
-      <div className="p-4">
-        <p className="text-gray-600 mb-2">Montant payé</p>
-        <p className="font-bold text-2xl" style={{ color: primaryColor }}>
-          {reservation.montant.toLocaleString()} FCFA
-        </p>
+          {/* Payment */}
+          <div className="p-3">
+            <div className="flex justify-between items-center mb-2">
+              <p className="text-gray-600 text-sm">Montant payé</p>
+              <p className="font-bold text-xl" style={{ color: primaryColor }}>
+                {reservation.montant.toLocaleString()} FCFA
+              </p>
+            </div>
 
-        <div className="mt-3 flex justify-between items-center text-sm">
-          <div>
-            <p className="text-gray-500 mb-1">Statut paiement</p>
-            <span
-              className="px-2 py-1 rounded-full text-xs font-medium"
-              style={{
-                 backgroundColor: hexToRgba(primaryColor, 0.1),
-                 color: primaryColor
-               }}
-             >
+            <div className="flex justify-between items-center text-xs">
+              <span
+                className="px-2 py-1 rounded-full font-medium"
+                style={{
+                  backgroundColor: hexToRgba(primaryColor, 0.1),
+                  color: primaryColor
+                }}
+              >
                 {reservation.statut || 'Non défini'}
-               </span>
-             </div>
-
-             <div className="text-right">
-                <p className="text-gray-500 mb-1">Canal</p>
-                <span className="font-medium">{reservation.canal || 'Non défini'}</span>
-              </div>
+              </span>
+              <span className="font-medium">{reservation.canal || 'Non défini'}</span>
             </div>
           </div>
 
@@ -319,17 +305,17 @@ const ReceiptEnLignePage: React.FC = () => {
           <div className="p-4 text-center text-sm border-t"
             style={{ backgroundColor: hexToRgba(primaryColor, 0.05), borderColor: hexToRgba(primaryColor, 0.2) }}>
             <p className="text-gray-600 mb-1">
-              Merci d'avoir choisi <strong>{companyInfo.name}</strong> — Bon voyage !
+              Merci d'avoir choisi <strong>{nomCompagnieAffiche}</strong> — Bon voyage !
             </p>
             <p className="text-xs italic text-gray-500">
-              Veuillez vous présenter à l’agence au moins 1 heure avant le départ.
+              Veuillez vous présenter à l'agence au moins 1 heure avant le départ.
             </p>
           </div>
         </div>
       </main>
 
       {/* Action Buttons - Fixed at bottom */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t py-3 px-4 shadow-lg grid grid-cols-2 gap-3"
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t py-20 px-4 shadow-lg grid grid-cols-2 gap-3"
            style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
         <button
           onClick={handlePDF}

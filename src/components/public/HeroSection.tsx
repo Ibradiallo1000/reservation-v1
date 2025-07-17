@@ -18,7 +18,8 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSearch(departure, arrival);
+    // ✅ Correction ici : trim + toLowerCase pour éviter les bugs d'espaces ou de majuscules
+    onSearch(departure.trim().toLowerCase(), arrival.trim().toLowerCase());
   };
 
   const couleurPrimaire = company.couleurPrimaire || '#3B82F6';
