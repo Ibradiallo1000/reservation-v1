@@ -144,7 +144,7 @@ const ReceiptEnLignePage: React.FC = () => {
     <div className="min-h-screen bg-gray-50 pb-32">
       {/* Header */}
       <header
-        className="sticky top-0 z-20 px-4 py-4 shadow-sm"
+        className="sticky top-0 z-20 px-4 py-1 shadow-sm"
         style={{
           backgroundColor: primaryColor,
           color: '#ffffff',

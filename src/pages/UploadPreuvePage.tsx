@@ -9,7 +9,16 @@ import 'react-lazy-load-image-component/src/effects/blur.css';
 import { hexToRgba, safeTextColor } from '../utils/color';
 import ErrorScreen from '@/components/ui/ErrorScreen';
 import LoadingScreen from '@/components/ui/LoadingScreen';
-
+import { format, parseISO } from 'date-fns';
+import { fr } from 'date-fns/locale';
+import {
+  MapPin,
+  Calendar,
+  Clock,
+  User,
+  Users,
+  BadgeCheck
+} from 'lucide-react';
 interface ReservationDraft {
   preuveMessage: string;
   id?: string;
@@ -416,38 +425,73 @@ const Header: React.FC<{ companyInfo?: CompanyInfo; themeConfig: any; onBack: ()
   </header>
 );
 
-const ReservationSummaryCard: React.FC<{ reservationDraft: ReservationDraft }> = ({ reservationDraft }) => (
-  <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-    <div className="p-6">
-      <h3 className="text-lg font-medium mb-4">Récapitulatif de votre réservation</h3>
-      <div className="space-y-3">
-        <div className="flex justify-between">
-          <span className="text-gray-600">Trajet :</span>
-          <span className="font-medium">{reservationDraft.depart} → {reservationDraft.arrivee}</span>
+const ReservationSummaryCard: React.FC<{ reservationDraft: ReservationDraft }> = ({ reservationDraft }) => {
+  const isAllerRetour = reservationDraft.tripType === 'aller_retour';
+  const formattedDate = reservationDraft.date
+    ? format(parseISO(reservationDraft.date), 'dd/MM/yyyy', { locale: fr })
+    : reservationDraft.date;
+
+  return (
+    <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
+      <div className="bg-gray-100 px-6 py-4 border-b border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-800">🎫 Récapitulatif de votre réservation</h3>
+      </div>
+
+      <div className="p-6 space-y-4 text-sm text-gray-700">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MapPin className="text-blue-600" size={16} />
+            <span className="text-gray-500">Trajet :</span>
+          </div>
+          <span className="font-semibold text-gray-900">{reservationDraft.depart} → {reservationDraft.arrivee}</span>
         </div>
-        <div className="flex justify-between">
-          <span className="text-gray-600">Date :</span>
-          <span className="font-medium">{reservationDraft.date}</span>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Calendar className="text-green-600" size={16} />
+            <span className="text-gray-500">Date de départ :</span>
+          </div>
+          <span className="font-semibold">{formattedDate}</span>
         </div>
-        <div className="flex justify-between">
-          <span className="text-gray-600">Heure :</span>
-          <span className="font-medium">{reservationDraft.heure}</span>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Clock className="text-purple-600" size={16} />
+            <span className="text-gray-500">Heure de départ :</span>
+          </div>
+          <span className="font-semibold">{reservationDraft.heure}</span>
         </div>
-        <div className="flex justify-between">
-          <span className="text-gray-600">Passager :</span>
-          <span className="font-medium">{reservationDraft.nomClient}</span>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <User className="text-pink-600" size={16} />
+            <span className="text-gray-500">Passager :</span>
+          </div>
+          <span className="font-semibold">{reservationDraft.nomClient}</span>
         </div>
-        <div className="flex justify-between">
-          <span className="text-gray-600">Places :</span>
-          <span className="font-medium">
-            {reservationDraft.seatsGo} aller
-            {reservationDraft.tripType === 'aller_retour' && ` + ${reservationDraft.seatsReturn} retour`}
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Users className="text-orange-500" size={16} />
+            <span className="text-gray-500">Nombre de passagers :</span>
+          </div>
+          <span className="font-semibold">
+            {reservationDraft.seatsGo}
+            {isAllerRetour && ` aller + ${reservationDraft.seatsReturn} retour`}
           </span>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BadgeCheck className="text-teal-600" size={16} />
+            <span className="text-gray-500">Type de billet :</span>
+          </div>
+          <span className="font-semibold">{isAllerRetour ? 'Aller-retour' : 'Aller simple'}</span>
         </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 interface PaymentMethodSectionProps {
   paymentMethod: string | null;

@@ -1,4 +1,4 @@
-// ✅ ParametresLegauxPage.tsx — configuration des mentions légales et politiques
+// ✅ ParametresLegauxPage.tsx — gestion multilingue des mentions
 
 import React, { useEffect, useState } from 'react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
@@ -9,8 +9,10 @@ import { Save, CheckCircle, AlertCircle } from 'lucide-react';
 
 const ParametresLegauxPage: React.FC = () => {
   const { user } = useAuth();
-  const [politiqueConfidentialite, setPolitiqueConfidentialite] = useState('');
-  const [conditionsUtilisation, setConditionsUtilisation] = useState('');
+  const [mentionsLegales, setMentionsLegales] = useState({ fr: '', en: '' });
+  const [politiqueConfidentialite, setPolitiqueConfidentialite] = useState({ fr: '', en: '' });
+  const [conditionsUtilisation, setConditionsUtilisation] = useState({ fr: '', en: '' });
+  const [politiqueCookies, setPolitiqueCookies] = useState({ fr: '', en: '' });
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' }>({ text: '', type: 'info' });
 
   useEffect(() => {
@@ -20,8 +22,10 @@ const ParametresLegauxPage: React.FC = () => {
         const snap = await getDoc(ref);
         if (snap.exists()) {
           const data = snap.data();
-          setPolitiqueConfidentialite(data.politiqueConfidentialite || '');
-          setConditionsUtilisation(data.conditionsUtilisation || '');
+          setMentionsLegales(data.mentionsLegales || { fr: '', en: '' });
+          setPolitiqueConfidentialite(data.politiqueConfidentialite || { fr: '', en: '' });
+          setConditionsUtilisation(data.conditionsUtilisation || { fr: '', en: '' });
+          setPolitiqueCookies(data.politiqueCookies || { fr: '', en: '' });
         }
       };
       fetchData();
@@ -34,8 +38,10 @@ const ParametresLegauxPage: React.FC = () => {
     try {
       const ref = doc(db, 'companies', user.companyId);
       await updateDoc(ref, {
+        mentionsLegales,
         politiqueConfidentialite,
-        conditionsUtilisation
+        conditionsUtilisation,
+        politiqueCookies
       });
       setMessage({ text: 'Mentions mises à jour avec succès.', type: 'success' });
     } catch (e) {
@@ -44,9 +50,19 @@ const ParametresLegauxPage: React.FC = () => {
     }
   };
 
+  const renderTextarea = (label: string, state: any, setState: any) => (
+    <div>
+      <h3 className="text-lg font-semibold mb-2">{label}</h3>
+      <label className="text-sm font-medium">🇫🇷 Français</label>
+      <textarea rows={4} className="w-full mb-4 p-2 border rounded" value={state.fr} onChange={(e) => setState({ ...state, fr: e.target.value })} />
+      <label className="text-sm font-medium">🇬🇧 English</label>
+      <textarea rows={4} className="w-full p-2 border rounded" value={state.en} onChange={(e) => setState({ ...state, en: e.target.value })} />
+    </div>
+  );
+
   return (
     <div className="max-w-4xl mx-auto p-6 bg-white rounded shadow">
-      <h2 className="text-xl font-bold mb-6">Mentions légales & politique de confidentialité</h2>
+      <h2 className="text-xl font-bold mb-6">Mentions légales & politiques multilingues</h2>
 
       <AnimatePresence>
         {message.text && (
@@ -80,29 +96,11 @@ const ParametresLegauxPage: React.FC = () => {
         )}
       </AnimatePresence>
 
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-lg font-semibold mb-2">Politique de confidentialité</h3>
-          <textarea
-            rows={6}
-            value={politiqueConfidentialite}
-            onChange={(e) => setPolitiqueConfidentialite(e.target.value)}
-            className="w-full border border-gray-300 rounded p-3"
-            placeholder="Expliquer comment les données clients sont collectées et utilisées."
-          />
-        </div>
-
-        <div>
-          <h3 className="text-lg font-semibold mb-2">Conditions d'utilisation</h3>
-          <textarea
-            rows={6}
-            value={conditionsUtilisation}
-            onChange={(e) => setConditionsUtilisation(e.target.value)}
-            className="w-full border border-gray-300 rounded p-3"
-            placeholder="Lister les règles d'utilisation de la plateforme par les clients."
-          />
-        </div>
-
+      <div className="space-y-8">
+        {renderTextarea('Mentions légales', mentionsLegales, setMentionsLegales)}
+        {renderTextarea('Politique de confidentialité', politiqueConfidentialite, setPolitiqueConfidentialite)}
+        {renderTextarea("Conditions d'utilisation", conditionsUtilisation, setConditionsUtilisation)}
+        {renderTextarea("Politique de cookies", politiqueCookies, setPolitiqueCookies)}
         <div className="flex justify-end">
           <button
             onClick={handleSave}

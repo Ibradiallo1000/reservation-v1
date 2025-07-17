@@ -60,6 +60,11 @@ i18n
           bookInOneClick: 'Réservez vos trajets en un seul clic',
           whatClientsSay: 'Ce que nos clients disent',
           realExperiences: 'Les expériences authentiques de nos voyageurs',
+          legalNotice: 'Mentions légales',
+          termsConditions: 'Conditions générales',
+          leaveReview: 'Laisser un avis',
+
+
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Sécurité',
@@ -119,6 +124,9 @@ i18n
           bookInOneClick: 'Book your trip in one click',
           whatClientsSay: 'What our clients say',
           realExperiences: 'Real experiences from our travelers',
+          legalNotice: 'Legal notice',
+          termsConditions: 'Terms and Conditions',
+          leaveReview: 'Leave a review',
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Security',
