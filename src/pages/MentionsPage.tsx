@@ -1,29 +1,99 @@
-// ✅ FICHIER 2 — MentionsPage.tsx (à placer dans src/pages)
+// src/pages/MentionsPage.tsx
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { db } from '../firebaseConfig';
+import { useParams, useNavigate } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
+import { db } from '../firebaseConfig';
+import { useTranslation } from 'react-i18next';
+import { hexToRgba, safeTextColor } from '@/utils/color';
+import { ChevronLeft } from 'lucide-react';
 
-const MentionsPage = () => {
-  const { slug } = useParams();
-  const [texte, setTexte] = useState('');
+interface CompanyInfo {
+  id: string;
+  name: string;
+  couleurPrimaire?: string;
+  logoUrl?: string;
+  mentionsLegales?: { fr?: string; en?: string };
+}
+
+const MentionsPage: React.FC = () => {
+  const { slug } = useParams<{ slug: string }>();
+  const navigate = useNavigate();
+  const { i18n } = useTranslation();
+  const currentLang = i18n.language === 'en' ? 'en' : 'fr';
+
+  const [company, setCompany] = useState<CompanyInfo | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetch = async () => {
+    const fetchCompany = async () => {
       const q = query(collection(db, 'companies'), where('slug', '==', slug));
       const snap = await getDocs(q);
       if (!snap.empty) {
-        const data = snap.docs[0].data();
-        setTexte(data.mentionsLegales || 'Aucune mention disponible.');
+        const data = snap.docs[0].data() as CompanyInfo;
+        setCompany({
+          id: snap.docs[0].id,
+          name: data.name,
+          couleurPrimaire: data.couleurPrimaire || '#3B82F6',
+          logoUrl: data.logoUrl,
+          mentionsLegales: data.mentionsLegales,
+        });
       }
+      setLoading(false);
     };
-    fetch();
+
+    fetchCompany();
   }, [slug]);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-gray-500">
+        Chargement...
+      </div>
+    );
+  }
+
+  const primaryColor = company?.couleurPrimaire || '#3B82F6';
+  const textColor = safeTextColor(primaryColor);
+  const content = company?.mentionsLegales?.[currentLang] || 'Mentions légales indisponibles.';
+
   return (
-    <div className="max-w-4xl mx-auto p-6 text-justify">
-      <h1 className="text-2xl font-bold mb-4">Mentions légales</h1>
-      <p className="whitespace-pre-wrap">{texte}</p>
+    <div className="min-h-screen bg-gray-50">
+      <header
+        className="px-6 py-4 shadow-sm"
+        style={{
+          backgroundColor: primaryColor,
+          color: textColor,
+        }}
+      >
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div className="flex items-center">
+            {/* 🔙 Bouton de retour */}
+            <button
+              onClick={() => navigate(`/${slug}`)}
+              className="mr-4 text-white hover:text-gray-200"
+              title="Retour à la page d'accueil"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <h1 className="text-xl font-bold">Mentions légales</h1>
+          </div>
+
+          {company?.logoUrl && (
+            <img
+              src={company.logoUrl}
+              alt="Logo"
+              className="h-10 w-10 object-contain rounded-full border bg-white"
+              style={{ borderColor: hexToRgba(primaryColor, 0.2) }}
+            />
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-6 py-8 text-gray-800">
+        <p className="whitespace-pre-wrap leading-relaxed text-justify text-sm md:text-base">
+          {content}
+        </p>
+      </main>
     </div>
   );
 };

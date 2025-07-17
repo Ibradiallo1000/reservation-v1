@@ -200,7 +200,7 @@ const ReservationDetailsPage: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-b from-gray-50/70 to-white">
       {/* Header élégant avec ombre douce */}
       <header
-        className="sticky top-0 z-10 px-5 py-3 shadow-sm"
+        className="sticky top-0 z-10 px-5 py-1 shadow-sm"
         style={{ 
           backgroundColor: hexToRgba(primaryColor, 0.98),
           color: textColor
@@ -360,7 +360,7 @@ const ReservationDetailsPage: React.FC = () => {
             disabled={reservation.statut !== 'payé'}
           >
             <CheckCircle className="h-4 w-4" />
-            {reservation.statut === 'payé' ? 'Voir mon reçu' : 'Reçu disponible après paiement'}
+            {reservation.statut === 'payé' ? 'Voir mon reçu' : 'Reçu disponible après confimation'}
           </button>
         </motion.div>
 

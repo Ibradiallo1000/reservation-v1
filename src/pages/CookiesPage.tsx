@@ -11,10 +11,10 @@ interface CompanyInfo {
   name: string;
   couleurPrimaire?: string;
   logoUrl?: string;
-  politiqueConfidentialite?: { fr?: string; en?: string };
+  politiqueCookies?: { fr?: string; en?: string };
 }
 
-const ConfidentialitePage: React.FC = () => {
+const CookiesPage: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const { i18n } = useTranslation();
@@ -34,7 +34,7 @@ const ConfidentialitePage: React.FC = () => {
           name: data.name,
           couleurPrimaire: data.couleurPrimaire || '#3B82F6',
           logoUrl: data.logoUrl,
-          politiqueConfidentialite: data.politiqueConfidentialite,
+          politiqueCookies: data.politiqueCookies,
         });
       }
       setLoading(false);
@@ -44,29 +44,22 @@ const ConfidentialitePage: React.FC = () => {
   }, [slug]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-gray-500">
-        Chargement...
-      </div>
-    );
+    return <div className="min-h-screen flex items-center justify-center text-gray-500">Chargement...</div>;
   }
 
   const primaryColor = company?.couleurPrimaire || '#3B82F6';
   const textColor = safeTextColor(primaryColor);
-  const content = company?.politiqueConfidentialite?.[currentLang] || 'Politique de confidentialité indisponible.';
+  const content = company?.politiqueCookies?.[currentLang] || 'Politique de cookies non disponible.';
 
   return (
     <div className="min-h-screen bg-gray-50">
       <header
         className="px-6 py-4 shadow-sm"
-        style={{
-          backgroundColor: primaryColor,
-          color: textColor,
-        }}
+        style={{ backgroundColor: primaryColor, color: textColor }}
       >
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center">
-            {/* 🔙 Flèche retour */}
+            {/* 🔙 Bouton flèche retour */}
             <button
               onClick={() => navigate(`/${slug}`)}
               className="mr-4 text-white hover:text-gray-200"
@@ -74,7 +67,7 @@ const ConfidentialitePage: React.FC = () => {
             >
               <ChevronLeft className="w-5 h-5" />
             </button>
-            <h1 className="text-xl font-bold">Politique de confidentialité</h1>
+            <h1 className="text-xl font-bold">Politique des cookies</h1>
           </div>
 
           {company?.logoUrl && (
@@ -82,9 +75,7 @@ const ConfidentialitePage: React.FC = () => {
               src={company.logoUrl}
               alt="Logo"
               className="h-10 w-10 object-contain rounded-full border bg-white"
-              style={{
-                borderColor: hexToRgba(primaryColor, 0.2),
-              }}
+              style={{ borderColor: hexToRgba(primaryColor, 0.2) }}
             />
           )}
         </div>
@@ -99,4 +90,4 @@ const ConfidentialitePage: React.FC = () => {
   );
 };
 
-export default ConfidentialitePage;
+export default CookiesPage;

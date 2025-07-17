@@ -4,6 +4,10 @@ import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
 import RouteResolver from './pages/RouteResolver';
+import MentionsPage from '@/pages/MentionsPage';
+import ConfidentialitePage from '@/pages/ConfidentialitePage';
+import ConditionsPage from '@/pages/ConditionsPage';
+import CookiesPage from '@/pages/CookiesPage';
 
 // Impression PDF
 import ReservationPrintPage from '@/pages/ReservationPrintPage';
@@ -71,28 +75,20 @@ const AppRoutes = () => {
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
 
+        {/* ✅ Pages légales publiques dynamiques par compagnie */}
+        <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
+        <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
+        <Route path="/:slug/conditions" element={<ConditionsPage />} />
+        <Route path="/:slug/cookies" element={<CookiesPage />} />
+
         {/* Admin plateforme */}
-        <Route
-          path="/admin"
-          element={
-            <PrivateRoute allowedRoles={['admin_platforme']}>
-              <AdminSidebarLayout />
-            </PrivateRoute>
-          }
-        >
+        <Route path="/admin" element={<PrivateRoute allowedRoles={['admin_platforme']}><AdminSidebarLayout /></PrivateRoute>}>
           <Route index element={<AdminDashboard />} />
           <Route path="dashboard" element={<AdminDashboard />} />
         </Route>
 
         {/* Compagnie privée */}
-        <Route
-          path="/compagnie"
-          element={
-            <PrivateRoute allowedRoles={['admin_compagnie']}>
-              <CompagnieLayout />
-            </PrivateRoute>
-          }
-        >
+        <Route path="/compagnie" element={<PrivateRoute allowedRoles={['admin_compagnie']}><CompagnieLayout /></PrivateRoute>}>
           <Route index element={<CompagnieDashboard />} />
           <Route path="dashboard" element={<CompagnieDashboard />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
@@ -111,32 +107,11 @@ const AppRoutes = () => {
         </Route>
 
         {/* Pages spécifiques à une agence */}
-        <Route
-          path="/compagnie/agence/:id/dashboard"
-          element={
-            <PrivateRoute allowedRoles={['admin_compagnie']}>
-              <DashboardAgencePage />
-            </PrivateRoute>
-          }
-        />
-        <Route
-          path="/compagnie/agence/:id/reservations"
-          element={
-            <PrivateRoute allowedRoles={['admin_compagnie']}>
-              <AgenceReservationsPage />
-            </PrivateRoute>
-          }
-        />
+        <Route path="/compagnie/agence/:id/dashboard" element={<PrivateRoute allowedRoles={['admin_compagnie']}><DashboardAgencePage /></PrivateRoute>} />
+        <Route path="/compagnie/agence/:id/reservations" element={<PrivateRoute allowedRoles={['admin_compagnie']}><AgenceReservationsPage /></PrivateRoute>} />
 
         {/* Espace agence */}
-        <Route
-          path="/agence"
-          element={
-            <PrivateRoute allowedRoles={['chefAgence', 'guichetier', 'agentCourrier']}>
-              <AgenceLayout />
-            </PrivateRoute>
-          }
-        >
+        <Route path="/agence" element={<PrivateRoute allowedRoles={['chefAgence', 'guichetier', 'agentCourrier']}><AgenceLayout /></PrivateRoute>}>
           <Route index element={<DashboardAgencePage />} />
           <Route path="dashboard" element={<DashboardAgencePage />} />
           <Route path="reservations" element={<AgenceReservationsPage />} />
@@ -152,14 +127,7 @@ const AppRoutes = () => {
         </Route>
 
         {/* Pages isolées */}
-        <Route
-          path="/agence/receipt/:id"
-          element={
-            <PrivateRoute allowedRoles={['chefAgence', 'guichetier']}>
-              <ReceiptGuichetPage />
-            </PrivateRoute>
-          }
-        />
+        <Route path="/agence/receipt/:id" element={<PrivateRoute allowedRoles={['chefAgence', 'guichetier']}><ReceiptGuichetPage /></PrivateRoute>} />
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
         {/* ✅ Pages publiques dynamiques par compagnie */}
@@ -170,16 +138,7 @@ const AppRoutes = () => {
         <Route path="/:slug/*" element={<RouteResolver />} />
 
         {/* 404 */}
-        <Route
-          path="*"
-          element={
-            <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gray-100">
-              <h1 className="text-4xl font-bold text-red-600 mb-4">404 - Page non trouvée</h1>
-              <p className="text-lg text-gray-700 mb-6">La page demandée est introuvable ou a été déplacée.</p>
-              <a href="/" className="bg-blue-600 text-white px-5 py-2 rounded hover:bg-blue-700">Retour à l'accueil</a>
-            </div>
-          }
-        />
+        <Route path="*" element={<div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gray-100"><h1 className="text-4xl font-bold text-red-600 mb-4">404 - Page non trouvée</h1><p className="text-lg text-gray-700 mb-6">La page demandée est introuvable ou a été déplacée.</p><a href="/" className="bg-blue-600 text-white px-5 py-2 rounded hover:bg-blue-700">Retour à l'accueil</a></div>} />
       </Routes>
     </Suspense>
   );

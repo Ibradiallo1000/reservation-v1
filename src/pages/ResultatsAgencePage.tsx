@@ -321,7 +321,7 @@ const ResultatsAgencePage: React.FC<ResultatsAgencePageProps> = ({ company }) =>
           <h2 className="text-xl font-bold mb-2 text-gray-900">Erreur</h2>
           <p className="text-gray-700">{error}</p>
           <button
-            onClick={() => navigate(`/compagnie/${slug}`)}
+            onClick={() => navigate(`/${slug}`)}
             className={`mt-4 px-4 py-2 rounded ${classes.button}`}
             style={{ backgroundColor: colors.primary, color: colors.textOnPrimary }}
           >
@@ -360,19 +360,21 @@ const ResultatsAgencePage: React.FC<ResultatsAgencePageProps> = ({ company }) =>
             >
               <MapPin className="h-5 w-5" />
             </div>
-            <div className="text-gray-800">
-              <h3 className="font-semibold">{agenceAller.nomAgence}</h3>
-              <p className="text-sm opacity-80">
-                {agenceAller.ville}, {agenceAller.quartier} • ☎ {agenceAller.telephone}
-              </p>
+             <div className="mt-2 mb-3">
+               <div className="text-gray-900">
+                 <h3 className="text-lg font-bold leading-tight">{agenceAller.nomAgence}</h3>
+                 <p className="text-sm text-gray-600 mt-1">
+                   {agenceAller.ville}, {agenceAller.quartier} • <span className="font-medium">☎ {agenceAller.telephone}</span>
+                 </p>
+               </div>
+             </div>
             </div>
-          </div>
-        )}
+         )}
 
         <div className="mb-4">
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2 text-gray-800">
             <Calendar className="h-5 w-5" style={{ color: colors.primary }} />
-            Dates disponibles
+            Choisissez votre date de départ
           </h3>
           <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide">
             {dates.map(date => (
@@ -417,7 +419,7 @@ const ResultatsAgencePage: React.FC<ResultatsAgencePageProps> = ({ company }) =>
               <div className="p-4 border-b" style={{ borderColor: hexToRgba(colors.primary, 0.1) }}>
                 <h3 className="font-semibold flex items-center gap-2 mb-3 text-gray-800">
                   <Clock className="h-5 w-5" style={{ color: colors.primary }} />
-                  Heures de départ
+                  Choisissez votre heure de départ
                 </h3>
                 
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
@@ -522,7 +524,7 @@ const ResultatsAgencePage: React.FC<ResultatsAgencePageProps> = ({ company }) =>
       >
         <div className="flex items-center gap-4 max-w-7xl mx-auto">
           <button 
-            onClick={() => navigate(`/compagnie/${slug}`)}
+            onClick={() => navigate(`/${slug}`)}
             className="p-2 rounded-full hover:bg-white/10 transition"
             style={{ color: colors.textOnPrimary }}
           >
@@ -543,7 +545,6 @@ const ResultatsAgencePage: React.FC<ResultatsAgencePageProps> = ({ company }) =>
               />
             )}
             <div>
-              <h1 className="text-lg font-bold">{company.nom}</h1>
               <p className="text-8sm font-medium text-white opacity-100">Résultats</p>
            </div>
 

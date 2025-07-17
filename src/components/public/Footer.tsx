@@ -206,16 +206,16 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
             <div className="flex flex-wrap justify-center gap-4 mb-2">
               {showLegalLinks && (
                 <>
-                  <a href={`/compagnie/${slug}/mentions-legales`} className="hover:underline">
+                  <a href={`/${slug}/mentions-legales`} className="hover:underline">
                     {t('legalNotice')}
                   </a>
-                  <a href={`/compagnie/${slug}/confidentialite`} className="hover:underline">
+                  <a href={`/${slug}/confidentialite`} className="hover:underline">
                     {t('privacyPolicy')}
                   </a>
-                  <a href={`/compagnie/${slug}/cgu`} className="hover:underline">
+                  <a href={`/${slug}/conditions`} className="hover:underline">
                     {t('termsConditions')}
                   </a>
-                  <a href={`/compagnie/${slug}/cookies`} className="hover:underline">
+                  <a href={`/${slug}/cookies`} className="hover:underline">
                     {t('cookiePolicy')}
                   </a>
                 </>
@@ -232,7 +232,9 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
                 </a>
               ))}
             </div>
-            <p>© {currentYear} {nom || t('ourCompany')}. {t('allRightsReserved')}</p>
+            <p>
+              © {currentYear} {nom || t('ourCompany')}. {t('allRightsReserved')}
+            </p>
           </div>
         </div>
       )}
