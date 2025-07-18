@@ -85,7 +85,6 @@ const CompagnieDashboard: React.FC = () => {
       villesDisponibles: data.villesDisponibles || [],
     });
 
-
   }, [user?.companyId]);
 
   const fetchAgencies = async (companyId: string): Promise<Agency[]> => {

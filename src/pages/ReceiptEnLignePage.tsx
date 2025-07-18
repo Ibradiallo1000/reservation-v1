@@ -185,41 +185,37 @@ const ReceiptEnLignePage: React.FC = () => {
           className="bg-white rounded-lg shadow-sm overflow-hidden border"
           style={{ borderColor: hexToRgba(primaryColor, 0.3) }}
         >
-          {/* Company Header */}
-          <div className="p-4 flex items-center gap-3 border-b"
-               style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
-            {companyInfo.logoUrl && (
-              <img 
-                src={companyInfo.logoUrl} 
-                alt="Logo" 
-                className="h-20 w-20 rounded-full object-cover border-2"
-                style={{ borderColor: 'white' }}
-              />
-            )}
-            <div>
-              <h2 className="font-bold text-lg" style={{ color: primaryColor }}>
-                {nomCompagnieAffiche}
-              </h2>
-              <div className="flex flex-wrap items-center gap-4 text-sm mt-1">
+          {/* Company Header - Version contractée */}
+          <div className="p-4 border-b" style={{ borderColor: hexToRgba(primaryColor, 0.2) }}>
+            <div className="flex flex-col items-center text-center sm:flex-row sm:items-center sm:justify-between sm:text-left gap-2">
+              {/* Logo + Nom compagnie */}
+              <div className="flex items-center gap-3">
+                {companyInfo.logoUrl && (
+                  <img 
+                    src={companyInfo.logoUrl} 
+                    alt="Logo" 
+                    className="h-12 w-12 rounded-full object-cover border-2"
+                    style={{ borderColor: 'white' }}
+                  />
+                )}
+                <h2 className="font-bold text-lg" style={{ color: primaryColor }}>
+                  {nomCompagnieAffiche}
+                </h2>
+              </div>
+
+              {/* Agence + téléphone */}
+              <div className="flex items-center gap-4 text-sm text-gray-700">
                 {agencyInfo?.nomAgence && (
-                  <a
-                    href={`https://www.google.com/maps/dir/?api=1&destination=${agencyInfo.latitude},${agencyInfo.longitude}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-gray-600 hover:underline"
-                  >
-                   <MapPin className="h-4 w-4" />
-                   <span>{agencyInfo.nomAgence}</span>
-                 </a>
+                  <div className="flex items-center gap-1">
+                    <MapPin className="h-4 w-4 text-gray-500" />
+                    <span>{agencyInfo.nomAgence}</span>
+                  </div>
                 )}
                 {(agencyInfo?.telephone || companyInfo.telephone) && (
-                  <a
-                    href={`tel:${agencyInfo?.telephone || companyInfo.telephone}`}
-                    className="flex items-center gap-1 text-gray-600 hover:underline"
-                  >
-                    <Phone className="h-4 w-4" />
+                  <div className="flex items-center gap-1">
+                    <Phone className="h-4 w-4 text-gray-500" />
                     <span>{agencyInfo?.telephone || companyInfo.telephone}</span>
-                  </a>
+                  </div>
                 )}
               </div>
             </div>
