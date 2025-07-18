@@ -89,6 +89,7 @@ export interface HeroSectionProps {
 
 // ✅ Le type principal corrigé avec tous les champs optionnels et cohérents
 export interface Company {
+  villesDisponibles: never[];
   services?: string[]; // ✅ au lieu de never[]
   featuredTrips?: any[]; // ✅ au lieu de "any" seul
   id: string;

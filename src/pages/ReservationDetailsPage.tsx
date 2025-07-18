@@ -257,7 +257,7 @@ const ReservationDetailsPage: React.FC = () => {
   const paymentMethod = getPaymentMethod(reservation.canal);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50/70 to-white">
+    <div className="min-h-screen bg-gradient-to-b from-gray-50/70 to-white pb-32">
       <AnimatePresence>
         {showConfetti && (
           <Confetti 
@@ -341,11 +341,14 @@ const ReservationDetailsPage: React.FC = () => {
               {STATUS_STEPS.map((step, index) => {
                 const isActive = index <= currentStepIndex;
                 const isCurrent = reservation.statut === step.id;
+                const isVerificationInProgress = reservation.statut === 'preuve_recue' && step.id === 'preuve_recue';
                 
                 return (
                   <div key={step.id} className="flex flex-col items-center w-1/4">
                     <div 
-                      className={`h-6 w-6 rounded-full flex items-center justify-center mb-1 transition-colors ${isActive ? 'ring-4 ring-opacity-30' : ''}`}
+                      className={`h-6 w-6 rounded-full flex items-center justify-center mb-1 transition-colors ${
+                        isActive ? 'ring-4 ring-opacity-30' : ''
+                      } ${isVerificationInProgress ? 'animate-pulse' : ''}`}
                       style={{
                         backgroundColor: isActive ? primaryColor : '#e5e7eb',
                         color: isActive ? textColor : '#6b7280',
@@ -498,41 +501,6 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Boutons d'action */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="space-y-3"
-        >
-          <button
-            onClick={() => navigate(`/${realSlug}/receipt/${id}`, {
-              state: { reservation, companyInfo }
-            })}
-            className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all
-              ${isConfirmed ? 'hover:opacity-90' : 'opacity-70 cursor-not-allowed'}`}
-            style={{ backgroundColor: primaryColor, color: textColor }}
-            disabled={!isConfirmed}
-          >
-            <CheckCircle className="h-4 w-4" />
-            {isConfirmed ? 'Voir mon reçu' : 'Reçu disponible après confirmation'}
-          </button>
-
-          {reservation.statut === 'annule' && (
-            <button
-              onClick={() => navigate(`/${realSlug}`)}
-              className="w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm border transition-all"
-              style={{ 
-                borderColor: primaryColor,
-                color: primaryColor
-              }}
-            >
-              <Ticket className="h-4 w-4" />
-              Nouvelle réservation
-            </button>
-          )}
-        </motion.div>
-
         {/* Message de remerciement */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -549,6 +517,40 @@ const ReservationDetailsPage: React.FC = () => {
           </p>
         </motion.div>
       </main>
+
+      {/* Boutons d'action FIXÉS en bas */}
+      <div 
+        className="fixed bottom-0 left-0 w-full z-40 bg-white border-t border-gray-200 px-4 py-3 shadow-md"
+      >
+        <div className="max-w-md mx-auto space-y-2">
+          <button
+            onClick={() => navigate(`/${realSlug}/receipt/${id}`, {
+              state: { reservation, companyInfo }
+            })}
+            className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all
+              ${isConfirmed ? 'hover:opacity-90' : 'opacity-70 cursor-not-allowed'}`}
+            style={{ backgroundColor: primaryColor, color: textColor }}
+            disabled={!isConfirmed}
+          >
+            <CheckCircle className="h-4 w-4" />
+            {isConfirmed ? 'Voir mon billet' : 'Billet disponible après confirmation'}
+          </button>
+
+          {reservation.statut === 'annule' && (
+            <button
+              onClick={() => navigate(`/${realSlug}`)}
+              className="w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm border transition-all"
+              style={{ 
+                borderColor: primaryColor,
+                color: primaryColor
+              }}
+            >
+              <Ticket className="h-4 w-4" />
+              Nouvelle réservation
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
