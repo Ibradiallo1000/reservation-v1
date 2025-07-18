@@ -328,14 +328,22 @@ const UploadPreuvePage: React.FC = () => {
             {error && <ErrorDisplay error={error} />}
           </div>
 
-          <div className="bg-gray-50 px-6 py-4 border-t border-gray-200">
-            <SubmitButton
-              onClick={handleUpload}
-              disabled={uploading || !message.trim() || !paymentMethod}
-              primaryColor={themeConfig.colors.primary}
-              textColor={themeConfig.colors.text}
-              uploading={uploading}
-            />
+          
+         <div 
+           className="fixed bottom-0 left-0 w-full z-50 border-t border-gray-200 bg-white px-4 py-3 shadow-md"
+           style={{ 
+             backgroundColor: '#ffffff',
+           }}
+         >
+           <div className="max-w-4xl mx-auto">
+             <SubmitButton
+               onClick={handleUpload}
+               disabled={uploading || !message.trim() || !paymentMethod}
+               primaryColor={themeConfig.colors.primary}
+               textColor={themeConfig.colors.text}
+               uploading={uploading}
+             />
+           </div>
           </div>
         </div>
       </main>
