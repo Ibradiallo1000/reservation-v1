@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, collectionGroup, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
+import { Bus, Search, ArrowLeft } from 'lucide-react';
 
 interface SearchCriteria {
   departure: string;
@@ -11,20 +12,28 @@ interface SearchCriteria {
 interface Company {
   id: string;
   nom: string;
-  logoUrl: string;
+  slug: string;
+  logoUrl?: string;
   rating?: number;
+  couleurPrimaire?: string;
 }
 
 interface Trajet {
   id: string;
   departure: string;
   arrival: string;
-  date: string;
-  time: string;
   price: number;
   places: number;
   companyId: string;
+  horaires?: string[];
+  dates?: string[];
 }
+
+// Normalisation
+const normalize = (s: string) =>
+  s?.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const capitalize = (s: string) =>
+  s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
 const PlatformSearchResultsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -45,60 +54,45 @@ const PlatformSearchResultsPage: React.FC = () => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        // 1. Fetch all companies first
+        // Charger les compagnies
         const companiesSnapshot = await getDocs(collection(db, 'companies'));
         const companiesMap = companiesSnapshot.docs.reduce((acc, doc) => {
-          acc[doc.id] = { id: doc.id, ...doc.data() } as Company;
+          acc[doc.id] = { ...doc.data(), id: doc.id } as Company;
           return acc;
         }, {} as Record<string, Company>);
         setCompanies(companiesMap);
 
-        // 2. Fetch trips with capitalised cities
-        const capitalize = (text: string) => 
-          text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
-        
-        const dep = capitalize(criteres.departure);
-        const arr = capitalize(criteres.arrival);
+        // Normaliser pour Firestore
+        const dep = capitalize(normalize(criteres.departure));
+        const arr = capitalize(normalize(criteres.arrival));
 
         const q = query(
-          collection(db, 'dailyTrips'),
+          collectionGroup(db, 'weeklyTrips'),
           where('departure', '==', dep),
           where('arrival', '==', arr)
         );
 
         const trajetsSnapshot = await getDocs(q);
-        const now = new Date();
         const grouped: Record<string, Trajet[]> = {};
 
-        trajetsSnapshot.forEach((doc) => {
-          const data = doc.data();
-          const tripDate = new Date(`${data.date}T${data.time}`);
-          
-          if (tripDate > now) {
-            const trajet = {
-              id: doc.id,
-              ...data,
-            } as Trajet;
+        trajetsSnapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          const pathSegments = docSnap.ref.path.split('/');
+          const companyId = pathSegments[1];
 
-            if (!grouped[trajet.companyId]) {
-              grouped[trajet.companyId] = [];
-            }
-            grouped[trajet.companyId].push(trajet);
-          }
-        });
+          const trajet: Trajet = {
+            ...data,
+            id: docSnap.id,
+            companyId,
+          } as Trajet;
 
-        // Sort trips by time for each company
-        Object.values(grouped).forEach(trajets => {
-          trajets.sort((a, b) => {
-            const timeA = a.time.split(':').map(Number);
-            const timeB = b.time.split(':').map(Number);
-            return timeA[0] * 60 + timeA[1] - (timeB[0] * 60 + timeB[1]);
-          });
+          if (!grouped[companyId]) grouped[companyId] = [];
+          grouped[companyId].push(trajet);
         });
 
         setGroupedTrajets(grouped);
       } catch (err) {
-        console.error('Erreur Firestore :', err);
+        console.error('❌ Erreur Firestore :', err);
       } finally {
         setLoading(false);
       }
@@ -107,116 +101,135 @@ const PlatformSearchResultsPage: React.FC = () => {
     fetchData();
   }, [criteres, navigate]);
 
-  if (!criteres?.departure || !criteres?.arrival) {
-    return null;
-  }
+  if (!criteres?.departure || !criteres?.arrival) return null;
 
-  const filteredCompanies = Object.keys(groupedTrajets)
-    .filter(companyId => {
-      const company = companies[companyId];
-      return company?.nom.toLowerCase().includes(filter.toLowerCase());
-    })
-    .sort((a, b) => {
-      // Sort by minimum price
-      const minPriceA = Math.min(...groupedTrajets[a].map(t => t.price));
-      const minPriceB = Math.min(...groupedTrajets[b].map(t => t.price));
-      return minPriceA - minPriceB;
-    });
+  const filteredCompanies = Object.keys(groupedTrajets).filter((companyId) => {
+    const company = companies[companyId];
+    return company?.nom?.toLowerCase().includes(filter.toLowerCase());
+  });
 
   return (
-    <div className="p-4 max-w-4xl mx-auto">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">
-          {criteres.departure} → {criteres.arrival}
-        </h1>
-        <input
-          type="text"
-          placeholder="Filtrer par compagnie..."
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="border border-gray-300 rounded px-3 py-2 w-64 text-sm"
-        />
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-md sticky top-0 z-50">
+        <div className="max-w-5xl mx-auto flex items-center justify-between px-4 py-3">
+          <button
+            onClick={() => navigate('/')}
+            className="flex items-center text-orange-600"
+          >
+            <ArrowLeft className="w-5 h-5 mr-1" /> Retour
+          </button>
+          <div className="flex items-center gap-2">
+            <Bus className="w-7 h-7 text-orange-600" />
+            <span className="font-bold text-xl text-orange-600">Teliya</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Route + search */}
+      <div className="max-w-5xl mx-auto px-4 mt-6 flex justify-between items-center">
+        <div className="flex items-center gap-2 text-lg font-semibold text-gray-800">
+          <Bus className="w-5 h-5 text-orange-600" />
+          <span>
+            {capitalize(criteres.departure)} → {capitalize(criteres.arrival)}
+          </span>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Filtrer par compagnie"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="pl-9 border border-gray-300 rounded-lg py-2 px-3 text-sm"
+          />
+        </div>
       </div>
 
-      {loading ? (
-        <div className="flex justify-center items-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-green-500"></div>
-        </div>
-      ) : filteredCompanies.length === 0 ? (
-        <div className="text-center py-10">
-          <p className="text-gray-500 text-lg">Aucune compagnie disponible pour ce trajet</p>
-          <button 
-            onClick={() => navigate('/')}
-            className="mt-4 bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 text-sm"
-          >
-            Nouvelle recherche
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {filteredCompanies.map((companyId) => {
-            const company = companies[companyId] || { 
-              nom: 'Compagnie inconnue', 
-              logoUrl: '',
-              rating: 4.0
-            };
-            const trajets = groupedTrajets[companyId];
-            const prixMin = Math.min(...trajets.map(t => t.price));
-            const prixMax = Math.max(...trajets.map(t => t.price));
+      {/* Results */}
+      <div className="max-w-5xl mx-auto p-4">
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <div className="h-10 w-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        ) : filteredCompanies.length === 0 ? (
+          <div className="text-center py-12">
+            <p className="text-gray-600 mb-4">
+              Aucune compagnie disponible pour ce trajet
+            </p>
+            <button
+              onClick={() => navigate('/')}
+              className="bg-orange-600 text-white px-6 py-2 rounded-lg hover:bg-orange-700"
+            >
+              Nouvelle recherche
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredCompanies.map((companyId) => {
+              const company = companies[companyId]!;
+              const trajets = groupedTrajets[companyId];
+              const prixMin = Math.min(...trajets.map((t) => t.price));
+              const totalPlaces = trajets.reduce(
+                (acc, t) => acc + (t.places || 0),
+                0
+              );
 
-            return (
-              <div 
-                key={companyId} 
-                className="flex justify-between items-center border p-4 rounded-lg hover:shadow-md transition-shadow bg-white"
-              >
-                <div className="flex items-center space-x-4 flex-1">
-                  {company.logoUrl && (
-                    <img 
-                      src={company.logoUrl} 
-                      alt={company.nom} 
-                      className="w-12 h-12 rounded-full object-cover border"
-                    />
-                  )}
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                      <h3 className="font-semibold">{company.nom}</h3>
-                      {company.rating && (
-                        <span className="flex items-center text-sm text-gray-500">
-                          <span className="text-yellow-500">★</span> {company.rating.toFixed(1)}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center space-x-2 text-sm text-gray-500 mt-1">
-                      <span>{trajets.length} départs aujourd'hui</span>
-                      <span>•</span>
-                      <span>
-                        {prixMin === prixMax ? (
-                          `${prixMin.toLocaleString()} FCFA`
-                        ) : (
-                          `${prixMin.toLocaleString()} - ${prixMax.toLocaleString()} FCFA`
-                        )}
-                      </span>
+              return (
+                <div
+                  key={companyId}
+                  className="bg-white rounded-lg shadow-sm p-3 flex items-center justify-between border border-gray-200"
+                >
+                  <div className="flex items-center gap-3">
+                    {company.logoUrl && (
+                      <img
+                        src={company.logoUrl}
+                        alt={company.nom}
+                        className="w-10 h-10 rounded-full border object-cover"
+                      />
+                    )}
+                    <div>
+                      <h3
+                        className="text-md font-bold"
+                        style={{ color: company.couleurPrimaire || '#ea580c' }}
+                      >
+                        {company.nom}
+                      </h3>
+                      <p className="text-xs text-gray-500">
+                        {totalPlaces} pl. disponibles
+                      </p>
+                      <p
+                        className="font-semibold text-sm"
+                        style={{ color: '#16a34a' }}
+                      >
+                        {prixMin.toLocaleString()} FCFA
+                      </p>
                     </div>
                   </div>
+                  <button
+                    onClick={() =>
+                      navigate(
+                        `/${company.slug}/booking?departure=${criteres.departure}&arrival=${criteres.arrival}`,
+                        {
+                          state: {
+                            preloaded: true,
+                            company,
+                            departure: criteres.departure,
+                            arrival: criteres.arrival,
+                            preloadedPrice: prixMin
+                          }
+                        }
+                      )
+                    }
+                    className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm"
+                  >
+                    Réserver
+                  </button>
                 </div>
-
-                <button
-                  onClick={() => navigate(
-                    `/compagnie/${company.nom.toLowerCase().replace(/\s+/g, '-')}/resultats?departure=${criteres.departure}&arrival=${criteres.arrival}`
-                  )}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm whitespace-nowrap ml-4"
-                >
-                  Voir les horaires
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="mt-6 text-center text-sm text-gray-500">
-        <p>Prix affichés en Francs CFA (FCFA)</p>
-        {/* Future currency selector can be added here */}
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

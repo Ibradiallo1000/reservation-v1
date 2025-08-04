@@ -1,9 +1,9 @@
 // src/firebaseConfig.ts
 
 import { initializeApp, getApps } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
-import { getStorage } from 'firebase/storage'; // ✅ AJOUT pour Storage
+import { getStorage } from 'firebase/storage'; 
 
 // ✅ Ton objet de configuration Firebase
 const firebaseConfig = {
@@ -16,13 +16,25 @@ const firebaseConfig = {
   measurementId: "G-G96GYRYS76"
 };
 
-// ✅ Initialisation sécurisée (évite les erreurs hot reload)
+// ✅ Initialisation sécurisée
 const app = getApps().length === 0
   ? initializeApp(firebaseConfig)
   : getApps()[0];
 
-// ✅ Exports clairs pour tout ton projet
+// ✅ Firestore avec persistance offline
 const db = getFirestore(app);
+
+enableIndexedDbPersistence(db).catch((err) => {
+  if (err.code === 'failed-precondition') {
+    console.warn('⚠️ La persistance offline ne fonctionne pas : plusieurs onglets ouverts.');
+  } else if (err.code === 'unimplemented') {
+    console.warn('⚠️ Le navigateur ne supporte pas IndexedDB pour Firestore.');
+  } else {
+    console.error('❌ Erreur persistance Firestore:', err);
+  }
+});
+
+// ✅ Exports clairs
 const auth = getAuth(app);
 const storage = getStorage(app);
 

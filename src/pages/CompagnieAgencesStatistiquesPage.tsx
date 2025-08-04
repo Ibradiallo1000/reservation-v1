@@ -22,26 +22,33 @@ const CompagnieAgencesStatistiquesPage: React.FC = () => {
     if (!user?.companyId) return;
     setLoading(true);
 
-    const agencesSnap = await getDocs(query(collection(db, 'agences'), where('companyId', '==', user.companyId)));
+    const agencesSnap = await getDocs(collection(db, 'companies', user.companyId, 'agences'));
     const agences = agencesSnap.docs.map(doc => ({ id: doc.id, ville: doc.data().ville }));
-
-    const reservationsSnap = await getDocs(query(collection(db, 'reservations'), where('compagnieId', '==', user.companyId), where('statut', '==', 'payé')));
 
     const grouped: Record<string, AgenceStat> = {};
 
-    agences.forEach(ag => {
-      grouped[ag.id] = { id: ag.id, ville: ag.ville, totalReservations: 0, totalMontant: 0, totalPassagers: 0 };
-    });
+    for (const agence of agences) {
+      grouped[agence.id] = {
+        id: agence.id,
+        ville: agence.ville,
+        totalReservations: 0,
+        totalMontant: 0,
+        totalPassagers: 0
+      };
 
-    reservationsSnap.docs.forEach(doc => {
-      const data = doc.data();
-      const aid = data.agencyId;
-      if (grouped[aid]) {
-        grouped[aid].totalReservations += 1;
-        grouped[aid].totalMontant += data.montant || 0;
-        grouped[aid].totalPassagers += data.seatsGo || 1;
-      }
-    });
+      const resQuery = query(
+        collection(db, 'companies', user.companyId, 'agences', agence.id, 'reservations'),
+        where('statut', '==', 'payé')
+      );
+      const resSnap = await getDocs(resQuery);
+
+      resSnap.docs.forEach(doc => {
+        const data = doc.data();
+        grouped[agence.id].totalReservations += 1;
+        grouped[agence.id].totalMontant += data.montant || 0;
+        grouped[agence.id].totalPassagers += data.seatsGo || 1;
+      });
+    }
 
     setStats(Object.values(grouped));
     setLoading(false);

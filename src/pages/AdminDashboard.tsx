@@ -1,72 +1,104 @@
-// src/pages/AdminDashboard.tsx
+import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { collection, getDocs, collectionGroup } from "firebase/firestore";
+import { db } from "../firebaseConfig";
 
-import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+interface Company {
+  id: string;
+  nom: string;
+  slug: string;
+  plan: string;
+  status: string;
+}
 
 interface CompanyStat {
   companyId: string;
   companySlug: string;
+  companyName: string;
+  plan: string;
   total: number;
   count: number;
   commission: number;
 }
 
-const links = [
-  { title: 'Créer un membre du staff', path: '/admin/ajouter-personnel', description: 'Ajouter un utilisateur interne à la plateforme' },
-  { title: 'Compagnies', path: '/admin/compagnies', description: 'Voir et gérer toutes les compagnies partenaires' },
-  { title: 'Réservations', path: '/admin/reservations', description: 'Voir la liste complète des réservations reçues' },
-  { title: 'Agents Créés', path: '/admin/agents', description: 'Voir les agents enregistrés dans le système' },
-  { title: 'Finances globales', path: '/admin/finances', description: 'Suivez les revenus, dépenses et bénéfices de la compagnie.' },
-  { title: 'Statistiques', path: '/admin/statistiques', description: "Consulter les statistiques d'utilisation du système" },
-  { title: 'Historique des ventes', path: '/admin/ventes', description: "Voir l'historique complet des ventes par ville ou pays" },
-  { title: 'Dépenses journalières', path: '/admin/depenses', description: "Ajouter et suivre les sorties d'argent quotidiennes." },
-  { title: 'Messagerie', path: '/admin/messagerie', description: 'Répondez aux clients ou communiquez avec vos agents.' },
-  { title: 'Paramètres', path: '/admin/parametres', description: 'Modifiez les préférences, le mot de passe ou le logo.' },
-];
-
 const AdminDashboard: React.FC = () => {
   const [stats, setStats] = useState<CompanyStat[]>([]);
-  const [totalGlobal, setTotalGlobal] = useState({ total: 0, reservations: 0, commission: 0 });
+  const [totalGlobal, setTotalGlobal] = useState({
+    total: 0,
+    reservations: 0,
+    commission: 0,
+    compagnies: 0,
+  });
 
   useEffect(() => {
     const fetchStats = async () => {
-      const snapshot = await getDocs(collection(db, 'reservations'));
-      let total = 0;
-      let count = 0;
-      let commission = 0;
+      try {
+        // 🔹 Étape 1 : récupérer toutes les compagnies
+        const companiesSnap = await getDocs(collection(db, "companies"));
+        const companies: Company[] = companiesSnap.docs.map((doc) => ({
+          id: doc.id,
+          nom: doc.data().nom || "Compagnie",
+          slug: doc.data().slug || "—",
+          plan: doc.data().plan || "free",
+          status: doc.data().status || "actif",
+        }));
 
-      const grouped: Record<string, CompanyStat> = {};
+        // 🔹 Étape 2 : récupérer toutes les réservations
+        const reservationsSnap = await getDocs(collectionGroup(db, "reservations"));
 
-      for (const docSnap of snapshot.docs) {
-        const d = docSnap.data();
-        const companyId = d.companyId || 'inconnu';
-        const companySlug = d.companySlug || '—';
-        const montant = d.total || 0;
-        const comm = d.commission || 0;
+        let total = 0;
+        let count = 0;
+        let commission = 0;
+        const grouped: Record<string, CompanyStat> = {};
 
-        if (!grouped[companyId]) {
-          grouped[companyId] = {
-            companyId,
-            companySlug,
-            total: 0,
-            count: 0,
-            commission: 0,
-          };
+        for (const docSnap of reservationsSnap.docs) {
+          const d = docSnap.data();
+          const companyId = d.companyId || "inconnu";
+          const montant = d.total || d.montant || 0;
+          const comm = d.commission || 0;
+
+          if (!grouped[companyId]) {
+            grouped[companyId] = {
+              companyId,
+              companySlug: d.companySlug || "—",
+              companyName: d.companyName || "Compagnie",
+              plan: d.plan || "free",
+              total: 0,
+              count: 0,
+              commission: 0,
+            };
+          }
+
+          grouped[companyId].total += montant;
+          grouped[companyId].commission += comm;
+          grouped[companyId].count += 1;
+
+          total += montant;
+          commission += comm;
+          count++;
         }
 
-        grouped[companyId].total += montant;
-        grouped[companyId].commission += comm;
-        grouped[companyId].count += 1;
+        // 🔹 Étape 3 : fusionner stats + compagnies
+        const mergedStats: CompanyStat[] = companies.map((c) => ({
+          companyId: c.id,
+          companySlug: c.slug,
+          companyName: c.nom,
+          plan: c.plan,
+          total: grouped[c.id]?.total || 0,
+          count: grouped[c.id]?.count || 0,
+          commission: grouped[c.id]?.commission || 0,
+        }));
 
-        total += montant;
-        commission += comm;
-        count++;
+        setStats(mergedStats);
+        setTotalGlobal({
+          total,
+          reservations: count,
+          commission,
+          compagnies: companies.length,
+        });
+      } catch (err) {
+        console.error("Erreur lors du chargement des stats:", err);
       }
-
-      setStats(Object.values(grouped));
-      setTotalGlobal({ total, reservations: count, commission });
     };
 
     fetchStats();
@@ -74,52 +106,73 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-2">Super Administrateur – Vue Globale Plateforme</h1>
-      <p className="text-gray-600 mb-6">Gérez toutes les compagnies, agences et utilisateurs depuis cet espace.</p>
+      <h1 className="text-2xl font-bold mb-2">
+        Tableau de bord – Administration plateforme
+      </h1>
+      <p className="text-gray-600 mb-6">
+        Suivi global des compagnies, abonnements et revenus.
+      </p>
 
       {/* Récap global */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="bg-white border rounded-lg p-4 shadow-sm">
+          <h2 className="text-sm text-gray-500">Total compagnies</h2>
+          <p className="text-xl font-bold text-purple-600">{totalGlobal.compagnies}</p>
+        </div>
         <div className="bg-white border rounded-lg p-4 shadow-sm">
           <h2 className="text-sm text-gray-500">Total réservations</h2>
-          <p className="text-xl font-bold text-blue-700">{totalGlobal.reservations}</p>
+          <p className="text-xl font-bold text-blue-600">{totalGlobal.reservations}</p>
         </div>
         <div className="bg-white border rounded-lg p-4 shadow-sm">
           <h2 className="text-sm text-gray-500">Montant encaissé</h2>
-          <p className="text-xl font-bold text-green-600">{totalGlobal.total.toLocaleString()} FCFA</p>
+          <p className="text-xl font-bold text-green-600">
+            {totalGlobal.total.toLocaleString()} FCFA
+          </p>
         </div>
         <div className="bg-white border rounded-lg p-4 shadow-sm">
           <h2 className="text-sm text-gray-500">Commission générée</h2>
-          <p className="text-xl font-bold text-orange-600">{totalGlobal.commission.toLocaleString()} FCFA</p>
+          <p className="text-xl font-bold text-orange-600">
+            {totalGlobal.commission.toLocaleString()} FCFA
+          </p>
         </div>
       </div>
 
       {/* Statistiques par compagnie */}
-      <h2 className="text-lg font-semibold mb-4">Détail par compagnie</h2>
+      <h2 className="text-lg font-semibold mb-4">Compagnies</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-        {stats.map((s, i) => (
-          <div key={i} className="p-4 border rounded-lg shadow-sm bg-white">
-            <h3 className="text-lg font-bold text-yellow-700 mb-1">{s.companySlug}</h3>
-            <p className="text-sm text-gray-700">Réservations : {s.count}</p>
-            <p className="text-sm text-gray-700">Montant : {s.total.toLocaleString()} FCFA</p>
-            <p className="text-sm text-gray-700">Commission : {s.commission.toLocaleString()} FCFA</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Liens vers les modules */}
-      <h2 className="text-lg font-semibold mb-4">Modules de gestion</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {links.map((card, index) => (
-          <Link
-            to={card.path}
-            key={index}
-            className="p-4 border rounded-lg shadow-sm hover:shadow-md bg-white hover:bg-gray-50"
-          >
-            <h3 className="text-lg font-semibold text-orange-600 mb-1">{card.title}</h3>
-            <p className="text-sm text-gray-600">{card.description}</p>
-            to="/villes"📍 Villes
-          </Link>
-        ))}
+        {stats.length === 0 ? (
+          <p className="text-gray-500 italic">Aucune donnée disponible</p>
+        ) : (
+          stats.map((s) => (
+            <div key={s.companyId} className="p-4 border rounded-lg shadow-sm bg-white">
+              <h3 className="text-lg font-bold text-orange-600 mb-1">{s.companyName}</h3>
+              <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                Plan : {s.plan}
+              </span>
+              <p className="text-sm mt-2 text-gray-700">Réservations : {s.count}</p>
+              <p className="text-sm text-gray-700">
+                Montant : {s.total.toLocaleString()} FCFA
+              </p>
+              <p className="text-sm text-gray-700">
+                Commission : {s.commission.toLocaleString()} FCFA
+              </p>
+              <div className="flex gap-2 mt-3">
+                <Link
+                  to={`/admin/compagnies/${s.companyId}`}
+                  className="text-sm px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Gérer
+                </Link>
+                <Link
+                  to={`/admin/compagnies/${s.companyId}/factures`}
+                  className="text-sm px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
+                >
+                  Factures
+                </Link>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

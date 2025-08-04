@@ -50,7 +50,7 @@ const ModifierReservationForm: React.FC<Props> = ({ reservation, onClose, onUpda
     setLoading(true);
 
     try {
-      const ref = doc(db, 'reservations', reservation.id);
+      const ref = doc(db, 'companies', reservation.companyId, 'agences', reservation.agencyId, 'reservations', reservation.id);
       await updateDoc(ref, {
         nomClient: form.nomClient,
         telephone: form.telephone,

@@ -8,7 +8,9 @@ import {
   getDocs,
   updateDoc,
   deleteDoc,
-  doc
+  doc,
+  QueryDocumentSnapshot,
+  DocumentData,
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -25,7 +27,7 @@ const AvisModerationPage: React.FC = () => {
   const { user } = useAuth();
   const [avisList, setAvisList] = useState<Avis[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lastDoc, setLastDoc] = useState<any>(null);
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
   const [hasMore, setHasMore] = useState(true);
 
   const ITEMS_PER_PAGE = 10;
@@ -35,17 +37,17 @@ const AvisModerationPage: React.FC = () => {
 
     setLoading(true);
 
+    const baseRef = collection(db, 'companies', user.companyId, 'avis');
+
     let q = query(
-      collection(db, 'avis'),
-      where('companyId', '==', user.companyId),
+      baseRef,
       where('visible', '==', false),
       limit(ITEMS_PER_PAGE)
     );
 
     if (loadMore && lastDoc) {
       q = query(
-        collection(db, 'avis'),
-        where('companyId', '==', user.companyId),
+        baseRef,
         where('visible', '==', false),
         startAfter(lastDoc),
         limit(ITEMS_PER_PAGE)
@@ -81,12 +83,16 @@ const AvisModerationPage: React.FC = () => {
   }, [user]);
 
   const toggleVisibility = async (id: string, visible: boolean) => {
-    await updateDoc(doc(db, 'avis', id), { visible: !visible });
+    if (!user?.companyId) return;
+    const avisRef = doc(db, 'companies', user.companyId, 'avis', id);
+    await updateDoc(avisRef, { visible: !visible });
     fetchAvis();
   };
 
   const handleDelete = async (id: string) => {
-    await deleteDoc(doc(db, 'avis', id));
+    if (!user?.companyId) return;
+    const avisRef = doc(db, 'companies', user.companyId, 'avis', id);
+    await deleteDoc(avisRef);
     fetchAvis();
   };
 
@@ -98,7 +104,7 @@ const AvisModerationPage: React.FC = () => {
         <p>Chargement des avis...</p>
       )}
 
-      {avisList.length === 0 && !loading && (
+      {!loading && avisList.length === 0 && (
         <p>Aucun avis en attente pour l’instant ✅</p>
       )}
 

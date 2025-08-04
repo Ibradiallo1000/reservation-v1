@@ -1,16 +1,17 @@
-// ✅ src/components/ReservationCard.tsx
-
 import React from 'react';
-import { CheckCircle2, Download, Trash2, AlertCircle, User, MapPin, Building, Wallet } from 'lucide-react';
+import {
+  CheckCircle2, Download, Trash2, AlertCircle,
+  User, MapPin, Building, Wallet
+} from 'lucide-react';
 import { motion } from 'framer-motion';
 import type { Reservation } from '../types/index';
 
 const statusStyles: Record<Reservation['statut'], string> = {
-    payé: 'bg-emerald-100 text-emerald-800',
-    preuve_recue: 'bg-amber-100 text-amber-800',
-    annulé: 'bg-red-100 text-red-800',
-    refusé: 'bg-red-100 text-red-800',
-    en_attente: ''
+  payé: 'bg-emerald-100 text-emerald-800',
+  preuve_recue: 'bg-amber-100 text-amber-800',
+  annulé: 'bg-red-100 text-red-800',
+  refusé: 'bg-red-100 text-red-800',
+  en_attente: ''
 };
 
 interface Props {
@@ -18,9 +19,16 @@ interface Props {
   onValider: (id: string) => void;
   onRefuser: (id: string) => void;
   onSupprimer: (id: string) => void;
+  isLoading: boolean;
 }
 
-export const ReservationCard: React.FC<Props> = ({ reservation, onValider, onRefuser, onSupprimer }) => {
+export const ReservationCard: React.FC<Props> = ({
+  reservation,
+  onValider,
+  onRefuser,
+  onSupprimer,
+  isLoading
+}) => {
   return (
     <div className="bg-white border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition">
       <div className="grid grid-cols-1">
@@ -63,7 +71,9 @@ export const ReservationCard: React.FC<Props> = ({ reservation, onValider, onRef
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2 text-slate-800">
               <Wallet className="w-4 h-4 text-slate-400" />
-              <span className="font-semibold">{reservation.montant?.toLocaleString()} FCFA</span>
+              <span className="font-semibold">
+                {reservation.montant?.toLocaleString()} FCFA
+              </span>
             </div>
             <div className="text-sm text-slate-500">
               Places : {reservation.seatsGo}{reservation.seatsReturn ? ` + ${reservation.seatsReturn}` : ''}
@@ -83,23 +93,33 @@ export const ReservationCard: React.FC<Props> = ({ reservation, onValider, onRef
         {reservation.statut === 'preuve_recue' && (
           <>
             <motion.button
+              disabled={isLoading}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => onValider(reservation.id)}
-              className="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-700 flex items-center gap-1"
+              className={`px-3 py-2 rounded bg-emerald-600 text-white text-xs flex items-center gap-1 ${
+                isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-emerald-700'
+              }`}
             >
-              <CheckCircle2 className="w-4 h-4" /> Valider
+              <CheckCircle2 className="w-4 h-4" />
+              {isLoading ? '...' : 'Valider'}
             </motion.button>
+
             <motion.button
+              disabled={isLoading}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => onRefuser(reservation.id)}
-              className="px-3 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-700 flex items-center gap-1"
+              className={`px-3 py-2 rounded bg-red-600 text-white text-xs flex items-center gap-1 ${
+                isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-700'
+              }`}
             >
-              <AlertCircle className="w-4 h-4" /> Refuser
+              <AlertCircle className="w-4 h-4" />
+              {isLoading ? '...' : 'Refuser'}
             </motion.button>
           </>
         )}
+
         {reservation.preuveUrl && (
           <a
             href={reservation.preuveUrl}
@@ -110,6 +130,7 @@ export const ReservationCard: React.FC<Props> = ({ reservation, onValider, onRef
             <Download className="w-4 h-4" /> Voir preuve
           </a>
         )}
+
         <motion.button
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}

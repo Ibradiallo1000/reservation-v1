@@ -18,6 +18,8 @@ interface Reservation {
   statut: 'payée' | 'confirmée' | 'en attente' | 'annulée';
   lieu_depart?: string;
   isUpcoming?: boolean;
+  companyId: string;
+  agencyId: string;
 }
 
 const MesReservationsPage = () => {
@@ -29,7 +31,7 @@ const MesReservationsPage = () => {
 
   useEffect(() => {
     const fetchReservations = async () => {
-      if (!user) {
+      if (!user?.companyId || !user?.agencyId) {
         setLoading(false);
         return;
       }
@@ -38,7 +40,7 @@ const MesReservationsPage = () => {
         setLoading(true);
         setError(null);
 
-        const reservationsRef = collection(db, 'reservations');
+        const reservationsRef = collection(db, 'companies', user.companyId, 'agences', user.agencyId, 'reservations');
         const reservationsQuery = query(reservationsRef, where('clientId', '==', user.uid));
         const reservationsSnapshot = await getDocs(reservationsQuery);
         const data = reservationsSnapshot.docs.map((doc) => ({ 

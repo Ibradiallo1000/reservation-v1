@@ -1,4 +1,4 @@
-// ✅ Fichier : src/pages/AgenceFinancesPage.tsx
+// ✅ src/pages/AgenceFinancesPage.tsx — version compatible structure imbriquée Firestore
 
 import React, { useEffect, useState } from 'react';
 import { Timestamp, collection, query, where, getDocs } from 'firebase/firestore';
@@ -27,16 +27,16 @@ const AgenceFinancesPage: React.FC = () => {
   };
 
   const fetchStats = async () => {
-    if (!user?.agencyId) return;
+    if (!user?.companyId || !user?.agencyId) return;
 
     const start = getStartDate();
     const q = query(
-      collection(db, 'reservations'),
-      where('agencyId', '==', user.agencyId),
-      where('createdAt', '>=', start)
+      collection(db, 'companies', user.companyId, 'agences', user.agencyId, 'reservations'),
+      where('createdAt', '>=', start),
+      where('statut', '==', 'payé')
     );
     const snap = await getDocs(q);
-    const total = snap.docs.reduce((sum, doc) => sum + (doc.data().prixTotal || 0), 0);
+    const total = snap.docs.reduce((sum, doc) => sum + (doc.data().montant || 0), 0);
     setRevenu(total);
     setNombre(snap.size);
   };
@@ -71,7 +71,7 @@ const AgenceFinancesPage: React.FC = () => {
       </div>
 
       <div className="bg-white p-6 rounded shadow border">
-        <p className="text-lg">Revenu total : <span className="font-bold text-green-700">{revenu} FCFA</span></p>
+        <p className="text-lg">Revenu total : <span className="font-bold text-green-700">{revenu.toLocaleString()} FCFA</span></p>
         <p className="text-lg">Nombre de réservations : <span className="font-bold text-blue-700">{nombre}</span></p>
       </div>
 

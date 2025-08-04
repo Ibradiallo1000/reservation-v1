@@ -1,4 +1,3 @@
-// ✅ src/pages/AjouterAgenceForm.tsx
 import React, { useState } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -50,20 +49,20 @@ const AjouterAgenceForm: React.FC<AjouterAgenceFormProps> = ({ onAdd }) => {
       type,
       latitude,
       longitude,
-      companyId: user.companyId,
       status: 'active',
       createdAt: new Date(),
       estSiege: false,
     };
 
     try {
-      await addDoc(collection(db, 'agences'), nouvelleAgence);
+      const agencesRef = collection(db, 'companies', user.companyId, 'agences');
+      await addDoc(agencesRef, nouvelleAgence);
+
       alert('✅ Agence ajoutée avec succès.');
       setNomAgence('');
       setPays('');
       setVille('');
       setQuartier('');
-      setType('');
       setLatitude(null);
       setLongitude(null);
       onAdd();
@@ -101,10 +100,6 @@ const AjouterAgenceForm: React.FC<AjouterAgenceFormProps> = ({ onAdd }) => {
         <div>
           <label className="block mb-1">Quartier (optionnel)</label>
           <input type="text" value={quartier} onChange={(e) => setQuartier(e.target.value)} className="w-full border p-2 rounded" />
-        </div>
-        <div>
-          <label className="block mb-1">Type (optionnel)</label>
-          <input type="text" value={type} onChange={(e) => setType(e.target.value)} className="w-full border p-2 rounded" />
         </div>
       </div>
 

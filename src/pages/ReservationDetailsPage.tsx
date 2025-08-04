@@ -151,32 +151,43 @@ const ReservationDetailsPage: React.FC = () => {
   const textColor = safeTextColor(primaryColor);
 
   useEffect(() => {
-    if (!id) { 
-      setError('ID de réservation manquant'); 
-      setLoading(false); 
-      return; 
+  if (!id) { 
+    setError('ID de réservation manquant'); 
+    setLoading(false); 
+    return; 
+  }
+
+  const reservationFromState = location.state?.reservation;
+  const companyId = reservationFromState?.companyId;
+  const agencyId = reservationFromState?.agencyId;
+
+  if (!companyId || !agencyId) {
+    setError("Impossible de localiser la réservation (données manquantes)");
+    setLoading(false);
+    return;
+  }
+
+  const reservationRef = doc(db, 'companies', companyId, 'agences', agencyId, 'reservations', id);
+  const unsub = onSnapshot(reservationRef, (docSnap) => {
+    if (docSnap.exists()) {
+      const data = docSnap.data() as Reservation;
+      setReservation({ 
+        ...data, 
+        id: docSnap.id,
+        updatedAt: data.updatedAt || new Date().toISOString()
+      });
+    } else {
+      setError('Réservation introuvable');
     }
+    setLoading(false);
+  }, (err) => { 
+    console.error(err); 
+    setError('Erreur de connexion'); 
+    setLoading(false); 
+  });
 
-    const unsub = onSnapshot(doc(db, 'reservations', id), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as Reservation;
-        setReservation({ 
-          ...data, 
-          id: docSnap.id,
-          updatedAt: data.updatedAt || new Date().toISOString()
-        });
-      } else {
-        setError('Réservation introuvable');
-      }
-      setLoading(false);
-    }, (err) => { 
-      console.error(err); 
-      setError('Erreur de connexion'); 
-      setLoading(false); 
-    });
-
-    return () => unsub();
-  }, [id]);
+  return () => unsub();
+}, [id]);
 
   useEffect(() => {
     const fetchCompany = async () => {

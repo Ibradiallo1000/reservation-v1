@@ -33,7 +33,6 @@ interface Agence {
   pays: string;
   quartier?: string;
   type?: string;
-  companyId: string;
   statut: 'active' | 'inactive';
   emailGerant: string;
   nomGerant: string;
@@ -63,6 +62,8 @@ const CompagnieAgencesPage: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(6);
+  const [isEmailChecking, setIsEmailChecking] = useState(false);
+  const [emailError, setEmailError] = useState('');
 
   const couleurPrincipale = user?.companyColor || '#2563eb';
 
@@ -77,18 +78,35 @@ const CompagnieAgencesPage: React.FC = () => {
 
   const fetchAgences = async () => {
     if (!user?.companyId) return;
-    const q = query(collection(db, 'agences'), where('companyId', '==', user.companyId));
-    const snap = await getDocs(q);
-    const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Agence[];
-    setAgences(list);
-    setCurrentPage(1); // Reset à la première page après un nouveau chargement
+    
+    try {
+      const agencesRef = collection(db, 'companies', user.companyId, 'agences');
+      const snap = await getDocs(agencesRef);
+      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Agence[];
+      setAgences(list);
+      setCurrentPage(1);
+    } catch (error) {
+      console.error("Erreur lors du chargement des agences:", error);
+      alert("Une erreur est survenue lors du chargement des agences");
+    }
+  };
+
+  const checkEmailExists = async (email: string): Promise<boolean> => {
+    try {
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', email));
+      const querySnapshot = await getDocs(q);
+      return !querySnapshot.empty;
+    } catch (error) {
+      console.error("Erreur lors de la vérification de l'email:", error);
+      return false;
+    }
   };
 
   useEffect(() => {
     fetchAgences();
   }, [user]);
 
-  // Calcul des agences à afficher
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentAgences = agences.slice(indexOfFirstItem, indexOfLastItem);
@@ -97,6 +115,10 @@ const CompagnieAgencesPage: React.FC = () => {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    
+    if (name === 'emailGerant') {
+      setEmailError('');
+    }
   };
 
   const handlePositionChange = (lat: number, lng: number) => {
@@ -123,70 +145,97 @@ const CompagnieAgencesPage: React.FC = () => {
     });
     setEditingId(null);
     setShowForm(false);
+    setEmailError('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    try {
-      if (editingId) {
-        // Mode édition
-        await updateDoc(doc(db, 'agences', editingId), {
-          nomAgence: formData.nomAgence,
-          ville: formData.ville,
-          pays: formData.pays,
-          quartier: formData.quartier,
-          type: formData.type,
-          nomGerant: formData.nomGerant,
-          telephone: formData.telephone,
-          latitude: formData.latitude ? parseFloat(formData.latitude) : null,
-          longitude: formData.longitude ? parseFloat(formData.longitude) : null,
-        });
-        
-        alert('Agence mise à jour avec succès');
-      } else {
-        // Mode création
-        const userCredential = await createUserWithEmailAndPassword(
-          auth, 
-          formData.emailGerant, 
-          formData.motDePasse
-        );
-        
-        const agenceRef = await addDoc(collection(db, 'agences'), {
-          nomAgence: formData.nomAgence,
-          ville: formData.ville,
-          pays: formData.pays,
-          quartier: formData.quartier,
-          type: formData.type,
-          statut: 'active',
-          emailGerant: formData.emailGerant,
-          nomGerant: formData.nomGerant,
-          telephone: formData.telephone,
-          companyId: user?.companyId || '',
-          latitude: formData.latitude ? parseFloat(formData.latitude) : null,
-          longitude: formData.longitude ? parseFloat(formData.longitude) : null,
-        });
+  e.preventDefault();
+  console.log("📤 Soumission du formulaire", formData);
 
-        await setDoc(doc(db, 'users', userCredential.user.uid), {
-          uid: userCredential.user.uid,
-          email: formData.emailGerant,
-          nom: formData.nomGerant,
-          telephone: formData.telephone,
-          role: 'chefAgence',
-          companyId: user?.companyId || '',
-          agencyId: agenceRef.id,
-        });
-
-        alert('Agence et gérant créés avec succès');
-      }
-      
-      resetForm();
-      fetchAgences();
-    } catch (err: any) {
-      console.error("Erreur:", err.message);
-      alert(`Erreur: ${err.message}`);
+  try {
+    if (!user?.companyId) {
+      throw new Error("Aucune compagnie associée à cet utilisateur");
     }
-  };
+
+    if (!editingId) {
+      console.log("🔍 Vérification email déjà utilisé...");
+      setIsEmailChecking(true);
+      const emailExists = await checkEmailExists(formData.emailGerant);
+      setIsEmailChecking(false);
+      if (emailExists) {
+        console.warn("❌ Email déjà utilisé :", formData.emailGerant);
+        setEmailError("Cet email est déjà utilisé par un autre utilisateur");
+        return;
+      }
+
+      if (!formData.motDePasse || formData.motDePasse.length < 6) {
+        console.warn("❌ Mot de passe trop court ou manquant");
+        alert("Le mot de passe doit contenir au moins 6 caractères.");
+        return;
+      }
+    }
+
+    if (editingId) {
+      console.log("✏️ Mise à jour agence...");
+      const agenceRef = doc(db, 'companies', user.companyId, 'agences', editingId);
+      await updateDoc(agenceRef, {
+        nomAgence: formData.nomAgence,
+        ville: formData.ville,
+        pays: formData.pays,
+        quartier: formData.quartier,
+        type: formData.type,
+        nomGerant: formData.nomGerant,
+        telephone: formData.telephone,
+        latitude: formData.latitude ? parseFloat(formData.latitude) : null,
+        longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+      });
+      alert('✅ Agence mise à jour avec succès');
+    } else {
+      console.log("👤 Création utilisateur Firebase Auth...");
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        formData.emailGerant,
+        formData.motDePasse
+      );
+      console.log("✅ Utilisateur créé :", userCredential.user.uid);
+
+      console.log("🏢 Ajout de l’agence Firestore...");
+      const agencesRef = collection(db, 'companies', user.companyId, 'agences');
+      const agenceRef = await addDoc(agencesRef, {
+        nomAgence: formData.nomAgence,
+        ville: formData.ville,
+        pays: formData.pays,
+        quartier: formData.quartier,
+        type: formData.type,
+        statut: 'active',
+        emailGerant: formData.emailGerant,
+        nomGerant: formData.nomGerant,
+        telephone: formData.telephone,
+        latitude: formData.latitude ? parseFloat(formData.latitude) : null,
+        longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+      });
+
+      console.log("📦 Mise à jour collection users...");
+      await setDoc(doc(db, 'users', userCredential.user.uid), {
+        uid: userCredential.user.uid,
+        email: formData.emailGerant,
+        nom: formData.nomGerant,
+        telephone: formData.telephone,
+        role: 'chefAgence',
+        companyId: user.companyId,
+        agencyId: agenceRef.id,
+      });
+
+      alert('✅ Agence et gérant créés avec succès');
+    }
+
+    resetForm();
+    fetchAgences();
+  } catch (err: any) {
+    console.error("🔥 Erreur pendant handleSubmit:", err);
+    alert(`Erreur: ${err?.message ?? err?.code ?? 'Erreur inconnue'}`);
+  }
+};
 
   const handleEdit = (agence: Agence) => {
     setFormData({
@@ -208,20 +257,35 @@ const CompagnieAgencesPage: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (!user?.companyId) return;
+    
     if (window.confirm('Êtes-vous sûr de vouloir supprimer cette agence ?')) {
-      await deleteDoc(doc(db, 'agences', id));
-      fetchAgences();
+      try {
+        await deleteDoc(doc(db, 'companies', user.companyId, 'agences', id));
+        fetchAgences();
+      } catch (error) {
+        console.error("Erreur lors de la suppression:", error);
+        alert("Une erreur est survenue lors de la suppression");
+      }
     }
   };
 
   const handleToggleStatut = async (agence: Agence) => {
+    if (!user?.companyId || !agence.id) return;
+    
     const newStatut = agence.statut === 'active' ? 'inactive' : 'active';
-    await updateDoc(doc(db, 'agences', agence.id!), { statut: newStatut });
-    fetchAgences();
+    try {
+      await updateDoc(doc(db, 'companies', user.companyId, 'agences', agence.id), { 
+        statut: newStatut 
+      });
+      fetchAgences();
+    } catch (error) {
+      console.error("Erreur lors du changement de statut:", error);
+      alert("Une erreur est survenue lors du changement de statut");
+    }
   };
 
   const goToDashboard = (agencyId: string) => {
-    console.log("Naviguer vers :", `/agence/${agencyId}/dashboard`);
     navigate(`/compagnie/agence/${agencyId}/dashboard`);
   };
 

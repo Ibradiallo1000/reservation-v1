@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import * as path from 'path';
 import { copyFileSync, existsSync } from 'fs';
+import { VitePWA } from 'vite-plugin-pwa';
 
 function copyRedirectsPlugin() {
   return {
@@ -25,7 +26,49 @@ function copyRedirectsPlugin() {
 
 export default defineConfig({
   base: '/',
-  plugins: [react(), copyRedirectsPlugin()],
+  plugins: [
+    react(),
+    copyRedirectsPlugin(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      devOptions: {
+        enabled: true, // ✅ activer PWA aussi en dev
+      },
+      includeAssets: [
+        'favicon.ico',
+        'icon-192.png',
+        'icon-512.png',
+        'splash.png'
+      ],
+      manifest: {
+        name: 'Teliya',
+        short_name: 'Teliya',
+        description: 'Réservation de billets en ligne et au guichet',
+        theme_color: '#FFD700',
+        background_color: '#ffffff',
+        display: 'standalone',
+        orientation: 'portrait',
+        start_url: '/',
+        icons: [
+          {
+            src: '/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any maskable'
+          },
+          {
+            src: '/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any maskable'
+          }
+        ]
+      },
+      workbox: {
+        cleanupOutdatedCaches: true
+      }
+    })
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -46,9 +89,15 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-router-dom')) return 'react';
+            if (id.includes('react') || id.includes('react-router-dom'))
+              return 'react';
             if (id.includes('firebase')) return 'firebase';
-            if (id.includes('lodash') || id.includes('axios') || id.includes('date-fns')) return 'vendor';
+            if (
+              id.includes('lodash') ||
+              id.includes('axios') ||
+              id.includes('date-fns')
+            )
+              return 'vendor';
           }
           if (id.includes('/src/pages/Compagnie/')) return 'compagnie';
           if (id.includes('/src/pages/Agence/')) return 'agence';
@@ -62,7 +111,7 @@ export default defineConfig({
   },
   server: {
     port: 5190,
-    strictPort: true,
+    strictPort: false,
     open: true,
     fs: {
       strict: false,
@@ -78,5 +127,5 @@ export default defineConfig({
   preview: {
     port: 5191,
     strictPort: true,
-  }
+  },
 });

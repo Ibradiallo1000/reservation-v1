@@ -1,4 +1,3 @@
-// ✅ src/types/index.ts
 
 export interface CustomUser {
   uid: string;
@@ -94,4 +93,16 @@ declare global {
   interface Window {
     __NETLIFY_FIX_APPLIED?: boolean;
   }
+}
+export interface Trip {
+  id: string;
+  date: string;
+  time: string;
+  departure: string;
+  arrival: string;
+  price: number;
+  agencyId: string;
+  companyId: string;
+  places: number;
+  remainingSeats: number;
 }

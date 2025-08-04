@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db, storage } from '../firebaseConfig';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { Upload, CheckCircle, XCircle, Loader2, ChevronLeft, Info } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -17,9 +17,13 @@ import {
   Clock,
   User,
   Users,
-  BadgeCheck
+  BadgeCheck,
+  ArrowRight,
+  Banknote
 } from 'lucide-react';
+
 interface ReservationDraft {
+  agencyId: string;
   preuveMessage: string;
   id?: string;
   nomClient: string;
@@ -38,17 +42,18 @@ interface ReservationDraft {
 }
 
 interface PaymentMethod {
-  url: string;
-  logoUrl: string;
-  ussdPattern: string;
-  merchantNumber: string;
+  url?: string;
+  logoUrl?: string;
+  ussdPattern?: string;
+  merchantNumber?: string;
 }
 
 interface PaymentMethods {
-  [key: string]: PaymentMethod;
+  [key: string]: PaymentMethod | null | undefined;
 }
 
 interface CompanyInfo {
+  couleurSecondaire: string | undefined;
   id: string;
   name: string;
   primaryColor?: string;
@@ -79,33 +84,66 @@ const UploadPreuvePage: React.FC = () => {
     try {
       setLoadingData(true);
 
+      let parsedCompanyInfo: CompanyInfo | null = null;
+
       if (locationDraft && locationCompanyInfo) {
+        parsedCompanyInfo = locationCompanyInfo;
         setReservationDraft(locationDraft);
-        setCompanyInfo(locationCompanyInfo);
-        return;
-      }
+      } else {
+        const savedDraft = sessionStorage.getItem('reservationDraft');
+        const savedCompanyInfo = sessionStorage.getItem('companyInfo');
 
-      const savedDraft = sessionStorage.getItem('reservationDraft');
-      const savedCompanyInfo = sessionStorage.getItem('companyInfo');
+        if (savedDraft && savedCompanyInfo) {
+          const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
+          parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
 
-      if (savedDraft && savedCompanyInfo) {
-        const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
-        const parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
+          if (!parsedDraft?.depart || !parsedDraft?.arrivee) {
+            throw new Error('Données de réservation incomplètes');
+          }
 
-        if (!parsedDraft?.depart || !parsedDraft?.arrivee) {
-          throw new Error('Données de réservation incomplètes');
+          setReservationDraft(parsedDraft);
+        } else {
+          throw new Error('Aucune donnée de réservation valide trouvée');
         }
-
-        setReservationDraft(parsedDraft);
-        setCompanyInfo(parsedCompanyInfo);
-        return;
       }
 
-      if (id) {
-        throw new Error('Fonctionnalité non implémentée');
+      if (parsedCompanyInfo?.id) {
+        const paymentSnap = await getDocs(
+          query(collection(db, 'paymentMethods'), where('companyId', '==', parsedCompanyInfo.id))
+        );
+
+        const methods: PaymentMethods = {};
+        paymentSnap.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data.name) {
+            methods[data.name] = {
+              logoUrl: data.logoUrl || '',
+              url: data.defaultPaymentUrl || '',
+              ussdPattern: data.ussdPattern || '',
+              merchantNumber: data.merchantNumber || '',
+            };
+          }
+        });
+
+        const companyRef = doc(db, 'companies', parsedCompanyInfo.id);
+        const snap = await getDoc(companyRef);
+
+        if (snap.exists()) {
+          const companyData = snap.data();
+          setCompanyInfo({
+            ...parsedCompanyInfo,
+            paymentMethods: methods,
+            primaryColor: companyData.primaryColor || companyData.couleurPrimaire || '#3b82f6',
+            secondaryColor: companyData.secondaryColor || companyData.couleurSecondaire || '#93c5fd',
+            logoUrl: companyData.logoUrl || '',
+          });
+          return;
+        } else {
+          throw new Error('Compagnie introuvable dans Firestore');
+        }
       }
 
-      throw new Error('Aucune donnée de réservation valide trouvée');
+      throw new Error('Impossible de récupérer les infos de la compagnie');
     } catch (error) {
       console.error('[UploadPreuvePage] ❌ Erreur de chargement:', error);
       setError(error instanceof Error ? error.message : 'Erreur inconnue');
@@ -151,22 +189,22 @@ const UploadPreuvePage: React.FC = () => {
 
   const handlePaymentMethodSelect = (methodKey: string) => {
     try {
-      if (!companyInfo?.paymentMethods?.[methodKey]) {
+      const method = companyInfo?.paymentMethods?.[methodKey];
+      if (!method) {
         throw new Error('Méthode de paiement non disponible');
       }
 
-      const method = companyInfo.paymentMethods[methodKey];
       setPaymentMethod(methodKey);
       setError(null);
 
       if (reservationDraft) {
         const ussd = method.ussdPattern
-          .replace('MERCHANT', method.merchantNumber)
-          .replace('AMOUNT', reservationDraft.montant.toString());
+          ?.replace('MERCHANT', method.merchantNumber || '')
+          ?.replace('AMOUNT', reservationDraft.montant.toString());
 
         if (method.url) {
           window.open(method.url, '_blank', 'noopener,noreferrer');
-        } else {
+        } else if (ussd) {
           window.open(`tel:${ussd}`, '_blank', 'noopener,noreferrer');
         }
       }
@@ -205,26 +243,38 @@ const UploadPreuvePage: React.FC = () => {
 
       const referenceCode = `RES-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}`;
 
-      await updateDoc(doc(db, 'reservations', reservationDraft.id), {
-        nomClient: reservationDraft.nomClient,
-        telephone: reservationDraft.telephone,
-        depart: reservationDraft.depart,
-        arrivee: reservationDraft.arrivee,
-        date: reservationDraft.date,
-        heure: reservationDraft.heure,
-        montant: reservationDraft.montant,
-        seatsGo: reservationDraft.seatsGo,
-        seatsReturn: reservationDraft.seatsReturn || 0,
-        tripType: reservationDraft.tripType,
-        statut: 'preuve_recue',
-        referenceCode,
-        companyId: reservationDraft.companyId || '',
-        companySlug: reservationDraft.companySlug || '',
-        canal: paymentMethod,
-        preuveMessage: message.trim(),
-        preuveUrl: preuveUrl || null,
-        updatedAt: new Date(),
-      });
+      await updateDoc(
+        doc(
+          db,
+          'companies',
+          reservationDraft.companyId!,
+          'agences',
+          reservationDraft.agencyId!,
+          'reservations',
+          reservationDraft.id!
+        ),
+        {
+          nomClient: reservationDraft.nomClient,
+          telephone: reservationDraft.telephone,
+          depart: reservationDraft.depart,
+          arrivee: reservationDraft.arrivee,
+          date: reservationDraft.date,
+          heure: reservationDraft.heure,
+          montant: reservationDraft.montant,
+          seatsGo: reservationDraft.seatsGo,
+          seatsReturn: reservationDraft.seatsReturn || 0,
+          tripType: reservationDraft.tripType,
+          statut: 'preuve_recue',
+          referenceCode,
+          companyId: reservationDraft.companyId || '',
+          companySlug: reservationDraft.companySlug || '',
+          canal: 'en_ligne', // 🔒 Fixé à "en_ligne"
+          preuveVia: paymentMethod, // ✅ Enregistre le vrai nom du PMA ici
+          preuveMessage: message.trim(),
+          preuveUrl: preuveUrl || null,
+          updatedAt: new Date(),
+        }
+      );
 
       sessionStorage.removeItem('reservationDraft');
       sessionStorage.removeItem('companyInfo');
@@ -243,16 +293,11 @@ const UploadPreuvePage: React.FC = () => {
       colors: {
         primary: companyInfo?.couleurPrimaire || '#3b82f6',
         text: companyInfo?.couleurPrimaire ? safeTextColor(companyInfo.couleurPrimaire) : '#ffffff',
+        background: '#f9fafb'
       }
     };
 
-    return (
-      <LoadingScreen colors={{
-        primary: themeConfig.colors.primary,
-        text: themeConfig.colors.text,
-        background: '#f9fafb'
-      }} />
-    );
+    return <LoadingScreen colors={themeConfig.colors} />;
   }
 
   if (!reservationDraft || !companyInfo) {
@@ -265,21 +310,25 @@ const UploadPreuvePage: React.FC = () => {
 
   const themeConfig = {
     colors: {
-      primary: companyInfo.primaryColor || '#3b82f6',
+      primary: companyInfo.primaryColor || companyInfo.couleurPrimaire || '#3b82f6',
+      secondary: companyInfo.secondaryColor || companyInfo.couleurSecondaire || '#93c5fd',
       text: companyInfo.primaryColor ? safeTextColor(companyInfo.primaryColor) : '#ffffff',
     }
   };
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-gray-50">
       <Header 
         companyInfo={companyInfo} 
         themeConfig={themeConfig} 
         onBack={() => navigate(-1)} 
       />
       
-      <main className="max-w-4xl mx-auto p-4 space-y-6">
-        <ReservationSummaryCard reservationDraft={reservationDraft} />
+      <main className="max-w-4xl mx-auto p-4 space-y-6 pb-24">
+        <ReservationSummaryCard 
+          reservationDraft={reservationDraft} 
+          primaryColor={themeConfig.colors.primary}
+        />
         
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="p-6 space-y-6">
@@ -289,64 +338,43 @@ const UploadPreuvePage: React.FC = () => {
             />
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Choisissez un moyen de paiement ci-dessous :
-              </label>
+              <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                <Banknote className="w-5 h-5" style={{ color: themeConfig.colors.primary }} />
+                <span>Moyen de paiement</span>
+              </h3>
               <PaymentMethodSection
                 paymentMethod={paymentMethod}
                 onPaymentMethodSelect={handlePaymentMethodSelect}
                 companyInfo={companyInfo}
                 reservationAmount={reservationDraft.montant}
+                primaryColor={themeConfig.colors.primary}
+                secondaryColor={themeConfig.colors.secondary}
               />
             </div>
             
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Entrez les détails du paiement que vous avez effectué :
-              </label>
-              <p className="text-xs text-gray-500 mb-2">
-                (Exemple: "Paiement MTN Mobile Money - Réf: 5X8T9K - 05/07/2024")
-              </p>
-              <textarea
-                placeholder="Coller les détails du paiement..."
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:outline-none"
-                style={{ 
-                  borderColor: hexToRgba(themeConfig.colors.primary, 0.3),
-                }}
-                rows={4}
-                required
-              />
-            </div>
+            <MessageSection
+              message={message}
+              setMessage={setMessage}
+              primaryColor={themeConfig.colors.primary}
+            />
             
             <FileUploadSection 
               handleFileChange={handleFileChange}
               file={file}
+              primaryColor={themeConfig.colors.primary}
             />
             
             {error && <ErrorDisplay error={error} />}
           </div>
-
-          
-         <div 
-           className="fixed bottom-0 left-0 w-full z-50 border-t border-gray-200 bg-white px-4 py-3 shadow-md"
-           style={{ 
-             backgroundColor: '#ffffff',
-           }}
-         >
-           <div className="max-w-4xl mx-auto">
-             <SubmitButton
-               onClick={handleUpload}
-               disabled={uploading || !message.trim() || !paymentMethod}
-               primaryColor={themeConfig.colors.primary}
-               textColor={themeConfig.colors.text}
-               uploading={uploading}
-             />
-           </div>
-          </div>
         </div>
       </main>
+
+      <SubmitButton
+        onClick={handleUpload}
+        disabled={uploading || !message.trim() || !paymentMethod}
+        themeConfig={themeConfig}
+        uploading={uploading}
+      />
     </div>
   );
 };
@@ -357,10 +385,16 @@ const SuccessScreen: React.FC<{
   slug?: string;
 }> = ({ reservationDraft, companyInfo, slug }) => {
   const navigate = useNavigate();
+  const themeConfig = {
+    colors: {
+      primary: companyInfo.primaryColor || companyInfo.couleurPrimaire || '#3b82f6',
+      text: companyInfo.primaryColor ? safeTextColor(companyInfo.primaryColor) : '#ffffff',
+    }
+  };
 
   useEffect(() => {
     const timeout = setTimeout(() => {
-      navigate(`/reservation/${reservationDraft.id}`, {
+      navigate(`/${slug}/reservation/${reservationDraft.id}`, {
         state: {
           slug: slug,
           companyInfo: companyInfo,
@@ -380,9 +414,18 @@ const SuccessScreen: React.FC<{
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-white">
       <div className="text-center max-w-md">
-        <CheckCircle className="mx-auto h-12 w-12 text-green-500 mb-4" />
-        <h1 className="text-xl font-bold text-green-600 mb-2">Preuve envoyée !</h1>
-        <p className="text-gray-600">Redirection en cours...</p>
+        <div className="mx-auto mb-4 flex items-center justify-center">
+          <div 
+            className="p-3 rounded-full"
+            style={{ 
+              backgroundColor: hexToRgba(themeConfig.colors.primary, 0.1)
+            }}
+          >
+            <CheckCircle className="h-10 w-10" style={{ color: themeConfig.colors.primary }} />
+          </div>
+        </div>
+        <h1 className="text-xl font-bold text-gray-900 mb-2">Preuve envoyée avec succès !</h1>
+        <p className="text-gray-600">Vous allez être redirigé vers votre réservation...</p>
       </div>
     </div>
   );
@@ -394,133 +437,170 @@ const Header: React.FC<{ companyInfo?: CompanyInfo; themeConfig: any; onBack: ()
   onBack 
 }) => (
   <header 
-    className="sticky top-0 z-50 px-4 py-3"
+    className="sticky top-0 z-50 px-4 py-3 shadow-sm"
     style={{
-      backgroundColor: hexToRgba(themeConfig.colors.primary, 0.95),
-      backdropFilter: 'blur(10px)'
+      backgroundColor: themeConfig.colors.primary,
+      color: themeConfig.colors.text
     }}
   >
     <div className="flex items-center gap-4 max-w-7xl mx-auto">
       <button 
         onClick={onBack}
         className="p-2 rounded-full hover:bg-white/10 transition"
-        style={{ color: themeConfig.colors.text }}
       >
         <ChevronLeft className="h-5 w-5" />
       </button>
       
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
         {companyInfo?.logoUrl && (
           <LazyLoadImage 
             src={companyInfo.logoUrl} 
             alt={`Logo ${companyInfo.name}`}
             effect="blur"
             className="h-8 w-8 rounded-full object-cover border-2"
-            style={{ 
-              borderColor: themeConfig.colors.text,
-              backgroundColor: hexToRgba(themeConfig.colors.primary, 0.2)
-            }}
+            style={{ borderColor: themeConfig.colors.text }}
           />
         )}
-        <h1 
-          className="text-lg font-bold"
-          style={{ color: themeConfig.colors.text }}
-        >
-          Preuve de paiement
+        <h1 className="text-lg font-bold">
+          Envoyer la preuve de paiement
         </h1>
       </div>
     </div>
   </header>
 );
 
-const ReservationSummaryCard: React.FC<{ reservationDraft: ReservationDraft }> = ({ reservationDraft }) => {
+const ReservationSummaryCard: React.FC<{ 
+  reservationDraft: ReservationDraft;
+  primaryColor: string;
+}> = ({ reservationDraft, primaryColor }) => {
   const isAllerRetour = reservationDraft.tripType === 'aller_retour';
   const formattedDate = reservationDraft.date
-    ? format(parseISO(reservationDraft.date), 'dd/MM/yyyy', { locale: fr })
+    ? format(parseISO(reservationDraft.date), 'EEEE d MMMM yyyy', { locale: fr })
     : reservationDraft.date;
 
   return (
-    <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden">
-      <div className="bg-gray-100 px-6 py-4 border-b border-gray-200">
-        <h3 className="text-lg font-semibold text-gray-800">🎫 Récapitulatif de votre réservation</h3>
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+      <div 
+        className="px-6 py-4 border-b"
+        style={{ 
+          backgroundColor: hexToRgba(primaryColor, 0.05),
+          borderColor: hexToRgba(primaryColor, 0.2)
+        }}
+      >
+        <h3 className="text-lg font-semibold" style={{ color: primaryColor }}>
+          Récapitulatif de votre réservation
+        </h3>
       </div>
 
-      <div className="p-6 space-y-4 text-sm text-gray-700">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <MapPin className="text-blue-600" size={16} />
-            <span className="text-gray-500">Trajet :</span>
-          </div>
-          <span className="font-semibold text-gray-900">{reservationDraft.depart} → {reservationDraft.arrivee}</span>
-        </div>
+      <div className="p-6 space-y-4 text-sm">
+        <div className="flex items-start gap-4">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div 
+                className="p-2 rounded-lg"
+                style={{ 
+                  backgroundColor: hexToRgba(primaryColor, 0.1)
+                }}
+              >
+                <MapPin className="w-5 h-5" style={{ color: primaryColor }} />
+              </div>
+              <div>
+                <p className="text-gray-500">Trajet</p>
+                <p className="font-semibold text-gray-900">
+                  {reservationDraft.depart} <ArrowRight className="inline mx-1 w-4 h-4 text-gray-400" /> {reservationDraft.arrivee}
+                </p>
+              </div>
+            </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Calendar className="text-green-600" size={16} />
-            <span className="text-gray-500">Date de départ :</span>
+            <div className="flex items-center gap-3 mb-3">
+              <div 
+                className="p-2 rounded-lg"
+                style={{ 
+                  backgroundColor: hexToRgba(primaryColor, 0.1)
+                }}
+              >
+                <Calendar className="w-5 h-5" style={{ color: primaryColor }} />
+              </div>
+              <div>
+                <p className="text-gray-500">Date et heure</p>
+                <p className="font-semibold text-gray-900">
+                  {formattedDate} à {reservationDraft.heure}
+                </p>
+              </div>
+            </div>
           </div>
-          <span className="font-semibold">{formattedDate}</span>
-        </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Clock className="text-purple-600" size={16} />
-            <span className="text-gray-500">Heure de départ :</span>
-          </div>
-          <span className="font-semibold">{reservationDraft.heure}</span>
-        </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div 
+                className="p-2 rounded-lg"
+                style={{ 
+                  backgroundColor: hexToRgba(primaryColor, 0.1)
+                }}
+              >
+                <User className="w-5 h-5" style={{ color: primaryColor }} />
+              </div>
+              <div>
+                <p className="text-gray-500">Passager</p>
+                <p className="font-semibold text-gray-900">
+                  {reservationDraft.nomClient}
+                </p>
+              </div>
+            </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <User className="text-pink-600" size={16} />
-            <span className="text-gray-500">Passager :</span>
+            <div className="flex items-center gap-3">
+              <div 
+                className="p-2 rounded-lg"
+                style={{ 
+                  backgroundColor: hexToRgba(primaryColor, 0.1)
+                }}
+              >
+                <Users className="w-5 h-5" style={{ color: primaryColor }} />
+              </div>
+              <div>
+                <p className="text-gray-500">Places</p>
+                <p className="font-semibold text-gray-900">
+                  {reservationDraft.seatsGo} {isAllerRetour && `+ ${reservationDraft.seatsReturn} retour`}
+                </p>
+              </div>
+            </div>
           </div>
-          <span className="font-semibold">{reservationDraft.nomClient}</span>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Users className="text-orange-500" size={16} />
-            <span className="text-gray-500">Nombre de passagers :</span>
-          </div>
-          <span className="font-semibold">
-            {reservationDraft.seatsGo}
-            {isAllerRetour && ` aller + ${reservationDraft.seatsReturn} retour`}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <BadgeCheck className="text-teal-600" size={16} />
-            <span className="text-gray-500">Type de billet :</span>
-          </div>
-          <span className="font-semibold">{isAllerRetour ? 'Aller-retour' : 'Aller simple'}</span>
         </div>
       </div>
     </div>
   );
 };
 
-interface PaymentMethodSectionProps {
+const PaymentMethodSection: React.FC<{
   paymentMethod: string | null;
   onPaymentMethodSelect: (method: string) => void;
   companyInfo?: CompanyInfo;
   reservationAmount: number;
-}
-
-const PaymentMethodSection: React.FC<PaymentMethodSectionProps> = ({ 
+  primaryColor: string;
+  secondaryColor: string;
+}> = ({ 
   paymentMethod, 
   onPaymentMethodSelect, 
   companyInfo,
-  reservationAmount
+  reservationAmount,
+  primaryColor,
+  secondaryColor
 }) => {
-  if (!companyInfo?.paymentMethods || Object.keys(companyInfo.paymentMethods).length === 0) {
+  const paymentMethods = companyInfo?.paymentMethods || {};
+
+  if (Object.keys(paymentMethods).length === 0) {
     return (
-      <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
-        <div className="flex items-center">
-          <Info className="h-5 w-5 text-yellow-500 mr-2" />
-          <p className="text-sm text-yellow-700">
-            Aucun moyen de paiement configuré pour cette compagnie
+      <div 
+        className="border-l-4 p-4 rounded-lg"
+        style={{ 
+          backgroundColor: hexToRgba('#f59e0b', 0.05),
+          borderColor: '#f59e0b'
+        }}
+      >
+        <div className="flex items-start gap-3">
+          <Info className="h-5 w-5 mt-0.5" style={{ color: '#f59e0b' }} />
+          <p className="text-sm" style={{ color: '#92400e' }}>
+            Aucun moyen de paiement configuré pour cette compagnie. Veuillez contacter l'agence.
           </p>
         </div>
       </div>
@@ -529,38 +609,88 @@ const PaymentMethodSection: React.FC<PaymentMethodSectionProps> = ({
 
   return (
     <div>
-      <h3 className="text-sm font-medium mb-2">Moyen de paiement *</h3>
-      <div className="flex gap-3 flex-wrap">
-        {Object.entries(companyInfo.paymentMethods).map(([key, method]) => (
-          <button
-            key={key}
-            onClick={() => onPaymentMethodSelect(key)}
-            className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm transition ${
-              paymentMethod === key
-                ? 'bg-blue-100 border-blue-600 text-black'
-                : 'bg-white border-gray-300 text-black hover:bg-gray-50'
-            }`}
-          >
-            {method.logoUrl && (
-              <img
-                src={method.logoUrl}
-                alt={key}
-                className="h-6 w-6 object-contain rounded"
-              />
-            )}
-            <span className="capitalize">{key.replace(/_/g, ' ')}</span>
-          </button>
-        ))}
+      <div className="space-y-3">
+        {Object.entries(paymentMethods)
+          .filter(([_, method]) => method)
+          .map(([key, method]) => {
+            if (!method) return null;
+            
+            return (
+              <button
+                key={key}
+                onClick={() => onPaymentMethodSelect(key)}
+                className={`w-full flex items-center gap-4 p-4 rounded-lg border transition-all ${
+                  paymentMethod === key
+                    ? 'border-blue-500 shadow-sm'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+                style={{
+                  backgroundColor: paymentMethod === key ? hexToRgba(secondaryColor, 0.2) : 'white'
+                }}
+              >
+                {method.logoUrl ? (
+                  <img
+                    src={method.logoUrl}
+                    alt={key}
+                    className="h-10 w-10 object-contain rounded-lg"
+                  />
+                ) : (
+                  <div 
+                    className="h-10 w-10 rounded-lg flex items-center justify-center"
+                    style={{ 
+                      backgroundColor: hexToRgba(primaryColor, 0.1),
+                      color: primaryColor
+                    }}
+                  >
+                    <Banknote className="w-5 h-5" />
+                  </div>
+                )}
+                <div className="text-left flex-1">
+                  <div className="font-medium capitalize">{key.replace(/_/g, ' ')}</div>
+                  {method.merchantNumber && (
+                    <div className="text-xs text-gray-500">Numéro: {method.merchantNumber}</div>
+                  )}
+                </div>
+                {paymentMethod === key && (
+                  <div className="ml-auto">
+                    <div 
+                      className="w-5 h-5 rounded-full flex items-center justify-center"
+                      style={{ 
+                        backgroundColor: primaryColor,
+                        color: safeTextColor(primaryColor)
+                      }}
+                    >
+                      <CheckCircle className="w-3 h-3" />
+                    </div>
+                  </div>
+                )}
+              </button>
+            );
+          })}
       </div>
       
-      {paymentMethod && companyInfo.paymentMethods[paymentMethod]?.ussdPattern && (
-        <div className="mt-4 bg-blue-50 p-3 rounded-lg">
-          <p className="text-sm text-blue-800">
-            <strong>Code USSD généré :</strong> {companyInfo.paymentMethods[paymentMethod].ussdPattern
-              .replace('MERCHANT', companyInfo.paymentMethods[paymentMethod].merchantNumber)
-              .replace('AMOUNT', reservationAmount.toString())}
+      {paymentMethod && paymentMethods[paymentMethod]?.ussdPattern && (
+        <div 
+          className="mt-4 p-4 rounded-lg"
+          style={{ 
+            backgroundColor: hexToRgba(primaryColor, 0.05),
+            border: `1px solid ${hexToRgba(primaryColor, 0.2)}`
+          }}
+        >
+          <p className="text-sm font-medium mb-2" style={{ color: primaryColor }}>
+            Code USSD généré :
           </p>
-          <p className="text-xs text-blue-600 mt-1">
+          <div 
+            className="p-3 rounded-lg font-mono text-center text-sm break-all"
+            style={{ 
+              backgroundColor: hexToRgba(primaryColor, 0.1)
+            }}
+          >
+            {paymentMethods[paymentMethod]?.ussdPattern
+              ?.replace('MERCHANT', paymentMethods[paymentMethod]?.merchantNumber || '')
+              ?.replace('AMOUNT', reservationAmount.toString())}
+          </div>
+          <p className="text-xs mt-2 text-gray-500">
             Ce code sera automatiquement utilisé si l'application n'est pas disponible
           </p>
         </div>
@@ -572,7 +702,13 @@ const PaymentMethodSection: React.FC<PaymentMethodSectionProps> = ({
 const AmountSection: React.FC<{ amount: number; primaryColor: string }> = ({ amount, primaryColor }) => (
   <div>
     <h3 className="text-sm font-medium text-gray-700 mb-2">Montant à payer</h3>
-    <div className="text-2xl font-bold" style={{ color: primaryColor }}>
+    <div 
+      className="text-3xl font-bold py-3 px-4 rounded-lg"
+      style={{ 
+        backgroundColor: hexToRgba(primaryColor, 0.1),
+        color: primaryColor
+      }}
+    >
       {amount?.toLocaleString() || 0} FCFA
     </div>
   </div>
@@ -607,21 +743,42 @@ const MessageSection: React.FC<{
 const FileUploadSection: React.FC<{
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   file: File | null;
-}> = ({ handleFileChange, file }) => (
+  primaryColor: string;
+}> = ({ handleFileChange, file, primaryColor }) => (
   <div>
     <label className="block text-sm font-medium text-gray-700 mb-2">
       Capture d'écran (optionnel)
     </label>
     <div className="flex items-center justify-center w-full">
-      <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition">
+      <label 
+        className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-all hover:border-gray-400"
+        style={{
+          borderColor: file ? primaryColor : hexToRgba(primaryColor, 0.3),
+          backgroundColor: file ? hexToRgba(primaryColor, 0.05) : 'white'
+        }}
+      >
         <div className="flex flex-col items-center justify-center pt-5 pb-6">
-          <Upload className="h-8 w-8 text-gray-400 mb-2" />
-          <p className="text-sm text-gray-500">
-            {file ? file.name : 'Cliquez pour sélectionner un fichier'}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            PNG, JPG, PDF (max. 5MB)
-          </p>
+          {file ? (
+            <>
+              <CheckCircle className="h-8 w-8 mb-2" style={{ color: primaryColor }} />
+              <p className="text-sm font-medium" style={{ color: primaryColor }}>
+                {file.name}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Cliquez pour changer de fichier
+              </p>
+            </>
+          ) : (
+            <>
+              <Upload className="h-8 w-8 text-gray-400 mb-2" />
+              <p className="text-sm text-gray-500">
+                Cliquez pour sélectionner un fichier
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                PNG, JPG, PDF (max. 5MB)
+              </p>
+            </>
+          )}
         </div>
         <input 
           type="file" 
@@ -635,10 +792,18 @@ const FileUploadSection: React.FC<{
 );
 
 const ErrorDisplay: React.FC<{ error: string }> = ({ error }) => (
-  <div className="bg-red-50 border-l-4 border-red-500 p-4">
-    <div className="flex items-center">
-      <XCircle className="h-5 w-5 text-red-500 mr-2" />
-      <p className="text-sm text-red-700">{error}</p>
+  <div 
+    className="border-l-4 p-4 rounded-lg"
+    style={{ 
+      backgroundColor: hexToRgba('#ef4444', 0.05),
+      borderColor: '#ef4444'
+    }}
+  >
+    <div className="flex items-start gap-3">
+      <XCircle className="h-5 w-5 mt-0.5" style={{ color: '#ef4444' }} />
+      <p className="text-sm" style={{ color: '#991b1b' }}>
+        {error}
+      </p>
     </div>
   </div>
 );
@@ -646,32 +811,34 @@ const ErrorDisplay: React.FC<{ error: string }> = ({ error }) => (
 const SubmitButton: React.FC<{
   onClick: () => void;
   disabled: boolean;
-  primaryColor: string;
-  textColor: string;
+  themeConfig: any;
   uploading: boolean;
-}> = ({ onClick, disabled, primaryColor, textColor, uploading }) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    className="w-full py-3 px-4 rounded-lg font-medium transition-all hover:scale-105 active:scale-95"
-    style={{
-      backgroundColor: primaryColor,
-      color: textColor,
-      opacity: disabled ? 0.7 : 1
-    }}
-  >
-    {uploading ? (
-      <span className="flex items-center justify-center gap-2">
-        <Loader2 className="h-5 w-5 animate-spin" />
-        Envoi en cours...
-      </span>
-    ) : (
-      <span className="flex items-center justify-center gap-2">
-        <CheckCircle className="h-5 w-5" />
-        Confirmer l'envoi
-      </span>
-    )}
-  </button>
+}> = ({ onClick, disabled, themeConfig, uploading }) => (
+  <div className="fixed bottom-0 left-0 w-full z-50 border-t border-gray-200 bg-white px-4 py-3 shadow-lg">
+    <div className="max-w-4xl mx-auto">
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        className="w-full py-3 px-4 rounded-lg font-medium transition-all hover:opacity-90"
+        style={{
+          backgroundColor: disabled ? '#9ca3af' : themeConfig.colors.primary,
+          color: themeConfig.colors.text
+        }}
+      >
+        {uploading ? (
+          <span className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Envoi en cours...
+          </span>
+        ) : (
+          <span className="flex items-center justify-center gap-2">
+            <CheckCircle className="h-5 w-5" />
+            Confirmer l'envoi
+          </span>
+        )}
+      </button>
+    </div>
+  </div>
 );
 
 export default UploadPreuvePage;

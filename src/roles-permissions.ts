@@ -1,5 +1,4 @@
-// ✅ Si tu préfères centraliser les types, tu peux importer Role depuis 'types.ts'
-// import type { Role } from './types';
+// ✅ src/roles-permissions.ts
 
 export type Role =
   | 'admin'
@@ -11,7 +10,8 @@ export type Role =
   | 'gestionnaire'
   | 'agentCourrier'
   | 'support'
-  | 'superviseur'; // ✅ Ajouté
+  | 'superviseur'
+  | 'embarquement';
 
 export type ModuleKey =
   | 'compagnies'
@@ -27,43 +27,55 @@ export type ModuleKey =
   | 'parametres'
   | 'parametresVitrine'
   | 'guichet'
-  | 'courriers';
+  | 'courriers'
+  | 'embarquement';
 
-  export const permissionsByRole: Record<Role, ModuleKey[]> = {
-    admin: ['dashboard', 'parametres'],
-  
-    admin_platforme: [
-      'dashboard', 'compagnies', 'reservations', 'finances',
-      'depenses', 'statistiques', 'personnel', 'messages', 'parametres'
-    ],
-  
-    admin_compagnie: [
-      'dashboard', 'trajets', 'reservations', 'statistiques',
-      'messages', 'parametres', 'parametresVitrine',
-      'guichet', 'courriers', 'finances', 'agences', 'personnel'
-    ],
-  
-    compagnie: [ // ✅ Ajout ici
-      'dashboard', 'trajets', 'reservations', 'guichet', 'courriers', 'parametres'
-    ],
-  
-    chefAgence: [
-      'dashboard', 'trajets', 'reservations', 'guichet',
-      'courriers', 'personnel', 'parametres'
-    ],
-    superviseur: [
-  'dashboard', 'reservations', 'guichet',
-  'courriers', 'trajets', 'finances', 'statistiques'
-],
+export const permissionsByRole: Record<Role, ModuleKey[]> = {
+  admin: ['dashboard', 'parametres'],
 
-  
-    guichetier: ['guichet', 'reservations'],
-    gestionnaire: ['trajets', 'reservations', 'finances', 'depenses', 'statistiques'],
-    agentCourrier: ['courriers'],
-    support: ['messages'],
-  };
+  admin_platforme: [
+    'dashboard', 'compagnies', 'reservations', 'finances',
+    'depenses', 'statistiques', 'personnel', 'messages', 'parametres'
+  ],
+
+  admin_compagnie: [
+    'dashboard', 'trajets', 'reservations', 'statistiques',
+    'messages', 'parametres', 'parametresVitrine',
+    'guichet', 'courriers', 'finances', 'agences',
+    'personnel', 'embarquement'
+  ],
+
+  compagnie: [
+    'dashboard', 'trajets', 'reservations', 'guichet',
+    'courriers', 'parametres', 'embarquement'
+  ],
+
+  // ✅ Donne TOUS les accès au chef d’agence
+  chefAgence: [
+    'dashboard', 'trajets', 'reservations', 'guichet',
+    'courriers', 'personnel', 'parametres', 'embarquement',
+    'finances', 'statistiques', 'agences', 'messages', 'parametresVitrine'
+  ],
+
+  superviseur: [
+    'dashboard', 'reservations', 'guichet', 'courriers',
+    'trajets', 'finances', 'statistiques', 'embarquement'
+  ],
+
+  guichetier: ['guichet', 'reservations', 'embarquement'],
+
+  gestionnaire: ['trajets', 'reservations', 'finances', 'depenses', 'statistiques'],
+
+  agentCourrier: ['courriers'],
+
+  support: ['messages'],
+
+  embarquement: ['embarquement', 'reservations'],
+};
 
 export const hasPermission = (role: Role, module: ModuleKey): boolean => {
-  const allowed = permissionsByRole[role] || [];
+  const normalizedRole = (role || '').trim() as Role;
+  const allowed = permissionsByRole[normalizedRole] || [];
+  console.log("hasPermission Debug =>", { role: normalizedRole, module, allowed });
   return allowed.includes(module);
 };

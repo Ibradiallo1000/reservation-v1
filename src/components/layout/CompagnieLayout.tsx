@@ -1,73 +1,68 @@
+// ✅ src/layouts/CompagnieLayout.tsx
+
 import React from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Building, Users, ClipboardList, Settings,
   Image, Wallet, BarChart2, MessageSquare, ChevronRight, LogOut,
-  Menu, X
+  Menu
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import useCompanyTheme from '@/hooks/useCompanyTheme';
 
 const CompagnieLayout: React.FC = () => {
   const location = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout, company } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
-  const companyInfo = location.state?.companyInfo || null;
+  const theme = useCompanyTheme(company);
 
-  const isActive = (path: string) => location.pathname.startsWith(path);
+  const isActive = (path: string) =>
+    location.pathname === path || location.pathname.startsWith(path + '/');
 
-  const colors = {
-    primary: companyInfo?.couleurPrimaire ? `bg-[${companyInfo.couleurPrimaire}]` : 'bg-indigo-600',
-    badge: 'bg-amber-500',
-    darker: 'bg-slate-900',
-    light: 'bg-slate-50',
-    card: 'bg-white'
-  };
-
-  // Badge dynamique + sonnerie
   const [onlineProofsCount, setOnlineProofsCount] = React.useState(0);
   const proofsCountRef = React.useRef(0);
   const [pendingReviewsCount, setPendingReviewsCount] = React.useState(0);
 
   React.useEffect(() => {
     if (!user?.companyId) return;
+    const unsubscribeFns: (() => void)[] = [];
 
-    const q = query(
-      collection(db, 'reservations'),
-      where('companyId', '==', user.companyId),
-      where('statut', '==', 'preuve_recue')
-    );
+    const fetchAgencesAndListen = async () => {
+      const agencesSnap = await getDocs(collection(db, 'companies', user.companyId, 'agences'));
+      const agenceIds = agencesSnap.docs.map(doc => doc.id);
 
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const newCount = snap.size;
+      agenceIds.forEach(agenceId => {
+        const q = query(
+          collection(db, 'companies', user.companyId, 'agences', agenceId, 'reservations'),
+          where('statut', '==', 'preuve_recue')
+        );
+        const unsubscribe = onSnapshot(q, (snap) => {
+          const count = snap.size;
+          if (count > 0 && count > proofsCountRef.current) playNotificationSound();
+          proofsCountRef.current = count;
+          setOnlineProofsCount(count);
+        });
+        unsubscribeFns.push(unsubscribe);
+      });
+    };
 
-      // Déclenche la sonnerie si nouvelle preuve détectée
-      if (newCount > proofsCountRef.current) {
-        playNotificationSound();
-      }
-
-      proofsCountRef.current = newCount;
-      setOnlineProofsCount(newCount);
-    });
-
-    return () => unsubscribe();
+    fetchAgencesAndListen();
+    return () => unsubscribeFns.forEach(unsub => unsub());
   }, [user?.companyId]);
 
   React.useEffect(() => {
     if (!user?.companyId) return;
-
     const q = query(
       collection(db, 'avis'),
       where('companyId', '==', user.companyId),
       where('visible', '==', false)
     );
-
     const unsubscribe = onSnapshot(q, (snap) => {
       setPendingReviewsCount(snap.size);
     });
-
     return () => unsubscribe();
   }, [user?.companyId]);
 
@@ -82,234 +77,187 @@ const CompagnieLayout: React.FC = () => {
   };
 
   return (
-    <div className={`flex min-h-screen ${colors.light}`}>
-      {/* Sidebar - Desktop */}
-      <aside className={`hidden md:flex md:w-64 flex-col justify-between ${colors.darker} text-white shadow-xl border-r border-slate-700`}>
-        <div>
-          <div className="p-6 border-b border-slate-700">
-            <h1 className="text-2xl font-bold flex items-center">
-              <span className={`${colors.primary} text-white rounded-lg p-2 mr-3 shadow-md`}>
-                <Building className="w-5 h-5" />
-              </span>
-              <span className="bg-gradient-to-r from-indigo-400 to-teal-400 bg-clip-text text-transparent">
-                Espace Pro
-              </span>
-            </h1>
+    <div className="flex min-h-screen bg-gray-50 text-gray-900">
+      {/* Sidebar */}
+      <aside
+        className="hidden md:flex md:w-64 flex-col justify-between text-white shadow-xl"
+        style={{ backgroundColor: theme.colors.primary }}
+      >
+        <div className="flex-1 flex flex-col justify-between">
+          <div>
+            {/* Header avec logo et nom de la compagnie */}
+            <div className="p-6 border-b border-white/20 flex items-center gap-3">
+              {company?.logoUrl && (
+                <img src={company.logoUrl} alt="logo" className="h-10 w-10 rounded-full shadow" />
+              )}
+              <h1 className="text-xl font-bold">{company?.nom || 'Compagnie'}</h1>
+            </div>
+
+            {/* Navigation */}
+            <nav className="flex flex-col p-4 space-y-2">
+              <NavItem
+                to="/compagnie/dashboard"
+                label="Tableau de bord"
+                icon={<LayoutDashboard />}
+                active={isActive('/compagnie/dashboard')}
+                theme={theme}
+              />
+              <NavItem
+                to="/compagnie/reservations-en-ligne"
+                label="Réservations en ligne"
+                icon={<ClipboardList />}
+                active={isActive('/compagnie/reservations-en-ligne')}
+                badge={onlineProofsCount}
+                theme={theme}
+              />
+              <NavItem
+                to="/compagnie/reservations"
+                label="Réservations"
+                icon={<ClipboardList />}
+                active={isActive('/compagnie/reservations')}
+                theme={theme}
+              />
+              <NavItem
+                to="/compagnie/agences"
+                label="Agences"
+                icon={<Building />}
+                active={isActive('/compagnie/agences')}
+                theme={theme}
+              />
+              <NavItem
+                to="/compagnie/avis-clients"
+                label="Avis Clients"
+                icon={<MessageSquare />}
+                active={isActive('/compagnie/avis-clients')}
+                badge={pendingReviewsCount}
+                theme={theme}
+              />
+              <NavItem
+                to="/compagnie/personnel"
+                label="Personnel"
+                icon={<Users />}
+                active={isActive('/compagnie/personnel')}
+                theme={theme}
+              />
+              <NavItem
+                to="/compagnie/payment-settings"
+                label="Moyens de paiement"
+                icon={<Settings />}
+                active={isActive('/compagnie/payment-settings')}
+                theme={theme}
+              />
+              <NavItem
+                to="/compagnie/parametres"
+                label="Paramètres"
+                icon={<Settings />}
+                active={isActive('/compagnie/parametres')}
+                theme={theme}
+              />
+              <div className="mt-4 pt-4 border-t border-white/20">
+                <p className="text-xs uppercase opacity-80 px-4 mb-2">Analytique</p>
+                <NavItem
+                  to="/compagnie/images"
+                  label="Médias"
+                  icon={<Image />}
+                  active={isActive('/compagnie/images')}
+                  theme={theme}
+                />
+                <NavItem
+                  to="/compagnie/finances"
+                  label="Finances"
+                  icon={<Wallet />}
+                  active={isActive('/compagnie/finances')}
+                  theme={theme}
+                />
+                <NavItem
+                  to="/compagnie/statistiques"
+                  label="Statistiques"
+                  icon={<BarChart2 />}
+                  active={isActive('/compagnie/statistiques')}
+                  theme={theme}
+                />
+              </div>
+            </nav>
           </div>
 
-          <nav className="flex flex-col p-4 space-y-2">
-            <NavItem to="/compagnie/dashboard" icon={<LayoutDashboard className="w-5 h-5" />} active={isActive('/compagnie/dashboard')}>
-              Tableau de bord
-            </NavItem>
-
-            <NavItem to="/compagnie/agences" icon={<Building className="w-5 h-5" />} active={isActive('/compagnie/agences')}>
-              Agences
-            </NavItem>
-
-            <NavItem to="/compagnie/avis-clients" icon={<MessageSquare className="w-5 h-5" />} active={isActive('/compagnie/avis-clients')}>
-              Avis Clients
-              {pendingReviewsCount > 0 && (
-                <span className={`ml-auto ${colors.badge} text-xs text-white px-2 py-1 rounded-full`}>
-                  {pendingReviewsCount}
-                </span>
-              )}
-            </NavItem>
-
-            <NavItem to="/compagnie/personnel" icon={<Users className="w-5 h-5" />} active={isActive('/compagnie/personnel')}>
-              Personnel
-            </NavItem>
-
-            <NavItem to="/compagnie/reservations" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations')}>
-              Réservations
-            </NavItem>
-
-            <NavItem to="/compagnie/reservations-en-ligne" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations-en-ligne')}>
-              Réservations en ligne
-              {onlineProofsCount > 0 && (
-                <span className={`ml-auto ${colors.badge} text-xs text-white px-2 py-1 rounded-full`}>
-                  {onlineProofsCount}
-                </span>
-              )}
-            </NavItem>
-
-            <NavItem to="/compagnie/guichet" icon={<Wallet className="w-5 h-5" />} active={isActive('/compagnie/guichet')}>
-              Guichet
-            </NavItem>
-
-            <NavItem to="/compagnie/payment-settings" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/payment-settings')}>
-              Moyens de paiement
-            </NavItem>
-
-            <NavItem to="/compagnie/parametres" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/parametres')}>
-              Paramètres
-            </NavItem>
-
-            <div className="mt-4 pt-4 border-t border-slate-700">
-              <p className="text-xs uppercase text-slate-400 px-4 mb-2">Analytique</p>
-
-              <NavItem to="/compagnie/images" icon={<Image className="w-5 h-5" />} active={isActive('/compagnie/images')}>
-                Médias
-              </NavItem>
-
-              <NavItem to="/compagnie/finances" icon={<Wallet className="w-5 h-5" />} active={isActive('/compagnie/finances')}>
-                Finances
-              </NavItem>
-
-              <NavItem to="/compagnie/statistiques" icon={<BarChart2 className="w-5 h-5" />} active={isActive('/compagnie/statistiques')}>
-                Statistiques
-              </NavItem>
-            </div>
-          </nav>
-        </div>
-
-        {/* Bottom */}
-        <div className="p-4 border-t border-slate-700">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-full ${colors.primary} flex items-center justify-center text-white font-medium`}>
-                {user?.displayName?.charAt(0) || user?.email?.charAt(0)}
+          {/* Profil fixé en bas */}
+          <div className="p-4 border-t border-white/20 sticky bottom-0 bg-opacity-90">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-white font-medium"
+                  style={{ backgroundColor: theme.colors.secondary }}
+                >
+                  {user?.displayName?.charAt(0) || user?.email?.charAt(0)}
+                </div>
+                <div>
+                  <p className="text-sm font-medium truncate">{user?.displayName || user?.email}</p>
+                  <p className="text-xs opacity-80">{user?.role}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-medium truncate">{user?.displayName || user?.email}</p>
-                <p className="text-xs text-slate-400">{user?.role}</p>
-              </div>
+              <button
+                onClick={logout}
+                className="p-2 rounded-md hover:bg-white/20 transition-colors"
+              >
+                <LogOut className="h-4 w-4 text-white" />
+              </button>
             </div>
-            <button
-              onClick={logout}
-              title="Déconnexion"
-              className="p-2 rounded-md hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
           </div>
         </div>
       </aside>
 
-      {/* Main */}
+      {/* Main Content */}
       <main className="flex-1 overflow-hidden">
         <div className="h-full flex flex-col">
-          <header className={`${colors.card} shadow-sm p-4 md:hidden flex items-center justify-between`}>
-            <button onClick={() => setMobileMenuOpen(true)} className="p-2 rounded-md text-slate-500 hover:bg-slate-100">
+          <header className="bg-white shadow-sm p-4 md:hidden flex items-center justify-between">
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="p-2 rounded-md text-gray-500 hover:bg-gray-100"
+            >
               <Menu className="w-5 h-5" />
             </button>
-            <h1 className="text-lg font-semibold text-slate-800">Espace Pro</h1>
+            <h1 className="text-lg font-semibold text-gray-900">{company?.nom || 'Compagnie'}</h1>
             <div className="w-5 h-5"></div>
           </header>
-
-          <div className={`flex-1 overflow-y-auto p-4 md:p-8 ${colors.card} md:rounded-tl-3xl shadow-inner`}>
+          <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-gray-50">
             <Outlet />
           </div>
         </div>
       </main>
-
-      {/* Mobile Sidebar */}
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileMenuOpen(false)} />
-
-          <div className={`absolute left-0 top-0 bottom-0 w-72 ${colors.darker} shadow-xl`}>
-            <div className="p-4 border-b border-slate-700 flex justify-between items-center">
-              <h2 className="text-xl font-bold text-white">Menu</h2>
-              <button onClick={() => setMobileMenuOpen(false)} className="p-1 rounded-md text-slate-300 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <nav className="flex flex-col p-2 space-y-1 overflow-y-auto h-[calc(100%-120px)]">
-              <MobileNavItem to="/compagnie/dashboard" icon={<LayoutDashboard className="w-5 h-5" />} active={isActive('/compagnie/dashboard')}>
-                Tableau de bord
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/reservations-en-ligne" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations-en-ligne')}>
-                Réservations en ligne
-                {onlineProofsCount > 0 && (
-                  <span className={`${colors.badge} text-xs text-white px-2 py-0.5 rounded-full`}>
-                    {onlineProofsCount}
-                  </span>
-                )}
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/avis-clients" icon={<MessageSquare className="w-5 h-5" />} active={isActive('/compagnie/avis-clients')}>
-                Avis clients
-                {pendingReviewsCount > 0 && (
-                  <span className={`${colors.badge} text-xs text-white px-2 py-0.5 rounded-full`}>
-                    {pendingReviewsCount}
-                  </span>
-                )}
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/reservations" icon={<ClipboardList className="w-5 h-5" />} active={isActive('/compagnie/reservations')}>
-                liste des Réservations
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/payment-settings" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/payment-settings')}>
-                Moyens de paiement
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/agences" icon={<Building className="w-5 h-5" />} active={isActive('/compagnie/agences')}>
-                Agences
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/personnel" icon={<Users className="w-5 h-5" />} active={isActive('/compagnie/personnel')}>
-                Personnel
-              </MobileNavItem>
-
-              <MobileNavItem to="/compagnie/parametres" icon={<Settings className="w-5 h-5" />} active={isActive('/compagnie/parametres')}>
-                Paramètres
-              </MobileNavItem>
-
-              <div className="mt-2 pt-2 border-t border-slate-700">
-                <p className="text-xs uppercase text-slate-400 px-3 mb-1">Analytique</p>
-
-                <MobileNavItem to="/compagnie/images" icon={<Image className="w-5 h-5" />} active={isActive('/compagnie/images')}>
-                  Médias
-                </MobileNavItem>
-
-                <MobileNavItem to="/compagnie/finances" icon={<Wallet className="w-5 h-5" />} active={isActive('/compagnie/finances')}>
-                  Finances
-                </MobileNavItem>
-
-                <MobileNavItem to="/compagnie/statistiques" icon={<BarChart2 className="w-5 h-5" />} active={isActive('/compagnie/statistiques')}>
-                  Statistiques
-                </MobileNavItem>
-              </div>
-            </nav>
-
-            <div className={`absolute bottom-0 left-0 right-0 p-4 border-t border-slate-700 ${colors.darker}`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className={`w-8 h-8 rounded-full ${colors.primary} flex items-center justify-center text-white font-medium`}>
-                    {user?.displayName?.charAt(0) || user?.email?.charAt(0)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-white truncate max-w-[120px]">{user?.displayName || user?.email}</p>
-                    <p className="text-xs text-slate-400">{user?.role}</p>
-                  </div>
-                </div>
-                <button onClick={logout} className="p-2 rounded-md text-slate-300 hover:bg-slate-700 hover:text-white">
-                  <LogOut className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
 
-const NavItem: React.FC<{ to: string; icon: React.ReactNode; active?: boolean; children: React.ReactNode; }> = ({ to, icon, active = false, children }) => (
-  <Link to={to} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${active ? 'bg-slate-700 text-white font-medium shadow-sm' : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'}`}>
-    <span className={`${active ? 'text-teal-400' : 'text-slate-400'}`}>{icon}</span>
-    <span className="flex-1 text-sm">{children}</span>
-    <ChevronRight className={`w-4 h-4 transition-transform ${active ? 'opacity-100 text-teal-400' : 'opacity-0'}`} />
-  </Link>
-);
-
-const MobileNavItem: React.FC<{ to: string; icon: React.ReactNode; active?: boolean; children: React.ReactNode; }> = ({ to, icon, active = false, children }) => (
-  <Link to={to} className={`flex items-center gap-3 px-3 py-3 rounded-lg mx-1 transition-colors ${active ? 'bg-slate-700 text-white font-medium' : 'text-slate-300 hover:bg-slate-700/50'}`}>
-    <span className={`${active ? 'text-teal-400' : 'text-slate-400'}`}>{icon}</span>
-    <span className="flex-1 text-sm">{children}</span>
+const NavItem: React.FC<{
+  to: string;
+  label: string;
+  icon: React.ReactNode;
+  active: boolean;
+  badge?: number;
+  theme: any;
+}> = ({ to, label, icon, active, badge, theme }) => (
+  <Link
+    to={to}
+    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+      active
+        ? 'font-bold shadow-sm'
+        : 'opacity-90 hover:opacity-100'
+    }`}
+    style={{
+      backgroundColor: active ? theme.colors.secondary : 'transparent',
+      color: active ? '#fff' : '#f1f1f1',
+    }}
+  >
+    <span>{icon}</span>
+    <span className="flex-1 text-sm">{label}</span>
+    {typeof badge === 'number' && badge > 0 && (
+      <span className="ml-auto bg-red-500 text-xs text-white px-2 py-1 rounded-full">
+        {badge}
+      </span>
+    )}
+    <ChevronRight
+      className={`w-4 h-4 ${active ? 'opacity-100 text-yellow-300' : 'opacity-0'}`}
+    />
   </Link>
 );
 

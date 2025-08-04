@@ -57,46 +57,53 @@ const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-50 w-full backdrop-blur-md bg-transparent border-b border-white/10">
-      <div className="absolute top-0 left-0 w-full h-[32px] bg-transparent overflow-hidden">
-        <svg viewBox="0 0 1440 100" preserveAspectRatio="none" className="w-full h-full">
-          <path
-            d="M0,0 C480,40 960,0 1440,50 L1440,0 L0,0 Z"
-            fill={secondaryColor}
-          />
-        </svg>
-      </div>
+      <div className="absolute top-0 left-0 w-full h-[80px] bg-transparent overflow-hidden">
+  <svg
+    viewBox="0 0 1440 120"
+    preserveAspectRatio="none"
+    className="w-full h-full"
+  >
+    <path
+      d="M0,0 C480,60 960,0 1440,70 L1440,0 L0,0 Z"
+      fill={secondaryColor}
+    />
+  </svg>
+</div>
+
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setMenuOpen(!menuOpen)}
-            className="md:hidden p-2 rounded-md border border-gray-300 bg-white shadow"
-            aria-label="Menu"
-          >
-            {menuOpen ? (
-              <X className="h-6 w-6 text-slate-800" />
-            ) : (
-              <Menu className="h-6 w-6 text-slate-800" />
-            )}
-          </button>
+  <button
+    onClick={() => setMenuOpen(!menuOpen)}
+    className="md:hidden p-2 rounded-md border border-gray-300 bg-white shadow"
+    aria-label="Menu"
+  >
+    {menuOpen ? (
+      <X className="h-6 w-6 text-slate-800" />
+    ) : (
+      <Menu className="h-6 w-6 text-slate-800" />
+    )}
+  </button>
 
-          <div className="h-10 w-10 rounded-full bg-white border border-gray-200 overflow-hidden shadow-sm">
-            <LazyLoadImage
-              src={company.logoUrl || logoFallback}
-              alt={`Logo ${company.nom || 'Compagnie'}`}
-              className="w-full h-full object-contain"
-              onError={(e: any) => (e.target.src = logoFallback)}
-            />
-          </div>
+  {/* Logo */}
+  <div className="h-10 w-10 rounded-full bg-white border border-gray-200 overflow-hidden shadow-sm flex-shrink-0">
+    <LazyLoadImage
+      src={company.logoUrl || logoFallback}
+      alt={`Logo ${company.nom || 'Compagnie'}`}
+      className="w-full h-full object-contain"
+      onError={(e: any) => (e.target.src = logoFallback)}
+    />
+  </div>
 
-          <span
-            className="text-xl font-bold truncate max-w-[180px]"
-            style={{ color: companyNameColor }}
-            title={company.nom || t('ourCompany')}
-          >
-            {company.nom || t('ourCompany')}
-          </span>
-        </div>
+  {/* Nom de la compagnie sans troncature */}
+  <span
+    className="text-xl font-bold whitespace-normal break-words leading-tight"
+    style={{ color: companyNameColor, maxWidth: '250px' }}
+    title={company.nom || t('ourCompany')}
+  >
+    {company.nom || t('ourCompany')}
+  </span>
+</div>
 
         <div className="hidden md:block">
           <LanguageSwitcher />

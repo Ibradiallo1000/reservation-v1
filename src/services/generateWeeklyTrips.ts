@@ -11,9 +11,16 @@ export const generateWeeklyTrips = async (
   agencyId: string
 ): Promise<string> => {
   try {
-    const docRef = await addDoc(collection(db, 'weeklyTrips'), {
+    const weeklyTripsRef = collection(
+      db,
+      'companies',
       companyId,
+      'agences',
       agencyId,
+      'weeklyTrips'
+    );
+
+    const docRef = await addDoc(weeklyTripsRef, {
       departure,
       arrival,
       price,
@@ -23,7 +30,7 @@ export const generateWeeklyTrips = async (
       createdAt: Timestamp.now(),
     });
 
-    return docRef.id; // ✅ Retourne l'ID du trajet créé
+    return docRef.id;
   } catch (error) {
     console.error('Erreur lors de la création du trajet hebdomadaire :', error);
     throw error;

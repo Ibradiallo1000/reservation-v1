@@ -1,15 +1,15 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useTranslation } from 'react-i18next';
-import i18n from '@/i18n'; // ajoute cette ligne si nécessaire
+import i18n from '@/i18n';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import VilleSuggestionBar from '../components/public/VilleSuggestionBar';
 import LanguageSuggestionPopup from '../components/public/LanguageSuggestionPopup';
 import HeroSection from '../components/public/HeroSection';
-import ServicesCarousel from '../components/public/ServicesCarousel';
+import CompanyImageSlider from '../components/public/CompanyImageSlider';
 import Footer from '../components/public/Footer';
 import AgencyList from '../components/public/AgencyList';
 import AvisListePublic from '../components/public/AvisListePublic';
@@ -70,32 +70,38 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     const fetchSuggestions = async () => {
       if (!company?.id) return;
       try {
-        const q = query(collection(db, 'weeklyTrips'), where('companyId', '==', company.id));
-        const snap = await getDocs(q);
-        const raw = snap.docs.map(doc => doc.data());
+        const agencesSnap = await getDocs(collection(db, 'companies', company.id, 'agences'));
+        const agences = agencesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         const uniqueMap = new Map<string, TripSuggestion>();
 
-        for (const trip of raw) {
-          const departure = trip.depart || trip.departure;
-          const arrival = trip.arrivee || trip.arrival;
-          const price = trip.price ?? trip.prix ?? 0;
+        for (const agence of agences) {
+          const weeklyTripsSnap = await getDocs(
+            collection(db, 'companies', company.id, 'agences', agence.id, 'weeklyTrips')
+          );
 
-          if (!departure || !arrival) continue;
+          for (const doc of weeklyTripsSnap.docs) {
+            const trip = doc.data();
+            const departure = trip.depart || trip.departure;
+            const arrival = trip.arrivee || trip.arrival;
+            const price = trip.price ?? trip.prix ?? 0;
 
-          const key = `${departure}__${arrival}`;
+            if (!departure || !arrival) continue;
 
-          if (!uniqueMap.has(key)) {
-            uniqueMap.set(key, {
-              departure,
-              arrival,
-              price,
-              frequency: trip.days?.length > 0 ? `${trip.days.length} jours / semaine` : 'Départs réguliers',
-            });
+            const key = `${departure}__${arrival}`;
+            if (!uniqueMap.has(key)) {
+              uniqueMap.set(key, {
+                departure,
+                arrival,
+                price,
+                frequency: trip.days?.length > 0 ? `${trip.days.length} jours / semaine` : 'Départs réguliers',
+                imageUrl: undefined
+              });
+            }
           }
         }
 
-        const top = Array.from(uniqueMap.values()).slice(0, 5);
+        const top = Array.from(uniqueMap.values()).slice(0, 6);
         setSuggestedTrips(top);
       } catch (error) {
         console.error('Erreur chargement suggestions :', error);
@@ -111,7 +117,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
 
       try {
         setLoading(true);
-        const agQ = query(collection(db, 'agences'), where('companyId', '==', company.id));
+        const agQ = collection(db, 'companies', company.id, 'agences');
         const agSnap = await getDocs(agQ);
         setAgences(agSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Agence)));
       } catch (err) {
@@ -183,7 +189,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         <HeroSection
           company={company}
           onSearch={(departure, arrival) => {
-            navigate(`/${slug}/resultats?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
+            navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
           }}
           isMobile={isMobile}
         />
@@ -192,11 +198,14 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           suggestions={suggestedTrips}
           company={company}
           onSelect={(departure: string, arrival: string) => {
-            navigate(`/${slug}/resultats?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
+            navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
           }}
         />
 
-        <ServicesCarousel colors={colors} isMobile={isMobile} />
+        <CompanyImageSlider
+          images={company.imagesSlider || []}
+          primaryColor={colors.primary}
+       />
 
         <AvisListePublic
           companyId={company.id}
@@ -222,13 +231,12 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         {showLangPopup && (
           <LanguageSuggestionPopup
             onSelectLanguage={(lang: string | undefined) => {
-            i18n.changeLanguage(lang);
-            setShowLangPopup(false);
-          }}
-          delayMs={8000}
-        />
-      )}
-
+              i18n.changeLanguage(lang);
+              setShowLangPopup(false);
+            }}
+            delayMs={8000}
+          />
+        )}
       </main>
 
       <Footer company={company} isMobile={isMobile} />

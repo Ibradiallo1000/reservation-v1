@@ -15,17 +15,27 @@ export const hexToRgba = (hex: string, alpha: number = 1): string => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-// ✅ Retourne une couleur de texte sûre (blanc ou noir) selon la luminosité du fond
-export const safeTextColor = (bgColor: string): '#000000' | '#FFFFFF' => {
+// ✅ Retourne une couleur de texte sûre (blanc ou noir) selon la luminosité et le contraste
+export const safeTextColor = (bgColor: string): string => {
   const color = bgColor.replace('#', '');
-  if (color.length !== 6) return '#FFFFFF';
+  if (color.length !== 6) return '#1e293b'; // fallback gris foncé
 
   const r = parseInt(color.substring(0, 2), 16);
   const g = parseInt(color.substring(2, 4), 16);
   const b = parseInt(color.substring(4, 6), 16);
 
-  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-  return brightness > 150 ? '#000000' : '#FFFFFF';
+  // Calcul luminance relative (WCAG)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+  // Contraste : si clair → texte foncé, sinon → texte clair
+  const baseColor = luminance > 0.6 ? '#1e293b' : '#FFFFFF';
+
+  // ✅ Empêcher le blanc pur (#FFFFFF) sur fond clair
+  if (baseColor === '#FFFFFF' && luminance > 0.8) {
+    return '#1e293b'; // force un texte foncé
+  }
+
+  return baseColor;
 };
 
 // ✅ Ajuste la luminosité d’une couleur hexadécimale de manière contrôlée
@@ -42,7 +52,7 @@ export const adjustBrightness = (hex: string, percent: number): string => {
       0x1000000 +
       (R < 255 ? (R < 1 ? 0 : R) : 255) * 0x10000 +
       (G < 255 ? (G < 1 ? 0 : G) : 255) * 0x100 +
-      (B < 255 ? (B < 1 ? 0 : B) : 255)
+      (B < 255 ? (B < 1 ? 0 : G) : 255)
     )
       .toString(16)
       .slice(1)

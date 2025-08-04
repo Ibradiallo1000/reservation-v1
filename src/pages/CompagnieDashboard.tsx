@@ -1,5 +1,7 @@
+// ✅ src/pages/CompagnieDashboard.tsx
+
 import React, { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, Timestamp, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/hooks/useCompanyTheme';
@@ -83,53 +85,11 @@ const CompagnieDashboard: React.FC = () => {
       couleurTertiaire: data.couleurTertiaire,
       logoUrl: data.logoUrl,
       villesDisponibles: data.villesDisponibles || [],
+      imagesSlider: data.imagesSlider || [],
+      sliderImages: data.sliderImages || [],
+      suggestions: data.suggestions || [],
     });
-
   }, [user?.companyId]);
-
-  const fetchAgencies = async (companyId: string): Promise<Agency[]> => {
-    const agenciesQuery = query(
-      collection(db, 'agences'),
-      where('companyId', '==', companyId)
-    );
-    const snapshot = await getDocs(agenciesQuery);
-    return snapshot.docs.map(doc => ({
-      id: doc.id,
-      nom: doc.data().nom,
-      ville: doc.data().ville,
-      companyId: doc.data().companyId,
-    }));
-  };
-
-  const fetchAgencyStats = async (agency: Agency, dailyMap: Record<string, number>) => {
-    const [startDate, endDate] = dateRange;
-    if (!startDate || !endDate) return { reservations: 0, revenus: 0, canaux: {} };
-
-    const reservationsSnap = await getDocs(query(
-      collection(db, 'reservations'),
-      where('agencyId', '==', agency.id),
-      where('createdAt', '>=', Timestamp.fromDate(startDate)),
-      where('createdAt', '<=', Timestamp.fromDate(endDate))
-    ));
-
-    const canaux: { [canal: string]: number } = {};
-    reservationsSnap.forEach(doc => {
-      const canal = (doc.data().canal || 'inconnu').toLowerCase();
-      const norm = canal.includes('ligne') ? 'En ligne' : 'Guichet';
-      canaux[norm] = (canaux[norm] || 0) + 1;
-
-      const createdAt: Timestamp = doc.data().createdAt;
-      const dateKey = createdAt.toDate().toLocaleDateString('fr-FR');
-      const montant = doc.data().montant || 0;
-      dailyMap[dateKey] = (dailyMap[dateKey] || 0) + montant;
-    });
-
-    return {
-      reservations: reservationsSnap.size,
-      revenus: reservationsSnap.docs.reduce((sum, doc) => sum + (doc.data().montant || 0), 0),
-      canaux
-    };
-  };
 
   const calculateGrowthRate = (agencies: AgencyStats[]): number => {
     if (agencies.length === 0) return 0;
@@ -139,62 +99,126 @@ const CompagnieDashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        if (!user?.companyId) return;
-        const [startDate, endDate] = dateRange;
-        if (!startDate || !endDate) return;
+    if (!user?.companyId) return;
+    const [startDate, endDate] = dateRange;
+    if (!startDate || !endDate) return;
 
-        await fetchCompany();
+    const unsubscribeAgences: (() => void)[] = [];
+    const start = Timestamp.fromDate(startDate);
+    const end = Timestamp.fromDate(endDate);
+
+    const listenToAgencies = async () => {
+      try {
         setLoading(true);
         setError(null);
+        await fetchCompany();
 
-        const agencies = await fetchAgencies(user.companyId);
-        const stats: AgencyStats[] = [];
-        const dailyMap: Record<string, number> = {};
+        const agenciesQuery = query(
+          collection(db, 'companies', user.companyId, 'agences')
+        );
 
-        for (const agency of agencies) {
-          const agencyStats = await fetchAgencyStats(agency, dailyMap);
-          stats.push({ ...agency, ...agencyStats });
-        }
+        const agenciesUnsubscribe = onSnapshot(agenciesQuery, (agenciesSnap) => {
+          const agencies: Agency[] = agenciesSnap.docs.map(doc => ({
+            id: doc.id,
+            nom: doc.data().nom,
+            ville: doc.data().ville,
+            companyId: user.companyId,
+          }));
 
-        const days: DailyRevenue[] = [];
-        const current = new Date(startDate);
-        while (current <= endDate) {
-          const key = current.toLocaleDateString('fr-FR');
-          days.push({ date: key, revenue: dailyMap[key] || 0 });
-          current.setDate(current.getDate() + 1);
-        }
+          setGlobalStats(prev => ({
+            ...prev,
+            totalAgencies: agencies.length
+          }));
 
-        const channelsSummary: { [canal: string]: number } = {};
-        stats.forEach(a => {
-          Object.entries(a.canaux).forEach(([k, v]) => {
-            channelsSummary[k] = (channelsSummary[k] || 0) + v;
+          unsubscribeAgences.forEach(unsub => unsub());
+          unsubscribeAgences.length = 0;
+
+          const channelTotals: Record<string, number> = {};
+          const dailyMap: Record<string, number> = {};
+
+          agencies.forEach((agency) => {
+            const reservationsRef = query(
+              collection(db, 'companies', user.companyId, 'agences', agency.id, 'reservations'),
+              where('createdAt', '>=', start),
+              where('createdAt', '<=', end)
+            );
+
+            const unsubscribe = onSnapshot(reservationsRef, (snapshot) => {
+              let reservations = 0;
+              let revenus = 0;
+              const canaux: Record<string, number> = {};
+
+              snapshot.forEach((doc) => {
+                const data = doc.data();
+                const canal = (data.canal || 'inconnu').toLowerCase();
+                const norm = canal.includes('ligne') ? 'En ligne' : 'Guichet';
+                canaux[norm] = (canaux[norm] || 0) + 1;
+                channelTotals[norm] = (channelTotals[norm] || 0) + 1;
+
+                const montant = data.montant || 0;
+                revenus += montant;
+                reservations += 1;
+
+                const dateKey = data.createdAt.toDate().toLocaleDateString('fr-FR');
+                dailyMap[dateKey] = (dailyMap[dateKey] || 0) + montant;
+              });
+
+              const updatedAgency = {
+                ...agency,
+                reservations,
+                revenus,
+                canaux
+              };
+
+              setAgenciesStats(prev => {
+                const updatedList = [...prev.filter(a => a.id !== agency.id), updatedAgency];
+
+                setGlobalStats(prevStats => ({
+                  ...prevStats,
+                  totalReservations: updatedList.reduce((acc, ag) => acc + ag.reservations, 0),
+                  totalRevenue: updatedList.reduce((acc, ag) => acc + ag.revenus, 0),
+                  totalChannels: { ...channelTotals },
+                  growthRate: calculateGrowthRate(updatedList)
+                }));
+
+                return updatedList;
+              });
+
+              const currentDate = new Date(startDate);
+              const endDateObj = new Date(endDate);
+              const days: DailyRevenue[] = [];
+
+              while (currentDate <= endDateObj) {
+                const dateKey = currentDate.toLocaleDateString('fr-FR');
+                days.push({
+                  date: dateKey,
+                  revenue: dailyMap[dateKey] || 0
+                });
+                currentDate.setDate(currentDate.getDate() + 1);
+              }
+
+              setDailyRevenue(days);
+            });
+
+            unsubscribeAgences.push(unsubscribe);
           });
         });
 
-        const totals = stats.reduce((acc, curr) => ({
-          totalReservations: acc.totalReservations + curr.reservations,
-          totalRevenue: acc.totalRevenue + curr.revenus,
-        }), { totalReservations: 0, totalRevenue: 0 });
-
-        setAgenciesStats(stats);
-        setDailyRevenue(days);
-        setGlobalStats({
-          totalAgencies: agencies.length,
-          ...totals,
-          growthRate: calculateGrowthRate(stats),
-          totalChannels: channelsSummary
-        });
+        unsubscribeAgences.push(agenciesUnsubscribe);
       } catch (err) {
-        console.error(err);
+        console.error('Erreur onSnapshot dashboard compagnie:', err);
         setError('Erreur de chargement des données. Veuillez réessayer.');
       } finally {
         setLoading(false);
       }
     };
-    loadData();
-  }, [user, dateRange, fetchCompany]);
+
+    listenToAgencies();
+
+    return () => {
+      unsubscribeAgences.forEach(unsub => unsub());
+    };
+  }, [user?.companyId, dateRange, fetchCompany]);
 
   const total = Object.values(globalStats.totalChannels).reduce((s, n) => s + n, 0);
   const guichet = globalStats.totalChannels.Guichet || 0;

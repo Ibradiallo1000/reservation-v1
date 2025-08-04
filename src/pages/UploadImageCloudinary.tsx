@@ -1,5 +1,3 @@
-// ✅ src/pages/UploadImageCloudinary.tsx
-
 import React from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
@@ -9,16 +7,24 @@ import { useAuth } from '@/contexts/AuthContext';
 
 interface UploadImageCloudinaryProps {
   label: string;
-  onUpload?: (url: string) => void; // Optionnel si utilisé seul
-  dossier: string; // exemple : compagnies/companyId
+  onUpload?: (url: string) => void;
+  dossier: string; 
+  className?: string;
+  collectionName?: string; // ✅ nouvelle prop
 }
 
-const UploadImageCloudinary: React.FC<UploadImageCloudinaryProps> = ({ label, onUpload, dossier }) => {
+const UploadImageCloudinary: React.FC<UploadImageCloudinaryProps> = ({
+  label,
+  onUpload,
+  dossier,
+  className,
+  collectionName = 'imagesBibliotheque', // par défaut : images compagnies
+}) => {
   const { user } = useAuth();
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file || !user?.companyId) return;
+    if (!file) return;
 
     const formData = new FormData();
     formData.append('file', file);
@@ -34,25 +40,24 @@ const UploadImageCloudinary: React.FC<UploadImageCloudinaryProps> = ({ label, on
       const imageUrl = response.data.secure_url;
       const nom = prompt("Nom de l'image (ex: logo, bannière, etc.)") || 'image';
 
-      await addDoc(collection(db, 'imagesBibliotheque'), {
-        companyId: user.companyId,
+      await addDoc(collection(db, collectionName), {
+        companyId: user?.companyId || null,
         url: imageUrl,
-        type: 'libre', // toutes les images uploadées sont utilisables librement
+        type: 'autre',
         nom,
-        createdAt: new Date()
+        createdAt: new Date(),
       });
 
       if (onUpload) onUpload(imageUrl);
-      alert('Image ajoutée avec succès.');
-
+      alert('✅ Image ajoutée avec succès !');
     } catch (error) {
-      console.error('Erreur lors du téléversement sur Cloudinary :', error);
-      alert("Échec de l'upload. Vérifie ta connexion et ton VPN.");
+      console.error('Erreur Cloudinary:', error);
+      alert('❌ Upload échoué.');
     }
   };
 
   return (
-    <div className="mb-4">
+    <div className={`mb-4 ${className || ''}`}>
       <label className="font-semibold block mb-1">{label}</label>
       <input type="file" accept="image/*" onChange={handleFileChange} />
     </div>

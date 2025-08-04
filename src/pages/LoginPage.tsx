@@ -38,7 +38,7 @@ const LoginPage: React.FC = () => {
 
       switch (role) {
         case 'admin_platforme':
-          navigate('/admin/dashboard');
+          navigate('/dashboard');
           break;
         case 'admin_compagnie':
           navigate('/compagnie/dashboard');

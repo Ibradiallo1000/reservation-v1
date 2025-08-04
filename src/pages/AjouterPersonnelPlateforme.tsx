@@ -1,8 +1,8 @@
-// src/pages/AjouterPersonnelPlateforme.tsx
+// ✅ src/pages/AjouterPersonnelPlateforme.tsx
 
 import React, { useState } from 'react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { addDoc, collection } from 'firebase/firestore';
+import { doc, setDoc, Timestamp } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
 const AjouterPersonnelPlateforme: React.FC = () => {
@@ -17,7 +17,7 @@ const AjouterPersonnelPlateforme: React.FC = () => {
     setMessage('');
 
     if (!email || !motDePasse || !nom || !role) {
-      setMessage("Tous les champs sont obligatoires.");
+      setMessage("❌ Tous les champs sont obligatoires.");
       return;
     }
 
@@ -25,12 +25,13 @@ const AjouterPersonnelPlateforme: React.FC = () => {
       const userCredential = await createUserWithEmailAndPassword(auth, email, motDePasse);
       const uid = userCredential.user.uid;
 
-      await addDoc(collection(db, 'users'), {
+      await setDoc(doc(db, 'users', uid), {
         uid,
         email,
         nom,
         role,
-        createdAt: new Date()
+        createdAt: Timestamp.now(),
+        isPlatformStaff: true // 👈 utile si tu veux filtrer par type plus tard
       });
 
       setMessage("✅ Utilisateur ajouté avec succès.");

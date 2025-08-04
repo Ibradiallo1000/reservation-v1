@@ -4,6 +4,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
 export interface CustomUser {
+  agencyLogoUrl: string | undefined;
   agencyNom: string;
   agencyTelephone: string;
   companyLogo: string | undefined;
@@ -48,7 +49,7 @@ const ROLES_PERMISSIONS: Record<string, string[]> = {
     'view_dashboard', 'access_ticketing', 'manage_routes',
     'manage_mail', 'mail_send', 'mail_receive',
     'view_finances', 'manage_income', 'manage_expenses',
-    'manage_staff', 'manage_bookings'
+    'manage_staff', 'manage_bookings', 'embarquement'
   ],
   user: []
 };
@@ -80,7 +81,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       permissions: [...(data.permissions || []), ...(ROLES_PERMISSIONS[data.role] || [])],
       companyLogo: undefined,
       agencyTelephone: '',
-      agencyNom: ''
+      agencyNom: '',
+      agencyLogoUrl: undefined
     };
 
     setUser(userData);
@@ -115,41 +117,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return user.permissions?.includes(permission) || false;
   }, [user]);
 
-  useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+useEffect(() => {
+  let timeoutId: NodeJS.Timeout;
+  let unsubscribe: (() => void) | undefined;
 
-    setPersistence(auth, browserLocalPersistence)
-      .then(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-          try {
-            if (firebaseUser) {
-              await fetchUserData(firebaseUser);
-            } else {
-              setUser(null);
-              setCompany(null);
-            }
-          } catch (error) {
-            console.error('Erreur auth state:', error);
+  setPersistence(auth, browserLocalPersistence)
+    .then(() => {
+      unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        try {
+          if (firebaseUser) {
+            await fetchUserData(firebaseUser);
+          } else {
             setUser(null);
             setCompany(null);
-          } finally {
-            clearTimeout(timeoutId);
-            setLoading(false);
           }
-        });
-
-        timeoutId = setTimeout(() => setLoading(false), 2500);
-
-        return () => {
-          unsubscribe();
+        } catch (error) {
+          console.error('Erreur auth state:', error);
+          setUser(null);
+          setCompany(null);
+        } finally {
           clearTimeout(timeoutId);
-        };
-      })
-      .catch((error) => {
-        console.error('Erreur de persistance Firebase:', error);
-        setLoading(false);
+          setLoading(false);
+        }
       });
-  }, [fetchUserData]);
+
+      timeoutId = setTimeout(() => setLoading(false), 2500);
+    })
+    .catch((error) => {
+      console.error('Erreur de persistance Firebase:', error);
+      setLoading(false);
+    });
+
+  return () => {
+    if (unsubscribe) unsubscribe();
+    clearTimeout(timeoutId);
+  };
+}, [fetchUserData]);
 
   return (
     <AuthContext.Provider value={{ user, loading, logout, refreshUser, hasPermission, company }}>

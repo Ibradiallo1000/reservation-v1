@@ -1,61 +1,59 @@
-// ✅ src/components/ImageSelectorModal.tsx
+// ✅ src/components/ui/ImageSelectorModal.tsx
+import React, { useEffect, useState } from "react";
+import { collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "../../firebaseConfig";
 
-import React, { useEffect, useState } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../../firebaseConfig';
-
-interface ImageSelectorModalProps {
+interface Props {
   companyId: string;
   onSelect: (url: string) => void;
   onClose: () => void;
 }
 
-const ImageSelectorModal: React.FC<ImageSelectorModalProps> = ({ companyId, onSelect, onClose }) => {
+const ImageSelectorModal: React.FC<Props> = ({ companyId, onSelect, onClose }) => {
   const [images, setImages] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchImages = async () => {
       try {
-        const q = query(collection(db, 'imagesBibliotheque'), where('companyId', '==', companyId));
-        const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setImages(data);
-      } catch (error) {
-        console.error("Erreur lors de la récupération des images :", error);
+        const q = query(
+          collection(db, "imagesBibliotheque"),
+          where("companyId", "==", companyId)
+        );
+        const snap = await getDocs(q);
+        setImages(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      } catch (err) {
+        console.error("Erreur chargement images:", err);
       }
-      setLoading(false);
     };
-
     fetchImages();
   }, [companyId]);
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 max-w-4xl w-full max-h-[80vh] overflow-y-auto">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-bold">Choisir une image</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-red-500 text-sm">✖ Fermer</button>
-        </div>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl">
+        <h2 className="text-lg font-bold mb-4">Choisir une image</h2>
 
-        {loading ? (
-          <p>Chargement...</p>
-        ) : images.length === 0 ? (
-          <p className="text-gray-500">Aucune image trouvée pour cette compagnie.</p>
+        {images.length === 0 ? (
+          <p className="text-gray-500">Aucune image trouvée pour cette compagnie</p>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {images.map((img) => (
+          <div className="grid grid-cols-3 gap-4">
+            {images.map(img => (
               <div
                 key={img.id}
-                className="border rounded overflow-hidden shadow hover:shadow-lg cursor-pointer"
+                className="cursor-pointer border rounded overflow-hidden hover:shadow-lg"
                 onClick={() => onSelect(img.url)}
               >
-                <img src={img.url} alt={img.nom} className="w-full h-32 object-cover" />
-                <div className="p-2 text-sm text-center truncate">{img.nom}</div>
+                <img src={img.url} alt={img.nom || "image"} className="h-32 w-full object-cover" />
               </div>
             ))}
           </div>
         )}
+
+        <div className="flex justify-end mt-6">
+          <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded">
+            Fermer
+          </button>
+        </div>
       </div>
     </div>
   );

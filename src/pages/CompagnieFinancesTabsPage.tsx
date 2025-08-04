@@ -1,11 +1,25 @@
-// ✅ src/pages/CompagnieFinancesPage.tsx — version modernisée
+// ✅ src/pages/CompagnieFinancesPage.tsx — version corrigée
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  getDoc,
+  doc,
+  Timestamp
+} from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { FiRefreshCw, FiCalendar, FiTrendingUp, FiDollarSign, FiArrowRight } from 'react-icons/fi';
+import {
+  FiRefreshCw,
+  FiCalendar,
+  FiTrendingUp,
+  FiDollarSign,
+  FiArrowRight
+} from 'react-icons/fi';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -20,7 +34,6 @@ const CompagnieFinancesPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [companyName, setCompanyName] = useState<string>('');
-
   const [agencyStats, setAgencyStats] = useState<AgencyFinance[]>([]);
   const [dateRange, setDateRange] = useState<[Date, Date]>([
     new Date(new Date().setDate(new Date().getDate() - 30)),
@@ -31,50 +44,69 @@ const CompagnieFinancesPage: React.FC = () => {
 
   const fetchCompanyName = useCallback(async () => {
     if (!user?.companyId) return;
-    const snap = await getDocs(query(collection(db, 'companies'), where('id', '==', user.companyId)));
-    if (!snap.empty) {
-      const data = snap.docs[0].data();
-      setCompanyName(data.nom || '');
+    try {
+      const ref = doc(db, 'companies', user.companyId);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data();
+        setCompanyName(data.nom || '');
+      }
+    } catch (err) {
+      console.error('Erreur récupération nom compagnie', err);
     }
   }, [user?.companyId]);
 
   const loadFinanceData = useCallback(async () => {
     if (!user?.companyId) return;
-
     setLoading(true);
     setError(null);
 
     try {
-      const start = new Date(dateRange[0]);
+      const [startDate, endDate] = dateRange;
+      const start = new Date(startDate);
       start.setHours(0, 0, 0, 0);
 
-      const end = new Date(dateRange[1]);
+      const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
 
-      const q = query(collection(db, 'agences'), where('companyId', '==', user.companyId));
-      const snap = await getDocs(q);
-      const stats: AgencyFinance[] = [];
+      const agencesSnap = await getDocs(
+        collection(db, `companies/${user.companyId}/agences`)
+      );
 
-      for (const docSnap of snap.docs) {
-        const agencyId = docSnap.id;
-        const nom = docSnap.data().nom || docSnap.data().ville || 'Agence';
+      const agences = agencesSnap.docs.map((doc) => ({
+        id: doc.id,
+        nom: doc.data().nom || doc.data().ville || 'Agence'
+      }));
 
-        const resQ = query(
-          collection(db, 'reservations'),
-          where('agencyId', '==', agencyId),
+      const allReservationsSnap = await getDocs(
+        query(
+          collection(db, `companies/${user.companyId}/reservations`),
           where('createdAt', '>=', Timestamp.fromDate(start)),
           where('createdAt', '<=', Timestamp.fromDate(end)),
           where('statut', '==', 'payé')
-        );
+        )
+      );
 
-        const resSnap = await getDocs(resQ);
-        const totalReservations = resSnap.size;
-        const totalRevenue = resSnap.docs.reduce((sum, d) => sum + (d.data().montant || 0), 0);
+      const grouped: Record<string, AgencyFinance> = {};
+      agences.forEach(ag => {
+        grouped[ag.id] = {
+          id: ag.id,
+          nom: ag.nom,
+          totalRevenue: 0,
+          totalReservations: 0
+        };
+      });
 
-        stats.push({ id: agencyId, nom, totalRevenue, totalReservations });
-      }
+      allReservationsSnap.docs.forEach(doc => {
+        const data = doc.data();
+        const aid = data.agencyId;
+        if (grouped[aid]) {
+          grouped[aid].totalRevenue += data.montant || 0;
+          grouped[aid].totalReservations += 1;
+        }
+      });
 
-      setAgencyStats(stats);
+      setAgencyStats(Object.values(grouped));
     } catch (err) {
       console.error(err);
       setError('Erreur lors du chargement des données financières.');
@@ -90,9 +122,7 @@ const CompagnieFinancesPage: React.FC = () => {
 
   const handleDateChange = (update: [Date | null, Date | null]) => {
     const [start, end] = update;
-    if (start && end) {
-      setDateRange([start, end]);
-    }
+    if (start && end) setDateRange([start, end]);
   };
 
   const totalRevenue = agencyStats.reduce((sum, a) => sum + a.totalRevenue, 0);
@@ -103,7 +133,9 @@ const CompagnieFinancesPage: React.FC = () => {
       <div className="max-w-7xl mx-auto space-y-8">
         <div className="flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold text-gray-800">📊 Finances de {companyName || 'la compagnie'}</h1>
+            <h1 className="text-3xl font-bold text-gray-800">
+              📊 Finances de {companyName || 'la compagnie'}
+            </h1>
             <p className="text-gray-500 text-sm">Sur la période sélectionnée</p>
           </div>
           <button

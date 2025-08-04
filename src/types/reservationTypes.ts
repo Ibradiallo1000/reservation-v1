@@ -1,24 +1,59 @@
 // ✅ src/types/reservationTypes.ts
 
+// =====================================
+// Interface : Réservation complète
+// =====================================
+
 export interface Reservation {
-  companySlug: any;
+  // Thème
+  couleurPrimaire: string;
+  couleurSecondaire: string;
+
+  // Identifiants
   id: string;
-  
-  clientName: string; // Nom du client
-  clientPhone: string; // Téléphone du client
-  email?: string; // Email optionnel
-  tripId: string; // ID du trajet associé
-  agencyId: string; // ID de l'agence
-  companyId: string; // ID de la compagnie
-  departure: string; // Ville de départ
-  arrival: string; // Ville d'arrivée
-  date: string; // Format ISO: YYYY-MM-DD
-  time: string; // Heure de départ, ex: "14:30"
-  seats: number; // Nombre de places réservées
-  montant: number; // Prix payé
-  statut: 'payé' | 'en_attente' | 'annulé'; // Statut de la réservation
-  canal: 'en_ligne' | 'guichet' | 'téléphone'; // Canal de réservation
-  preuvePaiementUrl?: string; // URL vers la preuve de paiement
-  referenceCode: string; // Code de référence unique
-  createdAt: string; // Date de création (ISO ou Firestore timestamp)
+  referenceCode: string; // Code unique du billet
+  tripId: string;        // Trajet associé
+  agencyId: string;
+  companyId: string;
+  companySlug: string;
+
+  // Client
+  clientName: string;    // Nom du client
+  clientPhone: string;   // Téléphone
+  email?: string;        // Email optionnel
+
+  // Trajet
+  departure: string;     // Ville de départ
+  arrival: string;       // Ville d'arrivée
+  date: string | { seconds: number; nanoseconds: number }; // ISO ou Firestore
+  time: string;          // Heure (ex: "14:30")
+  seats: number;         // Nombre de places réservées
+  montant: number;       // Prix total payé
+
+  // Statut
+  statut: 'payé' | 'en_attente' | 'annulé';
+  canal: 'en_ligne' | 'guichet' | 'téléphone';
+
+  // Paiement
+  preuvePaiementUrl?: string; 
+
+  // Metadata
+  createdAt: string | { seconds: number; nanoseconds: number };
+}
+
+// =====================================
+// Interface : Trajet généré
+// =====================================
+
+export interface Trip {
+  id: string;           // ex: weeklyTripId_date_heure
+  date: string;         // YYYY-MM-DD
+  time: string;         // "08:00"
+  departure: string;
+  arrival: string;
+  price: number;
+  agencyId: string;
+  companyId: string;
+  places: number;
+  remainingSeats: number;
 }

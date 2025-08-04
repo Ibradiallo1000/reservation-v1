@@ -9,6 +9,8 @@ import {
   Tooltip,
   ResponsiveContainer
 } from "recharts";
+import { useAuth } from "@/contexts/AuthContext";
+import useCompanyTheme from "@/hooks/useCompanyTheme";
 
 interface DailyStat {
   date: string;
@@ -23,14 +25,19 @@ export const RevenueChart = ({
   data: DailyStat[];
   isLoading: boolean;
 }) => {
+  const { company } = useAuth();
+  const theme = useCompanyTheme(company);
+
   if (isLoading) {
     return <Skeleton className="w-full h-64 rounded-lg" />;
   }
 
   return (
-    <Card>
+    <Card className="shadow-sm border border-gray-200">
       <CardHeader>
-        <CardTitle>Réservations par jour</CardTitle>
+        <CardTitle style={{ color: theme.colors.primary }}>
+          Réservations par jour
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="h-64">
@@ -38,28 +45,30 @@ export const RevenueChart = ({
             <BarChart data={data}>
               <XAxis
                 dataKey="date"
-                tick={{ fill: '#6B7280' }}
+                tick={{ fill: theme.colors.text }}
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: '#6B7280' }}
+                tick={{ fill: theme.colors.text }}
                 axisLine={false}
                 tickLine={false}
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
-                  borderRadius: '0.5rem',
-                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                  backgroundColor: "#fff",
+                  border: `1px solid ${theme.colors.secondary}`,
+                  borderRadius: "0.5rem",
+                  color: theme.colors.primary,
+                  boxShadow:
+                    "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1)",
                 }}
-                formatter={(value) => [`${value} réservations`, 'Nombre']}
+                formatter={(value) => [`${value} réservations`, "Nombre"]}
               />
               <Bar
                 dataKey="reservations"
-                fill="#6366F1"
-                radius={[4, 4, 0, 0]}
+                fill={theme.colors.secondary}
+                radius={[6, 6, 0, 0]}
                 animationDuration={1500}
               />
             </BarChart>

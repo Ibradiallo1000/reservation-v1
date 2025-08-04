@@ -1,13 +1,10 @@
 import type { Timestamp } from 'firebase/firestore';
-export type { Company } from './companyTypes';
 
-// ✅ Statuts possibles pour les réservations
+// ✅ Statuts possibles
 export type ReservationStatus = 'en_attente' | 'payé' | 'preuve_recue' | 'refusé' | 'annulé';
-
-// ✅ Canaux possibles
 export type Channel = 'en ligne' | 'agence' | 'téléphone';
 
-// ✅ Modèle de réservation complet
+// ✅ Modèle de réservation
 export interface Reservation {
   preuveUrl: any;
   preuveMessage: any;
@@ -39,7 +36,7 @@ export interface Reservation {
   longitude?: number;
 }
 
-// ✅ Avis client
+// ✅ Autres modèles
 export interface AvisClient {
   nom: string;
   note: number;
@@ -49,7 +46,6 @@ export interface AvisClient {
   createdAt?: Timestamp | Date;
 }
 
-// ✅ Message client
 export interface MessageClient {
   nom: string;
   email: string;
@@ -58,7 +54,6 @@ export interface MessageClient {
   createdAt: Timestamp;
 }
 
-// ✅ Agence (simplifiée)
 export interface Agency {
   id: string;
   nom: string;
@@ -67,7 +62,6 @@ export interface Agency {
   statut?: 'active' | 'inactive';
 }
 
-// ✅ Stats étendues
 export interface AgencyStats extends Agency {
   reservations: number;
   revenus: number;
@@ -82,4 +76,40 @@ export interface GlobalStats {
   totalCouriers: number;
   growthRate: number;
   totalChannels: { [canal: string]: number };
+}
+
+export interface Trip {
+  id: string;
+  date: string;
+  time: string;
+  departure: string;
+  arrival: string;
+  price: number;
+  agencyId: string;
+  companyId: string;
+  places: number;
+  remainingSeats: number;
+}
+
+export interface WeeklyTrip {
+  id: string;
+  departure?: string;
+  arrival?: string;
+  depart?: string;
+  arrivee?: string;
+  horaires?: {
+    [dayName: string]: string[];
+  };
+  price: number;
+  places: number;
+  [key: string]: any;
+}
+
+export interface TripSuggestion {
+  id: string;
+  title: string;
+  departure: string;
+  arrival: string;
+  price: number;
+  imageUrl?: string; // ✅ ajout
 }

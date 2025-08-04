@@ -49,35 +49,41 @@ const CompagnieReservationsPage: React.FC = () => {
   const perPage = 10;
 
   const loadAgences = async () => {
-    if (!user?.companyId) return;
-    try {
-      const q = query(
-        collection(db, 'agences'),
-        where('companyId', '==', user.companyId)
-      );
-      const snap = await getDocs(q);
+  if (!user?.companyId) return;
+  try {
+    const agencesSnap = await getDocs(
+      collection(db, 'companies', user.companyId, 'agences')
+    );
+    const data = agencesSnap.docs.map(doc => ({
+      id: doc.id,
+      nom: doc.data().ville || doc.data().nom,
+    }));
+    setAgences(data);
+  } finally {
+    setLoading(prev => ({ ...prev, agences: false }));
+  }
+};
+
+const loadReservations = async () => {
+  if (!user?.companyId) return;
+  try {
+    const agencesSnap = await getDocs(
+      collection(db, 'companies', user.companyId, 'agences')
+    );
+    const agencesList = agencesSnap.docs.map(doc => ({
+      id: doc.id,
+      nom: doc.data().ville || doc.data().nom,
+    }));
+    setAgences(agencesList);
+
+    const all: Reservation[] = [];
+
+    for (const agence of agencesList) {
+      const resRef = collection(db, 'companies', user.companyId, 'agences', agence.id, 'reservations');
+      const snap = await getDocs(resRef); // tu peux filtrer par statut ici si besoin
       const data = snap.docs.map(doc => ({
         id: doc.id,
-        nom: doc.data().ville || doc.data().nom,
-      }));
-      setAgences(data);
-    } finally {
-      setLoading(prev => ({ ...prev, agences: false }));
-    }
-  };
-
-  const loadReservations = async () => {
-    if (!user?.companyId) return;
-    try {
-      const q = query(
-        collection(db, 'reservations'),
-        where('companyId', '==', user.companyId),
-        where('statut', '==', 'payé')
-      );
-      const snap = await getDocs(q);
-      const all: Reservation[] = snap.docs.map(doc => ({
-        id: doc.id,
-        agencyId: doc.data().agencyId,
+        agencyId: agence.id,
         nomClient: doc.data().nomClient,
         telephone: doc.data().telephone,
         montant: doc.data().montant || 0,
@@ -87,23 +93,26 @@ const CompagnieReservationsPage: React.FC = () => {
         arrivee: doc.data().arrivee || '',
         createdAt: doc.data().createdAt?.toDate() || null,
       }));
-
-      // Grouper
-      const groups: { [key: string]: Reservation[] } = {};
-      all.forEach(r => {
-        if (!groups[r.agencyId]) groups[r.agencyId] = [];
-        groups[r.agencyId].push(r);
-      });
-
-      const grouped = Object.keys(groups).map(agencyId => ({
-        agencyId,
-        reservations: groups[agencyId],
-      }));
-      setGroupedData(grouped);
-    } finally {
-      setLoading(prev => ({ ...prev, reservations: false }));
+      all.push(...data);
     }
-  };
+
+    // Grouper
+    const groups: { [key: string]: Reservation[] } = {};
+    all.forEach(r => {
+      if (!groups[r.agencyId]) groups[r.agencyId] = [];
+      groups[r.agencyId].push(r);
+    });
+
+    const grouped = Object.keys(groups).map(agencyId => ({
+      agencyId,
+      reservations: groups[agencyId],
+    }));
+
+    setGroupedData(grouped);
+  } finally {
+    setLoading(prev => ({ ...prev, reservations: false }));
+  }
+};
 
   useEffect(() => {
     loadAgences();

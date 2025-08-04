@@ -1,7 +1,3 @@
-// ✅ COMPOSANT : SuggestionsSlider
-// Affiche une pile verticale animée de suggestions de trajets
-// Défile automatiquement les suggestions disponibles toutes les quelques secondes
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import TripSuggestionCard from './TripSuggestionCard';
@@ -10,7 +6,7 @@ import { TripSuggestion } from '@/types/companyTypes';
 interface SuggestionsSliderProps {
   suggestedTrips: TripSuggestion[];
   colors: { primary: string };
-    isMobile?: boolean; // ✅ AJOUTER CECI
+  isMobile?: boolean;
 }
 
 const SuggestionsSlider: React.FC<SuggestionsSliderProps> = ({ suggestedTrips, colors }) => {
@@ -18,9 +14,9 @@ const SuggestionsSlider: React.FC<SuggestionsSliderProps> = ({ suggestedTrips, c
   const [isPaused, setIsPaused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // ⏱️ EFFET : fait défiler les suggestions automatiquement sauf si la souris est dessus
+  // ⏱️ Défilement automatique
   useEffect(() => {
-    if (suggestedTrips.length <= 1) return;
+    if (suggestedTrips.length <= 3) return;
 
     const interval = setInterval(() => {
       if (!isPaused) {
@@ -31,11 +27,16 @@ const SuggestionsSlider: React.FC<SuggestionsSliderProps> = ({ suggestedTrips, c
     return () => clearInterval(interval);
   }, [suggestedTrips.length, isPaused]);
 
-  // ✅ GESTION : clic sur une carte (à personnaliser si besoin)
   const handleTripClick = useCallback((trip: TripSuggestion) => {
     console.log('Trajet sélectionné:', trip);
-    // Vous pouvez ajouter une navigation ici vers la page de résultats
+    // TODO: navigation
   }, []);
+
+  // ✅ Générer la pile de 3 suggestions
+  const visibleTrips = Array.from({ length: 3 }, (_, i) => {
+    const index = (activeIndex + i) % suggestedTrips.length;
+    return suggestedTrips[index];
+  });
 
   return (
     <div
@@ -47,13 +48,13 @@ const SuggestionsSlider: React.FC<SuggestionsSliderProps> = ({ suggestedTrips, c
       <AnimatePresence mode="wait">
         <motion.div
           key={activeIndex}
-          initial={{ opacity: 0, y: 50 }}
+          initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -50 }}
-          transition={{ duration: 0.5 }}
+          exit={{ opacity: 0, y: -40 }}
+          transition={{ duration: 0.6 }}
           className="absolute inset-0 flex flex-col gap-4"
         >
-          {suggestedTrips.slice(activeIndex, activeIndex + 3).map((trip, idx) => (
+          {visibleTrips.map((trip, idx) => (
             <TripSuggestionCard
               key={`${activeIndex}-${idx}`}
               trip={trip}

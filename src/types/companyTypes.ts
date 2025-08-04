@@ -20,7 +20,7 @@ export interface FooterConfig {
   showTestimonials?: boolean;
   showLegalLinks?: boolean;
   customLinks?: {
-    label: string; // ✅ c'était "title", on met "label" partout
+    label: string;
     url: string;
     external?: boolean;
   }[];
@@ -45,11 +45,12 @@ export interface Agence {
 }
 
 export interface TripSuggestion {
+  imageUrl?: string; // ✅ devient optionnel
   duration?: string;
   departure: string;
   arrival: string;
   price?: number;
-  frequency?: string; // ✅ Ajouté
+  frequency?: string;
 }
 
 export interface CityInputProps {
@@ -87,11 +88,24 @@ export interface HeroSectionProps {
   t: (key: string) => string;
 }
 
-// ✅ Le type principal corrigé avec tous les champs optionnels et cohérents
+export type PaymentMethod = 'espèces' | 'mobile_money' | 'carte' | 'orange_money' | 'mtn_money';
+
+export interface PaymentConfig {
+  methods: PaymentMethod[];
+  defaultMethod?: PaymentMethod;
+}
+
+export interface Service {
+  id: string;
+  name: string;
+  description?: string;
+  price?: number;
+  icon?: string;
+}
+
+export type PlanType = 'free' | 'premium' | 'pro' | 'enterprise';
+
 export interface Company {
-  villesDisponibles: never[];
-  services?: string[]; // ✅ au lieu de never[]
-  featuredTrips?: any[]; // ✅ au lieu de "any" seul
   id: string;
   nom: string;
   slug: string;
@@ -114,9 +128,15 @@ export interface Company {
   socialMedia?: SocialMediaLinks;
   footerConfig?: FooterConfig;
   responsable?: string;
-  plan?: 'free' | 'premium';
+  plan?: PlanType;
   createdAt?: Timestamp;
+  updatedAt?: Timestamp;
   commission?: number;
-  
+  imagesSlider?: string[];
+  sliderImages?: string[];
+  suggestions?: string[];
+  villesDisponibles?: string[];
+  services?: Service[];
+  featuredTrips?: any[];
+  paymentConfig?: PaymentConfig;
 }
-
