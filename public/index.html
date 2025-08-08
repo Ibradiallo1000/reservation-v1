@@ -1,30 +1,51 @@
 <!DOCTYPE html>
 <html lang="fr">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Teliya</title>
-    <base href="/" />
-
-    <!-- ✅ Manifest PWA -->
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#FF6600" />
-
-    <!-- ✅ Favicons générés -->
-    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
-    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
-
-    <script type="module" crossorigin src="/assets/index-BrxuZDy-.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/js/vendor-CZDa83Cj.js">
-    <link rel="modulepreload" crossorigin href="/assets/js/react-BKlva80Y.js">
-    <link rel="modulepreload" crossorigin href="/assets/js/firebase-1zyXmG6H.js">
-    <link rel="stylesheet" crossorigin href="/assets/css/react-CoRI1eQc.css">
-    <link rel="stylesheet" crossorigin href="/assets/css/index-DhjvYJ_d.css">
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Teliya - Réservation de billets</title>
+  <base href="/">
+  
+  <!-- Meta PWA Essentielles -->
+  <meta name="description" content="Réservation de billets en ligne et au guichet">
+  <meta name="theme-color" content="#FF6600">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Teliya">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="msapplication-TileColor" content="#FF6600">
+  
+  <!-- Manifest & Icônes -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="icon" type="image/png" href="/icons/icon-192.png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  
+  <!-- Splash Screens iOS -->
+  <link rel="apple-touch-startup-image" href="/splash/splash-750x1334.png" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2)">
+  <link rel="apple-touch-startup-image" href="/splash/splash-1242x2208.png" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3)">
+  
+  <!-- Préchargement -->
+  <link rel="preload" href="/assets/js/vendor-CZDa83Cj.js" as="script" crossorigin>
+  <link rel="preload" href="/assets/css/index-DhjyYJ_d.css" as="style">
+  
+  <!-- CSS -->
+  <link rel="stylesheet" href="/assets/css/react-CoRl1eQC.css" crossorigin>
+  <link rel="stylesheet" href="/assets/css/index-DhjyYJ_d.css" crossorigin>
+  
+  <!-- Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js');
+      });
+    }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <!-- Scripts -->
+  <script type="module" src="/assets/index-BrxuZDy-.js" crossorigin></script>
+</body>
 </html>

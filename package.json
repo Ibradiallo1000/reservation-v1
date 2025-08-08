@@ -3,17 +3,19 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
- "scripts": {
-  "clean": "rimraf dist",
-  "dev": "vite",
-  "build": "npm run clean && tsc && vite build",
-  "preview": "vite preview",
-  "generate-icons": "node scripts/generate-icons.js",
-  "generate-pwa-icons": "node scripts/generate-pwa-icons.js",
-  "generate-splash": "node scripts/generate-splash.js",
-  "generate-splash-screens": "node scripts/generate-splash-screens.js"
-},
+  "scripts": {
+    "clean": "rimraf dist",
+    "dev": "vite",
+    "build": "npm run clean && tsc && vite build",
+    "preview": "vite preview",
+    "generate-icons": "node scripts/generate-icons.js",
+    "generate-pwa-icons": "node scripts/generate-pwa-icons.js",
+    "generate-splash": "node scripts/generate-splash.js",
+    "generate-splash-screens": "node scripts/generate-splash-screens.js"
+  },
   "dependencies": {
+    "@emotion/babel-plugin": "^11.13.5",
+    "@emotion/react": "^11.14.0",
     "@headlessui/react": "^2.2.3",
     "@heroicons/react": "^2.2.0",
     "@netlify/functions": "^4.2.1",
@@ -76,7 +78,7 @@
     "@types/connect-history-api-fallback": "^1.5.4",
     "@types/file-saver": "^2.0.7",
     "@types/leaflet": "^1.9.18",
-    "@types/node": "^22.17.0",
+    "@types/node": "^22.17.1",
     "@types/node-fetch": "^2.6.13",
     "@types/react": "^18.3.23",
     "@types/react-csv": "^1.1.10",
@@ -96,8 +98,10 @@
     "npx": "^10.2.2",
     "postcss": "^8.5.4",
     "rimraf": "^6.0.1",
+    "rollup-plugin-visualizer": "^6.0.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.2.2",
-    "vite": "^5.4.19"
+    "vite": "^5.4.19",
+    "vite-plugin-imagemin": "^0.6.1"
   }
 }
