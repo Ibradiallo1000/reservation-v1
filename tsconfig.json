@@ -18,8 +18,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
-    }
+    },
+    "types": ["node"]
   },
-  "include": ["src", "functions"], // ✅ On inclut aussi "functions"
+  "include": ["src", "netlify/functions"], 
   "exclude": ["node_modules"]
 }

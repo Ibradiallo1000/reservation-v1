@@ -1,24 +1,38 @@
 {
   "name": "Teliya",
   "short_name": "Teliya",
+  "id": "/",
   "description": "Réservation de billets en ligne et au guichet",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#ffffff",
-  "theme_color": "#FFD700",
+  "theme_color": "#FF6600",
   "icons": [
     {
       "src": "/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
     },
     {
       "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "screenshots": [
@@ -26,19 +40,22 @@
       "src": "/splash.png",
       "sizes": "512x512",
       "type": "image/png",
-      "label": "Accueil Teliya"
+      "label": "Accueil Teliya",
+      "form_factor": "narrow"
     },
     {
       "src": "/icons/splash-750x1334.png",
       "sizes": "750x1334",
       "type": "image/png",
-      "label": "Accueil mobile"
+      "label": "Accueil mobile",
+      "form_factor": "narrow"
     },
     {
       "src": "/icons/splash-1242x2208.png",
       "sizes": "1242x2208",
       "type": "image/png",
-      "label": "Page de réservation"
+      "label": "Page de réservation",
+      "form_factor": "wide"
     }
   ],
   "shortcuts": [

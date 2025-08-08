@@ -2,7 +2,35 @@
   publish = "dist"
   command = "npm run build"
 
+[functions]
+  directory = "netlify/functions"
+
+# ✅ Redirection explicite pour manifest statique
+[[redirects]]
+  from = "/manifest.webmanifest"
+  to = "/manifest.webmanifest"
+  status = 200
+  headers = { Content-Type = "application/manifest+json" }
+
+# ✅ Screenshots statiques
+[[redirects]]
+  from = "/screenshot-wide.png"
+  to = "/screenshot-wide.png"
+  status = 200
+
+[[redirects]]
+  from = "/screenshot-mobile.png"
+  to = "/screenshot-mobile.png"
+  status = 200
+
+# ✅ SPA routing (doit rester à la fin)
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+[dev]
+  command = "npm run dev"
+  targetPort = 5177       # ← doit matcher vite.config.ts maintenant
+  port = 8889
+  autoLaunch = true

@@ -1,10 +1,10 @@
-// ✅ src/AppRoutes.tsx
 import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
 import RouteResolver from './pages/RouteResolver';
+
 import MentionsPage from '@/pages/MentionsPage';
 import ConfidentialitePage from '@/pages/ConfidentialitePage';
 import ConditionsPage from '@/pages/ConditionsPage';
@@ -68,28 +68,29 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={<PageLoader fullScreen />}>
       <Routes>
-        {/* Pages publiques globales */}
+        {/* ✅ Pages publiques globales */}
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
 
-        {/* Pages légales publiques */}
+        {/* ✅ Pages légales publiques dynamiques */}
         <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
         <Route path="/:slug/cookies" element={<CookiesPage />} />
 
-        {/* Admin plateforme */}
+        {/* ✅ Admin plateforme sous /admin */}
         <Route
-          path="/"
+          path="/admin"
           element={
             <PrivateRoute allowedRoles={['admin_platforme']}>
               <AdminSidebarLayout />
             </PrivateRoute>
           }
         >
+          <Route index element={<AdminDashboard />} />
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="compagnies" element={<AdminCompagniesPage />} />
           <Route path="compagnies/ajouter" element={<AdminAjouterCompagnie />} />
@@ -101,7 +102,7 @@ const AppRoutes = () => {
           <Route path="media" element={<MediaPage />} />
         </Route>
 
-        {/* Compagnie privée */}
+        {/* ✅ Compagnie privée */}
         <Route
           path="/compagnie"
           element={
@@ -126,7 +127,7 @@ const AppRoutes = () => {
           <Route path="avis-clients" element={<AvisModerationPage />} />
         </Route>
 
-        {/* Agence */}
+        {/* ✅ Agence privée */}
         <Route
           path="/agence"
           element={
@@ -153,7 +154,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        {/* Pages isolées */}
+        {/* ✅ Pages isolées */}
         <Route
           path="/agence/receipt/:id"
           element={
@@ -164,12 +165,12 @@ const AppRoutes = () => {
         />
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
-        {/* Pages publiques dynamiques */}
+        {/* ✅ Pages publiques dynamiques */}
         <Route path="/:slug/upload-preuve/:id" element={<UploadPreuvePage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
         <Route path="/:slug/*" element={<RouteResolver />} />
 
-        {/* 404 */}
+        {/* ✅ 404 fallback */}
         <Route
           path="*"
           element={
