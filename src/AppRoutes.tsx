@@ -1,28 +1,34 @@
+// src/AppRoutes.tsx
 import { Suspense, lazy } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
 import RouteResolver from './pages/RouteResolver';
 
+/* ---------- Pages statiques publiques ---------- */
 import MentionsPage from '@/pages/MentionsPage';
 import ConfidentialitePage from '@/pages/ConfidentialitePage';
 import ConditionsPage from '@/pages/ConditionsPage';
 import CookiesPage from '@/pages/CookiesPage';
+
+/* ---------- Pages isolées (agence / impression / détails) ---------- */
 import AgenceEmbarquementPage from '@/pages/AgenceEmbarquementPage';
 import ReservationPrintPage from '@/pages/ReservationPrintPage';
 import UploadPreuvePage from '@/pages/UploadPreuvePage';
 import ReservationDetailsPage from '@/pages/ReservationDetailsPage';
 import AdminParametresPlatformPage from './pages/AdminParametresPlatformPage';
+import ValidationComptablePage from '@/pages/ValidationComptablePage';
+import ValidationChefAgencePage from '@/pages/ValidationChefAgencePage';
 
-// Pages publiques
+/* ---------- Chargement paresseux (lazy) : publiques ---------- */
 const HomePage = lazy(() => import('./pages/HomePage'));
 const PlatformSearchResultsPage = lazy(() => import('./pages/PlatformSearchResultsPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const Register = lazy(() => import('./pages/Register'));
 const ListeVillesPage = lazy(() => import('./pages/ListeVillesPage'));
 
-// Admin plateforme
+/* ---------- Admin plateforme ---------- */
 const AdminSidebarLayout = lazy(() => import('./pages/AdminSidebarLayout'));
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const AdminCompagniesPage = lazy(() => import('./pages/AdminCompagniesPage'));
@@ -32,11 +38,10 @@ const AdminStatistiquesPage = lazy(() => import('./pages/AdminStatistiquesPage')
 const AdminReservationsPage = lazy(() => import('./pages/AdminReservationsPage'));
 const AdminFinancesPage = lazy(() => import('./pages/AdminFinancesPage'));
 
-// Compagnie privée
+/* ---------- Espace Compagnie ---------- */
 const CompagnieLayout = lazy(() => import('./components/layout/CompagnieLayout'));
 const CompagnieDashboard = lazy(() => import('./pages/CompagnieDashboard'));
 const CompagnieAgencesPage = lazy(() => import('./pages/CompagnieAgencesPage'));
-const CompagniePersonnelPage = lazy(() => import('./pages/CompagniePersonnelPage'));
 const CompagnieParametresTabsPage = lazy(() => import('./pages/CompagnieParametresTabsPage'));
 const CompagnieReservationsPage = lazy(() => import('./pages/CompagnieReservationsPage'));
 const CompagnieAgencesStatistiquesPage = lazy(() => import('./pages/CompagnieAgencesStatistiquesPage'));
@@ -48,18 +53,60 @@ const ReservationsEnLignePage = lazy(() => import('./pages/ReservationsEnLignePa
 const CompanyPaymentSettingsPage = lazy(() => import('./pages/CompanyPaymentSettingsPage'));
 const AvisModerationPage = lazy(() => import('./pages/AvisModerationPage'));
 
-// Agence privée
-import Sidebar from './components/layout/Sidebar';
+/* ---------- Espace Agence ---------- */
 const DashboardAgencePage = lazy(() => import('./pages/DashboardAgencePage'));
 const AgenceReservationsPage = lazy(() => import('./pages/AgenceReservationsPage'));
 const AgenceGuichetPage = lazy(() => import('./pages/AgenceGuichetPage'));
 const AgenceTrajetsPage = lazy(() => import('./pages/AgenceTrajetsPage'));
-const FormulaireEnvoiCourrier = lazy(() => import('./pages/FormulaireEnvoiCourrier'));
 const AgenceFinancesPage = lazy(() => import('./pages/AgenceFinancesPage'));
 const AgenceRecettesPage = lazy(() => import('./pages/AgenceRecettesPage'));
 const AgencePersonnelPage = lazy(() => import('./pages/AgencePersonnelPage'));
 const ReceiptGuichetPage = lazy(() => import('./pages/ReceiptGuichetPage'));
 const MediaPage = lazy(() => import('./pages/MediaPage'));
+const AgenceShiftHistoryPage = lazy(() => import('./pages/AgenceShiftHistoryPage'));
+const AgenceComptabilitePage = lazy(() => import('./pages/AgenceComptabilitePage'));
+const AgenceShiftPage = lazy(() => import('./pages/AgenceShiftPage'));
+
+/* ---------- Shell d’agence (layout sans sidebar) ---------- */
+const AgenceShellPage = lazy(() => import('./pages/AgenceShellPage'));
+
+/* ===================== RÔLES & PERMISSIONS CENTRALISÉS ===================== */
+export const routePermissions = {
+  // Layouts
+  compagnieLayout: ['admin_compagnie', 'compagnie'] as const,
+  agenceShell: ['chefAgence', 'superviseur', 'agentCourrier', 'admin_compagnie'] as const,
+
+  // Pages hors shell
+  guichet: ['guichetier', 'chefAgence', 'admin_compagnie'] as const,
+  comptabilite: ['comptable', 'admin_compagnie'] as const,
+  validationsCompta: ['comptable', 'admin_compagnie'] as const,
+  validationsAgence: ['chefAgence', 'superviseur', 'admin_compagnie'] as const,
+  receiptGuichet: ['chefAgence', 'guichetier', 'admin_compagnie'] as const,
+
+  // Admin plateforme
+  adminLayout: ['admin_platforme'] as const,
+};
+
+const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
+const hasAny = (roles: unknown, allowed: readonly string[]) =>
+  asArray(roles).some((r) => allowed.includes(String(r)));
+
+const landingTargetForRoles = (roles: unknown): string => {
+  // Priorités : guichet > compta > compagnie > shell agence > admin
+  if (hasAny(roles, routePermissions.guichet)) return '/agence/guichet';
+  if (hasAny(roles, routePermissions.comptabilite)) return '/agence/comptabilite';
+  if (hasAny(roles, routePermissions.compagnieLayout)) return '/compagnie/dashboard';
+  if (hasAny(roles, routePermissions.agenceShell)) return '/agence/dashboard';
+  if (hasAny(roles, routePermissions.adminLayout)) return '/admin/dashboard';
+  return '/login';
+};
+
+/* ---------- Redirection d’atterrissage selon rôle ---------- */
+function RoleLanding() {
+  const { user } = useAuth() as any;
+  if (!user) return <Navigate to="/login" replace />;
+  return <Navigate to={landingTargetForRoles(user.role)} replace />;
+}
 
 const AppRoutes = () => {
   const { loading } = useAuth();
@@ -68,24 +115,24 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={<PageLoader fullScreen />}>
       <Routes>
-        {/* ✅ Pages publiques globales */}
+        {/* ===================== PUBLIC ===================== */}
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
 
-        {/* ✅ Pages légales publiques dynamiques */}
+        {/* Mentions / Légal */}
         <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
         <Route path="/:slug/cookies" element={<CookiesPage />} />
 
-        {/* ✅ Admin plateforme sous /admin */}
+        {/* ===================== ADMIN PLATFORME ===================== */}
         <Route
           path="/admin"
           element={
-            <PrivateRoute allowedRoles={['admin_platforme']}>
+            <PrivateRoute allowedRoles={[...routePermissions.adminLayout]}>
               <AdminSidebarLayout />
             </PrivateRoute>
           }
@@ -102,11 +149,11 @@ const AppRoutes = () => {
           <Route path="media" element={<MediaPage />} />
         </Route>
 
-        {/* ✅ Compagnie privée */}
+        {/* ===================== COMPAGNIE ===================== */}
         <Route
           path="/compagnie"
           element={
-            <PrivateRoute allowedRoles={['admin_compagnie']}>
+            <PrivateRoute allowedRoles={[...routePermissions.compagnieLayout]}>
               <CompagnieLayout />
             </PrivateRoute>
           }
@@ -114,7 +161,6 @@ const AppRoutes = () => {
           <Route index element={<CompagnieDashboard />} />
           <Route path="dashboard" element={<CompagnieDashboard />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
-          <Route path="personnel" element={<CompagniePersonnelPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
           <Route path="reservations-en-ligne" element={<ReservationsEnLignePage />} />
@@ -127,50 +173,99 @@ const AppRoutes = () => {
           <Route path="avis-clients" element={<AvisModerationPage />} />
         </Route>
 
-        {/* ✅ Agence privée */}
+        {/* ===================== AGENCE : REDIRECT SELON ROLE ===================== */}
         <Route
           path="/agence"
           element={
-            <PrivateRoute allowedRoles={['chefAgence', 'guichetier', 'superviseur', 'agentCourrier']}>
-              <Sidebar />
+            <PrivateRoute
+              allowedRoles={[
+                ...routePermissions.agenceShell,
+                ...routePermissions.comptabilite,
+                ...routePermissions.guichet,
+              ]}
+            >
+              <RoleLanding />
+            </PrivateRoute>
+          }
+        />
+
+        {/* ===================== SHELL D’AGENCE (chef/superviseur/admin/agentCourrier) ===================== */}
+        <Route
+          path="/agence"
+          element={
+            <PrivateRoute allowedRoles={[...routePermissions.agenceShell]}>
+              <AgenceShellPage />
             </PrivateRoute>
           }
         >
           <Route index element={<DashboardAgencePage />} />
           <Route path="dashboard" element={<DashboardAgencePage />} />
           <Route path="reservations" element={<AgenceReservationsPage />} />
-          <Route path="guichet" element={<AgenceGuichetPage />} />
+          <Route path="embarquement" element={<AgenceEmbarquementPage />} />
           <Route path="trajets" element={<AgenceTrajetsPage />} />
-          <Route path="finances" element={<AgenceFinancesPage />} />
+          <Route path="garage" element={<AgenceShiftHistoryPage />} />
           <Route path="recettes" element={<AgenceRecettesPage />} />
+          <Route path="finances" element={<AgenceFinancesPage />} />
           <Route path="personnel" element={<AgencePersonnelPage />} />
-          <Route
-            path="embarquement"
-            element={
-              <PrivateRoute allowedRoles={['chefAgence', 'guichetier', 'superviseur', 'admin_compagnie']}>
-                <AgenceEmbarquementPage />
-              </PrivateRoute>
-            }
-          />
+          <Route path="shift" element={<AgenceShiftPage />} />
+          <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
         </Route>
 
-        {/* ✅ Pages isolées */}
+        {/* ===================== GUICHET (hors Shell) ===================== */}
+        <Route
+          path="/agence/guichet"
+          element={
+            <PrivateRoute allowedRoles={[...routePermissions.guichet]}>
+              <AgenceGuichetPage />
+            </PrivateRoute>
+          }
+        />
+
+        {/* ===================== COMPTABILITÉ (hors Shell) ===================== */}
+        <Route
+          path="/agence/comptabilite"
+          element={
+            <PrivateRoute allowedRoles={[...routePermissions.comptabilite]}>
+              <AgenceComptabilitePage />
+            </PrivateRoute>
+          }
+        />
+
+        {/* ===================== VALIDATIONS (hors Shell) ===================== */}
+        <Route
+          path="/compta/validations"
+          element={
+            <PrivateRoute allowedRoles={[...routePermissions.validationsCompta]}>
+              <ValidationComptablePage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/agence/validations"
+          element={
+            <PrivateRoute allowedRoles={[...routePermissions.validationsAgence]}>
+              <ValidationChefAgencePage />
+            </PrivateRoute>
+          }
+        />
+
+        {/* ===================== PAGES ISOLÉES (HORS SHELL) ===================== */}
         <Route
           path="/agence/receipt/:id"
           element={
-            <PrivateRoute allowedRoles={['chefAgence', 'guichetier']}>
+            <PrivateRoute allowedRoles={[...routePermissions.receiptGuichet]}>
               <ReceiptGuichetPage />
             </PrivateRoute>
           }
         />
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
-        {/* ✅ Pages publiques dynamiques */}
+        {/* ===================== DYNAMIQUES PUBLIQUES ===================== */}
         <Route path="/:slug/upload-preuve/:id" element={<UploadPreuvePage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
         <Route path="/:slug/*" element={<RouteResolver />} />
 
-        {/* ✅ 404 fallback */}
+        {/* ===================== 404 ===================== */}
         <Route
           path="*"
           element={

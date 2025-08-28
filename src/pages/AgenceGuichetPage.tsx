@@ -1,906 +1,1333 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import {
-  collection,
-  getDocs,
-  query,
-  where,
-  Timestamp,
-  addDoc,
-  doc,
-  getDoc
-} from 'firebase/firestore';
-import { db } from '../firebaseConfig';
-import { useAuth } from '@/contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { updateDoc } from "firebase/firestore";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+// src/pages/AgenceGuichetPage.tsx
+// ===================================================================
+// Guichet : VENTE EN ESPÈCES UNIQUEMENT (canal=guichet)
+// - Paiement forcé à "espèces"
+// - Gestion de poste : none → (Demander l’activation) → pending → active/paused → closed
+// - Places restantes (live) : statut = 'payé', somme seatsGo, fallback 30, onSnapshot
+// - Onglets locaux : Guichet / Rapport / Historique
+// - AMÉLIORATIONS :
+//   • arrivée -> auto 1ère date + 1er horaire dispo (priorité places)
+//   • après clôture → on voit la session dans “Rapport” (en attente de validation)
+// ===================================================================
 
-interface Trip {
-  id: string;
-  date: string;
-  time: string;
-  departure: string;
-  arrival: string;
-  price: number;
-  places?: number;
-  remainingSeats?: number;
-}
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  collection, getDocs, query, where, Timestamp, addDoc, doc, getDoc,
+  updateDoc, orderBy, onSnapshot, runTransaction, setDoc, limit
+} from 'firebase/firestore';
+import { db } from '@/firebaseConfig';
+import { useAuth } from '@/contexts/AuthContext';
+import { useActiveShift } from '@/hooks/useActiveShift';
+import useCompanyTheme from '@/hooks/useCompanyTheme';
+import { useNavigate } from 'react-router-dom';
+import { makeShortCode } from '@/utils/brand';
+
+import ReceiptModal, {
+  type ReservationData as ReceiptReservation,
+  type CompanyData as ReceiptCompany
+} from '@/components/ReceiptModal';
+
+import {
+  Building2, MapPin, CalendarDays, Clock4,
+  Ticket, LogOut, RefreshCw
+} from 'lucide-react';
+
+import UserMenu from '@/ui/UserMenu'; // ✅ menu utilisateur (cog/bonhomme)
+import { Settings } from 'lucide-react';
+import Button from '@/ui/Button';
+type TripType = 'aller_simple' | 'aller_retour';
 
 type WeeklyTrip = {
   id: string;
   departure: string;
   arrival: string;
   active: boolean;
-  horaires: { [key: string]: string[] };
+  horaires: Record<string, string[]>;
   price: number;
   places?: number;
 };
 
-type TripType = 'aller_simple' | 'aller_retour';
-type PaymentMethod = 'espèces' | 'mobile_money';
+type Trip = {
+  id: string;   // weeklyTripId_YYYY-MM-DD_HH:mm
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  departure: string;
+  arrival: string;
+  price: number;
+  places: number;
+  remainingSeats?: number;
+};
 
-const MAX_SEATS = 30;
+type TicketRow = {
+  id: string;
+  referenceCode?: string;
+  date: string;
+  heure: string;
+  depart: string;
+  arrivee: string;
+  nomClient: string;
+  telephone?: string;
+  seatsGo: number;
+  seatsReturn?: number;
+  montant: number;
+  paiement?: string;
+  createdAt?: any;
+  guichetierCode?: string;
+};
+
+/** Rapport (1–1) d’une session clôturée */
+type ShiftReport = {
+  shiftId: string;
+  companyId: string;
+  agencyId: string;
+  userId: string;
+  userName?: string;
+  userCode?: string;
+  startAt: Timestamp;
+  endAt: Timestamp;
+  billets: number;
+  montant: number;
+  details: { trajet: string; billets: number; montant: number; heures: string[] }[];
+  accountantValidated: boolean;
+  managerValidated: boolean;
+  createdAt?: any;
+  updatedAt?: any;
+};
+
 const DAYS_IN_ADVANCE = 8;
+const MAX_SEATS_FALLBACK = 30;
 const DEFAULT_COMPANY_SLUG = 'compagnie-par-defaut';
 
-const AgenceGuichetPage: React.FC = () => {
-  // Context and navigation
-  const { user, company } = useAuth();
-  const navigate = useNavigate();
-  
-  // Use company theme hook
-  const theme = useCompanyTheme(company);
+async function getSellerCodeFromFirestore(uid?: string | null) {
+  try {
+    if (!uid) return null;
+    const s = await getDoc(doc(db, 'users', uid));
+    if (!s.exists()) return null;
+    const u = s.data() as any;
+    return u.staffCode || u.codeCourt || u.code || null;
+  } catch {
+    return null;
+  }
+}
 
-  // State for search filters
-  const [departure, setDeparture] = useState('');
-  const [arrival, setArrival] = useState('');
-  const [selectedDate, setSelectedDate] = useState('');
+// Génère une référence unique, de façon atomique (anti collisions)
+async function generateReferenceCodeForTripInstance(opts: {
+  companyId: string; companyCode?: string;
+  agencyId: string;  agencyCode?: string;
+  tripInstanceId: string;
+  sellerCode: string;
+}) {
+  const { companyId, companyCode = 'COMP', agencyId, agencyCode = 'AGC', tripInstanceId, sellerCode } = opts;
+  const counterRef = doc(db, `companies/${companyId}/counters/byTrip/trips/${tripInstanceId}`);
 
-  // State for trips data
-  const [trips, setTrips] = useState<Trip[]>([]);
-  const [filteredTrips, setFilteredTrips] = useState<Trip[]>([]);
-  const [allDepartures, setAllDepartures] = useState<string[]>([]);
-  const [allArrivals, setAllArrivals] = useState<string[]>([]);
-
-  // State for reservation
-  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
-  const [nomClient, setNomClient] = useState('');
-  const [telephone, setTelephone] = useState('');
-  const [places, setPlaces] = useState(1);
-  const [placesRetour, setPlacesRetour] = useState(0);
-  const [tripType, setTripType] = useState<TripType>('aller_simple');
-  const [totalPrice, setTotalPrice] = useState(0);
-  const [paiement, setPaiement] = useState<PaymentMethod>('espèces');
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  // Generate available dates (today + 7 days)
-  const availableDates = Array.from({ length: DAYS_IN_ADVANCE }, (_, i) => {
-    const date = new Date();
-    date.setDate(date.getDate() + i);
-    return date.toISOString().split('T')[0];
+  const next = await runTransaction(db, async (tx) => {
+    const snap = await tx.get(counterRef);
+    const last = snap.exists() ? ((snap.data() as any).lastSeq || 0) : 0;
+    const n = last + 1;
+    if (!snap.exists()) {
+      tx.set(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
+    } else {
+      tx.update(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
+    }
+    return n;
+  }).catch(async () => {
+    await setDoc(counterRef, { lastSeq: 1, updatedAt: Timestamp.now() }, { merge: true });
+    return 1;
   });
 
-  // Check if a trip time is in the past
-  const isPastTime = useCallback((date: string, time: string): boolean => {
-    const now = new Date();
-    const [hours, minutes] = time.split(':').map(Number);
-    const tripDate = new Date(date);
-    tripDate.setHours(hours, minutes, 0, 0);
-    return tripDate.getTime() < now.getTime();
+  return `${companyCode}-${agencyCode}-${sellerCode}-${String(next).padStart(3, '0')}`;
+}
+
+// Couleur du badge + libellé FR selon le % de places restantes
+function seatBadgeStyle(remaining: number | undefined, total: number) {
+  if (remaining === undefined) return { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Calcul…' };
+  if (remaining <= 0) return { bg: 'bg-red-100', text: 'text-red-700', label: 'Complet' };
+  const pct = (remaining / Math.max(1, total)) * 100;
+  const label = `${remaining} place${remaining > 1 ? 's' : ''} restantes`;
+  if (pct > 60) return { bg: 'bg-green-100', text: 'text-green-700', label };
+  if (pct > 30) return { bg: 'bg-amber-100', text: 'text-amber-700', label };
+  return { bg: 'bg-red-100', text: 'text-red-700', label };
+}
+
+const AgenceGuichetPage: React.FC = () => {
+  const navigate = useNavigate();
+  const auth = useAuth() as any;
+  const { user, company } = auth;
+  const logout: (() => Promise<void>) = auth?.logout ?? (async () => {});
+
+  const shiftApi = useActiveShift();
+  const { activeShift, startShift, pauseShift, continueShift, closeShift, refresh } = shiftApi;
+
+  const theme = useCompanyTheme(company) || { primary: '#EA580C', secondary: '#F97316' };
+
+  // onglets
+  const [tab, setTab] = useState<'guichet' | 'rapport' | 'historique'>('guichet');
+
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
+  const [companyName, setCompanyName] = useState<string>('Compagnie');
+  const [agencyName, setAgencyName] = useState<string>('Agence');
+  const [companyPhone, setCompanyPhone] = useState<string>('');
+
+  const [departure, setDeparture] = useState<string>('');
+  const [arrival, setArrival] = useState<string>('');
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [allArrivals, setAllArrivals] = useState<string[]>([]);
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [filteredTrips, setFilteredTrips] = useState<Trip[]>([]);
+  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
+
+  const [nomClient, setNomClient] = useState('');
+  const [telephone, setTelephone] = useState('');
+  const [tripType, setTripType] = useState<TripType>('aller_simple');
+  const [placesAller, setPlacesAller] = useState(1);
+  const [placesRetour, setPlacesRetour] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Live ventes poste courant (si en service)
+  const [tickets, setTickets] = useState<TicketRow[]>([]);
+  const [loadingReport, setLoadingReport] = useState(false);
+
+  // Rapports de sessions en attente (après clôture, avant validations)
+  const [pendingReports, setPendingReports] = useState<ShiftReport[]>([]);
+  const [loadingPending, setLoadingPending] = useState(false);
+
+  // Historique : sessions validées
+  const [historyReports, setHistoryReports] = useState<ShiftReport[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [receiptData, setReceiptData] = useState<ReceiptReservation | null>(null);
+  const [receiptCompany, setReceiptCompany] = useState<ReceiptCompany | null>(null);
+
+  const [sellerCodeUI, setSellerCodeUI] = useState<string>(
+    (user as any)?.staffCode || (user as any)?.codeCourt || (user as any)?.code || 'GUEST'
+  );
+  const staffCodeForSale =
+    (user as any)?.staffCode || (user as any)?.codeCourt || (user as any)?.code || 'GUEST';
+
+  const status: 'active' | 'paused' | 'closed' | 'pending' | 'none' =
+    (activeShift?.status as any) ?? 'none';
+  const canSell = status === 'active' && !!user?.companyId && !!user?.agencyId;
+
+  // listener des places restantes
+  const remainingUnsubRef = useRef<() => void>();
+
+  const availableDates = useMemo(
+    () => Array.from({ length: DAYS_IN_ADVANCE }, (_, i) => {
+      const d = new Date(); d.setDate(d.getDate() + i);
+      return d.toISOString().split('T')[0];
+    }),
+    []
+  );
+
+  const isPastTime = useCallback((dateISO: string, hhmm: string) => {
+    const [H, M] = hhmm.split(':').map(Number);
+    const d = new Date(dateISO); d.setHours(H, M, 0, 0);
+    return d.getTime() < Date.now();
   }, []);
 
-  // Load cities and weekly trips
+  /* -------------------- INIT socle -------------------- */
   useEffect(() => {
-    const loadCities = async () => {
+    (async () => {
       try {
+        if (user?.uid) {
+          const fromDb = await getSellerCodeFromFirestore(user.uid);
+          if (fromDb) setSellerCodeUI(fromDb);
+        }
         if (!user?.companyId || !user?.agencyId) return;
 
-        const weeklyTripsRef = collection(
-          db, 
-          `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`
-        );
-        
-        const snapshot = await getDocs(
-          query(weeklyTripsRef, where('active', '==', true))
-        );
-        const allTrips = snapshot.docs.map(doc => doc.data());
-
-        const uniqueDepartures = Array.from(new Set(allTrips.map((t: any) => t.departure)));
-        const uniqueArrivals = Array.from(new Set(allTrips.map((t: any) => t.arrival)));
-
-        setAllDepartures(uniqueDepartures);
-        setAllArrivals(uniqueArrivals);
-      } catch (error) {
-        console.error('Erreur chargement des villes:', error);
-      }
-    };
-
-    loadCities();
-  }, [user?.companyId, user?.agencyId]);
-
-  // Calculate total price
-  useEffect(() => {
-    if (!selectedTrip) {
-      setTotalPrice(0);
-      return;
-    }
-
-    const basePrice = selectedTrip.price;
-    let calculatedTotal = places * basePrice;
-    
-    if (tripType === 'aller_retour') {
-      calculatedTotal += placesRetour * basePrice;
-    }
-
-    setTotalPrice(calculatedTotal);
-  }, [places, placesRetour, tripType, selectedTrip]);
-
-  // Handle search
-  const handleSearch = useCallback(async () => {
-    if (!departure || !arrival) {
-      alert('Veuillez sélectionner une ville de départ et une ville d\'arrivée');
-      return;
-    }
-
-    if (!user?.companyId || !user?.agencyId) {
-      alert('Votre compte n\'est pas correctement configuré');
-      return;
-    }
-
-    try {
-      const depLower = departure.trim().toLowerCase();
-      const arrLower = arrival.trim().toLowerCase();
-
-      const weeklyTripsRef = collection(
-        db,
-        `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`
-      );
-
-      const snapshot = await getDocs(weeklyTripsRef);
-      const weeklyTrips = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as WeeklyTrip[];
-
-      // Generate trips for next 8 days
-      const generatedTrips: Trip[] = [];
-      const now = new Date();
-
-      for (let i = 0; i < DAYS_IN_ADVANCE; i++) {
-        const date = new Date(now);
-        date.setDate(now.getDate() + i);
-        const jourSemaine = date.toLocaleDateString('fr-FR', { weekday: 'long' }).toLowerCase();
-
-        for (const trip of weeklyTrips) {
-          if (
-            trip.departure?.toLowerCase() === depLower &&
-            trip.arrival?.toLowerCase() === arrLower &&
-            trip.active &&
-            trip.horaires?.[jourSemaine]?.length > 0
-          ) {
-            for (const heure of trip.horaires[jourSemaine]) {
-              generatedTrips.push({
-                id: `${trip.id}_${date.toISOString().split('T')[0]}_${heure}`,
-                date: date.toISOString().split('T')[0],
-                time: heure,
-                departure: trip.departure,
-                arrival: trip.arrival,
-                price: trip.price,
-                places: trip.places || MAX_SEATS,
-              });
-            }
-          }
+        const compSnap = await getDoc(doc(db, 'companies', user.companyId));
+        if (compSnap.exists()) {
+          const c = compSnap.data() as any;
+          setCompanyLogo(c.logoUrl || c.logo || null);
+          setCompanyName(c.nom || c.name || 'Compagnie');
+          setCompanyPhone(c.telephone || '');
         }
+
+        const agSnap = await getDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}`));
+        if (agSnap.exists()) {
+          const a = agSnap.data() as any;
+          const ville = a?.ville || a?.city || a?.nomVille || a?.villeDepart || '';
+          setDeparture((ville || '').toString());
+          setAgencyName(a?.nomAgence || a?.nom || ville || 'Agence');
+        }
+
+        const weeklyRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
+        const snap = await getDocs(query(weeklyRef, where('active', '==', true)));
+        const arrivals = Array.from(new Set(snap.docs.map(d => (d.data() as WeeklyTrip).arrival).filter(Boolean)))
+          .sort((a, b) => a.localeCompare(b, 'fr'));
+        setAllArrivals(arrivals);
+      } catch (e) {
+        console.error('[GUICHET] init:error', e);
+      }
+    })();
+  }, [user?.uid, user?.companyId, user?.agencyId]);
+
+  /* -------------------- Live remaining seats -------------------- */
+  // (PLACÉ AVANT searchTrips pour éviter TS2448/2454)
+  const loadRemainingForDate = useCallback(async (
+    dateISO: string,
+    dep: string,
+    arr: string,
+    baseList?: Trip[],
+    pickFirst: boolean = false
+  ) => {
+    try {
+      if (!user?.companyId || !user?.agencyId) return;
+
+      if (remainingUnsubRef.current) {
+        remainingUnsubRef.current();
+        remainingUnsubRef.current = undefined;
       }
 
-      // Get reservations to calculate remaining seats
-      const reservationsRef = collection(
-        db,
-        `companies/${user.companyId}/agences/${user.agencyId}/reservations`
+      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
+      const qy = query(
+        rRef,
+        where('date', '==', dateISO),
+        where('depart', '==', dep),
+        where('arrivee', '==', arr)
       );
-      const reservationsSnap = await getDocs(reservationsRef);
-      const reservations = reservationsSnap.docs.map(doc => doc.data());
 
-      const enrichedTrips = generatedTrips
-        .map(trip => {
-          const reservedSeats = reservations
-            .filter(res =>
-              res.trajetId === trip.id &&
-              res.statut === 'payé' &&
-              res.statutEmbarquement !== 'absent' && res.statutEmbarquement !== 'reporté'
-            )
-            .reduce((acc, res) => acc + (res.seatsGo || 1), 0);
+      const unsub = onSnapshot(qy, (snap) => {
+        const usedByTrip: Record<string, number> = {};
 
-          return {
-            ...trip,
-            remainingSeats: (trip.places || MAX_SEATS) - reservedSeats
-          };
-        })
-        .filter(trip => !isPastTime(trip.date, trip.time));
+        snap.forEach((d) => {
+          const r = d.data() as any;
+          const statut = String(r.statut || '').toLowerCase();
+          if (statut !== 'payé') return; // **compter uniquement "payé"**
+          const tripKey = r.trajetId;
+          const seats = Number(r.seatsGo || 0);
+          usedByTrip[tripKey] = (usedByTrip[tripKey] || 0) + seats;
+        });
 
-      setTrips(enrichedTrips);
+        setTrips((prev) => {
+          const src  = baseList ?? prev;
+          const next = src.map((t) => {
+            if (t.date !== dateISO) return t;
+            const total = t.places || MAX_SEATS_FALLBACK;
+            const used  = usedByTrip[t.id] || 0;
+            return { ...t, remainingSeats: Math.max(0, total - used) };
+          });
 
-      const firstAvailableDate = enrichedTrips.length > 0 ? enrichedTrips[0].date : '';
-      setSelectedDate(firstAvailableDate);
+          const filtered = next
+            .filter((t) => t.date === dateISO && !isPastTime(t.date, t.time))
+            .sort((a, b) => a.time.localeCompare(b.time));
 
-      if (firstAvailableDate) {
-        const tripsForDate = enrichedTrips
-          .filter(trip => trip.date === firstAvailableDate)
-          .sort((a, b) => a.time.localeCompare(b.time));
-        setFilteredTrips(tripsForDate);
+          setFilteredTrips(filtered);
+
+          // **Sélection auto 1er horaire** (si rien n’est déjà choisi)
+          if (pickFirst && filtered.length > 0) {
+            const firstWithSeats = filtered.find(f => {
+              const rs = f.remainingSeats;
+              return (rs === undefined) ? true : rs > 0;
+            }) || filtered[0];
+
+            setSelectedTrip(prevSel => prevSel ?? firstWithSeats);
+          }
+
+          return next;
+        });
+      }, (err) => {
+        console.error('[GUICHET] loadRemainingForDate:snapshot:error', err);
+      });
+
+      remainingUnsubRef.current = unsub;
+    } catch (e) {
+      console.error('[GUICHET] loadRemainingForDate:error', e);
+    }
+  }, [isPastTime, user?.companyId, user?.agencyId]);
+
+  /* -------------------- Recherche trajets -------------------- */
+  const searchTrips = useCallback(async (dep: string, arr: string) => {
+    try {
+      // reset immédiat pour éviter un affichage fantôme
+      setTrips([]); setFilteredTrips([]); setSelectedTrip(null); setSelectedDate('');
+
+      if (!dep || !arr || !user?.companyId || !user?.agencyId) return;
+
+      const weeklyRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
+      const weekly = (await getDocs(query(weeklyRef, where('active', '==', true)))).docs
+        .map(d => ({ id: d.id, ...d.data() })) as WeeklyTrip[];
+
+      const out: Trip[] = [];
+      const now = new Date();
+      for (let i = 0; i < DAYS_IN_ADVANCE; i++) {
+        const d = new Date(now); d.setDate(now.getDate() + i);
+        const jour = d.toLocaleDateString('fr-FR', { weekday: 'long' }).toLowerCase();
+        const dateISO = d.toISOString().split('T')[0];
+        weekly.forEach(w => {
+          if (!w.active) return;
+          if ((w.departure || '').toLowerCase().trim() !== dep.toLowerCase().trim()) return;
+          if ((w.arrival || '').toLowerCase().trim() !== arr.toLowerCase().trim()) return;
+          (w.horaires?.[jour] || []).forEach(h => {
+            out.push({
+              id: `${w.id}_${dateISO}_${h}`,
+              date: dateISO,
+              time: h,
+              departure: w.departure,
+              arrival: w.arrival,
+              price: w.price,
+              places: w.places || MAX_SEATS_FALLBACK
+            });
+          });
+        });
+      }
+
+      // tri date + heure AVANT filtrage passé
+      out.sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+      const future = out.filter(t => !isPastTime(t.date, t.time));
+      setTrips(future);
+
+      // pré-sélection auto 1ère date & 1ère heure
+      const firstDate = future[0]?.date || '';
+      setSelectedDate(firstDate);
+      setSelectedTrip(null);
+
+      if (firstDate) {
+        // pickFirst = true → sélectionne automatiquement le 1er horaire dispo
+        await loadRemainingForDate(firstDate, dep, arr, future, true);
       } else {
         setFilteredTrips([]);
       }
-
-      setSelectedTrip(null);
-    } catch (error) {
-      console.error('Erreur lors de la recherche :', error);
-      alert('Une erreur est survenue lors de la recherche des trajets');
+    } catch (e) {
+      console.error('[GUICHET] searchTrips:error', e);
     }
-  }, [departure, arrival, user?.companyId, user?.agencyId, isPastTime]);
+  }, [isPastTime, user?.agencyId, user?.companyId, loadRemainingForDate]);
 
-  // Handle date selection
-  const handleSelectDate = useCallback((date: string) => {
+  // Quand on change d’arrivée ou de ville de départ → on relance la recherche
+  useEffect(() => {
+    if (!arrival) {
+      setTrips([]); setFilteredTrips([]); setSelectedTrip(null); setSelectedDate(''); return;
+    }
+    searchTrips(departure, arrival);
+  }, [arrival, departure, searchTrips]);
+
+  const handleSelectDate = useCallback(async (date: string) => {
     setSelectedDate(date);
-    const tripsForDate = trips
-      .filter(trip => trip.date === date && !isPastTime(trip.date, trip.time))
-      .sort((a, b) => a.time.localeCompare(b.time));
-    setFilteredTrips(tripsForDate);
     setSelectedTrip(null);
-  }, [trips, isPastTime]);
+    // pickFirst = true pour auto-sélectionner la 1ère heure de cette date
+    await loadRemainingForDate(date, departure, arrival, undefined, true);
+  }, [arrival, departure, loadRemainingForDate]);
 
-  // Handle trip selection
-  const handleSelectTrip = useCallback((trip: Trip) => {
-    setSelectedTrip(trip);
-    setPlaces(1);
-    setPlacesRetour(0);
+  useEffect(() => {
+    return () => {
+      if (remainingUnsubRef.current) { remainingUnsubRef.current(); remainingUnsubRef.current = undefined; }
+    };
   }, []);
 
-  // Handle reservation submission
+  /* -------------------- Prix total -------------------- */
+  const totalPrice = useMemo(() => {
+    if (!selectedTrip) return 0;
+    const base = selectedTrip.price;
+    const qty = tripType === 'aller_retour' ? (placesAller + placesRetour) : placesAller;
+    return Math.max(0, base * Math.max(0, qty));
+  }, [selectedTrip, tripType, placesAller, placesRetour]);
+
+  const validPhone = (v: string) => /\d{7,}/.test((v||'').replace(/\D/g,''));
+
+  /* -------------------- Réservation -------------------- */
   const handleReservation = useCallback(async () => {
-    if (!selectedTrip || !nomClient || !telephone || places < 1) {
-      alert('Veuillez remplir tous les champs obligatoires');
-      return;
+    if (!selectedTrip || !nomClient || !telephone) return;
+    if (!canSell) { alert('Démarrez/activez votre poste.'); return; }
+    if (!validPhone(telephone)) { alert('Téléphone invalide.'); return; }
+
+    if (selectedTrip.remainingSeats !== undefined) {
+      const needed = tripType === 'aller_retour' ? (placesAller + placesRetour) : placesAller;
+      if (needed > selectedTrip.remainingSeats) { alert(`Il reste ${selectedTrip.remainingSeats} places.`); return; }
+      if (needed <= 0) { alert('Nombre de places invalide.'); return; }
     }
 
-    if (!user?.companyId || !user?.agencyId) {
-      alert('Votre compte n\'est pas associé à une compagnie valide');
-      return;
-    }
-
-    const totalSeats = tripType === 'aller_retour' ? places + placesRetour : places;
-
-    if (selectedTrip.remainingSeats !== undefined && totalSeats > selectedTrip.remainingSeats) {
-      alert(`Désolé, il ne reste que ${selectedTrip.remainingSeats} places disponibles.`);
-      return;
-    }
+    if (totalPrice <= 0) { alert('Montant invalide.'); return; }
 
     setIsProcessing(true);
-
     try {
-      let companySlug = DEFAULT_COMPANY_SLUG;
-      let companyName = 'Compagnie';
+      const compSnap = await getDoc(doc(db, 'companies', user!.companyId));
+      const comp = compSnap.data() || {};
+      const companyNameFull = (comp as any).nom || 'Compagnie';
+      const companyCode = makeShortCode(companyNameFull, (comp as any).code);
+      const companySlug = (comp as any).slug || DEFAULT_COMPANY_SLUG;
 
-      const compagnieRef = doc(db, 'companies', user.companyId);
-      const compagnieSnap = await getDoc(compagnieRef);
+      const agSnap = await getDoc(doc(db, `companies/${user!.companyId}/agences/${user!.agencyId}`));
+      const ag = agSnap.data() || {};
+      const agencyNameLocal = (ag as any).nomAgence || (ag as any).nom || '';
+      const agencyCode = makeShortCode(agencyNameLocal, (ag as any).code);
+      const agencyTelephone = (ag as any).telephone || '';
 
-      if (compagnieSnap.exists()) {
-        companySlug = compagnieSnap.data().slug || DEFAULT_COMPANY_SLUG;
-        companyName = compagnieSnap.data().nom || 'Compagnie';
-      }
+      const sellerCode = (await getSellerCodeFromFirestore(user?.uid)) || staffCodeForSale;
 
-      let agencyName = '';
-      let agencyTelephone = '';
+      const referenceCode = await generateReferenceCodeForTripInstance({
+        companyId: user!.companyId, companyCode,
+        agencyId: user!.agencyId, agencyCode,
+        tripInstanceId: selectedTrip.id, sellerCode
+      });
 
-      const agencyRef = doc(db, `companies/${user.companyId}/agences/${user.agencyId}`);
-      const agencySnap = await getDoc(agencyRef);
-      
-      if (agencySnap.exists()) {
-        const agencyData = agencySnap.data();
-        agencyName = agencyData.nomAgence || agencyData.nom || '';
-        agencyTelephone = agencyData.telephone || '';
-      }
-
-      const reservationData = {
+      // Paiement forcé espèces + canal guichet
+      const data = {
         trajetId: selectedTrip.id,
-        nomClient,
-        telephone,
-        seatsGo: places,
-        seatsReturn: tripType === 'aller_retour' ? placesRetour : 0,
-        date: selectedTrip.date,
-        heure: selectedTrip.time,
-        depart: selectedTrip.departure,
-        arrivee: selectedTrip.arrival,
-        montant: totalPrice,
-        statut: 'payé',
-        statutEmbarquement: "en_attente",
-        checkInTime: null,
-        reportInfo: null,
-        compagnieId: user.companyId,
-        compagnieNom: companyName,
-        agencyId: user.agencyId,
-        agencyNom: agencyName,
-        agencyTelephone: agencyTelephone,
+        date: selectedTrip.date, heure: selectedTrip.time,
+        depart: selectedTrip.departure, arrivee: selectedTrip.arrival,
+        nomClient, telephone, email: null,
+        seatsGo: placesAller, seatsReturn: tripType === 'aller_retour' ? placesRetour : 0,
+        montant: totalPrice, statut: 'payé', statutEmbarquement: 'en_attente',
+        checkInTime: null, reportInfo: null,
+        compagnieId: user!.companyId, agencyId: user!.agencyId,
+        companySlug, compagnieNom: (comp as any).nom || 'Compagnie',
+        agencyNom: agencyNameLocal, agencyTelephone,
+        canal: 'guichet', paiement: 'espèces',
+        paiementSource: 'encaisse_guichet',
+        guichetierId: user!.uid, guichetierCode: sellerCode,
+        shiftId: activeShift?.id || null,
+        referenceCode, qrCode: null, tripType,
         createdAt: Timestamp.now(),
-        canal: 'guichet',
-        tripType,
-        paiement,
-        companySlug: companySlug,
-        qrCode: null // Will be set after creation
       };
 
-      const reservationsRef = collection(
-        db,
-        `companies/${user.companyId}/agences/${user.agencyId}/reservations`
-      );
-      
-      const docRef = await addDoc(reservationsRef, reservationData);
+      const ref = collection(db, `companies/${user!.companyId}/agences/${user!.agencyId}/reservations`);
+      const created = await addDoc(ref, data);
+      await updateDoc(doc(db, `companies/${user!.companyId}/agences/${user!.agencyId}/reservations`, created.id), { qrCode: created.id });
 
-      // Update the reservation with the QR code (using the document ID)
-      
-      await updateDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`, docRef.id), {
-        qrCode: docRef.id
-      });
+      const reservationForModal: ReceiptReservation = {
+        id: created.id, nomClient, telephone,
+        date: data.date, heure: data.heure, depart: data.depart, arrivee: data.arrivee,
+        seatsGo: data.seatsGo, seatsReturn: data.seatsReturn, montant: data.montant,
+        statut: data.statut, paiement: data.paiement,
+        compagnieId: user!.companyId, compagnieNom: (comp as any).nom || 'Compagnie',
+        agencyId: user!.agencyId, agencyNom: agencyNameLocal, nomAgence: agencyNameLocal,
+        agenceTelephone: agencyTelephone, canal: 'guichet',
+        createdAt: new Date(), companySlug, referenceCode,
+        qrCode: created.id, guichetierId: user!.uid, guichetierCode: sellerCode,
+        shiftId: activeShift?.id || null, email: undefined,
+      };
 
-      navigate(`/agence/receipt/${docRef.id}`, {
-        state: {
-          reservation: { ...reservationData, id: docRef.id, qrCode: docRef.id },
-          companyInfo: {
-            id: user.companyId,
-            slug: companySlug,
-            nom: companyName,
-            couleurPrimaire: theme.primary,
-            couleurSecondaire: theme.secondary
-          }
-        }
-      });
+      const companyForModal: ReceiptCompany = {
+        nom: (comp as any).nom || 'Compagnie',
+        logoUrl: (comp as any).logoUrl || (comp as any).logo || companyLogo || undefined,
+        couleurPrimaire: theme.primary, couleurSecondaire: theme.secondary,
+        slug: companySlug, telephone: companyPhone || undefined,
+      };
 
-    } catch (error) {
-      console.error('Erreur création réservation:', error);
-      alert('Erreur lors de la réservation');
+      setReceiptData(reservationForModal);
+      setReceiptCompany(companyForModal);
+      setShowReceipt(true);
+
+      // Reset UI (le live mettra à jour les places automatiquement)
+      setNomClient(''); setTelephone('');
+      setTripType('aller_simple'); setPlacesAller(1); setPlacesRetour(0);
+
+      await loadRemainingForDate(selectedTrip.date, selectedTrip.departure, selectedTrip.arrival);
+    } catch (e) {
+      console.error('[GUICHET] reservation:error', e);
+      alert('Erreur lors de la réservation.');
     } finally {
       setIsProcessing(false);
     }
-  }, [selectedTrip, nomClient, telephone, user, places, placesRetour, tripType, totalPrice, paiement, navigate, theme]);
+  }, [
+    selectedTrip, nomClient, telephone, canSell, user,
+    placesAller, placesRetour, tripType, totalPrice,
+    activeShift, staffCodeForSale, theme.primary, theme.secondary, companyLogo, companyPhone,
+    loadRemainingForDate
+  ]);
 
-  // Get unique available dates from trips
-  const availableTripDates = Array.from(new Set(trips.map(trip => trip.date)));
+  /* -------------------- Live ventes du poste courant -------------------- */
+  const loadReport = useCallback(async () => {
+    try {
+      if (!user?.companyId || !user?.agencyId || !activeShift?.id) { setTickets([]); return; }
+      setLoadingReport(true);
 
+      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
+      const snap = await getDocs(query(
+        rRef,
+        where('shiftId', '==', activeShift.id),
+        where('canal', '==', 'guichet'),
+        orderBy('createdAt', 'asc')
+      ));
+      const rows: TicketRow[] = snap.docs.map(d => {
+        const r = d.data() as any;
+        return {
+          id: d.id, referenceCode: r.referenceCode, date: r.date, heure: r.heure,
+          depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone,
+          seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0,
+          paiement: r.paiement, createdAt: r.createdAt, guichetierCode: r.guichetierCode || '',
+        };
+      });
+      setTickets(rows);
+    } catch (e) {
+      console.error('[GUICHET] loadReport:error', e);
+    } finally {
+      setLoadingReport(false);
+    }
+  }, [user?.companyId, user?.agencyId, activeShift?.id]);
+
+  const totals = useMemo(() => {
+    const agg = { billets: 0, montant: 0 };
+    for (const t of tickets) {
+      const nb = (t.seatsGo || 0) + (t.seatsReturn || 0);
+      agg.billets += nb; agg.montant += t.montant || 0;
+    }
+    return agg;
+  }, [tickets]);
+
+  /* -------------------- Rapports en attente (shiftReports) -------------------- */
+  const loadPendingReports = useCallback(async () => {
+    try {
+      if (!user?.companyId || !user?.agencyId || !user?.uid) { setPendingReports([]); return; }
+      setLoadingPending(true);
+      const base = `companies/${user.companyId}/agences/${user.agencyId}`;
+      const repRef = collection(db, `${base}/shiftReports`);
+      // en attente = au moins une des validations est false
+      const snap = await getDocs(query(
+        repRef,
+        where('userId', '==', user.uid),
+        where('accountantValidated', '==', false)
+      ));
+      const snap2 = await getDocs(query(
+        repRef,
+        where('userId', '==', user.uid),
+        where('accountantValidated', '==', true),
+        where('managerValidated', '==', false)
+      ));
+      const rows: ShiftReport[] = [...snap.docs, ...snap2.docs]
+        .reduce((acc, d) => {
+          const r = d.data() as any;
+          acc.push({
+            shiftId: d.id,
+            companyId: r.companyId, agencyId: r.agencyId,
+            userId: r.userId, userName: r.userName, userCode: r.userCode,
+            startAt: r.startAt, endAt: r.endAt,
+            billets: r.billets || 0, montant: r.montant || 0,
+            details: Array.isArray(r.details) ? r.details : [],
+            accountantValidated: !!r.accountantValidated,
+            managerValidated: !!r.managerValidated,
+            createdAt: r.createdAt, updatedAt: r.updatedAt,
+          });
+          return acc;
+        }, [] as ShiftReport[])
+        // tri du + récent au + ancien sur endAt
+        .sort((a,b) => (b.endAt?.toMillis?.() ?? 0) - (a.endAt?.toMillis?.() ?? 0));
+
+      setPendingReports(rows);
+    } catch (e) {
+      console.error('[GUICHET] loadPendingReports:error', e);
+    } finally {
+      setLoadingPending(false);
+    }
+  }, [user?.companyId, user?.agencyId, user?.uid]);
+
+  /* -------------------- Historique (shiftReports validés) -------------------- */
+  const loadHistory = useCallback(async () => {
+    try {
+      if (!user?.companyId || !user?.agencyId || !user?.uid) { setHistoryReports([]); return; }
+      setLoadingHistory(true);
+      const base = `companies/${user.companyId}/agences/${user.agencyId}`;
+      const repRef = collection(db, `${base}/shiftReports`);
+      const snap = await getDocs(query(
+        repRef,
+        where('userId', '==', user.uid),
+        where('accountantValidated', '==', true),
+        where('managerValidated', '==', true),
+        orderBy('endAt', 'desc'),
+        limit(50)
+      ));
+      const rows: ShiftReport[] = snap.docs.map(d => {
+        const r = d.data() as any;
+        return {
+          shiftId: d.id,
+          companyId: r.companyId, agencyId: r.agencyId,
+          userId: r.userId, userName: r.userName, userCode: r.userCode,
+          startAt: r.startAt, endAt: r.endAt,
+          billets: r.billets || 0, montant: r.montant || 0,
+          details: Array.isArray(r.details) ? r.details : [],
+          accountantValidated: !!r.accountantValidated,
+          managerValidated: !!r.managerValidated,
+          createdAt: r.createdAt, updatedAt: r.updatedAt,
+        };
+      });
+      setHistoryReports(rows);
+    } catch (e) {
+      console.error('[GUICHET] loadHistory:error', e);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [user?.companyId, user?.agencyId, user?.uid]);
+
+  // Charger quand on ouvre les onglets
+  useEffect(() => {
+    if (tab === 'rapport') {
+      // Live ventes si poste actif/pausé
+      if (activeShift?.id && (status === 'active' || status === 'paused' || status === 'pending')) {
+        void loadReport();
+      } else {
+        setTickets([]);
+      }
+      void loadPendingReports();
+    }
+  }, [tab, loadReport, loadPendingReports, activeShift?.id, status]);
+
+  useEffect(() => { if (tab === 'historique') void loadHistory(); }, [tab, loadHistory]);
+
+  /* ------------------------------------ JSX ------------------------------------ */
   return (
-    <div className="p-4 md:p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen">
-      {/* Left column - Search and results */}
-      <div className="lg:col-span-2 space-y-6">
-        <header className="space-y-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          #report-print, #report-print * { visibility: visible !important; }
+          #report-print { position: absolute; left: 0; top: 0; width: 100%; }
+          .no-print { display: none !important; }
+        }
+        @page { size: auto; margin: 10mm; }
+      `}</style>
+
+      {/* EN-TÊTE */}
+      <div className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/70">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-3 rounded-xl shadow-lg" style={{ backgroundColor: theme.primary }}>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            </div>
+            {companyLogo
+              ? <img src={companyLogo} alt="logo" className="h-10 w-10 rounded object-contain border" />
+              : <div className="h-10 w-10 rounded bg-gray-200 grid place-items-center"><Building2 className="h-5 w-5 text-gray-500"/></div>}
             <div>
-              <h1 className="text-2xl md:text-3xl font-bold" style={{ color: theme.textPrimary }}>Guichet de vente</h1>
-              <p className="text-sm md:text-base" style={{ color: theme.textSecondary }}>Recherchez et réservez des billets en quelques clics</p>
-            </div>
-          </div>
-        </header>
-
-        {/* Search form */}
-        <section className="bg-white p-4 md:p-6 rounded-2xl shadow-lg border" style={{ borderColor: theme.primaryLight }}>
-          <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center gap-2" style={{ color: theme.textPrimary }}>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.secondary }}>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            Rechercher un trajet
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label htmlFor="departure" className="block text-sm font-medium mb-2" style={{ color: theme.textPrimary }}>Départ</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.textSecondary }}>
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </div>
-                <input 
-                  id="departure"
-                  list="depList" 
-                  value={departure} 
-                  onChange={(e) => setDeparture(e.target.value)} 
-                  placeholder="Ville de départ" 
-                  className="w-full pl-10 border-2 px-4 py-2 md:py-3 rounded-xl focus:ring-2 focus:ring-offset-1 transition-all duration-200"
-                  style={{ 
-                    borderColor: theme.primaryLight,
-                    color: theme.textPrimary,
-                    ['--tw-ring-color' as any]: theme.primary
-                  }}
-                />
-                <datalist id="depList">
-                  {allDepartures.map(city => (
-                    <option key={`dep-${city}`} value={city} />
-                  ))}
-                </datalist>
+              <div
+                className="text-lg font-bold"
+                style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
+              >
+                {companyName}
+              </div>
+              <div className="text-xs text-gray-500 flex items-center gap-1">
+                <MapPin className="h-3.5 w-3.5"/><span>{agencyName}</span>
               </div>
             </div>
-            
-            <div>
-              <label htmlFor="arrival" className="block text-sm font-medium mb-2" style={{ color: theme.textPrimary }}>Arrivée</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.textSecondary }}>
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </div>
-                <input 
-                  id="arrival"
-                  list="arrList" 
-                  value={arrival} 
-                  onChange={(e) => setArrival(e.target.value)} 
-                  placeholder="Ville d'arrivée" 
-                  className="w-full pl-10 border-2 px-4 py-2 md:py-3 rounded-xl focus:ring-2 focus:ring-offset-1 transition-all duration-200"
-                  style={{ 
-                    borderColor: theme.primaryLight,
-                    color: theme.textPrimary,
-                    ['--tw-ring-color' as any]: theme.primary
-                  }}
-                />
-                <datalist id="arrList">
-                  {allArrivals.map(city => (
-                    <option key={`arr-${city}`} value={city} />
-                  ))}
-                </datalist>
-              </div>
-            </div>
-            
-            <div className="flex items-end">
-              <button 
-                onClick={handleSearch} 
-                className="w-full text-white font-medium px-4 py-2 md:py-3 rounded-xl shadow-md transition-all duration-200 flex items-center justify-center gap-2 hover:shadow-lg hover:opacity-90"
-                 style={{ 
-                   background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})`,
-                 }}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                Rechercher
-              </button>
-            </div>
           </div>
-        </section>
 
-        {/* Date selection */}
-        {trips.length > 0 && (
-          <section className="bg-white p-4 md:p-6 rounded-2xl shadow-lg border" style={{ borderColor: theme.primaryLight }}>
-            <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center gap-2" style={{ color: theme.textPrimary }}>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.secondary }}>
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              Dates disponibles
-            </h2>
-            <div className="flex flex-wrap gap-2 md:gap-3">
-              {availableDates.map(date => {
-                const isAvailable = availableTripDates.includes(date);
-                const isSelected = selectedDate === date;
-                const dateObj = new Date(date);
-                const dayName = dateObj.toLocaleDateString('fr-FR', { weekday: 'short' });
-                const dayNumber = dateObj.getDate();
-                
-                return (
-                  <button
-                    key={date}
-                    onClick={() => isAvailable && handleSelectDate(date)}
-                    className={`flex flex-col items-center justify-center w-14 h-14 md:w-16 md:h-16 rounded-xl border-2 transition-all duration-200 ${
-                      isSelected 
-                        ? 'text-white shadow-md' 
-                        : isAvailable 
-                          ? 'bg-white hover:bg-gray-50' 
-                          : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                    }`}
-                    style={isSelected ? { 
-                      backgroundColor: theme.primary,
-                      borderColor: theme.primaryDark
-                    } : {
-                      borderColor: isAvailable ? theme.primaryLight : theme.primaryLight,
-                      color: isAvailable ? theme.textPrimary : 'inherit'
-                    }}
-                    disabled={!isAvailable}
-                  >
-                    <span className="text-xs font-medium">{dayName}</span>
-                    <span className="text-lg font-bold">{dayNumber}</span>
+          {/* onglets */}
+          <div className="inline-flex rounded-xl p-1 bg-gray-100 shadow-inner">
+            <button
+              type="button"
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='guichet' ? 'text-white' : 'hover:bg-white'}`}
+              onClick={() => setTab('guichet')}
+              style={tab==='guichet'
+                ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                : {}}
+            >
+              Guichet
+            </button>
+            <button
+              type="button"
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='rapport' ? 'text-white' : 'hover:bg-white'}`}
+              onClick={() => setTab('rapport')}
+              style={tab==='rapport'
+                ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                : {}}
+            >
+              Rapport
+            </button>
+            <button
+              type="button"
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='historique' ? 'text-white' : 'hover:bg-white'}`}
+              onClick={() => setTab('historique')}
+              style={tab==='historique'
+                ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                : { color: theme.primary }}
+            >
+              Historique
+            </button>
+          </div>
+
+          {/* État de poste + actions + menu utilisateur */}
+          <div className="flex items-center gap-3">
+            {/* État + actions (bloc original conservé) */}
+            <div className="flex items-center gap-2">
+              <div
+                className="px-3 py-1 rounded-lg text-xs font-medium transition-colors"
+                style={{
+                  backgroundColor:
+                    status==='active' ? '#DCFCE7'
+                    : status==='paused' ? '#FEF3C7'
+                    : status==='pending' ? '#E0E7FF'
+                    : '#F3F4F6',
+                  color:
+                    status==='active' ? '#15803D'
+                    : status==='paused' ? '#92400E'
+                    : status==='pending' ? '#1D4ED8'
+                    : '#374151',
+                }}
+                title={status==='pending' ? 'En attente d’activation par la comptabilité' : undefined}
+              >
+                {status==='active' ? 'En service'
+                 : status==='paused' ? 'En pause'
+                 : status==='pending' ? 'En attente d’activation'
+                 : 'Hors service'}
+              </div>
+
+              {status==='active' && (
+                <>
+                  <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition"
+                          onClick={() => pauseShift().catch((e:any)=>alert(e?.message||'Erreur'))}>
+                    Pause
                   </button>
-                );
-              })}
-            </div>
-          </section>
-        )}
+                  <button
+                    className="px-3 py-2 rounded-lg text-white text-sm shadow-sm hover:shadow transition"
+                    style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                    onClick={() => { if (window.confirm('Clôturer ce poste ? Vous ne pourrez plus vendre après clôture.')) { closeShift().catch((e:any)=>alert(e?.message||'Erreur')); setTab('rapport'); } }}
+                  >
+                    Clôturer
+                  </button>
+                </>
+              )}
 
-        {/* Available trips */}
-        <section className="bg-white p-4 md:p-6 rounded-2xl shadow-lg border" style={{ borderColor: theme.primaryLight }}>
-          <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center gap-2" style={{ color: theme.textPrimary }}>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.secondary }}>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Horaires disponibles
-          </h2>
-          
-          {filteredTrips.length === 0 ? (
-            <div className="text-center py-8">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.textSecondary }}>
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <p className="mt-3" style={{ color: theme.textSecondary }}>
-                {trips.length === 0 
-                  ? 'Aucun trajet trouvé. Veuillez effectuer une recherche.'
-                  : 'Aucun horaire disponible pour cette date.'}
-              </p>
+              {status==='paused' && (
+                <>
+                  <button className="px-3 py-2 rounded-lg text-white text-sm shadow-sm hover:shadow transition"
+                          style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                          onClick={() => continueShift().catch((e:any)=>alert(e?.message||'Erreur'))}>
+                    Continuer
+                  </button>
+                  <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition"
+                          onClick={() => { if (window.confirm('Clôturer ce poste ?')) { closeShift().catch((e:any)=>alert(e?.message||'Erreur')); setTab('rapport'); } }}>
+                    Clôturer
+                  </button>
+                </>
+              )}
+
+              {status==='pending' && (
+                <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition"
+                        onClick={() => refresh().catch(()=>{})}>
+                  <RefreshCw className="h-4 w-4 inline mr-1" /> Actualiser
+                </button>
+              )}
+
+              {status==='none' && (
+                <button className="px-3 py-2 rounded-lg text-white text-sm shadow-sm hover:shadow transition"
+                        style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                        onClick={() => startShift().catch((e:any)=>alert(e?.message||'Erreur'))}>
+                  Demander l’activation
+                </button>
+              )}
             </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredTrips.map(trip => (
-                <div 
-                  key={trip.id} 
-                  onClick={() => handleSelectTrip(trip)} 
-                  className={`p-4 rounded-xl border-2 transition-all duration-200 cursor-pointer ${
-                    selectedTrip?.id === trip.id 
-                      ? 'border-indigo-500 bg-indigo-50 shadow-md' 
-                      : 'border-gray-200 hover:border-indigo-300 hover:shadow-sm'
-                  }`}
-                  style={selectedTrip?.id === trip.id ? { 
-                    borderColor: theme.primary,
-                    backgroundColor: theme.primaryLight 
-                  } : {
-                    borderColor: theme.primaryLight
-                  }}
-                >
-                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 sm:p-3 rounded-lg" style={{ backgroundColor: theme.primaryLight }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 sm:h-6 w-5 sm:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.primary }}>
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="font-bold" style={{ color: theme.textPrimary }}>
-                          <span className="text-lg sm:text-xl" style={{ color: theme.primary }}>{trip.time}</span> — {trip.departure} → {trip.arrival}
-                        </p>
-                        <p className="text-sm" style={{ color: theme.textSecondary }}>
-                          {new Date(trip.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-bold text-lg" style={{ color: theme.primary }}>{trip.price.toLocaleString('fr-FR')} FCFA</p>
-                      <div className="flex items-center justify-end gap-1">
-                        <span className={`inline-block w-2 h-2 rounded-full ${
-                          (trip.remainingSeats || 0) > 10 ? 'bg-green-500' : 
-                          (trip.remainingSeats || 0) > 5 ? 'bg-yellow-500' : 'bg-red-500'
-                        }`}></span>
-                        <span className="text-xs" style={{ color: theme.textSecondary }}>
-                          {trip.remainingSeats ?? 'NC'} places
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+
+            {/* Séparateur fin */}
+            <div className="h-6 w-px bg-gray-200" />
+
+            {/* Menu utilisateur (roue dentée) */}
+            <Button leftIcon={<Settings className="h-4 w-4" />}>Paramètres</Button>
+          </div>
+        </div>
       </div>
 
-      {/* Right column - Reservation form */}
-      <div className="bg-white p-4 md:p-6 rounded-2xl shadow-xl border" style={{ 
-        borderColor: theme.primaryLight,
-        position: 'sticky',
-        top: '1.5rem',
-        alignSelf: 'flex-start'
-      }}>
-        <h2 className="text-xl md:text-2xl font-bold mb-4" style={{ 
-          background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})`,
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent'
-        }}>
-          Détails de la réservation
-        </h2>
-
-        {selectedTrip ? (
-          <div className="rounded-xl p-4 border-2 space-y-2" style={{ 
-            backgroundColor: theme.primaryLight,
-            borderColor: theme.primary 
-          }}>
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2">
-              <div>
-                <p className="font-bold" style={{ color: theme.primaryDark }}>{selectedTrip.departure} → {selectedTrip.arrival}</p>
-                <p className="text-sm" style={{ color: theme.primary }}>
-                  {new Date(selectedTrip.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                </p>
+      {/* =================== CONTENU: RAPPORT =================== */}
+      {tab==='rapport' && (
+        <div id="report-print" className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+          {/* Bloc en-tête */}
+          <div className="bg-white rounded-2xl border shadow-sm p-4 transition duration-200 ease-out">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {companyLogo
+                  ? <img src={companyLogo} alt="logo" className="h-9 w-9 rounded object-contain border" />
+                  : <div className="h-9 w-9 rounded bg-gray-200 grid place-items-center"><Building2 className="h-4 w-4 text-gray-500"/></div>}
+                <div className="text-lg font-semibold">{companyName}</div>
               </div>
-              <div className="bg-white rounded-lg px-2 py-1 shadow-sm">
-                <p className="font-medium" style={{ color: theme.primary }}>{selectedTrip.time}</p>
+              <div className="text-right">
+                <div className="text-2xl font-bold">Rapport</div>
+                <div className="text-sm text-gray-600">
+                  {new Date().toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' })}
+                </div>
               </div>
             </div>
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center pt-2 border-t" style={{ borderColor: theme.primary }}>
-              <p className="text-sm" style={{ color: theme.primaryDark }}>
-                <span className="font-medium">Prix unitaire:</span> {selectedTrip.price.toLocaleString('fr-FR')} FCFA
-              </p>
-              {selectedTrip.remainingSeats !== undefined && (
-                <div className="flex items-center gap-1">
-                  <span className={`inline-block w-2 h-2 rounded-full ${
-                    selectedTrip.remainingSeats > 10 ? 'bg-green-500' : 
-                    selectedTrip.remainingSeats > 5 ? 'bg-yellow-500' : 'bg-red-500'
-                  }`}></span>
-                  <span className="text-xs font-medium" style={{ color: theme.primaryDark }}>
-                    {selectedTrip.remainingSeats} restantes
-                  </span>
+          </div>
+
+          {/* A. Live ventes (uniquement si poste en cours) */}
+          {(status==='active' || status==='paused' || status==='pending') && (
+            <div className="space-y-3">
+              <div className="flex gap-2 no-print">
+                <button className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50 transition">Imprimer</button>
+                <button className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50 transition" onClick={refresh}>Actualiser</button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-xl border p-4 bg-white shadow-sm transition duration-200 ease-out hover:shadow">
+                  <div className="text-sm text-gray-500">Billets</div>
+                  <div className="text-2xl font-bold">{totals.billets}</div>
+                </div>
+                <div className="rounded-xl border p-4 bg-white shadow-sm transition duration-200 ease-out hover:shadow">
+                  <div className="text-sm text-gray-500">Montant</div>
+                  <div className="text-2xl font-bold">{totals.montant.toLocaleString('fr-FR')} FCFA</div>
+                </div>
+                <div className="rounded-xl border p-4 bg-white shadow-sm transition duration-200 ease-out hover:shadow">
+                  <div className="text-sm text-gray-500">Réservations</div>
+                  <div className="text-2xl font-bold">{tickets.length}</div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border bg-white p-4 shadow-sm transition duration-200 ease-out hover:shadow">
+                <div className="font-semibold mb-3">Ventes du poste en cours (canal: guichet, paiement: espèces)</div>
+
+                {loadingReport ? (
+                  <div className="text-gray-500">Chargement…</div>
+                ) : !tickets.length ? (
+                  <div className="text-gray-500">Aucune vente pour ce poste pour le moment.</div>
+                ) : (
+                  <div className="overflow-hidden rounded-lg border">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Date</th>
+                          <th className="px-3 py-2 text-left">Heure</th>
+                          <th className="px-3 py-2 text-left">Trajet</th>
+                          <th className="px-3 py-2 text-left">Client</th>
+                          <th className="px-3 py-2 text-left">Tél.</th>
+                          <th className="px-3 py-2 text-right">Billets</th>
+                          <th className="px-3 py-2 text-right">Montant</th>
+                          <th className="px-3 py-2 text-right">Réf.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tickets.map(t => (
+                          <tr key={t.id} className="border-t">
+                            <td className="px-3 py-2">{t.date}</td>
+                            <td className="px-3 py-2">{t.heure}</td>
+                            <td className="px-3 py-2">{t.depart} → {t.arrivee}</td>
+                            <td className="px-3 py-2">{t.nomClient}</td>
+                            <td className="px-3 py-2">{t.telephone || ''}</td>
+                            <td className="px-3 py-2 text-right">{(t.seatsGo||0)+(t.seatsReturn||0)}</td>
+                            <td className="px-3 py-2 text-right">{t.montant.toLocaleString('fr-FR')} FCFA</td>
+                            <td className="px-3 py-2 text-right text-xs text-gray-500">{t.referenceCode || t.id}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* B. Sessions en attente de validation */}
+          <div className="rounded-2xl border bg-white p-4 shadow-sm transition duration-200 ease-out hover:shadow">
+            <div className="font-semibold mb-2">Mes sessions en attente de validation</div>
+            {loadingPending ? (
+              <div className="text-gray-500">Chargement…</div>
+            ) : pendingReports.length === 0 ? (
+              <div className="text-gray-500">Aucune session en attente.</div>
+            ) : (
+              <div className="space-y-3">
+                {pendingReports.map(rep => {
+                  const start = rep.startAt?.toDate?.() ? rep.startAt.toDate() : new Date();
+                  const end   = rep.endAt?.toDate?.() ? rep.endAt.toDate() : new Date();
+                  return (
+                    <div key={rep.shiftId} className="border rounded-xl p-4 transition duration-200 ease-out hover:shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-semibold">Session #{rep.shiftId.slice(0,6)} — {rep.userName || 'Guichetier'} ({rep.userCode || '—'})</div>
+                          <div className="text-xs text-gray-500">
+                            Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleString('fr-FR')}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-1 rounded text-xs ${rep.accountantValidated ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            Comptable {rep.accountantValidated ? 'OK' : 'en attente'}
+                          </span>
+                          <span className={`px-2 py-1 rounded text-xs ${rep.managerValidated ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            Chef {rep.managerValidated ? 'OK' : 'en attente'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="rounded-lg border p-3">
+                          <div className="text-xs text-gray-500">Billets</div>
+                          <div className="text-xl font-bold">{rep.billets}</div>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <div className="text-xs text-gray-500">Montant</div>
+                          <div className="text-xl font-bold">{rep.montant.toLocaleString('fr-FR')} FCFA</div>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <div className="text-xs text-gray-500">Trajets</div>
+                          <div className="text-xl font-bold">{rep.details?.length || 0}</div>
+                        </div>
+                      </div>
+
+                      {!!rep.details?.length && (
+                        <div className="mt-3 overflow-hidden rounded border">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="px-3 py-2 text-left">Trajet</th>
+                                <th className="px-3 py-2 text-left">Heures</th>
+                                <th className="px-3 py-2 text-right">Billets</th>
+                                <th className="px-3 py-2 text-right">Montant</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rep.details.map((d, i) => (
+                                <tr key={i} className="border-t">
+                                  <td className="px-3 py-2">{d.trajet}</td>
+                                  <td className="px-3 py-2 text-xs text-gray-600">{(d.heures||[]).join(', ')}</td>
+                                  <td className="px-3 py-2 text-right">{d.billets}</td>
+                                  <td className="px-3 py-2 text-right">{d.montant.toLocaleString('fr-FR')} FCFA</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* =================== CONTENU: HISTORIQUE =================== */}
+      {tab==='historique' && (
+        <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
+            <div className="text-lg font-semibold">Historique de mes sessions (validées)</div>
+            <div className="text-sm text-gray-500">Guichetier : {(user?.displayName || user?.email) ?? '—'} ({sellerCodeUI})</div>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-4 shadow-sm">
+            {loadingHistory ? (
+              <div className="text-gray-500">Chargement…</div>
+            ) : historyReports.length === 0 ? (
+              <div className="text-gray-500">Aucune session validée trouvée.</div>
+            ) : (
+              <div className="space-y-3">
+                {historyReports.map(rep => {
+                  const start = rep.startAt?.toDate?.() ? rep.startAt.toDate() : new Date();
+                  const end   = rep.endAt?.toDate?.() ? rep.endAt.toDate() : new Date();
+                  return (
+                    <div key={rep.shiftId} className="border rounded-xl p-4 transition duration-200 ease-out hover:shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-semibold">Session #{rep.shiftId.slice(0,6)} — {rep.userName || 'Guichetier'} ({rep.userCode || '—'})</div>
+                          <div className="text-xs text-gray-500">
+                            Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleString('fr-FR')}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-700">Comptable OK</span>
+                          <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-700">Chef OK</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="rounded-lg border p-3">
+                          <div className="text-xs text-gray-500">Billets</div>
+                          <div className="text-xl font-bold">{rep.billets}</div>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <div className="text-xs text-gray-500">Montant</div>
+                          <div className="text-xl font-bold">{rep.montant.toLocaleString('fr-FR')} FCFA</div>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <div className="text-xs text-gray-500">Trajets</div>
+                          <div className="text-xl font-bold">{rep.details?.length || 0}</div>
+                        </div>
+                      </div>
+
+                      {!!rep.details?.length && (
+                        <div className="mt-3 overflow-hidden rounded border">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="px-3 py-2 text-left">Trajet</th>
+                                <th className="px-3 py-2 text-left">Heures</th>
+                                <th className="px-3 py-2 text-right">Billets</th>
+                                <th className="px-3 py-2 text-right">Montant</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rep.details.map((d, i) => (
+                                <tr key={i} className="border-t">
+                                  <td className="px-3 py-2">{d.trajet}</td>
+                                  <td className="px-3 py-2 text-xs text-gray-600">{(d.heures||[]).join(', ')}</td>
+                                  <td className="px-3 py-2 text-right">{d.billets}</td>
+                                  <td className="px-3 py-2 text-right">{d.montant.toLocaleString('fr-FR')} FCFA</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* =================== CONTENU: GUICHET (VENTE) =================== */}
+      {tab==='guichet' && (
+        <div className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* G, Recherche */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="rounded-2xl border shadow-sm p-6 bg-white transition duration-200 ease-out hover:shadow">
+              <div className="mb-4">
+                <h1 className="text-2xl font-bold">Guichet de vente</h1>
+                <p className="text-gray-500 text-sm flex items-center gap-2">
+                  <MapPin className="h-4 w-4"/><span>Départ :</span>
+                  <span className="font-medium">{departure || '—'}</span>
+                </p>
+              </div>
+
+              {status==='pending' && (
+                <div className="mb-4 p-3 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-800 text-sm">
+                  Demande envoyée. En attente d’activation par la comptabilité. Cliquez sur <b>Actualiser</b> dans l’entête pour vérifier.
+                </div>
+              )}
+              {status==='none' && (
+                <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                  Cliquez sur <b>Demander l’activation</b> (en haut) pour créer votre poste.
+                </div>
+              )}
+
+              <div className="mb-2 text-sm text-gray-600">Choisissez une ville d'arrivée :</div>
+              <div className="flex flex-wrap gap-2">
+                {allArrivals.length === 0 && <span className="text-gray-400 text-sm">Aucune destination configurée.</span>}
+                {allArrivals.map(v => {
+                  const active = arrival.toLowerCase() === v.toLowerCase();
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => setArrival(v)}
+                      className={`px-3 py-2 rounded-full text-sm border transition ${active ? 'text-white' : 'text-gray-700 hover:bg-gray-50'}`}
+                      style={active
+                        ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, borderColor:'transparent' }
+                        : { borderColor:'#E5E7EB', backgroundColor:'white' }}
+                    >{v}</button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Dates */}
+            <div className="rounded-2xl border shadow-sm p-6 bg-white transition duration-200 ease-out hover:shadow">
+              <h3 className="font-semibold mb-3 flex items-center gap-2"><CalendarDays className="h-5 w-5"/><span>Dates disponibles</span></h3>
+              <div className="flex flex-wrap gap-2">
+                {availableDates.map(d => {
+                  const has = trips.some(t => t.date === d);
+                  const act = selectedDate === d;
+                  const day = new Date(d);
+                  return (
+                    <button
+                      key={d}
+                      disabled={!has}
+                      onClick={() => has && handleSelectDate(d)}
+                      className={`w-16 h-16 rounded-xl border text-center transition ${act ? 'text-white' : ''} ${!has ? 'opacity-40 cursor-not-allowed' : 'hover:shadow-sm'}`}
+                      style={act
+                        ? { background: theme.primary, borderColor: theme.primary }
+                        : { background:'white', borderColor:'#E5E7EB' }}
+                    >
+                      <div className="text-xs">{day.toLocaleDateString('fr-FR',{weekday:'short'})}</div>
+                      <div className="text-lg font-bold">{day.getDate()}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Horaires */}
+            <div className="rounded-2xl border shadow-sm p-6 bg-white transition duration-200 ease-out hover:shadow">
+              <h3 className="font-semibold mb-2 flex items-center gap-2"><Clock4 className="h-5 w-5"/><span>Horaires disponibles</span></h3>
+              {filteredTrips.length === 0 ? (
+                <div className="text-gray-400 text-sm">Aucun horaire pour cette date.</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 gap-2">
+                  {filteredTrips.map(t => {
+                    const active = selectedTrip?.id === t.id;
+                    const seat = seatBadgeStyle(t.remainingSeats, t.places || MAX_SEATS_FALLBACK);
+                    return (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelectedTrip(t)}
+                        className={`text-left px-4 py-3 rounded-xl border transition ${active ? 'shadow ring-1' : 'hover:shadow-sm'}`}
+                        style={active
+                          ? { borderColor: theme.primary, backgroundColor: '#F5F7FF' }
+                          : { borderColor: '#E5E7EB', backgroundColor: 'white' }}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-semibold">
+                              <span className="text-base mr-2" style={{ color: theme.primary }}>{t.time}</span>
+                              {t.departure} → {t.arrival}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {new Date(t.date).toLocaleDateString('fr-FR',{weekday:'long', day:'numeric', month:'long'})}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-bold" style={{ color: theme.primary }}>
+                              {t.price.toLocaleString('fr-FR')} FCFA
+                            </div>
+                            <div className={`inline-flex mt-1 px-2 py-0.5 rounded-full text-[11px] ${seat.bg} ${seat.text}`}>
+                              {seat.label}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
-            <div className="mt-2 text-sm font-medium" style={{ color: theme.textSecondary }}>
-              Statut d'embarquement prévu : <span className="text-yellow-600">En attente</span>
-            </div>
           </div>
-        ) : (
-          <div className="text-center py-6 bg-gray-50 rounded-xl border-2 border-dashed" style={{ 
-            borderColor: theme.primaryLight,
-            color: theme.textSecondary
-          }}>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-            </svg>
-            <p className="mt-2">Sélectionnez un trajet pour continuer</p>
-          </div>
-        )}
 
-        {/* Trip type selector */}
-        <div className="bg-gray-50 p-1 rounded-xl inline-flex w-full mt-4">
-          <button 
-            onClick={() => setTripType('aller_simple')} 
-            className={`flex-1 py-2 px-3 rounded-lg transition-all duration-200 text-sm md:text-base ${
-              tripType === 'aller_simple' 
-                ? 'bg-white shadow-sm border font-medium' 
-                : 'hover:bg-gray-100'
-            }`}
-            style={tripType === 'aller_simple' ? { 
-              borderColor: theme.primary,
-              color: theme.primary,
-              backgroundColor: 'white'
-            } : {
-              color: theme.textSecondary
-            }}
-          >
-            Aller simple
-          </button>
-          <button 
-            onClick={() => setTripType('aller_retour')} 
-            className={`flex-1 py-2 px-3 rounded-lg transition-all duration-200 text-sm md:text-base ${
-              tripType === 'aller_retour' 
-                ? 'bg-white shadow-sm border font-medium' 
-                : 'hover:bg-gray-100'
-            }`}
-            style={tripType === 'aller_retour' ? { 
-              borderColor: theme.primary,
-              color: theme.primary,
-              backgroundColor: 'white'
-            } : {
-              color: theme.textSecondary
-            }}
-          >
-            Aller-retour
-          </button>
-        </div>
+          {/* Réservation (droite) */}
+          <div className="bg-white rounded-2xl shadow-sm border h-max sticky top-24 p-6 transition duration-200 ease-out hover:shadow">
+            <h3 className="text-xl font-bold mb-4" style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>
+              Détails de la réservation
+            </h3>
 
-        {/* Passenger details */}
-        <div className="space-y-4 mt-4">
-          <div className="space-y-2">
-            <label className="block text-sm font-medium" style={{ color: theme.textPrimary }}>Nom complet du passager*</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.textSecondary }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
+            {!canSell && (
+              <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                {status==='pending'
+                  ? "Votre poste est en attente d’activation par la comptabilité."
+                  : "Demandez l’activation de votre poste, puis démarrez la vente (espèces uniquement)."}
               </div>
-              <input 
-                type="text" 
-                value={nomClient} 
-                onChange={(e) => setNomClient(e.target.value)} 
-                className="w-full pl-10 border-2 px-4 py-2 md:py-3 rounded-xl focus:ring-2 focus:ring-offset-1 transition-all duration-200" 
-                required 
-                placeholder="Jean Dupont"
-                style={{ 
-                  borderColor: theme.primaryLight,
-                  color: theme.textPrimary,
-                  ['--tw-ring-color' as any]: theme.primary
-                }}
-              />
-            </div>
-          </div>
+            )}
 
-          <div className="space-y-2">
-            <label className="block text-sm font-medium" style={{ color: theme.textPrimary }}>Numéro de téléphone*</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ color: theme.textSecondary }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                </svg>
+            {selectedTrip ? (
+              <div className="mb-4 p-4 rounded-xl border" style={{borderColor: theme.primary, backgroundColor: '#F8FAFF'}}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-semibold">{selectedTrip.departure} → {selectedTrip.arrival}</div>
+                    <div className="text-sm text-gray-500">
+                      {new Date(selectedTrip.date).toLocaleDateString('fr-FR',{weekday:'long', day:'numeric', month:'long'})}
+                    </div>
+                  </div>
+                  <div className="px-2 py-1 rounded-md bg-white shadow text-sm" style={{color: theme.primary}}>
+                    {selectedTrip.time}
+                  </div>
+                </div>
+                <div className="mt-2 text-sm">
+                  Prix unitaire : <span className="font-semibold">{selectedTrip.price.toLocaleString('fr-FR')} FCFA</span>
+                </div>
               </div>
-              <input 
-                type="tel" 
-                value={telephone} 
-                onChange={(e) => setTelephone(e.target.value)} 
-                className="w-full pl-10 border-2 px-4 py-2 md:py-3 rounded-xl focus:ring-2 focus:ring-offset-1 transition-all duration-200" 
-                required 
-                placeholder="+225 XX XX XX XX"
-                style={{ 
-                  borderColor: theme.primaryLight,
-                  color: theme.textPrimary,
-                  ['--tw-ring-color' as any]: theme.primary
-                }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Seats selection */}
-        <div className="space-y-4 mt-4">
-          <div className="space-y-2">
-            <label className="block text-sm font-medium" style={{ color: theme.textPrimary }}>Nombre de places (Aller)*</label>
-            <div className="flex items-center gap-3">
-              <button 
-                onClick={() => setPlaces(p => Math.max(1, p - 1))} 
-                className="p-2 rounded-lg hover:bg-gray-100 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ color: theme.textPrimary }}
-                disabled={!selectedTrip || places <= 1}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                </svg>
-              </button>
-              <span className="flex-1 text-center py-2 font-bold rounded-lg" style={{ 
-                backgroundColor: theme.primaryLight,
-                color: theme.primaryDark
-              }}>{places}</span>
-              <button 
-                onClick={() => setPlaces(p => p + 1)} 
-                className="p-2 rounded-lg hover:bg-gray-100 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ color: theme.textPrimary }}
-                disabled={!selectedTrip || (selectedTrip.remainingSeats !== undefined && places >= selectedTrip.remainingSeats)}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {tripType === 'aller_retour' && (
-            <div className="space-y-2">
-              <label className="block text-sm font-medium" style={{ color: theme.textPrimary }}>Nombre de places (Retour)</label>
-              <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => setPlacesRetour(p => Math.max(0, p - 1))} 
-                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{ color: theme.textPrimary }}
-                  disabled={!selectedTrip || placesRetour <= 0}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                  </svg>
-                </button>
-                <span className="flex-1 text-center py-2 font-bold rounded-lg" style={{ 
-                  backgroundColor: theme.primaryLight,
-                  color: theme.primaryDark
-                }}>{placesRetour}</span>
-                <button 
-                  onClick={() => setPlacesRetour(p => p + 1)} 
-                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{ color: theme.textPrimary }}
-                  disabled={!selectedTrip || (selectedTrip.remainingSeats !== undefined && (places + placesRetour) >= selectedTrip.remainingSeats)}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                </button>
+            ) : (
+              <div className="mb-4 p-4 rounded-xl border border-dashed text-gray-500 text-sm">
+                Sélectionnez un horaire pour continuer.
               </div>
-            </div>
-          )}
-        </div>
+            )}
 
-        {/* Payment summary */}
-        <div className="pt-4 border-t mt-4 space-y-4" style={{ borderColor: theme.primaryLight }}>
-          <div className="space-y-2">
-            <label className="block text-sm font-medium" style={{ color: theme.textPrimary }}>Mode de paiement</label>
-            <div className="grid grid-cols-2 gap-2">
+            {/* Aller / retour */}
+            <div className="mb-3 inline-flex bg-gray-100 p-1 rounded-xl w-full shadow-inner">
               <button
-                onClick={() => setPaiement('espèces')}
-                className={`py-2 px-3 rounded-lg border-2 transition-all duration-200 flex items-center justify-center gap-2 text-sm md:text-base ${
-                  paiement === 'espèces' ? 'font-medium' : ''
-                }`}
-                style={paiement === 'espèces' ? { 
-                  borderColor: theme.primary,
-                  backgroundColor: theme.primaryLight,
-                  color: theme.primaryDark
-                } : {
-                  borderColor: theme.primaryLight,
-                  color: theme.textSecondary
-                }}
+                type="button"
+                className={`flex-1 py-2 rounded-lg text-sm transition ${tripType==='aller_simple' ? 'text-white' : 'hover:bg-white'}`}
+                onClick={() => { setTripType('aller_simple'); setPlacesRetour(0); }}
+                style={tripType==='aller_simple'
+                  ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                  : {}}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                </svg>
-                Espèces
+                Aller simple
               </button>
               <button
-                onClick={() => setPaiement('mobile_money')}
-                className={`py-2 px-3 rounded-lg border-2 transition-all duration-200 flex items-center justify-center gap-2 text-sm md:text-base ${
-                  paiement === 'mobile_money' ? 'font-medium' : ''
-                }`}
-                style={paiement === 'mobile_money' ? { 
-                  borderColor: theme.primary,
-                  backgroundColor: theme.primaryLight,
-                  color: theme.primaryDark
-                } : {
-                  borderColor: theme.primaryLight,
-                  color: theme.textSecondary
-                }}
+                type="button"
+                className={`flex-1 py-2 rounded-lg text-sm transition ${tripType==='aller_retour' ? 'text-white' : 'hover:bg-white'}`}
+                onClick={() => setTripType('aller_retour')}
+                style={tripType==='aller_retour'
+                  ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                  : {}}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                </svg>
-                Mobile Money
+                Aller-retour
               </button>
             </div>
-          </div>
 
-          <div className="p-4 rounded-xl" style={{ 
-            background: `linear-gradient(to right, ${theme.primaryLight}, ${theme.secondary}20)`
-          }}>
-            <div className="flex justify-between items-center">
-              <span className="text-sm font-medium" style={{ color: theme.textPrimary }}>Total à payer</span>
-              <span className="text-xl md:text-2xl font-bold" style={{ color: theme.primaryDark }}>
+            {/* Infos client */}
+            <div className="space-y-3">
+              <input className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-200" placeholder="Nom complet du passager" value={nomClient} onChange={e => setNomClient(e.target.value)} />
+              <input className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-200" placeholder="Téléphone" value={telephone} onChange={e => setTelephone(e.target.value)} />
+            </div>
+
+            {/* Places */}
+            <div className="mt-4 space-y-3">
+              <div>
+                <div className="text-sm mb-1">Nombre de places (Aller)</div>
+                <div className="flex items-center gap-2">
+                  <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesAller(p => Math.max(1, p-1))}>-</button>
+                  <div className="flex-1 text-center font-bold py-2 rounded bg-gray-50">{placesAller}</div>
+                  <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesAller(p => p+1)}>+</button>
+                </div>
+              </div>
+              {tripType === 'aller_retour' && (
+                <div>
+                  <div className="text-sm mb-1">Nombre de places (Retour)</div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesRetour(p => Math.max(0, p-1))}>-</button>
+                    <div className="flex-1 text-center font-bold py-2 rounded bg-gray-50">{placesRetour}</div>
+                    <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesRetour(p => p+1)}>+</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Total */}
+            <div className="mt-4 p-4 rounded-xl bg-gray-50 flex items-center justify-between">
+              <div className="text-sm text-gray-600">Total à payer (ESPÈCES)</div>
+              <div className="text-2xl font-bold" style={{ color: theme.primary }}>
                 {totalPrice.toLocaleString('fr-FR')} FCFA
-              </span>
+              </div>
             </div>
           </div>
         </div>
+      )}
 
-        {/* Submit button */}
-        <button 
-          onClick={handleReservation} 
-          disabled={!selectedTrip || !nomClient || !telephone || places < 1 || isProcessing}
-          className={`w-full py-3 md:py-4 px-6 rounded-xl font-bold transition-all duration-300 flex items-center justify-center gap-2 shadow-lg mt-6 ${
-            !selectedTrip || !nomClient || !telephone || places < 1
-              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'text-white transform hover:-translate-y-1 hover:shadow-xl'
-          }`}
-          style={(!selectedTrip || !nomClient || !telephone || places < 1) ? {} : { 
-            background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})`
-          }}
-        >
-          {isProcessing ? (
-            <>
-              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              Traitement en cours...
-            </>
-          ) : (
-            <>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              Valider la réservation
-            </>
-          )}
-        </button>
+      {/* BARRE BAS */}
+      <div className="sticky bottom-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 pb-4">
+          <div className="bg-white/95 backdrop-blur rounded-2xl border shadow-md p-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-gradient-to-br from-gray-200 to-gray-100 grid place-items-center border">
+                <Ticket className="h-5 w-5 text-gray-500" />
+              </div>
+              <div className="leading-tight">
+                <div className="text-sm font-semibold">
+                  {(user?.displayName || user?.email) ?? '—'} <span className="text-gray-500">({sellerCodeUI})</span>
+                </div>
+                <div className="text-xs text-gray-500">{(user as any)?.role || 'guichetier'}</div>
+              </div>
+              <button
+                onClick={async () => { await logout(); navigate('/login'); }}
+                className="ml-3 inline-flex items-center gap-1 px-3 py-2 text-sm rounded-lg border bg-gray-50 hover:bg-gray-100 transition"
+                title="Déconnexion"
+              >
+                <LogOut className="h-4 w-4"/> Déconnexion
+              </button>
+            </div>
+
+            {tab==='guichet' && (
+              <div className="flex items-center gap-3">
+                <div className="text-sm text-gray-600">Total:</div>
+                <div className="text-xl font-extrabold" style={{ color: theme.primary }}>
+                  {totalPrice.toLocaleString('fr-FR')} FCFA
+                </div>
+                <button
+                  className="px-5 py-3 rounded-xl text-white font-bold disabled:opacity-50 shadow-sm hover:shadow transition"
+                  disabled={!canSell || !selectedTrip || !nomClient || !telephone || !validPhone(telephone) || totalPrice<=0 || isProcessing}
+                  style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                  onClick={handleReservation}
+                  title="Valider la réservation"
+                >
+                  {isProcessing ? 'Traitement…' : 'Valider la réservation'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Footer gradient */}
-      <div className="lg:col-span-3 h-2 mt-6 rounded-full" style={{
-        background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})`
-      }}></div>
+      {showReceipt && receiptData && receiptCompany && (
+        <ReceiptModal
+          open={showReceipt}
+          onClose={() => setShowReceipt(false)}
+          reservation={receiptData}
+          company={receiptCompany}
+        />
+      )}
     </div>
   );
 };

@@ -1,57 +1,144 @@
-import type { Timestamp } from 'firebase/firestore';
+import type { Timestamp } from "firebase/firestore";
 
-// ✅ Statuts possibles
-export type ReservationStatus = 'en_attente' | 'payé' | 'preuve_recue' | 'refusé' | 'annulé';
-export type Channel = 'en ligne' | 'agence' | 'téléphone';
+/** ————— Enums normalisés ————— */
+export type ReservationStatus =
+  | "en_attente"
+  | "paiement_en_cours"
+  | "preuve_recue"
+  | "payé"
+  | "embarqué"
+  | "refusé"
+  | "annulé";
 
-// ✅ Modèle de réservation
+export type Canal = "en_ligne" | "guichet" | "telephone";
+
+export type PaiementSource =
+  | "encaisse_guichet"
+  | "encaisse_mm"
+  | "compte_marchand_compagnie";
+
+/** ————— Modèles principaux ————— */
 export interface Reservation {
-  preuveUrl: any;
-  preuveMessage: any;
-  agencyTelephone: string;
-  agencyNom: string;
+  nomClient: any;
+  trajetId: string;
+  // Identité/portée
   id: string;
-  trajetId?: string;
-  canal: Channel;
-  montant: number;
-  createdAt: Timestamp | Date;
-  agenceId?: string;
-  clientNom?: string;
-  nomClient?: string;
-  telephone?: string;
+  companyId: string;        // normalisé (ex: remplace compagnieId)
+  agencyId: string;         // normalisé (ex: remplace agenceId)
+  voyageId: string;         // voyage concret (date/heure/bus)
+  busId?: string;
+
+  // Client
+  clientNom: string;        // normalisé (remplace nomClient | clientNom)
+  telephone: string;
   email?: string;
-  statut: ReservationStatus;
-  date?: string;
-  heure?: string;
-  depart?: string;
-  arrivee?: string;
-  referenceCode?: string;
-  seatsGo?: number;
+
+  // Trajet/voyage
+  depart: string;           // normalisé (remplace depart)
+  arrivee: string;          // normalisé (remplace arrivee)
+  date: string;             // ISO yyyy-mm-dd
+  heure: string;            // HH:mm
+  seatsGo: number;
   seatsReturn?: number;
-  compagnieId?: string;
+
+  // Vente/paiement
+  canal: Canal;             // "guichet" | "en_ligne" | "telephone"
+  paiementSource?: PaiementSource;
+  montant: number;
+  statut: ReservationStatus;
+
+  // Guichet/shift (si canal="guichet")
+  guichetierId?: string;
+  shiftId?: string;
+
+  // Sécurité & référence
+  referenceCode: string;
+  qrSig?: string;
+  qrVersion?: number;
+
+  // Preuve (si en ligne)
+  preuveUrl?: string;
+  preuveMessage?: string;
+
+  // Métadonnées (snapshots utiles pour UI/exports)
   companySlug?: string;
-  agenceNom?: string;
-  agenceTelephone?: string;
+  agencyNom?: string;
+  agencyTelephone?: string;
   latitude?: number;
   longitude?: number;
-}
 
-// ✅ Autres modèles
-export interface AvisClient {
-  nom: string;
-  note: number;
-  commentaire: string;
-  visible: boolean;
-  companyId: string;
-  createdAt?: Timestamp | Date;
-}
-
-export interface MessageClient {
-  nom: string;
-  email: string;
-  message: string;
-  companyId: string;
+  // Timestamps
   createdAt: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+/** ————— Flotte & opérations ————— */
+export interface Bus {
+  id: string;
+  immatriculation: string;
+  capacite: number;
+  seatMap?: string[];                // ["1A","1B",...]
+  statut: "OK" | "maintenance" | "HS";
+  proprietaire?: "comp" | "affretement";
+  notes?: string;
+  updatedAt?: Timestamp;
+}
+
+export interface Voyage {
+  id: string;
+  companyId: string;
+  agencyId: string;
+  weeklyTripId?: string;
+  date: string;                      // yyyy-mm-dd
+  heure: string;                     // HH:mm
+  depart: string;
+  arrivee: string;
+  busId?: string;
+  immatriculation?: string;
+  capaciteEffective?: number;        // capacité réellement dispo
+  driverId?: string;
+  controleurId?: string;
+  statut: "planifie" | "embarquement" | "parti" | "annule";
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+/** ————— Shifts (postes guichetier) ————— */
+export interface Shift {
+  id: string;
+  companyId: string;
+  agencyId: string;
+  guichetierId: string;
+  guichetierNom?: string;
+  startTime: string;                 // ISO
+  endTime?: string;                  // ISO
+  status: "en_service" | "cloture";
+  ventesCount?: number;
+  montantEncaisse?: number;
+  encaissementMode?: "cash" | "mm" | "mixte";
+  versementDeclare?: number;
+  versementValideParControleur?: boolean;
+}
+
+/** ————— WeeklyTrip (gabarit hebdo) ————— */
+export interface WeeklyTrip {
+  id: string;
+  departure: string;                 // normalisé
+  arrival: string;                   // normalisé
+  horaires?: { [dayName: string]: string[] }; // ex: "lundi":["08:00","14:00"]
+  price: number;
+  places: number;
+  [key: string]: any;
+}
+
+/** ————— Vitrine & divers ————— */
+export interface TripSuggestion {
+  id: string;
+  title: string;
+  departure: string;
+  arrival: string;
+  price: number;
+  imageUrl?: string;
 }
 
 export interface Agency {
@@ -59,14 +146,14 @@ export interface Agency {
   nom: string;
   ville: string;
   companyId: string;
-  statut?: 'active' | 'inactive';
+  statut?: "active" | "inactive";
 }
 
 export interface AgencyStats extends Agency {
   reservations: number;
   revenus: number;
   courriers: number;
-  canaux: { [canal: string]: number };
+  canaux: { [canal in Canal]?: number };
 }
 
 export interface GlobalStats {
@@ -75,41 +162,22 @@ export interface GlobalStats {
   totalRevenue: number;
   totalCouriers: number;
   growthRate: number;
-  totalChannels: { [canal: string]: number };
+  totalChannels: { [canal in Canal]?: number };
 }
 
-export interface Trip {
-  id: string;
-  date: string;
-  time: string;
-  departure: string;
-  arrival: string;
-  price: number;
-  agencyId: string;
+export interface AvisClient {
+  nom: string;
+  note: number;
+  commentaire: string;
+  visible: boolean;
   companyId: string;
-  places: number;
-  remainingSeats: number;
+  createdAt?: Timestamp;
 }
 
-export interface WeeklyTrip {
-  id: string;
-  departure?: string;
-  arrival?: string;
-  depart?: string;
-  arrivee?: string;
-  horaires?: {
-    [dayName: string]: string[];
-  };
-  price: number;
-  places: number;
-  [key: string]: any;
-}
-
-export interface TripSuggestion {
-  id: string;
-  title: string;
-  departure: string;
-  arrival: string;
-  price: number;
-  imageUrl?: string; // ✅ ajout
+export interface MessageClient {
+  nom: string;
+  email: string;
+  message: string;
+  companyId: string;
+  createdAt: Timestamp;
 }

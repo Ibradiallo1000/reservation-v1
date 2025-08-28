@@ -1,19 +1,20 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+// src/pages/ReceiptGuichetPage.tsx
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collectionGroup, getDocs, query, where, limit } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import QRCode from 'react-qr-code';
 import html2pdf from 'html2pdf.js';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, Download, Home, MapPin, Phone, Printer, Calendar, User, Ticket, CreditCard, ArrowRight } from 'lucide-react';
+import { ChevronLeft, Download, Home, MapPin, Printer, User, Ticket, CreditCard, ArrowRight } from 'lucide-react';
 import { hexToRgba, safeTextColor } from '../utils/color';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
 
-type ReservationStatus = 'confirmé' | 'annulé' | 'en attente';
+type ReservationStatus = 'confirmé' | 'annulé' | 'en attente' | 'payé' | string;
 type PaymentMethod = 'espèces' | 'mobile_money' | 'carte' | string;
-type BookingChannel = 'en ligne' | 'agence' | 'téléphone';
+type BookingChannel = 'en ligne' | 'agence' | 'téléphone' | 'guichet';
 
 interface ReservationData {
   id: string;
@@ -31,35 +32,28 @@ interface ReservationData {
   paiement: PaymentMethod;
   compagnieId: string;
   compagnieNom: string;
-  compagnieLogo?: string;
-  compagnieCouleur?: string;
   agencyId?: string;
-  agenceNom?: string;
   agencyNom?: string;
   nomAgence?: string;
   agenceTelephone?: string;
   canal: BookingChannel;
-  createdAt: { seconds: number; nanoseconds: number } | Date;
+  createdAt: { seconds: number; nanoseconds: number } | Date | undefined;
   companySlug: string;
-  latitude?: number;
-  longitude?: number;
   referenceCode?: string;
+  qrCode?: string | null;
+  guichetierId?: string;
+  guichetierCode?: string;
+  shiftId?: string | null;
 }
 
 interface CompanyData {
   id: string;
   nom: string;
-  logoUrl: string;
+  logoUrl?: string;
   couleurPrimaire: string;
   couleurSecondaire?: string;
   slug: string;
   telephone?: string;
-  banniereUrl?: string;
-  theme?: {
-    primary?: string;
-    secondary?: string;
-    text?: string;
-  };
 }
 
 interface LocationState {
@@ -69,13 +63,14 @@ interface LocationState {
 }
 
 const ReceiptGuichetPage: React.FC = () => {
-  const { id, slug } = useParams<{ id: string; slug: string }>();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { companyInfo: companyInfoFromState, reservation: reservationFromState, from } = location.state as LocationState || {};
+  const { companyInfo: companyInfoFromState, reservation: reservationFromState, from } =
+    (location.state as LocationState) || {};
 
-  const [reservation, setReservation] = useState<ReservationData | null>(null);
-  const [company, setCompany] = useState<CompanyData | null>(null);
+  const [reservation, setReservation] = useState<ReservationData | null>(reservationFromState || null);
+  const [company, setCompany] = useState<CompanyData | null>(companyInfoFromState || null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
@@ -92,237 +87,281 @@ const ReceiptGuichetPage: React.FC = () => {
     }
   }, []);
 
-  const generateReceiptNumber = useCallback(() => {
-  if (!reservation) return 'BIL-000000';
+  /** Fallback: charge la réservation via collectionGroup quand on arrive par URL directe */
+  const fetchReservationFallback = useCallback(async () => {
+    if (!id) throw new Error('ID manquant');
+    const q = query(collectionGroup(db, 'reservations'), where('qrCode', '==', id), limit(1));
+    const snap = await getDocs(q);
+    if (snap.empty) throw new Error('Réservation introuvable');
+    const d = snap.docs[0];
+    const data = d.data() as any;
+    const parts = d.ref.path.split('/'); // companies/{companyId}/agences/{agencyId}/reservations/{resId}
+    const companyId = parts[1];
+    const agencyId = parts[3];
 
-  const villeDep = reservation.depart.slice(0, 3).toUpperCase();
-  const villeArr = reservation.arrivee.slice(0, 3).toUpperCase();
-  const agence = (reservation.agenceNom || reservation.agencyNom || reservation.nomAgence || 'AGC')
-    .slice(0, 3)
-    .toUpperCase();
-  const code = reservation.id.substring(reservation.id.length - 6).toUpperCase();
-
-  return `${agence}-${villeDep}${villeArr}-${code}`;
-}, [reservation]);
-
-  const fetchReservation = useCallback(async () => {
-    if (!id) {
-      setError("ID de réservation manquant");
-      setLoading(false);
-      return null;
-    }
-
-    try {
-      if (!reservationFromState) throw new Error("Données de réservation manquantes");
-
-      const companyId = reservationFromState.compagnieId;
-      const agencyId = reservationFromState.agencyId;
-
-      if (!companyId || !agencyId) throw new Error("Identifiants manquants");
-
-      const fullRef = doc(db, 'companies', companyId, 'agences', agencyId, 'reservations', id);
-      const fullSnap = await getDoc(fullRef);
-
-      if (!fullSnap.exists()) throw new Error("Réservation introuvable");
-
-      const data = fullSnap.data();
-      return {
-        ...data,
-        id: fullSnap.id,
-        createdAt: data.createdAt instanceof Date ? data.createdAt : new Date(data.createdAt.seconds * 1000),
-      } as ReservationData;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur inconnue');
-      return null;
-    }
-  }, [id, reservationFromState]);
+    return {
+      ...data,
+      id: d.id,
+      compagnieId: data.compagnieId || companyId,
+      agencyId: data.agencyId || agencyId,
+      createdAt:
+        data.createdAt instanceof Date
+          ? data.createdAt
+          : data.createdAt?.seconds
+          ? new Date(data.createdAt.seconds * 1000)
+          : undefined,
+    } as ReservationData;
+  }, [id]);
 
   const fetchCompany = useCallback(async (companyId: string) => {
-    try {
-      const companyRef = doc(db, 'companies', companyId);
-      const snap = await getDoc(companyRef);
-      if (!snap.exists()) throw new Error("Compagnie non trouvée");
-      const raw = snap.data();
-      return {
-        id: snap.id,
-        nom: raw.nom,
-        logoUrl: raw.logoUrl,
-        couleurPrimaire: raw.theme?.primary || raw.couleurPrimaire || '#3b82f6',
-        couleurSecondaire: raw.theme?.secondary || raw.couleurSecondaire || '#93c5fd',
-        slug: raw.slug,
-        telephone: raw.telephone,
-        banniereUrl: raw.banniereUrl
-      } as CompanyData;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur compagnie');
-      return null;
-    }
+    const snap = await getDoc(doc(db, 'companies', companyId));
+    if (!snap.exists()) throw new Error('Compagnie non trouvée');
+    const raw = snap.data() as any;
+    return {
+      id: snap.id,
+      nom: raw.nom,
+      logoUrl: raw.logoUrl,
+      couleurPrimaire: raw.theme?.primary || raw.couleurPrimaire || '#3b82f6',
+      couleurSecondaire: raw.theme?.secondary || raw.couleurSecondaire || '#93c5fd',
+      slug: raw.slug,
+      telephone: raw.telephone,
+    } as CompanyData;
   }, []);
 
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      setError(null);
-      
+    (async () => {
       try {
-        if (!reservationFromState || !companyInfoFromState) {
-          throw new Error("Données manquantes. Vous devez accéder à cette page depuis une réservation valide.");
-        }
+        setLoading(true);
+        let res = reservationFromState || null;
+        let comp = companyInfoFromState || null;
 
-        const res = await fetchReservation();
-        if (!res) return;
-        
-        const comp = await fetchCompany(res.compagnieId);
-        if (!comp) return;
-        
-        setReservation(res);
-        setCompany(comp);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Erreur inattendue');
+        if (!res) res = await fetchReservationFallback();
+        if (!comp) comp = await fetchCompany(res!.compagnieId);
+
+        setReservation(res!);
+        setCompany(comp!);
+      } catch (e: any) {
+        setError(e?.message || 'Erreur de chargement');
       } finally {
         setLoading(false);
       }
-    };
-    
-    loadData();
-  }, [fetchReservation, fetchCompany, reservationFromState, companyInfoFromState]);
+    })();
+  }, [fetchCompany, fetchReservationFallback, reservationFromState, companyInfoFromState]);
+
+  // Numéro de billet : toujours la référence pro si présente
+  const receiptNumber = useMemo(() => {
+    if (!reservation) return 'BIL-000000';
+    if (reservation.referenceCode) return reservation.referenceCode;
+    const dep = (reservation.depart || 'DEP').slice(0, 3).toUpperCase();
+    const arr = (reservation.arrivee || 'ARR').slice(0, 3).toUpperCase();
+    const code = reservation.id.slice(-6).toUpperCase();
+    return `AGC-${dep}${arr}-${code}`;
+  }, [reservation]);
+
+  // QR: basé sur la référence (plus stable pour contrôle)
+  const qrValue = useMemo(() => {
+    const base = window.location.origin;
+    const ref = reservation?.referenceCode || reservation?.id;
+    return `${base}/r/${encodeURIComponent(ref || '')}`;
+  }, [reservation?.referenceCode, reservation?.id]);
+
+  // ✅ Date d'émission, comme sur le reçu en ligne
+  const emissionDate = useMemo(() => {
+    const ca = reservation?.createdAt;
+    let d: Date | undefined;
+    if (!ca) d = new Date();
+    else if (ca instanceof Date) d = ca;
+    else if (typeof ca === 'object' && (ca as any).seconds) d = new Date((ca as any).seconds * 1000);
+    else d = new Date();
+    return format(d!, 'dd/MM/yyyy', { locale: fr });
+  }, [reservation?.createdAt]);
 
   const handlePDF = useCallback(() => {
-    if (receiptRef.current) {
-      const opt = {
-        margin: 2,
-        filename: `recu-${generateReceiptNumber()}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { 
-          scale: 2,
-          useCORS: true,
-          letterRendering: true,
-          width: 340
-        },
-        jsPDF: { 
-          unit: 'mm', 
-          format: [81, 200],
-          orientation: 'portrait' 
-        }
-      };
-      
-      html2pdf()
-        .set(opt)
-        .from(receiptRef.current)
-        .save();
-    }
-  }, [generateReceiptNumber]);
+    if (!receiptRef.current) return;
+    const opt = {
+      margin: 2,
+      filename: `recu-${receiptNumber}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, letterRendering: true, width: 340 },
+      jsPDF: { unit: 'mm', format: [81, 200], orientation: 'portrait' }
+    };
+    // @ts-ignore
+    html2pdf().set(opt).from(receiptRef.current).save();
+  }, [receiptNumber]);
 
   const handleBack = useCallback(() => {
-    if (from) {
-      navigate(from);
-    } else {
-      navigate(-1);
-    }
-  }, [from, navigate]);
+    if (from) navigate(from);
+    else navigate('/agence/guichet');
+  }, [navigate, from]);
 
-  if (loading || !company) {
-    return <LoadingSpinner fullScreen />;
-  }
+  if (loading || !company) return <LoadingSpinner fullScreen />;
+  if (error || !reservation || !company)
+    return <ErrorMessage message={error || 'Erreur de chargement'} onRetry={() => window.location.reload()} onHome={() => navigate('/')} />;
 
-  if (error || !reservation || !company) {
-    return (
-      <ErrorMessage 
-        message={error || 'Erreur de chargement'} 
-        onRetry={() => window.location.reload()}
-        onHome={() => navigate('/')}
-      />
-    );
-  }
-
-  const qrContent = `${window.location.origin}/compagnie/${company.slug}/receipt/${reservation.id}`;
   const primaryColor = company.couleurPrimaire;
   const secondaryColor = company.couleurSecondaire;
   const textColor = safeTextColor(primaryColor);
 
+  /* ---------- Composant interne : un volet (copie) ---------- */
+  const Slip: React.FC<{ copy: 'Comptabilité' | 'Contrôle' | 'Client'; note: string; }> = ({ copy, note }) => (
+    <div className="bg-white rounded-lg shadow-sm overflow-hidden" style={{ width: '81mm', margin: '0 auto' }}>
+      {/* Top */}
+      <div className="flex justify-between items-center border-b pb-2 mb-2 px-3" style={{ borderColor: hexToRgba(primaryColor, 0.3) }}>
+        <div className="flex items-center gap-2">
+          {company.logoUrl && (
+            <img
+              src={company.logoUrl}
+              alt={company.nom}
+              className="h-9 w-9 object-contain rounded border"
+              style={{ borderColor: primaryColor }}
+              onError={(e) => ((e.target as HTMLImageElement).src = '/default-company.png')}
+            />
+          )}
+          <div className="leading-tight">
+            <h2 className="text-sm font-bold" style={{ color: primaryColor }}>{company.nom}</h2>
+            {/* ✅ Affiche bien le NOM D'AGENCE, pas "WEB" */}
+            <p className="text-[11px] text-gray-700 flex items-center gap-1">
+              <MapPin className="h-3 w-3 text-gray-500" />
+              {(reservation.agencyNom || reservation.nomAgence || 'Agence').trim()}
+            </p>
+          </div>
+        </div>
+        <div className="text-right leading-tight pr-2">
+          <div className="badge-copy">{copy}</div>
+          <p className="text-[11px] font-mono tracking-tight text-gray-700 mt-1">N° {receiptNumber}</p>
+          <span
+            className="px-2 py-0.5 rounded text-[10px] font-medium"
+            style={{ backgroundColor: hexToRgba(primaryColor, 0.15), color: primaryColor }}
+          >
+            {(reservation.statut || 'payé').toString().toUpperCase()}
+          </span>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="px-3 pb-2 space-y-2">
+        {/* Client */}
+        <div>
+          <div className="flex items-center gap-1 mb-1">
+            <User className="h-3 w-3" style={{ color: primaryColor }} />
+            <h3 className="text-xs font-semibold" style={{ color: primaryColor }}>Client</h3>
+          </div>
+          <div className="grid grid-cols-2 gap-1 text-[11px]">
+            <div><p className="text-[10px] text-gray-600">Nom</p><p className="truncate">{reservation.nomClient}</p></div>
+            <div><p className="text-[10px] text-gray-600">Téléphone</p><p>{reservation.telephone}</p></div>
+          </div>
+        </div>
+
+        {/* Voyage */}
+        <div>
+          <div className="flex items-center gap-1 mb-1">
+            <Ticket className="h-3 w-3" style={{ color: primaryColor }} />
+            <h3 className="text-xs font-semibold" style={{ color: primaryColor }}>Voyage</h3>
+          </div>
+          <div className="grid grid-cols-2 gap-1 text-[11px]">
+            <div className="col-span-2">
+              <p className="text-[10px] text-gray-600">Trajet</p>
+              <div className="flex items-center gap-1">
+                <p className="font-medium">{reservation.depart}</p>
+                <ArrowRight className="h-3 w-3 text-gray-500" />
+                <p className="font-medium">{reservation.arrivee}</p>
+              </div>
+            </div>
+            <div><p className="text-[10px] text-gray-600">Date</p><p>{formatDate(reservation.date, 'dd/MM/yyyy')}</p></div>
+            <div><p className="text-[10px] text-gray-600">Heure</p><p>{reservation.heure}</p></div>
+            <div><p className="text-[10px] text-gray-600">Places</p><p>{reservation.seatsGo}{reservation.seatsReturn ? ` (+${reservation.seatsReturn} retour)` : ''}</p></div>
+            <div><p className="text-[10px] text-gray-600">Canal</p><p className="capitalize">{reservation.canal}</p></div>
+          </div>
+        </div>
+
+        {/* Paiement */}
+        <div>
+          <div className="flex items-center gap-1 mb-1">
+            <CreditCard className="h-3 w-3" style={{ color: primaryColor }} />
+            <h3 className="text-xs font-semibold" style={{ color: primaryColor }}>Paiement</h3>
+          </div>
+          <div className="grid grid-cols-2 gap-1 text-[11px]">
+            <div>
+              <p className="text-[10px] text-gray-600">Montant</p>
+              <p className="font-bold" style={{ color: primaryColor }}>{reservation.montant?.toLocaleString('fr-FR')} FCFA</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-gray-600">Méthode</p>
+              <p className="capitalize">{reservation.paiement}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* QR + Date d'émission + Validité */}
+        <div className="mt-2 p-1 rounded border border-gray-200 flex flex-col items-center">
+          <h3 className="text-xs font-semibold mb-1" style={{ color: primaryColor }}>Code d'embarquement</h3>
+          <div className="bg-white p-1 rounded border" style={{ borderColor: primaryColor }}>
+            <QRCode value={qrValue} size={60} fgColor={primaryColor} level="H" />
+          </div>
+          {/* ✅ Ajouts pour cohérence avec le reçu en ligne */}
+          <p className="mt-2 text-[10px] text-gray-600 text-center">
+            Date d’émission : {emissionDate}
+          </p>
+          <p className="text-[10px] text-gray-600 text-center">
+            Validité : 1 mois à compter de la date d’émission.
+          </p>
+        </div>
+
+        {/* Footer + note */}
+        <div className="mt-2 pt-2 border-t border-gray-200 text-center" style={{ fontSize: '10px', color: '#4b5563' }}>
+          <p className="mb-1">Merci d'avoir choisi {company.nom}</p>
+          <p className="italic mb-1">Présentez-vous 1H avant le départ</p>
+          <p className="font-medium mb-0.5">Infos : {reservation.agenceTelephone || company.telephone || '—'}</p>
+          <p className="mt-0.5 text-[9px] text-gray-400">
+            Ref {reservation.referenceCode || reservation.id} • Guichetier {reservation.guichetierCode || '—'} • Shift {reservation.shiftId || '—'}
+          </p>
+          <p className="mt-1 text-[9px] text-gray-500">{note}</p>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
-    <div 
+    <div
       className="min-h-screen bg-gray-50 print:bg-white"
-      style={{ 
-        '--primary': primaryColor,
-        '--secondary': secondaryColor,
-        '--text-on-primary': textColor
-      } as React.CSSProperties}
+      style={{
+        ['--primary' as any]: primaryColor,
+        ['--secondary' as any]: secondaryColor,
+        ['--text-on-primary' as any]: textColor
+      }}
     >
+      {/* Styles impression : ne montrer QUE #print-receipt, largeur 80mm */}
       <style>{`
         @media print {
-          body, html {
-            height: auto !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: white !important;
-            width: 81mm !important;
+          body * { visibility: hidden !important; }
+          #print-receipt, #print-receipt * { visibility: visible !important; }
+          #print-receipt {
+            position: fixed; inset: 0;
+            display: flex; align-items: flex-start; justify-content: center;
+            background: white; margin: 0; padding: 0;
           }
-          .receipt-container {
-            width: 81mm !important;
-            max-width: 81mm !important;
-            padding: 3mm !important;
-            font-size: 11px !important;
-            box-shadow: none !important;
-            border-radius: 0 !important;
-            border: none !important;
-            page-break-after: avoid !important;
-          }
-          .compact-section {
-            margin-bottom: 3px !important;
-            padding: 2px !important;
-          }
-          .qr-code-container {
-            width: 60px !important;
-            height: 60px !important;
-            margin: 0 auto !important;
-          }
-          .print-text-sm {
-            font-size: 10px !important;
-          }
-          .print-py-1 {
-            padding-top: 1px !important;
-            padding-bottom: 1px !important;
-          }
-          .no-print {
-            display: none !important;
-          }
-          .print-border-top {
-            border-top: 4px solid var(--primary) !important;
-          }
+          .no-print { display: none !important; }
         }
+        @page { size: 80mm auto; margin: 4mm; }
+        .perf { border-top: 1px dashed #9ca3af; margin: 8px 0 12px; position: relative; height: 1px; }
+        .perf::after { content: "✂︎"; position: absolute; right: -2px; top: -10px; font-size: 10px; color: #9ca3af; }
+        .badge-copy { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 6px; border: 1px solid #e5e7eb; background: #f9fafb; }
       `}</style>
 
-      {/* Header navigation (non imprimé) */}
-      <header 
-        className="sticky top-0 z-50 px-4 py-3 shadow-sm no-print"
-        style={{
-          backgroundColor: primaryColor,
-          color: textColor
-        }}
-      >
+      {/* Header (écran) */}
+      <header className="sticky top-0 z-50 px-4 py-3 shadow-sm no-print" style={{ backgroundColor: primaryColor, color: textColor }}>
         <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <button 
-            onClick={handleBack}
-            className="p-2 rounded-full hover:bg-white/10 transition"
-            aria-label="Retour"
-          >
+          <button onClick={handleBack} className="p-2 rounded-full hover:bg-white/10 transition" aria-label="Retour">
             <ChevronLeft className="h-5 w-5" />
           </button>
-          
           <div className="flex items-center gap-3">
             {company.logoUrl && (
-              <img 
-                src={company.logoUrl} 
+              <img
+                src={company.logoUrl}
                 alt={`Logo ${company.nom}`}
                 className="h-10 w-10 rounded-full object-cover border-2"
-                style={{ 
-                  borderColor: textColor,
-                  backgroundColor: hexToRgba(primaryColor, 0.2)
-                }}
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = '/default-company.png';
-                }}
+                style={{ borderColor: textColor }}
+                onError={(e) => ((e.target as HTMLImageElement).src = '/default-company.png')}
               />
             )}
             <div className="flex flex-col">
@@ -333,204 +372,37 @@ const ReceiptGuichetPage: React.FC = () => {
         </div>
       </header>
 
-      <div className="max-w-[81mm] mx-auto p-2 print:p-0 print:max-w-none">
-        {/* Conteneur principal du reçu */}
-        <div 
-          ref={receiptRef}
-          className="receipt-container bg-white rounded-lg shadow-sm overflow-hidden print-border-top"
-          style={{ width: '81mm', margin: '0 auto' }}
-        >
-          {/* En-tête du reçu */}
-<div 
-  className="flex justify-between items-center border-b pb-2 mb-2 px-3" 
-  style={{ borderColor: hexToRgba(primaryColor, 0.3) }}
->
-  {/* Logo + Société + Agence */}
-  <div className="flex items-center gap-2">
-    {company.logoUrl && (
-      <img 
-        src={company.logoUrl} 
-        alt={company.nom}
-        className="h-9 w-9 object-contain rounded border"
-        style={{ borderColor: primaryColor }}
-        onError={(e) => {
-          (e.target as HTMLImageElement).src = '/default-company.png';
-        }}
-      />
-    )}
-    <div className="leading-tight">
-      <h2 className="text-sm font-bold" style={{ color: primaryColor }}>
-        {company.nom}
-      </h2>
-      <p className="text-[11px] text-gray-700 flex items-center gap-1">
-        <MapPin className="h-3 w-3 text-gray-500" />
-        {(reservation.agenceNom || reservation.agencyNom || reservation.nomAgence || "Agence inconnue").trim()}
-      </p>
-    </div>
-  </div>
-
-  {/* Numéro de billet + Statut */}
-  <div className="text-right leading-tight pr-2">
-    <p className="text-[11px] font-mono tracking-tight text-gray-700">
-      N° {generateReceiptNumber()}
-    </p>
-    <span 
-      className="px-2 py-0.5 rounded text-[10px] font-medium"
-      style={{ 
-        backgroundColor: hexToRgba(primaryColor, 0.15),
-        color: primaryColor 
-      }}
-    >
-      {reservation.statut?.toUpperCase() || "EN ATTENTE"}
-    </span>
-  </div>
-</div>
-
-          {/* Corps du reçu */}
-          <div className="p-2 print:p-1 space-y-2 print-py-1">
-            {/* Section Client */}
-            <div className="compact-section">
-              <div className="flex items-center gap-1 mb-1">
-                <User className="h-3 w-3" style={{ color: primaryColor }} />
-                <h3 className="text-xs font-semibold" style={{ color: primaryColor }}>Client</h3>
-              </div>
-              <div className="grid grid-cols-2 gap-1 text-[11px]">
-                <div>
-                  <p className="text-[10px] text-gray-600">Nom</p>
-                  <p className="truncate">{reservation.nomClient}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-600">Téléphone</p>
-                  <p>{reservation.telephone}</p>
-                </div>
-                {reservation.referenceCode && (
-                  <div className="col-span-2">
-                    <p className="text-[10px] text-gray-600">Référence</p>
-                    <p className="font-mono text-[11px]">{reservation.referenceCode}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Section Voyage */}
-            <div className="compact-section">
-              <div className="flex items-center gap-1 mb-1">
-                <Ticket className="h-3 w-3" style={{ color: primaryColor }} />
-                <h3 className="text-xs font-semibold" style={{ color: primaryColor }}>Voyage</h3>
-              </div>
-              <div className="grid grid-cols-2 gap-1 text-[11px]">
-                <div className="col-span-2">
-                  <p className="text-[10px] text-gray-600">Trajet</p>
-                  <div className="flex items-center gap-1">
-                    <p className="font-medium">{reservation.depart}</p>
-                    <ArrowRight className="h-3 w-3 text-gray-500" />
-                    <p className="font-medium">{reservation.arrivee}</p>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-600">Date</p>
-                  <p>{formatDate(reservation.date, 'dd/MM/yyyy')}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-600">Heure</p>
-                  <p>{reservation.heure}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-600">Places</p>
-                  <p>
-                    {reservation.seatsGo} {reservation.seatsReturn ? `(+${reservation.seatsReturn} retour)` : ''}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-600">Canal</p>
-                  <p className="capitalize">{reservation.canal}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Section Paiement */}
-            <div className="compact-section">
-              <div className="flex items-center gap-1 mb-1">
-                <CreditCard className="h-3 w-3" style={{ color: primaryColor }} />
-                <h3 className="text-xs font-semibold" style={{ color: primaryColor }}>Paiement</h3>
-              </div>
-              <div className="grid grid-cols-2 gap-1 text-[11px]">
-                <div>
-                  <p className="text-[10px] text-gray-600">Montant</p>
-                  <p className="font-bold" style={{ color: primaryColor }}>
-                    {reservation.montant?.toLocaleString('fr-FR')} FCFA
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-600">Méthode</p>
-                  <p className="capitalize">{reservation.paiement}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* QR Code */}
-            <div className="mt-2 p-1 rounded border border-gray-200 flex flex-col items-center compact-section">
-              <h3 className="text-xs font-semibold mb-1" style={{ color: primaryColor }}>
-                Code d'embarquement
-              </h3>
-              <div className="bg-white p-1 rounded border qr-code-container" style={{ borderColor: primaryColor }}> 
-                <QRCode 
-                  value={qrContent} 
-                  size={60} 
-                  fgColor={primaryColor}
-                  level="H"
-                />
-              </div>
-            </div>
-
-            {/* Footer */}
-<div className="mt-2 pt-2 border-t border-gray-200 text-center compact-section"
-    style={{ fontSize: "10px", color: "#4b5563" }}>
-  
-  <p className="mb-1">Merci d'avoir choisi {company.nom}</p>
-  <p className="italic mb-1">Présentez-vous 1H avant le départ</p>
-  
-  <p className="font-medium mb-0.5">Pour plus d'infos, veuillez contacter :</p>
-  <div className="flex justify-center items-center gap-1 text-gray-700">
-    <Phone className="h-3 w-3 text-gray-500" />
-    <span>{reservation.agenceTelephone || company.telephone || "—"}</span>
-  </div>
-</div>  
-          </div>
+      {/* Zone imprimable : 3 volets empilés */}
+      <div className="max-w-[81mm] mx-auto p-2 print:p-0" id="print-receipt">
+        <div ref={receiptRef} style={{ width: '81mm', margin: '0 auto' }}>
+          <Slip copy="Comptabilité" note="À remettre au comptable par le guichetier immédiatement après la vente." />
+          <div className="perf" />
+          <Slip copy="Contrôle" note="À découper et conserver par le contrôleur lors de l’embarquement." />
+          <div className="perf" />
+          <Slip copy="Client" note="À conserver par le passager jusqu’à la fin du voyage." />
         </div>
 
-        {/* Boutons d'action (non imprimés) */}
-        <div className="no-print mt-3 grid grid-cols-1 gap-2">
+        {/* Actions (écran seulement) */}
+        <div className="no-print mt-3 grid grid-cols-1 gap-2" style={{ width: '81mm', margin: '0 auto' }}>
           <button
             onClick={handlePDF}
-            className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow transition-colors text-xs"
-            style={{
-              backgroundColor: primaryColor,
-              color: textColor
-            }}
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow text-xs"
+            style={{ backgroundColor: primaryColor, color: textColor }}
           >
-            <Download className="h-4 w-4" />
-            Télécharger
+            <Download className="h-4 w-4" /> Télécharger
           </button>
-
           <button
             onClick={() => window.print()}
-            className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow transition-colors text-xs"
-            style={{
-              backgroundColor: secondaryColor || hexToRgba(primaryColor, 0.8),
-              color: safeTextColor(secondaryColor || primaryColor)
-            }}
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg shadow text-xs"
+            style={{ backgroundColor: secondaryColor || hexToRgba(primaryColor, 0.8), color: safeTextColor(secondaryColor || primaryColor) }}
           >
-            <Printer className="h-4 w-4" />
-            Imprimer
+            <Printer className="h-4 w-4" /> Imprimer
           </button>
-
           <button
             onClick={() => navigate('/agence/guichet')}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 transition-colors text-xs"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg shadow hover:bg-gray-300 text-xs"
           >
-            <Home className="h-4 w-4" />
-            Retour à la compagnie
+            <Home className="h-4 w-4" /> Retour au guichet
           </button>
         </div>
       </div>

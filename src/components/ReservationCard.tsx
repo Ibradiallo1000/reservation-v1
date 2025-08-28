@@ -11,7 +11,9 @@ const statusStyles: Record<Reservation['statut'], string> = {
   preuve_recue: 'bg-amber-100 text-amber-800',
   annulé: 'bg-red-100 text-red-800',
   refusé: 'bg-red-100 text-red-800',
-  en_attente: ''
+  en_attente: '',
+  paiement_en_cours: '',
+  embarqué: ''
 };
 
 interface Props {

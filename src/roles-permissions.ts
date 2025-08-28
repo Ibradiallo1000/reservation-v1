@@ -11,7 +11,9 @@ export type Role =
   | 'agentCourrier'
   | 'support'
   | 'superviseur'
-  | 'embarquement';
+  | 'embarquement'
+  | 'comptable'   // ✅ ajouté
+  | 'user'; // rôle par défaut si rien dans Firestore
 
 export type ModuleKey =
   | 'compagnies'
@@ -31,13 +33,16 @@ export type ModuleKey =
   | 'embarquement';
 
 export const permissionsByRole: Record<Role, ModuleKey[]> = {
+  // Admin “app” basique
   admin: ['dashboard', 'parametres'],
 
+  // Admin plateforme
   admin_platforme: [
     'dashboard', 'compagnies', 'reservations', 'finances',
     'depenses', 'statistiques', 'personnel', 'messages', 'parametres'
   ],
 
+  // Admin d’une compagnie
   admin_compagnie: [
     'dashboard', 'trajets', 'reservations', 'statistiques',
     'messages', 'parametres', 'parametresVitrine',
@@ -45,37 +50,49 @@ export const permissionsByRole: Record<Role, ModuleKey[]> = {
     'personnel', 'embarquement'
   ],
 
+  // Compagnie (compte global)
   compagnie: [
     'dashboard', 'trajets', 'reservations', 'guichet',
     'courriers', 'parametres', 'embarquement'
   ],
 
-  // ✅ Donne TOUS les accès au chef d’agence
+  // ✅ Chef d’agence : accès quasi total
   chefAgence: [
     'dashboard', 'trajets', 'reservations', 'guichet',
     'courriers', 'personnel', 'parametres', 'embarquement',
     'finances', 'statistiques', 'agences', 'messages', 'parametresVitrine'
   ],
 
+  // Superviseur
   superviseur: [
     'dashboard', 'reservations', 'guichet', 'courriers',
     'trajets', 'finances', 'statistiques', 'embarquement'
   ],
 
+  // ✅ Guichetier : ce dont il a besoin
   guichetier: ['guichet', 'reservations', 'embarquement'],
 
+  // Gestionnaire (compta / opérations)
   gestionnaire: ['trajets', 'reservations', 'finances', 'depenses', 'statistiques'],
 
+  // Agent courrier
   agentCourrier: ['courriers'],
 
+  // Support
   support: ['messages'],
 
+  // Agent embarquement (contrôle à la gare)
   embarquement: ['embarquement', 'reservations'],
+
+  // ✅ Comptable : validation des postes, encaissements, rapports
+  comptable: ['dashboard', 'finances', 'reservations', 'depenses', 'statistiques'], // ✅ ajouté
+
+  // Rôle par défaut (aucun accès sensible)
+  user: [],
 };
 
+/** Vérifie l’accès d’un rôle à un module. */
 export const hasPermission = (role: Role, module: ModuleKey): boolean => {
-  const normalizedRole = (role || '').trim() as Role;
-  const allowed = permissionsByRole[normalizedRole] || [];
-  console.log("hasPermission Debug =>", { role: normalizedRole, module, allowed });
-  return allowed.includes(module);
+  const list = permissionsByRole[role] ?? permissionsByRole.user;
+  return list.includes(module);
 };

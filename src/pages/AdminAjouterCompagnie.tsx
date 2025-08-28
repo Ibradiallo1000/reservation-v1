@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { auth, db } from '../firebaseConfig';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'; // ← (updateProfile utile mais optionnel)
 import { doc, setDoc, collection, Timestamp } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 
@@ -45,12 +45,20 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
       const companyId = uid;
       const slug = slugify(nom);
 
+      // ⚠️ Normaliser le téléphone (garder uniquement les chiffres côté local, puis préfixer le code)
+      const fullPhone = `${code}${telephone.replace(/\D/g, '')}`; // ← AJOUT (normalisation)
+
+      // (optionnel) définir le displayName dans Auth
+      try {
+        await updateProfile(userCredential.user, { displayName: responsable });
+      } catch {}
+
       // Création document compagnie
       await setDoc(doc(db, 'companies', companyId), {
         nom,
         email,
         pays,
-        telephone: `${code}${telephone}`,
+        telephone: fullPhone,                      // ← AJOUT (téléphone normalisé)
         responsable,
         plan: 'free',
         createdAt: Timestamp.now(),
@@ -76,7 +84,7 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
       await setDoc(mainAgencyRef, {
         nom: 'Siège principal',
         adresse: '',
-        telephone: `${code}${telephone}`,
+        telephone: fullPhone,                      // ← AJOUT (téléphone normalisé)
         createdAt: Timestamp.now(),
         latitude: latitude || null,
         longitude: longitude || null,
@@ -86,14 +94,18 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
         isHeadOffice: true
       });
 
-      // Création du document utilisateur
+      // Création du document utilisateur (ADMIN COMPAGNIE)
       await setDoc(doc(db, 'users', uid), {
+        uid,                                       // ← AJOUT (pratique pour les listes)
         email,
         role: 'admin_compagnie',
         companyId,
         agencyId: mainAgencyRef.id,
         companyName: nom,
         nom: responsable,
+        displayName: responsable,                  // ← AJOUT (affichage clair)
+        telephone: fullPhone,                      // ← AJOUT IMPORTANT (téléphone admin dans Firestore)
+        active: true,                              // ← (facilite activer/désactiver)
         createdAt: Timestamp.now()
       });
 

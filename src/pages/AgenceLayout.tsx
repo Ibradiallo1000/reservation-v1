@@ -1,12 +1,10 @@
-import React, { useState, useMemo } from 'react';
-import { Link, Outlet, useLocation, matchPath } from 'react-router-dom';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Link, Outlet, useLocation, matchPath, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   LayoutDashboard,
   Ticket,
   MapPinned,
-  Mail,
-  Wallet,
   Coins,
   Receipt,
   Users,
@@ -22,7 +20,7 @@ interface MenuItem {
   path?: string;
   icon: React.ReactNode;
   submenu?: SubMenuItem[];
-  permission?: string;
+  permission?: string; // clé de permission
 }
 
 interface SubMenuItem {
@@ -34,10 +32,10 @@ interface SubMenuItem {
 interface CustomUser {
   displayName?: string;
   email?: string;
-  role?: string;
+  role?: string;              // 'chef_agence' | 'guichetier' | 'controleur' | 'comptable'
   agencyName?: string;
-  agencyLogoUrl?: string; // ✅ Logo ajouté
-  permissions?: string[];
+  agencyLogoUrl?: string;
+  permissions?: string[];     // overrides spécifiques utilisateur
 }
 
 interface AuthContextType {
@@ -51,8 +49,13 @@ const cn = (...classes: string[]) => classes.filter(Boolean).join(' ');
 const AgenceLayout: React.FC = () => {
   const { user, logout, hasPermission } = useAuth() as AuthContextType;
   const location = useLocation();
+  const navigate = useNavigate();
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
 
+  // Chef d'agence = accès total
+  const isChefAgence = user?.role === 'chef_agence';
+
+  // Menu déclaratif (filtré plus bas par rôle/permission)
   const menuItems: MenuItem[] = useMemo(() => [
     {
       label: 'Dashboard',
@@ -79,6 +82,12 @@ const AgenceLayout: React.FC = () => {
       permission: 'manage_routes'
     },
     {
+      label: 'Embarquement',
+      path: '/agence/embarquement',
+      icon: <Receipt className="w-5 h-5" />,
+      permission: 'manage_boarding'
+    },
+    {
       label: 'Recettes',
       path: '/agence/recettes',
       icon: <Coins className="w-5 h-5" />,
@@ -97,15 +106,46 @@ const AgenceLayout: React.FC = () => {
   };
 
   const isActive = (path?: string, submenu?: SubMenuItem[]) => {
-    if (path) return matchPath(path, location.pathname);
-    if (submenu) return submenu.some(item => matchPath(item.path, location.pathname));
+    if (path) return !!matchPath(path, location.pathname);
+    if (submenu) return submenu.some(item => !!matchPath(item.path, location.pathname));
     return false;
   };
+
+  // Redirection par défaut selon rôle si l’URL actuelle n’est pas autorisée
+  useEffect(() => {
+    const role = user?.role;
+    if (!role) return;
+
+    const defaultByRole: Record<string, string> = {
+      chef_agence: '/agence/dashboard',
+      guichetier: '/agence/guichet',
+      controleur: '/agence/embarquement',
+      comptable: '/agence/recettes',
+    };
+
+    const current = location.pathname;
+    const isHub = current === '/agence' || current === '/agence/';
+    const onDefaultDash = !!matchPath('/agence/dashboard', current);
+
+    // Chef d’agence → rien à forcer sauf si hub
+    if (isChefAgence) {
+      if (isHub) navigate(defaultByRole['chef_agence'], { replace: true });
+      return;
+    }
+
+    // Pour les autres rôles : s’ils sont au hub, ou sur dashboard sans droit dashboard, route vers la page par défaut du rôle
+    const canSeeDash = hasPermission('view_dashboard');
+    const target = defaultByRole[role] || '/agence/guichet';
+
+    if ((isHub || (onDefaultDash && !canSeeDash)) && current !== target) {
+      navigate(target, { replace: true });
+    }
+  }, [user?.role, isChefAgence, hasPermission, location.pathname, navigate]);
 
   return (
     <div className="flex min-h-screen bg-[#f4f6fc]">
       <aside className="w-64 bg-white shadow-md text-gray-900 flex flex-col fixed h-full">
-        {/* ✅ Bloc header logo + nom */}
+        {/* Header logo + nom */}
         <div className="p-4 border-b flex items-center gap-3">
           {user?.agencyLogoUrl ? (
             <img
@@ -127,10 +167,11 @@ const AgenceLayout: React.FC = () => {
           </div>
         </div>
 
+        {/* Navigation filtrée par rôle/permission */}
         <nav className="flex-1 overflow-y-auto py-4">
           <div className="space-y-1 px-2">
             {menuItems.map((item) => {
-              const canAccess = !item.permission || hasPermission(item.permission);
+              const canAccess = isChefAgence || !item.permission || hasPermission(item.permission);
               if (!canAccess) return null;
 
               return item.submenu ? (
@@ -155,7 +196,7 @@ const AgenceLayout: React.FC = () => {
                   {openMenus[item.label] && (
                     <div className="mt-1 space-y-1 ml-12">
                       {item.submenu.map((subItem) => {
-                        const canAccessSub = !subItem.permission || hasPermission(subItem.permission);
+                        const canAccessSub = isChefAgence || !subItem.permission || hasPermission(subItem.permission);
                         if (!canAccessSub) return null;
 
                         return (
@@ -193,6 +234,7 @@ const AgenceLayout: React.FC = () => {
           </div>
         </nav>
 
+        {/* Footer user + actions */}
         <div className="p-4 border-t">
           <div className="flex items-center justify-between">
             <div>
@@ -222,6 +264,8 @@ const AgenceLayout: React.FC = () => {
           </div>
         </div>
       </aside>
+
+      {/* Contenu */}
       <main className="flex-1 ml-64 p-6 overflow-auto bg-[#f4f6fc]">
         <div className="max-w-7xl mx-auto">
           <Outlet />

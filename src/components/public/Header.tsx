@@ -1,5 +1,4 @@
 import React from 'react';
-import { LazyLoadImage } from 'react-lazy-load-image-component';
 import { Menu, X, Settings } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import MobileMenu from './MobileMenu';
@@ -26,14 +25,8 @@ interface HeaderProps {
   isMobile?: boolean;
 }
 
-const isColorDark = (hex: string): boolean => {
-  const c = hex.replace('#', '');
-  const r = parseInt(c.substring(0, 2), 16);
-  const g = parseInt(c.substring(2, 4), 16);
-  const b = parseInt(c.substring(4, 6), 16);
-  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-  return brightness < 128;
-};
+// Couleur de marque par défaut si non fournie
+const BRAND_ORANGE = '#FF6600';
 
 const Header: React.FC<HeaderProps> = ({
   company,
@@ -47,68 +40,81 @@ const Header: React.FC<HeaderProps> = ({
   navigate,
   t,
 }) => {
-  const logoFallback = '/default-logo.png';
-  const primaryColor = colors.primary || '#facc15';
-  const secondaryColor = colors.secondary || '#e2e8f0';
+  const brandColor = colors.primary || BRAND_ORANGE;
+  const secondaryColor = colors.secondary || '#e5e7eb';
 
-  const companyNameColor = isColorDark(primaryColor)
-    ? primaryColor
-    : secondaryColor || '#1f2937';
+  // avatar fallback (initiale) si pas de logo
+  const Initials = ({ name }: { name?: string }) => {
+    const letter = (name || 'C').trim().charAt(0).toUpperCase();
+    return (
+      <div
+        className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold"
+        style={{ backgroundColor: brandColor }}
+      >
+        {letter}
+      </div>
+    );
+  };
 
   return (
-    <header className="sticky top-0 z-50 w-full backdrop-blur-md bg-transparent border-b border-white/10">
-      <div className="absolute top-0 left-0 w-full h-[80px] bg-transparent overflow-hidden">
-  <svg
-    viewBox="0 0 1440 120"
-    preserveAspectRatio="none"
-    className="w-full h-full"
-  >
-    <path
-      d="M0,0 C480,60 960,0 1440,70 L1440,0 L0,0 Z"
-      fill={secondaryColor}
-    />
-  </svg>
-</div>
+    <header className="sticky top-0 z-50 w-full bg-white/95 backdrop-blur border-b border-gray-100">
+      {/* Bande/onde secondaire plus haute */}
+      <div className="absolute top-0 left-0 w-full h-[80px] overflow-hidden pointer-events-none">
+        <svg viewBox="0 0 1440 120" preserveAspectRatio="none" className="w-full h-full">
+          <path d="M0,0 C480,60 960,0 1440,70 L1440,0 L0,0 Z" fill={secondaryColor} />
+        </svg>
+      </div>
 
+      <div className="relative z-10 max-w-7xl mx-auto px-4 py-2 flex items-center justify-between">
+        {/* Gauche : menu + bloc marque */}
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="md:hidden p-2 rounded-md border border-gray-300 bg-white"
+            aria-label="Menu"
+          >
+            {menuOpen ? <X className="h-6 w-6 text-slate-800" /> : <Menu className="h-6 w-6 text-slate-800" />}
+          </button>
 
-      <div className="relative z-10 max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-        <div className="flex items-center gap-3">
-  <button
-    onClick={() => setMenuOpen(!menuOpen)}
-    className="md:hidden p-2 rounded-md border border-gray-300 bg-white shadow"
-    aria-label="Menu"
-  >
-    {menuOpen ? (
-      <X className="h-6 w-6 text-slate-800" />
-    ) : (
-      <Menu className="h-6 w-6 text-slate-800" />
-    )}
-  </button>
+          {/* Bloc marque : cercle logo + nom (couleur unique, aligné) */}
+          <button
+            onClick={() => navigate('/')}
+            className="flex items-center gap-2 select-none"
+            aria-label={company?.nom || 'Accueil'}
+          >
+            <div className="h-10 w-10 rounded-full bg-white border border-gray-200 overflow-hidden shadow-sm flex items-center justify-center">
+              {company?.logoUrl ? (
+                <img
+                  src={company.logoUrl}
+                  alt={`Logo ${company.nom || 'Compagnie'}`}
+                  width={40}
+                  height={40}
+                  className="w-full h-full object-contain"
+                  // ⬇️ pour charger vite et éviter le clignotement
+                  fetchPriority="high"
+                  decoding="async"
+                />
+              ) : (
+                <Initials name={company?.nom} />
+              )}
+            </div>
 
-  {/* Logo */}
-  <div className="h-10 w-10 rounded-full bg-white border border-gray-200 overflow-hidden shadow-sm flex-shrink-0">
-    <LazyLoadImage
-      src={company.logoUrl || logoFallback}
-      alt={`Logo ${company.nom || 'Compagnie'}`}
-      className="w-full h-full object-contain"
-      onError={(e: any) => (e.target.src = logoFallback)}
-    />
-  </div>
+            <span
+              className="text-xl font-bold leading-tight break-words"
+              style={{ color: brandColor, maxWidth: '240px' }}
+              title={company?.nom || t('ourCompany')}
+            >
+              {company?.nom || t('ourCompany')}
+            </span>
+          </button>
+        </div>
 
-  {/* Nom de la compagnie sans troncature */}
-  <span
-    className="text-xl font-bold whitespace-normal break-words leading-tight"
-    style={{ color: companyNameColor, maxWidth: '250px' }}
-    title={company.nom || t('ourCompany')}
-  >
-    {company.nom || t('ourCompany')}
-  </span>
-</div>
-
+        {/* Centre (desktop) : sélecteur de langue */}
         <div className="hidden md:block">
           <LanguageSwitcher />
         </div>
 
+        {/* Droite (desktop) */}
         <div className="hidden md:flex items-center gap-4">
           <button
             onClick={() => navigate(`/${slug}/mes-reservations`)}
@@ -134,6 +140,7 @@ const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
+      {/* Menu mobile */}
       <AnimatePresence>
         {menuOpen && (
           <MobileMenu
@@ -147,7 +154,7 @@ const Header: React.FC<HeaderProps> = ({
               setMenuOpen(false);
             }}
             slug={slug}
-            colors={colors}
+            colors={{ ...colors, primary: brandColor }}
             classes={classes}
             config={config}
             t={t}

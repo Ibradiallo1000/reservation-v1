@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams } from 'react-router-dom';
-import { collection, onSnapshot, query, Timestamp, orderBy, limit, where, getDocs } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+// src/pages/DashboardAgencePage.tsx
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useParams } from 'react-router-dom'; // ⬅️ Link retiré
+import { collection, onSnapshot, query, where, Timestamp, orderBy } from 'firebase/firestore';
+import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/hooks/useCompanyTheme';
 import type { Reservation } from '@/types/index';
@@ -24,34 +25,12 @@ import {
   DocumentArrowDownIcon
 } from '@heroicons/react/24/outline';
 
-import { Card, CardHeader, CardContent } from '@/components/ui/card';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Button } from '@/components/ui/button';
-
-interface DailyStat {
-  date: string;
-  reservations: number;
-  revenue: number;
-}
-
-interface DestinationStat {
-  name: string;
-  count: number;
-}
-
-interface ChannelStat {
-  name: string;
-  value: number;
-}
-
-interface TopRoute {
-  id: string;
-  name: string;
-  count: number;
-  revenue: number;
-}
-
-interface DashboardStats {
+/* ===================== Types & helpers (inchangés) ===================== */
+type DailyStat = { date: string; reservations: number; revenue: number };
+type DestinationStat = { name: string; count: number };
+type ChannelStat = { name: string; value: number };
+type TopRoute = { id: string; name: string; count: number; revenue: number };
+type DashboardStats = {
   sales: number;
   totalRevenue: number;
   dailyStats: DailyStat[];
@@ -59,233 +38,283 @@ interface DashboardStats {
   destinations: DestinationStat[];
   channels: ChannelStat[];
   topRoutes: TopRoute[];
-}
+};
+const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const endOfDay   = (d: Date) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
+const startOfMonth = (y:number,m:number) => new Date(y, m, 1, 0,0,0,0);
+const endOfMonth   = (y:number,m:number) => new Date(y, m+1, 0, 23,59,59,999);
+const startOfYear  = (y:number) => new Date(y, 0, 1, 0,0,0,0);
+const endOfYear    = (y:number) => new Date(y,11,31,23,59,59,999);
+const fmtDDMM = (d: Date) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+type ModePeriode = 'month'|'year'|'range';
 
+/* ===================== Page ===================== */
 const DashboardAgencePage: React.FC = () => {
-  const { user, company } = useAuth();
-  const theme = useCompanyTheme(company);
+  const { user } = useAuth();
+  const theme = useCompanyTheme();
   const { id: agencyIdFromRoute } = useParams();
 
-  const [dateRange, setDateRange] = useState<[Date, Date]>([
-    new Date(new Date().setDate(new Date().getDate() - 7)),
-    new Date()
+  // Filtres de période
+  const now = new Date();
+  const [mode, setMode] = useState<ModePeriode>('month');
+  const [mois, setMois] = useState<number>(now.getMonth());
+  const [annee, setAnnee] = useState<number>(now.getFullYear());
+  const [rangeStart, setRangeStart] = useState<string>('');
+  const [rangeEnd, setRangeEnd] = useState<string>('');
+  const [dateRange, setDateRange] = useState<[Date,Date]>([
+    startOfMonth(now.getFullYear(), now.getMonth()),
+    endOfMonth(now.getFullYear(), now.getMonth())
   ]);
-  const [timeRange, setTimeRange] = useState('week');
 
+  useEffect(() => {
+    if (mode === 'month') {
+      setDateRange([ startOfMonth(annee, mois), endOfMonth(annee, mois) ]);
+    } else if (mode === 'year') {
+      setDateRange([ startOfYear(annee), endOfYear(annee) ]);
+    } else {
+      const s = rangeStart ? startOfDay(new Date(rangeStart)) : startOfDay(now);
+      const e = rangeEnd ? endOfDay(new Date(rangeEnd)) : endOfDay(now);
+      setDateRange([s,e]);
+    }
+  }, [mode, mois, annee, rangeStart, rangeEnd]);
+
+  // Données
   const [stats, setStats] = useState<DashboardStats>({
-    sales: 0,
-    totalRevenue: 0,
-    dailyStats: [],
-    nextDeparture: '',
-    destinations: [],
-    channels: [],
-    topRoutes: []
+    sales: 0, totalRevenue: 0, dailyStats: [],
+    nextDeparture: '—', destinations: [], channels: [], topRoutes: []
   });
   const [isLoading, setIsLoading] = useState(true);
-
   const unsubscribeRef = useRef<() => void>();
 
-  const formatDate = (date: Date) => {
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    return `${day}/${month}`;
-  };
-
   const fetchStats = useCallback(async (startDate: Date, endDate: Date) => {
-    const agencyId = agencyIdFromRoute || user?.agencyId;
     const companyId = user?.companyId;
-    if (!agencyId || !companyId) return;
+    const agencyId  = agencyIdFromRoute || user?.agencyId;
+    if (!companyId || !agencyId) return;
 
     setIsLoading(true);
+    if (unsubscribeRef.current) unsubscribeRef.current();
 
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-    }
+    const qy = query(
+      collection(db, 'companies', companyId, 'agences', agencyId, 'reservations'),
+      where('createdAt','>=', Timestamp.fromDate(startDate)),
+      where('createdAt','<=', Timestamp.fromDate(endDate)),
+      where('statut','==','payé'),
+      orderBy('createdAt','asc')
+    );
 
-    try {
-      const startTimestamp = Timestamp.fromDate(startDate);
-      const endTimestamp = Timestamp.fromDate(endDate);
+    const unsub = onSnapshot(qy, snap => {
+      const rows: Reservation[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
 
-      const reservationsQuery = query(
-        collection(db, 'companies', companyId, 'agences', agencyId, 'reservations'),
-        where('createdAt', '>=', startTimestamp),
-        where('createdAt', '<=', endTimestamp)
-      );
+      let totalRevenue = 0;
+      const channels: Record<'online'|'counter', number> = { online:0, counter:0 };
+      const dest: Record<string, number> = {};
+      const daily: Record<string, {count:number; revenue:number}> = {};
+      const topMap: Record<string, {name:string; count:number; revenue:number}> = {};
 
-      const unsubscribe = onSnapshot(reservationsQuery, async (reservationsSnap) => {
-        const reservations: Reservation[] = reservationsSnap.docs.map(doc => ({
-          ...(doc.data() as Reservation),
-          id: doc.id
-        }));
+      for (const r of rows) {
+        totalRevenue += r.montant || 0;
 
-        let totalRevenue = 0;
-        const channelCounts: Record<string, number> = { online: 0, counter: 0 };
-        const destinationCounts: Record<string, number> = {};
-        const dailyStatsMap: Record<string, { count: number; revenue: number }> = {};
-        const trajetStats: Record<string, { count: number; revenue: number; departure?: string; arrival?: string }> = {};
+        const raw = (r.canal || '').toString().toLowerCase().trim();
+        const norm = raw.replace(/\s|_|-/g,'');
+        const isOnline = norm.includes('ligne') || norm === 'online' || norm === 'web';
+        const canal: 'online'|'counter' = isOnline ? 'online' : 'counter';
+        channels[canal]++;
 
-        reservations.forEach(reservation => {
-          totalRevenue += reservation.montant || 0;
+        const destKey = r.arrivee || 'Inconnu';
+        dest[destKey] = (dest[destKey]||0) + 1;
 
-          let canal = reservation.canal?.toLowerCase().trim() || 'counter';
-          const normalizedCanal = canal.replace(/\s|_|-/g, '');
-          canal = ['enligne', 'online'].includes(normalizedCanal) ? 'online' : 'counter';
-          channelCounts[canal] = (channelCounts[canal] || 0) + 1;
+        if ((r as any).createdAt) {
+          const d = toJSDate((r as any).createdAt);
+          const key = fmtDDMM(d);
+          if (!daily[key]) daily[key] = {count:0, revenue:0};
+          daily[key].count++;
+          daily[key].revenue += r.montant || 0;
+        }
 
-          const depart = reservation.depart || 'Inconnu';
-          destinationCounts[depart] = (destinationCounts[depart] || 0) + 1;
+        const routeName = `${r.depart || '?'} → ${r.arrivee || '?'}`;
+        const routeKey  = r.trajetId || routeName;
+        if (!topMap[routeKey]) topMap[routeKey] = { name: routeName, count:0, revenue:0 };
+        topMap[routeKey].count  += 1;
+        topMap[routeKey].revenue+= r.montant || 0;
+      }
 
-          const trajetId = reservation.trajetId || 'inconnu';
-          if (!trajetStats[trajetId]) trajetStats[trajetId] = { count: 0, revenue: 0 };
-          trajetStats[trajetId].count += 1;
-          trajetStats[trajetId].revenue += reservation.montant || 0;
-
-          if (!trajetStats[trajetId].departure && reservation.depart) {
-            trajetStats[trajetId].departure = reservation.depart;
-            trajetStats[trajetId].arrival = reservation.arrivee;
-          }
-
-          if (reservation.createdAt) {
-            const date = toJSDate(reservation.createdAt);
-            const dateKey = formatDate(date);
-            if (!dailyStatsMap[dateKey]) dailyStatsMap[dateKey] = { count: 0, revenue: 0 };
-            dailyStatsMap[dateKey].count += 1;
-            dailyStatsMap[dateKey].revenue += reservation.montant || 0;
-          }
+      const dailyStats = Object.entries(daily)
+        .map(([date, v]) => ({ date, reservations: v.count, revenue: v.revenue }))
+        .sort((a,b)=> {
+          const [ad,am]=a.date.split('/').map(Number), [bd,bm]=b.date.split('/').map(Number);
+          return am===bm ? ad-bd : am-bm;
         });
 
-        const dailyStats = Object.entries(dailyStatsMap)
-          .map(([date, { count, revenue }]) => ({ date, reservations: count, revenue }))
-          .sort((a, b) => {
-            const [aDay, aMonth] = a.date.split('/').map(Number);
-            const [bDay, bMonth] = b.date.split('/').map(Number);
-            return aMonth === bMonth ? aDay - bDay : aMonth - bMonth;
-          });
+      const channelData: ChannelStat[] = [
+        { name:'En ligne', value: channels.online },
+        { name:'Guichet',  value: channels.counter }
+      ];
 
-        const channelData: ChannelStat[] = [
-          { name: 'En ligne', value: channelCounts.online },
-          { name: 'Guichet', value: channelCounts.counter }
-        ];
+      const topRoutes: TopRoute[] = Object.entries(topMap)
+        .map(([id,v]) => ({ id, name:v.name, count:v.count, revenue:v.revenue }))
+        .sort((a,b)=> b.revenue - a.revenue);
 
-        setStats({
-          sales: reservations.length,
-          totalRevenue,
-          dailyStats,
-          nextDeparture: '—',
-          destinations: Object.entries(destinationCounts).map(([name, count]) => ({ name, count })),
-          channels: channelData,
-          topRoutes: Object.entries(trajetStats).map(([trajetId, stats]) => ({
-            id: trajetId,
-            name: `${stats.departure || '?'} → ${stats.arrival || '?'}`,
-            count: stats.count,
-            revenue: stats.revenue
-          }))
-        });
-        setIsLoading(false);
+      const destinations: DestinationStat[] = Object.entries(dest)
+        .map(([name,count]) => ({ name, count }))
+        .sort((a,b)=> b.count - a.count);
+
+      setStats({
+        sales: rows.length,
+        totalRevenue,
+        dailyStats,
+        nextDeparture: '—',
+        destinations,
+        channels: channelData,
+        topRoutes
       });
-
-      unsubscribeRef.current = unsubscribe;
-    } catch (err) {
-      console.error("Erreur:", err);
       setIsLoading(false);
-    }
-  }, [user, agencyIdFromRoute]);
+    }, (e)=>{ console.error(e); setIsLoading(false); });
+
+    unsubscribeRef.current = unsub;
+  }, [user?.companyId, user?.agencyId, agencyIdFromRoute]);
 
   useEffect(() => {
     fetchStats(dateRange[0], dateRange[1]);
     return () => { if (unsubscribeRef.current) unsubscribeRef.current(); };
   }, [fetchStats, dateRange]);
 
+  // Pagination “Top trajets”
+  const [routePage, setRoutePage] = useState(1);
+  const pageSize = 10;
+  const totalRoutePages = Math.max(1, Math.ceil(stats.topRoutes.length / pageSize));
+  useEffect(()=>{ setRoutePage(1); }, [stats.topRoutes.length]);
+  const visibleTopRoutes = useMemo(() => {
+    const start = (routePage-1)*pageSize;
+    return stats.topRoutes.slice(start, start+pageSize);
+  }, [stats.topRoutes, routePage]);
+
+  // Export CSV
+  const exportCSV = () => {
+    const header = ['Date','Réservations','Revenus'];
+    const rows = stats.dailyStats.map(d => [d.date, String(d.reservations), String(d.revenue)]);
+    const csv = [header, ...rows].map(r => r.join(';')).join('\n');
+    const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='dashboard_reservations.csv'; a.click(); URL.revokeObjectURL(url);
+  };
+
   return (
-    <div 
-      className="min-h-screen p-4 md:p-6" 
-      style={{ backgroundColor: theme.colors.background }}
-    >
+    <div className="min-h-screen p-4 md:p-6" style={{ backgroundColor: theme.colors.background }}>
       <div className="max-w-7xl mx-auto space-y-6">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 
-              className="text-2xl md:text-3xl font-bold" 
-              style={{ color: theme.colors.primary }}
-            >
-              Tableau de bord - Réservations
-            </h1>
-            <p 
-              className="px-3 py-1 rounded-md text-sm font-medium shadow-sm"
-              style={{ 
-                backgroundColor: `${theme.colors.secondary}20`, 
-                color: theme.colors.primary 
-              }}
-            >
-              {user?.agencyName} • Mis à jour à {new Date().toLocaleTimeString()}
-            </p>
-          </div>
 
-          <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-            <Tabs value={timeRange} onValueChange={setTimeRange}>
-              <TabsList style={{ backgroundColor: theme.colors.secondary, color: theme.colors.text }}>
-                <TabsTrigger value="day">Aujourd'hui</TabsTrigger>
-                <TabsTrigger value="week">7 jours</TabsTrigger>
-                <TabsTrigger value="month">Mois</TabsTrigger>
-                <TabsTrigger value="year">Année</TabsTrigger>
-              </TabsList>
-            </Tabs>
-
-            <Button 
-              variant="outline" 
-              className="gap-2 border rounded-lg shadow-sm"
+        {/* En-tête + filtres période */}
+        <div className="rounded-xl bg-white shadow-sm border p-4 space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-2xl md:text-3xl font-bold" style={{ color: theme.colors.primary }}>
+                Tableau de bord • Réservations
+              </h1>
+              <p
+                className="px-3 py-1 rounded-md text-sm font-medium shadow-sm"
+                style={{ backgroundColor: `${theme.colors.secondary}20`, color: theme.colors.primary }}
+              >
+                {user?.agencyName} • Période {dateRange[0].toLocaleDateString()} → {dateRange[1].toLocaleDateString()}
+              </p>
+            </div>
+            <button
+              onClick={exportCSV}
+              className="inline-flex items-center gap-2 border rounded-lg px-3 py-2 shadow-sm"
               style={{ borderColor: theme.colors.primary, color: theme.colors.primary }}
             >
-              <DocumentArrowDownIcon className="h-5 w-5" />
-              <span className="hidden sm:inline">Exporter</span>
-            </Button>
+              <DocumentArrowDownIcon className="h-5 w-5" /> Exporter
+            </button>
+          </div>
+
+          {/* Contrôles période */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="mode" checked={mode==='month'} onChange={()=>setMode('month')} /> Mois
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="mode" checked={mode==='year'} onChange={()=>setMode('year')} /> Année
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="mode" checked={mode==='range'} onChange={()=>setMode('range')} /> Période personnalisée
+              </label>
+            </div>
+
+            {mode==='month' && (
+              <div className="flex items-center gap-2">
+                <select className="border rounded-lg px-3 py-2" value={mois} onChange={e=>setMois(Number(e.target.value))}>
+                  {Array.from({length:12}).map((_,i)=>
+                    <option key={i} value={i}>
+                      {new Date(2000,i,1).toLocaleString('fr-FR',{month:'long'})}
+                    </option>
+                  )}
+                </select>
+                <input className="border rounded-lg px-3 py-2 w-28" type="number" value={annee} onChange={e=>setAnnee(Number(e.target.value))} />
+              </div>
+            )}
+
+            {mode==='year' && (
+              <div className="flex items-center gap-2">
+                <input className="border rounded-lg px-3 py-2 w-28" type="number" value={annee} onChange={e=>setAnnee(Number(e.target.value))} />
+              </div>
+            )}
+
+            {mode==='range' && (
+              <div className="flex items-center gap-2">
+                <input type="date" className="border rounded-lg px-3 py-2" value={rangeStart} onChange={e=>setRangeStart(e.target.value)} />
+                <span className="text-gray-500">→</span>
+                <input type="date" className="border rounded-lg px-3 py-2" value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)} />
+              </div>
+            )}
           </div>
         </div>
 
+        {/* ❌ Bloc "Actions rapides" supprimé pour éviter la répétition (présent dans AgenceShellPage) */}
+
+        {/* KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard 
-            title="Billets vendus" 
-            value={stats.sales} 
-            icon={<TicketIcon className="h-5 w-5" style={{ color: theme.colors.secondary }} />} 
-            color="primary" 
-            link="/reservations" 
-            isLoading={isLoading} 
+          <MetricCard
+            title="Billets vendus"
+            value={stats.sales}
+            icon={<TicketIcon className="h-5 w-5" style={{ color: theme.colors.secondary }} />}
+            color="primary"
+            link="/agence/reservations"
+            isLoading={isLoading}
           />
-          <MetricCard 
-            title="Revenus totaux" 
-            value={stats.totalRevenue} 
-            icon={<CurrencyDollarIcon className="h-5 w-5" style={{ color: theme.colors.primary }} />} 
-            color="success" 
-            isCurrency 
-            isLoading={isLoading} 
+          <MetricCard
+            title="Revenus totaux"
+            value={stats.totalRevenue}
+            icon={<CurrencyDollarIcon className="h-5 w-5" style={{ color: theme.colors.primary }} />}
+            color="success"
+            isCurrency
+            isLoading={isLoading}
           />
-          <MetricCard 
-            title="En ligne" 
-            value={stats.channels.find(c => c.name === 'En ligne')?.value || 0} 
-            icon={<ComputerDesktopIcon className="h-5 w-5" style={{ color: theme.colors.primary }} />} 
-            color="info" 
-            isLoading={isLoading} 
+          <MetricCard
+            title="En ligne"
+            value={stats.channels.find(c => c.name==='En ligne')?.value || 0}
+            icon={<ComputerDesktopIcon className="h-5 w-5" style={{ color: theme.colors.primary }} />}
+            color="info"
+            isLoading={isLoading}
           />
-          <MetricCard 
-            title="Au guichet" 
-            value={stats.channels.find(c => c.name === 'Guichet')?.value || 0} 
-            icon={<BuildingStorefrontIcon className="h-5 w-5" style={{ color: theme.colors.secondary }} />} 
-            color="warning" 
-            isLoading={isLoading} 
+          <MetricCard
+            title="Au guichet"
+            value={stats.channels.find(c => c.name==='Guichet')?.value || 0}
+            icon={<BuildingStorefrontIcon className="h-5 w-5" style={{ color: theme.colors.secondary }} />}
+            color="warning"
+            isLoading={isLoading}
           />
         </div>
 
+        {/* Graph + canaux */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 p-4 rounded-lg shadow-md bg-white">
             <RevenueChart data={stats.dailyStats} isLoading={isLoading} />
           </div>
-          <div className="space-y-6">
-            <div className="p-4 rounded-lg shadow-md bg-white">
-              <ChannelsChart data={stats.channels} isLoading={isLoading} />
-            </div>
+          <div className="p-4 rounded-lg shadow-md bg-white">
+            <ChannelsChart data={stats.channels} isLoading={isLoading} />
           </div>
         </div>
 
+        {/* Destinations / Top trajets (pagination) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="p-4 rounded-lg shadow-md bg-white">
             <NextDepartureCard isLoading={isLoading} />
@@ -293,10 +322,22 @@ const DashboardAgencePage: React.FC = () => {
           <div className="p-4 rounded-lg shadow-md bg-white">
             <DestinationsChart destinations={stats.destinations} isLoading={isLoading} />
           </div>
-          <div className="p-4 rounded-lg shadow-md bg-white">
-            <TopTrajetsCard trajets={stats.topRoutes} isLoading={isLoading} />
+
+          <div className="p-4 rounded-lg shadow-md bg-white space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold">Top trajets</div>
+              <div className="text-sm text-gray-600">
+                {stats.topRoutes.length} lignes • page {routePage}/{totalRoutePages}
+              </div>
+            </div>
+            <TopTrajetsCard trajets={visibleTopRoutes} isLoading={isLoading} />
+            <div className="flex items-center justify-end gap-2">
+              <button className="px-3 py-1 rounded border" onClick={()=>setRoutePage(p=>Math.max(1,p-1))} disabled={routePage<=1}>Préc.</button>
+              <button className="px-3 py-1 rounded border" onClick={()=>setRoutePage(p=>Math.min(totalRoutePages,p+1))} disabled={routePage>=totalRoutePages}>Suiv.</button>
+            </div>
           </div>
         </div>
+
       </div>
     </div>
   );

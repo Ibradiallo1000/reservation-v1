@@ -1,48 +1,55 @@
+import './firebaseConfig';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './index.css';
 import './i18n';
-import { BrowserRouter } from 'react-router-dom';
-import { useRegisterSW } from 'virtual:pwa-register/react';
+import { handleFirestoreError } from './utils/firestoreErrorHandler';
 
-const root = ReactDOM.createRoot(document.getElementById('root')!);
+/* ================== Interception globale des erreurs d’index ================== */
+// 1) Promesses non catchées
+window.addEventListener('unhandledrejection', (event) => {
+  const err: any = event?.reason;
+  const msg = String(err?.message ?? '');
+  if (err?.code === 'failed-precondition' && msg.includes('create_index')) {
+    handleFirestoreError(err);
+    // Évite le popup rouge React dans certains cas
+    event.preventDefault?.();
+  }
+});
 
-function MainApp() {
-  const {
-    needRefresh,
-    offlineReady,
-    updateServiceWorker,
-  } = useRegisterSW();
+// 2) console.error (optionnel mais pratique : remonte un lien propre)
+const originalConsoleError = console.error.bind(console);
+console.error = (...args: any[]) => {
+  const err = args?.[0];
+  const msg = String(err?.message ?? '');
+  if (err?.code === 'failed-precondition' && msg.includes('create_index')) {
+    handleFirestoreError(err);
+  } else {
+    originalConsoleError(...args);
+  }
+};
+/* ============================================================================ */
 
-  return (
-    <>
-      <BrowserRouter basename="/">
-        <App />
-      </BrowserRouter>
-
-      {offlineReady && (
-        <div className="fixed bottom-4 right-4 bg-green-100 text-green-800 p-3 rounded-lg shadow-lg">
-          ✅ L’application Teliya est prête à être utilisée hors ligne
-        </div>
-      )}
-      {needRefresh && (
-        <div className="fixed bottom-4 right-4 bg-blue-100 text-blue-800 p-3 rounded-lg shadow-lg flex gap-2">
-          🔄 Nouvelle version disponible
-          <button
-            onClick={() => updateServiceWorker(true)}
-            className="bg-blue-600 text-white px-3 py-1 rounded"
-          >
-            Mettre à jour
-          </button>
-        </div>
-      )}
-    </>
-  );
+// Nettoyage des Service Workers existants
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((regs) => {
+    regs.forEach((r) => r.unregister());
+  });
 }
 
-root.render(
+ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <MainApp />
+    <BrowserRouter
+      future={{
+        // @ts-ignore
+        v7_startTransition: true,
+        // @ts-ignore
+        v7_relativeSplatPath: true,
+      }}
+    >
+      <App />
+    </BrowserRouter>
   </React.StrictMode>
 );

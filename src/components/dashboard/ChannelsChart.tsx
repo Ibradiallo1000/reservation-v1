@@ -1,19 +1,12 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  Tooltip,
-  Legend
-} from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, Label } from "recharts";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/hooks/useCompanyTheme";
 
 interface ChannelStat {
-  name: string;
+  name: string; // "En ligne" | "Guichet"
   value: number;
 }
 
@@ -27,13 +20,39 @@ export const ChannelsChart = ({
   const { company } = useAuth();
   const theme = useCompanyTheme(company);
 
+  // Normalisation des libellés + calcul des pourcentages
+  const enriched = useMemo(() => {
+    // Harmonise "guiché/guichet/..." → "Guichet", "en ligne" → "En ligne"
+    const normalize = (s: string) =>
+      (s || "")
+        .toLowerCase()
+        .trim()
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/\s+/g, " ")
+        .replace("guiche", "guichet")
+        .replace("en ligne", "En ligne")
+        .replace("guichet", "Guichet")
+        .replace(/^en ligne$/, "En ligne")
+        .replace(/^guichet$/, "Guichet");
+
+    const fixed = data.map(d => ({ ...d, name: normalize(d.name) }));
+    const total = fixed.reduce((s, d) => s + (Number(d.value) || 0), 0);
+    return {
+      total,
+      rows: fixed.map(d => ({
+        ...d,
+        pct: total ? Math.round((Number(d.value) / total) * 100) : 0
+      }))
+    };
+  }, [data]);
+
   // Palette dynamique
   const COLORS = [
     theme.colors.primary,
     theme.colors.secondary,
     theme.colors.accent,
     theme.colors.tertiary,
-    "#9CA3AF", // gris fallback
+    "#9CA3AF" // fallback
   ];
 
   if (isLoading) {
@@ -52,38 +71,58 @@ export const ChannelsChart = ({
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
-                data={data}
+                data={enriched.rows}
                 cx="50%"
                 cy="50%"
-                labelLine={false}
-                outerRadius={80}
+                innerRadius={60}
+                outerRadius={90}
+                paddingAngle={2}
                 dataKey="value"
-                label={({ name, percent }) =>
-                  `${name} ${(percent * 100).toFixed(0)}%`
-                }
-                animationDuration={1500}
+                nameKey="name"
+                labelLine={false}
+                // On laisse les labels sur les parts désactivés pour éviter le chevauchement,
+                // tout est géré dans la légende et le tooltip
               >
-                {data.map((entry, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={COLORS[index % COLORS.length]}
-                  />
+                {enriched.rows.map((_, i) => (
+                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
                 ))}
+                {/* Total au centre */}
+                <Label
+                  position="center"
+                  content={() => (
+                    <text textAnchor="middle" dominantBaseline="middle">
+                      <tspan fontSize="16" fontWeight={700}>{enriched.total}</tspan>
+                      <tspan x="0" dy="1.2em" fontSize="11" fill="#64748B">
+                        réservations
+                      </tspan>
+                    </text>
+                  )}
+                />
               </Pie>
+
               <Tooltip
-                formatter={(value) => [`${value}`, "réservations"]}
+                formatter={(value: number, name: string, props: any) => {
+                  const pct = props?.payload?.pct ?? 0;
+                  return [`${value} (${pct}%)`, name];
+                }}
                 contentStyle={{
                   backgroundColor: "#fff",
                   border: `1px solid ${theme.colors.secondary}`,
                   borderRadius: "0.5rem",
                   color: theme.colors.primary,
                   boxShadow:
-                    "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1)",
+                    "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1)"
                 }}
               />
+
               <Legend
-                wrapperStyle={{
-                  color: theme.colors.text,
+                verticalAlign="bottom"
+                align="center"
+                wrapperStyle={{ paddingTop: 8, color: theme.colors.text }}
+                formatter={(value: string, entry: any) => {
+                  const v = entry?.payload?.value ?? 0;
+                  const p = entry?.payload?.pct ?? 0;
+                  return `${value} — ${v} (${p}%)`;
                 }}
               />
             </PieChart>

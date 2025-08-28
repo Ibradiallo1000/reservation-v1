@@ -133,13 +133,6 @@ const CompagnieLayout: React.FC = () => {
                 theme={theme}
               />
               <NavItem
-                to="/compagnie/personnel"
-                label="Personnel"
-                icon={<Users />}
-                active={isActive('/compagnie/personnel')}
-                theme={theme}
-              />
-              <NavItem
                 to="/compagnie/payment-settings"
                 label="Moyens de paiement"
                 icon={<Settings />}
