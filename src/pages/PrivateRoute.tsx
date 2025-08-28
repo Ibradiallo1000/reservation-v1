@@ -13,7 +13,8 @@ export type Role =
   | 'agentCourrier'
   | 'comptable'
   | 'embarquement'
-  | 'user';
+  | 'user'
+  | 'financier';
 
 interface PrivateRouteProps {
   children: React.ReactNode;
@@ -49,6 +50,7 @@ const defaultLandingByRole: Record<Role, string> = {
   comptable: '/agence/comptabilite',
   embarquement: '/agence/embarquement',
   user: '/',
+  financier: ''
 };
 
 const asArray = (v: unknown) => (Array.isArray(v) ? v : [v].filter(Boolean));
