@@ -105,10 +105,11 @@ function normalizeShift(id: string, data: any): ShiftDoc {
 type Api = {
   activeShift?: ShiftDoc | null;
   status: ShiftStatus;
-  startShift: () => Promise<void>;      // crée une demande (pending) — ID auto
+  loading: boolean;                 // ✅ ajouté pour compat avec les composants
+  startShift: () => Promise<void>;  // crée une demande (pending) — ID auto
   pauseShift: () => Promise<void>;
   continueShift: () => Promise<void>;
-  closeShift: () => Promise<void>;      // clôture + rapport
+  closeShift: () => Promise<void>;  // clôture + rapport
   validateByAccountant: (shiftId: string) => Promise<void>;
   validateByManager: (shiftId: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -123,14 +124,17 @@ type Api = {
 export function useActiveShift(): Api {
   const { user } = useAuth() as any;
   const [activeShift, setActiveShift] = useState<ShiftDoc | null>(null);
+  const [loading, setLoading] = useState<boolean>(true); // ✅
   const status: ShiftStatus = activeShift?.status ?? 'none';
 
   /* --------- Abonnement au shift ouvert (pending/active/paused) --------- */
   useEffect(() => {
     if (!user?.companyId || !user?.agencyId || !user?.uid) {
       setActiveShift(null);
+      setLoading(false);
       return;
     }
+    setLoading(true);
     const shiftsRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
     const qy = query(
       shiftsRef,
@@ -139,10 +143,19 @@ export function useActiveShift(): Api {
       orderBy('createdAt', 'desc'),
       limit(1)
     );
-    const unsub = onSnapshot(qy, (snap) => {
-      if (snap.empty) setActiveShift(null);
-      else setActiveShift(normalizeShift(snap.docs[0].id, snap.docs[0].data()));
-    });
+    const unsub = onSnapshot(
+      qy,
+      (snap) => {
+        if (snap.empty) setActiveShift(null);
+        else setActiveShift(normalizeShift(snap.docs[0].id, snap.docs[0].data()));
+        setLoading(false);
+      },
+      (err) => {
+        console.error('[useActiveShift] onSnapshot error:', err);
+        setActiveShift(null);
+        setLoading(false);
+      }
+    );
     return () => unsub();
   }, [user?.uid, user?.companyId, user?.agencyId]);
 
@@ -356,6 +369,7 @@ export function useActiveShift(): Api {
   return {
     activeShift,
     status,
+    loading, // ✅ exposé
     startShift,
     pauseShift,
     continueShift,

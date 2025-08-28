@@ -1,4 +1,4 @@
-// ✅ functions/src/hooks/useReservations.ts
+// src/hooks/useReservations.ts
 import { useState, useEffect } from 'react';
 import {
   collection,
@@ -11,13 +11,13 @@ import {
   QueryDocumentSnapshot,
   getDocs
 } from 'firebase/firestore';
-import { db } from '../../src/firebaseConfig';
-import { Reservation, ReservationStatus, Channel } from '@/types/index';
+import { db } from '@/firebaseConfig';
+import { Reservation, ReservationStatus, Canal } from '@/types/index';
 
 interface UseReservationsOptions {
   companyId: string;
   statuses: ReservationStatus[];
-  channel: Channel;
+  channel: Canal;            // <- Channel => Canal
   limit: number;
   realtime?: boolean;
   playSound?: boolean;
@@ -121,6 +121,7 @@ export const useReservations = ({
     }
 
     return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, JSON.stringify(statuses), channel, limit, realtime]);
 
   // ✅ Pagination « charger plus »

@@ -1,9 +1,10 @@
+// src/components/layout/GuichetSessionCard.tsx
 import React from 'react';
 import { useActiveShift } from '@/hooks/useActiveShift';
 import { useAuth } from '@/contexts/AuthContext';
 
 const GuichetSessionCard: React.FC = () => {
-  const { startShift, closeShift, activeShift, loading } = useActiveShift();
+  const { startShift, closeShift, activeShift } = useActiveShift(); // ❌ enlevé loading
   const { user } = useAuth();
 
   return (
@@ -14,9 +15,10 @@ const GuichetSessionCard: React.FC = () => {
         <div className="text-[11px] text-gray-500">{user?.agencyName}</div>
 
         {!activeShift ? (
-          <button disabled={loading}
-                  onClick={startShift}
-                  className="mt-3 w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700">
+          <button
+            onClick={startShift}
+            className="mt-3 w-full bg-emerald-600 text-white py-2 rounded-lg hover:bg-emerald-700"
+          >
             Démarrer le poste
           </button>
         ) : (
@@ -24,20 +26,26 @@ const GuichetSessionCard: React.FC = () => {
             <span className="inline-flex items-center gap-1 text-emerald-700 text-sm">
               <span className="w-2 h-2 rounded-full bg-emerald-500"></span> En service
             </span>
-            <button onClick={() => closeShift()}
-                    className="ml-auto text-sm px-3 py-1 rounded-md bg-red-600 text-white hover:bg-red-700">
+            <button
+              onClick={() => closeShift()}
+              className="ml-auto text-sm px-3 py-1 rounded-md bg-red-600 text-white hover:bg-red-700"
+            >
               Clôturer
             </button>
           </div>
         )}
 
         <button
-          onClick={() => document.getElementById('rapport-anchor')?.scrollIntoView({behavior:'smooth'})}
-          className="mt-2 w-full text-sm px-3 py-2 rounded-md border hover:bg-gray-50">
+          onClick={() =>
+            document.getElementById('rapport-anchor')?.scrollIntoView({ behavior: 'smooth' })
+          }
+          className="mt-2 w-full text-sm px-3 py-2 rounded-md border hover:bg-gray-50"
+        >
           Ouvrir le rapport de poste
         </button>
       </div>
     </div>
   );
 };
+
 export default GuichetSessionCard;

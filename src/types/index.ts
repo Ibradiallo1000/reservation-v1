@@ -1,3 +1,4 @@
+// src/types/index.ts
 import type { Timestamp } from "firebase/firestore";
 
 /** ————— Enums normalisés ————— */
@@ -12,6 +13,9 @@ export type ReservationStatus =
 
 export type Canal = "en_ligne" | "guichet" | "telephone";
 
+/** ✅ Alias pour compatibilité avec l’existant (anglais) */
+export type Channel = Canal;
+
 export type PaiementSource =
   | "encaisse_guichet"
   | "encaisse_mm"
@@ -23,44 +27,44 @@ export interface Reservation {
   trajetId: string;
   // Identité/portée
   id: string;
-  companyId: string;        // normalisé (ex: remplace compagnieId)
-  agencyId: string;         // normalisé (ex: remplace agenceId)
-  voyageId: string;         // voyage concret (date/heure/bus)
+  companyId: string;
+  agencyId: string;
+  voyageId: string;
   busId?: string;
 
   // Client
-  clientNom: string;        // normalisé (remplace nomClient | clientNom)
+  clientNom: string;
   telephone: string;
   email?: string;
 
   // Trajet/voyage
-  depart: string;           // normalisé (remplace depart)
-  arrivee: string;          // normalisé (remplace arrivee)
-  date: string;             // ISO yyyy-mm-dd
-  heure: string;            // HH:mm
+  depart: string;
+  arrivee: string;
+  date: string;   // yyyy-mm-dd
+  heure: string;  // HH:mm
   seatsGo: number;
   seatsReturn?: number;
 
   // Vente/paiement
-  canal: Canal;             // "guichet" | "en_ligne" | "telephone"
+  canal: Canal;   // (alias Channel disponible)
   paiementSource?: PaiementSource;
   montant: number;
   statut: ReservationStatus;
 
-  // Guichet/shift (si canal="guichet")
+  // Guichet/shift
   guichetierId?: string;
   shiftId?: string;
 
-  // Sécurité & référence
+  // Référence
   referenceCode: string;
   qrSig?: string;
   qrVersion?: number;
 
-  // Preuve (si en ligne)
+  // Preuve (en ligne)
   preuveUrl?: string;
   preuveMessage?: string;
 
-  // Métadonnées (snapshots utiles pour UI/exports)
+  // Métadonnées
   companySlug?: string;
   agencyNom?: string;
   agencyTelephone?: string;
@@ -77,7 +81,7 @@ export interface Bus {
   id: string;
   immatriculation: string;
   capacite: number;
-  seatMap?: string[];                // ["1A","1B",...]
+  seatMap?: string[];
   statut: "OK" | "maintenance" | "HS";
   proprietaire?: "comp" | "affretement";
   notes?: string;
@@ -89,13 +93,13 @@ export interface Voyage {
   companyId: string;
   agencyId: string;
   weeklyTripId?: string;
-  date: string;                      // yyyy-mm-dd
-  heure: string;                     // HH:mm
+  date: string;
+  heure: string;
   depart: string;
   arrivee: string;
   busId?: string;
   immatriculation?: string;
-  capaciteEffective?: number;        // capacité réellement dispo
+  capaciteEffective?: number;
   driverId?: string;
   controleurId?: string;
   statut: "planifie" | "embarquement" | "parti" | "annule";
@@ -103,29 +107,12 @@ export interface Voyage {
   updatedAt?: Timestamp;
 }
 
-/** ————— Shifts (postes guichetier) ————— */
-export interface Shift {
-  id: string;
-  companyId: string;
-  agencyId: string;
-  guichetierId: string;
-  guichetierNom?: string;
-  startTime: string;                 // ISO
-  endTime?: string;                  // ISO
-  status: "en_service" | "cloture";
-  ventesCount?: number;
-  montantEncaisse?: number;
-  encaissementMode?: "cash" | "mm" | "mixte";
-  versementDeclare?: number;
-  versementValideParControleur?: boolean;
-}
-
-/** ————— WeeklyTrip (gabarit hebdo) ————— */
+/** ————— WeeklyTrip ————— */
 export interface WeeklyTrip {
   id: string;
-  departure: string;                 // normalisé
-  arrival: string;                   // normalisé
-  horaires?: { [dayName: string]: string[] }; // ex: "lundi":["08:00","14:00"]
+  departure: string;
+  arrival: string;
+  horaires?: { [dayName: string]: string[] };
   price: number;
   places: number;
   [key: string]: any;
