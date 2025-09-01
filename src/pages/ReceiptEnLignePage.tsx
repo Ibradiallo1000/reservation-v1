@@ -10,6 +10,7 @@ import { hexToRgba, safeTextColor } from '@/utils/color';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
+// ---------- Types ----------
 type ReservationStatus = 'confirmé' | 'annulé' | 'en attente' | 'payé' | string;
 
 interface Reservation {
@@ -21,13 +22,14 @@ interface Reservation {
   date: string;
   heure: string;
   montant: number;
-  referenceCode?: string;
+  referenceCode?: string;          // ex: "MT-AP-WEB-0016"
   companyId: string;
   companySlug: string;
   companyName?: string;
   agencyId?: string;
-  agencyNom?: string;
-  agenceNom?: string;
+  nomAgence?: string;              // <- PRIORITÉ 1
+  agencyNom?: string;              // <- alias
+  agenceNom?: string;              // <- alias ancien
   statut?: ReservationStatus;
   canal?: string;
   seatsGo: number;
@@ -45,6 +47,7 @@ interface CompanyInfo {
   code?: string;
 }
 
+// ---------- Page ----------
 const ReceiptEnLignePage: React.FC = () => {
   const { id, slug } = useParams<{ id: string; slug: string }>();
   const navigate = useNavigate();
@@ -54,31 +57,31 @@ const ReceiptEnLignePage: React.FC = () => {
 
   const [reservation, setReservation] = useState<Reservation | null>(reservationFromState || null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(locationCompanyInfo || null);
-  const [agencyName, setAgencyName] = useState<string>('Agence'); // ✅ vrai nom d’agence
+  const [agencyName, setAgencyName] = useState<string>('Agence'); // sera remplacé si trouvé
   const receiptRef = useRef<HTMLDivElement>(null);
 
   const primaryColor = companyInfo?.couleurPrimaire || '#8b3a2f';
   const secondaryColor = companyInfo?.couleurSecondaire || '#f59e0b';
   const textColor = safeTextColor(primaryColor);
 
-  // Pré-remplir agencyName depuis la résa passée en state
+  // Pré-remplir nom d’agence depuis l'état de navigation
   useEffect(() => {
-    const inline = reservationFromState?.agencyNom || reservationFromState?.agenceNom;
+    const inline = reservationFromState?.nomAgence || reservationFromState?.agencyNom || reservationFromState?.agenceNom;
     if (inline) setAgencyName(inline);
-  }, [reservationFromState?.agencyNom, reservationFromState?.agenceNom]);
+  }, [reservationFromState?.nomAgence, reservationFromState?.agencyNom, reservationFromState?.agenceNom]);
 
-  // Fallback de réservation si accès direct (optionnel)
+  // Fallback : charger la réservation si l’accès est direct
   useEffect(() => {
     const load = async () => {
       if (!reservation && id) {
-        const snap = await getDoc(doc(db, 'reservations', id)); // fallback minimal si tu as cette collection
-        if (snap.exists()) setReservation({ ...(snap.data() as Reservation), id: snap.id });
+        const snap = await getDoc(doc(db, 'reservations', id)).catch(() => null as any);
+        if (snap && snap.exists()) setReservation({ ...(snap.data() as Reservation), id: snap.id });
       }
     };
     load();
   }, [id, reservation]);
 
-  // Charger companyInfo si absent (accès direct)
+  // Charger les infos compagnie si absentes
   useEffect(() => {
     const fetchCompany = async () => {
       if (companyInfo || !reservation?.companyId) return;
@@ -100,21 +103,34 @@ const ReceiptEnLignePage: React.FC = () => {
     fetchCompany();
   }, [companyInfo, reservation?.companyId]);
 
-  // Lire l’agence si pas déjà connue
+  // Récupérer le vrai nom d’agence si nécessaire
   useEffect(() => {
-    const fetchAgency = async () => {
-      if (agencyName !== 'Agence') return;           // déjà connu via state
-      if (!reservation?.companyId || !reservation?.agencyId) return;
+    // si déjà fourni par la réservation (nomAgence / agencyNom / agenceNom) → on l'affiche
+    const inline = reservation?.nomAgence || reservation?.agencyNom || reservation?.agenceNom;
+    if (inline) {
+      setAgencyName(inline);
+      return;
+    }
+    // sinon on va lire l'agence dans Firestore
+    if (!reservation?.companyId || !reservation?.agencyId) return;
+
+    // ---- Narrowing explicite pour TypeScript ----
+    const companyId: string = reservation.companyId;
+    const agencyId: string = reservation.agencyId;
+
+    (async () => {
       try {
-        const ag = await getDoc(doc(db, 'companies', reservation.companyId, 'agences', reservation.agencyId));
+        const agRef = doc(db, 'companies', companyId, 'agences', agencyId);
+        const ag = await getDoc(agRef);
         if (ag.exists()) {
           const a = ag.data() as any;
           setAgencyName(a?.nom || a?.name || 'Agence');
         }
-      } catch { /* ignore */ }
-    };
-    fetchAgency();
-  }, [agencyName, reservation?.companyId, reservation?.agencyId]);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [reservation?.companyId, reservation?.agencyId, reservation?.nomAgence, reservation?.agencyNom, reservation?.agenceNom]);
 
   const emissionDate =
     reservation?.createdAt?.seconds
@@ -125,6 +141,7 @@ const ReceiptEnLignePage: React.FC = () => {
     ? format(parseISO(reservation.date), 'dd/MM/yyyy', { locale: fr })
     : '';
 
+  // Export PDF
   const handlePDF = useCallback(() => {
     if (!receiptRef.current) return;
     const filename = `recu-${reservation?.referenceCode || reservation?.id || 'billet'}.pdf`;
@@ -147,25 +164,37 @@ const ReceiptEnLignePage: React.FC = () => {
     );
   }
 
+  // On affiche la référence déjà enregistrée
   const receiptNumber = reservation.referenceCode || '—';
   const qrValue = `${window.location.origin}/r/${encodeURIComponent(receiptNumber)}`;
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Header avec couleur primaire */}
       <header className="sticky top-0 z-20 px-4 py-2 shadow-sm" style={{ backgroundColor: primaryColor, color: textColor }}>
         <div className="flex items-center justify-between max-w-md mx-auto">
-          <button onClick={() => navigate(-1)} className="p-2 rounded-full">
+          <button onClick={() => navigate(-1)} className="p-2 rounded-full" aria-label="Retour">
             <ChevronLeft size={22} />
           </button>
           <h1 className="font-bold text-lg">Reçu de réservation</h1>
-          {companyInfo.logoUrl && (
-            <img src={companyInfo.logoUrl} alt="Logo" className="h-8 w-8 rounded-full object-cover border" style={{ borderColor: textColor }} />
+          {companyInfo.logoUrl ? (
+            <img
+              src={companyInfo.logoUrl}
+              alt="Logo"
+              className="h-8 w-8 rounded-full object-cover border"
+              style={{ borderColor: textColor }}
+            />
+          ) : (
+            <div className="h-8 w-8 rounded-full grid place-items-center font-bold" style={{ background: hexToRgba(textColor, 0.15) }}>
+              {(companyInfo.name || 'C').slice(0, 1)}
+            </div>
           )}
         </div>
       </header>
 
       <main className="max-w-md mx-auto px-4 py-6">
         <div ref={receiptRef} className="bg-white rounded-lg shadow-sm border p-4">
+          {/* En-tête société + agence + n° reçu */}
           <div className="flex justify-between items-center border-b pb-2 mb-2" style={{ borderColor: hexToRgba(primaryColor, 0.3) }}>
             <div className="flex items-center gap-2">
               {companyInfo.logoUrl && (
@@ -180,19 +209,22 @@ const ReceiptEnLignePage: React.FC = () => {
               <div>
                 <h2 className="font-bold text-sm">{companyInfo.name}</h2>
                 <p className="text-xs text-gray-600 flex items-center gap-1">
-                  <MapPin size={12} /> {agencyName /* ✅ VRAI nom d’agence */}
+                  <MapPin size={12} /> {agencyName}
                 </p>
               </div>
             </div>
             <div className="text-right">
               <p className="text-xs font-mono">N° {receiptNumber}</p>
-              <span className="px-1 py-0.5 rounded text-[10px] font-medium"
-                    style={{ backgroundColor: hexToRgba(primaryColor, 0.15), color: primaryColor }}>
+              <span
+                className="px-1 py-0.5 rounded text-[10px] font-medium"
+                style={{ backgroundColor: hexToRgba(primaryColor, 0.15), color: primaryColor }}
+              >
                 {(reservation.statut || 'payé').toString().toUpperCase()}
               </span>
             </div>
           </div>
 
+          {/* Client */}
           <div className="mb-3">
             <h3 className="font-semibold text-sm flex items-center gap-1" style={{ color: primaryColor }}>
               <User size={14} style={{ color: secondaryColor }} /> Client
@@ -203,6 +235,7 @@ const ReceiptEnLignePage: React.FC = () => {
             </div>
           </div>
 
+          {/* Voyage */}
           <div className="mb-3">
             <h3 className="font-semibold text-sm flex items-center gap-1" style={{ color: primaryColor }}>
               <Ticket size={14} style={{ color: secondaryColor }} /> Voyage
@@ -220,6 +253,7 @@ const ReceiptEnLignePage: React.FC = () => {
             </div>
           </div>
 
+          {/* Paiement */}
           <div className="mb-3">
             <h3 className="font-semibold text-sm flex items-center gap-1" style={{ color: primaryColor }}>
               <CreditCard size={14} style={{ color: secondaryColor }} /> Paiement
@@ -232,8 +266,11 @@ const ReceiptEnLignePage: React.FC = () => {
             </div>
           </div>
 
+          {/* QR – Code d’embarquement */}
           <div className="text-center border-t pt-3">
-            <h3 className="text-sm font-semibold mb-2" style={{ color: primaryColor }}>Code d'embarquement</h3>
+            <h3 className="text-sm font-semibold mb-2" style={{ color: primaryColor }}>
+              Code d'embarquement
+            </h3>
             <div className="flex justify-center">
               <QRCode value={qrValue} size={80} fgColor={primaryColor} />
             </div>
@@ -248,18 +285,29 @@ const ReceiptEnLignePage: React.FC = () => {
         </div>
       </main>
 
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t py-3 px-4 grid grid-cols-3 gap-2"
-           style={{ borderColor: hexToRgba(primaryColor, 0.3) }}>
-        <button onClick={handlePDF} className="py-2 rounded-lg font-medium flex items-center justify-center gap-1"
-                style={{ backgroundColor: primaryColor, color: textColor }}>
+      {/* Actions fixes */}
+      <div
+        className="fixed bottom-0 left-0 right-0 bg-white border-t py-3 px-4 grid grid-cols-3 gap-2"
+        style={{ borderColor: hexToRgba(primaryColor, 0.3) }}
+      >
+        <button
+          onClick={handlePDF}
+          className="py-2 rounded-lg font-medium flex items-center justify-center gap-1"
+          style={{ backgroundColor: primaryColor, color: textColor }}
+        >
           <Download size={16} /> Télécharger
         </button>
-        <button onClick={() => window.print()} className="py-2 rounded-lg font-medium flex items-center justify-center gap-1"
-                style={{ backgroundColor: secondaryColor, color: safeTextColor(secondaryColor) }}>
+        <button
+          onClick={() => window.print()}
+          className="py-2 rounded-lg font-medium flex items-center justify-center gap-1"
+          style={{ backgroundColor: secondaryColor, color: safeTextColor(secondaryColor) }}
+        >
           <Printer size={16} /> Imprimer
         </button>
-        <button onClick={() => navigate(`/${slug}`)}
-                className="py-2 rounded-lg font-medium flex items-center justify-center gap-1 bg-gray-200 text-gray-800">
+        <button
+          onClick={() => navigate(`/${slug}`)}
+          className="py-2 rounded-lg font-medium flex items-center justify-center gap-1 bg-gray-200 text-gray-800"
+        >
           <Home size={16} /> Retour
         </button>
       </div>

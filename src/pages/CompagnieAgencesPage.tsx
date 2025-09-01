@@ -1,4 +1,6 @@
+// =============================================
 // src/pages/CompagnieAgencesPage.tsx
+// =============================================
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   collection,
@@ -14,6 +16,8 @@ import {
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, auth } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePageHeader } from '@/contexts/PageHeaderContext';
+import useCompanyTheme from '@/hooks/useCompanyTheme';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -56,7 +60,9 @@ const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const isValidPhone = (s: string) => s.length >= 8 && s.length <= 15; // adapte au besoin
 
 const CompagnieAgencesPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, company } = useAuth();
+  const theme = useCompanyTheme(company);
+  const { setHeader, resetHeader } = usePageHeader();
   const navigate = useNavigate();
 
   const [agences, setAgences] = useState<Agence[]>([]);
@@ -84,7 +90,7 @@ const CompagnieAgencesPage: React.FC = () => {
   const [emailError, setEmailError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const couleurPrincipale = user?.companyColor || '#2563eb';
+  const couleurPrincipale = theme.colors?.primary || user?.companyColor || '#2563eb';
   const companyId = user?.companyId;
 
   const MapClickHandler = ({ onPositionChange }: { onPositionChange: (lat: number, lng: number) => void }) => {
@@ -95,6 +101,18 @@ const CompagnieAgencesPage: React.FC = () => {
     });
     return null;
   };
+
+  // ===== Header dynamique (bandeau fixe)
+  useEffect(() => {
+    setHeader({
+      title: 'Agences',
+      subtitle: agences.length ? `${agences.length} agence${agences.length > 1 ? 's' : ''}` : '',
+      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
+      fg: '#fff',
+    });
+    return () => resetHeader();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agences.length, theme.colors.primary, theme.colors.secondary]);
 
   // ===== Fetch agences
   const fetchAgences = async () => {
@@ -122,8 +140,8 @@ const CompagnieAgencesPage: React.FC = () => {
   const checkEmailExists = async (email: string): Promise<boolean> => {
     try {
       const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', email));
-      const querySnapshot = await getDocs(q);
+      const qy = query(usersRef, where('email', '==', email));
+      const querySnapshot = await getDocs(qy);
       return !querySnapshot.empty;
     } catch (error) {
       console.error("Erreur lors de la vérification de l'email:", error);
@@ -161,7 +179,6 @@ const CompagnieAgencesPage: React.FC = () => {
       return;
     }
     if ((name === 'latitude' || name === 'longitude') && value !== '') {
-      // autoriser nombres, virgule/point
       const clean = value.replace(',', '.');
       setFormData(prev => ({ ...prev, [name]: clean }));
       return;
@@ -205,7 +222,6 @@ const CompagnieAgencesPage: React.FC = () => {
       return;
     }
 
-    // validations frontend
     const emailOk = isValidEmail(formData.emailGerant);
     const phoneOk = isValidPhone(formData.telephone);
     if (!emailOk) {
@@ -275,7 +291,7 @@ const CompagnieAgencesPage: React.FC = () => {
           email: formData.emailGerant,
           displayName: formData.nomGerant,
           telephone: formData.telephone,
-          role: 'chef_agence', // cohérent
+          role: 'chef_agence',
           companyId,
           agencyId: agenceRef.id,
           createdAt: new Date(),
@@ -288,7 +304,6 @@ const CompagnieAgencesPage: React.FC = () => {
       fetchAgences();
     } catch (err: any) {
       console.error('Erreur pendant handleSubmit:', err?.code, err?.message, err);
-      // messages plus explicites pour les cas fréquents
       if (err?.code === 'permission-denied') {
         alert("Permissions insuffisantes (Firestore rules).");
       } else if (err?.code === 'auth/email-already-in-use') {
@@ -351,9 +366,8 @@ const CompagnieAgencesPage: React.FC = () => {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-8">
-        <h2 className="text-2xl font-bold" style={{ color: couleurPrincipale }}>
-          Gestion des agences
-        </h2>
+        {/* Titre retiré: désormais dans le header fixe */}
+        <div />
         <button
           onClick={() => setShowForm(!showForm)}
           className="flex items-center px-4 py-2 rounded-md shadow-sm text-white font-medium"

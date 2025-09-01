@@ -264,19 +264,22 @@ const AgenceComptabilitePage: React.FC = () => {
     return () => unsub();
   }, [user?.companyId, user?.agencyId]);
 
-  /* ---------- Live stats ---------- */
+  /* ---------- Live stats (active + paused) ---------- */
   useEffect(() => {
     if (!user?.companyId || !user?.agencyId) return;
     const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
 
+    // Nettoyer les écoutes inutiles
     for (const id of Object.keys(liveUnsubsRef.current)) {
-      if (!activeShifts.find(s => s.id === id)) {
+      const stillNeeded = !![...activeShifts, ...pausedShifts].find(s => s.id === id);
+      if (!stillNeeded) {
         liveUnsubsRef.current[id]?.();
         delete liveUnsubsRef.current[id];
       }
     }
 
-    for (const s of activeShifts) {
+    // Ajouter les écoutes pour active + paused
+    for (const s of [...activeShifts, ...pausedShifts]) {
       if (liveUnsubsRef.current[s.id]) continue;
       const qLive = query(rRef, where('shiftId', '==', s.id), where('canal', '==', 'guichet'));
       const unsub = onSnapshot(qLive, (snap) => {
@@ -296,7 +299,7 @@ const AgenceComptabilitePage: React.FC = () => {
       for (const k of Object.keys(liveUnsubsRef.current)) liveUnsubsRef.current[k]?.();
       liveUnsubsRef.current = {};
     };
-  }, [activeShifts, user?.companyId, user?.agencyId]);
+  }, [activeShifts, pausedShifts, user?.companyId, user?.agencyId]);
 
   /* ---------- Agrégats pour réceptions ---------- */
   useEffect(() => {
@@ -472,8 +475,7 @@ const AgenceComptabilitePage: React.FC = () => {
 
         tx.set(newRef, rcpt);
 
-        // ⚠️ Après validation comptable, on NE passe PAS le shift en "validated".
-        // Il reste "closed" et sort de la liste "Réceptions à valider".
+        // Ne pas passer en "validated" ici
         tx.update(shiftRef, {
           status: 'closed',
           endTime: endAt,
@@ -620,12 +622,12 @@ const AgenceComptabilitePage: React.FC = () => {
 
   const liveTotalsGlobal = useMemo(() => {
     let reservations = 0, tickets = 0, amount = 0;
-    for (const s of activeShifts) {
+    for (const s of [...activeShifts, ...pausedShifts]) { // inclut pause
       const lv = liveStats[s.id];
       if (lv) { reservations += lv.reservations; tickets += lv.tickets; amount += lv.amount; }
     }
     return { reservations, tickets, amount };
-  }, [activeShifts, liveStats]);
+  }, [activeShifts, pausedShifts, liveStats]);
 
   /* ================= CAISSE: chargement ================= */
   const currentRange = useMemo(() => {
@@ -730,42 +732,54 @@ const AgenceComptabilitePage: React.FC = () => {
   /* ============================ UI ============================ */
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      {/* Header */}
+      {/* Header (responsive + badge comptable) */}
       <div className="sticky top-0 z-10 border-b bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/65">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {companyLogo
-              ? <img src={companyLogo} alt="logo" className="h-10 w-10 rounded-xl object-contain border bg-white p-1" />
-              : <div className="h-10 w-10 rounded-xl bg-gray-200 grid place-items-center"><Building2 className="h-5 w-5 text-gray-600"/></div>}
-            <div>
-              <div
-                className="text-lg font-extrabold tracking-tight"
-                style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
-              >
-                {companyName}
-              </div>
-              <div className="text-xs text-gray-600 flex items-center gap-1">
-                <MapPin className="h-3.5 w-3.5"/><span>{agencyName}</span>
+        <div className="max-w-7xl mx-auto px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Branding */}
+            <div className="flex items-center gap-3 min-w-0">
+              {companyLogo
+                ? <img src={companyLogo} alt="logo" className="h-10 w-10 rounded-xl object-contain border bg-white p-1 flex-shrink-0" />
+                : <div className="h-10 w-10 rounded-xl bg-gray-200 grid place-items-center flex-shrink-0"><Building2 className="h-5 w-5 text-gray-600"/></div>}
+              <div className="min-w-0">
+                <div
+                  className="text-lg font-extrabold tracking-tight truncate"
+                  style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
+                  title={companyName}
+                >
+                  {companyName}
+                </div>
+                <div className="text-xs text-gray-600 flex items-center gap-1 truncate">
+                  <MapPin className="h-3.5 w-3.5 flex-shrink-0"/><span className="truncate">{agencyName}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="inline-flex rounded-2xl p-1 bg-slate-100 shadow-inner">
-            <TabButton active={tab==='controle'} onClick={()=>setTab('controle')} label="Contrôle des postes" theme={theme}/>
-            <TabButton active={tab==='receptions'} onClick={()=>setTab('receptions')} label="Réceptions de caisse" theme={theme}/>
-            <TabButton active={tab==='rapports'} onClick={()=>setTab('rapports')} label="Rapports" theme={theme}/>
-            <TabButton active={tab==='caisse'} onClick={()=>setTab('caisse')} label="Caisse agence" theme={theme}/>
-          </div>
+            {/* Tabs — passent à la ligne sur mobile */}
+            <div className="order-3 md:order-none w-full md:w-auto">
+              <div className="inline-flex rounded-2xl p-1 bg-slate-100 shadow-inner w-full md:w-auto">
+                <TabButton active={tab==='controle'}   onClick={()=>setTab('controle')}   label="Contrôle des postes" theme={theme}/>
+                <TabButton active={tab==='receptions'} onClick={()=>setTab('receptions')} label="Réceptions de caisse" theme={theme}/>
+                <TabButton active={tab==='rapports'}   onClick={()=>setTab('rapports')}   label="Rapports"            theme={theme}/>
+                <TabButton active={tab==='caisse'}     onClick={()=>setTab('caisse')}     label="Caisse agence"       theme={theme}/>
+              </div>
+            </div>
 
-          <div className="flex items-center gap-2">
-            <span className="px-3 py-1 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 shadow-sm">Comptabilité</span>
-            <button
-              onClick={async () => { await logout(); navigate('/login'); }}
-              className="ml-2 inline-flex items-center gap-1 px-3 py-2 text-sm rounded-lg border bg-white hover:bg-slate-50 shadow-sm"
-              title="Déconnexion"
-            >
-              <LogOut className="h-4 w-4"/> Déconnexion
-            </button>
+            {/* Actions + badge rôle */}
+            <div className="ml-auto flex items-center gap-2 flex-wrap">
+              {accountant && (
+                <span className="px-3 py-1 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 shadow-sm">
+                  Comptable • {(accountant.displayName || accountant.email || '—')} ({accountantCode || '—'})
+                </span>
+              )}
+              <button
+                onClick={async () => { await logout(); navigate('/login'); }}
+                className="inline-flex items-center gap-1 px-3 py-2 text-sm rounded-lg border bg-white hover:bg-slate-50 shadow-sm"
+                title="Déconnexion"
+              >
+                <LogOut className="h-4 w-4"/> <span className="hidden sm:inline">Déconnexion</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -833,7 +847,7 @@ const AgenceComptabilitePage: React.FC = () => {
               icon={<Pause className="h-5 w-5" />}
               list={pausedShifts}
               usersCache={usersCache}
-              liveStats={{}}
+              liveStats={liveStats}   
               theme={theme}
               actions={(s) => (
                 <div className="flex gap-2">
@@ -842,6 +856,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
               )}
             />
+            {/* on montre les stats même en pause */}
           </div>
         )}
 
@@ -855,7 +870,7 @@ const AgenceComptabilitePage: React.FC = () => {
             />
 
             {(() => {
-              // ✅ IMPORTANT: ne montrer que les postes *non encore validés* par le comptable.
+              // ✅ ne montrer que les postes non encore validés par le comptable
               const toReceive = closedShifts.filter(s => !s.comptable?.validated);
               if (toReceive.length === 0) return <Empty> Aucune clôture en attente.</Empty>;
               return (
@@ -886,7 +901,7 @@ const AgenceComptabilitePage: React.FC = () => {
                             <div className="text-xs text-gray-500">Guichetier</div>
                             <div className="font-semibold">{name} <span className="text-gray-500 text-xs">({code})</span></div>
                           </div>
-                          {/* PATCH UI: ne plus afficher l'ID de poste */}
+                          {/* On n’affiche plus l’ID de poste */}
                           <div className="text-right">
                             <div className="text-xs text-gray-500">Poste</div>
                             <div className="font-medium text-gray-400">&nbsp;</div>
@@ -1237,6 +1252,7 @@ const SectionHeader: React.FC<{icon:React.ReactNode; title:string; subtitle?:str
   </div>
 );
 
+/* Cartes modernisées + responsive */
 const SectionShifts: React.FC<{
   title: string; hint?: string; icon: React.ReactNode;
   list: ShiftDoc[];
@@ -1244,7 +1260,7 @@ const SectionShifts: React.FC<{
   liveStats: Record<string, { reservations: number; tickets: number; amount: number }>;
   actions: (s: ShiftDoc) => React.ReactNode;
   theme:{primary:string;secondary:string};
-}> = ({ title, hint, icon, list, usersCache, liveStats, actions }) => (
+}> = ({ title, hint, icon, list, usersCache, liveStats, actions, theme }) => (
   <div className="rounded-2xl border shadow-sm p-4 bg-white">
     <div className="flex items-center justify-between">
       <div className="flex items-center gap-2 text-lg font-bold">{icon}<span>{title}</span></div>
@@ -1257,40 +1273,79 @@ const SectionShifts: React.FC<{
     {list.length === 0 ? (
       <Empty>Aucun poste.</Empty>
     ) : (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+      <div
+        className="
+          grid gap-3 mt-3
+          [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]
+        "
+      >
         {list.map(s => {
-          const ui = usersCache[s.userId] || {};
+          const ui   = usersCache[s.userId] || {};
           const name = ui.name || s.userName || s.userEmail || s.userId;
           const code = ui.code || s.userCode || '—';
           const live = liveStats[s.id];
           const reservations = (live?.reservations ?? s.totalReservations ?? 0);
-          const tickets = (live?.tickets ?? s.totalTickets ?? 0);
-          const amount = (live?.amount ?? s.totalAmount ?? 0);
+          const tickets      = (live?.tickets      ?? s.totalTickets      ?? 0);
+          const amount       = (live?.amount       ?? s.totalAmount       ?? 0);
+
+          const statusLabel =
+            s.status==='active'   ? 'En service' :
+            s.status==='paused'   ? 'En pause'   :
+            s.status==='closed'   ? 'Clôturé'    :
+            s.status==='pending'  ? 'En attente' : 'Validé';
+
+          const statusTone =
+            s.status==='active'   ? 'bg-green-50 text-green-700 ring-green-200' :
+            s.status==='paused'   ? 'bg-amber-50 text-amber-700 ring-amber-200' :
+            s.status==='closed'   ? 'bg-rose-50 text-rose-700 ring-rose-200' :
+            s.status==='pending'  ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' :
+                                    'bg-slate-50 text-slate-700 ring-slate-200';
 
           return (
-            <div key={s.id} className="rounded-xl border p-3 bg-white shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-xs text-gray-500">Guichetier</div>
-                  <div className="font-semibold">{name} <span className="text-gray-500 text-xs">({code})</span></div>
-                </div>
-                {/* PATCH UI: ne plus afficher l'ID de poste */}
-                <div className="text-right">
-                  <div className="text-xs text-gray-500">Poste</div>
-                  <div className="font-medium text-gray-400">&nbsp;</div>
-                </div>
-              </div>
+            <div
+              key={s.id}
+              className="
+                group relative rounded-2xl
+                ring-1 ring-slate-200 bg-white
+                hover:ring-slate-300 hover:shadow-md
+                transition-all"
+            >
+              {/* halo dégradé subtile au survol */}
+              <div
+                className="absolute inset-0 rounded-2xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{background:`linear-gradient(135deg, ${theme.primary}22, ${theme.secondary}22)`}}
+              />
 
-              <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
-                <Info label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} />
-                <Info label="Fin" value={s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleString('fr-FR') : '—'} />
-                <Info label="Réservations" value={reservations.toString()} />
-                <Info label="Billets" value={tickets.toString()} />
-                <Info label="Montant" value={fmtMoney(amount)} />
-              </div>
+              <div className="relative p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs text-gray-500">Guichetier</div>
+                    <div className="font-semibold truncate">
+                      {name} <span className="text-gray-500 text-xs">({code})</span>
+                    </div>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded-lg text-xs font-medium ring-1 ${statusTone}`}>
+                    {statusLabel}
+                  </span>
+                </div>
 
-              <div className="mt-3 flex items-center justify-end gap-2">
-                {actions(s)}
+                <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
+                  <Info label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} />
+                  <Info label="Fin"   value={s.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime).toLocaleString('fr-FR')   : '—'} />
+                  <Info label="Réservations" value={reservations.toString()} />
+                  <Info label="Billets"       value={tickets.toString()} />
+                </div>
+
+                <div className="mt-3 p-3 rounded-xl bg-slate-50/60 ring-1 ring-slate-100 flex items-center justify-between">
+                  <div className="text-xs text-slate-600">Montant</div>
+                  <div className="text-lg font-extrabold" style={{color: theme.primary}}>
+                    {fmtMoney(amount)}
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  {actions(s)}
+                </div>
               </div>
             </div>
           );

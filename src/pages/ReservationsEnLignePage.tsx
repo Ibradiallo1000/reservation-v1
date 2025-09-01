@@ -1,65 +1,80 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection, query, where, orderBy, limit, updateDoc, doc,
   deleteDoc, onSnapshot, Timestamp, getDocs, getDoc, runTransaction
 } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { RotateCw, Frown, Search } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
-import { ReservationCard } from '../components/ReservationCard';
-import type { Reservation, ReservationStatus } from '../types/index';
+import { ReservationCard } from '@/components/ReservationCard';
+import { usePageHeader } from '@/contexts/PageHeaderContext';
 
-/** ================= Helpers référence ================ **/
+/* ================= Types locaux (corrige l'erreur 2305) ================ */
+export type ReservationStatus =
+  | 'preuve_recue'
+  | 'payé'
+  | 'annulé'
+  | 'refusé'
+  | string;
 
-/** abréviation “compagnie” : jusqu’à 3 lettres (initiales) */
+export interface Reservation {
+  id: string;
+  agencyId?: string;           // injecté lorsqu’on agrège multi-agences
+  nomClient?: string;
+  telephone?: string;
+  email?: string;
+  referenceCode?: string;
+  statut?: ReservationStatus;
+  canal?: string;
+  depart?: string;
+  arrivee?: string;
+  montant?: number;
+  createdAt?: Timestamp | Date | null;
+  [key: string]: any;          // tolérance champs divers (pièces, etc.)
+}
+
+/* ================= Helpers ================ */
+
+const norm = (s = '') =>
+  s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
 const abbrCompany = (name = '', fallback = 'CMP') => {
   const n = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
   if (!n) return fallback;
   const parts = n.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) return parts[0].slice(0, 3).toUpperCase(); // “MANITRANS” -> “MAN”
-  return parts.slice(0, 3).map(p => p[0]).join('').toUpperCase();     // “Mani Trans” -> “MT”
+  if (parts.length === 1) return parts[0].slice(0, 3).toUpperCase();
+  return parts.slice(0, 3).map(p => p[0]).join('').toUpperCase();
 };
 
-/** initiale d’agence : toujours 1 lettre, quel que soit le nombre de mots */
 const initialAgency = (name = '', fallback = 'A') => {
   const n = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '').trim();
   return (n[0] || fallback).toUpperCase();
 };
 
-/**
- * Pose le referenceCode une seule fois si manquant, au format: COMP-Agc-WEB-0001
- * - Lit les noms (compagnie/agence) hors transaction
- * - Incrémente le compteur et écrit referenceCode dans UNE transaction
- */
+/** Pose referenceCode une seule fois si manquant: COMP-A-WEB-0001 */
 async function ensureReferenceCode(companyId: string, agencyId: string, reservationId: string) {
-  // 1) Lire noms (hors transaction)
   const compSnap = await getDoc(doc(db, 'companies', companyId));
   const companyName = (compSnap.data()?.name || compSnap.data()?.nom || '') as string;
 
   const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
-  const agencyName = (agSnap.data()?.nom || agSnap.data()?.name || '') as string;
+  const agencyName = (agSnap.data()?.nomAgence || agSnap.data()?.nom || agSnap.data()?.name || '') as string;
 
   const comp = abbrCompany(companyName, 'CMP');
   const agc = initialAgency(agencyName, 'A');
   const channelKey = 'WEB';
 
-  // 2) Transaction : incrément séquence + set referenceCode si manquant
   const seqRef = doc(db, 'companies', companyId, 'agences', agencyId, 'sequences', channelKey);
   const resRef = doc(db, 'companies', companyId, 'agences', agencyId, 'reservations', reservationId);
 
   const finalRef = await runTransaction(db, async (tx) => {
     const resSnap = await tx.get(resRef);
     if (!resSnap.exists()) throw new Error('Reservation not found');
-
     const already = resSnap.data()?.referenceCode as string | undefined;
-    if (already) {
-      console.log('[ensureReferenceCode] already set →', already);
-      return already;
-    }
+    if (already) return already;
 
     const seqSnap = await tx.get(seqRef);
     let last = 0;
@@ -71,42 +86,55 @@ async function ensureReferenceCode(companyId: string, agencyId: string, reservat
     const next = last + 1;
     tx.set(seqRef, { last: next, updatedAt: new Date() }, { merge: true });
 
-    const serial = String(next).padStart(4, '0'); // 0001, 0002, ...
+    const serial = String(next).padStart(4, '0');
     const refCode = `${comp}-${agc}-WEB-${serial}`;
-
     tx.update(resRef, { referenceCode: refCode });
-    console.log('[ensureReferenceCode] set →', refCode);
     return refCode;
   });
 
   return finalRef;
 }
 
-/** ===================================================== **/
+/* ========================================= */
 
 const ITEMS_PER_PAGE = 8;
 
 const ReservationsEnLignePage: React.FC = () => {
   const { user } = useAuth();
+  const { setHeader, resetHeader } = usePageHeader();
+
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [loading, setLoading] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<ReservationStatus | ''>('preuve_recue');
-  const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const lastSeenCreatedAtRef = useRef<number>(0); // pour ding unique
+
+  /* --- Header dynamique du layout --- */
+  useEffect(() => {
+    setHeader({ title: 'Réservations en ligne', subtitle: 'Preuves de paiement' });
+    return () => resetHeader();
+  }, [setHeader, resetHeader]);
+
+  /* --- Temps réel multi-agences fusionné --- */
   useEffect(() => {
     if (!user?.companyId) return;
     setLoading(true);
 
+    let unsubs: Array<() => void> = [];
+    let firstPacketReceived = false;
+
     (async () => {
-      // On récupère toutes les agences de la compagnie
       const agencesSnap = await getDocs(collection(db, 'companies', user.companyId, 'agences'));
       const agenceIds = agencesSnap.docs.map(d => d.id);
 
-      // Pour chaque agence : requête + listener
-      const unsubscribers = agenceIds.map((agencyId) => {
-        const q = query(
+      // Map interne: key = `${agencyId}_${reservationId}`
+      const buffer = new Map<string, Reservation>();
+
+      agenceIds.forEach((agencyId) => {
+        const qRef = query(
           collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
           filterStatus
             ? where('statut', '==', filterStatus)
@@ -115,60 +143,78 @@ const ReservationsEnLignePage: React.FC = () => {
           limit(ITEMS_PER_PAGE)
         );
 
-        return onSnapshot(q, (snap) => {
-          const rows = snap.docs.map(docSnap => {
-            const data = docSnap.data() as any;
+        const unsub = onSnapshot(qRef, (snap) => {
+          let newest = lastSeenCreatedAtRef.current;
+
+          snap.docChanges().forEach((chg) => {
+            const d = chg.doc.data() as any;
             const row: Reservation = {
-              id: docSnap.id,
-              ...data,
-              // ✅ on attache l’agence à la ligne
-              agencyId: data.agencyId || data.agenceId || agencyId,
+              id: chg.doc.id,
+              ...d,
+              agencyId: d.agencyId || d.agenceId || agencyId,
             };
-            return row;
+
+            const key = `${row.agencyId}_${row.id}`;
+            if (chg.type === 'removed') {
+              buffer.delete(key);
+            } else {
+              buffer.set(key, row);
+
+              const ts = d.createdAt instanceof Timestamp ? d.createdAt.toMillis() : 0;
+              if (ts && ts > newest) newest = ts;
+            }
           });
 
-          // “ding” si nouvelles résas (<10s)
-          const newOnes = rows.filter(r => r.createdAt instanceof Timestamp
-            ? (Timestamp.now().seconds - r.createdAt.seconds) < 10
-            : false);
-          if (newOnes.length > 0 && audioRef.current) {
-            audioRef.current.play().catch(() => {});
+          // “ding” si nouvelles (<10s)
+          if (newest > 0 && newest > lastSeenCreatedAtRef.current) {
+            const now = Date.now();
+            if (now - newest < 10_000 && audioRef.current) {
+              audioRef.current.play().catch(() => {});
+            }
+            lastSeenCreatedAtRef.current = newest;
           }
 
-          // NOTE: si tu veux merger toutes les agences, combine ici avec setReservations(prev => merge(prev, rows))
-          setReservations(rows);
-          setLoading(false);
-        });
-      });
+          // Fusion globale triée + coupe à ITEMS_PER_PAGE
+          const merged = Array.from(buffer.values())
+            .sort((a, b) => {
+              const ta = a.createdAt instanceof Timestamp ? a.createdAt.toMillis()
+                : a.createdAt ? (a.createdAt as any).toMillis?.() ?? new Date(a.createdAt).getTime() : 0;
+              const tb = b.createdAt instanceof Timestamp ? b.createdAt.toMillis()
+                : b.createdAt ? (b.createdAt as any).toMillis?.() ?? new Date(b.createdAt).getTime() : 0;
+              return tb - ta;
+            })
+            .slice(0, ITEMS_PER_PAGE);
 
-      return () => unsubscribers.forEach(u => u());
+          setReservations(merged);
+          if (!firstPacketReceived) {
+            firstPacketReceived = true;
+            setLoading(false);
+          }
+        });
+
+        unsubs.push(unsub);
+      });
     })();
+
+    return () => {
+      unsubs.forEach(u => u());
+    };
   }, [user?.companyId, filterStatus]);
 
-  /** Valider = assurer referenceCode + passer en payé */
+  /* --- Actions --- */
   const validerReservation = async (id: string, agencyId?: string) => {
-    if (!agencyId || !user?.companyId) {
-      alert("Aucune agence associée à cette réservation");
-      return;
-    }
+    if (!agencyId || !user?.companyId) return alert("Aucune agence associée à cette réservation");
     try {
       setProcessingId(id);
-      console.log('[validate] start →', { id, agencyId });
-
-      // 1) Assurer la référence (si absente) avec initiale agence (1 lettre)
       await ensureReferenceCode(user.companyId, agencyId, id);
-
-      // 2) statut → payé
       await updateDoc(doc(db, 'companies', user.companyId, 'agences', agencyId, 'reservations', id), {
         statut: 'payé',
         validatedAt: new Date(),
         validatedBy: user.uid
       });
-
-      alert("Réservation validée ✅");
       setReservations(prev => prev.filter(r => r.id !== id));
-    } catch (error) {
-      console.error("Erreur validation:", error);
+    } catch (e) {
+      console.error(e);
       alert("Une erreur est survenue lors de la validation ❌");
     } finally {
       setProcessingId(null);
@@ -186,11 +232,10 @@ const ReservationsEnLignePage: React.FC = () => {
         refusedAt: new Date(),
         refusedBy: user.uid
       });
-      alert("Réservation refusée ❌");
       setReservations(prev => prev.filter(r => r.id !== id));
-    } catch (error) {
-      console.error("Erreur refus:", error);
-      alert("Erreur lors du refus");
+    } catch (e) {
+      console.error(e);
+      alert("Erreur lors du refus ❌");
     } finally {
       setProcessingId(null);
     }
@@ -202,17 +247,23 @@ const ReservationsEnLignePage: React.FC = () => {
     try {
       await deleteDoc(doc(db, 'companies', user.companyId, 'agences', agencyId, 'reservations', id));
       setReservations(prev => prev.filter(r => r.id !== id));
-    } catch (error) {
+    } catch {
       alert("Erreur lors de la suppression ❌");
     }
   };
 
-  const filteredReservations = reservations.filter(res =>
-    res.nomClient?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    res.telephone?.includes(searchTerm) ||
-    res.referenceCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (res as any).email?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  /* --- Recherche normalisée (sans accents) --- */
+  const filteredReservations = useMemo(() => {
+    const term = norm(searchTerm);
+    if (!term) return reservations;
+    return reservations.filter((res) => {
+      const nom = norm(res.nomClient || '');
+      const tel = (res.telephone || '').toLowerCase();
+      const ref = norm((res as any).referenceCode || '');
+      const mail = norm((res as any).email || '');
+      return nom.includes(term) || tel.includes(term) || ref.includes(term) || mail.includes(term);
+    });
+  }, [reservations, searchTerm]);
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
@@ -235,7 +286,7 @@ const ReservationsEnLignePage: React.FC = () => {
             </div>
             <input
               type="text"
-              placeholder="Rechercher..."
+              placeholder="Rechercher par nom, téléphone, référence…"
               className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-full"
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
@@ -256,7 +307,7 @@ const ReservationsEnLignePage: React.FC = () => {
         </div>
       </div>
 
-      {loading && reservations.length === 0 && (
+      {loading && filteredReservations.length === 0 && (
         <div className="flex justify-center py-8">
           <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
             <RotateCw className="h-8 w-8 text-blue-600" />
@@ -275,7 +326,7 @@ const ReservationsEnLignePage: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {filteredReservations.map((reservation) => (
           <ReservationCard
-            key={reservation.id}
+            key={`${(reservation as any).agencyId || 'ag'}_${reservation.id}`}
             reservation={reservation}
             onValider={() => validerReservation(reservation.id, (reservation as any).agencyId)}
             onRefuser={() => refuserReservation(reservation.id, (reservation as any).agencyId)}
@@ -285,7 +336,6 @@ const ReservationsEnLignePage: React.FC = () => {
         ))}
       </div>
 
-      {/* son optionnel */}
       <audio ref={audioRef} src="/sounds/new.mp3" preload="auto" />
     </div>
   );

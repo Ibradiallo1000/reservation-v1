@@ -1,676 +1,633 @@
-import React, { useEffect, useState, useMemo } from 'react';
+// src/pages/ReservationClientPage.tsx
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
-import { db } from '@/firebaseConfig';
-import { Trip } from '@/types';
-import { ChevronLeft, Phone, Bus, Plus, Minus } from 'lucide-react';
-import {
-  collection, getDocs, query, where, addDoc, doc, getDoc, serverTimestamp
-} from 'firebase/firestore';
+import { motion } from 'framer-motion';
 import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { motion } from 'framer-motion';
+import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User } from 'lucide-react';
+import {
+  collection, getDocs, query, where, addDoc, doc, updateDoc, serverTimestamp, getDoc,
+} from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '@/firebaseConfig';
+import { Trip } from '@/types';
+import { generateWebReferenceCode } from '@/utils/tickets';
 
-// ===================== DEBUG / LOGGER =====================
-// Mets DEBUG=false en prod pour couper les consoles.
-const DEBUG = true;
-const NS = '[ReservationClientPage]';
-const log = {
-  info: (...args: any[]) => DEBUG && console.log(NS, ...args),
-  warn: (...args: any[]) => DEBUG && console.warn(NS, ...args),
-  error: (...args: any[]) => DEBUG && console.error(NS, ...args),
-  group: (label: string) => DEBUG && console.group(`${NS} ${label}`),
-  groupEnd: () => DEBUG && console.groupEnd(),
-};
-// =========================================================
+// ---------- helpers ----------
+const normalize = (s: string) =>
+  s?.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/-/g,' ').replace(/\s+/g,' ') || '';
+const toYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const formatCity = (s: string) => s ? s.charAt(0).toUpperCase()+s.slice(1).toLowerCase() : s;
+const addMin = (d: Date, m: number) => new Date(d.getTime() + m*60000);
+const DAYS = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
 
-interface WeeklyTrip {
-  id: string;
-  active: boolean;
-  depart?: string;
-  departure?: string;
-  arrivee?: string;
-  arrival?: string;
-  price: number;
-  places?: number;
-  horaires?: Record<string, string[]>;
-}
-
-const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
-
-// Normalise une chaîne (retire accents, tirets, espaces multiples) pour matcher Firestore
-const normalizeForQuery = (str: string) =>
-  str ? str.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, ' ').replace(/\s+/g, ' ') : '';
-
-const formatCityName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
-
-const ReservationClientPage: React.FC = () => {
-  // ======= Routing / Query =======
+export default function ReservationClientPage() {
+  // ---------- routing ----------
   const { slug } = useParams<{ slug: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const searchParams = new URLSearchParams(location.search);
-  const departure = normalizeForQuery(searchParams.get('departure') || '');
-  const arrival = normalizeForQuery(searchParams.get('arrival') || '');
+  const search = new URLSearchParams(location.search);
+  const departureQ = normalize(search.get('departure') || '');
+  const arrivalQ   = normalize(search.get('arrival') || '');
 
-  // ======= State =======
-  const [company, setCompany] = useState({
-    id: '',
-    name: '',
-    couleurPrimaire: '#3b82f6',
-    couleurSecondaire: '#93c5fd',
-    logoUrl: ''
-  });
-  const [agencyInfo, setAgencyInfo] = useState({ nom: '', telephone: '' });
+  // ---------- theme/company ----------
+  const [company, setCompany] = useState({ id:'', name:'', couleurPrimaire:'#f43f5e', couleurSecondaire:'#f97316', logoUrl:'', code:'MT' });
+  const theme = useMemo(()=>({
+    primary: company.couleurPrimaire,
+    secondary: company.couleurSecondaire,
+    lightPrimary: `${company.couleurPrimaire}1A`, // ~10% alpha
+    lightSecondary: `${company.couleurSecondaire}1A`,
+  }), [company]);
+
+  // ---------- state ----------
+  const [agencyInfo, setAgencyInfo] = useState<{id?:string; nom?:string; telephone?:string; code?:string}>({});
+  const [paymentMethods, setPaymentMethods] = useState<Record<string, {
+    url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string;
+  }>>({});
+  const [paymentMethodKey, setPaymentMethodKey] = useState<string|null>(null);
+  const [paymentTriggeredAt, setPaymentTriggeredAt] = useState<number|null>(null);
+
   const [trips, setTrips] = useState<Trip[]>([]);
   const [dates, setDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTime, setSelectedTime] = useState('');
-  const [passengerInfo, setPassengerInfo] = useState({
-    fullName: '',
-    phone: '',
-    email: ''
-  });
   const [seats, setSeats] = useState(1);
+  const [passenger, setPassenger] = useState({ fullName:'', phone:'' });
+
+  const [message, setMessage] = useState('');
+  const [file, setFile] = useState<File|null>(null);
+
+  const [reservationId, setReservationId] = useState<string|null>(null);
+  const [creating, setCreating] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // ======= Récupération du cache (sessionStorage) =======
+  // ---------- cache rapide ----------
   useEffect(() => {
-    log.group('Init / Cache');
     try {
-      const key = `preload_${slug}_${departure}_${arrival}`;
-      const cachedData = sessionStorage.getItem(key);
-      log.info('Query', { slug, departure, arrival, key, hasCache: !!cachedData });
-
-      if (cachedData) {
-        const { company, trips, dates, agencyInfo } = JSON.parse(cachedData);
-        setCompany(company);
-        setTrips(trips);
-        setDates(dates);
-        setSelectedDate(dates[0] || '');
-        setAgencyInfo(agencyInfo);
-        log.info('Cache restored', { company, tripsCount: trips.length, dates, agencyInfo });
+      const key = `preload_${slug}_${departureQ}_${arrivalQ}`;
+      const cached = sessionStorage.getItem(key);
+      if (cached) {
+        const { company, trips, dates, agencyInfo } = JSON.parse(cached);
+        setCompany(company); setTrips(trips); setDates(dates);
+        setSelectedDate(dates[0] || ''); setAgencyInfo(agencyInfo);
       }
-    } catch (e) {
-      log.warn('Cache parse error', e);
-    } finally {
-      log.groupEnd();
-    }
-  }, [slug, departure, arrival]);
+    } catch {}
+  }, [slug, departureQ, arrivalQ]);
 
-  // ======= Chargement Firestore en parallèle =======
+  // ---------- fetch Firestore ----------
   useEffect(() => {
-    if (!slug || !departure || !arrival) {
-      log.warn('Missing slug/departure/arrival => skip load');
-      return;
-    }
+    if (!slug || !departureQ || !arrivalQ) return;
 
-    const loadAllData = async () => {
+    const load = async () => {
       setLoading(true);
-      log.group('LoadAllData');
       try {
-        const [companyData, tripsData] = await Promise.all([
-          loadCompanyData(),
-          loadTripsData()
-        ]);
+        const cSnap = await getDocs(query(collection(db, 'companies'), where('slug','==',slug)));
+        if (cSnap.empty) throw new Error('Compagnie introuvable');
+        const cdoc = cSnap.docs[0]; const cdata = cdoc.data() as any;
 
-        if (companyData) {
-          setCompany(companyData);
-          sessionStorage.setItem('companyInfo', JSON.stringify(companyData));
-          log.info('Company loaded', companyData);
-        }
+        setCompany({
+          id: cdoc.id,
+          name: cdata.nom || cdata.name || '',
+          code: (cdata.code || 'MT').toString().toUpperCase(),
+          couleurPrimaire: cdata.couleurPrimaire || '#f43f5e',
+          couleurSecondaire: cdata.couleurSecondaire || '#f97316',
+          logoUrl: cdata.logoUrl || ''
+        });
 
-        if (tripsData) {
-          const { trips, dates, agencyInfo } = tripsData;
-          setTrips(trips);
-          setDates(dates);
-          setSelectedDate(dates[0] || '');
-          setAgencyInfo(agencyInfo);
-
-          const key = `preload_${slug}_${departure}_${arrival}`;
-          sessionStorage.setItem(
-            key,
-            JSON.stringify({ company: companyData, trips, dates, agencyInfo, timestamp: Date.now() })
-          );
-          log.info('Trips loaded', { tripsCount: trips.length, dates, agencyInfo, cacheKey: key });
-        }
-      } catch (err) {
-        log.error('LoadAllData error', err);
-        setError('Une erreur est survenue lors du chargement des données');
-      } finally {
-        setLoading(false);
-        log.groupEnd();
-      }
-    };
-
-    loadAllData();
-  }, [slug, departure, arrival]);
-
-  // ------- Firestore: compagnie -------
-  const loadCompanyData = async () => {
-    log.group('loadCompanyData');
-    try {
-      const snap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)));
-      if (snap.empty) {
-        log.warn('Company not found for slug', slug);
-        return null;
-      }
-      const d = snap.docs[0];
-      const c = {
-        id: d.id,
-        name: d.data().nom || '',
-        couleurPrimaire: d.data().couleurPrimaire || '#3b82f6',
-        couleurSecondaire: d.data().couleurSecondaire || '#93c5fd',
-        logoUrl: d.data().logoUrl || '',
-        slug
-      };
-      log.info('Company data', c);
-      return c;
-    } catch (e) {
-      log.error('loadCompanyData error', e);
-      return null;
-    } finally {
-      log.groupEnd();
-    }
-  };
-
-  // ------- Firestore: trajets / réservations / places restantes -------
-  const loadTripsData = async () => {
-    log.group('loadTripsData');
-    try {
-      const companySnap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)));
-      if (companySnap.empty) return null;
-
-      const companyId = companySnap.docs[0].id;
-
-      // On récupère toutes les agences de la compagnie
-      const agencesSnap = await getDocs(collection(db, 'companies', companyId, 'agences'));
-      const agences = agencesSnap.docs.map(doc => ({
-        id: doc.id,
-        nom: doc.data().nom || '',
-        telephone: doc.data().telephone || ''
-      }));
-
-      const agencyInfo = agences.length > 0
-        ? { nom: agences[0].nom, telephone: agences[0].telephone }
-        : { nom: '', telephone: '' };
-
-      // 8 prochains jours
-      const next8Days = Array.from({ length: 8 }, (_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        return d.toISOString().split('T')[0];
-      });
-
-      const allTrips: Trip[] = [];
-
-      await Promise.all(agences.map(async (agence) => {
-        // weeklyTrips + reservations en parallèle
-        const [weeklyTripsSnap, reservationsSnap] = await Promise.all([
-          getDocs(query(
-            collection(db, 'companies', companyId, 'agences', agence.id, 'weeklyTrips'),
-            where('active', '==', true)
-          )),
-          getDocs(collection(db, 'companies', companyId, 'agences', agence.id, 'reservations'))
-        ]);
-
-        const matched: WeeklyTrip[] = weeklyTripsSnap.docs
-          .map(doc => ({ id: doc.id, ...doc.data() } as WeeklyTrip))
-          .filter((t) => {
-            const dep = normalizeForQuery(t.depart || t.departure || '');
-            const arr = normalizeForQuery(t.arrivee || t.arrival || '');
-            return dep === departure && arr === arrival;
+        const agencesSnap = await getDocs(collection(db, 'companies', cdoc.id, 'agences'));
+        const agences = agencesSnap.docs.map(d=>({ id:d.id, ...(d.data() as any) }));
+        if (agences[0]) {
+          const a = agences[0];
+          setAgencyInfo({
+            id: a.id,
+            nom: a.nomAgence || a.nom || a.name,
+            telephone: a.telephone,
+            code: (a.code || a.codeAgence || '').toString().toUpperCase() || undefined
           });
+        }
 
-        const reservations = reservationsSnap.docs.map(doc => doc.data());
+        const pmSnap = await getDocs(query(collection(db, 'paymentMethods'), where('companyId','==',cdoc.id)));
+        const pms: any = {};
+        pmSnap.forEach(ds => {
+          const d = ds.data() as any;
+          if (d.name) pms[d.name] = { url:d.defaultPaymentUrl||'', logoUrl:d.logoUrl||'', ussdPattern:d.ussdPattern||'', merchantNumber:d.merchantNumber||'' };
+        });
+        setPaymentMethods(pms);
 
-        next8Days.forEach(dateStr => {
-          const d = new Date(dateStr);
-          const dayName = DAYS[d.getDay()];
+        const next8 = Array.from({length:8},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return toYMD(d); });
 
-          matched.forEach(t => {
-            const horaires = t.horaires?.[dayName] || [];
-
-            horaires.forEach(heure => {
-              const trajetId = `${t.id}_${dateStr}_${heure}`;
-
-              // Filtre les horaires déjà passés aujourd'hui
-              if (dateStr === new Date().toISOString().split('T')[0]) {
-                const now = new Date();
-                const tripTime = parse(heure, 'HH:mm', new Date());
-                if (tripTime <= now) return;
-              }
-
-              const reserved = (reservations as any[])
-                .filter((r) => String(r.trajetId) === trajetId && ['payé', 'preuve_recue'].includes(String(r.statut).toLowerCase()))
-                .reduce((acc, r) => acc + (r.seatsGo || 0), 0);
-
-              const total = t.places || 30;
-              const remaining = total - reserved;
-
-              if (remaining > 0) {
-                allTrips.push({
-                  id: trajetId,
-                  date: dateStr,
-                  time: heure,
-                  departure: t.depart || t.departure || '',
-                  arrival: t.arrivee || t.arrival || '',
-                  price: t.price,
-                  agencyId: agence.id as any,
-                  companyId: companyId as any,
-                  places: total,
-                  remainingSeats: remaining,
-                } as any);
-              }
+        const allTrips: Trip[] = [];
+        for (const a of agences) {
+          const [wSnap, rSnap] = await Promise.all([
+            getDocs(query(collection(db,'companies',cdoc.id,'agences',a.id,'weeklyTrips'), where('active','==',true))),
+            getDocs(collection(db,'companies',cdoc.id,'agences',a.id,'reservations'))
+          ]);
+          const weekly = wSnap.docs.map(d=>({ id:d.id, ...(d.data() as any)}))
+            .filter(t => normalize(t.depart||t.departure||'')===departureQ && normalize(t.arrivee||t.arrival||'')===arrivalQ);
+          const reservations = rSnap.docs.map(d=>({ id:d.id, ...(d.data() as any)}));
+          next8.forEach(dateStr=>{
+            const d = new Date(dateStr); const dayName = DAYS[d.getDay()];
+            weekly.forEach(t=>{
+              (t.horaires?.[dayName]||[]).forEach(heure=>{
+                if (dateStr===toYMD(new Date())) {
+                  const now = new Date();
+                  const nowHHMM = parse(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,'HH:mm',new Date());
+                  if (parse(heure,'HH:mm',new Date()) <= nowHHMM) return;
+                }
+                const trajetId = `${t.id}_${dateStr}_${heure}`;
+                const total = t.places || 30;
+                const reserved = reservations
+                  .filter(r=> String((r as any).trajetId)===trajetId && ['payé','preuve_recue'].includes(String((r as any).statut).toLowerCase()))
+                  .reduce((a,r:any)=> a + (r.seatsGo||0), 0);
+                const remaining = total - reserved;
+                if (remaining>0) {
+                  allTrips.push({
+                    id: trajetId,
+                    date: dateStr, time: heure,
+                    departure: t.depart || t.departure || '',
+                    arrival: t.arrivee || t.arrival || '',
+                    price: t.price,
+                    agencyId: a.id as any, companyId: cdoc.id as any,
+                    places: total, remainingSeats: remaining
+                  } as any);
+                }
+              });
             });
           });
-        });
-      }));
+        }
+        const sorted = allTrips.sort((a,b)=> a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+        const uniqDates = [...new Set(sorted.map(t=>t.date))];
 
-      const sorted = allTrips.sort((a, b) => a.date.localeCompare(b.date));
-      const uniqueDates = [...new Set(sorted.map(t => t.date))]
-        .filter(date => sorted.some(t => t.date === date));
+        setTrips(sorted); setDates(uniqDates); setSelectedDate(uniqDates[0] || '');
 
-      log.info('TripsData built', { count: sorted.length, dates: uniqueDates });
-      return { trips: sorted, dates: uniqueDates, agencyInfo };
-    } catch (e) {
-      log.error('loadTripsData error', e);
-      return null;
-    } finally {
-      log.groupEnd();
+        sessionStorage.setItem(`preload_${slug}_${departureQ}_${arrivalQ}`, JSON.stringify({
+          company: {
+            id: cdoc.id, name: cdata.nom || '',
+            couleurPrimaire: cdata.couleurPrimaire || '#f43f5e',
+            couleurSecondaire: cdata.couleurSecondaire || '#f97316',
+            logoUrl: cdata.logoUrl || '', code: (cdata.code || 'MT').toString().toUpperCase()
+          }, trips: sorted, dates: uniqDates,
+          agencyInfo: { nom: agences[0]?.nomAgence || agences[0]?.nom || '', telephone: agences[0]?.telephone || '', code: agences[0]?.code }
+        }));
+      } catch (e:any) {
+        setError(e?.message || 'Erreur de chargement');
+      } finally { setLoading(false); }
+    };
+
+    load();
+  }, [slug, departureQ, arrivalQ]);
+
+  // ---------- dérivés ----------
+  const filteredTrips = useMemo(()=>{
+    if (!selectedDate) return [] as any[];
+    const base = trips.filter((t:any)=> t.date===selectedDate);
+    if (isToday(parseISO(selectedDate))) {
+      const now=new Date();
+      const nowHHMM=parse(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,'HH:mm',new Date());
+      return base.filter((t:any)=> parse(t.time,'HH:mm',new Date()) > nowHHMM);
     }
-  };
-
-  // ======= Filtre par date / heure (memo) =======
-  const filteredTrips = useMemo(() => {
-    const label = 'filteredTrips';
-    log.group(label);
-    try {
-      if (!selectedDate) {
-        log.info('No selectedDate');
-        return [];
-      }
-
-      const baseFiltered = trips.filter((t: any) => t.date === selectedDate);
-      if (isToday(parseISO(selectedDate))) {
-        const now = new Date();
-        const next = baseFiltered.filter((trip: any) => parse(trip.time, 'HH:mm', new Date()) > now);
-        log.info('Today filter', { input: baseFiltered.length, output: next.length });
-        return next;
-      }
-      log.info('Base filter', { count: baseFiltered.length });
-      return baseFiltered;
-    } finally {
-      log.groupEnd();
-    }
+    return base;
   }, [trips, selectedDate]);
 
-  const selectedTrip: any = filteredTrips.find((t: any) => t.time === selectedTime);
+  // auto-select première heure quand la date change
+  useEffect(()=> {
+    if (filteredTrips.length && !selectedTime) setSelectedTime(filteredTrips[0].time);
+  }, [filteredTrips, selectedTime]);
 
-  const formatShortDate = (dateStr: string) => {
-    const date = parseISO(dateStr);
-    return format(date, 'EEE d', { locale: fr });
+  const selectedTrip: any = filteredTrips.find((t:any)=> t.time===selectedTime);
+  const topPrice = (selectedTrip?.price ?? (filteredTrips[0] as any)?.price);
+  const cityFrom = formatCity(departureQ), cityTo = formatCity(arrivalQ);
+  const priceText = topPrice ? `${topPrice.toLocaleString('fr-FR')} FCFA` : '—';
+
+  // ---------- UI helpers ----------
+  const seatColor = (remaining:number, total:number) => {
+    const ratio = remaining / total;
+    if (ratio > 0.7) return '#16a34a';     // vert
+    if (ratio > 0.3) return '#f59e0b';     // jaune
+    return '#dc2626';                       // rouge
   };
 
-  // ===================== BOOKING =====================
-  const handleBooking = async () => {
-    // Vérifs basiques
-    if (!selectedTrip) return;
-    if (!passengerInfo.fullName || !passengerInfo.phone) {
-      setError('Veuillez remplir votre nom complet et numéro de téléphone');
-      return;
-    }
-
-    log.group('handleBooking');
+  // ---------- handlers ----------
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     try {
-      // 1) Agency fetch (pour nom + tel agency)
-      const agencyRef = doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId);
-      const agencySnap = await getDoc(agencyRef);
-      const agencyData = agencySnap.data() || {};
-      log.info('Agency', { id: selectedTrip.agencyId, agencyData });
+      const f = e.target.files?.[0]; if (!f) return setFile(null);
+      const valid = ['image/jpeg','image/png','application/pdf']; if (!valid.includes(f.type)) throw new Error('Fichier non supporté');
+      if (f.size > 5*1024*1024) throw new Error('Fichier trop volumineux (5MB max)');
+      setFile(f); setError('');
+    } catch (err:any) { setError(err?.message || 'Erreur fichier'); setFile(null); }
+  };
 
-      // 2) Construction de la réservation (AUCUN numéro généré ici)
+  const createReservationDraft = useCallback(async () => {
+    if (!selectedTrip) return;
+    if (!passenger.fullName || !passenger.phone) { setError('Nom et téléphone requis'); return; }
+    if (creating) return;
+
+    setCreating(true); setError('');
+    try {
+      // 1) lire agence + société pour fabriquer le n° et sauver le vrai nom d’agence
+      const agSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId));
+      const ag = agSnap.exists() ? (agSnap.data() as any) : {};
+      const agencyName = ag.nomAgence || ag.nom || ag.name || 'Agence';
+      const agencyCode = (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined;
+
+      const compSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId));
+      const comp = compSnap.exists() ? (compSnap.data() as any) : {};
+      const companyCode = (comp.code || company.code || 'MT').toString().toUpperCase();
+
+      const referenceCode = await generateWebReferenceCode({
+        companyId: selectedTrip.companyId,
+        companyCode,
+        agencyId: selectedTrip.agencyId,
+        agencyCode,
+        agencyName,                      // pour déduire AP si besoin
+        tripInstanceId: selectedTrip.id
+      });
+
+      const now = new Date();
       const reservation = {
-        nomClient: passengerInfo.fullName,
-        telephone: passengerInfo.phone,
-        email: passengerInfo.email || null,
-
+        nomClient: passenger.fullName,
+        telephone: passenger.phone,
         depart: selectedTrip.departure,
         arrivee: selectedTrip.arrival,
         date: selectedTrip.date,
         heure: selectedTrip.time,
-
         montant: selectedTrip.price * seats,
-        seatsGo: seats,
-
-        statut: 'en_attente',       // en ligne = en attente (preuve à envoyer)
-        canal: 'en_ligne',
-        tripType: 'aller_simple',
+        seatsGo: seats, seatsReturn: 0, tripType: 'aller_simple',
+        statut: 'en_attente_paiement', canal: 'en_ligne',
 
         companyId: selectedTrip.companyId,
-        agencyId: selectedTrip.agencyId,
-        agencyNom: (agencyData as any).nom || '',
-        agencyTelephone: (agencyData as any).telephone || '',
-
-        trajetId: selectedTrip.id,
-
-        // ⚠️ On NE génère PAS de referenceCode ici.
         companySlug: slug,
         companyName: company.name,
 
+        agencyId: selectedTrip.agencyId,
+        agencyNom: agencyName,          // ✅ clé 1
+        nomAgence: agencyName,          // ✅ clé 2 (compat)
+
+        referenceCode,                  // ✅ MT-AP-WEB-00xx
+        trajetId: selectedTrip.id,
+        holdUntil: addMin(now, 15),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
 
-      // 3) Enregistrement Firestore
-      const ref = await addDoc(
-        collection(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations'),
+      const refDoc = await addDoc(
+        collection(db,'companies',selectedTrip.companyId,'agences',selectedTrip.agencyId,'reservations'),
         reservation
       );
-      log.info('Reservation added', { resId: ref.id, reservation });
+      setReservationId(refDoc.id);
 
-      // 4) Contexte pour l’upload de preuve
-      const companyForReceipt = {
-        id: selectedTrip.companyId,
-        name: company.name,
-        logoUrl: company.logoUrl,
-        couleurPrimaire: company.couleurPrimaire,
-        couleurSecondaire: company.couleurSecondaire,
-        slug,
-      };
+      // reprise
+      sessionStorage.setItem('reservationDraft', JSON.stringify({ ...reservation, id: refDoc.id }));
+      sessionStorage.setItem('companyInfo', JSON.stringify({
+        id: company.id, name: company.name, logoUrl: company.logoUrl,
+        couleurPrimaire: company.couleurPrimaire, couleurSecondaire: company.couleurSecondaire, slug
+      }));
+    } catch (e:any) {
+      setError(e?.message || 'Impossible de créer la réservation');
+    }
+    finally { setCreating(false); }
+  }, [selectedTrip, passenger, seats, creating, slug, company]);
 
-      sessionStorage.setItem('reservationDraft', JSON.stringify({ ...reservation, id: ref.id }));
-      sessionStorage.setItem('companyInfo', JSON.stringify(companyForReceipt));
-      log.info('Draft saved to sessionStorage', { id: ref.id });
-
-      // 5) REDIRECTION OK → page d’upload de preuve (PMA)
-      navigate(`/${slug}/upload-preuve/${ref.id}`);
-      log.info('Navigate to upload-preuve', { path: `/${slug}/upload-preuve/${ref.id}` });
-    } catch (err) {
-      log.error('Booking error', err);
-      setError('Une erreur est survenue lors de la réservation');
-    } finally {
-      log.groupEnd();
+  const onChoosePayment = (key: string) => {
+    setPaymentMethodKey(key); setPaymentTriggeredAt(Date.now());
+    const method = paymentMethods[key||'']; if (!method) return;
+    const total = selectedTrip ? selectedTrip.price*seats : (topPrice||0);
+    const ussd = method.ussdPattern?.replace('MERCHANT', method.merchantNumber||'').replace('AMOUNT', String(total));
+    if (method.url) {
+      try { new URL(method.url); window.open(method.url, '_blank', 'noopener,noreferrer'); } catch {}
+    } else if (ussd) {
+      // 👉 lance l’app téléphone (mobile)
+      window.location.href = `tel:${encodeURIComponent(ussd)}`;
     }
   };
-  // ===================================================
 
-  // Skeletons
-  const DateSkeleton = () => (<div className="h-12 w-16 bg-gray-200 rounded-lg animate-pulse" />);
-  const TimeSkeleton = () => (<div className="h-20 bg-gray-200 rounded-lg animate-pulse" />);
+  const submitProofInline = async () => {
+    if (!reservationId || !company.id || !agencyInfo?.id) { setError('Réservation introuvable'); return; }
+    if (!paymentMethodKey) { setError('Sélectionnez un moyen de paiement'); return; }
+    if (uploading) return;
 
-  // Thème
-  const theme = useMemo(() => ({
-    primary: company.couleurPrimaire,
-    secondary: company.couleurSecondaire,
-    lightPrimary: `${company.couleurPrimaire}20`,
-    lightSecondary: `${company.couleurSecondaire}20`,
-    textOnPrimary: '#ffffff',
-  }), [company.couleurPrimaire, company.couleurSecondaire]);
+    setUploading(true); setError('');
+    try {
+      let preuveUrl: string|null = null;
+      if (file) {
+        const ext = file.name.split('.').pop(); const filename = `preuves/preuve_${Date.now()}.${ext}`;
+        const fileRef = ref(storage, filename); const snap = await uploadBytes(fileRef, file);
+        preuveUrl = await getDownloadURL(snap.ref);
+      }
+      await updateDoc(doc(db,'companies',company.id,'agences',agencyInfo.id!,'reservations',reservationId), {
+        statut: 'preuve_recue', canal: 'en_ligne',
+        preuveVia: paymentMethodKey, preuveMessage: message.trim(), preuveUrl: preuveUrl || null,
+        paymentHint: paymentMethodKey, paymentTriggeredAt: paymentTriggeredAt ? new Date(paymentTriggeredAt) : null,
+        updatedAt: new Date(),
+      });
 
-  // Loader initial
-  if (loading || !company.id || dates.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
-        <motion.div
-          initial={{ opacity: 0, y: -50, scale: 0.5 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.8, ease: 'easeOut' }}
-          className="relative flex items-center justify-center mb-6"
+      navigate(`/${slug}/reservation/${reservationId}`, {
+        state: { companyId: company.id, agencyId: agencyInfo.id }
+      });
+    } catch (e) { setError("Échec de l'envoi de la preuve"); }
+    finally { setUploading(false); }
+  };
+
+  // ---------- UI ----------
+  const RouteCard = () => (
+    <section className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+      <div className="flex items-center justify-between gap-4 px-4 sm:px-5 py-3">
+        <div className="flex items-center gap-3 min-w-0">
+          {company.logoUrl && <img src={company.logoUrl} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-gray-200" />}
+          <div className="min-w-0">
+            <div className="flex items-center text-gray-900 font-semibold">
+              <span className="truncate">{cityFrom}</span>
+              <svg viewBox="0 0 24 24" className="mx-2 h-5 w-5 shrink-0" style={{color: theme.primary}}>
+                <path fill="currentColor" d="M5 12h12l-4-4 1.4-1.4L21.8 12l-7.4 5.4L13 16l4-4H5z"/>
+              </svg>
+              <span className="truncate">{cityTo}</span>
+            </div>
+            <p className="text-xs text-gray-500">Sélectionnez la date et l’heure</p>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs text-gray-500">À partir de</div>
+          <div className="text-lg sm:text-xl font-extrabold" style={{ color: theme.primary }}>{priceText}</div>
+        </div>
+      </div>
+    </section>
+  );
+
+  const DateChip: React.FC<{d:string}> = ({ d }) => (
+    <button
+      onClick={()=>{ setSelectedDate(d); setSelectedTime(''); }}
+      className="h-10 px-3 rounded-xl border text-sm whitespace-nowrap transition"
+      style={{
+        borderColor: selectedDate===d ? theme.primary : '#e5e7eb',
+        color: selectedDate===d ? '#111827' : '#374151',
+        backgroundColor: selectedDate===d ? theme.lightPrimary : '#f9fafb'
+      }}
+    >
+      <span className="font-medium">{format(parseISO(d), 'EEE d', { locale: fr })}</span>
+      {isToday(parseISO(d)) && <span className="ml-2 text-xs text-gray-500">Aujourd’hui</span>}
+      {isTomorrow(parseISO(d)) && <span className="ml-2 text-xs text-gray-500">Demain</span>}
+    </button>
+  );
+
+  const TimeBtn: React.FC<{t:any}> = ({ t }) => (
+    <button
+      onClick={()=> setSelectedTime(t.time)}
+      className="h-11 px-3 rounded-lg border text-sm text-left transition"
+      style={{
+        borderColor: selectedTime===t.time ? theme.secondary : '#e5e7eb',
+        backgroundColor: selectedTime===t.time ? theme.lightSecondary : '#f9fafb'
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span className="font-semibold">{t.time}</span>
+        <span
+          className="text-xs px-2 py-[2px] rounded-md"
+          style={{ color: seatColor(t.remainingSeats, t.places), border: `1px solid ${seatColor(t.remainingSeats, t.places)}` }}
         >
-          <motion.div
-            className="absolute w-28 h-28 rounded-full"
-            style={{ backgroundColor: company.couleurPrimaire, opacity: 0.2 }}
-            animate={{ scale: [1, 1.4, 1], opacity: [0.2, 0, 0.2] }}
-            transition={{ duration: 2, repeat: Infinity }}
-          />
-          <motion.img
-            src={company.logoUrl}
-            alt="Logo compagnie"
-            className="h-20 w-20 rounded-full object-cover border-4 shadow-lg"
-            style={{ borderColor: company.couleurSecondaire }}
-            whileHover={{ scale: 1.05 }}
-          />
+          {t.remainingSeats} pl.
+        </span>
+      </div>
+    </button>
+  );
+
+  const PaymentPill: React.FC<{k:string; m: NonNullable<{url?:string;logoUrl?:string;ussdPattern?:string;merchantNumber?:string}>}> = ({ k, m }) => (
+    <button
+      onClick={()=> onChoosePayment(k)}
+      className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition ${paymentMethodKey===k ? 'bg-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100'}`}
+      style={{ borderColor: paymentMethodKey===k ? theme.primary : '#e5e7eb' }}
+    >
+      {m.logoUrl ? <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" /> : <div className="h-6 w-6 rounded bg-gray-100" />}
+      <div className="text-left min-w-0">
+        <div className="font-medium capitalize truncate">{k.replace(/_/g,' ')}</div>
+        {m.merchantNumber && <div className="text-[11px] text-gray-500 truncate">N° {m.merchantNumber}</div>}
+      </div>
+      {paymentMethodKey===k && (
+        <div className="ml-auto h-5 w-5 rounded-full flex items-center justify-center" style={{ backgroundColor: theme.primary, color:'#fff' }}>
+          <CheckCircle className="w-3 h-3" />
+        </div>
+      )}
+    </button>
+  );
+
+  // ---------- skeleton ----------
+  if (loading || !company.id || dates.length===0) {
+    return (
+      <div className="min-h-screen grid place-items-center bg-gray-50">
+        <motion.div initial={{opacity:0, scale:0.95}} animate={{opacity:1, scale:1}} className="bg-white/70 backdrop-blur rounded-2xl p-6 shadow-sm">
+          <div className="flex items-center gap-3">
+            {company.logoUrl && <img src={company.logoUrl} alt="" className="h-10 w-10 rounded-full object-cover ring-1 ring-gray-200" />}
+            <div>
+              <div className="h-4 w-40 bg-gray-200 rounded mb-2" />
+              <div className="h-3 w-24 bg-gray-200 rounded" />
+            </div>
+          </div>
         </motion.div>
-        <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6, duration: 0.6 }} className="text-gray-600 font-medium">
-          Recherche en cours...
-        </motion.p>
       </div>
     );
   }
 
-  const priceToShow = (selectedTrip?.price ?? (filteredTrips[0] as any)?.price);
-
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
-      {/* Header */}
-      <header className="p-4 shadow-sm sticky top-0 z-50" style={{ backgroundColor: theme.primary }}>
-        <div className="max-w-5xl mx-auto flex items-center justify-between text-white">
-          <button onClick={() => navigate(-1)} className="hover:opacity-80 transition-opacity">
-            <ChevronLeft className="w-6 h-6" />
+    <div className="min-h-screen bg-gradient-to-br from-white to-gray-50">
+      {/* header */}
+      <header className="sticky top-0 z-50 shadow-sm" style={{ backgroundColor: theme.primary }}>
+        <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-2 flex items-center justify-between text-white">
+          <button onClick={()=> navigate(-1)} className="p-2 rounded-full hover:bg-white/10 transition" aria-label="Retour">
+            <ChevronLeft className="h-5 w-5" />
           </button>
-          <div className="flex items-center gap-3">
-            {company.logoUrl && (
-              <img src={company.logoUrl} alt="logo" className="h-8 w-8 rounded-full object-cover border border-white" />
-            )}
-            <span className="font-semibold text-lg">{company.name}</span>
+          <div className="flex items-center gap-2">
+            {company.logoUrl && <img src={company.logoUrl} alt="" className="h-7 w-7 rounded-full object-cover ring-1 ring-white/30" />}
+            <span className="font-semibold tracking-wide">{company.name || 'MALI TRANS'}</span>
           </div>
+          <div className="w-9" />
         </div>
       </header>
 
-      {/* Agency info */}
-      {agencyInfo.nom && (
-        <div className="bg-white py-2 px-4 border-b border-gray-100">
-          <div className="max-w-5xl mx-auto text-sm text-gray-600">
-            Agence : {agencyInfo.nom} — {agencyInfo.telephone}
-          </div>
-        </div>
-      )}
+      {/* body */}
+      <main className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4 sm:space-y-5">
+        <RouteCard />
 
-      <main className="max-w-5xl mx-auto p-4">
-        {/* Route + price */}
-        <section className="flex items-center justify-between bg-white p-4 mb-6 rounded-xl shadow-sm border" style={{ borderColor: theme.primary }}>
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-full" style={{ backgroundColor: theme.lightPrimary }}>
-              <Bus className="w-5 h-5" style={{ color: theme.primary }} />
-            </div>
-            <h1 className="font-semibold text-lg text-gray-900">
-              {formatCityName(departure)} → {formatCityName(arrival)}
-            </h1>
-          </div>
-          <div className="text-right font-bold text-lg" style={{ color: theme.primary }}>
-            {priceToShow ? `${priceToShow.toLocaleString('fr-FR')} FCFA` : 'Prix non disponible'}
+        {agencyInfo?.nom && (
+          <div className="text-xs text-gray-500 px-1">Agence : {agencyInfo.nom} — {agencyInfo.telephone}</div>
+        )}
+
+        {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>}
+
+        {/* dates */}
+        <section className="bg-white rounded-2xl border border-gray-100 p-4">
+          <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre date</h2>
+          <div className="flex gap-2 overflow-x-auto scrollbar-none">
+            {dates.map(d=> <DateChip key={d} d={d} />)}
           </div>
         </section>
 
-        {/* Error */}
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 rounded-lg border border-red-200">
-            <div className="flex items-center gap-3 text-red-800">
-              <span>{error}</span>
+        {/* heures */}
+        {!!filteredTrips.length && (
+          <section className="bg-white rounded-2xl border border-gray-100 p-4">
+            <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre heure</h2>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+              {filteredTrips.map((t:any)=> <TimeBtn key={t.id} t={t} />)}
             </div>
-          </div>
+          </section>
         )}
 
-        {/* Step 1: Date */}
-        {!loading && dates.length > 0 && (
-          <div className="mb-8 p-5 rounded-xl shadow-sm border"
-               style={{ backgroundColor: theme.lightPrimary, borderColor: theme.primary }}>
-            <div className="flex items-center mb-4">
-              <div className="flex items-center justify-center w-8 h-8 rounded-full font-bold mr-3 text-white"
-                   style={{ backgroundColor: theme.primary }}>1</div>
-              <h2 className="text-lg font-semibold text-gray-900">Choisissez votre date du voyage</h2>
-            </div>
-            <div className="overflow-x-auto pb-2">
-              <div className="flex space-x-3 w-max">
-                {dates.map(date => (
-                  <button
-                    key={date}
-                    onClick={() => { setSelectedDate(date); setSelectedTime(''); log.info('Select date', date); }}
-                    className={`py-2 px-4 rounded-lg border transition-all flex flex-col items-center min-w-[80px] ${
-                      selectedDate === date ? 'shadow-sm' : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
-                    }`}
-                    style={{
-                      borderColor: selectedDate === date ? theme.primary : '',
-                      backgroundColor: selectedDate === date ? theme.lightPrimary : 'white'
-                    }}
-                  >
-                    <div className="font-medium text-sm">{formatShortDate(date)}</div>
-                    {isToday(parseISO(date)) && <div className="text-xs mt-1">Aujourd'hui</div>}
-                    {isTomorrow(parseISO(date)) && <div className="text-xs mt-1">Demain</div>}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Time */}
-        {!loading && filteredTrips.length > 0 && (
-          <div className="mb-8 p-5 rounded-xl shadow-sm border"
-               style={{ backgroundColor: theme.lightSecondary, borderColor: theme.secondary }}>
-            <div className="flex items-center mb-4">
-              <div className="flex items-center justify-center w-8 h-8 rounded-full font-bold mr-3 text-white"
-                   style={{ backgroundColor: theme.secondary }}>2</div>
-              <h2 className="text-lg font-semibold text-gray-900">Choisissez votre heure de depart</h2>
-            </div>
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
-              {filteredTrips.map((trip: any) => (
-                <button
-                  key={trip.id}
-                  onClick={() => { setSelectedTime(trip.time); log.info('Select time', trip.time, { trip }); }}
-                  className={`py-3 px-4 rounded-lg border transition-all ${
-                    selectedTime === trip.time ? 'shadow-sm' : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
-                  }`}
-                  style={{
-                    borderColor: selectedTime === trip.time ? theme.secondary : '',
-                    backgroundColor: selectedTime === trip.time ? theme.lightSecondary : 'white'
-                  }}
-                >
-                  <div className="font-bold text-center text-lg">{trip.time}</div>
-                  <div className="text-sm text-center mt-1">
-                    {trip.remainingSeats} place{trip.remainingSeats > 1 ? 's' : ''}
+        {/* infos + paiement */}
+        {selectedTrip && (
+          <>
+            <section className="bg-white rounded-2xl border border-gray-100 p-4">
+              <h2 className="text-sm font-semibold text-gray-900 mb-3">Informations personnelles</h2>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {/* Nom */}
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <User className="h-5 w-5 text-gray-400" />
                   </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+                  <input
+                    className="h-11 pl-10 pr-3 w-full border border-gray-200 rounded-lg focus:ring-2 focus:outline-none"
+                    placeholder="Nom complet *"
+                    value={passenger.fullName}
+                    onChange={e=> setPassenger(p=>({...p, fullName: e.target.value}))}
+                  />
+                </div>
 
-        {/* Step 3: Passenger */}
-        {!loading && selectedTrip && (
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-            <div className="flex items-center mb-4">
-              <div className="flex items-center justify-center w-8 h-8 rounded-full font-bold mr-3 text-white"
-                   style={{ backgroundColor: theme.primary }}>3</div>
-              <h2 className="text-lg font-semibold text-gray-900">Informations personnelles</h2>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="fullName" className="block text-sm font-medium text-gray-700 mb-1">
-                  Nom complet *
-                </label>
-                <input
-                  id="fullName"
-                  type="text"
-                  placeholder="Votre nom complet"
-                  value={passengerInfo.fullName}
-                  onChange={e => { setPassengerInfo({ ...passengerInfo, fullName: e.target.value }); }}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:outline-none focus:ring-blue-500"
-                  style={{ borderColor: theme.lightPrimary }}
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
-                  Numéro de téléphone *
-                </label>
+                {/* Téléphone */}
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Phone className="h-5 w-5 text-gray-400" />
                   </div>
                   <input
-                    id="phone"
-                    type="tel"
-                    placeholder="Votre numéro de téléphone"
-                    value={passengerInfo.phone}
-                    onChange={e => { setPassengerInfo({ ...passengerInfo, phone: e.target.value }); }}
-                    className="w-full pl-10 px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:outline-none focus:ring-blue-500"
-                    style={{ borderColor: theme.lightPrimary }}
-                    required
+                    className="h-11 pl-10 pr-3 w-full border border-gray-200 rounded-lg focus:ring-2 focus:outline-none"
+                    placeholder="Téléphone *"
+                    value={passenger.phone}
+                    onChange={e=> setPassenger(p=>({...p, phone: e.target.value}))}
                   />
                 </div>
-              </div>
 
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                  Email (facultatif)
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  placeholder="Votre email"
-                  value={passengerInfo.email}
-                  onChange={e => { setPassengerInfo({ ...passengerInfo, email: e.target.value }); }}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:outline-none focus:ring-blue-500"
-                  style={{ borderColor: theme.lightPrimary }}
-                />
-              </div>
-
-              <div>
-                <label htmlFor="seats" className="block text-sm font-medium text-gray-700 mb-1">
-                  Nombre de places ({selectedTrip.remainingSeats} disponible{selectedTrip.remainingSeats > 1 ? 's' : ''})
-                </label>
-                <div className="flex items-center space-x-4">
-                  <button
-                    onClick={() => { const s = Math.max(1, seats - 1); setSeats(s); log.info('Seats--', s); }}
-                    className="w-10 h-10 rounded-full flex items-center justify-center border"
-                    style={{ borderColor: theme.lightPrimary, color: theme.primary }}
-                  >
-                    <Minus className="w-5 h-5" />
+                {/* Places */}
+                <div className="sm:col-span-2 flex items-center gap-4">
+                  <span className="text-sm text-gray-600">Places</span>
+                  <button onClick={()=> setSeats(s=> Math.max(1, s-1))} className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" style={{ borderColor: theme.lightPrimary, color: theme.primary }}>
+                    <Minus className="w-4 h-4" />
                   </button>
-                  <span className="text-lg font-semibold px-4 py-2 rounded-lg"
-                        style={{ backgroundColor: theme.lightPrimary, color: theme.primary }}>
-                    {seats}
+                  <span className="px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ background: theme.lightPrimary, color: theme.primary }}>{seats}</span>
+                  <button onClick={()=> setSeats(s=> Math.min(Math.min(5, selectedTrip.remainingSeats), s+1))} className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" style={{ borderColor: theme.lightPrimary, color: theme.primary }}>
+                    <Plus className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs" style={{ color: seatColor(selectedTrip.remainingSeats, selectedTrip.places) }}>
+                    {selectedTrip.remainingSeats} pl. dispo
                   </span>
-                  <button
-                    onClick={() => { const s = Math.min(10, selectedTrip.remainingSeats, seats + 1); setSeats(s); log.info('Seats++', s); }}
-                    className="w-10 h-10 rounded-full flex items-center justify-center border"
-                    style={{ borderColor: theme.lightPrimary, color: theme.primary }}
-                  >
-                    <Plus className="w-5 h-5" />
-                  </button>
                 </div>
               </div>
-            </div>
-          </div>
+            </section>
+
+            <section className="bg-white rounded-2xl border border-gray-100 p-4">
+              <h2 className="text-sm font-semibold text-gray-900 mb-3">Paiement & preuve</h2>
+
+              {/* CTA pour créer le draft */}
+              {!reservationId ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-gray-600">Cliquez sur « Réserver & Payer » pour bloquer vos places pendant 15 minutes.</p>
+                  <button
+                    onClick={createReservationDraft}
+                    disabled={creating}
+                    className="w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
+                    style={{ background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, color: '#fff' }}
+                  >
+                    {creating ? 'Traitement…' : `Réserver & Payer (${(selectedTrip.price * seats).toLocaleString('fr-FR')} FCFA)`}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* moyens de paiement */}
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                    {Object.entries(paymentMethods).map(([k,m])=> m && <PaymentPill key={k} k={k} m={m} />)}
+                  </div>
+
+                  {/* code USSD réduit */}
+                  {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && (
+                    <div className="mt-3 text-xs text-gray-600">
+                      Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
+                        {paymentMethods[paymentMethodKey]!.ussdPattern!
+                          .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
+                          .replace('AMOUNT', String(selectedTrip.price * seats))}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* preuve compacte */}
+                  <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                    <textarea
+                      rows={3}
+                      className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
+                      placeholder="Détails du paiement (ID, référence, n° transfert, etc.) — optionnel"
+                      value={message}
+                      onChange={e=> setMessage(e.target.value)}
+                    />
+                    <label className="border-2 border-dashed rounded-lg h-[104px] grid place-items-center text-sm text-gray-600 cursor-pointer">
+                      <input type="file" className="hidden" onChange={onFile} accept=".png,.jpg,.jpeg,.pdf" />
+                      {file ? (
+                        <span className="flex items-center gap-2 text-gray-800">
+                          <CheckCircle className="w-4 h-4 text-emerald-600" /> {file.name}
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-2">
+                          <Upload className="w-4 h-4" /> Capture (PNG, JPG, PDF · 5MB)
+                        </span>
+                      )}
+                    </label>
+                  </div>
+
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      onClick={submitProofInline}
+                      disabled={uploading || !paymentMethodKey}
+                      className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
+                      style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
+                    >
+                      {uploading ? 'Envoi…' : 'Confirmer l’envoi'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+          </>
         )}
       </main>
 
-      {/* Bouton fixe */}
-      {!loading && selectedTrip && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 py-3 px-4 shadow-lg">
-          <div className="max-w-5xl mx-auto flex justify-between items-center">
-            <div>
-              <div className="text-sm text-gray-600">Total pour {seats} place{seats > 1 ? 's' : ''}</div>
-              <div className="font-bold text-lg" style={{ color: theme.primary }}>
+      {/* footer total */}
+      {selectedTrip && (
+        <div className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur border-t border-gray-200">
+          <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-2 flex items-center justify-between">
+            <div className="text-sm text-gray-600">
+              Total {seats} place{seats>1?'s':''} — <span className="font-semibold" style={{ color: theme.primary }}>
                 {(selectedTrip.price * seats).toLocaleString('fr-FR')} FCFA
-              </div>
+              </span>
             </div>
-            <button
-              onClick={handleBooking}
-              className="py-3 px-6 text-white font-bold rounded-lg shadow-md hover:shadow-lg transition-all"
-              style={{ backgroundColor: theme.secondary }}
-            >
-              Confirmer la réservation
-            </button>
+
+            {!reservationId ? (
+              <button
+                onClick={createReservationDraft}
+                disabled={creating || !passenger.fullName || !passenger.phone || !selectedTime}
+                className="h-10 px-4 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
+                style={{ background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, color: '#fff' }}
+              >
+                {creating ? 'Traitement…' : 'Réserver & Payer'}
+              </button>
+            ) : (
+              <button
+                onClick={submitProofInline}
+                disabled={uploading || !paymentMethodKey}
+                className="h-10 px-4 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
+                style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
+              >
+                {uploading ? 'Envoi…' : 'Confirmer l’envoi'}
+              </button>
+            )}
           </div>
         </div>
       )}
     </div>
   );
-};
-
-export default ReservationClientPage;
+}

@@ -1,6 +1,5 @@
-// src/AppRoutes.tsx
 import { Suspense, lazy } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import PrivateRoute from './pages/PrivateRoute';
 import PageLoader from './components/PageLoaderComponent';
@@ -15,7 +14,6 @@ import CookiesPage from '@/pages/CookiesPage';
 /* ---------- Pages isolées (agence / impression / détails) ---------- */
 import AgenceEmbarquementPage from '@/pages/AgenceEmbarquementPage';
 import ReservationPrintPage from '@/pages/ReservationPrintPage';
-import UploadPreuvePage from '@/pages/UploadPreuvePage';
 import ReservationDetailsPage from '@/pages/ReservationDetailsPage';
 import AdminParametresPlatformPage from './pages/AdminParametresPlatformPage';
 import ValidationComptablePage from '@/pages/ValidationComptablePage';
@@ -27,6 +25,9 @@ const PlatformSearchResultsPage = lazy(() => import('./pages/PlatformSearchResul
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const Register = lazy(() => import('./pages/Register'));
 const ListeVillesPage = lazy(() => import('./pages/ListeVillesPage'));
+
+/* ---------- Nouvelle page réservation tout-en-un ---------- */
+const ReservationClientPage = lazy(() => import('./pages/ReservationClientPage'));
 
 /* ---------- Admin plateforme ---------- */
 const AdminSidebarLayout = lazy(() => import('./pages/AdminSidebarLayout'));
@@ -45,9 +46,8 @@ const CompagnieAgencesPage = lazy(() => import('./pages/CompagnieAgencesPage'));
 const CompagnieParametresTabsPage = lazy(() => import('./pages/CompagnieParametresTabsPage'));
 const CompagnieReservationsPage = lazy(() => import('./pages/CompagnieReservationsPage'));
 const CompagnieAgencesStatistiquesPage = lazy(() => import('./pages/CompagnieAgencesStatistiquesPage'));
-const CompagnieVentesJournalieresPage = lazy(() => import('./pages/CompagnieVentesJournalieresPage'));
-const CompagnieStatistiquesMensuellesPage = lazy(() => import('./pages/CompagnieStatistiquesMensuellesPage'));
-const CompagnieFinancesTabsPage = lazy(() => import('./pages/CompagnieFinancesTabsPage'));
+/* ✅ Comptabilité compagnie (remplace tout “reporting/exports”) */
+const CompagnieComptabilitePage = lazy(() => import('./pages/CompagnieComptabilitePage'));
 const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
 const ReservationsEnLignePage = lazy(() => import('./pages/ReservationsEnLignePage'));
 const CompanyPaymentSettingsPage = lazy(() => import('./pages/CompanyPaymentSettingsPage'));
@@ -72,18 +72,13 @@ const AgenceShellPage = lazy(() => import('./pages/AgenceShellPage'));
 
 /* ===================== RÔLES & PERMISSIONS CENTRALISÉS ===================== */
 export const routePermissions = {
-  // Layouts
   compagnieLayout: ['admin_compagnie', 'compagnie'] as const,
   agenceShell: ['chefAgence', 'superviseur', 'agentCourrier', 'admin_compagnie'] as const,
-
-  // Pages hors shell
   guichet: ['guichetier', 'chefAgence', 'admin_compagnie'] as const,
   comptabilite: ['comptable', 'admin_compagnie'] as const,
   validationsCompta: ['comptable', 'admin_compagnie'] as const,
   validationsAgence: ['chefAgence', 'superviseur', 'admin_compagnie'] as const,
   receiptGuichet: ['chefAgence', 'guichetier', 'admin_compagnie'] as const,
-
-  // Admin plateforme
   adminLayout: ['admin_platforme'] as const,
 };
 
@@ -92,7 +87,6 @@ const hasAny = (roles: unknown, allowed: readonly string[]) =>
   asArray(roles).some((r) => allowed.includes(String(r)));
 
 const landingTargetForRoles = (roles: unknown): string => {
-  // Priorités : guichet > compta > compagnie > shell agence > admin
   if (hasAny(roles, routePermissions.guichet)) return '/agence/guichet';
   if (hasAny(roles, routePermissions.comptabilite)) return '/agence/comptabilite';
   if (hasAny(roles, routePermissions.compagnieLayout)) return '/compagnie/dashboard';
@@ -101,11 +95,15 @@ const landingTargetForRoles = (roles: unknown): string => {
   return '/login';
 };
 
-/* ---------- Redirection d’atterrissage selon rôle ---------- */
 function RoleLanding() {
   const { user } = useAuth() as any;
   if (!user) return <Navigate to="/login" replace />;
   return <Navigate to={landingTargetForRoles(user.role)} replace />;
+}
+
+function LegacyUploadRedirect() {
+  const { slug, id } = useParams();
+  return <Navigate to={`/${slug || ''}/reservation/${id || ''}`} replace />;
 }
 
 const AppRoutes = () => {
@@ -160,14 +158,13 @@ const AppRoutes = () => {
         >
           <Route index element={<CompagnieDashboard />} />
           <Route path="dashboard" element={<CompagnieDashboard />} />
+          {/* ✅ Comptabilité compagnie */}
+          <Route path="comptabilite" element={<CompagnieComptabilitePage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
           <Route path="reservations-en-ligne" element={<ReservationsEnLignePage />} />
           <Route path="statistiques-agences" element={<CompagnieAgencesStatistiquesPage />} />
-          <Route path="ventes-journalieres" element={<CompagnieVentesJournalieresPage />} />
-          <Route path="statistiques" element={<CompagnieStatistiquesMensuellesPage />} />
-          <Route path="finances" element={<CompagnieFinancesTabsPage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />
@@ -189,7 +186,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* ===================== SHELL D’AGENCE (chef/superviseur/admin/agentCourrier) ===================== */}
+        {/* ===================== SHELL D’AGENCE ===================== */}
         <Route
           path="/agence"
           element={
@@ -231,7 +228,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* ===================== VALIDATIONS (hors Shell) ===================== */}
+        {/* ===================== VALIDATIONS ===================== */}
         <Route
           path="/compta/validations"
           element={
@@ -249,7 +246,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* ===================== PAGES ISOLÉES (HORS SHELL) ===================== */}
+        {/* ===================== PAGES ISOLÉES ===================== */}
         <Route
           path="/agence/receipt/:id"
           element={
@@ -261,8 +258,9 @@ const AppRoutes = () => {
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
         {/* ===================== DYNAMIQUES PUBLIQUES ===================== */}
-        <Route path="/:slug/upload-preuve/:id" element={<UploadPreuvePage />} />
+        <Route path="/:slug/reserver" element={<ReservationClientPage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
+        <Route path="/:slug/upload-preuve/:id" element={<LegacyUploadRedirect />} />
         <Route path="/:slug/*" element={<RouteResolver />} />
 
         {/* ===================== 404 ===================== */}

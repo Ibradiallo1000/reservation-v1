@@ -1,3 +1,6 @@
+// =============================================
+// src/pages/AvisModerationPage.tsx
+// =============================================
 import React, { useEffect, useState } from 'react';
 import {
   collection,
@@ -14,6 +17,8 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePageHeader } from '@/contexts/PageHeaderContext';
+import useCompanyTheme from '@/hooks/useCompanyTheme';
 
 interface Avis {
   id: string;
@@ -24,7 +29,10 @@ interface Avis {
 }
 
 const AvisModerationPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, company } = useAuth();
+  const theme = useCompanyTheme(company);
+  const { setHeader, resetHeader } = usePageHeader();
+
   const [avisList, setAvisList] = useState<Avis[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
@@ -82,6 +90,20 @@ const AvisModerationPage: React.FC = () => {
     fetchAvis();
   }, [user]);
 
+  // === Header dynamique
+  useEffect(() => {
+    setHeader({
+      title: "Avis clients",
+      subtitle: avisList.length
+        ? `${avisList.length} avis en attente`
+        : "Aucun avis en attente",
+      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
+      fg: "#fff",
+    });
+    return () => resetHeader();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avisList.length, theme.colors.primary, theme.colors.secondary]);
+
   const toggleVisibility = async (id: string, visible: boolean) => {
     if (!user?.companyId) return;
     const avisRef = doc(db, 'companies', user.companyId, 'avis', id);
@@ -98,8 +120,6 @@ const AvisModerationPage: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto p-6">
-      <h2 className="text-2xl font-bold mb-4">Modération des avis clients</h2>
-
       {loading && avisList.length === 0 && (
         <p>Chargement des avis...</p>
       )}
@@ -119,10 +139,11 @@ const AvisModerationPage: React.FC = () => {
               <div className="flex gap-2">
                 <button
                   onClick={() => toggleVisibility(avis.id, avis.visible)}
-                  className={`text-sm px-3 py-1 rounded ${avis.visible
-                    ? 'bg-red-100 text-red-700'
-                    : 'bg-green-100 text-green-700'
-                    }`}
+                  className={`text-sm px-3 py-1 rounded ${
+                    avis.visible
+                      ? 'bg-red-100 text-red-700'
+                      : 'bg-green-100 text-green-700'
+                  }`}
                 >
                   {avis.visible ? 'Masquer' : 'Afficher'}
                 </button>
@@ -143,7 +164,8 @@ const AvisModerationPage: React.FC = () => {
         <div className="flex justify-center mt-6">
           <button
             onClick={() => fetchAvis(true)}
-            className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            className="px-6 py-2 rounded text-white font-medium"
+            style={{ backgroundColor: theme.colors.primary }}
           >
             Charger plus
           </button>

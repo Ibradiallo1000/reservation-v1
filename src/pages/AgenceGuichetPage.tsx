@@ -5,21 +5,26 @@
 // - Gestion de poste : none → (Demander l’activation) → pending → active/paused → closed
 // - Places restantes (live) : statut = 'payé', somme seatsGo, fallback 30, onSnapshot
 // - Onglets locaux : Guichet / Rapport / Historique
-// - AMÉLIORATIONS :
-//   • arrivée -> auto 1ère date + 1er horaire dispo (priorité places)
-//   • après clôture → on voit la session dans “Rapport” (en attente de validation)
+// - AMÉLIORATIONS (ce fichier) :
+//   • En-tête Rapport minimal (titre + date du jour / plage si chevauchement)
+//   • Suppression bouton Imprimer dans le Rapport (on n’imprime que depuis Historique)
+//   • Boutons/puces modernisés avec dégradé thème
+//   • Édition rapide étendue : nom, téléphone, places (aller/retour), montant (+ motif)
+//   • Annulation soignée
+//   • ⚠️ Changement trajet/date/heure : à traiter par “reporté” + revente (sécurisé).
+//   • Vente accélérée : caches (company/agency/seller) + écriture unique setDoc
+//   • Header responsive (flex-wrap, truncate, réorganisation sur mobile)
 // ===================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection, getDocs, query, where, Timestamp, addDoc, doc, getDoc,
-  updateDoc, orderBy, onSnapshot, runTransaction, setDoc, limit
+  updateDoc, orderBy, onSnapshot, runTransaction, setDoc, limit, serverTimestamp
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActiveShift } from '@/hooks/useActiveShift';
 import useCompanyTheme from '@/hooks/useCompanyTheme';
-import { useNavigate } from 'react-router-dom';
 import { makeShortCode } from '@/utils/brand';
 
 import ReceiptModal, {
@@ -29,12 +34,12 @@ import ReceiptModal, {
 
 import {
   Building2, MapPin, CalendarDays, Clock4,
-  Ticket, LogOut, RefreshCw
+  Ticket, RefreshCw, Pencil, XCircle
 } from 'lucide-react';
 
-import UserMenu from '@/ui/UserMenu'; // ✅ menu utilisateur (cog/bonhomme)
 import { Settings } from 'lucide-react';
 import Button from '@/ui/Button';
+
 type TripType = 'aller_simple' | 'aller_retour';
 
 type WeeklyTrip = {
@@ -73,9 +78,10 @@ type TicketRow = {
   paiement?: string;
   createdAt?: any;
   guichetierCode?: string;
+  canal?: string;
+  statutEmbarquement?: string;
 };
 
-/** Rapport (1–1) d’une session clôturée */
 type ShiftReport = {
   shiftId: string;
   companyId: string;
@@ -98,6 +104,7 @@ const DAYS_IN_ADVANCE = 8;
 const MAX_SEATS_FALLBACK = 30;
 const DEFAULT_COMPANY_SLUG = 'compagnie-par-defaut';
 
+/* ----------------------- Utils Firestore ----------------------- */
 async function getSellerCodeFromFirestore(uid?: string | null) {
   try {
     if (!uid) return null;
@@ -149,11 +156,129 @@ function seatBadgeStyle(remaining: number | undefined, total: number) {
   return { bg: 'bg-red-100', text: 'text-red-700', label };
 }
 
+/* ----------------------- Modal d’édition (étendue) ----------------------- */
+type EditModalProps = {
+  open: boolean;
+  onClose: () => void;
+  initial: {
+    id: string;
+    nomClient: string;
+    telephone?: string;
+    seatsGo: number;
+    seatsReturn?: number;
+    montant: number;
+  } | null;
+  onSave: (payload: {
+    id: string;
+    nomClient: string;
+    telephone?: string;
+    seatsGo: number;
+    seatsReturn?: number;
+    montant: number;
+    editReason?: string;
+  }) => Promise<void>;
+  isSaving: boolean;
+};
+
+const EditReservationModal: React.FC<EditModalProps> = ({ open, onClose, initial, onSave, isSaving }) => {
+  const [nomClient, setNomClient] = useState(initial?.nomClient || '');
+  const [telephone, setTelephone] = useState(initial?.telephone || '');
+  const [seatsGo, setSeatsGo] = useState<number>(initial?.seatsGo ?? 1);
+  const [seatsReturn, setSeatsReturn] = useState<number>(initial?.seatsReturn ?? 0);
+  const [montant, setMontant] = useState<number>(initial?.montant ?? 0);
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    if (initial) {
+      setNomClient(initial.nomClient || '');
+      setTelephone(initial.telephone || '');
+      setSeatsGo(initial.seatsGo ?? 1);
+      setSeatsReturn(initial.seatsReturn ?? 0);
+      setMontant(initial.montant ?? 0);
+      setReason('');
+    }
+  }, [initial]);
+
+  if (!open || !initial) return null;
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white border shadow-lg p-5">
+        <div className="text-lg font-semibold mb-3">Modifier la réservation</div>
+        <div className="space-y-3">
+          <input
+            className="w-full border rounded-lg px-3 py-2"
+            placeholder="Nom du client"
+            value={nomClient}
+            onChange={(e)=>setNomClient(e.target.value)}
+          />
+          <input
+            className="w-full border rounded-lg px-3 py-2"
+            placeholder="Téléphone"
+            value={telephone}
+            onChange={(e)=>setTelephone(e.target.value)}
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <div className="text-sm mb-1">Places (Aller)</div>
+              <div className="flex items-center gap-2">
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsGo(Math.max(1, seatsGo-1))}>-</button>
+                <div className="flex-1 text-center font-semibold py-2 rounded bg-gray-50">{seatsGo}</div>
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsGo(seatsGo+1)}>+</button>
+              </div>
+            </div>
+            <div>
+              <div className="text-sm mb-1">Places (Retour)</div>
+              <div className="flex items-center gap-2">
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsReturn(Math.max(0, seatsReturn-1))}>-</button>
+                <div className="flex-1 text-center font-semibold py-2 rounded bg-gray-50">{seatsReturn}</div>
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsReturn(seatsReturn+1)}>+</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div className="text-sm mb-1">Montant (FCFA)</div>
+            <input
+              type="number"
+              className="w-full border rounded-lg px-3 py-2"
+              value={montant}
+              onChange={(e)=>setMontant(Math.max(0, Number(e.target.value||0)))}
+            />
+          </div>
+          <input
+            className="w-full border rounded-lg px-3 py-2"
+            placeholder="Motif de modification (optionnel)"
+            value={reason}
+            onChange={(e)=>setReason(e.target.value)}
+          />
+        </div>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50" onClick={onClose}>Annuler</button>
+          <button
+            disabled={isSaving || !nomClient}
+            className="px-4 py-2 rounded-lg text-white disabled:opacity-50"
+            style={{ background: 'linear-gradient(90deg, #2563EB, #1D4ED8)' }}
+            onClick={() => onSave({
+              id: initial.id,
+              nomClient,
+              telephone,
+              seatsGo,
+              seatsReturn,
+              montant,
+              editReason: reason || undefined
+            })}
+          >
+            {isSaving ? 'Enregistrement…' : 'Enregistrer'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------------ Page ------------------------------ */
 const AgenceGuichetPage: React.FC = () => {
-  const navigate = useNavigate();
   const auth = useAuth() as any;
   const { user, company } = auth;
-  const logout: (() => Promise<void>) = auth?.logout ?? (async () => {});
 
   const shiftApi = useActiveShift();
   const { activeShift, startShift, pauseShift, continueShift, closeShift, refresh } = shiftApi;
@@ -183,15 +308,15 @@ const AgenceGuichetPage: React.FC = () => {
   const [placesRetour, setPlacesRetour] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Live ventes poste courant (si en service)
+  // Live ventes poste courant
   const [tickets, setTickets] = useState<TicketRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
 
-  // Rapports de sessions en attente (après clôture, avant validations)
+  // Rapports en attente
   const [pendingReports, setPendingReports] = useState<ShiftReport[]>([]);
   const [loadingPending, setLoadingPending] = useState(false);
 
-  // Historique : sessions validées
+  // Historique validés
   const [historyReports, setHistoryReports] = useState<ShiftReport[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -212,6 +337,22 @@ const AgenceGuichetPage: React.FC = () => {
   // listener des places restantes
   const remainingUnsubRef = useRef<() => void>();
 
+  // États pour édition/annulation
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<EditModalProps['initial']>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
+
+  // CACHES accélération vente
+  const [companyMeta, setCompanyMeta] = useState({
+    name: 'Compagnie', code: 'COMP', slug: DEFAULT_COMPANY_SLUG,
+    logo: null as string | null, phone: ''
+  });
+  const [agencyMeta, setAgencyMeta] = useState({
+    name: 'Agence', code: 'AGC', phone: ''
+  });
+  const [sellerCodeCached, setSellerCodeCached] = useState<string>('GUEST');
+
   const availableDates = useMemo(
     () => Array.from({ length: DAYS_IN_ADVANCE }, (_, i) => {
       const d = new Date(); d.setDate(d.getDate() + i);
@@ -226,32 +367,48 @@ const AgenceGuichetPage: React.FC = () => {
     return d.getTime() < Date.now();
   }, []);
 
-  /* -------------------- INIT socle -------------------- */
+  /* -------------------- INIT socle + CACHES -------------------- */
   useEffect(() => {
     (async () => {
       try {
         if (user?.uid) {
-          const fromDb = await getSellerCodeFromFirestore(user.uid);
-          if (fromDb) setSellerCodeUI(fromDb);
+          const sc = await getSellerCodeFromFirestore(user.uid);
+          if (sc) { setSellerCodeCached(sc); setSellerCodeUI(sc); }
         }
         if (!user?.companyId || !user?.agencyId) return;
 
+        // company
         const compSnap = await getDoc(doc(db, 'companies', user.companyId));
         if (compSnap.exists()) {
           const c = compSnap.data() as any;
+          const name = c.nom || c.name || 'Compagnie';
           setCompanyLogo(c.logoUrl || c.logo || null);
-          setCompanyName(c.nom || c.name || 'Compagnie');
+          setCompanyName(name);
           setCompanyPhone(c.telephone || '');
+          setCompanyMeta({
+            name,
+            code: makeShortCode(name, c.code),
+            slug: c.slug || DEFAULT_COMPANY_SLUG,
+            logo: c.logoUrl || c.logo || null,
+            phone: c.telephone || ''
+          });
         }
 
+        // agency
         const agSnap = await getDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}`));
         if (agSnap.exists()) {
           const a = agSnap.data() as any;
           const ville = a?.ville || a?.city || a?.nomVille || a?.villeDepart || '';
           setDeparture((ville || '').toString());
           setAgencyName(a?.nomAgence || a?.nom || ville || 'Agence');
+          setAgencyMeta({
+            name: a?.nomAgence || a?.nom || ville || 'Agence',
+            code: makeShortCode(a?.nomAgence || a?.nom || ville, a?.code),
+            phone: a?.telephone || ''
+          });
         }
 
+        // arrivals
         const weeklyRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
         const snap = await getDocs(query(weeklyRef, where('active', '==', true)));
         const arrivals = Array.from(new Set(snap.docs.map(d => (d.data() as WeeklyTrip).arrival).filter(Boolean)))
@@ -264,7 +421,6 @@ const AgenceGuichetPage: React.FC = () => {
   }, [user?.uid, user?.companyId, user?.agencyId]);
 
   /* -------------------- Live remaining seats -------------------- */
-  // (PLACÉ AVANT searchTrips pour éviter TS2448/2454)
   const loadRemainingForDate = useCallback(async (
     dateISO: string,
     dep: string,
@@ -294,7 +450,7 @@ const AgenceGuichetPage: React.FC = () => {
         snap.forEach((d) => {
           const r = d.data() as any;
           const statut = String(r.statut || '').toLowerCase();
-          if (statut !== 'payé') return; // **compter uniquement "payé"**
+          if (statut !== 'payé') return; // ne compter que "payé"
           const tripKey = r.trajetId;
           const seats = Number(r.seatsGo || 0);
           usedByTrip[tripKey] = (usedByTrip[tripKey] || 0) + seats;
@@ -315,13 +471,11 @@ const AgenceGuichetPage: React.FC = () => {
 
           setFilteredTrips(filtered);
 
-          // **Sélection auto 1er horaire** (si rien n’est déjà choisi)
           if (pickFirst && filtered.length > 0) {
             const firstWithSeats = filtered.find(f => {
               const rs = f.remainingSeats;
               return (rs === undefined) ? true : rs > 0;
             }) || filtered[0];
-
             setSelectedTrip(prevSel => prevSel ?? firstWithSeats);
           }
 
@@ -340,7 +494,6 @@ const AgenceGuichetPage: React.FC = () => {
   /* -------------------- Recherche trajets -------------------- */
   const searchTrips = useCallback(async (dep: string, arr: string) => {
     try {
-      // reset immédiat pour éviter un affichage fantôme
       setTrips([]); setFilteredTrips([]); setSelectedTrip(null); setSelectedDate('');
 
       if (!dep || !arr || !user?.companyId || !user?.agencyId) return;
@@ -373,19 +526,15 @@ const AgenceGuichetPage: React.FC = () => {
         });
       }
 
-      // tri date + heure AVANT filtrage passé
       out.sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
-
       const future = out.filter(t => !isPastTime(t.date, t.time));
       setTrips(future);
 
-      // pré-sélection auto 1ère date & 1ère heure
       const firstDate = future[0]?.date || '';
       setSelectedDate(firstDate);
       setSelectedTrip(null);
 
       if (firstDate) {
-        // pickFirst = true → sélectionne automatiquement le 1er horaire dispo
         await loadRemainingForDate(firstDate, dep, arr, future, true);
       } else {
         setFilteredTrips([]);
@@ -395,7 +544,6 @@ const AgenceGuichetPage: React.FC = () => {
     }
   }, [isPastTime, user?.agencyId, user?.companyId, loadRemainingForDate]);
 
-  // Quand on change d’arrivée ou de ville de départ → on relance la recherche
   useEffect(() => {
     if (!arrival) {
       setTrips([]); setFilteredTrips([]); setSelectedTrip(null); setSelectedDate(''); return;
@@ -406,7 +554,6 @@ const AgenceGuichetPage: React.FC = () => {
   const handleSelectDate = useCallback(async (date: string) => {
     setSelectedDate(date);
     setSelectedTrip(null);
-    // pickFirst = true pour auto-sélectionner la 1ère heure de cette date
     await loadRemainingForDate(date, departure, arrival, undefined, true);
   }, [arrival, departure, loadRemainingForDate]);
 
@@ -426,7 +573,7 @@ const AgenceGuichetPage: React.FC = () => {
 
   const validPhone = (v: string) => /\d{7,}/.test((v||'').replace(/\D/g,''));
 
-  /* -------------------- Réservation -------------------- */
+  /* -------------------- Réservation (écriture unique + caches) -------------------- */
   const handleReservation = useCallback(async () => {
     if (!selectedTrip || !nomClient || !telephone) return;
     if (!canSell) { alert('Démarrez/activez votre poste.'); return; }
@@ -437,32 +584,25 @@ const AgenceGuichetPage: React.FC = () => {
       if (needed > selectedTrip.remainingSeats) { alert(`Il reste ${selectedTrip.remainingSeats} places.`); return; }
       if (needed <= 0) { alert('Nombre de places invalide.'); return; }
     }
-
     if (totalPrice <= 0) { alert('Montant invalide.'); return; }
 
     setIsProcessing(true);
     try {
-      const compSnap = await getDoc(doc(db, 'companies', user!.companyId));
-      const comp = compSnap.data() || {};
-      const companyNameFull = (comp as any).nom || 'Compagnie';
-      const companyCode = makeShortCode(companyNameFull, (comp as any).code);
-      const companySlug = (comp as any).slug || DEFAULT_COMPANY_SLUG;
-
-      const agSnap = await getDoc(doc(db, `companies/${user!.companyId}/agences/${user!.agencyId}`));
-      const ag = agSnap.data() || {};
-      const agencyNameLocal = (ag as any).nomAgence || (ag as any).nom || '';
-      const agencyCode = makeShortCode(agencyNameLocal, (ag as any).code);
-      const agencyTelephone = (ag as any).telephone || '';
-
-      const sellerCode = (await getSellerCodeFromFirestore(user?.uid)) || staffCodeForSale;
-
+      // 1) référence atomique (transaction)
       const referenceCode = await generateReferenceCodeForTripInstance({
-        companyId: user!.companyId, companyCode,
-        agencyId: user!.agencyId, agencyCode,
-        tripInstanceId: selectedTrip.id, sellerCode
+        companyId: user!.companyId,
+        companyCode: companyMeta.code,
+        agencyId: user!.agencyId,
+        agencyCode: agencyMeta.code,
+        tripInstanceId: selectedTrip.id,
+        sellerCode: sellerCodeCached || staffCodeForSale
       });
 
-      // Paiement forcé espèces + canal guichet
+      // 2) Pré-créer l'ID du doc pour écrire EN UNE FOIS
+      const colRef = collection(db, `companies/${user!.companyId}/agences/${user!.agencyId}/reservations`);
+      const newRef = doc(colRef);
+      const newId = newRef.id;
+
       const data = {
         trajetId: selectedTrip.id,
         date: selectedTrip.date, heure: selectedTrip.time,
@@ -472,45 +612,41 @@ const AgenceGuichetPage: React.FC = () => {
         montant: totalPrice, statut: 'payé', statutEmbarquement: 'en_attente',
         checkInTime: null, reportInfo: null,
         compagnieId: user!.companyId, agencyId: user!.agencyId,
-        companySlug, compagnieNom: (comp as any).nom || 'Compagnie',
-        agencyNom: agencyNameLocal, agencyTelephone,
-        canal: 'guichet', paiement: 'espèces',
-        paiementSource: 'encaisse_guichet',
-        guichetierId: user!.uid, guichetierCode: sellerCode,
+        companySlug: companyMeta.slug, compagnieNom: companyMeta.name,
+        agencyNom: agencyMeta.name, agencyTelephone: agencyMeta.phone,
+        canal: 'guichet', paiement: 'espèces', paiementSource: 'encaisse_guichet',
+        guichetierId: user!.uid, guichetierCode: sellerCodeCached || staffCodeForSale,
         shiftId: activeShift?.id || null,
-        referenceCode, qrCode: null, tripType,
+        referenceCode, qrCode: newId, tripType,
         createdAt: Timestamp.now(),
       };
 
-      const ref = collection(db, `companies/${user!.companyId}/agences/${user!.agencyId}/reservations`);
-      const created = await addDoc(ref, data);
-      await updateDoc(doc(db, `companies/${user!.companyId}/agences/${user!.agencyId}/reservations`, created.id), { qrCode: created.id });
+      // ÉCRITURE UNIQUE
+      await setDoc(newRef, data);
 
-      const reservationForModal: ReceiptReservation = {
-        id: created.id, nomClient, telephone,
+      // Reçu (aucune relecture nécessaire)
+      setReceiptData({
+        id: newId, nomClient, telephone,
         date: data.date, heure: data.heure, depart: data.depart, arrivee: data.arrivee,
         seatsGo: data.seatsGo, seatsReturn: data.seatsReturn, montant: data.montant,
         statut: data.statut, paiement: data.paiement,
-        compagnieId: user!.companyId, compagnieNom: (comp as any).nom || 'Compagnie',
-        agencyId: user!.agencyId, agencyNom: agencyNameLocal, nomAgence: agencyNameLocal,
-        agenceTelephone: agencyTelephone, canal: 'guichet',
-        createdAt: new Date(), companySlug, referenceCode,
-        qrCode: created.id, guichetierId: user!.uid, guichetierCode: sellerCode,
+        compagnieId: user!.companyId, compagnieNom: companyMeta.name,
+        agencyId: user!.agencyId, agencyNom: agencyMeta.name, nomAgence: agencyMeta.name,
+        agenceTelephone: agencyMeta.phone, canal: 'guichet',
+        createdAt: new Date(), companySlug: companyMeta.slug, referenceCode,
+        qrCode: newId, guichetierId: user!.uid, guichetierCode: sellerCodeCached || staffCodeForSale,
         shiftId: activeShift?.id || null, email: undefined,
-      };
+      });
 
-      const companyForModal: ReceiptCompany = {
-        nom: (comp as any).nom || 'Compagnie',
-        logoUrl: (comp as any).logoUrl || (comp as any).logo || companyLogo || undefined,
+      setReceiptCompany({
+        nom: companyMeta.name,
+        logoUrl: companyMeta.logo || undefined,
         couleurPrimaire: theme.primary, couleurSecondaire: theme.secondary,
-        slug: companySlug, telephone: companyPhone || undefined,
-      };
-
-      setReceiptData(reservationForModal);
-      setReceiptCompany(companyForModal);
+        slug: companyMeta.slug, telephone: companyMeta.phone || undefined,
+      });
       setShowReceipt(true);
 
-      // Reset UI (le live mettra à jour les places automatiquement)
+      // Reset UI (le live mettra à jour)
       setNomClient(''); setTelephone('');
       setTripType('aller_simple'); setPlacesAller(1); setPlacesRetour(0);
 
@@ -522,11 +658,96 @@ const AgenceGuichetPage: React.FC = () => {
       setIsProcessing(false);
     }
   }, [
-    selectedTrip, nomClient, telephone, canSell, user,
-    placesAller, placesRetour, tripType, totalPrice,
-    activeShift, staffCodeForSale, theme.primary, theme.secondary, companyLogo, companyPhone,
+    selectedTrip, nomClient, telephone, canSell, validPhone, tripType,
+    placesAller, placesRetour, totalPrice, user, activeShift,
+    companyMeta, agencyMeta, sellerCodeCached, staffCodeForSale, theme,
     loadRemainingForDate
   ]);
+
+  /* -------------------- Annulation / Édition -------------------- */
+  const cancelReservation = useCallback(async (row: TicketRow) => {
+    if (!user?.companyId || !user?.agencyId) return;
+    // garde-fous
+    if (row.canal && row.canal !== 'guichet') { alert("Annulation autorisée ici uniquement pour les ventes guichet."); return; }
+    if (row.statutEmbarquement === 'embarqué') { alert("Impossible d'annuler : passager déjà embarqué."); return; }
+
+    const reason = prompt("Motif d'annulation (optionnel) :") || undefined;
+    if (!window.confirm("Confirmer l'annulation de cette réservation ?")) return;
+
+    try {
+      setCancelingId(row.id);
+      const ref = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations/${row.id}`);
+      await updateDoc(ref, {
+        statut: 'annulé',
+        updatedAt: serverTimestamp(),
+        cancelReason: reason || null,
+        canceledBy: {
+          id: user.uid,
+          name: user.displayName || user.email || null,
+        }
+      });
+      // MAJ UI locale — on ne retire pas la ligne pour garder la trace
+      setTickets((prev) => prev.map(t => t.id === row.id ? { ...t, montant: 0 } : t));
+    } catch (e) {
+      console.error('[GUICHET] cancelReservation:error', e);
+      alert("Échec de l'annulation.");
+    } finally {
+      setCancelingId(null);
+    }
+  }, [user?.companyId, user?.agencyId]);
+
+  const openEdit = useCallback((row: TicketRow) => {
+    setEditTarget({
+      id: row.id,
+      nomClient: row.nomClient,
+      telephone: row.telephone,
+      seatsGo: row.seatsGo ?? 1,
+      seatsReturn: row.seatsReturn ?? 0,
+      montant: row.montant ?? 0
+    });
+    setEditOpen(true);
+  }, []);
+
+  const saveEditedReservation = useCallback(async (payload: {
+    id: string; nomClient: string; telephone?: string; seatsGo: number; seatsReturn?: number; montant: number; editReason?: string
+  }) => {
+    if (!user?.companyId || !user?.agencyId) return;
+    try {
+      setIsSavingEdit(true);
+      const ref = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations/${payload.id}`);
+      await updateDoc(ref, {
+        nomClient: payload.nomClient,
+        telephone: payload.telephone || null,
+        seatsGo: Math.max(1, payload.seatsGo || 1),
+        seatsReturn: Math.max(0, payload.seatsReturn || 0),
+        montant: Math.max(0, payload.montant || 0),
+        updatedAt: serverTimestamp(),
+        editedBy: {
+          id: user.uid,
+          name: user.displayName || user.email || null,
+          reason: payload.editReason || null
+        }
+      });
+      // MAJ liste locale
+      setTickets(prev => prev.map(t => t.id === payload.id
+        ? { ...t,
+            nomClient: payload.nomClient,
+            telephone: payload.telephone,
+            seatsGo: Math.max(1, payload.seatsGo || 1),
+            seatsReturn: Math.max(0, payload.seatsReturn || 0),
+            montant: Math.max(0, payload.montant || 0)
+          }
+        : t
+      ));
+      setEditOpen(false);
+      setEditTarget(null);
+    } catch (e) {
+      console.error('[GUICHET] saveEditedReservation:error', e);
+      alert("Échec de la modification.");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  }, [user?.companyId, user?.agencyId, user?.uid]);
 
   /* -------------------- Live ventes du poste courant -------------------- */
   const loadReport = useCallback(async () => {
@@ -548,6 +769,7 @@ const AgenceGuichetPage: React.FC = () => {
           depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone,
           seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0,
           paiement: r.paiement, createdAt: r.createdAt, guichetierCode: r.guichetierCode || '',
+          canal: r.canal, statutEmbarquement: r.statutEmbarquement
         };
       });
       setTickets(rows);
@@ -567,6 +789,18 @@ const AgenceGuichetPage: React.FC = () => {
     return agg;
   }, [tickets]);
 
+  // Période d’affichage du bloc Rapport (si chevauchement de jours)
+  const reportDateLabel = useMemo(() => {
+    const start = activeShift?.startAt?.toDate?.() || activeShift?.startTime?.toDate?.();
+    const end = activeShift?.endAt?.toDate?.() || new Date();
+    if (!start) return new Date().toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+    const d1 = start.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric' });
+    const d2 = end.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric' });
+    return (d1 === d2)
+      ? d1
+      : `du ${d1} au ${d2}`;
+  }, [activeShift?.startAt, activeShift?.startTime, activeShift?.endAt]);
+
   /* -------------------- Rapports en attente (shiftReports) -------------------- */
   const loadPendingReports = useCallback(async () => {
     try {
@@ -574,7 +808,6 @@ const AgenceGuichetPage: React.FC = () => {
       setLoadingPending(true);
       const base = `companies/${user.companyId}/agences/${user.agencyId}`;
       const repRef = collection(db, `${base}/shiftReports`);
-      // en attente = au moins une des validations est false
       const snap = await getDocs(query(
         repRef,
         where('userId', '==', user.uid),
@@ -602,7 +835,6 @@ const AgenceGuichetPage: React.FC = () => {
           });
           return acc;
         }, [] as ShiftReport[])
-        // tri du + récent au + ancien sur endAt
         .sort((a,b) => (b.endAt?.toMillis?.() ?? 0) - (a.endAt?.toMillis?.() ?? 0));
 
       setPendingReports(rows);
@@ -650,10 +882,8 @@ const AgenceGuichetPage: React.FC = () => {
     }
   }, [user?.companyId, user?.agencyId, user?.uid]);
 
-  // Charger quand on ouvre les onglets
   useEffect(() => {
     if (tab === 'rapport') {
-      // Live ventes si poste actif/pausé
       if (activeShift?.id && (status === 'active' || status === 'paused' || status === 'pending')) {
         void loadReport();
       } else {
@@ -678,64 +908,67 @@ const AgenceGuichetPage: React.FC = () => {
         @page { size: auto; margin: 10mm; }
       `}</style>
 
-      {/* EN-TÊTE */}
+      {/* EN-TÊTE GLOBAL — responsive */}
       <div className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/70">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {companyLogo
-              ? <img src={companyLogo} alt="logo" className="h-10 w-10 rounded object-contain border" />
-              : <div className="h-10 w-10 rounded bg-gray-200 grid place-items-center"><Building2 className="h-5 w-5 text-gray-500"/></div>}
-            <div>
-              <div
-                className="text-lg font-bold"
-                style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
-              >
-                {companyName}
-              </div>
-              <div className="text-xs text-gray-500 flex items-center gap-1">
-                <MapPin className="h-3.5 w-3.5"/><span>{agencyName}</span>
+        <div className="max-w-7xl mx-auto px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Bloc logo + info agence */}
+            <div className="flex items-center gap-3 min-w-0">
+              {companyLogo
+                ? <img src={companyLogo} alt="logo" className="h-10 w-10 rounded object-contain border flex-shrink-0" />
+                : <div className="h-10 w-10 rounded bg-gray-200 grid place-items-center flex-shrink-0"><Building2 className="h-5 w-5 text-gray-500"/></div>}
+              <div className="min-w-0">
+                <div
+                  className="text-lg font-bold truncate"
+                  style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
+                  title={companyName}
+                >
+                  {companyName}
+                </div>
+                <div className="text-xs text-gray-500 flex items-center gap-1 truncate">
+                  <MapPin className="h-3.5 w-3.5 flex-shrink-0"/><span className="truncate">{agencyName}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* onglets */}
-          <div className="inline-flex rounded-xl p-1 bg-gray-100 shadow-inner">
-            <button
-              type="button"
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='guichet' ? 'text-white' : 'hover:bg-white'}`}
-              onClick={() => setTab('guichet')}
-              style={tab==='guichet'
-                ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
-                : {}}
-            >
-              Guichet
-            </button>
-            <button
-              type="button"
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='rapport' ? 'text-white' : 'hover:bg-white'}`}
-              onClick={() => setTab('rapport')}
-              style={tab==='rapport'
-                ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
-                : {}}
-            >
-              Rapport
-            </button>
-            <button
-              type="button"
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='historique' ? 'text-white' : 'hover:bg-white'}`}
-              onClick={() => setTab('historique')}
-              style={tab==='historique'
-                ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
-                : { color: theme.primary }}
-            >
-              Historique
-            </button>
-          </div>
+            {/* Tabs — passent dessous sur mobile */}
+            <div className="order-3 md:order-none w-full md:w-auto">
+              <div className="inline-flex rounded-xl p-1 bg-gray-100 shadow-inner w-full md:w-auto">
+                <button
+                  type="button"
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='guichet' ? 'text-white' : 'hover:bg-white'}`}
+                  onClick={() => setTab('guichet')}
+                  style={tab==='guichet'
+                    ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                    : {}}
+                >
+                  Guichet
+                </button>
+                <button
+                  type="button"
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='rapport' ? 'text-white' : 'hover:bg-white'}`}
+                  onClick={() => setTab('rapport')}
+                  style={tab==='rapport'
+                    ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                    : {}}
+                >
+                  Rapport
+                </button>
+                <button
+                  type="button"
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='historique' ? 'text-white' : 'hover:bg-white'}`}
+                  onClick={() => setTab('historique')}
+                  style={tab==='historique'
+                    ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                    : { color: theme.primary }}
+                >
+                  Historique
+                </button>
+              </div>
+            </div>
 
-          {/* État de poste + actions + menu utilisateur */}
-          <div className="flex items-center gap-3">
-            {/* État + actions (bloc original conservé) */}
-            <div className="flex items-center gap-2">
+            {/* État + actions */}
+            <div className="ml-auto flex items-center gap-3 flex-wrap">
               <div
                 className="px-3 py-1 rounded-lg text-xs font-medium transition-colors"
                 style={{
@@ -802,13 +1035,10 @@ const AgenceGuichetPage: React.FC = () => {
                   Demander l’activation
                 </button>
               )}
+
+              <div className="h-6 w-px bg-gray-200" />
+              <Button leftIcon={<Settings className="h-4 w-4" />}>Paramètres</Button>
             </div>
-
-            {/* Séparateur fin */}
-            <div className="h-6 w-px bg-gray-200" />
-
-            {/* Menu utilisateur (roue dentée) */}
-            <Button leftIcon={<Settings className="h-4 w-4" />}>Paramètres</Button>
           </div>
         </div>
       </div>
@@ -816,48 +1046,36 @@ const AgenceGuichetPage: React.FC = () => {
       {/* =================== CONTENU: RAPPORT =================== */}
       {tab==='rapport' && (
         <div id="report-print" className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-          {/* Bloc en-tête */}
-          <div className="bg-white rounded-2xl border shadow-sm p-4 transition duration-200 ease-out">
+          {/* En-tête minimal Rapport */}
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {companyLogo
-                  ? <img src={companyLogo} alt="logo" className="h-9 w-9 rounded object-contain border" />
-                  : <div className="h-9 w-9 rounded bg-gray-200 grid place-items-center"><Building2 className="h-4 w-4 text-gray-500"/></div>}
-                <div className="text-lg font-semibold">{companyName}</div>
+              <div className="text-2xl font-bold"
+                   style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>
+                Rapport
               </div>
-              <div className="text-right">
-                <div className="text-2xl font-bold">Rapport</div>
-                <div className="text-sm text-gray-600">
-                  {new Date().toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' })}
-                </div>
-              </div>
+              <div className="text-sm text-gray-600">{reportDateLabel}</div>
             </div>
           </div>
 
           {/* A. Live ventes (uniquement si poste en cours) */}
           {(status==='active' || status==='paused' || status==='pending') && (
             <div className="space-y-3">
-              <div className="flex gap-2 no-print">
-                <button className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50 transition">Imprimer</button>
-                <button className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50 transition" onClick={refresh}>Actualiser</button>
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-xl border p-4 bg-white shadow-sm transition duration-200 ease-out hover:shadow">
+                <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
                   <div className="text-sm text-gray-500">Billets</div>
                   <div className="text-2xl font-bold">{totals.billets}</div>
                 </div>
-                <div className="rounded-xl border p-4 bg-white shadow-sm transition duration-200 ease-out hover:shadow">
+                <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
                   <div className="text-sm text-gray-500">Montant</div>
                   <div className="text-2xl font-bold">{totals.montant.toLocaleString('fr-FR')} FCFA</div>
                 </div>
-                <div className="rounded-xl border p-4 bg-white shadow-sm transition duration-200 ease-out hover:shadow">
+                <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
                   <div className="text-sm text-gray-500">Réservations</div>
                   <div className="text-2xl font-bold">{tickets.length}</div>
                 </div>
               </div>
 
-              <div className="rounded-xl border bg-white p-4 shadow-sm transition duration-200 ease-out hover:shadow">
+              <div className="rounded-xl border bg-white p-4 shadow-sm hover:shadow transition">
                 <div className="font-semibold mb-3">Ventes du poste en cours (canal: guichet, paiement: espèces)</div>
 
                 {loadingReport ? (
@@ -877,6 +1095,7 @@ const AgenceGuichetPage: React.FC = () => {
                           <th className="px-3 py-2 text-right">Billets</th>
                           <th className="px-3 py-2 text-right">Montant</th>
                           <th className="px-3 py-2 text-right">Réf.</th>
+                          <th className="px-3 py-2 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -890,6 +1109,27 @@ const AgenceGuichetPage: React.FC = () => {
                             <td className="px-3 py-2 text-right">{(t.seatsGo||0)+(t.seatsReturn||0)}</td>
                             <td className="px-3 py-2 text-right">{t.montant.toLocaleString('fr-FR')} FCFA</td>
                             <td className="px-3 py-2 text-right text-xs text-gray-500">{t.referenceCode || t.id}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-white"
+                                  style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                                  title="Modifier (nom, tél., places, montant)"
+                                  onClick={() => openEdit(t)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" /> Modifier
+                                </button>
+                                <button
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md border text-xs hover:bg-red-50"
+                                  style={{ borderColor:'#FCA5A5', color:'#B91C1C' }}
+                                  title="Annuler la réservation"
+                                  onClick={() => cancelReservation(t)}
+                                  disabled={cancelingId === t.id}
+                                >
+                                  <XCircle className="h-3.5 w-3.5" /> {cancelingId === t.id ? 'Annulation…' : 'Annuler'}
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -901,7 +1141,7 @@ const AgenceGuichetPage: React.FC = () => {
           )}
 
           {/* B. Sessions en attente de validation */}
-          <div className="rounded-2xl border bg-white p-4 shadow-sm transition duration-200 ease-out hover:shadow">
+          <div className="rounded-2xl border bg-white p-4 shadow-sm hover:shadow transition">
             <div className="font-semibold mb-2">Mes sessions en attente de validation</div>
             {loadingPending ? (
               <div className="text-gray-500">Chargement…</div>
@@ -913,7 +1153,7 @@ const AgenceGuichetPage: React.FC = () => {
                   const start = rep.startAt?.toDate?.() ? rep.startAt.toDate() : new Date();
                   const end   = rep.endAt?.toDate?.() ? rep.endAt.toDate() : new Date();
                   return (
-                    <div key={rep.shiftId} className="border rounded-xl p-4 transition duration-200 ease-out hover:shadow-sm">
+                    <div key={rep.shiftId} className="border rounded-xl p-4 hover:shadow-sm transition">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-semibold">Session #{rep.shiftId.slice(0,6)} — {rep.userName || 'Guichetier'} ({rep.userCode || '—'})</div>
@@ -928,21 +1168,6 @@ const AgenceGuichetPage: React.FC = () => {
                           <span className={`px-2 py-1 rounded text-xs ${rep.managerValidated ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                             Chef {rep.managerValidated ? 'OK' : 'en attente'}
                           </span>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="rounded-lg border p-3">
-                          <div className="text-xs text-gray-500">Billets</div>
-                          <div className="text-xl font-bold">{rep.billets}</div>
-                        </div>
-                        <div className="rounded-lg border p-3">
-                          <div className="text-xs text-gray-500">Montant</div>
-                          <div className="text-xl font-bold">{rep.montant.toLocaleString('fr-FR')} FCFA</div>
-                        </div>
-                        <div className="rounded-lg border p-3">
-                          <div className="text-xs text-gray-500">Trajets</div>
-                          <div className="text-xl font-bold">{rep.details?.length || 0}</div>
                         </div>
                       </div>
 
@@ -998,32 +1223,17 @@ const AgenceGuichetPage: React.FC = () => {
                   const start = rep.startAt?.toDate?.() ? rep.startAt.toDate() : new Date();
                   const end   = rep.endAt?.toDate?.() ? rep.endAt.toDate() : new Date();
                   return (
-                    <div key={rep.shiftId} className="border rounded-xl p-4 transition duration-200 ease-out hover:shadow-sm">
+                    <div key={rep.shiftId} className="border rounded-xl p-4 hover:shadow-sm transition">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-semibold">Session #{rep.shiftId.slice(0,6)} — {rep.userName || 'Guichetier'} ({rep.userCode || '—'})</div>
                           <div className="text-xs text-gray-500">
-                            Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleString('fr-FR')}
+                            Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleDateString('fr-FR',{ weekday:'long', day:'numeric', month:'long', year:'numeric' })} {end.toLocaleTimeString('fr-FR')}
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-700">Comptable OK</span>
                           <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-700">Chef OK</span>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="rounded-lg border p-3">
-                          <div className="text-xs text-gray-500">Billets</div>
-                          <div className="text-xl font-bold">{rep.billets}</div>
-                        </div>
-                        <div className="rounded-lg border p-3">
-                          <div className="text-xs text-gray-500">Montant</div>
-                          <div className="text-xl font-bold">{rep.montant.toLocaleString('fr-FR')} FCFA</div>
-                        </div>
-                        <div className="rounded-lg border p-3">
-                          <div className="text-xs text-gray-500">Trajets</div>
-                          <div className="text-xl font-bold">{rep.details?.length || 0}</div>
                         </div>
                       </div>
 
@@ -1051,6 +1261,16 @@ const AgenceGuichetPage: React.FC = () => {
                           </table>
                         </div>
                       )}
+
+                      <div className="no-print mt-3 flex items-center justify-end">
+                        <button
+                          className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50"
+                          onClick={() => window.print()}
+                          title="Imprimer le rapport"
+                        >
+                          🖨️ Imprimer
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1065,7 +1285,7 @@ const AgenceGuichetPage: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* G, Recherche */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="rounded-2xl border shadow-sm p-6 bg-white transition duration-200 ease-out hover:shadow">
+            <div className="rounded-2xl border shadow-sm p-6 bg-white hover:shadow transition">
               <div className="mb-4">
                 <h1 className="text-2xl font-bold">Guichet de vente</h1>
                 <p className="text-gray-500 text-sm flex items-center gap-2">
@@ -1105,7 +1325,7 @@ const AgenceGuichetPage: React.FC = () => {
             </div>
 
             {/* Dates */}
-            <div className="rounded-2xl border shadow-sm p-6 bg-white transition duration-200 ease-out hover:shadow">
+            <div className="rounded-2xl border shadow-sm p-6 bg-white hover:shadow transition">
               <h3 className="font-semibold mb-3 flex items-center gap-2"><CalendarDays className="h-5 w-5"/><span>Dates disponibles</span></h3>
               <div className="flex flex-wrap gap-2">
                 {availableDates.map(d => {
@@ -1131,7 +1351,7 @@ const AgenceGuichetPage: React.FC = () => {
             </div>
 
             {/* Horaires */}
-            <div className="rounded-2xl border shadow-sm p-6 bg-white transition duration-200 ease-out hover:shadow">
+            <div className="rounded-2xl border shadow-sm p-6 bg-white hover:shadow transition">
               <h3 className="font-semibold mb-2 flex items-center gap-2"><Clock4 className="h-5 w-5"/><span>Horaires disponibles</span></h3>
               {filteredTrips.length === 0 ? (
                 <div className="text-gray-400 text-sm">Aucun horaire pour cette date.</div>
@@ -1276,7 +1496,7 @@ const AgenceGuichetPage: React.FC = () => {
         </div>
       )}
 
-      {/* BARRE BAS */}
+      {/* BARRE BAS (sans bouton déconnexion) */}
       <div className="sticky bottom-0 z-10">
         <div className="max-w-7xl mx-auto px-4 pb-4">
           <div className="bg-white/95 backdrop-blur rounded-2xl border shadow-md p-3 flex items-center justify-between">
@@ -1290,13 +1510,6 @@ const AgenceGuichetPage: React.FC = () => {
                 </div>
                 <div className="text-xs text-gray-500">{(user as any)?.role || 'guichetier'}</div>
               </div>
-              <button
-                onClick={async () => { await logout(); navigate('/login'); }}
-                className="ml-3 inline-flex items-center gap-1 px-3 py-2 text-sm rounded-lg border bg-gray-50 hover:bg-gray-100 transition"
-                title="Déconnexion"
-              >
-                <LogOut className="h-4 w-4"/> Déconnexion
-              </button>
             </div>
 
             {tab==='guichet' && (
@@ -1319,6 +1532,15 @@ const AgenceGuichetPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Modale d’édition */}
+      <EditReservationModal
+        open={editOpen}
+        onClose={() => { setEditOpen(false); setEditTarget(null); }}
+        initial={editTarget}
+        onSave={saveEditedReservation}
+        isSaving={isSavingEdit}
+      />
 
       {showReceipt && receiptData && receiptCompany && (
         <ReceiptModal
