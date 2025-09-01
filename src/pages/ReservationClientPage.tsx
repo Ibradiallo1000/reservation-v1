@@ -130,8 +130,9 @@ export default function ReservationClientPage() {
           const reservations = rSnap.docs.map(d=>({ id:d.id, ...(d.data() as any)}));
           next8.forEach(dateStr=>{
             const d = new Date(dateStr); const dayName = DAYS[d.getDay()];
-            weekly.forEach(t=>{
-              (t.horaires?.[dayName]||[]).forEach(heure=>{
+            // 👇 cast explicite pour typer les heures
+            ((weekly as any[])).forEach((t:any)=>{
+              ((t.horaires?.[dayName] || []) as string[]).forEach((heure) => {
                 if (dateStr===toYMD(new Date())) {
                   const now = new Date();
                   const nowHHMM = parse(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,'HH:mm',new Date());
@@ -339,18 +340,21 @@ export default function ReservationClientPage() {
           {company.logoUrl && <img src={company.logoUrl} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-gray-200" />}
           <div className="min-w-0">
             <div className="flex items-center text-gray-900 font-semibold">
-              <span className="truncate">{cityFrom}</span>
+              <span className="truncate">{formatCity(departureQ)}</span>
               <svg viewBox="0 0 24 24" className="mx-2 h-5 w-5 shrink-0" style={{color: theme.primary}}>
                 <path fill="currentColor" d="M5 12h12l-4-4 1.4-1.4L21.8 12l-7.4 5.4L13 16l4-4H5z"/>
               </svg>
-              <span className="truncate">{cityTo}</span>
+              <span className="truncate">{formatCity(arrivalQ)}</span>
             </div>
             <p className="text-xs text-gray-500">Sélectionnez la date et l’heure</p>
           </div>
         </div>
         <div className="text-right">
           <div className="text-xs text-gray-500">À partir de</div>
-          <div className="text-lg sm:text-xl font-extrabold" style={{ color: theme.primary }}>{priceText}</div>
+          <div className="text-lg sm:text-xl font-extrabold" style={{ color: theme.primary }}>
+            { (selectedTrip?.price ?? (filteredTrips[0] as any)?.price)
+              ? `${(selectedTrip?.price ?? (filteredTrips[0] as any)?.price).toLocaleString('fr-FR')} FCFA` : '—'}
+          </div>
         </div>
       </div>
     </section>
