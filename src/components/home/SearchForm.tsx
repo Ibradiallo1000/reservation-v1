@@ -1,4 +1,3 @@
-// src/components/home/SearchForm.tsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import VilleCombobox from "@/components/VilleCombobox";
@@ -15,9 +14,7 @@ const SearchForm: React.FC = () => {
 
   return (
     <div className="bg-white shadow-lg rounded-xl p-6 max-w-xl mx-auto">
-      <h2 className="text-lg font-semibold text-gray-800 mb-4">
-        Trouvez votre prochain trajet
-      </h2>
+      <h2 className="text-lg font-semibold text-gray-800 mb-4">Trouvez votre prochain trajet</h2>
       <div className="space-y-4">
         <VilleCombobox label="Ville de départ" value={departure} onChange={setDeparture} />
         <VilleCombobox label="Ville d'arrivée" value={arrival} onChange={setArrival} />

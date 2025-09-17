@@ -1,3 +1,4 @@
+// src/main.tsx
 import './firebaseConfig';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -12,7 +13,6 @@ function openIndexHelp(err: any) {
   const linkMatch = txt.match(/https?:\/\/[^\s"]*indexes[^\s"]*/i);
   const url = linkMatch ? linkMatch[0] : null;
 
-  // Message simple pour tout le monde
   const base = 'Cette requête Firestore a besoin d’un index.';
   const detail = url
     ? `\n\n👉 Cliquez sur "Créer l’index", puis revenez sur l’app.\n\nLien : ${url}`
@@ -20,7 +20,6 @@ function openIndexHelp(err: any) {
 
   alert(base + detail);
   if (url) { try { window.open(url, '_blank', 'noopener'); } catch {} }
-  // Log propre en console pour le debug
   // eslint-disable-next-line no-console
   console.warn('[Firestore] Index requis →', url || '(aucun lien détecté)', err);
 }
@@ -57,13 +56,6 @@ if (import.meta?.env?.MODE !== 'production') {
 }
 /* ===================================================================== */
 
-/* Nettoyage des Service Workers existants (on force une PWA "off") */
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then((regs) => {
-    regs.forEach((r) => r.unregister());
-  });
-}
-
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter
@@ -78,3 +70,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </React.StrictMode>
 );
+
+/* === PWA ON : enregistrer un Service Worker minimal ===
+   -> crée aussi public/sw.js (voir plus bas)
+*/
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js', { scope: '/' })
+      .catch((err) => console.error('SW register error:', err));
+  });
+}

@@ -11,7 +11,6 @@ import {
   GaugeCircle,
   Ticket,
   BellRing,
-  Route as RouteIcon,
 } from "lucide-react";
 
 // RangeKey : source unique
@@ -29,22 +28,14 @@ import { AlertsPanel } from "@/components/CompanyDashboard/AlertsPanel";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 
-// --------- helpers ----------
-function formatFCFA(n: number) {
-  return new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "XOF",
-    maximumFractionDigits: 0,
-  }).format(n);
-}
-
+/* ---------- helpers ---------- */
 const DEFAULT_RANGE: RangeKey = "month";
 
 export default function CompagnieDashboard() {
   const { user } = useAuth();
   const companyId = user?.companyId ?? "";
 
-  // Titre du header (uniquement le titre, pas de boutons)
+  // Titre dans le header global
   const { setHeader, resetHeader } = usePageHeader();
   useEffect(() => {
     setHeader({ title: "Dashboard Compagnie" });
@@ -58,7 +49,6 @@ export default function CompagnieDashboard() {
   // ======= horloge pour mettre à jour automatiquement après minuit =======
   const [now, setNow] = useState(new Date());
   useEffect(() => {
-    // tick chaque minute suffit pour détecter le passage à minuit
     const id = setInterval(() => setNow(new Date()), 60 * 1000);
     return () => clearInterval(id);
   }, []);
@@ -75,7 +65,7 @@ export default function CompagnieDashboard() {
     return { todayFrom: start, todayTo: end, todayLabel: label };
   }, [now]);
 
-  // ======= 2) Dates "PÉRIODE" (dashboard principal) =======
+  // ======= 2) Dates "PÉRIODE" (section principale) =======
   const { dateFrom, dateTo, periodLabel } = useMemo(() => {
     const endOfToday = new Date(
       now.getFullYear(),
@@ -127,19 +117,12 @@ export default function CompagnieDashboard() {
     loading: loadingToday,
     company: companyToday,
     kpis: kpisToday,
-    topTrajets: topTrajetsToday,
     alerts: alertsToday,
   } = useCompanyDashboardData({ companyId, dateFrom: todayFrom, dateTo: todayTo });
 
-  // Top trajet du jour (libellé court)
-  const topToday = topTrajetsToday?.[0];
-  const topTrajetLabel = topToday ? topToday.trajet : "—";
-  const topTrajetSub = topToday ? `${topToday.reservations} billets` : "Aucune donnée";
-
-  // Nombre d’alertes (jour)
   const alertsCountToday = alertsToday?.length ?? 0;
 
-  // ======= 4) Données PÉRIODE (dashboard principal) =======
+  // ======= 4) Données PÉRIODE (section principale) =======
   const {
     loading,
     company,
@@ -151,15 +134,15 @@ export default function CompagnieDashboard() {
   } = useCompanyDashboardData({ companyId, dateFrom, dateTo });
 
   return (
-    <div className="space-y-6 p-4 md:p-6">
+    <div className="space-y-5 p-4 md:p-6">
       {/* ===== HERO : Indicateurs du JOUR ===== */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl md:text-2xl font-bold">Réservations du jour</h2>
+            {/* même taille que la section mois */}
+            <h2 className="text-2xl md:text-3xl font-bold">Réservations du jour</h2>
             <p className="text-sm text-muted-foreground">{todayLabel}</p>
           </div>
-          {/* plus d'actions ici (export supprimé) */}
         </div>
 
         <KpiHeader
@@ -188,12 +171,13 @@ export default function CompagnieDashboard() {
               sub: `${kpisToday.totalAgences || 0} au total`,
               to: "/compagnie/agences",
             },
+            // 🔁 remplacé "Top trajet (jour)" par "Part en ligne (jour)"
             {
-              icon: RouteIcon,
-              label: "Top trajet (jour)",
-              value: topTrajetLabel,
-              sub: topTrajetSub,
-              to: "/compagnie/statistiques",
+              icon: GaugeCircle,
+              label: "Part en ligne (jour)",
+              value: `${kpisToday.partEnLigne ?? 0}%`,
+              sub: "Ventes en ligne",
+              to: "/compagnie/reservations",
             },
             {
               icon: BellRing,
@@ -206,24 +190,26 @@ export default function CompagnieDashboard() {
         />
       </div>
 
-      {/* ===== EN-TÊTE PÉRIODE ===== */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Dashboard Compagnie</h1>
+      {/* ===== EN-TÊTE PÉRIODE + FILTRE SUR LA MÊME LIGNE ===== */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div className="flex-1">
+          {/* même taille que le titre du jour */}
+          <h2 className="text-2xl md:text-3xl font-bold">Réservations du mois</h2>
           <p className="text-sm text-muted-foreground">Période : {periodLabel}</p>
         </div>
-        {/* plus d’actions à droite (export supprimé) */}
-      </div>
 
-      {/* ===== Filtre PÉRIODE ===== */}
-      <TimeFilterBar
-        range={range}
-        setRange={setRange}
-        customStart={customStart}
-        setCustomStart={setCustomStart}
-        customEnd={customEnd}
-        setCustomEnd={setCustomEnd}
-      />
+        {/* Filtre compacté à droite */}
+        <div className="w-full md:w-auto">
+          <TimeFilterBar
+            range={range}
+            setRange={setRange}
+            customStart={customStart}
+            setCustomStart={setCustomStart}
+            customEnd={customEnd}
+            setCustomEnd={setCustomEnd}
+          />
+        </div>
+      </div>
 
       {/* ===== KPIs PÉRIODE — 5 cartes ===== */}
       <KpiHeader
@@ -270,7 +256,7 @@ export default function CompagnieDashboard() {
       />
 
       {/* ===== Graphiques (période) ===== */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <Card className="xl:col-span-2">
           <CardHeader>
             <CardTitle>Évolution du CA & des Réservations</CardTitle>
@@ -290,7 +276,7 @@ export default function CompagnieDashboard() {
       </div>
 
       {/* ===== Comparatifs (période) ===== */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <Card className="xl:col-span-2">
           <CardHeader>
             <CardTitle>Performance par agence (période)</CardTitle>
@@ -310,7 +296,7 @@ export default function CompagnieDashboard() {
       </div>
 
       {/* ===== Tables & Alertes (période) ===== */}
-      <div className="grid grid-cols-1 2xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 2xl:grid-cols-3 gap-5">
         <Card className="2xl:col-span-2">
           <CardHeader>
             <CardTitle>Top trajets (période)</CardTitle>
@@ -319,7 +305,7 @@ export default function CompagnieDashboard() {
             <TopTrajetsTable rows={topTrajets} loading={loading} />
           </CardContent>
         </Card>
-        <div className="space-y-6">
+        <div className="space-y-5">
           <Card>
             <CardHeader>
               <CardTitle>Agences à surveiller</CardTitle>

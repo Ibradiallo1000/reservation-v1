@@ -4,58 +4,44 @@ import { db } from "@/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 
-interface Company {
-  publicVisible: boolean;
-  status: string;
+type Company = {
   id: string;
   nom: string;
-  logoUrl: string;
+  logoUrl?: string;
   slug: string;
-  pays: string;
-  plan: string;
-}
+  pays?: string;
+  status?: string;
+  publicVisible?: boolean;
+};
 
 const PartnersSection: React.FC = () => {
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchCompanies = async () => {
+    let mounted = true;
+    (async () => {
       try {
-        const snapshot = await getDocs(collection(db, "companies"));
-        const list: Company[] = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        })) as Company[];
-
-        const filtered = list.filter((c) => c.status === "actif" && c.publicVisible !== false);
-        setCompanies(filtered);
-      } catch (err) {
-        console.error("Erreur chargement compagnies:", err);
+        const snap = await getDocs(collection(db, "companies"));
+        const all = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Company[];
+        const filtered = all.filter(c => (c.status ?? "actif") === "actif" && c.publicVisible !== false);
+        if (mounted) setCompanies(filtered);
+      } catch {
+        // silent fail en public
       } finally {
-        setLoading(false);
+        if (mounted) setLoaded(true);
       }
-    };
-
-    fetchCompanies();
+    })();
+    return () => { mounted = false; };
   }, []);
 
-  if (loading) {
-    return <p className="text-center py-10">Chargement des compagnies...</p>;
-  }
-
-  if (companies.length === 0) {
-    return <p className="text-center py-10 text-gray-500">Aucune compagnie partenaire visible.</p>;
-  }
+  // si rien ou erreur → ne rien afficher
+  if (!loaded || companies.length === 0) return null;
 
   return (
     <div className="max-w-6xl mx-auto px-4 text-center">
-      <h2 className="text-2xl font-bold mb-6 text-orange-600">
-        Nos compagnies partenaires
-      </h2>
-
-      {/* Carrousel compact */}
+      <h2 className="text-2xl font-bold mb-6 text-orange-600">Nos compagnies partenaires</h2>
       <div className="flex gap-4 overflow-x-auto scrollbar-thin scrollbar-thumb-orange-500 scrollbar-track-gray-200 py-3">
         {companies.map((c) => (
           <motion.div
@@ -69,11 +55,13 @@ const PartnersSection: React.FC = () => {
                 src={c.logoUrl || "/default-logo.png"}
                 alt={c.nom}
                 className="w-full h-full object-cover"
-                onError={(e: any) => (e.target.src = "/default-logo.png")}
+                onError={(e: any) => (e.currentTarget.src = "/default-logo.png")}
+                loading="lazy"
+                decoding="async"
               />
             </div>
             <p className="text-xs font-semibold text-gray-800 truncate">{c.nom}</p>
-            <p className="text-[11px] text-gray-500">{c.pays}</p>
+            {c.pays && <p className="text-[11px] text-gray-500">{c.pays}</p>}
           </motion.div>
         ))}
       </div>

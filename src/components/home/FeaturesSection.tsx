@@ -1,27 +1,50 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { ShieldCheck, Zap, Globe, TrendingUp } from "lucide-react";
+import SectionTitle from "@/components/ui/SectionTitle";
 
-const features = [
-  { icon: <ShieldCheck className="h-6 w-6 text-blue-600" />, title: "Sécurité", desc: "Paiements sécurisés et fiables" },
-  { icon: <Zap className="h-6 w-6 text-blue-600" />, title: "Rapidité", desc: "Réservez vos billets en quelques secondes" },
-  { icon: <Globe className="h-6 w-6 text-blue-600" />, title: "Couverture", desc: "Des trajets dans toute l'Afrique de l’Ouest" },
-  { icon: <TrendingUp className="h-6 w-6 text-blue-600" />, title: "Économie", desc: "Les meilleurs prix garantis" },
+const FEATURES = [
+  { icon: ShieldCheck, title: "Sécurité", desc: "Paiements sécurisés et fiables" },
+  { icon: Zap,        title: "Rapidité", desc: "Réservez vos billets en quelques secondes" },
+  { icon: Globe,      title: "Couverture", desc: "Des trajets dans toute l’Afrique de l’Ouest" },
+  { icon: TrendingUp, title: "Économie", desc: "Les meilleurs prix garantis" },
 ];
 
 const FeaturesSection: React.FC = () => {
+  const [i, setI] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setI(v => (v + 1) % FEATURES.length), 4000);
+    return () => clearInterval(id);
+  }, []);
+
+  const F = FEATURES[i];
+
   return (
-    <div className="max-w-6xl mx-auto text-center">
-      <h2 className="text-xl font-bold mb-6">Pourquoi choisir TIKETA+</h2>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {features.map((f, i) => (
-          <div key={i} className="p-4 bg-white shadow rounded">
-            <div className="mb-2 flex justify-center">{f.icon}</div>
-            <h3 className="font-semibold mb-1">{f.title}</h3>
-            <p className="text-sm text-gray-600">{f.desc}</p>
+    <section className="py-8 md:py-10 bg-gray-50">
+      <div className="max-w-6xl mx-auto px-4 text-center">
+        <SectionTitle className="mb-3">Pourquoi choisir Teliya</SectionTitle>
+
+        <div className="mx-auto max-w-md bg-white border border-orange-100 rounded-xl shadow-sm p-6">
+          <div className="flex flex-col items-center gap-2">
+            <F.icon className="h-7 w-7 text-orange-600" />
+            <h3 className="text-lg font-semibold text-gray-900">{F.title}</h3>
+            <p className="text-sm text-gray-600">{F.desc}</p>
           </div>
-        ))}
+        </div>
+
+        {/* Puces d’état */}
+        <div className="mt-4 flex justify-center gap-2">
+          {FEATURES.map((_, idx) => (
+            <button
+              key={idx}
+              onClick={() => setI(idx)}
+              className={`h-2 w-2 rounded-full ${i === idx ? "bg-orange-600" : "bg-orange-200"}`}
+              aria-label={`Aller à la carte ${idx + 1}`}
+            />
+          ))}
+        </div>
       </div>
-    </div>
+    </section>
   );
 };
 

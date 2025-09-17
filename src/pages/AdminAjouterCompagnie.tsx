@@ -1,120 +1,202 @@
-import React, { useState } from 'react';
-import { auth, db } from '../firebaseConfig';
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'; // ← (updateProfile utile mais optionnel)
-import { doc, setDoc, collection, Timestamp } from 'firebase/firestore';
-import { useNavigate } from 'react-router-dom';
+import React, { useMemo, useState } from "react";
+import { db, auth } from "../firebaseConfig";
+import {
+  addDoc,
+  collection,
+  doc,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
 
+/** === Petites utils === */
 const countries = [
-  { name: 'Mali', code: '+223' },
-  { name: 'Sénégal', code: '+221' },
-  { name: "Côte d'Ivoire", code: '+225' },
-  { name: 'Burkina Faso', code: '+226' },
-  { name: 'Togo', code: '+228' },
+  { name: "Mali", code: "+223" },
+  { name: "Sénégal", code: "+221" },
+  { name: "Côte d'Ivoire", code: "+225" },
+  { name: "Burkina Faso", code: "+226" },
+  { name: "Togo", code: "+228" },
 ];
 
-// Fonction utilitaire pour générer un slug
 const slugify = (str: string) =>
   str
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, '')   // supprime accents
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/[^a-z0-9]/g, '')         // supprime tout sauf lettres/chiffres
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
     .trim();
 
-const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess }) => {
+const isEmail = (s: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test((s || "").trim());
+const normalizePhone = (dial: string, local: string) =>
+  `${dial}${(local || "").replace(/\D/g, "")}`;
+
+type Props = { onSuccess?: () => void };
+
+const AdminAjouterCompagnie: React.FC<Props> = ({ onSuccess }) => {
   const navigate = useNavigate();
-  const [nom, setNom] = useState('');
-  const [responsable, setResponsable] = useState('');
-  const [email, setEmail] = useState('');
-  const [motDePasse, setMotDePasse] = useState('');
+
+  // Compagnie
+  const [nom, setNom] = useState("");
   const [pays, setPays] = useState(countries[0].name);
   const [code, setCode] = useState(countries[0].code);
-  const [telephone, setTelephone] = useState('');
+  const [ville, setVille] = useState("");
+  const [telephone, setTelephone] = useState("");
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [couleurPrimaire, setCouleurPrimaire] = useState("#f59e0b");
+  const [couleurSecondaire, setCouleurSecondaire] = useState("#ef4444");
 
+  // Admin Compagnie (info de contact uniquement — pas de création Auth côté client)
+  const [adminNom, setAdminNom] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+
+  // Chef agence principale (optionnel / info de contact)
+  const [useSameManager, setUseSameManager] = useState(true);
+  const [managerNom, setManagerNom] = useState("");
+  const [managerEmail, setManagerEmail] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const slug = useMemo(() => slugify(nom), [nom]);
+
+  /** Écrit les docs Firestore — nécessite role=admin_platforme dans les custom claims */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validations UI
+    if (!nom.trim()) return alert("Le nom de la compagnie est requis.");
+    if (!adminNom.trim()) return alert("Le nom de l’admin de la compagnie est requis.");
+    if (!isEmail(adminEmail)) return alert("Email admin compagnie invalide.");
+    if (!telephone.trim()) return alert("Téléphone requis.");
+    if (!useSameManager && managerEmail && !isEmail(managerEmail)) {
+      return alert("Email chef d’agence invalide.");
+    }
+
+    // Vérifier le rôle de l’utilisateur courant (doit être admin_platforme)
+    const current = auth.currentUser;
+    if (!current) return alert("Tu dois être connecté.");
+    const token = await current.getIdTokenResult();
+    if (token.claims?.role !== "admin_platforme") {
+      return alert("Accès refusé : nécessite le rôle admin_platforme.");
+    }
+
     setLoading(true);
-
     try {
-      // Création utilisateur Firebase Auth
-      const userCredential = await createUserWithEmailAndPassword(auth, email, motDePasse);
-      const uid = userCredential.user.uid;
-      const companyId = uid;
-      const slug = slugify(nom);
+      // 1) Créer la compagnie
+      const fullPhone = normalizePhone(code, telephone);
 
-      // ⚠️ Normaliser le téléphone (garder uniquement les chiffres côté local, puis préfixer le code)
-      const fullPhone = `${code}${telephone.replace(/\D/g, '')}`; // ← AJOUT (normalisation)
-
-      // (optionnel) définir le displayName dans Auth
-      try {
-        await updateProfile(userCredential.user, { displayName: responsable });
-      } catch {}
-
-      // Création document compagnie
-      await setDoc(doc(db, 'companies', companyId), {
+      // Valeurs par défaut utiles pour le branding / accueil
+      const companyDoc = {
         nom,
-        email,
-        pays,
-        telephone: fullPhone,                      // ← AJOUT (téléphone normalisé)
-        responsable,
-        plan: 'free',
-        createdAt: Timestamp.now(),
-        commissionRate: 0.1, // 10% par défaut
-        status: 'actif',
-        logoUrl: '',
-        banniereUrl: '',
-        description: `Bienvenue chez ${nom}`,
         slug,
-        latitude: latitude || null,
-        longitude: longitude || null,
-        themeStyle: 'moderne',
-        couleurPrimaire: '#3B82F6',
-        couleurSecondaire: '#10B981',
-        police: 'sans-serif',
+        pays,
+        ville: ville || null,
+        telephone: fullPhone,
+        latitude: latitude ?? null,
+        longitude: longitude ?? null,
+
+        // Branding par défaut (lecture publique permise par tes règles)
         publicVisible: true,
-        vues: 0,
-        modifiable: true, // pour l’édition future
-      });
+        couleurPrimaire,
+        couleurSecondaire,
+        couleurAccent: "#f6f3f0",
+        couleurTertiaire: "#000000",
+        plan: "free",
+        status: "actif",
+        police: "sans-serif",
+        themeStyle: "moderne",
 
-      // Création de l'agence principale
-      const mainAgencyRef = doc(collection(db, 'companies', companyId, 'agences'));
-      await setDoc(mainAgencyRef, {
-        nom: 'Siège principal',
-        adresse: '',
-        telephone: fullPhone,                      // ← AJOUT (téléphone normalisé)
-        createdAt: Timestamp.now(),
-        latitude: latitude || null,
-        longitude: longitude || null,
-        responsable: responsable,
-        active: true,
-        slug: 'siegeprincipal',
-        isHeadOffice: true
-      });
+        // Textes/basiques
+        description: "",
+        instructionRecherche: "Trouver votre prochain trajet",
+        accroche: "Réservez votre trajet en un clic",
 
-      // Création du document utilisateur (ADMIN COMPAGNIE)
-      await setDoc(doc(db, 'users', uid), {
-        uid,                                       // ← AJOUT (pratique pour les listes)
-        email,
-        role: 'admin_compagnie',
-        companyId,
-        agencyId: mainAgencyRef.id,
-        companyName: nom,
-        nom: responsable,
-        displayName: responsable,                  // ← AJOUT (affichage clair)
-        telephone: fullPhone,                      // ← AJOUT IMPORTANT (téléphone admin dans Firestore)
-        active: true,                              // ← (facilite activer/désactiver)
-        createdAt: Timestamp.now()
-      });
+        // Médias (vides au départ)
+        logoUrl: "",
+        banniereUrl: "",
+        faviconUrl: "",
+        imagesSlider: [],
 
-      alert('✅ Compagnie, agence principale et administrateur créés avec succès !');
-      navigate('/compagnies'); // Redirection automatique vers la gestion des compagnies
+        // Liens/sections site vitrine
+        showContactForm: true,
+        showLegalLinks: true,
+        showSocialMedia: true,
+        showTestimonials: true,
 
-      if (onSuccess) onSuccess();
-    } catch (error: any) {
-      alert('❌ Erreur : ' + error.message);
+        // Données contact “responsable”
+        responsable: adminNom,
+        email: adminEmail,
+
+        // Légales (vides au départ)
+        politiqueConfidentialite: "",
+        conditionsUtilisation: "",
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      // On crée le doc avec un id auto
+      const companyRef = await addDoc(collection(db, "companies"), companyDoc);
+      const companyId = companyRef.id;
+
+      // 2) Agence principale (sous-collection)
+      const mainAgency = {
+        id: "", // on le met après
+        nomAgence: "Agence principale",
+        ville: ville || null,
+        pays,
+        statut: "active",
+        latitude: latitude ?? null,
+        longitude: longitude ?? null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        isHeadOffice: true,
+      };
+      const agencyRef = await addDoc(collection(companyRef, "agences"), mainAgency);
+      await setDoc(agencyRef, { id: agencyRef.id }, { merge: true });
+      const agencyId = agencyRef.id;
+
+      // 3) Enregistrer des “contacts” (facultatif, pas lié à Auth)
+      //    -> utile pour savoir qui est censé être admin / manager
+      const contactsRef = doc(collection(companyRef, "contacts"), "main");
+      await setDoc(
+        contactsRef,
+        {
+          admin: { name: adminNom, email: adminEmail },
+          agencyManager: useSameManager
+            ? { name: adminNom, email: adminEmail }
+            : managerEmail
+            ? { name: managerNom, email: managerEmail }
+            : null,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      // 4) Message et suite
+      alert(
+        [
+          "✅ Compagnie créée sans Cloud Function.",
+          `- companyId: ${companyId}`,
+          `- agencyId: ${agencyId}`,
+          "",
+          "ℹ️ Étape suivante (Spark) : crée/repère le compte de l’admin compagnie, puis lance :",
+          `node setUserClaims.cjs ${adminEmail} admin_compagnie ${companyId}`,
+          useSameManager
+            ? "(le même compte aura déjà les bons contacts)"
+            : managerEmail
+            ? `et pour le chef d’agence : node setUserClaims.cjs ${managerEmail} chefAgence ${companyId} ${agencyId}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+
+      onSuccess?.();
+      navigate("/compagnies");
+    } catch (err: any) {
+      console.error(err);
+      alert("❌ Erreur: " + (err?.message || "création impossible"));
     } finally {
       setLoading(false);
     }
@@ -123,7 +205,9 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
   return (
     <div className="p-6 max-w-2xl mx-auto">
       <h2 className="text-xl font-bold mb-4">Ajouter une compagnie</h2>
+
       <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4">
+        {/* Compagnie */}
         <input
           required
           value={nom}
@@ -131,34 +215,12 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
           placeholder="Nom de la compagnie"
           className="border p-2 rounded"
         />
-        <input
-          required
-          value={responsable}
-          onChange={(e) => setResponsable(e.target.value)}
-          placeholder="Nom du responsable"
-          className="border p-2 rounded"
-        />
-        <input
-          required
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email du responsable"
-          className="border p-2 rounded"
-        />
-        <input
-          required
-          type="password"
-          value={motDePasse}
-          onChange={(e) => setMotDePasse(e.target.value)}
-          placeholder="Mot de passe"
-          className="border p-2 rounded"
-        />
+
         <div className="flex gap-2">
           <select
             value={pays}
             onChange={(e) => {
-              const selected = countries.find(c => c.name === e.target.value);
+              const selected = countries.find((c) => c.name === e.target.value);
               if (selected) {
                 setPays(selected.name);
                 setCode(selected.code);
@@ -166,24 +228,36 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
             }}
             className="border p-2 rounded w-1/2"
           >
-            {countries.map(c => (
-              <option key={c.code} value={c.name}>{c.name}</option>
+            {countries.map((c) => (
+              <option key={c.code} value={c.name}>
+                {c.name}
+              </option>
             ))}
           </select>
           <input
-            required
-            value={telephone}
-            onChange={(e) => setTelephone(e.target.value)}
-            placeholder="Numéro de téléphone"
+            value={ville}
+            onChange={(e) => setVille(e.target.value)}
+            placeholder="Ville (optionnel)"
             className="border p-2 rounded w-1/2"
           />
         </div>
 
         <div className="flex gap-2">
           <input
+            required
+            value={telephone}
+            onChange={(e) => setTelephone(e.target.value)}
+            placeholder="Téléphone"
+            className="border p-2 rounded w-1/2"
+          />
+          <input readOnly value={code} className="border p-2 rounded w-1/2 bg-gray-50" />
+        </div>
+
+        <div className="flex gap-2">
+          <input
             type="number"
             step="any"
-            value={latitude ?? ''}
+            value={latitude ?? ""}
             onChange={(e) => setLatitude(e.target.value ? parseFloat(e.target.value) : null)}
             placeholder="Latitude (optionnel)"
             className="border p-2 rounded w-1/2"
@@ -191,11 +265,85 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
           <input
             type="number"
             step="any"
-            value={longitude ?? ''}
+            value={longitude ?? ""}
             onChange={(e) => setLongitude(e.target.value ? parseFloat(e.target.value) : null)}
             placeholder="Longitude (optionnel)"
             className="border p-2 rounded w-1/2"
           />
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            type="color"
+            value={couleurPrimaire}
+            onChange={(e) => setCouleurPrimaire(e.target.value)}
+            className="border p-1 rounded w-1/2"
+            title="Couleur primaire"
+          />
+          <input
+            type="color"
+            value={couleurSecondaire}
+            onChange={(e) => setCouleurSecondaire(e.target.value)}
+            className="border p-1 rounded w-1/2"
+            title="Couleur secondaire"
+          />
+        </div>
+
+        {/* Admin compagnie (contact) */}
+        <div className="mt-2 border-t pt-4">
+          <h3 className="font-semibold mb-2">Administrateur de la compagnie (contact)</h3>
+          <input
+            required
+            value={adminNom}
+            onChange={(e) => setAdminNom(e.target.value)}
+            placeholder="Nom complet (admin compagnie)"
+            className="border p-2 rounded mb-2 w-full"
+          />
+          <input
+            required
+            type="email"
+            value={adminEmail}
+            onChange={(e) => setAdminEmail(e.target.value)}
+            placeholder="Email (admin compagnie)"
+            className="border p-2 rounded w-full"
+          />
+        </div>
+
+        {/* Chef agence principale (contact) */}
+        <div className="mt-2 border-t pt-4">
+          <div className="flex items-center gap-2">
+            <input
+              id="sameManager"
+              type="checkbox"
+              checked={useSameManager}
+              onChange={(e) => setUseSameManager(e.target.checked)}
+            />
+            <label htmlFor="sameManager">
+              Utiliser le même compte comme Chef d’agence principale
+            </label>
+          </div>
+
+          {!useSameManager && (
+            <div className="mt-3 grid grid-cols-1 gap-2">
+              <input
+                value={managerNom}
+                onChange={(e) => setManagerNom(e.target.value)}
+                placeholder="Nom complet (chef d’agence)"
+                className="border p-2 rounded"
+              />
+              <input
+                type="email"
+                value={managerEmail}
+                onChange={(e) => setManagerEmail(e.target.value)}
+                placeholder="Email (chef d’agence)"
+                className="border p-2 rounded"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="text-sm text-gray-500">
+          Slug généré : <span className="font-mono">{slug || "(vide)"}</span>
         </div>
 
         <button
@@ -203,7 +351,7 @@ const AdminAjouterCompagnie: React.FC<{ onSuccess?: () => void }> = ({ onSuccess
           disabled={loading}
           className="bg-orange-600 text-white p-2 rounded hover:bg-orange-700 transition"
         >
-          {loading ? 'Enregistrement...' : 'Ajouter la compagnie'}
+          {loading ? "Création en cours..." : "Créer la compagnie"}
         </button>
       </form>
     </div>

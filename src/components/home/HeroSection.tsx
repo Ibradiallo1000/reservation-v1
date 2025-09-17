@@ -11,23 +11,21 @@ const HeroSection: React.FC = () => {
   const [arrival, setArrival] = useState("");
   const [banniereUrl, setBanniereUrl] = useState<string | null>(null);
 
-  // Charger l'image de bannière depuis Firestore
   useEffect(() => {
-    const fetchBanner = async () => {
+    let mounted = true;
+    (async () => {
       try {
         const ref = doc(db, "platform", "settings");
         const snap = await getDoc(ref);
-        if (snap.exists()) {
-          const data = snap.data();
-          if (data.banniereUrl) {
-            setBanniereUrl(data.banniereUrl);
-          }
+        if (mounted && snap.exists()) {
+          const data = snap.data() as any;
+          if (data?.banniereUrl) setBanniereUrl(String(data.banniereUrl));
         }
-      } catch (err) {
-        console.error("Erreur lors du chargement de la bannière:", err);
+      } catch {
+        // silent fail
       }
-    };
-    fetchBanner();
+    })();
+    return () => { mounted = false; };
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -49,9 +47,7 @@ const HeroSection: React.FC = () => {
         <h1 className="text-4xl md:text-6xl font-bold mb-6">
           Voyagez avec <span className="text-orange-400">Teliya</span>
         </h1>
-        <p className="text-lg mb-8">
-          Réservez vos billets en ligne, trouvez les meilleurs trajets en Afrique.
-        </p>
+        <p className="text-lg mb-8">Réservez vos billets en ligne, trouvez les meilleurs trajets en Afrique.</p>
 
         <form
           onSubmit={handleSubmit}
@@ -59,11 +55,7 @@ const HeroSection: React.FC = () => {
         >
           <VilleCombobox label="Ville de départ" value={departure} onChange={setDeparture} />
           <VilleCombobox label="Ville d’arrivée" value={arrival} onChange={setArrival} />
-
-          <button
-            type="submit"
-            className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded flex items-center justify-center"
-          >
+          <button type="submit" className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded flex items-center justify-center">
             <Search className="h-5 w-5 mr-2" /> Rechercher
           </button>
         </form>

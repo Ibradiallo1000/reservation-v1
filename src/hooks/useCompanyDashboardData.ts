@@ -1,5 +1,5 @@
 // =============================================
-// src/hooks/useCompanyDashboardData.ts  (DEBUG LOGS)
+// src/hooks/useCompanyDashboardData.ts  (PAID-ONLY METRICS)
 // =============================================
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
@@ -7,22 +7,22 @@ import {
   collection, query, where, onSnapshot, Timestamp, getDocs, doc, getDoc, CollectionReference,
 } from "firebase/firestore";
 
-// ---------- Types exportés (identiques au nouveau dashboard) ----------
+/* ---------- Types exportés (identiques à ta version) ---------- */
 
 export interface DashboardKpis {
   caPeriode: number;
   caPeriodeFormatted: string;
   caDeltaText: string;
-  reservationsCount: number;            // ✅ nouveau
-  clientsUniques: number;               // ✅ gardé pour compatibilité (tu peux l’enlever si tu ne l’utilises plus)
+  reservationsCount: number;
+  clientsUniques: number;
   agencesActives: number;
   totalAgences: number;
   villesCouvertes: number;
   tauxRemplissageText: string;
   parCanal: { name: string; value: number }[];
   parStatut: { name: string; value: number }[];
-  partEnLigne: number;                  // ✅ nouveau
-  partGuichet: number;                  // ✅ nouveau
+  partEnLigne: number;
+  partGuichet: number;
 }
 
 export type DailyPoint = { date: string; reservations: number; revenue: number };
@@ -43,12 +43,20 @@ export interface ReservationDoc {
   createdAt?: any;
 }
 
-// ---------- Utils ----------
+/* ---------- Utils ---------- */
 function formatFCFA(n: number) {
-  return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(n);
+  return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(n || 0);
 }
 function normCity(s?: string) {
   return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/-/g, " ").trim();
+}
+function normStr(s?: string) {
+  return (s || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+}
+function isPaidStatus(s?: string) {
+  const n = normStr(s);
+  // "payé" => "paye"; on accepte quelques variantes
+  return n === "paye" || n === "paid" || n === "payed";
 }
 function getDateKey(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), da = String(d.getDate()).padStart(2, "0");
@@ -64,16 +72,9 @@ function toDateSafe(v: any): Date | null {
   } catch { return null; }
 }
 
-// ---------- Noms possibles de la sous-collection (on essaie dans cet ordre) ----------
-const RESERVATION_COLLECTION_CANDIDATES = [
-  "reservations",
-  "reservation",
-  "bookings",
-  "reserves",
-  "resas",
-];
+/* ---------- Noms possibles de la sous-collection ---------- */
+const RESERVATION_COLLECTION_CANDIDATES = ["reservations","reservation","bookings","reserves","resas"];
 
-// Essaie chaque nom et renvoie le 1er qui ne jette pas d'erreur à la lecture
 async function getReservationsCollectionRef(
   companyId: string,
   agencyId: string
@@ -82,10 +83,9 @@ async function getReservationsCollectionRef(
   for (const name of RESERVATION_COLLECTION_CANDIDATES) {
     tried.push(name);
     const ref = collection(db, `companies/${companyId}/agences/${agencyId}/${name}`);
-    // on “ping” avec un getDocs pour voir si Firestore accepte le chemin
     try {
       console.log("▶ Test chemin:", `companies/${companyId}/agences/${agencyId}/${name}`);
-      await getDocs(query(ref)); // léger ; s'il y a un souci (reserved/permissions), ça jette
+      await getDocs(query(ref));
       return { ref, nameTried: tried };
     } catch (e: any) {
       console.warn(`⚠️ Chemin refusé (${name}) →`, e?.message || e);
@@ -95,7 +95,7 @@ async function getReservationsCollectionRef(
   return { ref: null, nameTried: tried };
 }
 
-// ---------- Hook principal ----------
+/* ---------- Hook principal ---------- */
 export function useCompanyDashboardData({
   companyId, dateFrom, dateTo,
 }: { companyId: string; dateFrom: Date; dateTo: Date }) {
@@ -127,7 +127,7 @@ export function useCompanyDashboardData({
     return () => unsub();
   }, [companyId]);
 
-  // Réservations par agence (avec logs & auto-détection du nom de collection)
+  // Réservations par agence (filtre dates – on garde les logs; filtre "payé" en aval pour éviter un index Firestore requis partout)
   useEffect(() => {
     if (!companyId) return;
     setLoading(true);
@@ -140,7 +140,6 @@ export function useCompanyDashboardData({
 
     (async () => {
       try {
-        // snapshot instantané de la liste d'agences
         const agSnap = await getDocs(collection(db, `companies/${companyId}/agences`));
         const agencyIds = agSnap.docs.map(d => d.id);
         console.log("📄 Agences trouvées:", agencyIds.length, agencyIds);
@@ -154,19 +153,14 @@ export function useCompanyDashboardData({
         let attached = 0;
 
         for (const aid of agencyIds) {
-          // 1) Détecter le bon nom de sous-collection
           const { ref, nameTried } = await getReservationsCollectionRef(companyId, aid);
           if (!ref) {
             console.error("✖ Impossible d'ouvrir une sous-collection de réservations pour", aid, " (essayé:", nameTried.join(", "), ")");
             attached += 1;
-            if (attached === agencyIds.length && !cancelled) {
-              setReservations(all);
-              setLoading(false);
-            }
+            if (attached === agencyIds.length && !cancelled) { setReservations(all); setLoading(false); }
             continue;
           }
 
-          // 2) Attacher l'écoute temps réel avec filtre createdAt
           const qRes = query(ref, where("createdAt", ">=", startTs), where("createdAt", "<=", endTs));
           console.log("📡 Listen réservations:", ref.path);
 
@@ -191,7 +185,6 @@ export function useCompanyDashboardData({
               } as ReservationDoc;
             });
 
-            // remplace les enregistrements de cette agence
             const filteredOut = all.filter(r => r.agencyId !== aid && r.agenceId !== aid);
             all.splice(0, all.length, ...filteredOut, ...items);
 
@@ -223,13 +216,19 @@ export function useCompanyDashboardData({
     };
   }, [companyId, dateFrom.getTime(), dateTo.getTime()]);
 
-  // ---------- Agrégations ----------
+  /* ---------- Sélection paid-only pour toutes les métriques ---------- */
+  const paidReservations = useMemo(
+    () => reservations.filter(r => isPaidStatus(r.statut)),
+    [reservations]
+  );
+
+  /* ---------- Agrégations ---------- */
   const totalAgences = agencies.length;
 
   const perAgency = useMemo<AgencyPerf[]>(() => {
     const map = new Map<string, AgencyPerf>();
     agencies.forEach(a => map.set(a.id, { id: a.id, nom: a.nom, ville: a.ville, reservations: 0, revenus: 0 }));
-    reservations.forEach(r => {
+    paidReservations.forEach(r => {
       const aId = (r.agencyId || r.agenceId) as string | undefined;
       if (!aId) return;
       const curr = map.get(aId) || { id: aId, nom: r.agencyNom || aId, ville: r.agencyVille, reservations: 0, revenus: 0 };
@@ -238,97 +237,91 @@ export function useCompanyDashboardData({
       map.set(aId, curr);
     });
     return Array.from(map.values()).sort((a, b) => b.revenus - a.revenus);
-  }, [agencies, reservations]);
+  }, [agencies, paidReservations]);
 
   const clientsUniques = useMemo(() => {
     const s = new Set<string>();
-    reservations.forEach(r => { if (r.clientId) s.add("id:" + r.clientId); else if (r.clientPhone) s.add("tel:" + r.clientPhone); });
+    paidReservations.forEach(r => { if (r.clientId) s.add("id:" + r.clientId); else if (r.clientPhone) s.add("tel:" + r.clientPhone); });
     return s.size;
-  }, [reservations]);
+  }, [paidReservations]);
 
   const villesCouvertes = useMemo(() => {
     const s = new Set<string>();
-    reservations.forEach(r => { const a = normCity(r.depart || r.departNormalized); const b = normCity(r.arrival || r.arrivee); if (a) s.add(a); if (b) s.add(b); });
+    paidReservations.forEach(r => { const a = normCity(r.depart || r.departNormalized); const b = normCity(r.arrival || r.arrivee); if (a) s.add(a); if (b) s.add(b); });
     return s.size;
-  }, [reservations]);
+  }, [paidReservations]);
 
   const parCanal = useMemo(() => {
     const m = new Map<string, number>();
-    reservations.forEach(r => {
-      const canal = (r.canal || "inconnu").toLowerCase();
-      const norm = canal.includes("ligne") ? "En ligne" : canal.includes("guichet") ? "Guichet" : "Autres";
+    paidReservations.forEach(r => {
+      const canal = normStr(r.canal);
+      const norm =
+        canal.includes("ligne") || canal === "online" || canal === "web" ? "En ligne" :
+        canal.includes("guichet") ? "Guichet" : "Autres";
       m.set(norm, (m.get(norm) || 0) + 1);
     });
     return Array.from(m).map(([name, value]) => ({ name, value })).sort((a,b)=>b.value-a.value);
-  }, [reservations]);
+  }, [paidReservations]);
 
+  // ⚠️ parStatut reste basé sur TOUTES les réservations (utile pour tes alertes)
   const parStatut = useMemo(() => {
     const m = new Map<string, number>();
-    reservations.forEach(r => { const k = (r.statut || "—").toLowerCase(); m.set(k, (m.get(k) || 0) + 1); });
+    reservations.forEach(r => { const k = normStr(r.statut) || "—"; m.set(k, (m.get(k) || 0) + 1); });
     return Array.from(m).map(([name, value]) => ({ name, value }));
   }, [reservations]);
 
   const kpis = useMemo<DashboardKpis>(() => {
-  const ca = reservations.reduce((s, r) => s + (r.montant || 0), 0);
-  const caDeltaText = "vs période précédente"; // TODO: calcul réel
+    const ca = paidReservations.reduce((s, r) => s + (r.montant || 0), 0);
+    const caDeltaText = "vs période précédente"; // TODO: calcul réel
 
-  // Réservations
-  const reservationsCount = reservations.length;
+    const reservationsCount = paidReservations.length;
 
-  // Clients uniques (si tu ne le veux plus, enlève-le aussi de l'interface et de la page)
-  const clientsSet = new Set<string>();
-  reservations.forEach((r) => {
-    if (r.clientId) clientsSet.add(`id:${r.clientId}`);
-    else if (r.clientPhone) clientsSet.add(`tel:${r.clientPhone}`);
-  });
-  const clientsUniques = clientsSet.size;
+    const clientsSet = new Set<string>();
+    paidReservations.forEach((r) => {
+      if (r.clientId) clientsSet.add(`id:${r.clientId}`);
+      else if (r.clientPhone) clientsSet.add(`tel:${r.clientPhone}`);
+    });
+    const clientsUniques = clientsSet.size;
 
-  // Taux de remplissage (placeholder)
-  const totalSeats = reservations.reduce((s, r) => s + (r.seatsGo || 1), 0);
-  const capacity = 0;
-  const tauxRemplissageText = capacity > 0 ? `${Math.round((totalSeats / capacity) * 100)}%` : "N/A";
+    const totalSeats = paidReservations.reduce((s, r) => s + (r.seatsGo || 1), 0);
+    const capacity = 0;
+    const tauxRemplissageText = capacity > 0 ? `${Math.round((totalSeats / capacity) * 100)}%` : "N/A";
 
-  // Agences actives
-  const actives = new Set<string>();
-  reservations.forEach((r) => {
-    const aId = (r.agencyId || r.agenceId) as string | undefined;
-    if (aId) actives.add(aId);
-  });
+    const actives = new Set<string>();
+    paidReservations.forEach((r) => {
+      const aId = (r.agencyId || r.agenceId) as string | undefined;
+      if (aId) actives.add(aId);
+    });
 
-  // Parts par canal (en ligne / guichet)
-  const totalCanal = parCanal.reduce((s, x) => s + x.value, 0);
-  const enLigneVal = parCanal
-    .filter(x => x.name.includes("ligne"))
-    .reduce((s, x) => s + x.value, 0);
-  const guichetVal = parCanal
-    .filter(x => x.name.includes("guichet"))
-    .reduce((s, x) => s + x.value, 0);
-  const partEnLigne = totalCanal ? Math.round((enLigneVal / totalCanal) * 100) : 0;
-  const partGuichet = totalCanal ? Math.round((guichetVal / totalCanal) * 100) : 0;
+    const totalCanal = parCanal.reduce((s, x) => s + x.value, 0);
+    const enLigneVal = parCanal.filter(x => x.name === "En ligne").reduce((s, x) => s + x.value, 0);
+    const guichetVal = parCanal.filter(x => x.name === "Guichet").reduce((s, x) => s + x.value, 0);
+    const partEnLigne = totalCanal ? Math.round((enLigneVal / totalCanal) * 100) : 0;
+    const partGuichet = totalCanal ? Math.round((guichetVal / totalCanal) * 100) : 0;
 
-  return {
-    caPeriode: ca,
-    caPeriodeFormatted: formatFCFA(ca),
-    caDeltaText,
-    reservationsCount,         // ✅
-    clientsUniques,            // ✅
-    agencesActives: actives.size,
-    totalAgences,
-    villesCouvertes,
-    tauxRemplissageText,
-    parCanal,
-    parStatut,
-    partEnLigne,               // ✅
-    partGuichet,               // ✅
-  };
-}, [reservations, totalAgences, villesCouvertes, parCanal, parStatut]);
+    return {
+      caPeriode: ca,
+      caPeriodeFormatted: formatFCFA(ca),
+      caDeltaText,
+      reservationsCount,
+      clientsUniques,
+      agencesActives: actives.size,
+      totalAgences,
+      villesCouvertes,
+      tauxRemplissageText,
+      parCanal,
+      parStatut,          // <- toujours tous statuts
+      partEnLigne,
+      partGuichet,
+    };
+  }, [paidReservations, totalAgences, villesCouvertes, parCanal, parStatut]);
 
-const series = useMemo<Series>(() => {
+  const series = useMemo<Series>(() => {
     const m = new Map<string, { reservations: number; revenue: number }>();
     for (let d = new Date(dateFrom); d <= dateTo; d.setDate(d.getDate() + 1)) {
       m.set(getDateKey(d), { reservations: 0, revenue: 0 });
     }
-    reservations.forEach(r => {
+    paidReservations.forEach(r => {
       const dt = toDateSafe(r.createdAt) ?? (r.date ? new Date(`${r.date}T${r.heure || "00:00"}:00`) : new Date());
       const key = getDateKey(dt);
       const curr = m.get(key) || { reservations: 0, revenue: 0 };
@@ -338,11 +331,11 @@ const series = useMemo<Series>(() => {
     });
     const daily = Array.from(m).map(([date, v]) => ({ date, reservations: v.reservations, revenue: v.revenue }));
     return { daily };
-  }, [reservations, dateFrom.getTime(), dateTo.getTime()]);
+  }, [paidReservations, dateFrom.getTime(), dateTo.getTime()]);
 
   const topTrajets = useMemo<TopTrajet[]>(() => {
     const m = new Map<string, { reservations: number; revenus: number }>();
-    reservations.forEach(r => {
+    paidReservations.forEach(r => {
       const a = normCity(r.depart || r.departNormalized); const b = normCity(r.arrival || r.arrivee);
       if (!a || !b) return;
       const key = `${a} → ${b}`;
@@ -352,14 +345,14 @@ const series = useMemo<Series>(() => {
     });
     return Array.from(m).map(([trajet, v]) => ({ trajet, reservations: v.reservations, revenus: v.revenus }))
       .sort((a,b)=>b.reservations-a.reservations).slice(0,12);
-  }, [reservations]);
+  }, [paidReservations]);
 
   const alerts: AlertItem[] = useMemo(() => {
     const arr: AlertItem[] = [];
     const enAttente = parStatut.find(s => s.name.includes("attente"))?.value || 0;
     if (enAttente > 50) arr.push({ level: "warning", message: `${enAttente} réservations en attente` });
     const preuves = parStatut.find(s => s.name.includes("preuve"))?.value || 0;
-    if (preuves > 0) arr.push({ level: "info", message: `${preuves} preuves reçues à valider` });
+    if (preuves > 0) arr.push({ level: "info", message: `${preuves} preuve(s) reçue(s) à valider` });
     const zero = perAgency.filter(a => a.reservations === 0);
     if (zero.length > 0) arr.push({ level: "warning", message: `${zero.length} agence(s) sans vente` });
     return arr;

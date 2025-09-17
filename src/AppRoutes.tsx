@@ -45,7 +45,6 @@ const CompagnieDashboard = lazy(() => import('./pages/CompagnieDashboard'));
 const CompagnieAgencesPage = lazy(() => import('./pages/CompagnieAgencesPage'));
 const CompagnieParametresTabsPage = lazy(() => import('./pages/CompagnieParametresTabsPage'));
 const CompagnieReservationsPage = lazy(() => import('./pages/CompagnieReservationsPage'));
-const CompagnieAgencesStatistiquesPage = lazy(() => import('./pages/CompagnieAgencesStatistiquesPage'));
 /* ✅ Comptabilité compagnie (remplace tout “reporting/exports”) */
 const CompagnieComptabilitePage = lazy(() => import('./pages/CompagnieComptabilitePage'));
 const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
@@ -164,7 +163,6 @@ const AppRoutes = () => {
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
           <Route path="reservations-en-ligne" element={<ReservationsEnLignePage />} />
-          <Route path="statistiques-agences" element={<CompagnieAgencesStatistiquesPage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />

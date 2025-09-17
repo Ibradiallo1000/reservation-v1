@@ -64,10 +64,8 @@ const CompagnieParametresTabsPage: React.FC = () => {
   // Header sticky dynamique (titre + sous-titre)
   useEffect(() => {
     const title = 'Paramètres de la compagnie';
-    const subtitle = companyInfo?.nom || company?.nom || '';
     setHeader({
       title,
-      subtitle,
       // pas d’actions dans ce header
       bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
       fg: '#fff',

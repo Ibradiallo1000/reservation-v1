@@ -1,13 +1,20 @@
 import React from "react";
 
 const CTASection: React.FC = () => {
+  const scrollToSearch = () => {
+    document.getElementById("search")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
-    <div className="max-w-3xl mx-auto text-center">
-      <h2 className="text-2xl font-bold mb-4">Prêt à voyager avec TIKETA+ ?</h2>
-      <p className="text-gray-100 mb-6">
+    <div className="max-w-4xl mx-auto text-center">
+      <h2 className="text-2xl md:text-3xl font-extrabold mb-2">Prêt à voyager avec Teliya&nbsp;?</h2>
+      <p className="text-white/90 mb-6">
         Réservez vos billets en ligne et profitez des meilleurs trajets en Afrique.
       </p>
-      <button className="bg-white text-blue-600 px-6 py-3 rounded font-semibold hover:bg-gray-100">
+      <button
+        onClick={scrollToSearch}
+        className="bg-white text-orange-600 px-6 py-3 rounded-xl font-semibold hover:bg-orange-50"
+      >
         Commencer maintenant
       </button>
     </div>

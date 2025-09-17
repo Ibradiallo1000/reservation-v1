@@ -1,6 +1,6 @@
 // src/pages/DashboardAgencePage.tsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom'; // ⬅️ Link retiré
+import { useParams } from 'react-router-dom';
 import { collection, onSnapshot, query, where, Timestamp, orderBy } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -25,7 +25,7 @@ import {
   DocumentArrowDownIcon
 } from '@heroicons/react/24/outline';
 
-/* ===================== Types & helpers (inchangés) ===================== */
+/* ===================== Types & helpers ===================== */
 type DailyStat = { date: string; reservations: number; revenue: number };
 type DestinationStat = { name: string; count: number };
 type ChannelStat = { name: string; value: number };
@@ -94,6 +94,7 @@ const DashboardAgencePage: React.FC = () => {
     setIsLoading(true);
     if (unsubscribeRef.current) unsubscribeRef.current();
 
+    // ✅ IMPORTANT : on ne prend que les réservations "payé"
     const qy = query(
       collection(db, 'companies', companyId, 'agences', agencyId, 'reservations'),
       where('createdAt','>=', Timestamp.fromDate(startDate)),
@@ -267,8 +268,6 @@ const DashboardAgencePage: React.FC = () => {
             )}
           </div>
         </div>
-
-        {/* ❌ Bloc "Actions rapides" supprimé pour éviter la répétition (présent dans AgenceShellPage) */}
 
         {/* KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

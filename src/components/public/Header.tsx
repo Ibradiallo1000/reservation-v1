@@ -90,8 +90,7 @@ const Header: React.FC<HeaderProps> = ({
                   width={40}
                   height={40}
                   className="w-full h-full object-contain"
-                  // ⬇️ pour charger vite et éviter le clignotement
-                  fetchPriority="high"
+                  loading="eager"   // ✅ correction ici
                   decoding="async"
                 />
               ) : (
