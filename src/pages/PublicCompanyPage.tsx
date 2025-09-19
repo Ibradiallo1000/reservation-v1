@@ -1,26 +1,26 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
-import { useTranslation } from 'react-i18next';
-import i18n from '@/i18n';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useMemo, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import {
+  collection, getDocs, query, where, limit, doc, getDoc,
+} from "firebase/firestore";
+import { db } from "@/firebaseConfig";
+import { useTranslation } from "react-i18next";
+import { motion, AnimatePresence } from "framer-motion";
 
-import VilleSuggestionBar from '../components/public/VilleSuggestionBar';
-import LanguageSuggestionPopup from '../components/public/LanguageSuggestionPopup';
-import HeroSection from '../components/public/HeroSection';
-import CompanyImageSlider from '../components/public/CompanyImageSlider';
-import Footer from '../components/public/Footer';
-import AgencyList from '../components/public/AgencyList';
-import AvisListePublic from '../components/public/AvisListePublic';
-import Header from '@/components/public/Header';
+import VilleSuggestionBar from "@/components/public/VilleSuggestionBar";
+import LanguageSuggestionPopup from "@/components/public/LanguageSuggestionPopup";
+import HeroSection from "@/components/public/HeroSection";
+import CompanyImageSlider from "@/components/public/CompanyImageSlider";
+import Footer from "@/components/public/Footer";
+import AgencyList from "@/components/public/AgencyList";
+import AvisListePublic from "@/components/public/AvisListePublic";
+import Header from "@/components/public/Header";
 
-import useCompanyTheme from '../hooks/useCompanyTheme';
-import { Company, Agence, TripSuggestion } from '@/types/companyTypes';
-
-import LoadingScreen from '@/components/ui/LoadingScreen';
-import ErrorScreen from '@/components/ui/ErrorScreen';
-import NotFoundScreen from '@/components/ui/NotFoundScreen';
+import useCompanyTheme from "@/hooks/useCompanyTheme";
+import { Company, Agence, TripSuggestion } from "@/types/companyTypes";
+import ErrorScreen from "@/components/ui/ErrorScreen";
+import NotFoundScreen from "@/components/ui/NotFoundScreen";
+import { getCompanyFromCache } from "@/utils/companyCache";
 
 interface PublicCompanyPageProps {
   company?: Company;
@@ -31,18 +31,19 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   company: propCompany,
   isMobile = false,
 }) => {
-  const { slug } = useParams<{ slug: string }>();
+  const { slug = "" } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
 
-  const [company, setCompany] = useState<Company | undefined>(propCompany);
-  const { colors, classes, config } = useCompanyTheme(company);
+  // 1) démarrer avec la compagnie du cache (préchargée depuis la Home)
+  const cached = getCompanyFromCache(slug);
+  const [company, setCompany] = useState<Company | undefined>(propCompany || cached);
 
+  const { colors, classes, config } = useCompanyTheme(company);
   const [agences, setAgences] = useState<Agence[]>([]);
   const [suggestedTrips, setSuggestedTrips] = useState<TripSuggestion[]>([]);
   const [showAgences, setShowAgences] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [loading, setLoading] = useState(!company);
   const [error, setError] = useState<string | null>(null);
   const [openVilles, setOpenVilles] = useState<Record<string, boolean>>({});
   const [showLangPopup, setShowLangPopup] = useState(false);
@@ -61,92 +62,85 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     [agences]
   );
 
+  // 2) si on arrive par URL directe (pas de cache), on récupère la compagnie par slug
+  useEffect(() => {
+    if (company || !slug) return;
+    (async () => {
+      try {
+        const q = query(collection(db, "companies"), where("slug", "==", slug), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) setCompany({ id: snap.docs[0].id, ...(snap.docs[0].data() as any) });
+        else setError("notFound");
+      } catch (e) {
+        console.warn("PublicCompanyPage ► fetch company by slug", e);
+        setError(t("loadingError"));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
+  // popup langue
   useEffect(() => {
     const timer = setTimeout(() => setShowLangPopup(true), 4000);
     return () => clearTimeout(timer);
   }, []);
 
+  // suggestions (fond, pas d'overlay)
   useEffect(() => {
     const fetchSuggestions = async () => {
       if (!company?.id) return;
       try {
-        const agencesSnap = await getDocs(collection(db, 'companies', company.id, 'agences'));
-        const agences = agencesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const agencesSnap = await getDocs(collection(db, "companies", company.id, "agences"));
+        const ags = agencesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
 
         const uniqueMap = new Map<string, TripSuggestion>();
-
-        for (const agence of agences) {
-          const weeklyTripsSnap = await getDocs(
-            collection(db, 'companies', company.id, 'agences', agence.id, 'weeklyTrips')
-          );
-
-          for (const doc of weeklyTripsSnap.docs) {
-            const trip = doc.data();
+        for (const agence of ags) {
+          const weekly = await getDocs(collection(db, "companies", company.id, "agences", agence.id, "weeklyTrips"));
+          for (const d of weekly.docs) {
+            const trip: any = d.data();
             const departure = trip.depart || trip.departure;
             const arrival = trip.arrivee || trip.arrival;
             const price = trip.price ?? trip.prix ?? 0;
-
             if (!departure || !arrival) continue;
-
             const key = `${departure}__${arrival}`;
             if (!uniqueMap.has(key)) {
               uniqueMap.set(key, {
                 departure,
                 arrival,
                 price,
-                frequency: trip.days?.length > 0 ? `${trip.days.length} jours / semaine` : 'Départs réguliers',
-                imageUrl: undefined
+                frequency: trip.days?.length > 0 ? `${trip.days.length} jours / semaine` : "Départs réguliers",
+                imageUrl: undefined,
               });
             }
           }
         }
-
-        const top = Array.from(uniqueMap.values()).slice(0, 6);
-        setSuggestedTrips(top);
-      } catch (error) {
-        console.error('Erreur chargement suggestions :', error);
+        setSuggestedTrips(Array.from(uniqueMap.values()).slice(0, 6));
+      } catch (e) {
+        console.warn("PublicCompanyPage ► suggestions", e);
       }
     };
-
     fetchSuggestions();
   }, [company]);
 
+  // agences (fond, pas d'overlay)
   useEffect(() => {
     const fetchAgences = async () => {
       if (!company?.id) return;
-
       try {
-        setLoading(true);
-        const agQ = collection(db, 'companies', company.id, 'agences');
-        const agSnap = await getDocs(agQ);
+        const agSnap = await getDocs(collection(db, "companies", company.id, "agences"));
         setAgences(agSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Agence)));
-      } catch (err) {
-        console.error('Erreur chargement agences', err);
-        setError(t('loadingError'));
-      } finally {
-        setLoading(false);
+      } catch (e) {
+        console.warn("PublicCompanyPage ► agences", e);
+        setError(t("loadingError"));
       }
     };
-
-    if (company) {
-      fetchAgences();
-    }
+    fetchAgences();
   }, [company, t]);
 
-  if (loading) {
-    return (
-      <LoadingScreen
-        message={t('loading')}
-        colors={{
-          primary: colors.primary,
-          text: colors.text,
-          background: colors.background,
-        }}
-      />
-    );
+  if (error === "notFound") {
+    return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
-
-  if (error) {
+  if (error && error !== "notFound") {
     return (
       <ErrorScreen
         error={error}
@@ -159,17 +153,16 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     );
   }
 
-  if (!company || !slug) {
-    return <NotFoundScreen primaryColor={colors.primary} />;
+  // ⚠️ plus d'écran plein-page "Loading". Si company pas encore là (rare),
+  // on rend un squelette très léger, puis on affiche dès que possible.
+  if (!company) {
+    return <div className="min-h-screen bg-white"><div className="h-14 border-b" /></div>;
   }
 
   return (
     <div
       className={`min-h-screen flex flex-col ${config.typography}`}
-      style={{
-        backgroundColor: colors.background || '#ffffff',
-        color: colors.text,
-      }}
+      style={{ backgroundColor: colors.background || "#ffffff", color: colors.text }}
     >
       <Header
         company={company}
@@ -205,7 +198,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         <CompanyImageSlider
           images={company.imagesSlider || []}
           primaryColor={colors.primary}
-       />
+        />
 
         <AvisListePublic
           companyId={company.id}
@@ -231,7 +224,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         {showLangPopup && (
           <LanguageSuggestionPopup
             onSelectLanguage={(lang: string | undefined) => {
-              i18n.changeLanguage(lang);
+              import("@/i18n").then(({ default: i18n }) => i18n.changeLanguage(lang));
               setShowLangPopup(false);
             }}
             delayMs={8000}

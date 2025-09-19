@@ -1,6 +1,15 @@
-// skeleton.tsx
-import * as React from 'react';
+// src/components/ui/skeleton.tsx
+import React from "react";
 
-export const Skeleton = ({ className = '' }: { className?: string }) => (
-  <div className={`bg-gray-200 animate-pulse rounded ${className}`} />
+type Props = React.HTMLAttributes<HTMLDivElement>;
+
+/** Export nommé */
+export const Skeleton: React.FC<Props> = ({ className = "", ...rest }) => (
+  <div
+    className={`animate-pulse rounded-md bg-gray-200 ${className}`}
+    {...rest}
+  />
 );
+
+/** Export par défaut (compat) */
+export default Skeleton;

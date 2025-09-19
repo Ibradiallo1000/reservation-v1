@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Menu, X, Settings } from 'lucide-react';
 import { AnimatePresence } from 'framer-motion';
 import MobileMenu from './MobileMenu';
@@ -25,7 +25,6 @@ interface HeaderProps {
   isMobile?: boolean;
 }
 
-// Couleur de marque par défaut si non fournie
 const BRAND_ORANGE = '#FF6600';
 
 const Header: React.FC<HeaderProps> = ({
@@ -43,7 +42,23 @@ const Header: React.FC<HeaderProps> = ({
   const brandColor = colors.primary || BRAND_ORANGE;
   const secondaryColor = colors.secondary || '#e5e7eb';
 
-  // avatar fallback (initiale) si pas de logo
+  const [logoLoaded, setLogoLoaded] = useState(false);
+
+  // Précharge le logo pour éviter le retard d’affichage
+  useEffect(() => {
+    if (!company?.logoUrl) return;
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'image';
+    link.href = company.logoUrl;
+    link.setAttribute('fetchpriority', 'high');
+    document.head.appendChild(link);
+    return () => {
+      try { document.head.removeChild(link); } catch {}
+    };
+  }, [company?.logoUrl]);
+
+  // Fallback initial (initiale) si pas de logo
   const Initials = ({ name }: { name?: string }) => {
     const letter = (name || 'C').trim().charAt(0).toUpperCase();
     return (
@@ -58,7 +73,7 @@ const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-50 w-full bg-white/95 backdrop-blur border-b border-gray-100">
-      {/* Bande/onde secondaire plus haute */}
+      {/* Bande/onde secondaire */}
       <div className="absolute top-0 left-0 w-full h-[80px] overflow-hidden pointer-events-none">
         <svg viewBox="0 0 1440 120" preserveAspectRatio="none" className="w-full h-full">
           <path d="M0,0 C480,60 960,0 1440,70 L1440,0 L0,0 Z" fill={secondaryColor} />
@@ -66,7 +81,7 @@ const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 py-2 flex items-center justify-between">
-        {/* Gauche : menu + bloc marque */}
+        {/* Menu + marque */}
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={() => setMenuOpen(!menuOpen)}
@@ -76,22 +91,28 @@ const Header: React.FC<HeaderProps> = ({
             {menuOpen ? <X className="h-6 w-6 text-slate-800" /> : <Menu className="h-6 w-6 text-slate-800" />}
           </button>
 
-          {/* Bloc marque : cercle logo + nom (couleur unique, aligné) */}
           <button
             onClick={() => navigate('/')}
             className="flex items-center gap-2 select-none"
             aria-label={company?.nom || 'Accueil'}
           >
             <div className="h-10 w-10 rounded-full bg-white border border-gray-200 overflow-hidden shadow-sm flex items-center justify-center">
+              {/* Skeleton pour éviter le “saut” */}
+              {!logoLoaded && company?.logoUrl && (
+                <div className="w-6 h-6 rounded-full bg-gray-200 animate-pulse" />
+              )}
+
               {company?.logoUrl ? (
                 <img
                   src={company.logoUrl}
                   alt={`Logo ${company.nom || 'Compagnie'}`}
                   width={40}
                   height={40}
-                  className="w-full h-full object-contain"
-                  loading="eager"   // ✅ correction ici
+                  className={`w-full h-full object-contain ${logoLoaded ? '' : 'opacity-0'}`}
+                  loading="eager"
                   decoding="async"
+                  {...({ fetchpriority: 'high' } as any)}   // ✅ attribut HTML natif, sans warning
+                  onLoad={() => setLogoLoaded(true)}
                 />
               ) : (
                 <Initials name={company?.nom} />
@@ -108,12 +129,12 @@ const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
 
-        {/* Centre (desktop) : sélecteur de langue */}
+        {/* Sélecteur de langue (desktop) */}
         <div className="hidden md:block">
           <LanguageSwitcher />
         </div>
 
-        {/* Droite (desktop) */}
+        {/* Actions (desktop) */}
         <div className="hidden md:flex items-center gap-4">
           <button
             onClick={() => navigate(`/${slug}/mes-reservations`)}

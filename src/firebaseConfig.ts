@@ -1,68 +1,62 @@
 // src/firebaseConfig.ts
-import { initializeApp, getApps, getApp, deleteApp, FirebaseOptions } from 'firebase/app';
-import { getFirestore, enableIndexedDbPersistence, enableMultiTabIndexedDbPersistence } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
-import { getStorage } from 'firebase/storage';
-import { getFunctions } from 'firebase/functions';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  connectFirestoreEmulator,
+  setLogLevel, // ⬅️ pour calmer la verbosité
+} from 'firebase/firestore';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import { getStorage, connectStorageEmulator } from 'firebase/storage';
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 
-const firebaseConfig: FirebaseOptions = {
-  apiKey: "AIzaSyB9sGzgvdzhxxhIshtPprPix7oBfCB2OuM",
-  authDomain: "monbillet-95b77.firebaseapp.com",
-  projectId: "monbillet-95b77",
-  storageBucket: "monbillet-95b77.appspot.com",
-  messagingSenderId: "337289733382",
-  appId: "1:337289733382:web:bb99ee8f48861b47226a87",
-  measurementId: "G-G96GYRYS76",
+/* ===================== CONFIG FIREBASE ===================== */
+const firebaseConfig = {
+  apiKey: 'AIzaSyB9sGzgvdzhxxhIshtPprPix7oBfCB2OuM',
+  authDomain: 'monbillet-95b77.firebaseapp.com',
+  projectId: 'monbillet-95b77',
+  storageBucket: 'monbillet-95b77.appspot.com',
+  messagingSenderId: '337289733382',
+  appId: '1:337289733382:web:bb99ee8f48861b47226a87',
+  measurementId: 'G-G96GYRYS76',
 };
 
-// ⚠️ Anti-HMR : si une app existe mais avec un autre projectId, on la détruit et on réinitialise
-async function ensureApp() {
-  const apps = getApps();
-  if (apps.length) {
-    const current = getApp();
-    // @ts-ignore - options non typées complètes
-    const currentProject = current.options?.projectId;
-    if (currentProject && currentProject !== firebaseConfig.projectId) {
-      await deleteApp(current);
-      return initializeApp(firebaseConfig, 'monbillet-client');
-    }
-    return current;
-  }
-  return initializeApp(firebaseConfig, 'monbillet-client');
-}
+/* ===================== INIT APP (idempotent) ===================== */
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
-const appPromise = ensureApp();
+/* ===================== SERVICES ===================== */
+/** ✅ Nouvelle API : cache persistant multi-onglets + tolérance réseau */
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
+  ignoreUndefinedProperties: true,
+  // rend les connexions plus fiables quand WebChannel est bloqué par le réseau/DNS
+  experimentalAutoDetectLongPolling: true,
+  // experimentalForceLongPolling: true, // <-- décommente si réseau vraiment récalcitrant
+});
+setLogLevel('error'); // coupe les logs verbeux Firestore en console
 
-export const getFirebase = async () => {
-  const app = await appPromise;
+const auth = getAuth(app);
+const storage = getStorage(app);
+const functions = getFunctions(app);
 
-  // Log très utile pour vérifier le projet réellement utilisé côté navigateur
-  // (tu verras ça dans la console du navigateur)
-  // @ts-ignore
-  console.info('[FIREBASE] projectId:', app.options?.projectId);
+/* ===================== EMULATEURS (optionnel) ===================== */
+const useEmulators = import.meta?.env?.VITE_USE_EMULATORS === 'true';
 
-  const db = getFirestore(app);
-  const auth = getAuth(app);
-  const storage = getStorage(app);
-  const functions = getFunctions(app);
-
-  // Persistance (optionnel)
+export const dbReady = (async () => {
   try {
-    await enableMultiTabIndexedDbPersistence(db);
-  } catch {
-    try { await enableIndexedDbPersistence(db); } catch {}
+    if (useEmulators) {
+      connectFirestoreEmulator(db, '127.0.0.1', 8080);
+      connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+      connectStorageEmulator(storage, '127.0.0.1', 9199);
+      connectFunctionsEmulator(functions, '127.0.0.1', 5001);
+      console.info('✅ Emulateurs Firebase connectés (Firestore/Auth/Storage/Functions).');
+    }
+  } catch (e) {
+    console.warn('⚠️ Initialisation Firestore partielle (continuer en mode dégradé).', e);
   }
-
-  return { app, db, auth, storage, functions };
-};
-
-// Pour compatibilité avec ton code existant qui importait { db, auth, storage, functions }
-export let db: ReturnType<typeof getFirestore>;
-export let auth: ReturnType<typeof getAuth>;
-export let storage: ReturnType<typeof getStorage>;
-export let functions: ReturnType<typeof getFunctions>;
-
-(async () => {
-  const x = await getFirebase();
-  db = x.db; auth = x.auth; storage = x.storage; functions = x.functions;
 })();
+
+export { app, db, auth, storage, functions };

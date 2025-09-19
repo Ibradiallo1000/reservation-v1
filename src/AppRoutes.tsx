@@ -1,84 +1,85 @@
-import { Suspense, lazy } from 'react';
-import { Routes, Route, Navigate, useParams } from 'react-router-dom';
-import { useAuth } from './contexts/AuthContext';
-import PrivateRoute from './pages/PrivateRoute';
-import PageLoader from './components/PageLoaderComponent';
-import RouteResolver from './pages/RouteResolver';
+// src/AppRoutes.tsx
+import { Suspense, lazy } from "react";
+import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
+import { useAuth } from "./contexts/AuthContext";
+import PrivateRoute from "./pages/PrivateRoute";
+import PageLoader from "./components/PageLoaderComponent";
+import RouteResolver from "./pages/RouteResolver";
+import SplashScreen from "@/components/SplashScreen";
 
-/* ---------- Pages statiques publiques ---------- */
-import MentionsPage from '@/pages/MentionsPage';
-import ConfidentialitePage from '@/pages/ConfidentialitePage';
-import ConditionsPage from '@/pages/ConditionsPage';
-import CookiesPage from '@/pages/CookiesPage';
+/* ---------- Pages statiques ---------- */
+import MentionsPage from "@/pages/MentionsPage";
+import ConfidentialitePage from "@/pages/ConfidentialitePage";
+import ConditionsPage from "@/pages/ConditionsPage";
+import CookiesPage from "@/pages/CookiesPage";
 
-/* ---------- Pages isolées (agence / impression / détails) ---------- */
-import AgenceEmbarquementPage from '@/pages/AgenceEmbarquementPage';
-import ReservationPrintPage from '@/pages/ReservationPrintPage';
-import ReservationDetailsPage from '@/pages/ReservationDetailsPage';
-import AdminParametresPlatformPage from './pages/AdminParametresPlatformPage';
-import ValidationComptablePage from '@/pages/ValidationComptablePage';
-import ValidationChefAgencePage from '@/pages/ValidationChefAgencePage';
+/* ---------- Pages isolées ---------- */
+import AgenceEmbarquementPage from "@/pages/AgenceEmbarquementPage";
+import ReservationPrintPage from "@/pages/ReservationPrintPage";
+import ReservationDetailsPage from "@/pages/ReservationDetailsPage";
+import AdminParametresPlatformPage from "./pages/AdminParametresPlatformPage";
+import ValidationComptablePage from "@/pages/ValidationComptablePage";
+import ValidationChefAgencePage from "@/pages/ValidationChefAgencePage";
 
-/* ---------- Chargement paresseux (lazy) : publiques ---------- */
-const HomePage = lazy(() => import('./pages/HomePage'));
-const PlatformSearchResultsPage = lazy(() => import('./pages/PlatformSearchResultsPage'));
-const LoginPage = lazy(() => import('./pages/LoginPage'));
-const Register = lazy(() => import('./pages/Register'));
-const ListeVillesPage = lazy(() => import('./pages/ListeVillesPage'));
+/* ---------- Lazy public ---------- */
+const HomePage = lazy(() => import("./pages/HomePage"));
+const PlatformSearchResultsPage = lazy(() => import("./pages/PlatformSearchResultsPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const Register = lazy(() => import("./pages/Register"));
+const ListeVillesPage = lazy(() => import("./pages/ListeVillesPage"));
 
-/* ---------- Nouvelle page réservation tout-en-un ---------- */
-const ReservationClientPage = lazy(() => import('./pages/ReservationClientPage'));
+/* ---------- Réservation ---------- */
+const ReservationClientPage = lazy(() => import("./pages/ReservationClientPage"));
 
-/* ---------- Admin plateforme ---------- */
-const AdminSidebarLayout = lazy(() => import('./pages/AdminSidebarLayout'));
-const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
-const AdminCompagniesPage = lazy(() => import('./pages/AdminCompagniesPage'));
-const AdminAjouterCompagnie = lazy(() => import('./pages/AdminAjouterCompagnie'));
-const AdminModifierCompagniePage = lazy(() => import('./pages/AdminModifierCompagniePage'));
-const AdminStatistiquesPage = lazy(() => import('./pages/AdminStatistiquesPage'));
-const AdminReservationsPage = lazy(() => import('./pages/AdminReservationsPage'));
-const AdminFinancesPage = lazy(() => import('./pages/AdminFinancesPage'));
+/* ---------- Admin ---------- */
+const AdminSidebarLayout = lazy(() => import("./pages/AdminSidebarLayout"));
+const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
+const AdminCompagniesPage = lazy(() => import("./pages/AdminCompagniesPage"));
+const AdminAjouterCompagnie = lazy(() => import("./pages/AdminAjouterCompagnie"));
+const AdminModifierCompagniePage = lazy(() => import("./pages/AdminModifierCompagniePage"));
+const AdminStatistiquesPage = lazy(() => import("./pages/AdminStatistiquesPage"));
+const AdminReservationsPage = lazy(() => import("./pages/AdminReservationsPage"));
+const AdminFinancesPage = lazy(() => import("./pages/AdminFinancesPage"));
 
-/* ---------- Espace Compagnie ---------- */
-const CompagnieLayout = lazy(() => import('./components/layout/CompagnieLayout'));
-const CompagnieDashboard = lazy(() => import('./pages/CompagnieDashboard'));
-const CompagnieAgencesPage = lazy(() => import('./pages/CompagnieAgencesPage'));
-const CompagnieParametresTabsPage = lazy(() => import('./pages/CompagnieParametresTabsPage'));
-const CompagnieReservationsPage = lazy(() => import('./pages/CompagnieReservationsPage'));
-/* ✅ Comptabilité compagnie (remplace tout “reporting/exports”) */
-const CompagnieComptabilitePage = lazy(() => import('./pages/CompagnieComptabilitePage'));
-const BibliothequeImagesPage = lazy(() => import('./pages/BibliothequeImagesPage'));
-const ReservationsEnLignePage = lazy(() => import('./pages/ReservationsEnLignePage'));
-const CompanyPaymentSettingsPage = lazy(() => import('./pages/CompanyPaymentSettingsPage'));
-const AvisModerationPage = lazy(() => import('./pages/AvisModerationPage'));
+/* ---------- Compagnie ---------- */
+const CompagnieLayout = lazy(() => import("./components/layout/CompagnieLayout"));
+const CompagnieDashboard = lazy(() => import("./pages/CompagnieDashboard"));
+const CompagnieAgencesPage = lazy(() => import("./pages/CompagnieAgencesPage"));
+const CompagnieParametresTabsPage = lazy(() => import("./pages/CompagnieParametresTabsPage"));
+const CompagnieReservationsPage = lazy(() => import("./pages/CompagnieReservationsPage"));
+const CompagnieComptabilitePage = lazy(() => import("./pages/CompagnieComptabilitePage"));
+const BibliothequeImagesPage = lazy(() => import("./pages/BibliothequeImagesPage"));
+const ReservationsEnLignePage = lazy(() => import("./pages/ReservationsEnLignePage"));
+const CompanyPaymentSettingsPage = lazy(() => import("./pages/CompanyPaymentSettingsPage"));
+const AvisModerationPage = lazy(() => import("./pages/AvisModerationPage"));
 
-/* ---------- Espace Agence ---------- */
-const DashboardAgencePage = lazy(() => import('./pages/DashboardAgencePage'));
-const AgenceReservationsPage = lazy(() => import('./pages/AgenceReservationsPage'));
-const AgenceGuichetPage = lazy(() => import('./pages/AgenceGuichetPage'));
-const AgenceTrajetsPage = lazy(() => import('./pages/AgenceTrajetsPage'));
-const AgenceFinancesPage = lazy(() => import('./pages/AgenceFinancesPage'));
-const AgenceRecettesPage = lazy(() => import('./pages/AgenceRecettesPage'));
-const AgencePersonnelPage = lazy(() => import('./pages/AgencePersonnelPage'));
-const ReceiptGuichetPage = lazy(() => import('./pages/ReceiptGuichetPage'));
-const MediaPage = lazy(() => import('./pages/MediaPage'));
-const AgenceShiftHistoryPage = lazy(() => import('./pages/AgenceShiftHistoryPage'));
-const AgenceComptabilitePage = lazy(() => import('./pages/AgenceComptabilitePage'));
-const AgenceShiftPage = lazy(() => import('./pages/AgenceShiftPage'));
+/* ---------- Agence ---------- */
+const DashboardAgencePage = lazy(() => import("./pages/DashboardAgencePage"));
+const AgenceReservationsPage = lazy(() => import("./pages/AgenceReservationsPage"));
+const AgenceGuichetPage = lazy(() => import("./pages/AgenceGuichetPage"));
+const AgenceTrajetsPage = lazy(() => import("./pages/AgenceTrajetsPage"));
+const AgenceFinancesPage = lazy(() => import("./pages/AgenceFinancesPage"));
+const AgenceRecettesPage = lazy(() => import("./pages/AgenceRecettesPage"));
+const AgencePersonnelPage = lazy(() => import("./pages/AgencePersonnelPage"));
+const ReceiptGuichetPage = lazy(() => import("./pages/ReceiptGuichetPage"));
+const MediaPage = lazy(() => import("./pages/MediaPage"));
+const AgenceShiftHistoryPage = lazy(() => import("./pages/AgenceShiftHistoryPage"));
+const AgenceComptabilitePage = lazy(() => import("./pages/AgenceComptabilitePage"));
+const AgenceShiftPage = lazy(() => import("./pages/AgenceShiftPage"));
 
-/* ---------- Shell d’agence (layout sans sidebar) ---------- */
-const AgenceShellPage = lazy(() => import('./pages/AgenceShellPage'));
+/* ---------- Shell d’agence ---------- */
+const AgenceShellPage = lazy(() => import("./pages/AgenceShellPage"));
 
-/* ===================== RÔLES & PERMISSIONS CENTRALISÉS ===================== */
+/* ===================== RÔLES & PERMISSIONS ===================== */
 export const routePermissions = {
-  compagnieLayout: ['admin_compagnie', 'compagnie'] as const,
-  agenceShell: ['chefAgence', 'superviseur', 'agentCourrier', 'admin_compagnie'] as const,
-  guichet: ['guichetier', 'chefAgence', 'admin_compagnie'] as const,
-  comptabilite: ['comptable', 'admin_compagnie'] as const,
-  validationsCompta: ['comptable', 'admin_compagnie'] as const,
-  validationsAgence: ['chefAgence', 'superviseur', 'admin_compagnie'] as const,
-  receiptGuichet: ['chefAgence', 'guichetier', 'admin_compagnie'] as const,
-  adminLayout: ['admin_platforme'] as const,
+  compagnieLayout: ["admin_compagnie", "compagnie"] as const,
+  agenceShell: ["chefAgence", "superviseur", "agentCourrier", "admin_compagnie"] as const,
+  guichet: ["guichetier", "chefAgence", "admin_compagnie"] as const,
+  comptabilite: ["comptable", "admin_compagnie"] as const,
+  validationsCompta: ["comptable", "admin_compagnie"] as const,
+  validationsAgence: ["chefAgence", "superviseur", "admin_compagnie"] as const,
+  receiptGuichet: ["chefAgence", "guichetier", "admin_compagnie"] as const,
+  adminLayout: ["admin_platforme"] as const,
 };
 
 const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
@@ -86,12 +87,12 @@ const hasAny = (roles: unknown, allowed: readonly string[]) =>
   asArray(roles).some((r) => allowed.includes(String(r)));
 
 const landingTargetForRoles = (roles: unknown): string => {
-  if (hasAny(roles, routePermissions.guichet)) return '/agence/guichet';
-  if (hasAny(roles, routePermissions.comptabilite)) return '/agence/comptabilite';
-  if (hasAny(roles, routePermissions.compagnieLayout)) return '/compagnie/dashboard';
-  if (hasAny(roles, routePermissions.agenceShell)) return '/agence/dashboard';
-  if (hasAny(roles, routePermissions.adminLayout)) return '/admin/dashboard';
-  return '/login';
+  if (hasAny(roles, routePermissions.guichet)) return "/agence/guichet";
+  if (hasAny(roles, routePermissions.comptabilite)) return "/agence/comptabilite";
+  if (hasAny(roles, routePermissions.compagnieLayout)) return "/compagnie/dashboard";
+  if (hasAny(roles, routePermissions.agenceShell)) return "/agence/dashboard";
+  if (hasAny(roles, routePermissions.adminLayout)) return "/admin/dashboard";
+  return "/login";
 };
 
 function RoleLanding() {
@@ -102,18 +103,44 @@ function RoleLanding() {
 
 function LegacyUploadRedirect() {
   const { slug, id } = useParams();
-  return <Navigate to={`/${slug || ''}/reservation/${id || ''}`} replace />;
+  return <Navigate to={`/${slug || ""}/reservation/${id || ""}`} replace />;
 }
 
 const AppRoutes = () => {
   const { loading } = useAuth();
-  if (loading) return <PageLoader fullScreen />;
+  const { pathname } = useLocation();
+  const isHome = pathname === "/";
+
+  if (loading && !isHome) return <PageLoader fullScreen />;
 
   return (
-    <Suspense fallback={<PageLoader fullScreen />}>
-      <Routes>
-        {/* ===================== PUBLIC ===================== */}
-        <Route path="/" element={<HomePage />} />
+    <Suspense fallback={isHome ? null : <PageLoader fullScreen />}>
+      <Routes key={pathname}>
+        {/* HOME + Splash */}
+        <Route
+          path="/"
+          element={
+            <SplashScreen
+              logo="/images/teliya-logo.jpg"
+              sizePx={190}
+              ringWidthPx={2}
+              ringOpacity={0.45}
+              spinnerSpeedMs={800}
+              minMs={1200}
+              maxMs={3600}
+              extraHoldMs={900}
+              preload={[
+                "/images/hero-fallback.jpg",
+                "/images/partners/mali-trans.png",
+                "/images/partners/diarra-trans.png",
+              ]}
+            >
+              <HomePage />
+            </SplashScreen>
+          }
+        />
+
+        {/* PUBLIC */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
@@ -125,7 +152,7 @@ const AppRoutes = () => {
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
         <Route path="/:slug/cookies" element={<CookiesPage />} />
 
-        {/* ===================== ADMIN PLATFORME ===================== */}
+        {/* ADMIN PLATEFORME (tes pages existantes) */}
         <Route
           path="/admin"
           element={
@@ -146,7 +173,7 @@ const AppRoutes = () => {
           <Route path="media" element={<MediaPage />} />
         </Route>
 
-        {/* ===================== COMPAGNIE ===================== */}
+        {/* COMPAGNIE */}
         <Route
           path="/compagnie"
           element={
@@ -157,7 +184,6 @@ const AppRoutes = () => {
         >
           <Route index element={<CompagnieDashboard />} />
           <Route path="dashboard" element={<CompagnieDashboard />} />
-          {/* ✅ Comptabilité compagnie */}
           <Route path="comptabilite" element={<CompagnieComptabilitePage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
@@ -168,23 +194,7 @@ const AppRoutes = () => {
           <Route path="avis-clients" element={<AvisModerationPage />} />
         </Route>
 
-        {/* ===================== AGENCE : REDIRECT SELON ROLE ===================== */}
-        <Route
-          path="/agence"
-          element={
-            <PrivateRoute
-              allowedRoles={[
-                ...routePermissions.agenceShell,
-                ...routePermissions.comptabilite,
-                ...routePermissions.guichet,
-              ]}
-            >
-              <RoleLanding />
-            </PrivateRoute>
-          }
-        />
-
-        {/* ===================== SHELL D’AGENCE ===================== */}
+        {/* SHELL D’AGENCE (fusion du redirect ici en index) */}
         <Route
           path="/agence"
           element={
@@ -193,7 +203,8 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         >
-          <Route index element={<DashboardAgencePage />} />
+          {/* 👉 redirection d’atterrissage ici, plus de doublon de route /agence */}
+          <Route index element={<RoleLanding />} />
           <Route path="dashboard" element={<DashboardAgencePage />} />
           <Route path="reservations" element={<AgenceReservationsPage />} />
           <Route path="embarquement" element={<AgenceEmbarquementPage />} />
@@ -206,7 +217,7 @@ const AppRoutes = () => {
           <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
         </Route>
 
-        {/* ===================== GUICHET (hors Shell) ===================== */}
+        {/* HORS SHELL */}
         <Route
           path="/agence/guichet"
           element={
@@ -215,8 +226,6 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         />
-
-        {/* ===================== COMPTABILITÉ (hors Shell) ===================== */}
         <Route
           path="/agence/comptabilite"
           element={
@@ -226,7 +235,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* ===================== VALIDATIONS ===================== */}
+        {/* VALIDATIONS */}
         <Route
           path="/compta/validations"
           element={
@@ -244,7 +253,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* ===================== PAGES ISOLÉES ===================== */}
+        {/* PAGES ISOLÉES */}
         <Route
           path="/agence/receipt/:id"
           element={
@@ -255,21 +264,19 @@ const AppRoutes = () => {
         />
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
-        {/* ===================== DYNAMIQUES PUBLIQUES ===================== */}
+        {/* DYNAMIQUES PUBLIQUES */}
         <Route path="/:slug/reserver" element={<ReservationClientPage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
         <Route path="/:slug/upload-preuve/:id" element={<LegacyUploadRedirect />} />
         <Route path="/:slug/*" element={<RouteResolver />} />
 
-        {/* ===================== 404 ===================== */}
+        {/* 404 */}
         <Route
           path="*"
           element={
             <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gray-100">
               <h1 className="text-4xl font-bold text-red-600 mb-4">404 - Page non trouvée</h1>
-              <p className="text-lg text-gray-700 mb-6">
-                La page demandée est introuvable ou a été déplacée.
-              </p>
+              <p className="text-lg text-gray-700 mb-6">La page demandée est introuvable ou a été déplacée.</p>
               <a href="/" className="bg-orange-600 text-white px-5 py-2 rounded hover:bg-orange-700">
                 Retour à l'accueil
               </a>

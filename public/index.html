@@ -1,51 +1,50 @@
 <!DOCTYPE html>
 <html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Teliya - Réservation de billets</title>
-  <base href="/">
-  
-  <!-- Meta PWA Essentielles -->
-  <meta name="description" content="Réservation de billets en ligne et au guichet">
-  <meta name="theme-color" content="#FF6600">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Teliya">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="msapplication-TileColor" content="#FF6600">
-  
-  <!-- Manifest & Icônes -->
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/favicon.ico" type="image/x-icon">
-  <link rel="icon" type="image/png" href="/icons/icon-192.png" sizes="192x192">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  
-  <!-- Splash Screens iOS -->
-  <link rel="apple-touch-startup-image" href="/splash/splash-750x1334.png" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2)">
-  <link rel="apple-touch-startup-image" href="/splash/splash-1242x2208.png" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3)">
-  
-  <!-- Préchargement -->
-  <link rel="preload" href="/assets/js/vendor-CZDa83Cj.js" as="script" crossorigin>
-  <link rel="preload" href="/assets/css/index-DhjyYJ_d.css" as="style">
-  
-  <!-- CSS -->
-  <link rel="stylesheet" href="/assets/css/react-CoRl1eQC.css" crossorigin>
-  <link rel="stylesheet" href="/assets/css/index-DhjyYJ_d.css" crossorigin>
-  
-  <!-- Service Worker -->
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js');
-      });
-    }
-  </script>
-</head>
-<body>
-  <div id="root"></div>
-  
-  <!-- Scripts -->
-  <script type="module" src="/assets/index-BrxuZDy-.js" crossorigin></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teliya</title>
+    <meta name="theme-color" content="#f97316" />
+
+    <!-- Ne précharge que le logo du splash (évite les warnings "preloaded but not used") -->
+    <link rel="preload" as="image" href="/images/teliya-logo.jpg" fetchpriority="high" />
+
+    <style>
+      /* fond orange dès le 1er paint */
+      html,body { height:100%; margin:0; background:#f97316; }
+
+      #splash{
+        position:fixed; inset:0; display:flex; flex-direction:column;
+        align-items:center; justify-content:center; color:#fff; z-index:9999;
+        font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      }
+      #splash img{
+        width:104px; height:104px; border-radius:50%;
+        margin-bottom:.875rem; animation:zoomLoop 1.6s ease-in-out infinite;
+        will-change:transform,opacity;
+      }
+      #splash .caption{ opacity:.95; font-size:14px; letter-spacing:.2px; }
+
+      @keyframes zoomLoop {
+        0%{transform:scale(1);opacity:1}
+        50%{transform:scale(1.15);opacity:.92}
+        100%{transform:scale(1);opacity:1}
+      }
+      #splash.leaving img{
+        animation:none; transition:transform .42s ease,opacity .42s ease;
+        transform:scale(1.35); opacity:0;
+      }
+      #root{ opacity:0; transition:opacity .28s ease; min-height:100% }
+      #root.ready{ opacity:1 }
+    </style>
+  </head>
+  <body>
+    <div id="splash" role="status" aria-live="polite">
+      <!-- ⚠️ Assure-toi que le fichier existe EXACTEMENT : public/images/teliya-logo.jpg -->
+      <img src="/images/teliya-logo.jpg" alt="Teliya" />
+    </div>
+
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

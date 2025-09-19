@@ -1,3 +1,4 @@
+// vite.config.ts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import * as path from 'path';
@@ -30,21 +31,14 @@ export default defineConfig({
   plugins: [
     react({
       jsxImportSource: '@emotion/react',
-      babel: {
-        plugins: ['@emotion/babel-plugin'],
-      },
+      babel: { plugins: ['@emotion/babel-plugin'] },
     }),
     copyRedirectsPlugin(),
     VitePWA({
       registerType: 'autoUpdate',
-      devOptions: {
-        enabled: true,
-      },
-      includeAssets: [
-        'favicon.ico',
-        'icons/*.png',
-        'images/*.{png,svg,jpg}'
-      ],
+      /* ⛔️ important : pas de PWA en DEV */
+      devOptions: { enabled: false },
+      includeAssets: ['favicon.ico', 'icons/*.png', 'images/*.{png,svg,jpg}'],
       manifest: {
         name: 'Teliya',
         short_name: 'Teliya',
@@ -58,69 +52,32 @@ export default defineConfig({
         dir: 'ltr',
         start_url: '/',
         icons: [
-          {
-            src: '/icons/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-            purpose: 'any'
-          },
-          {
-            src: '/icons/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any'
-          }
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
         ],
         screenshots: [
-          {
-            src: '/screenshots/desktop-wide.png',
-            sizes: '1920x1080',
-            type: 'image/png',
-            form_factor: 'wide',
-            label: 'Teliya - Version Bureau'
-          },
-          {
-            src: '/screenshots/mobile-narrow.png',
-            sizes: '1080x1920',
-            type: 'image/png',
-            form_factor: 'narrow',
-            label: 'Teliya - Version Mobile'
-          }
-        ]
+          { src: '/screenshots/desktop-wide.png', sizes: '1920x1080', type: 'image/png', form_factor: 'wide', label: 'Teliya - Version Bureau' },
+          { src: '/screenshots/mobile-narrow.png', sizes: '1080x1920', type: 'image/png', form_factor: 'narrow', label: 'Teliya - Version Mobile' },
+        ],
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         cleanupOutdatedCaches: true,
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365
-              }
-            }
-          }
-        ]
-      }
-    })
+      },
+    }),
   ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
       '@assets': path.resolve(__dirname, './src/assets'),
-      '@images': path.resolve(__dirname, './public/images')
-    }
+      '@images': path.resolve(__dirname, './public/images'),
+    },
   },
   css: {
     postcss: './postcss.config.cjs',
     preprocessorOptions: {
-      scss: {
-        additionalData: `@import "@assets/styles/_variables.scss";`
-      }
-    }
+      scss: { additionalData: `@import "@assets/styles/_variables.scss";` },
+    },
   },
   build: {
     outDir: 'dist',
@@ -129,39 +86,28 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-router-dom'))
-              return 'react';
+            if (id.includes('react') || id.includes('react-router-dom')) return 'react';
             if (id.includes('firebase')) return 'firebase';
-            if (id.includes('lodash') || id.includes('axios') || id.includes('date-fns'))
-              return 'vendor';
+            if (id.includes('lodash') || id.includes('axios') || id.includes('date-fns')) return 'vendor';
           }
           if (id.includes('/src/pages/Compagnie/')) return 'compagnie';
           if (id.includes('/src/pages/Agence/')) return 'agence';
           if (id.includes('/src/pages/Admin/')) return 'admin';
         },
         chunkFileNames: 'assets/js/[name]-[hash].js',
-        assetFileNames: 'assets/[ext]/[name]-[hash].[ext]'
-      }
+        assetFileNames: 'assets/[ext]/[name]-[hash].[ext]',
+      },
     },
-    chunkSizeWarningLimit: 1500
+    chunkSizeWarningLimit: 1500,
   },
   server: {
     port: 5190,
     strictPort: false,
     open: true,
-    fs: {
-      strict: false
-    },
+    fs: { strict: false },
     proxy: {
-      '/api': {
-        target: 'http://localhost:5000',
-        changeOrigin: true,
-        secure: false
-      }
-    }
+      '/api': { target: 'http://localhost:5000', changeOrigin: true, secure: false },
+    },
   },
-  preview: {
-    port: 5191,
-    strictPort: true
-  }
+  preview: { port: 5191, strictPort: true },
 });

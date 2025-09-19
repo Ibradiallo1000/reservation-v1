@@ -1,138 +1,204 @@
-@import 'leaflet/dist/leaflet.css'; /* ✅ doit être en tout premier */
+/* === DOIT RESTER EN PREMIER si tu utilises des cartes === */
+@import 'leaflet/dist/leaflet.css';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-
+/* =========================
+   0) Variables de marque
+   ========================= */
 @layer base {
   :root {
+    /* Couleurs Teliya */
+    --teliya-orange: #FF6600;
+    --teliya-orange-100: #FFE3D1;
+    --teliya-text: #0F172A;       /* gris très foncé */
+    --teliya-muted: #6B7280;      /* texte secondaire */
 
+    /* Fond & bordures génériques (clair) */
     --background: 0 0% 100%;
-
     --foreground: 222.2 84% 4.9%;
-
     --card: 0 0% 100%;
-
     --card-foreground: 222.2 84% 4.9%;
-
     --popover: 0 0% 100%;
-
     --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-
+    --primary: 24 100% 55%; /* proche de #FF6600 en HSL */
     --primary-foreground: 210 40% 98%;
-
     --secondary: 210 40% 96.1%;
-
     --secondary-foreground: 222.2 47.4% 11.2%;
-
     --muted: 210 40% 96.1%;
-
     --muted-foreground: 215.4 16.3% 46.9%;
-
     --accent: 210 40% 96.1%;
-
     --accent-foreground: 222.2 47.4% 11.2%;
-
     --destructive: 0 84.2% 60.2%;
-
     --destructive-foreground: 210 40% 98%;
-
     --border: 214.3 31.8% 91.4%;
-
     --input: 214.3 31.8% 91.4%;
+    --ring: 24 100% 55%;
+    --radius: 0.75rem;            /* arrondis un peu plus généreux */
 
-    --ring: 222.2 84% 4.9%;
-
-    --chart-1: 12 76% 61%;
-
+    /* Charts (optionnel) */
+    --chart-1: 24 100% 55%;
     --chart-2: 173 58% 39%;
-
     --chart-3: 197 37% 24%;
-
     --chart-4: 43 74% 66%;
-
     --chart-5: 27 87% 67%;
-
-    --radius: 0.5rem
   }
+
   .dark {
-
+    /* Mode sombre si un jour tu l’actives */
     --background: 222.2 84% 4.9%;
-
     --foreground: 210 40% 98%;
-
     --card: 222.2 84% 4.9%;
-
     --card-foreground: 210 40% 98%;
-
     --popover: 222.2 84% 4.9%;
-
     --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-
+    --primary: 24 100% 55%;
     --primary-foreground: 222.2 47.4% 11.2%;
-
     --secondary: 217.2 32.6% 17.5%;
-
     --secondary-foreground: 210 40% 98%;
-
     --muted: 217.2 32.6% 17.5%;
-
     --muted-foreground: 215 20.2% 65.1%;
-
     --accent: 217.2 32.6% 17.5%;
-
     --accent-foreground: 210 40% 98%;
-
     --destructive: 0 62.8% 30.6%;
-
     --destructive-foreground: 210 40% 98%;
-
     --border: 217.2 32.6% 17.5%;
-
     --input: 217.2 32.6% 17.5%;
-
-    --ring: 212.7 26.8% 83.9%;
-
-    --chart-1: 220 70% 50%;
-
-    --chart-2: 160 60% 45%;
-
-    --chart-3: 30 80% 55%;
-
-    --chart-4: 280 65% 60%;
-
-    --chart-5: 340 75% 55%
+    --ring: 24 100% 55%;
   }
 }
-
-
 
 @layer base {
-  * {
-    @apply border-border;
+  * { @apply border-border; }
+  html, body { @apply bg-background text-foreground; }
+
+  /* 1) Supprimer le “flash” bleu au tap (Android) */
+  html, body, a, button, [role="button"] {
+    -webkit-tap-highlight-color: transparent;
   }
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid var(--teliya-orange);
+    outline-offset: 2px;
+  }
+
+  /* 2) Rendu texte plus net */
   body {
-    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color: var(--teliya-text);
+  }
+
+  /* 3) Couleur de sélection (cohérence marque) */
+  ::selection {
+    background: var(--teliya-orange-100);
   }
 }
 
-/* === Effets SCI-FI === */
+/* =========================
+   1) Images sans “flash”
+   ========================= */
+
+/* Fade-in doux pour toutes les images (évite l’apparition brutale) */
+.img-fade {
+  opacity: 0;
+  transition: opacity .25s ease;
+}
+.img-fade.is-loaded { opacity: 1; }
+
+/* Variante Blur-Up (LQIP) si tu utilises un placeholder base64 */
+.blur-up {
+  filter: blur(12px);
+  transform: translateZ(0); /* évite clignotements Android */
+}
+.blur-up.is-loaded {
+  filter: blur(0);
+  transition: filter .35s ease;
+}
+
+/* Img au dessus de la ligne de flottaison : “eager” par défaut */
+img.hero, img.logo {
+  content-visibility: auto;
+}
+
+/* =========================
+   2) Squelettes de chargement
+   ========================= */
+.skeleton {
+  @apply bg-gray-200/80 rounded;
+  position: relative;
+  overflow: hidden;
+}
+.skeleton::after {
+  content: "";
+  position: absolute; inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* =========================
+   3) Titres de section Teliya
+   ========================= */
+.section-title {
+  @apply text-2xl md:text-3xl font-extrabold tracking-tight text-center;
+  color: var(--teliya-orange);
+  margin-block: 0.75rem 1.25rem; /* peu d’espace au-dessus comme tu veux */
+}
+
+/* Petite ligne décorative en orange sous les titres (optionnel) */
+.section-title::after {
+  content: "";
+  display: block;
+  height: 3px;
+  width: 72px;
+  margin: .5rem auto 0;
+  background: var(--teliya-orange);
+  border-radius: 9999px;
+  opacity: .25;
+}
+
+/* =========================
+   4) Cartes / encarts
+   ========================= */
+.card {
+  @apply bg-white rounded-2xl shadow-sm border;
+}
+.card:hover { box-shadow: 0 8px 24px rgba(0,0,0,.07); }
+
+/* =========================
+   5) Animations douces (préférence utilisateur respectée)
+   ========================= */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
+
+/* =========================
+   6) (Option) Effet glow sci-fi — désactivé par défaut
+   ========================= */
 @keyframes glow {
-  0%, 100% {
-    text-shadow: 0 0 8px rgba(0, 255, 255, 0.7),
-                 0 0 16px rgba(0, 255, 255, 0.5);
+  0%,100%{
+    text-shadow:0 0 8px rgba(0,255,255,.7),0 0 16px rgba(0,255,255,.5)
   }
-  50% {
-    text-shadow: 0 0 16px rgba(0, 255, 255, 1),
-                 0 0 32px rgba(0, 255, 255, 0.7);
+  50%{
+    text-shadow:0 0 16px rgba(0,255,255,1),0 0 32px rgba(0,255,255,.7)
   }
 }
+.animate-glow { animation: glow 3s ease-in-out infinite alternate; }
 
-.animate-glow {
-  animation: glow 3s ease-in-out infinite alternate;
+/* Splash animations */
+@keyframes float {
+  0%   { transform: translateY(0) }
+  50%  { transform: translateY(-6px) }
+  100% { transform: translateY(0) }
 }
+@keyframes fadein {
+  from { opacity: 0 } to { opacity: 1 }
+}
+.animate-float { animation: float 1.8s ease-in-out infinite }
+.animate-fadein { animation: fadein .6s ease forwards }

@@ -1,7 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Search, ArrowRight } from 'lucide-react';
-import { LazyLoadImage } from 'react-lazy-load-image-component';
 import { Company } from '@/types/companyTypes';
 import { useTranslation } from 'react-i18next';
 import VilleCombobox from '@/components/public/VilleCombobox';
@@ -19,6 +18,17 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
   const { t } = useTranslation();
   const villeOptions = useVilleOptions(company.id);
 
+  const bannerRef = useRef<HTMLImageElement | null>(null);
+
+  // Applique fetchpriority sans warning (lowercase, via setAttribute)
+  useEffect(() => {
+    if (bannerRef.current) {
+      try {
+        bannerRef.current.setAttribute('fetchpriority', 'high');
+      } catch {}
+    }
+  }, [company?.banniereUrl]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSearch(departure.trim().toLowerCase(), arrival.trim().toLowerCase());
@@ -30,14 +40,17 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
     <section className="relative w-full min-h-[600px] flex items-center justify-center overflow-hidden bg-gray-100">
       {company.banniereUrl && (
         <div className="absolute inset-0 z-0 overflow-hidden">
-          <LazyLoadImage
+          <img
+            ref={bannerRef}
             src={company.banniereUrl}
             alt={`Bannière ${company.nom}`}
-            className="w-full h-full object-cover object-center"
-            effect="opacity"
+            className="w-full h-full object-cover object-center img-fade is-loaded"
             width="100%"
             height="100%"
+            decoding="async"
+            loading="eager"
             style={{ objectPosition: 'center center', minHeight: '100%', minWidth: '100%' }}
+            {...({ fetchpriority: 'high' } as any)}   // ✅ passe à React sans warning
           />
           <div className="absolute inset-0 bg-black/30" />
         </div>
