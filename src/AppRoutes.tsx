@@ -1,4 +1,3 @@
-// src/AppRoutes.tsx
 import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
@@ -274,6 +273,8 @@ const AppRoutes = () => {
         {/* DYNAMIQUES PUBLIQUES */}
         <Route path="/:slug/reserver" element={<ReservationClientPage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
+        {/* ✅ lien court basé sur un token public */}
+        <Route path="/:slug/mon-billet" element={<ReservationDetailsPage />} />
         <Route path="/:slug/upload-preuve/:id" element={<LegacyUploadRedirect />} />
         <Route path="/:slug/*" element={<RouteResolver />} />
 

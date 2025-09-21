@@ -6,6 +6,7 @@ import FeaturesSection from "@/components/home/FeaturesSection";
 import TestimonialsSection from "@/components/home/TestimonialsSection";
 import CTASection from "@/components/home/CTASection";
 import Footer from "@/components/home/Footer";
+import ResumeLastReservation from "@/components/ResumeLastReservation";
 
 const HomePage: React.FC = () => {
   return (
@@ -13,6 +14,12 @@ const HomePage: React.FC = () => {
       <Header />
       <main className="flex-grow">
         <HeroSection />
+
+        {/* 🔶 Retrouver ma réservation (global) */}
+        <section className="py-6 px-4 max-w-5xl mx-auto">
+          <ResumeLastReservation />
+        </section>
+
         <section className="py-8 md:py-10"><PartnersSection /></section>
         <section className="py-8 md:py-10 bg-gray-50"><FeaturesSection /></section>
         <section className="py-8 md:py-10"><TestimonialsSection /></section>

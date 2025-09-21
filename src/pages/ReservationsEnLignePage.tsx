@@ -1,3 +1,4 @@
+// src/pages/ReservationsEnLignePage.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection, query, where, orderBy, limit, updateDoc, doc,
@@ -22,7 +23,7 @@ export type ReservationStatus =
 
 export interface Reservation {
   id: string;
-  agencyId?: string;           // injecté lorsqu’on agrège multi-agences
+  agencyId?: string;
   nomClient?: string;
   telephone?: string;
   email?: string;
@@ -33,7 +34,16 @@ export interface Reservation {
   arrivee?: string;
   montant?: number;
   createdAt?: Timestamp | Date | null;
-  [key: string]: any;          // tolérance champs divers (pièces, etc.)
+
+  // Champs potentiels pour la preuve (on tolère plusieurs noms)
+  preuve?: { url?: string; status?: string; filename?: string; message?: string; via?: string };
+  preuveUrl?: string;
+  paymentProofUrl?: string;
+  paiementPreuveUrl?: string;
+  proofUrl?: string;
+  receiptUrl?: string;
+
+  [key: string]: any;
 }
 
 /* ================= Helpers ================ */

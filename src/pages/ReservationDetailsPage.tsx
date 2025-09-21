@@ -1,10 +1,9 @@
-// src/pages/ReservationDetailsPage.tsx
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   doc, onSnapshot, getDoc,
   collection, getDocs, query, where,
-  collectionGroup, documentId, DocumentReference
+  collectionGroup, documentId, DocumentReference, limit
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import {
@@ -18,7 +17,6 @@ import Confetti from 'react-confetti';
 import { useWindowSize } from '@react-hook/window-size';
 import { hexToRgba, safeTextColor } from '@/utils/color';
 
-/* ===================== Types ===================== */
 type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'payé' | 'annule';
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | string;
 
@@ -34,7 +32,7 @@ interface Reservation {
   seatsGo: number;
   seatsReturn: number;
   tripType: string;
-  referenceCode?: string;     // ex: "MT-AP-WEB-0016"
+  referenceCode?: string;
   statut: ReservationStatus;
   companyId: string;
   companySlug: string;
@@ -42,8 +40,9 @@ interface Reservation {
   canal?: PaymentMethod;
   updatedAt?: string;
   agencyId?: string;
-  agencyNom?: string;         // nouveau
-  agenceNom?: string;         // ancien
+  agencyNom?: string;
+  agenceNom?: string;
+  publicToken?: string;
 }
 
 interface CompanyInfo {
@@ -55,7 +54,6 @@ interface CompanyInfo {
   secondaryColor?: string;
 }
 
-/* ===================== UI helpers ===================== */
 const STATUS_DISPLAY: Record<ReservationStatus, {
   text: string; color: string; icon: React.ReactNode; bgColor: string; description: string;
 }> = {
@@ -87,29 +85,21 @@ const STATUS_STEPS = [
 const formatCompactDate = (dateString: string) =>
   new Date(dateString).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
 
-/* ===================== Fallback: reconstruire le chemin ===================== */
-async function resolveReservationRef(slug: string, reservationId: string): Promise<{
-  ref: DocumentReference; companyId: string; agencyId: string;
-}> {
-  // 1) companyId par slug
+async function resolveById(slug: string, reservationId: string) {
   const cSnap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)));
   if (cSnap.empty) throw new Error('Compagnie introuvable');
   const companyId = cSnap.docs[0].id;
 
-  // 2A) Essai via collectionGroup(documentId)
-  try {
-    const cgSnap = await getDocs(
-      query(collectionGroup(db, 'reservations'), where(documentId(), '==', reservationId))
-    );
-    for (const d of cgSnap.docs) {
-      if (d.ref.path.includes(`/companies/${companyId}/`)) {
-        const agencyId = d.ref.parent.parent?.id as string;
-        return { ref: d.ref, companyId, agencyId };
-      }
+  const cg = await getDocs(
+    query(collectionGroup(db, 'reservations'), where(documentId(), '==', reservationId))
+  );
+  for (const d of cg.docs) {
+    if (d.ref.path.includes(`/companies/${companyId}/`)) {
+      const agencyId = d.ref.parent.parent?.id as string;
+      return { ref: d.ref, companyId, agencyId };
     }
-  } catch {/* ignore */}
+  }
 
-  // 2B) Fallback : boucler les agences
   const aSnap = await getDocs(collection(db, 'companies', companyId, 'agences'));
   for (const a of aSnap.docs) {
     const rRef = doc(db, 'companies', companyId, 'agences', a.id, 'reservations', reservationId);
@@ -119,11 +109,26 @@ async function resolveReservationRef(slug: string, reservationId: string): Promi
   throw new Error('Réservation introuvable');
 }
 
-/* ===================== Page ===================== */
+async function resolveByToken(slug: string, token: string) {
+  const qRef = query(
+    collectionGroup(db, 'reservations'),
+    where('companySlug', '==', slug),
+    where('publicToken', '==', token),
+    limit(1)
+  );
+  const snap = await getDocs(qRef);
+  if (snap.empty) throw new Error('Réservation introuvable');
+  const d = snap.docs[0];
+  const parts = d.ref.path.split('/');
+  return { ref: d.ref, companyId: parts[1], agencyId: parts[3], hardId: d.id };
+}
+
 const ReservationDetailsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { slug = '', id = '' } = useParams<{ slug: string; id: string }>();
+  const { slug = '', id } = useParams<{ slug: string; id?: string }>();
   const location = useLocation();
+  const qs = new URLSearchParams(location.search);
+  const token = qs.get('r') || '';
   const { companyInfo: locationCompanyInfo } = (location.state as any) || {};
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
@@ -139,22 +144,28 @@ const ReservationDetailsPage: React.FC = () => {
   const secondaryColor = companyInfo?.secondaryColor || '#e0f2fe';
   const textColor = safeTextColor(primaryColor);
 
-  /* ---------- Résoudre chemin + onSnapshot ---------- */
   useEffect(() => {
-    if (!id || !slug) { setError('Paramètres manquants'); setLoading(false); return; }
-    let unsub: (() => void) | undefined;
+    if ((!id && !token) || !slug) { setError('Paramètres manquants'); setLoading(false); return; }
+    let unsub: undefined | (() => void);
 
     (async () => {
       try {
         setLoading(true);
-        // Utilise state s'il existe, sinon fallback robuste
-        let ref: DocumentReference;
+
+        let ref: DocumentReference, hardId = id || '';
         const st: any = location.state || {};
-        if (st?.companyId && st?.agencyId) {
-          ref = doc(db, 'companies', st.companyId, 'agences', st.agencyId, 'reservations', id);
+
+        if (id) {
+          if (st?.companyId && st?.agencyId) {
+            ref = doc(db, 'companies', st.companyId, 'agences', st.agencyId, 'reservations', id);
+          } else {
+            const r = await resolveById(slug, id);
+            ref = r.ref;
+          }
         } else {
-          const r = await resolveReservationRef(slug, id);
+          const r = await resolveByToken(slug, token!);
           ref = r.ref;
+          hardId = r.hardId;
         }
 
         unsub = onSnapshot(ref, async (snap) => {
@@ -163,21 +174,18 @@ const ReservationDetailsPage: React.FC = () => {
           const next: Reservation = { ...data, id: snap.id, updatedAt: data?.updatedAt || new Date().toISOString() };
           setReservation(next);
 
-          // Nom d’agence (agencyNom -> agenceNom -> fetch)
           const inline = next.agencyNom || next.agenceNom;
-          if (inline) {
-            setAgencyName(inline);
-          } else {
+          if (inline) setAgencyName(inline);
+          else {
             const companyId = ref.path.split('/')[1];
             const agencyId = ref.path.split('/')[3];
             try {
               const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
               const ag = agSnap.data() as any;
               setAgencyName(ag?.nom || ag?.name || '');
-            } catch {/* ignore */}
+            } catch {}
           }
 
-          // Couleurs/logo si nécessaire
           if (!companyInfo) {
             try {
               const companyId = ref.path.split('/')[1];
@@ -193,10 +201,16 @@ const ReservationDetailsPage: React.FC = () => {
                   logoUrl: d?.logoUrl
                 });
               }
-            } catch {/* ignore */}
+            } catch {}
           }
 
           setLoading(false);
+
+          // Normalise l’URL si on est venu par /mon-billet?r=TOKEN
+          if (!id && hardId) {
+            const slugToUse = (location as any)?.state?.slug || next.companySlug || slug;
+            window.history.replaceState({}, '', `/${slugToUse}/reservation/${hardId}`);
+          }
         }, (e) => {
           setError(e?.message || 'Erreur de connexion'); setLoading(false);
         });
@@ -206,9 +220,8 @@ const ReservationDetailsPage: React.FC = () => {
     })();
 
     return () => { if (unsub) unsub(); };
-  }, [id, slug]); // volontairement sans dépendance à location.state
+  }, [id, token, slug]);
 
-  /* ---------- Confettis à la première confirmation ---------- */
   useEffect(() => {
     if (reservation?.statut === 'payé') {
       const k = `celebrated-${reservation.id}`;
@@ -221,7 +234,6 @@ const ReservationDetailsPage: React.FC = () => {
     }
   }, [reservation?.statut, reservation?.id]);
 
-  /* ---------- States UI ---------- */
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50/50">
@@ -241,7 +253,7 @@ const ReservationDetailsPage: React.FC = () => {
           <h3 className="text-lg font-semibold text-gray-900 mb-2">Erreur</h3>
           <p className="text-gray-600 mb-5">{error || 'Réservation introuvable'}</p>
           <button onClick={() => navigate(-1)} className="px-5 py-2 rounded-lg text-sm font-medium shadow-sm"
-                  style={{ backgroundColor: primaryColor, color: textColor }}>
+                  style={{ backgroundColor: primaryColor, color: safeTextColor(primaryColor) }}>
             Retour
           </button>
         </div>
@@ -250,14 +262,19 @@ const ReservationDetailsPage: React.FC = () => {
   }
 
   const realSlug = (location as any)?.state?.slug || reservation.companySlug;
-  const currentStepIndex = Math.max(0, STATUS_STEPS.findIndex(s => s.id === reservation.statut));
+  const STATUS_STEPS_UI = [
+    { id: 'en_attente', label: 'Enregistrée' },
+    { id: 'paiement_en_cours', label: 'Paiement' },
+    { id: 'preuve_recue', label: 'Vérification' },
+    { id: 'payé', label: 'Confirmée' }
+  ] as const;
+  const currentStepIndex = Math.max(0, STATUS_STEPS_UI.findIndex(s => s.id === reservation.statut));
   const isConfirmed = reservation.statut === 'payé';
   const paymentMethod = getPaymentMethod(reservation.canal);
   const lastUpdated = reservation.updatedAt && !isNaN(new Date(reservation.updatedAt).getTime())
     ? new Date(reservation.updatedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
     : null;
 
-  /* ---------- Render ---------- */
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50/70 to-white pb-32">
       <AnimatePresence>
@@ -265,9 +282,8 @@ const ReservationDetailsPage: React.FC = () => {
                                    colors={[primaryColor, secondaryColor, '#ffffff']} />}
       </AnimatePresence>
 
-      {/* Header */}
       <header className="sticky top-0 z-10 px-5 py-3 shadow-sm"
-              style={{ backgroundColor: hexToRgba(primaryColor, 0.98), color: textColor }}>
+              style={{ backgroundColor: hexToRgba(primaryColor, 0.98), color: safeTextColor(primaryColor) }}>
         <div className="flex items-center justify-between max-w-md mx-auto">
           <button onClick={() => navigate(-1)} className="p-1.5 rounded-full hover:bg-white/10 transition-colors" aria-label="Retour">
             <ChevronLeft className="h-5 w-5" />
@@ -275,16 +291,15 @@ const ReservationDetailsPage: React.FC = () => {
           <h1 className="font-semibold text-base tracking-tight">Détails de réservation</h1>
           {companyInfo?.logoUrl
             ? <LazyLoadImage src={companyInfo.logoUrl} alt="Logo" className="h-8 w-8 rounded-full object-cover border"
-                             style={{ borderColor: hexToRgba(textColor, 0.2) }} effect="blur" />
+                             style={{ borderColor: hexToRgba(safeTextColor(primaryColor), 0.2) }} effect="blur" />
             : <div className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium border"
-                   style={{ backgroundColor: hexToRgba(textColor, 0.1), borderColor: hexToRgba(textColor, 0.2), color: textColor }}>
+                   style={{ backgroundColor: hexToRgba(safeTextColor(primaryColor), 0.1), borderColor: hexToRgba(safeTextColor(primaryColor), 0.2), color: safeTextColor(primaryColor) }}>
                 {companyInfo?.name?.charAt(0) || 'C'}
               </div>}
         </div>
       </header>
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
-        {/* Progress */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
                     className="bg-white rounded-xl p-4 shadow-xs border">
           <div className="flex justify-between items-center mb-3">
@@ -297,7 +312,7 @@ const ReservationDetailsPage: React.FC = () => {
                    style={{ width: `${(currentStepIndex + 1) * 25}%`, backgroundColor: primaryColor }} />
             </div>
             <div className="relative z-10 flex justify-between">
-              {STATUS_STEPS.map((step, idx) => {
+              {STATUS_STEPS_UI.map((step, idx) => {
                 const isActive = idx <= currentStepIndex;
                 const isCurrent = reservation.statut === step.id;
                 const isVerification = reservation.statut === 'preuve_recue' && step.id === 'preuve_recue';
@@ -306,8 +321,8 @@ const ReservationDetailsPage: React.FC = () => {
                     <div className={`h-6 w-6 rounded-full flex items-center justify-center mb-1 transition-colors
                                     ${isActive ? 'ring-4 ring-opacity-30' : ''} ${isVerification ? 'animate-pulse' : ''}`}
                          style={{ backgroundColor: isActive ? primaryColor : '#e5e7eb',
-                                  color: isActive ? textColor : '#6b7280',
-                                  border: isCurrent ? `2px solid ${textColor}` : 'none' }}>
+                                  color: isActive ? safeTextColor(primaryColor) : '#6b7280',
+                                  border: isCurrent ? `2px solid ${safeTextColor(primaryColor)}` : 'none' }}>
                       {isActive ? <CheckCircle className="h-3 w-3" /> : <div className="h-2 w-2 rounded-full bg-gray-400" />}
                     </div>
                     <span className={`text-xs text-center ${isActive ? 'font-medium text-gray-900' : 'text-gray-500'}`}>{step.label}</span>
@@ -318,14 +333,13 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Status bloc (avec référence + agence) */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-                    className={`p-4 rounded-xl flex items-start gap-3 ${STATUS_DISPLAY[reservation.statut]?.bgColor}`}>
+                    className={`${STATUS_DISPLAY[reservation.statut]?.bgColor} p-4 rounded-xl flex items-start gap-3`}>
           <div className={`p-2 rounded-lg ${STATUS_DISPLAY[reservation.statut]?.color} bg-white/80 flex-shrink-0`}>
             {STATUS_DISPLAY[reservation.statut]?.icon}
           </div>
           <div>
-            <p className="font-medium text-sm mb-1" style={{ color: 'inherit' }}>
+            <p className="font-medium text-sm mb-1">
               {STATUS_DISPLAY[reservation.statut]?.text}
             </p>
             <p className="text-xs text-gray-600">{STATUS_DISPLAY[reservation.statut]?.description}</p>
@@ -343,7 +357,6 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Détails du voyage */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
                     className="bg-white rounded-xl shadow-xs border overflow-hidden">
           <div className="p-4 border-b">
@@ -405,7 +418,6 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Merci */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }} className="text-center pt-4">
           <div className="flex items-center justify-center gap-1 text-sm text-gray-500">
             <Heart className="h-3.5 w-3.5 text-rose-400 fill-rose-400" />
@@ -417,18 +429,17 @@ const ReservationDetailsPage: React.FC = () => {
         </motion.div>
       </main>
 
-      {/* Actions */}
       <div className="fixed bottom-0 left-0 w-full z-40 bg-white border-t border-gray-200 px-4 py-3 shadow-md">
         <div className="max-w-md mx-auto space-y-2">
           <button
             onClick={() => {
               const slugToUse = realSlug || slug;
-              navigate(`/${slugToUse}/receipt/${id}`, {
+              navigate(`/${slugToUse}/receipt/${reservation.id}`, {
                 state: { reservation: { ...reservation, agencyNom: agencyName }, companyInfo }
               });
             }}
             className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${isConfirmed ? 'hover:opacity-90' : 'opacity-70 cursor-not-allowed'}`}
-            style={{ backgroundColor: primaryColor, color: textColor }}
+            style={{ backgroundColor: primaryColor, color: safeTextColor(primaryColor) }}
             disabled={!isConfirmed}
           >
             <CheckCircle className="h-4 w-4" />

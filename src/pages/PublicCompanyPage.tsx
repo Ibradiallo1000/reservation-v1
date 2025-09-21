@@ -1,4 +1,3 @@
-// src/pages/PublicCompanyPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
@@ -22,6 +21,7 @@ import { Company, Agence, TripSuggestion } from "@/types/companyTypes";
 import ErrorScreen from "@/components/ui/ErrorScreen";
 import NotFoundScreen from "@/components/ui/NotFoundScreen";
 import { getCompanyFromCache } from "@/utils/companyCache";
+import ResumeLastReservation from "@/components/ResumeLastReservation";
 
 interface PublicCompanyPageProps {
   company?: Company;
@@ -36,7 +36,6 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   const navigate = useNavigate();
   const { t } = useTranslation();
 
-  // 1) démarrer avec la compagnie du cache (préchargée depuis la Home)
   const cached = getCompanyFromCache(slug);
   const [company, setCompany] = useState<Company | undefined>(propCompany || cached);
 
@@ -63,7 +62,6 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     [agences]
   );
 
-  // 2) si on arrive par URL directe (pas de cache), on récupère la compagnie par slug
   useEffect(() => {
     if (company || !slug) return;
     (async () => {
@@ -80,13 +78,11 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
-  // popup langue
   useEffect(() => {
     const timer = setTimeout(() => setShowLangPopup(true), 4000);
     return () => clearTimeout(timer);
   }, []);
 
-  // suggestions (fond, pas d'overlay)
   useEffect(() => {
     const fetchSuggestions = async () => {
       if (!company?.id) return;
@@ -123,7 +119,6 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     fetchSuggestions();
   }, [company]);
 
-  // agences (fond, pas d'overlay)
   useEffect(() => {
     const fetchAgences = async () => {
       if (!company?.id) return;
@@ -138,9 +133,8 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     fetchAgences();
   }, [company, t]);
 
-  // --- 🛑 Garde-fous d'affichage en fonction du plan ---
-  const allowPublic = !!company?.publicPageEnabled;         // vitrine
-  const allowOnline = allowPublic && !!company?.onlineBookingEnabled; // réservation en ligne
+  const allowPublic = !!company?.publicPageEnabled;
+  const allowOnline = allowPublic && !!company?.onlineBookingEnabled;
 
   if (error === "notFound") {
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
@@ -158,13 +152,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     );
   }
 
-  // ⚠️ plus d'écran plein-page "Loading". Si company pas encore là (rare),
-  // on rend un squelette très léger, puis on affiche dès que possible.
   if (!company) {
     return <div className="min-h-screen bg-white"><div className="h-14 border-b" /></div>;
   }
 
-  // Si la vitrine n'est pas incluse dans le plan (ex: "Start") -> page désactivée.
   if (!allowPublic) {
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
@@ -189,7 +180,6 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
       />
 
       <main className="flex-grow">
-        {/* Recherche + suggestions visibles uniquement si onlineBookingEnabled */}
         {allowOnline && (
           <>
             <HeroSection
@@ -199,6 +189,11 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               }}
               isMobile={isMobile}
             />
+
+            {/* 🔶 Retrouver ma réservation (spécifique à cette compagnie) */}
+            <div className="px-4 pt-4 max-w-5xl mx-auto">
+              <ResumeLastReservation onlyForSlug={slug} />
+            </div>
 
             <VilleSuggestionBar
               suggestions={suggestedTrips}

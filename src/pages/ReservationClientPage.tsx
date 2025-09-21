@@ -13,6 +13,21 @@ import { db, storage } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
 
+// ============== Anti-spam / réservation en cours ==============
+const PENDING_KEY = 'pendingReservation'; // localStorage
+const isBlockingStatus = (s?: string) =>
+  ['en_attente', 'en_attente_paiement', 'paiement_en_cours', 'preuve_recue'].includes(String(s || '').toLowerCase());
+const rememberPending = (payload: { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; }) => {
+  localStorage.setItem(PENDING_KEY, JSON.stringify(payload));
+};
+const readPending = (): { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; } | null => {
+  try { const r = localStorage.getItem(PENDING_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
+};
+// ===============================================================
+
+// util pour token public
+const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+
 // ---------- helpers ----------
 const normalize = (s: string) =>
   s?.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/-/g,' ').replace(/\s+/g,' ') || '';
@@ -22,7 +37,6 @@ const addMin = (d: Date, m: number) => new Date(d.getTime() + m*60000);
 const DAYS = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
 
 export default function ReservationClientPage() {
-  // ---------- routing ----------
   const { slug } = useParams<{ slug: string }>();
   const location = useLocation();
   const navigate = useNavigate();
@@ -30,16 +44,14 @@ export default function ReservationClientPage() {
   const departureQ = normalize(search.get('departure') || '');
   const arrivalQ   = normalize(search.get('arrival') || '');
 
-  // ---------- theme/company ----------
   const [company, setCompany] = useState({ id:'', name:'', couleurPrimaire:'#f43f5e', couleurSecondaire:'#f97316', logoUrl:'', code:'MT' });
   const theme = useMemo(()=>({
     primary: company.couleurPrimaire,
     secondary: company.couleurSecondaire,
-    lightPrimary: `${company.couleurPrimaire}1A`, // ~10% alpha
+    lightPrimary: `${company.couleurPrimaire}1A`,
     lightSecondary: `${company.couleurSecondaire}1A`,
   }), [company]);
 
-  // ---------- state ----------
   const [agencyInfo, setAgencyInfo] = useState<{id?:string; nom?:string; telephone?:string; code?:string}>({});
   const [paymentMethods, setPaymentMethods] = useState<Record<string, {
     url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string;
@@ -64,7 +76,15 @@ export default function ReservationClientPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // ---------- cache rapide ----------
+  // ========== Redirection immédiate si une réservation bloquante existe ==========
+  useEffect(() => {
+    const p = readPending();
+    if (p && isBlockingStatus(p.status) && p.slug === slug) {
+      navigate(`/${slug}/reservation/${p.id}`, { replace: true, state: { companyId: p.companyId, agencyId: p.agencyId } });
+    }
+  }, [slug, navigate]);
+  // ==============================================================================
+
   useEffect(() => {
     try {
       const key = `preload_${slug}_${departureQ}_${arrivalQ}`;
@@ -77,7 +97,6 @@ export default function ReservationClientPage() {
     } catch {}
   }, [slug, departureQ, arrivalQ]);
 
-  // ---------- fetch Firestore ----------
   useEffect(() => {
     if (!slug || !departureQ || !arrivalQ) return;
 
@@ -130,7 +149,6 @@ export default function ReservationClientPage() {
           const reservations = rSnap.docs.map(d=>({ id:d.id, ...(d.data() as any)}));
           next8.forEach(dateStr=>{
             const d = new Date(dateStr); const dayName = DAYS[d.getDay()];
-            // 👇 cast explicite pour typer les heures
             ((weekly as any[])).forEach((t:any)=>{
               ((t.horaires?.[dayName] || []) as string[]).forEach((heure) => {
                 if (dateStr===toYMD(new Date())) {
@@ -181,7 +199,6 @@ export default function ReservationClientPage() {
     load();
   }, [slug, departureQ, arrivalQ]);
 
-  // ---------- dérivés ----------
   const filteredTrips = useMemo(()=>{
     if (!selectedDate) return [] as any[];
     const base = trips.filter((t:any)=> t.date===selectedDate);
@@ -193,7 +210,6 @@ export default function ReservationClientPage() {
     return base;
   }, [trips, selectedDate]);
 
-  // auto-select première heure quand la date change
   useEffect(()=> {
     if (filteredTrips.length && !selectedTime) setSelectedTime(filteredTrips[0].time);
   }, [filteredTrips, selectedTime]);
@@ -203,15 +219,13 @@ export default function ReservationClientPage() {
   const cityFrom = formatCity(departureQ), cityTo = formatCity(arrivalQ);
   const priceText = topPrice ? `${topPrice.toLocaleString('fr-FR')} FCFA` : '—';
 
-  // ---------- UI helpers ----------
   const seatColor = (remaining:number, total:number) => {
     const ratio = remaining / total;
-    if (ratio > 0.7) return '#16a34a';     // vert
-    if (ratio > 0.3) return '#f59e0b';     // jaune
-    return '#dc2626';                       // rouge
+    if (ratio > 0.7) return '#16a34a';
+    if (ratio > 0.3) return '#f59e0b';
+    return '#dc2626';
   };
 
-  // ---------- handlers ----------
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     try {
       const f = e.target.files?.[0]; if (!f) return setFile(null);
@@ -222,13 +236,19 @@ export default function ReservationClientPage() {
   };
 
   const createReservationDraft = useCallback(async () => {
+    // 🛑 Anti-spam : si une réservation bloquante existe, rediriger et empêcher la création
+    const pending = readPending();
+    if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
+      navigate(`/${slug}/reservation/${pending.id}`, { replace: true, state: { companyId: pending.companyId, agencyId: pending.agencyId } });
+      return;
+    }
+
     if (!selectedTrip) return;
     if (!passenger.fullName || !passenger.phone) { setError('Nom et téléphone requis'); return; }
     if (creating) return;
 
     setCreating(true); setError('');
     try {
-      // 1) lire agence + société pour fabriquer le n° et sauver le vrai nom d’agence
       const agSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId));
       const ag = agSnap.exists() ? (agSnap.data() as any) : {};
       const agencyName = ag.nomAgence || ag.nom || ag.name || 'Agence';
@@ -243,7 +263,7 @@ export default function ReservationClientPage() {
         companyCode,
         agencyId: selectedTrip.agencyId,
         agencyCode,
-        agencyName,                      // pour déduire AP si besoin
+        agencyName,
         tripInstanceId: selectedTrip.id
       });
 
@@ -264,10 +284,10 @@ export default function ReservationClientPage() {
         companyName: company.name,
 
         agencyId: selectedTrip.agencyId,
-        agencyNom: agencyName,          // ✅ clé 1
-        nomAgence: agencyName,          // ✅ clé 2 (compat)
+        agencyNom: agencyName,
+        nomAgence: agencyName,
 
-        referenceCode,                  // ✅ MT-AP-WEB-00xx
+        referenceCode,
         trajetId: selectedTrip.id,
         holdUntil: addMin(now, 15),
         createdAt: serverTimestamp(),
@@ -278,10 +298,29 @@ export default function ReservationClientPage() {
         collection(db,'companies',selectedTrip.companyId,'agences',selectedTrip.agencyId,'reservations'),
         reservation
       );
+
+      // ✅ token public + URL partage
+      const token = randomToken();
+      const publicUrl = `${window.location.origin}/${slug}/mon-billet?r=${encodeURIComponent(token)}`;
+      await updateDoc(
+        doc(db,'companies',selectedTrip.companyId,'agences',selectedTrip.agencyId,'reservations',refDoc.id),
+        { publicToken: token, publicUrl }
+      );
+      try { await navigator.clipboard.writeText(publicUrl); } catch {}
+
       setReservationId(refDoc.id);
 
-      // reprise
-      sessionStorage.setItem('reservationDraft', JSON.stringify({ ...reservation, id: refDoc.id }));
+      // 🧠 mémoriser comme “bloquante”
+      rememberPending({
+        slug: slug!,
+        id: refDoc.id,
+        referenceCode,
+        status: 'en_attente_paiement',
+        companyId: selectedTrip.companyId,
+        agencyId: selectedTrip.agencyId
+      });
+
+      sessionStorage.setItem('reservationDraft', JSON.stringify({ ...reservation, id: refDoc.id, publicUrl }));
       sessionStorage.setItem('companyInfo', JSON.stringify({
         id: company.id, name: company.name, logoUrl: company.logoUrl,
         couleurPrimaire: company.couleurPrimaire, couleurSecondaire: company.couleurSecondaire, slug
@@ -290,7 +329,7 @@ export default function ReservationClientPage() {
       setError(e?.message || 'Impossible de créer la réservation');
     }
     finally { setCreating(false); }
-  }, [selectedTrip, passenger, seats, creating, slug, company]);
+  }, [selectedTrip, passenger, seats, creating, slug, company, navigate]);
 
   const onChoosePayment = (key: string) => {
     setPaymentMethodKey(key); setPaymentTriggeredAt(Date.now());
@@ -300,7 +339,6 @@ export default function ReservationClientPage() {
     if (method.url) {
       try { new URL(method.url); window.open(method.url, '_blank', 'noopener,noreferrer'); } catch {}
     } else if (ussd) {
-      // 👉 lance l’app téléphone (mobile)
       window.location.href = `tel:${encodeURIComponent(ussd)}`;
     }
   };
@@ -324,6 +362,12 @@ export default function ReservationClientPage() {
         paymentHint: paymentMethodKey, paymentTriggeredAt: paymentTriggeredAt ? new Date(paymentTriggeredAt) : null,
         updatedAt: new Date(),
       });
+
+      // 🧠 garder comme bloquante mais maj du statut
+      const p = readPending();
+      if (p && p.id === reservationId) {
+        rememberPending({ ...p, status: 'preuve_recue' });
+      }
 
       navigate(`/${slug}/reservation/${reservationId}`, {
         state: { companyId: company.id, agencyId: agencyInfo.id }
