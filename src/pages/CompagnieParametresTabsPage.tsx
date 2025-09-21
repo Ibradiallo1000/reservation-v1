@@ -7,6 +7,7 @@ import ParametresPersonnel from './ParametresPersonnel';
 import ParametresSecurite from './ParametresSecurite';
 import ParametresReseauxPage from './ParametresReseauxPage';
 import ParametresLegauxPage from './ParametresLegauxPage';
+import ParametresPlan from './ParametresPlan';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { usePageHeader } from '@/contexts/PageHeaderContext';
@@ -17,9 +18,10 @@ import { db } from '@/firebaseConfig';
 import useCompanyTheme from '@/hooks/useCompanyTheme';
 import { Company } from '@/types/companyTypes';
 
-type TabKey = 'vitrine' | 'personnel' | 'securite' | 'reseaux' | 'legaux';
+type TabKey = 'plan' | 'vitrine' | 'personnel' | 'securite' | 'reseaux' | 'legaux';
 
 const TABS: { key: TabKey; label: string }[] = [
+  { key: 'plan',      label: 'Plan & abonnement' },
   { key: 'vitrine',   label: 'Vitrine publique' },
   { key: 'personnel', label: 'Personnel' },
   { key: 'securite',  label: 'Sécurité' },
@@ -83,6 +85,7 @@ const CompagnieParametresTabsPage: React.FC = () => {
   // Rendu de l’onglet courant
   const renderTab = () => {
     switch (selectedTab) {
+      case 'plan':      return <ParametresPlan />;
       case 'vitrine':
         return <ParametresVitrine />;
       case 'personnel':

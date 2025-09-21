@@ -1,7 +1,8 @@
+// src/pages/PublicCompanyPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
-  collection, getDocs, query, where, limit, doc, getDoc,
+  collection, getDocs, query, where, limit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useTranslation } from "react-i18next";
@@ -137,6 +138,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     fetchAgences();
   }, [company, t]);
 
+  // --- 🛑 Garde-fous d'affichage en fonction du plan ---
+  const allowPublic = !!company?.publicPageEnabled;         // vitrine
+  const allowOnline = allowPublic && !!company?.onlineBookingEnabled; // réservation en ligne
+
   if (error === "notFound") {
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
@@ -159,6 +164,11 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     return <div className="min-h-screen bg-white"><div className="h-14 border-b" /></div>;
   }
 
+  // Si la vitrine n'est pas incluse dans le plan (ex: "Start") -> page désactivée.
+  if (!allowPublic) {
+    return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
+  }
+
   return (
     <div
       className={`min-h-screen flex flex-col ${config.typography}`}
@@ -179,21 +189,26 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
       />
 
       <main className="flex-grow">
-        <HeroSection
-          company={company}
-          onSearch={(departure, arrival) => {
-            navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
-          }}
-          isMobile={isMobile}
-        />
+        {/* Recherche + suggestions visibles uniquement si onlineBookingEnabled */}
+        {allowOnline && (
+          <>
+            <HeroSection
+              company={company}
+              onSearch={(departure, arrival) => {
+                navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
+              }}
+              isMobile={isMobile}
+            />
 
-        <VilleSuggestionBar
-          suggestions={suggestedTrips}
-          company={company}
-          onSelect={(departure: string, arrival: string) => {
-            navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
-          }}
-        />
+            <VilleSuggestionBar
+              suggestions={suggestedTrips}
+              company={company}
+              onSelect={(departure: string, arrival: string) => {
+                navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
+              }}
+            />
+          </>
+        )}
 
         <CompanyImageSlider
           images={company.imagesSlider || []}

@@ -17,6 +17,7 @@ import {
 import { doc, getDoc, Timestamp } from "firebase/firestore";
 import { auth, db } from "../firebaseConfig";
 import { Role, permissionsByRole } from "@/roles-permissions";
+import { Company } from "@/types/companyTypes";
 
 /* ===================== Types ===================== */
 export interface CustomUser {
@@ -50,7 +51,12 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   hasPermission: (permission: string) => boolean;
-  company?: any;
+
+  /** ✅ Ajout : id de la compagnie active */
+  companyId: string | null;
+
+  /** ✅ Maintenant typé Company */
+  company: Company | null;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -59,6 +65,7 @@ const AuthContext = createContext<AuthContextType>({
   logout: async () => {},
   refreshUser: async () => {},
   hasPermission: () => false,
+  companyId: null,
   company: null,
 });
 
@@ -86,11 +93,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const [user, setUser] = useState<CustomUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [company, setCompany] = useState<any | null>(null);
+  const [company, setCompany] = useState<Company | null>(null);
 
   const fetchUserData = useCallback(async (firebaseUser: FirebaseUser) => {
-    // ⚠️ Si les custom claims viennent d’être modifiés côté Admin SDK,
-    // force le refresh du token pour récupérer role/companyId à jour.
     try {
       await getIdToken(firebaseUser, true);
     } catch {
@@ -99,14 +104,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const userRef = doc(db, "users", firebaseUser.uid);
     const snap = await getDoc(userRef);
-    if (!snap.exists()) {
-      throw new Error("Document utilisateur non trouvé");
-    }
+    if (!snap.exists()) throw new Error("Document utilisateur non trouvé");
 
     const data: any = snap.data() || {};
     const role: Role = normalizeRole(data.role);
 
-    // Fusion des permissions: Firestore + permissions par rôle
+    // Fusion des permissions
     const mergedPermissions = Array.from(
       new Set([...(data.permissions || []), ...(permissionsByRole[role] || [])])
     );
@@ -141,7 +144,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     if (custom.companyId) {
       const companyRef = doc(db, "companies", custom.companyId);
       const companySnap = await getDoc(companyRef);
-      setCompany(companySnap.exists() ? companySnap.data() : null);
+      setCompany(
+        companySnap.exists()
+          ? ({ ...(companySnap.data() as Company), id: companySnap.id })
+          : null
+      );
     } else {
       setCompany(null);
     }
@@ -165,8 +172,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     (permission: string): boolean => {
       if (!user) return false;
       const role: Role = normalizeRole(user.role);
-      // Raccourci pour certains rôles "forts"
-      if (role === "chefAgence" || role === "admin_platforme") return true;
+      if (role === "admin_platforme") return true;
       return !!user.permissions?.includes(permission);
     },
     [user]
@@ -196,7 +202,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           }
         });
 
-        // Sécurité : ne jamais rester bloqué en loading si l’écoute tarde
         timeoutId = setTimeout(() => setLoading(false), 2500);
       })
       .catch((e) => {
@@ -212,7 +217,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, logout, refreshUser, hasPermission, company }}
+      value={{
+        user,
+        loading,
+        logout,
+        refreshUser,
+        hasPermission,
+        companyId: user?.companyId || null,
+        company,
+      }}
     >
       {children}
     </AuthContext.Provider>

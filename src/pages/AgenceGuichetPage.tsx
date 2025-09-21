@@ -14,6 +14,7 @@
 //   • ⚠️ Changement trajet/date/heure : à traiter par “reporté” + revente (sécurisé).
 //   • Vente accélérée : caches (company/agency/seller) + écriture unique setDoc
 //   • Header responsive (flex-wrap, truncate, réorganisation sur mobile)
+//   • ✅ Détails utilisateur + rôle en haut à droite + bouton Déconnexion (icône)
 // ===================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -34,10 +35,9 @@ import ReceiptModal, {
 
 import {
   Building2, MapPin, CalendarDays, Clock4,
-  Ticket, RefreshCw, Pencil, XCircle
+  Ticket, RefreshCw, Pencil, XCircle, Settings, LogOut, User2
 } from 'lucide-react';
 
-import { Settings } from 'lucide-react';
 import Button from '@/ui/Button';
 
 type TripType = 'aller_simple' | 'aller_retour';
@@ -278,7 +278,25 @@ const EditReservationModal: React.FC<EditModalProps> = ({ open, onClose, initial
 /* ------------------------------ Page ------------------------------ */
 const AgenceGuichetPage: React.FC = () => {
   const auth = useAuth() as any;
-  const { user, company } = auth;
+  // On récupère signOutSafe si exposé par l'AuthContext
+  const { user, company, signOutSafe } = auth ?? {};
+
+  const handleLogout = useCallback(async () => {
+    try {
+      if (typeof signOutSafe === 'function') {
+        await signOutSafe();
+        return;
+      }
+      if (typeof auth?.logout === 'function') {
+        await auth.logout();
+        return;
+      }
+      window.location.href = '/logout'; // route utilitaire
+    } catch (e) {
+      console.error('logout error', e);
+      window.location.href = '/login';
+    }
+  }, [signOutSafe, auth]);
 
   const shiftApi = useActiveShift();
   const { activeShift, startShift, pauseShift, continueShift, closeShift, refresh } = shiftApi;
@@ -967,7 +985,7 @@ const AgenceGuichetPage: React.FC = () => {
               </div>
             </div>
 
-            {/* État + actions */}
+            {/* État + actions + Détails utilisateur (à droite) */}
             <div className="ml-auto flex items-center gap-3 flex-wrap">
               <div
                 className="px-3 py-1 rounded-lg text-xs font-medium transition-colors"
@@ -1036,6 +1054,31 @@ const AgenceGuichetPage: React.FC = () => {
                 </button>
               )}
 
+              {/* Détails utilisateur en haut à droite */}
+              <div className="h-6 w-px bg-gray-200" />
+              <div className="hidden sm:flex items-center gap-3 rounded-xl border bg-white px-3 py-2 max-w-[280px]">
+                <div className="h-8 w-8 rounded-full bg-gray-100 grid place-items-center">
+                  <User2 className="h-4 w-4 text-gray-500" />
+                </div>
+                <div className="leading-tight min-w-0">
+                  <div className="text-sm font-medium truncate">
+                    {(user?.displayName || user?.email) ?? '—'}
+                  </div>
+                  <div className="text-xs text-gray-500 truncate">
+                    {(user as any)?.role || 'guichetier'} • {sellerCodeUI}
+                  </div>
+                </div>
+                <button
+                  className="ml-1 px-2.5 py-1.5 rounded-lg border text-xs bg-white hover:bg-gray-50 inline-flex items-center gap-1"
+                  onClick={handleLogout}
+                  title="Se déconnecter"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Quitter
+                </button>
+              </div>
+
+              {/* Bouton paramètres (conserve ton composant) */}
               <div className="h-6 w-px bg-gray-200" />
               <Button leftIcon={<Settings className="h-4 w-4" />}>Paramètres</Button>
             </div>
@@ -1496,7 +1539,7 @@ const AgenceGuichetPage: React.FC = () => {
         </div>
       )}
 
-      {/* BARRE BAS (sans bouton déconnexion) */}
+      {/* BARRE BAS (avec bouton déconnexion) */}
       <div className="sticky bottom-0 z-10">
         <div className="max-w-7xl mx-auto px-4 pb-4">
           <div className="bg-white/95 backdrop-blur rounded-2xl border shadow-md p-3 flex items-center justify-between">
@@ -1512,23 +1555,35 @@ const AgenceGuichetPage: React.FC = () => {
               </div>
             </div>
 
-            {tab==='guichet' && (
-              <div className="flex items-center gap-3">
-                <div className="text-sm text-gray-600">Total:</div>
-                <div className="text-xl font-extrabold" style={{ color: theme.primary }}>
-                  {totalPrice.toLocaleString('fr-FR')} FCFA
-                </div>
-                <button
-                  className="px-5 py-3 rounded-xl text-white font-bold disabled:opacity-50 shadow-sm hover:shadow transition"
-                  disabled={!canSell || !selectedTrip || !nomClient || !telephone || !validPhone(telephone) || totalPrice<=0 || isProcessing}
-                  style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
-                  onClick={handleReservation}
-                  title="Valider la réservation"
-                >
-                  {isProcessing ? 'Traitement…' : 'Valider la réservation'}
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {/* Déconnexion visible aussi en bas */}
+              <button
+                className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition hidden sm:inline-flex items-center gap-2"
+                onClick={handleLogout}
+                title="Se déconnecter"
+              >
+                <LogOut className="h-4 w-4" />
+                Déconnexion
+              </button>
+
+              {tab==='guichet' && (
+                <>
+                  <div className="text-sm text-gray-600">Total:</div>
+                  <div className="text-xl font-extrabold" style={{ color: theme.primary }}>
+                    {totalPrice.toLocaleString('fr-FR')} FCFA
+                  </div>
+                  <button
+                    className="px-5 py-3 rounded-xl text-white font-bold disabled:opacity-50 shadow-sm hover:shadow transition"
+                    disabled={!canSell || !selectedTrip || !nomClient || !telephone || !validPhone(telephone) || totalPrice<=0 || isProcessing}
+                    style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                    onClick={handleReservation}
+                    title="Valider la réservation"
+                  >
+                    {isProcessing ? 'Traitement…' : 'Valider la réservation'}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>

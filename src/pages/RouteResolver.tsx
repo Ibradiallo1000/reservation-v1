@@ -1,7 +1,15 @@
 // src/pages/RouteResolver.tsx
 import { useLocation } from "react-router-dom";
 import { useEffect, useMemo, useState, lazy, Suspense } from "react";
-import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  doc,
+  getDoc,
+  onSnapshot,
+} from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 import PageLoader from "@/components/PageLoaderComponent";
@@ -33,7 +41,7 @@ const RESERVED = new Set([
   "compagnie",
 ]);
 
-/** cache mémoire par session de navigation */
+/** cache mémoire par session (optimisation non bloquante) */
 const memoryCache = new Map<string, Company>();
 
 /* ---------------------------------------------------------------------------------- */
@@ -42,12 +50,12 @@ export default function RouteResolver() {
   const { pathname } = useLocation();
   const parts = useMemo(() => pathname.split("/").filter(Boolean), [pathname]);
 
-  /** Dans AppRoutes, RouteResolver ne monte que sur `/:slug/*`.
-   *  Du coup le slug est bien la 1re partie du chemin. */
+  /** Dans AppRoutes, RouteResolver ne monte que sur `/:slug/*`. */
   const slug = parts[0] ?? null;
   const subPath = parts[1] ?? null;
 
   const [company, setCompany] = useState<Company | null>(null);
+  const [companyId, setCompanyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -63,14 +71,17 @@ export default function RouteResolver() {
     []
   );
 
+  // 1) Résolution du slug -> id de compagnie (avec cache) puis abonnement live
   useEffect(() => {
     let alive = true;
+    let unsubscribe: (() => void) | null = null;
 
-    async function load() {
+    async function resolveAndSubscribe() {
       setLoading(true);
       setError(null);
       setNotFound(false);
       setCompany(null);
+      setCompanyId(null);
 
       // garde-fous
       if (!slug || RESERVED.has(slug.toLowerCase())) {
@@ -80,76 +91,96 @@ export default function RouteResolver() {
         return;
       }
 
-      // 1) cache mémoire
+      // Essai cache mémoire
       const cached = memoryCache.get(slug);
       if (cached) {
         if (!alive) return;
         setCompany(cached);
+        setCompanyId(cached.id);
         setLoading(false);
-        return;
       }
 
-      // 2) sessionStorage
-      try {
-        const raw = sessionStorage.getItem(`company-${slug}`);
-        if (raw) {
-          const parsed = JSON.parse(raw) as Company;
-          memoryCache.set(slug, parsed);
-          if (!alive) return;
-          setCompany(parsed);
-          setLoading(false);
-          return;
-        }
-      } catch {
-        // ignore
-      }
-
-      // 3) Firestore : d’abord par slug, sinon par ID = slug
-      try {
-        let data: Company | null = null;
-
-        const bySlugQ = query(collection(db, "companies"), where("slug", "==", slug));
-        const bySlugSnap = await getDocs(bySlugQ);
-        if (!bySlugSnap.empty) {
-          const d = bySlugSnap.docs[0];
-          data = validateCompany(d.id, slug, d.data());
-        } else {
-          const byIdSnap = await getDoc(doc(db, "companies", slug));
-          if (byIdSnap.exists()) {
-            data = validateCompany(byIdSnap.id, slug, byIdSnap.data());
+      // Essai sessionStorage
+      if (!cached) {
+        try {
+          const raw = sessionStorage.getItem(`company-${slug}`);
+          if (raw) {
+            const parsed = JSON.parse(raw) as Company;
+            memoryCache.set(slug, parsed);
+            if (!alive) return;
+            setCompany(parsed);
+            setCompanyId(parsed.id);
+            setLoading(false);
           }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // Firestore : d’abord par slug, sinon par ID = slug
+      try {
+        let id: string | null = null;
+        if (!cached && !companyId) {
+          const bySlugQ = query(collection(db, "companies"), where("slug", "==", slug));
+          const bySlugSnap = await getDocs(bySlugQ);
+          if (!bySlugSnap.empty) {
+            id = bySlugSnap.docs[0].id;
+          } else {
+            const byIdSnap = await getDoc(doc(db, "companies", slug));
+            if (byIdSnap.exists()) id = byIdSnap.id;
+          }
+        } else {
+          id = (cached || company)?.id || companyId;
         }
 
-        if (!data) {
+        if (!id) {
           if (!alive) return;
           setNotFound(true);
           setLoading(false);
           return;
         }
 
-        memoryCache.set(slug, data);
-        try {
-          sessionStorage.setItem(`company-${slug}`, JSON.stringify(data));
-        } catch {
-          /* quota ou privacy mode – ignorer */
-        }
-
-        if (!alive) return;
-        setCompany(data);
+        // Abonnement live → reflète instantanément tout changement (pas besoin de refresh)
+        unsubscribe = onSnapshot(
+          doc(db, "companies", id),
+          (snap) => {
+            if (!alive) return;
+            if (!snap.exists()) {
+              setNotFound(true);
+              setCompany(null);
+              setCompanyId(null);
+              return;
+            }
+            const normalized = validateCompany(id!, slug!, snap.data());
+            setCompanyId(id!);
+            setCompany(normalized);
+            memoryCache.set(slug!, normalized);
+            try {
+              sessionStorage.setItem(`company-${slug}`, JSON.stringify(normalized));
+            } catch { /* quota / private */ }
+            setLoading(false);
+          },
+          (err) => {
+            if (!alive) return;
+            if (import.meta.env.DEV) console.debug("RouteResolver onSnapshot error:", err);
+            setError(err instanceof Error ? err : new Error("Erreur chargement compagnie"));
+            setNotFound(true);
+            setLoading(false);
+          }
+        );
       } catch (e) {
         if (!alive) return;
-        // log discret en dev uniquement
         if (import.meta.env.DEV) console.debug("RouteResolver Firestore error:", e);
         setError(e instanceof Error ? e : new Error("Erreur chargement compagnie"));
         setNotFound(true);
-      } finally {
-        if (alive) setLoading(false);
+        setLoading(false);
       }
     }
 
-    load();
+    resolveAndSubscribe();
     return () => {
       alive = false;
+      if (unsubscribe) unsubscribe();
     };
   }, [slug]);
 
@@ -157,6 +188,35 @@ export default function RouteResolver() {
   if (loading) return <PageLoader fullScreen />;
   if (error) return <MobileErrorScreen error={error} />;
   if (notFound || !company) return <PageNotFound />;
+
+  // 2) GARDES FONCTIONNELLES par plan
+  // Si la page publique est désactivée (ex: plan Start), on bloque toute la vitrine
+  if (company.publicPageEnabled === false) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6">
+        <h1 className="text-2xl font-bold text-red-600 mb-4">Site désactivé</h1>
+        <p className="text-gray-700 text-center max-w-xl">
+          Cette compagnie n’a pas de page publique active avec son plan actuel.
+          Veuillez réserver directement au guichet.
+        </p>
+      </div>
+    );
+  }
+
+  // Si la réservation en ligne est désactivée, on bloque les écrans de booking
+  const blocksOnline = !company.onlineBookingEnabled;
+  const isOnlineRoute = subPath === "booking" || subPath === "receipt" || subPath === "confirmation" || subPath === "upload-preuve" || subPath === "reservation" || subPath === "details";
+  if (blocksOnline && isOnlineRoute) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6">
+        <h1 className="text-2xl font-bold text-orange-600 mb-4">Réservation en ligne indisponible</h1>
+        <p className="text-gray-700 text-center max-w-xl">
+          La réservation en ligne n’est pas incluse dans le plan actuel de cette compagnie.
+          Vous pouvez vous rendre au guichet pour effectuer votre réservation.
+        </p>
+      </div>
+    );
+  }
 
   const common = { company };
   let content: JSX.Element;

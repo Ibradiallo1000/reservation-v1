@@ -1,14 +1,19 @@
+// src/components/home/PartnersSection.tsx
 import React, { useEffect, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 
-interface Company {
-  id: string; nom: string; slug: string;
-  status?: string; publicVisible?: boolean;
-  logoUrl?: string; pays?: string;
-}
+type Company = {
+  id: string;
+  nom: string;
+  slug: string;
+  status?: string;                 // "actif" / "inactif"
+  publicPageEnabled?: boolean;     // <-- used to filter
+  logoUrl?: string;
+  pays?: string;
+};
 
 const SkeletonCard = () => (
   <div className="min-w-[120px] max-w-[120px] p-3">
@@ -22,14 +27,20 @@ const PartnersSection: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // laisse le 1er rendu passer, puis charge
     const id = requestIdleCallback(async () => {
       try {
-        const snap = await getDocs(collection(db, "companies"));
+        // Only companies that are active AND have a public page
+        const q = query(
+          collection(db, "companies"),
+          where("publicPageEnabled", "==", true),
+          where("status", "==", "actif")
+        );
+        const snap = await getDocs(q);
         const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Company[];
-        setCompanies(list.filter(c => c.status === "actif" && c.publicVisible !== false));
+        setCompanies(list);
       } catch {
-        setCompanies([]); // ne bloque jamais l’affichage
+        // Fallback: never block the homepage
+        setCompanies([]);
       }
     });
     return () => cancelIdleCallback(id);
@@ -38,7 +49,9 @@ const PartnersSection: React.FC = () => {
   const preload = (url?: string) => {
     if (!url) return;
     const l = document.createElement("link");
-    l.rel = "preload"; l.as = "image"; l.href = url;
+    l.rel = "preload";
+    l.as = "image";
+    l.href = url;
     document.head.appendChild(l);
   };
 
@@ -51,7 +64,7 @@ const PartnersSection: React.FC = () => {
           ? Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
           : companies.length === 0
             ? null
-            : companies.map((c) => (
+            : companies.map(c => (
                 <motion.button
                   key={c.id}
                   whileHover={{ scale: 1.03 }}

@@ -4,15 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "clean": "rimraf dist",
-    "dev": "vite",
-    "build": "npm run clean && tsc && vite build",
-    "preview": "vite preview",
-    "generate-icons": "node scripts/generate-icons.js",
-    "generate-pwa-icons": "node scripts/generate-pwa-icons.js",
-    "generate-splash": "node scripts/generate-splash.js",
-    "generate-splash-screens": "node scripts/generate-splash-screens.js"
-  },
+  "clean": "rimraf dist",
+  "dev": "vite",
+  "build": "npm run clean && tsc && vite build",
+  "preview": "vite preview",
+  "generate-icons": "node scripts/generate-icons.js",
+  "generate-pwa-icons": "node scripts/generate-pwa-icons.js",
+  "generate-splash": "node scripts/generate-splash.js",
+  "generate-splash-screens": "node scripts/generate-splash-screens.js",
+  "migrate:companies": "node scripts/migrate_companies.cjs"
+},
   "dependencies": {
     "@emotion/babel-plugin": "^11.13.5",
     "@emotion/react": "^11.14.0",
@@ -107,3 +108,4 @@
     "vite-plugin-imagemin": "^0.6.1"
   }
 }
+

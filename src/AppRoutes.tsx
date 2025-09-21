@@ -6,13 +6,15 @@ import PrivateRoute from "./pages/PrivateRoute";
 import PageLoader from "./components/PageLoaderComponent";
 import RouteResolver from "./pages/RouteResolver";
 import SplashScreen from "@/components/SplashScreen";
-
+import AdminCompanyPlan from "@/pages/AdminCompanyPlan";
+import PlansManager from "@/pages/PlansManager";
+import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 /* ---------- Pages statiques ---------- */
 import MentionsPage from "@/pages/MentionsPage";
 import ConfidentialitePage from "@/pages/ConfidentialitePage";
 import ConditionsPage from "@/pages/ConditionsPage";
 import CookiesPage from "@/pages/CookiesPage";
-
+import AdminCompanyDetail from "@/pages/AdminCompanyDetail";
 /* ---------- Pages isolées ---------- */
 import AgenceEmbarquementPage from "@/pages/AgenceEmbarquementPage";
 import ReservationPrintPage from "@/pages/ReservationPrintPage";
@@ -52,6 +54,7 @@ const BibliothequeImagesPage = lazy(() => import("./pages/BibliothequeImagesPage
 const ReservationsEnLignePage = lazy(() => import("./pages/ReservationsEnLignePage"));
 const CompanyPaymentSettingsPage = lazy(() => import("./pages/CompanyPaymentSettingsPage"));
 const AvisModerationPage = lazy(() => import("./pages/AvisModerationPage"));
+const ParametresPlan = lazy(() => import("./pages/ParametresPlan"));
 
 /* ---------- Agence ---------- */
 const DashboardAgencePage = lazy(() => import("./pages/DashboardAgencePage"));
@@ -145,19 +148,20 @@ const AppRoutes = () => {
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
-
         {/* Mentions / Légal */}
         <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
         <Route path="/:slug/cookies" element={<CookiesPage />} />
 
-        {/* ADMIN PLATEFORME (tes pages existantes) */}
+        {/* ========= ADMIN (unique, avec PageHeaderProvider) ========= */}
         <Route
           path="/admin"
           element={
             <PrivateRoute allowedRoles={[...routePermissions.adminLayout]}>
-              <AdminSidebarLayout />
+              <PageHeaderProvider>
+                <AdminSidebarLayout />
+              </PageHeaderProvider>
             </PrivateRoute>
           }
         >
@@ -166,6 +170,8 @@ const AppRoutes = () => {
           <Route path="compagnies" element={<AdminCompagniesPage />} />
           <Route path="compagnies/ajouter" element={<AdminAjouterCompagnie />} />
           <Route path="compagnies/:id/modifier" element={<AdminModifierCompagniePage />} />
+          <Route path="compagnies/:companyId/plan" element={<AdminCompanyPlan />} />
+          <Route path="plans" element={<PlansManager />} />
           <Route path="reservations" element={<AdminReservationsPage />} />
           <Route path="finances" element={<AdminFinancesPage />} />
           <Route path="statistiques" element={<AdminStatistiquesPage />} />
@@ -187,14 +193,16 @@ const AppRoutes = () => {
           <Route path="comptabilite" element={<CompagnieComptabilitePage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
+          <Route path="parametres/plan" element={<ParametresPlan />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
           <Route path="reservations-en-ligne" element={<ReservationsEnLignePage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />
+          <Route path="compagnies/:companyId" element={<AdminCompanyDetail />} />
         </Route>
 
-        {/* SHELL D’AGENCE (fusion du redirect ici en index) */}
+        {/* SHELL D’AGENCE */}
         <Route
           path="/agence"
           element={
@@ -203,7 +211,6 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         >
-          {/* 👉 redirection d’atterrissage ici, plus de doublon de route /agence */}
           <Route index element={<RoleLanding />} />
           <Route path="dashboard" element={<DashboardAgencePage />} />
           <Route path="reservations" element={<AgenceReservationsPage />} />
