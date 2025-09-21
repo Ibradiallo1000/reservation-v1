@@ -1,6 +1,7 @@
 // ✅ src/types/companyTypes.ts
 
-import { Timestamp } from 'firebase/firestore';
+import type React from "react";
+import { Timestamp } from "firebase/firestore";
 
 export interface SocialMediaLinks {
   facebook?: string;
@@ -45,7 +46,7 @@ export interface Agence {
 }
 
 export interface TripSuggestion {
-  imageUrl?: string; // ✅ devient optionnel
+  imageUrl?: string; // ✅ optionnel
   duration?: string;
   departure: string;
   arrival: string;
@@ -88,7 +89,12 @@ export interface HeroSectionProps {
   t: (key: string) => string;
 }
 
-export type PaymentMethod = 'espèces' | 'mobile_money' | 'carte' | 'orange_money' | 'mtn_money';
+export type PaymentMethod =
+  | "espèces"
+  | "mobile_money"
+  | "carte"
+  | "orange_money"
+  | "mtn_money";
 
 export interface PaymentConfig {
   methods: PaymentMethod[];
@@ -103,12 +109,18 @@ export interface Service {
   icon?: string;
 }
 
-export type PlanType = 'free' | 'premium' | 'pro' | 'enterprise';
+export type PlanType = "free" | "premium" | "pro" | "enterprise";
 
 export interface Company {
   id: string;
   nom: string;
   slug: string;
+
+  // ✅ Flags liés au plan (optionnels pour compatibilité avec les anciens docs)
+  publicPageEnabled?: boolean;       // vitrine active
+  onlineBookingEnabled?: boolean;    // réservation en ligne active
+  guichetEnabled?: boolean;          // guichet actif
+
   sousTitre?: string;
   description?: string;
   logoUrl?: string;
