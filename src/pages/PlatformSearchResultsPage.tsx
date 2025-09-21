@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { collection, collectionGroup, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { Bus, Search, ArrowLeft } from 'lucide-react';
@@ -33,12 +33,27 @@ interface Trajet {
 const normalize = (s: string) =>
   s?.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const capitalize = (s: string) =>
-  s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 
 const PlatformSearchResultsPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const criteres = location.state as SearchCriteria | null;
+  const [params] = useSearchParams();
+
+  // 1) Historique : via location.state
+  const stateCrit = location.state as SearchCriteria | null;
+  // 2) Fallback : via query params (si on arrive avec ?from=&to=)
+  const qp = {
+    departure: (params.get('from') || '').trim(),
+    arrival:   (params.get('to')   || '').trim(),
+  };
+
+  // Critères unifiés
+  const criteres: SearchCriteria | null = useMemo(() => {
+    if (stateCrit?.departure && stateCrit?.arrival) return stateCrit;
+    if (qp.departure && qp.arrival) return qp;
+    return null;
+  }, [stateCrit, qp.departure, qp.arrival]);
 
   const [groupedTrajets, setGroupedTrajets] = useState<Record<string, Trajet[]>>({});
   const [companies, setCompanies] = useState<Record<string, Company>>({});
@@ -46,8 +61,10 @@ const PlatformSearchResultsPage: React.FC = () => {
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
+    // ⚠️ Ne pas rediriger tout de suite : affiche un message si incomplet
     if (!criteres?.departure || !criteres?.arrival) {
-      navigate('/');
+      setLoading(false);
+      setGroupedTrajets({});
       return;
     }
 
@@ -56,35 +73,36 @@ const PlatformSearchResultsPage: React.FC = () => {
       try {
         // Charger les compagnies
         const companiesSnapshot = await getDocs(collection(db, 'companies'));
-        const companiesMap = companiesSnapshot.docs.reduce((acc, doc) => {
-          acc[doc.id] = { ...doc.data(), id: doc.id } as Company;
+        const companiesMap = companiesSnapshot.docs.reduce((acc, d) => {
+          acc[d.id] = { ...d.data(), id: d.id } as Company;
           return acc;
         }, {} as Record<string, Company>);
         setCompanies(companiesMap);
 
-        // Normaliser pour Firestore
+        // Normaliser pour Firestore (mêmes règles qu'au write)
         const dep = capitalize(normalize(criteres.departure));
         const arr = capitalize(normalize(criteres.arrival));
 
-        const q = query(
+        const qRef = query(
           collectionGroup(db, 'weeklyTrips'),
           where('departure', '==', dep),
           where('arrival', '==', arr)
         );
 
-        const trajetsSnapshot = await getDocs(q);
+        const trajetsSnapshot = await getDocs(qRef);
         const grouped: Record<string, Trajet[]> = {};
 
         trajetsSnapshot.forEach((docSnap) => {
-          const data = docSnap.data();
+          const data = docSnap.data() as any;
           const pathSegments = docSnap.ref.path.split('/');
+          // /companies/{companyId}/weeklyTrips/{docId}
           const companyId = pathSegments[1];
 
           const trajet: Trajet = {
             ...data,
             id: docSnap.id,
             companyId,
-          } as Trajet;
+          };
 
           if (!grouped[companyId]) grouped[companyId] = [];
           grouped[companyId].push(trajet);
@@ -93,20 +111,54 @@ const PlatformSearchResultsPage: React.FC = () => {
         setGroupedTrajets(grouped);
       } catch (err) {
         console.error('❌ Erreur Firestore :', err);
+        setGroupedTrajets({});
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-  }, [criteres, navigate]);
+  }, [criteres?.departure, criteres?.arrival]);
 
-  if (!criteres?.departure || !criteres?.arrival) return null;
+  const filteredCompanies = useMemo(() => {
+    const ids = Object.keys(groupedTrajets);
+    const term = filter.toLowerCase();
+    return ids.filter((companyId) => {
+      const company = companies[companyId];
+      return term ? company?.nom?.toLowerCase().includes(term) : true;
+    });
+  }, [groupedTrajets, companies, filter]);
 
-  const filteredCompanies = Object.keys(groupedTrajets).filter((companyId) => {
-    const company = companies[companyId];
-    return company?.nom?.toLowerCase().includes(filter.toLowerCase());
-  });
+  // UI
+
+  if (!criteres?.departure || !criteres?.arrival) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-white shadow-md sticky top-0 z-50">
+          <div className="max-w-5xl mx-auto flex items-center justify-between px-4 py-3">
+            <button onClick={() => navigate('/')} className="flex items-center text-orange-600">
+              <ArrowLeft className="w-5 h-5 mr-1" /> Retour
+            </button>
+            <div className="flex items-center gap-2">
+              <Bus className="w-7 h-7 text-orange-600" />
+              <span className="font-bold text-xl text-orange-600">Teliya</span>
+            </div>
+          </div>
+        </header>
+
+        <div className="max-w-5xl mx-auto p-6">
+          <h1 className="text-2xl font-bold mb-3">Résultats de recherche</h1>
+          <p className="text-gray-600">Paramètres incomplets. Veuillez relancer une recherche.</p>
+          <button
+            onClick={() => navigate('/')}
+            className="mt-4 bg-orange-600 text-white px-6 py-2 rounded-lg hover:bg-orange-700"
+          >
+            Nouvelle recherche
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -170,10 +222,7 @@ const PlatformSearchResultsPage: React.FC = () => {
               const company = companies[companyId]!;
               const trajets = groupedTrajets[companyId];
               const prixMin = Math.min(...trajets.map((t) => t.price));
-              const totalPlaces = trajets.reduce(
-                (acc, t) => acc + (t.places || 0),
-                0
-              );
+              const totalPlaces = trajets.reduce((acc, t) => acc + (t.places || 0), 0);
 
               return (
                 <div
@@ -198,10 +247,7 @@ const PlatformSearchResultsPage: React.FC = () => {
                       <p className="text-xs text-gray-500">
                         {totalPlaces} pl. disponibles
                       </p>
-                      <p
-                        className="font-semibold text-sm"
-                        style={{ color: '#16a34a' }}
-                      >
+                      <p className="font-semibold text-sm" style={{ color: '#16a34a' }}>
                         {prixMin.toLocaleString()} FCFA
                       </p>
                     </div>
@@ -209,15 +255,15 @@ const PlatformSearchResultsPage: React.FC = () => {
                   <button
                     onClick={() =>
                       navigate(
-                        `/${company.slug}/booking?departure=${criteres.departure}&arrival=${criteres.arrival}`,
+                        `/${company.slug}/booking?departure=${encodeURIComponent(criteres.departure)}&arrival=${encodeURIComponent(criteres.arrival)}`,
                         {
                           state: {
                             preloaded: true,
                             company,
                             departure: criteres.departure,
                             arrival: criteres.arrival,
-                            preloadedPrice: prixMin
-                          }
+                            preloadedPrice: prixMin,
+                          },
                         }
                       )
                     }

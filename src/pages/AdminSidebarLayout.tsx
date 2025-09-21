@@ -38,7 +38,6 @@ const AdminSidebarLayout: React.FC = () => {
 
   // Titre header basé sur le segment juste après /admin/ (robuste aux sous-routes)
   const headerTitle = useMemo(() => {
-    // ex: /admin/compagnies/123/modifier -> key = "compagnies"
     const seg = pathname.split("/").filter(Boolean);
     const key = seg[0] === "admin" ? (seg[1] || "dashboard") : "dashboard";
     const match = MENU.find((m) => m.path.split("/")[0] === key);
@@ -71,10 +70,11 @@ const AdminSidebarLayout: React.FC = () => {
           {/* Top bar */}
           <div className="px-4 py-4 border-b border-white/15 flex items-center justify-between sticky top-0 z-10 bg-orange-600">
             <div className="flex items-center gap-2 overflow-hidden">
+              {/* ✅ Logo rond */}
               <img
                 src="/images/teliya-logo.jpg"
                 alt="Teliya"
-                className="w-9 h-9 rounded bg-white object-cover shrink-0"
+                className="w-9 h-9 rounded-full bg-white object-cover shrink-0 p-[2px]"
               />
               {!collapsed && (
                 <span className="text-lg font-semibold tracking-wide">Teliya</span>
@@ -153,30 +153,8 @@ const AdminSidebarLayout: React.FC = () => {
             <div className="px-6 py-3 flex items-center justify-between gap-4">
               <h1 className="text-base font-medium">{headerTitle}</h1>
 
-              {/* Infos utilisateur en haut à droite */}
-              <div className="flex items-center gap-3">
-                <div className="hidden sm:flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full bg-white/20 grid place-items-center">
-                    <User className="w-4 h-4" />
-                  </div>
-                  <div className="text-right leading-tight">
-                    <div className="text-sm font-semibold truncate max-w-[180px]">
-                      {user?.displayName || user?.email || "Utilisateur"}
-                    </div>
-                    <div className="text-[11px] opacity-90 truncate max-w-[220px]">
-                      {roleLabel}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="px-3 py-1.5 rounded-lg bg-white text-orange-700 hover:bg-white/90 flex items-center gap-2"
-                  title="Déconnexion"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span className="hidden sm:inline">Déconnexion</span>
-                </button>
-              </div>
+              {/* ✅ Suppression du doublon (plus d’infos user + bouton logout en haut) */}
+              <div className="h-6" />
             </div>
           </header>
 

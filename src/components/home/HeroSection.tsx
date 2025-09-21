@@ -1,15 +1,16 @@
 import React, { useEffect, useRef } from "react";
-import { motion } from "framer-motion";
 import { Search } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import VilleCombobox from "@/components/VilleCombobox";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 const HeroSection: React.FC = () => {
   const [departure, setDeparture] = React.useState("");
-  const [arrival, setArrival] = React.useState("");
+  const [arrival, setArrival]   = React.useState("");
   const [bannerUrl, setBannerUrl] = React.useState<string | null>(null);
   const bannerRef = useRef<HTMLImageElement | null>(null);
+  const navigate = useNavigate();
 
   // Récupère la bannière et précharge
   useEffect(() => {
@@ -26,7 +27,9 @@ const HeroSection: React.FC = () => {
           document.head.appendChild(l);
           setBannerUrl(url);
         }
-      } catch {}
+      } catch (e) {
+        console.warn("[Hero] impossible de charger la bannière", e);
+      }
     })();
   }, []);
 
@@ -39,25 +42,39 @@ const HeroSection: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!departure || !arrival) return;
-    // … navigation vers les résultats
+    const from = (departure || "").trim();
+    const to   = (arrival || "").trim();
+
+    console.debug("[SEARCH submit]", { from, to });
+
+    if (!from || !to) return;
+    if (from.toLowerCase() === to.toLowerCase()) return;
+
+    // ✅ Navigation via state (compatible avec ta page résultats existante)
+    navigate("/resultats", {
+      state: { departure: from, arrival: to }
+    });
+
+    // (Optionnel) Si tu veux aussi une URL partageable, dé-commente :
+    // const qs = new URLSearchParams({ from, to }).toString();
+    // navigate({ pathname: "/resultats", search: `?${qs}`, state: { departure: from, arrival: to } });
   };
 
   return (
-    <section className="relative bg-cover bg-center text-white py-32"
+    <section
+      className="relative bg-cover bg-center text-white py-32"
       style={{
         backgroundImage: bannerUrl
           ? `linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('${bannerUrl}')`
           : undefined,
       }}
     >
-      {/* Si tu préfères une balise <img> au lieu de background */}
       {bannerUrl && (
         <img
           ref={bannerRef}
           src={bannerUrl}
           alt="Bannière"
-          className="hidden"  // image utilisée seulement pour la priorité réseau
+          className="hidden"
           loading="eager"
           decoding="async"
         />
@@ -75,8 +92,16 @@ const HeroSection: React.FC = () => {
           onSubmit={handleSubmit}
           className="bg-white text-gray-800 rounded-lg shadow-lg flex flex-col md:flex-row p-4 gap-4 max-w-3xl mx-auto"
         >
-          <VilleCombobox label="Ville de départ" value={departure} onChange={setDeparture} />
-          <VilleCombobox label="Ville d’arrivée" value={arrival} onChange={setArrival} />
+          <VilleCombobox
+            label="Ville de départ"
+            value={departure}
+            onChange={setDeparture}
+          />
+          <VilleCombobox
+            label="Ville d’arrivée"
+            value={arrival}
+            onChange={setArrival}
+          />
 
           <button
             type="submit"
