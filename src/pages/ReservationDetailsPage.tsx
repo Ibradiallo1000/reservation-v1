@@ -54,14 +54,17 @@ interface CompanyInfo {
   secondaryColor?: string;
 }
 
-const STATUS_DISPLAY: Record<ReservationStatus, {
-  text: string; color: string; icon: React.ReactNode; bgColor: string; description: string;
-}> = {
-  en_attente: { text: 'En attente', color: 'text-amber-600', bgColor: 'bg-amber-50/80', icon: <Loader2 className="h-4 w-4 animate-spin" />, description: 'Votre réservation est en attente de traitement' },
-  paiement_en_cours: { text: 'Paiement en cours', color: 'text-blue-600', bgColor: 'bg-blue-50/80', icon: <Loader2 className="h-4 w-4 animate-spin" />, description: 'Votre paiement est en cours de vérification' },
-  preuve_recue: { text: 'Vérification', color: 'text-violet-600', bgColor: 'bg-violet-50/80', icon: <Loader2 className="h-4 w-4 animate-spin" />, description: 'Preuve reçue — confirmation en cours' },
-  payé: { text: 'Confirmé', color: 'text-emerald-600', bgColor: 'bg-emerald-50/80', icon: <CheckCircle className="h-4 w-4" />, description: '🎉 Votre réservation a été confirmée avec succès !' },
-  annule: { text: 'Annulé', color: 'text-red-600', bgColor: 'bg-red-50/80', icon: <XCircle className="h-4 w-4" />, description: 'Cette réservation a été annulée' },
+/* ====== Anti-spam memory (commun avec la page de réservation) ====== */
+const PENDING_KEY = 'pendingReservation';
+const isBlockingStatus = (s?: string) =>
+  ['en_attente', 'en_attente_paiement', 'paiement_en_cours', 'preuve_recue'].includes(String(s || '').toLowerCase());
+const readPending = () => {
+  try { const raw = localStorage.getItem(PENDING_KEY); return raw ? JSON.parse(raw) : null; }
+  catch { return null; }
+};
+const clearPending = () => {
+  try { localStorage.removeItem(PENDING_KEY); } catch {}
+  try { sessionStorage.removeItem('reservationDraft'); } catch {}
 };
 
 const PAYMENT_METHODS = {
@@ -74,13 +77,6 @@ const PAYMENT_METHODS = {
 const getPaymentMethod = (method?: PaymentMethod) =>
   method ? (PAYMENT_METHODS[method as keyof typeof PAYMENT_METHODS] || { text: method, icon: <CreditCard className="h-4 w-4" /> })
          : { text: 'Non précisé', icon: <CreditCard className="h-4 w-4" /> };
-
-const STATUS_STEPS = [
-  { id: 'en_attente', label: 'Enregistrée' },
-  { id: 'paiement_en_cours', label: 'Paiement' },
-  { id: 'preuve_recue', label: 'Vérification' },
-  { id: 'payé', label: 'Confirmée' }
-] as const;
 
 const formatCompactDate = (dateString: string) =>
   new Date(dateString).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -174,6 +170,12 @@ const ReservationDetailsPage: React.FC = () => {
           const next: Reservation = { ...data, id: snap.id, updatedAt: data?.updatedAt || new Date().toISOString() };
           setReservation(next);
 
+          // 🔒 Si statut final (payé/annule), on nettoie la mémoire anti-spam
+          if (next.statut === 'payé' || next.statut === 'annule') {
+            const pend = readPending();
+            if (pend?.id === snap.id) clearPending();
+          }
+
           const inline = next.agencyNom || next.agenceNom;
           if (inline) setAgencyName(inline);
           else {
@@ -262,13 +264,7 @@ const ReservationDetailsPage: React.FC = () => {
   }
 
   const realSlug = (location as any)?.state?.slug || reservation.companySlug;
-  const STATUS_STEPS_UI = [
-    { id: 'en_attente', label: 'Enregistrée' },
-    { id: 'paiement_en_cours', label: 'Paiement' },
-    { id: 'preuve_recue', label: 'Vérification' },
-    { id: 'payé', label: 'Confirmée' }
-  ] as const;
-  const currentStepIndex = Math.max(0, STATUS_STEPS_UI.findIndex(s => s.id === reservation.statut));
+  const currentStepIndex = Math.max(0, ['en_attente','paiement_en_cours','preuve_recue','payé'].findIndex(s => s === reservation.statut));
   const isConfirmed = reservation.statut === 'payé';
   const paymentMethod = getPaymentMethod(reservation.canal);
   const lastUpdated = reservation.updatedAt && !isNaN(new Date(reservation.updatedAt).getTime())
@@ -300,6 +296,7 @@ const ReservationDetailsPage: React.FC = () => {
       </header>
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
+        {/* Barre d’étapes */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
                     className="bg-white rounded-xl p-4 shadow-xs border">
           <div className="flex justify-between items-center mb-3">
@@ -312,12 +309,12 @@ const ReservationDetailsPage: React.FC = () => {
                    style={{ width: `${(currentStepIndex + 1) * 25}%`, backgroundColor: primaryColor }} />
             </div>
             <div className="relative z-10 flex justify-between">
-              {STATUS_STEPS_UI.map((step, idx) => {
+              {['en_attente','paiement_en_cours','preuve_recue','payé'].map((step, idx) => {
                 const isActive = idx <= currentStepIndex;
-                const isCurrent = reservation.statut === step.id;
-                const isVerification = reservation.statut === 'preuve_recue' && step.id === 'preuve_recue';
+                const isCurrent = reservation.statut === step;
+                const isVerification = reservation.statut === 'preuve_recue' && step === 'preuve_recue';
                 return (
-                  <div key={step.id} className="flex flex-col items-center w-1/4">
+                  <div key={step} className="flex flex-col items-center w-1/4">
                     <div className={`h-6 w-6 rounded-full flex items-center justify-center mb-1 transition-colors
                                     ${isActive ? 'ring-4 ring-opacity-30' : ''} ${isVerification ? 'animate-pulse' : ''}`}
                          style={{ backgroundColor: isActive ? primaryColor : '#e5e7eb',
@@ -325,7 +322,11 @@ const ReservationDetailsPage: React.FC = () => {
                                   border: isCurrent ? `2px solid ${safeTextColor(primaryColor)}` : 'none' }}>
                       {isActive ? <CheckCircle className="h-3 w-3" /> : <div className="h-2 w-2 rounded-full bg-gray-400" />}
                     </div>
-                    <span className={`text-xs text-center ${isActive ? 'font-medium text-gray-900' : 'text-gray-500'}`}>{step.label}</span>
+                    <span className={`text-xs text-center ${isActive ? 'font-medium text-gray-900' : 'text-gray-500'}`}>
+                      {step === 'en_attente' ? 'Enregistrée' :
+                       step === 'paiement_en_cours' ? 'Paiement' :
+                       step === 'preuve_recue' ? 'Vérification' : 'Confirmée'}
+                    </span>
                   </div>
                 );
               })}
@@ -333,16 +334,34 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
+        {/* Bandeau statut + références */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-                    className={`${STATUS_DISPLAY[reservation.statut]?.bgColor} p-4 rounded-xl flex items-start gap-3`}>
-          <div className={`p-2 rounded-lg ${STATUS_DISPLAY[reservation.statut]?.color} bg-white/80 flex-shrink-0`}>
-            {STATUS_DISPLAY[reservation.statut]?.icon}
+                    className={`${reservation.statut === 'payé' ? 'bg-emerald-50/80' :
+                                reservation.statut === 'preuve_recue' ? 'bg-violet-50/80' :
+                                reservation.statut === 'paiement_en_cours' ? 'bg-blue-50/80' :
+                                reservation.statut === 'en_attente' ? 'bg-amber-50/80' : 'bg-red-50/80'} p-4 rounded-xl flex items-start gap-3`}>
+          <div className={`p-2 rounded-lg bg-white/80 flex-shrink-0
+                           ${reservation.statut === 'payé' ? 'text-emerald-600' :
+                              reservation.statut === 'preuve_recue' ? 'text-violet-600' :
+                              reservation.statut === 'paiement_en_cours' ? 'text-blue-600' :
+                              reservation.statut === 'en_attente' ? 'text-amber-600' : 'text-red-600'}`}>
+            {reservation.statut === 'payé' ? <CheckCircle className="h-4 w-4" /> :
+             reservation.statut === 'annule' ? <XCircle className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           </div>
           <div>
             <p className="font-medium text-sm mb-1">
-              {STATUS_DISPLAY[reservation.statut]?.text}
+              {reservation.statut === 'payé' ? 'Confirmé' :
+               reservation.statut === 'annule' ? 'Annulé' :
+               reservation.statut === 'preuve_recue' ? 'Vérification' :
+               reservation.statut === 'paiement_en_cours' ? 'Paiement en cours' : 'En attente'}
             </p>
-            <p className="text-xs text-gray-600">{STATUS_DISPLAY[reservation.statut]?.description}</p>
+            <p className="text-xs text-gray-600">
+              {reservation.statut === 'payé' ? '🎉 Votre réservation a été confirmée avec succès !' :
+               reservation.statut === 'annule' ? 'Cette réservation a été annulée.' :
+               reservation.statut === 'preuve_recue' ? 'Preuve reçue — confirmation en cours.' :
+               reservation.statut === 'paiement_en_cours' ? 'Votre paiement est en cours de vérification.' :
+               'Votre réservation est en attente de traitement.'}
+            </p>
 
             {reservation.referenceCode && (
               <p className="mt-2 text-xs text-gray-700 flex items-center gap-1">
@@ -357,6 +376,7 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
+        {/* Détails voyage */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
                     className="bg-white rounded-xl shadow-xs border overflow-hidden">
           <div className="p-4 border-b">

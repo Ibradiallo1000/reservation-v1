@@ -1,4 +1,3 @@
-// src/pages/ReservationClientPage.tsx
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -13,17 +12,25 @@ import { db, storage } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
 
-// ============== Anti-spam / réservation en cours ==============
-const PENDING_KEY = 'pendingReservation'; // localStorage
+/* ============== Anti-spam: mémoire locale ============== */
+const PENDING_KEY = 'pendingReservation';
 const isBlockingStatus = (s?: string) =>
   ['en_attente', 'en_attente_paiement', 'paiement_en_cours', 'preuve_recue'].includes(String(s || '').toLowerCase());
 const rememberPending = (payload: { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; }) => {
-  localStorage.setItem(PENDING_KEY, JSON.stringify(payload));
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(payload)); } catch {}
 };
 const readPending = (): { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; } | null => {
   try { const r = localStorage.getItem(PENDING_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
 };
-// ===============================================================
+const clearPendingIfNotBlocking = () => {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (!isBlockingStatus(p?.status)) localStorage.removeItem(PENDING_KEY);
+  } catch {}
+};
+/* ======================================================= */
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -76,14 +83,18 @@ export default function ReservationClientPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // ========== Redirection immédiate si une réservation bloquante existe ==========
+  /* ========== Garde-fou au montage ========== */
   useEffect(() => {
+    // si la mémoire existe mais n'est plus bloquante, on nettoie
+    clearPendingIfNotBlocking();
+
+    // redirection si réservation bloquante du même slug
     const p = readPending();
     if (p && isBlockingStatus(p.status) && p.slug === slug) {
       navigate(`/${slug}/reservation/${p.id}`, { replace: true, state: { companyId: p.companyId, agencyId: p.agencyId } });
     }
   }, [slug, navigate]);
-  // ==============================================================================
+  /* =========================================== */
 
   useEffect(() => {
     try {
@@ -216,7 +227,6 @@ export default function ReservationClientPage() {
 
   const selectedTrip: any = filteredTrips.find((t:any)=> t.time===selectedTime);
   const topPrice = (selectedTrip?.price ?? (filteredTrips[0] as any)?.price);
-  const cityFrom = formatCity(departureQ), cityTo = formatCity(arrivalQ);
   const priceText = topPrice ? `${topPrice.toLocaleString('fr-FR')} FCFA` : '—';
 
   const seatColor = (remaining:number, total:number) => {
@@ -236,7 +246,7 @@ export default function ReservationClientPage() {
   };
 
   const createReservationDraft = useCallback(async () => {
-    // 🛑 Anti-spam : si une réservation bloquante existe, rediriger et empêcher la création
+    // 🛑 Anti-spam : rediriger si une réservation bloquante du même slug existe
     const pending = readPending();
     if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
       navigate(`/${slug}/reservation/${pending.id}`, { replace: true, state: { companyId: pending.companyId, agencyId: pending.agencyId } });
