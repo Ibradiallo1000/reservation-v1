@@ -1,3 +1,4 @@
+// src/pages/HomePage.tsx
 import React from "react";
 import Header from "@/components/home/Header";
 import HeroSection from "@/components/home/HeroSection";
@@ -6,7 +7,7 @@ import FeaturesSection from "@/components/home/FeaturesSection";
 import TestimonialsSection from "@/components/home/TestimonialsSection";
 import CTASection from "@/components/home/CTASection";
 import Footer from "@/components/home/Footer";
-import ResumeLastReservation from "@/components/ResumeLastReservation";
+import MyBookingsCTA from "@/components/common/MyBookingsCTA"; // ⬅️ nouveau
 
 const HomePage: React.FC = () => {
   return (
@@ -15,9 +16,9 @@ const HomePage: React.FC = () => {
       <main className="flex-grow">
         <HeroSection />
 
-        {/* 🔶 Retrouver ma réservation (global) */}
+        {/* 🔶 Bouton “Voir mes réservations” (plateforme) */}
         <section className="py-6 px-4 max-w-5xl mx-auto">
-          <ResumeLastReservation />
+          <MyBookingsCTA />
         </section>
 
         <section className="py-8 md:py-10"><PartnersSection /></section>
@@ -31,4 +32,5 @@ const HomePage: React.FC = () => {
     </div>
   );
 };
+
 export default HomePage;

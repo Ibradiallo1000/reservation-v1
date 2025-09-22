@@ -1,8 +1,7 @@
+// src/pages/PublicCompanyPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import {
-  collection, getDocs, query, where, limit,
-} from "firebase/firestore";
+import { collection, getDocs, query, where, limit } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
@@ -37,7 +36,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   const { t } = useTranslation();
 
   const cached = getCompanyFromCache(slug);
-  const [company, setCompany] = useState<Company | undefined>(propCompany || cached);
+  const [company, setCompany] = useState<Company | undefined>(
+    propCompany || cached
+  );
 
   const { colors, classes, config } = useCompanyTheme(company);
   const [agences, setAgences] = useState<Agence[]>([]);
@@ -66,9 +67,14 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     if (company || !slug) return;
     (async () => {
       try {
-        const q = query(collection(db, "companies"), where("slug", "==", slug), limit(1));
+        const q = query(
+          collection(db, "companies"),
+          where("slug", "==", slug),
+          limit(1)
+        );
         const snap = await getDocs(q);
-        if (!snap.empty) setCompany({ id: snap.docs[0].id, ...(snap.docs[0].data() as any) });
+        if (!snap.empty)
+          setCompany({ id: snap.docs[0].id, ...(snap.docs[0].data() as any) });
         else setError("notFound");
       } catch (e) {
         console.warn("PublicCompanyPage ► fetch company by slug", e);
@@ -87,12 +93,26 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     const fetchSuggestions = async () => {
       if (!company?.id) return;
       try {
-        const agencesSnap = await getDocs(collection(db, "companies", company.id, "agences"));
-        const ags = agencesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+        const agencesSnap = await getDocs(
+          collection(db, "companies", company.id, "agences")
+        );
+        const ags = agencesSnap.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as any[];
 
         const uniqueMap = new Map<string, TripSuggestion>();
         for (const agence of ags) {
-          const weekly = await getDocs(collection(db, "companies", company.id, "agences", agence.id, "weeklyTrips"));
+          const weekly = await getDocs(
+            collection(
+              db,
+              "companies",
+              company.id,
+              "agences",
+              agence.id,
+              "weeklyTrips"
+            )
+          );
           for (const d of weekly.docs) {
             const trip: any = d.data();
             const departure = trip.depart || trip.departure;
@@ -105,7 +125,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
                 departure,
                 arrival,
                 price,
-                frequency: trip.days?.length > 0 ? `${trip.days.length} jours / semaine` : "Départs réguliers",
+                frequency:
+                  trip.days?.length > 0
+                    ? `${trip.days.length} jours / semaine`
+                    : "Départs réguliers",
                 imageUrl: undefined,
               });
             }
@@ -123,8 +146,12 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     const fetchAgences = async () => {
       if (!company?.id) return;
       try {
-        const agSnap = await getDocs(collection(db, "companies", company.id, "agences"));
-        setAgences(agSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Agence)));
+        const agSnap = await getDocs(
+          collection(db, "companies", company.id, "agences")
+        );
+        setAgences(
+          agSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Agence))
+        );
       } catch (e) {
         console.warn("PublicCompanyPage ► agences", e);
         setError(t("loadingError"));
@@ -153,7 +180,11 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   }
 
   if (!company) {
-    return <div className="min-h-screen bg-white"><div className="h-14 border-b" /></div>;
+    return (
+      <div className="min-h-screen bg-white">
+        <div className="h-14 border-b" />
+      </div>
+    );
   }
 
   if (!allowPublic) {
@@ -185,21 +216,38 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
             <HeroSection
               company={company}
               onSearch={(departure, arrival) => {
-                navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
+                navigate(
+                  `/${slug}/booking?departure=${encodeURIComponent(
+                    departure
+                  )}&arrival=${encodeURIComponent(arrival)}`
+                );
               }}
               isMobile={isMobile}
             />
 
             {/* 🔶 Retrouver ma réservation (spécifique à cette compagnie) */}
-            <div className="px-4 pt-4 max-w-5xl mx-auto">
-              <ResumeLastReservation onlyForSlug={slug} />
-            </div>
+            <section
+              aria-label="Retrouver ma réservation pour cette compagnie"
+              className="max-w-5xl mx-auto px-4 sm:px-6"
+            >
+              <div className="pt-4 sm:pt-6">
+                <ResumeLastReservation
+                  onlyForSlug={slug}
+                  primaryColor={colors.primary}
+                  secondaryColor={colors.secondary}
+                />
+              </div>
+            </section>
 
             <VilleSuggestionBar
               suggestions={suggestedTrips}
               company={company}
               onSelect={(departure: string, arrival: string) => {
-                navigate(`/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`);
+                navigate(
+                  `/${slug}/booking?departure=${encodeURIComponent(
+                    departure
+                  )}&arrival=${encodeURIComponent(arrival)}`
+                );
               }}
             />
           </>
@@ -234,7 +282,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         {showLangPopup && (
           <LanguageSuggestionPopup
             onSelectLanguage={(lang: string | undefined) => {
-              import("@/i18n").then(({ default: i18n }) => i18n.changeLanguage(lang));
+              import("@/i18n").then(({ default: i18n }) =>
+                i18n.changeLanguage(lang)
+              );
               setShowLangPopup(false);
             }}
             delayMs={8000}
