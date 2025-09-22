@@ -31,6 +31,7 @@ const ListeVillesPage = lazy(() => import("./pages/ListeVillesPage"));
 
 /* ---------- Réservation ---------- */
 const ReservationClientPage = lazy(() => import("./pages/ReservationClientPage"));
+const ClientMesReservationsPage = lazy(() => import("./pages/ClientMesReservationsPage"));
 
 /* ---------- Admin ---------- */
 const AdminSidebarLayout = lazy(() => import("./pages/AdminSidebarLayout"));
@@ -178,7 +179,7 @@ const AppRoutes = () => {
           <Route path="media" element={<MediaPage />} />
         </Route>
 
-        {/* COMPAGNIE */}
+        {/* COMPAGNIE (privé) */}
         <Route
           path="/compagnie"
           element={
@@ -199,9 +200,10 @@ const AppRoutes = () => {
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />
           <Route path="compagnies/:companyId" element={<AdminCompanyDetail />} />
+          {/* ❌ plus de route privée “/compagnie/:slug/mes-reservations” */}
         </Route>
 
-        {/* SHELL D’AGENCE */}
+        {/* SHELL D’AGENCE (privé) */}
         <Route
           path="/agence"
           element={
@@ -223,7 +225,7 @@ const AppRoutes = () => {
           <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
         </Route>
 
-        {/* HORS SHELL */}
+        {/* HORS SHELL (privé) */}
         <Route
           path="/agence/guichet"
           element={
@@ -241,7 +243,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* VALIDATIONS */}
+        {/* VALIDATIONS (privé) */}
         <Route
           path="/compta/validations"
           element={
@@ -273,9 +275,12 @@ const AppRoutes = () => {
         {/* DYNAMIQUES PUBLIQUES */}
         <Route path="/:slug/reserver" element={<ReservationClientPage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
-        {/* ✅ lien court basé sur un token public */}
+        {/* lien court basé sur un token public */}
         <Route path="/:slug/mon-billet" element={<ReservationDetailsPage />} />
         <Route path="/:slug/upload-preuve/:id" element={<LegacyUploadRedirect />} />
+        {/* ✅ Mes réservations publiques (plateforme & vitrine compagnie) */}
+        <Route path="/mes-reservations" element={<ClientMesReservationsPage />} />
+        <Route path="/:slug/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/:slug/*" element={<RouteResolver />} />
 
         {/* 404 */}

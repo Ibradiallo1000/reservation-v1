@@ -1,6 +1,6 @@
 // src/components/home/Header.tsx
 import React, { useEffect, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { Menu, X, Ticket, LogIn } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -31,7 +31,6 @@ const Header: React.FC = () => {
           l.href = url;
           l.setAttribute("fetchpriority", "high");
           document.head.appendChild(l);
-          // nettoyage plus tard
           setTimeout(() => { try { document.head.removeChild(l); } catch {} }, 4000);
         }
       } catch {
@@ -41,15 +40,17 @@ const Header: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
+  const goHome = () => navigate("/");
+  const goMyBookings = () => { setMenuOpen(false); navigate("/mes-reservations"); };
+  const goLogin = () => { setMenuOpen(false); navigate("/login"); };
+
   return (
     <header className="bg-white/90 backdrop-blur-md shadow-sm sticky top-0 z-50 border-b border-gray-200">
       <div className="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-        <button onClick={() => navigate("/")} className="flex items-center gap-2">
+        <button onClick={goHome} className="flex items-center gap-2" aria-label="Accueil Teliya">
           {/* pastille ronde, anneau blanc fin, sans flash */}
           <div className="h-9 w-9 rounded-full bg-white ring-2 ring-white border border-orange-500/20 overflow-hidden grid place-items-center">
-            {!logoLoaded && (
-              <div className="w-4.5 h-4.5 rounded-full bg-gray-200 animate-pulse" />
-            )}
+            {!logoLoaded && <div className="w-4.5 h-4.5 rounded-full bg-gray-200 animate-pulse" />}
             {logoUrl ? (
               <img
                 src={logoUrl}
@@ -78,22 +79,54 @@ const Header: React.FC = () => {
           </span>
         </button>
 
-        <nav className="hidden md:flex items-center gap-6">
-          <button onClick={() => navigate("/resultats")} className="text-gray-700 hover:text-orange-600">Trajets</button>
-          <button onClick={() => navigate("/destinations")} className="text-gray-700 hover:text-orange-600">Destinations</button>
-          <button onClick={() => navigate("/login")} className="bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700">Connexion</button>
+        {/* --- Desktop actions --- */}
+        <nav className="hidden md:flex items-center gap-3">
+          <button
+            onClick={goMyBookings}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50"
+            title="Retrouver mes réservations"
+          >
+            <Ticket className="w-4 h-4 text-orange-600" />
+            Mes réservations
+          </button>
+          <button
+            onClick={goLogin}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white bg-orange-600 hover:bg-orange-700"
+            title="Se connecter"
+          >
+            <LogIn className="w-4 h-4" />
+            Connexion
+          </button>
         </nav>
 
-        <button className="md:hidden text-gray-700" onClick={() => setMenuOpen(v => !v)}>
-          {menuOpen ? <X className="h-6 w-6"/> : <Menu className="h-6 w-6"/>}
+        {/* --- Mobile toggle --- */}
+        <button
+          className="md:hidden inline-flex items-center justify-center p-2 rounded-lg hover:bg-gray-100 text-gray-700"
+          onClick={() => setMenuOpen(v => !v)}
+          aria-label="Ouvrir le menu"
+        >
+          {menuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
         </button>
       </div>
 
+      {/* --- Mobile menu --- */}
       {menuOpen && (
         <div className="md:hidden bg-white border-t border-gray-200 px-4 py-3 space-y-3">
-          <button onClick={() => { navigate("/resultats"); setMenuOpen(false); }} className="block w-full text-left hover:text-orange-600">Trajets</button>
-          <button onClick={() => { navigate("/destinations"); setMenuOpen(false); }} className="block w-full text-left hover:text-orange-600">Destinations</button>
-          <button onClick={() => { navigate("/login"); setMenuOpen(false); }} className="block w-full text-left bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700">Connexion</button>
+          <button
+            onClick={goMyBookings}
+            className="w-full inline-flex items-center gap-2 px-3 py-3 rounded-lg border border-gray-300 hover:bg-gray-50 text-left"
+          >
+            <Ticket className="w-4 h-4 text-orange-600" />
+            <span className="font-medium">Mes réservations</span>
+          </button>
+
+          <button
+            onClick={goLogin}
+            className="w-full inline-flex items-center gap-2 px-3 py-3 rounded-lg bg-orange-600 text-white hover:bg-orange-700 text-left"
+          >
+            <LogIn className="w-4 h-4" />
+            <span className="font-medium">Connexion</span>
+          </button>
         </div>
       )}
     </header>
