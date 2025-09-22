@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { collection, collectionGroup, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
-import { Bus, Search, ArrowLeft } from 'lucide-react';
+import { Bus, Search, ArrowLeft, ArrowRight } from 'lucide-react';
 
 interface SearchCriteria { departure: string; arrival: string; }
 
@@ -168,23 +168,35 @@ const PlatformSearchResultsPage: React.FC = () => {
         </div>
       </header>
 
-      {/* Route + search */}
-      <div className="max-w-5xl mx-auto px-4 mt-6 flex justify-between items-center">
-        <div className="flex items-center gap-2 text-lg font-semibold text-gray-800">
-          <img src="/icons/icon-192.png" alt="" className="w-5 h-5 object-contain rounded-full" />
-          <span>
-            {capitalize(criteres.departure)} → {capitalize(criteres.arrival)}
-          </span>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Filtrer par compagnie"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="pl-9 border border-gray-300 rounded-lg py-2 px-3 text-sm"
-          />
+      {/* Route + search — villes sur UNE SEULE LIGNE */}
+      <div className="max-w-5xl mx-auto px-4 mt-6">
+        <div className="flex flex-col gap-3">
+          {/* Villes en grille 1fr / auto / 1fr -> garantit une seule ligne */}
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-orange-50 border border-orange-200 font-semibold text-gray-900 truncate">
+              {capitalize(criteres.departure)}
+            </span>
+
+            <div className="flex items-center justify-center">
+              <ArrowRight className="h-4 w-4 text-gray-400" />
+            </div>
+
+            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 font-semibold text-gray-900 justify-self-end truncate">
+              {capitalize(criteres.arrival)}
+            </span>
+          </div>
+
+          {/* Filtre compagnie (en dessous sur mobile, aligné à droite ≥ sm) */}
+          <div className="relative w-full sm:w-[320px] sm:self-end">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Filtrer par compagnie"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="pl-9 border border-gray-300 rounded-lg py-2 px-3 text-sm w-full bg-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+            />
+          </div>
         </div>
       </div>
 
