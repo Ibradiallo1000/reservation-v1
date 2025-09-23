@@ -4,19 +4,36 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Teliya</title>
-    <meta name="theme-color" content="#f97316" />
+
+    <!-- Couleur barre d'état / onglet -->
+    <meta name="theme-color" content="#FF6600" />
+
+    <!-- PWA manifest -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- iOS (Safari) : installation manuelle + status bar -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Teliya" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-maskable-512.png" />
+
+    <!-- Perf : preconnect vers Firebase (si utilisé) -->
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://www.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://firebasestorage.googleapis.com" crossorigin />
 
     <!-- Ne précharge que le logo du splash (évite les warnings "preloaded but not used") -->
     <link rel="preload" as="image" href="/images/teliya-logo.jpg" fetchpriority="high" />
 
     <style>
       /* fond orange dès le 1er paint */
-      html,body { height:100%; margin:0; background:#f97316; }
-
+      html,body{height:100%;margin:0;background:#f97316;}
       #splash{
         position:fixed; inset:0; display:flex; flex-direction:column;
         align-items:center; justify-content:center; color:#fff; z-index:9999;
         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+        text-align:center; padding:16px;
       }
       #splash img{
         width:104px; height:104px; border-radius:50%;
@@ -25,11 +42,16 @@
       }
       #splash .caption{ opacity:.95; font-size:14px; letter-spacing:.2px; }
 
-      @keyframes zoomLoop {
+      @keyframes zoomLoop{
         0%{transform:scale(1);opacity:1}
         50%{transform:scale(1.15);opacity:.92}
         100%{transform:scale(1);opacity:1}
       }
+      /* Accessibilité : désactiver l'anim si reduced-motion */
+      @media (prefers-reduced-motion: reduce){
+        #splash img{ animation:none }
+      }
+
       #splash.leaving img{
         animation:none; transition:transform .42s ease,opacity .42s ease;
         transform:scale(1.35); opacity:0;
@@ -40,11 +62,61 @@
   </head>
   <body>
     <div id="splash" role="status" aria-live="polite">
-      <!-- ⚠️ Assure-toi que le fichier existe EXACTEMENT : public/images/teliya-logo.jpg -->
       <img src="/images/teliya-logo.jpg" alt="Teliya" />
+      <div class="caption">Chargement…</div>
+      <noscript style="margin-top:.5rem;display:block;opacity:.9">
+        Activez JavaScript pour utiliser l’application.
+      </noscript>
     </div>
 
     <div id="root"></div>
+
+    <!-- Enregistrement Service Worker + gestion splash -->
+    <script>
+      // Retire le splash quand React signale "prêt" OU après un timeout de secours.
+      (function(){
+        const root = document.getElementById('root');
+        const splash = document.getElementById('splash');
+
+        // Fallback au cas où l’événement custom n’arrive pas
+        const safety = setTimeout(() => leaveSplash(), 3500);
+
+        // Écoute un événement custom envoyé par React au 1er rendu stable
+        window.addEventListener('teliya:app-ready', () => {
+          clearTimeout(safety);
+          leaveSplash();
+        }, { once: true });
+
+        function leaveSplash(){
+          if (!splash) return;
+          splash.classList.add('leaving');
+          root && root.classList.add('ready');
+          splash.addEventListener('transitionend', () => splash.remove(), { once:true });
+          // Au cas où transitionend ne déclenche pas
+          setTimeout(() => splash.remove(), 600);
+        }
+      })();
+
+      // PWA : enregistrer le SW (si présent) sans bloquer le rendu
+      if ('serviceWorker' in navigator) {
+        // Important : le fichier sw doit être à la racine du scope (ex: /sw.js)
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => {
+              // Mise à jour rapide : skipWaiting + clients.claim côté sw.js
+              // console.log('SW registered', reg);
+            })
+            .catch(err => {
+              // console.warn('SW registration failed', err);
+            });
+        });
+      }
+
+      // Détection webview (WhatsApp/FB/Instagram) : utile pour afficher un tip "Ouvrir dans Chrome"
+      window.__isWebView = /(FBAN|FBAV|Instagram|Line|WhatsApp)/i.test(navigator.userAgent);
+    </script>
+
+    <!-- Entrée de l'app (Vite/React) : module = async par défaut -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
