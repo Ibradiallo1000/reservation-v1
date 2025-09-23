@@ -5,13 +5,18 @@ import App from "./App";
 import "./index.css";
 import "./i18n";
 
-const sleep = (ms:number) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 (async () => {
-  const rootEl = document.getElementById("root")!;
+  const rootEl = document.getElementById("root") as HTMLElement | null;
   const splash = document.getElementById("splash");
 
-  // Monte l'app TOUT DE SUITE (pendant que le splash reste visible)
+  if (!rootEl) {
+    console.error("❌ Impossible de trouver #root");
+    return;
+  }
+
+  // 1) Monte l'app immédiatement
   const root = ReactDOM.createRoot(rootEl);
   root.render(
     <React.StrictMode>
@@ -21,17 +26,42 @@ const sleep = (ms:number) => new Promise(r => setTimeout(r, ms));
     </React.StrictMode>
   );
 
-  // Laisse le splash au moins 1.0s, max 2.0s le temps que les chunks paresseux arrivent
-  const MIN = 1000, MAX = 2000;
-  await sleep(MIN);
+  // 2) Promesse "premier paint stable"
+  const firstPaint = new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
 
-  // Transition de sortie du splash (zoom-out du logo)
-  if (splash) {
-    splash.classList.add("leaving");
-    await sleep(430);
-    splash.remove();
+  // 3) Paramètres de timing
+  const MIN = 1000;  // ms d'expo minimale du splash
+  const MAX = 3000;  // ms plafond absolu
+
+  const start = performance.now();
+
+  // 3a) Attendre paint OU MAX
+  await Promise.race([firstPaint, sleep(MAX)]);
+
+  // 3b) Respecter MIN
+  const elapsed = performance.now() - start;
+  if (elapsed < MIN) {
+    await sleep(MIN - elapsed);
   }
 
-  // Révèle l'app
+  // 4) Signaler au HTML que l'app est prête
+  window.dispatchEvent(new Event("teliya:app-ready"));
+
+  // 5) Transition + sortie du splash
+  if (splash) {
+    try {
+      splash.classList.add("leaving");
+      await sleep(430); // durée anim CSS
+      splash.remove();
+    } catch (err) {
+      console.warn("⚠️ Erreur lors de la suppression du splash:", err);
+    }
+  }
+
+  // 6) Révéler l'app
   rootEl.classList.add("ready");
 })();
