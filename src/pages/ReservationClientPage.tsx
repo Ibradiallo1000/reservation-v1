@@ -14,14 +14,24 @@ import { generateWebReferenceCode } from '@/utils/tickets';
 
 /* ============== Anti-spam: mémoire locale ============== */
 const PENDING_KEY = 'pendingReservation';
+// ⛔ NE CONSIDÈRE BLOQUANT QUE 'preuve_recue'
 const isBlockingStatus = (s?: string) =>
-  ['en_attente', 'en_attente_paiement', 'paiement_en_cours', 'preuve_recue'].includes(String(s || '').toLowerCase());
-const rememberPending = (payload: { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; }) => {
+  ['preuve_recue'].includes(String(s || '').toLowerCase());
+
+const rememberPending = (payload: {
+  slug: string; id: string; referenceCode?: string; status: string;
+  companyId?: string; agencyId?: string;
+}) => {
   try { localStorage.setItem(PENDING_KEY, JSON.stringify(payload)); } catch {}
 };
-const readPending = (): { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; } | null => {
+
+const readPending = (): {
+  slug: string; id: string; referenceCode?: string; status: string;
+  companyId?: string; agencyId?: string;
+} | null => {
   try { const r = localStorage.getItem(PENDING_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
 };
+
 const clearPendingIfNotBlocking = () => {
   try {
     const raw = localStorage.getItem(PENDING_KEY);
@@ -85,13 +95,14 @@ export default function ReservationClientPage() {
 
   /* ========== Garde-fou au montage ========== */
   useEffect(() => {
-    // si la mémoire existe mais n'est plus bloquante, on nettoie
     clearPendingIfNotBlocking();
-
-    // redirection si réservation bloquante du même slug
     const p = readPending();
-    if (p && isBlockingStatus(p.status) && p.slug === slug) {
-      navigate(`/${slug}/reservation/${p.id}`, { replace: true, state: { companyId: p.companyId, agencyId: p.agencyId } });
+    // 👉 Rediriger UNIQUEMENT si la dernière étape mémorisée est "preuve_recue"
+    if (p && p.slug === slug && p.status === 'preuve_recue') {
+      navigate(`/${slug}/reservation/${p.id}`, {
+        replace: true,
+        state: { companyId: p.companyId, agencyId: p.agencyId }
+      });
     }
   }, [slug, navigate]);
   /* =========================================== */
@@ -246,7 +257,6 @@ export default function ReservationClientPage() {
   };
 
   const createReservationDraft = useCallback(async () => {
-    // 🛑 Anti-spam : rediriger si une réservation bloquante du même slug existe
     const pending = readPending();
     if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
       navigate(`/${slug}/reservation/${pending.id}`, { replace: true, state: { companyId: pending.companyId, agencyId: pending.agencyId } });
@@ -309,7 +319,6 @@ export default function ReservationClientPage() {
         reservation
       );
 
-      // ✅ token public + URL partage
       const token = randomToken();
       const publicUrl = `${window.location.origin}/${slug}/mon-billet?r=${encodeURIComponent(token)}`;
       await updateDoc(
@@ -320,7 +329,6 @@ export default function ReservationClientPage() {
 
       setReservationId(refDoc.id);
 
-      // 🧠 mémoriser comme “bloquante”
       rememberPending({
         slug: slug!,
         id: refDoc.id,
@@ -353,9 +361,39 @@ export default function ReservationClientPage() {
     }
   };
 
+  /* ====== Instructions + validation ====== */
+  const paymentHints = useMemo(() => {
+    if (!paymentMethodKey) return "Choisissez un moyen de paiement pour voir les instructions.";
+    switch (paymentMethodKey) {
+      case "orangemoney":
+        return "Après votre paiement Orange Money, copiez le code reçu par SMS ou joignez une capture d’écran du message.";
+      case "moov":
+        return "Après votre paiement Moov Money, indiquez la référence reçue par SMS ou joignez une photo du reçu.";
+      case "wave":
+        return "Après votre paiement Wave, copiez le code du reçu ou joignez une capture.";
+      case "cash":
+        return "Paiement au guichet : entrez le n° du reçu ou joignez sa photo.";
+      default:
+        return "Copiez la référence reçue par SMS après paiement ou joignez une capture d’écran.";
+    }
+  }, [paymentMethodKey]);
+
+  const canConfirm = useMemo(() => {
+    if (!reservationId) return false;
+    if (!paymentMethodKey) return false;
+    const hasRef  = message.trim().length >= 4;
+    const hasFile = !!file;
+    return hasRef || hasFile;
+  }, [reservationId, paymentMethodKey, message, file]);
+  /* ======================================== */
+
   const submitProofInline = async () => {
     if (!reservationId || !company.id || !agencyInfo?.id) { setError('Réservation introuvable'); return; }
     if (!paymentMethodKey) { setError('Sélectionnez un moyen de paiement'); return; }
+    if (!canConfirm) {
+      setError("Ajoutez la référence du paiement (≥ 4 caractères) ou une capture avant de confirmer.");
+      return;
+    }
     if (uploading) return;
 
     setUploading(true); setError('');
@@ -373,7 +411,6 @@ export default function ReservationClientPage() {
         updatedAt: new Date(),
       });
 
-      // 🧠 garder comme bloquante mais maj du statut
       const p = readPending();
       if (p && p.id === reservationId) {
         rememberPending({ ...p, status: 'preuve_recue' });
@@ -406,8 +443,7 @@ export default function ReservationClientPage() {
         <div className="text-right">
           <div className="text-xs text-gray-500">À partir de</div>
           <div className="text-lg sm:text-xl font-extrabold" style={{ color: theme.primary }}>
-            { (selectedTrip?.price ?? (filteredTrips[0] as any)?.price)
-              ? `${(selectedTrip?.price ?? (filteredTrips[0] as any)?.price).toLocaleString('fr-FR')} FCFA` : '—'}
+            { priceText }
           </div>
         </div>
       </div>
@@ -470,7 +506,6 @@ export default function ReservationClientPage() {
     </button>
   );
 
-  // ---------- skeleton ----------
   if (loading || !company.id || dates.length===0) {
     return (
       <div className="min-h-screen grid place-items-center bg-gray-50">
@@ -515,7 +550,7 @@ export default function ReservationClientPage() {
 
         {/* dates */}
         <section className="bg-white rounded-2xl border border-gray-100 p-4">
-          <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre date</h2>
+          <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre date de départ</h2>
           <div className="flex gap-2 overflow-x-auto scrollbar-none">
             {dates.map(d=> <DateChip key={d} d={d} />)}
           </div>
@@ -524,7 +559,7 @@ export default function ReservationClientPage() {
         {/* heures */}
         {!!filteredTrips.length && (
           <section className="bg-white rounded-2xl border border-gray-100 p-4">
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre heure</h2>
+            <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre heure de départ</h2>
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
               {filteredTrips.map((t:any)=> <TimeBtn key={t.id} t={t} />)}
             </div>
@@ -581,7 +616,7 @@ export default function ReservationClientPage() {
             </section>
 
             <section className="bg-white rounded-2xl border border-gray-100 p-4">
-              <h2 className="text-sm font-semibold text-gray-900 mb-3">Paiement & preuve</h2>
+              <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez le moyen de paiement</h2>
 
               {/* CTA pour créer le draft */}
               {!reservationId ? (
@@ -603,9 +638,15 @@ export default function ReservationClientPage() {
                     {Object.entries(paymentMethods).map(([k,m])=> m && <PaymentPill key={k} k={k} m={m} />)}
                   </div>
 
+                  {/* instructions + titre */}
+                  <div className="mt-4">
+                    <h2 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h2>
+                    <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
+                  </div>
+
                   {/* code USSD réduit */}
                   {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && (
-                    <div className="mt-3 text-xs text-gray-600">
+                    <div className="mt-1 text-xs text-gray-600">
                       Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
                         {paymentMethods[paymentMethodKey]!.ussdPattern!
                           .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
@@ -614,12 +655,12 @@ export default function ReservationClientPage() {
                     </div>
                   )}
 
-                  {/* preuve compacte */}
-                  <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                  {/* preuve : saisie + upload */}
+                  <div className="mt-3 grid sm:grid-cols-2 gap-3">
                     <textarea
                       rows={3}
                       className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
-                      placeholder="Détails du paiement (ID, référence, n° transfert, etc.) — optionnel"
+                      placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
                       value={message}
                       onChange={e=> setMessage(e.target.value)}
                     />
@@ -637,11 +678,18 @@ export default function ReservationClientPage() {
                     </label>
                   </div>
 
-                  <div className="mt-3 flex justify-end">
+                  {/* bouton confirmé */}
+                  <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="text-xs text-amber-600">
+                      {!canConfirm && paymentMethodKey && (
+                        <span>Entrez une référence (≥ 4 caractères) <em>ou</em> joignez une capture.</span>
+                      )}
+                    </div>
                     <button
                       onClick={submitProofInline}
-                      disabled={uploading || !paymentMethodKey}
-                      className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
+                      disabled={uploading || !canConfirm}
+                      title={!canConfirm ? "Ajoutez la référence ou une capture" : ""}
+                      className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
                       style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
                     >
                       {uploading ? 'Envoi…' : 'Confirmer l’envoi'}
@@ -653,39 +701,6 @@ export default function ReservationClientPage() {
           </>
         )}
       </main>
-
-      {/* footer total */}
-      {selectedTrip && (
-        <div className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur border-t border-gray-200">
-          <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-2 flex items-center justify-between">
-            <div className="text-sm text-gray-600">
-              Total {seats} place{seats>1?'s':''} — <span className="font-semibold" style={{ color: theme.primary }}>
-                {(selectedTrip.price * seats).toLocaleString('fr-FR')} FCFA
-              </span>
-            </div>
-
-            {!reservationId ? (
-              <button
-                onClick={createReservationDraft}
-                disabled={creating || !passenger.fullName || !passenger.phone || !selectedTime}
-                className="h-10 px-4 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
-                style={{ background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, color: '#fff' }}
-              >
-                {creating ? 'Traitement…' : 'Réserver & Payer'}
-              </button>
-            ) : (
-              <button
-                onClick={submitProofInline}
-                disabled={uploading || !paymentMethodKey}
-                className="h-10 px-4 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
-                style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
-              >
-                {uploading ? 'Envoi…' : 'Confirmer l’envoi'}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

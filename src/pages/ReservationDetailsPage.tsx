@@ -54,10 +54,14 @@ interface CompanyInfo {
   secondaryColor?: string;
 }
 
-/* ====== Anti-spam memory (commun avec la page de réservation) ====== */
+/* ====== Mémoire locale (alignée avec la page de réservation) ====== */
 const PENDING_KEY = 'pendingReservation';
+const STEP_KEY = (slug?: string) => `mb:lastStep:${slug || ''}`;
+
+// ⚠️ Désormais, SEULES ces étapes sont "bloquantes"
 const isBlockingStatus = (s?: string) =>
-  ['en_attente', 'en_attente_paiement', 'paiement_en_cours', 'preuve_recue'].includes(String(s || '').toLowerCase());
+  ['preuve_recue', 'payé'].includes(String(s || '').toLowerCase());
+
 const readPending = () => {
   try { const raw = localStorage.getItem(PENDING_KEY); return raw ? JSON.parse(raw) : null; }
   catch { return null; }
@@ -139,6 +143,11 @@ const ReservationDetailsPage: React.FC = () => {
   const primaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
   const secondaryColor = companyInfo?.secondaryColor || '#e0f2fe';
   const textColor = safeTextColor(primaryColor);
+
+  // 💾 Mémoriser que l’utilisateur est sur l’étape "details"
+  useEffect(() => {
+    try { localStorage.setItem(STEP_KEY(slug), 'details'); } catch {}
+  }, [slug]);
 
   useEffect(() => {
     if ((!id && !token) || !slug) { setError('Paramètres manquants'); setLoading(false); return; }
@@ -264,7 +273,18 @@ const ReservationDetailsPage: React.FC = () => {
   }
 
   const realSlug = (location as any)?.state?.slug || reservation.companySlug;
-  const currentStepIndex = Math.max(0, ['en_attente','paiement_en_cours','preuve_recue','payé'].findIndex(s => s === reservation.statut));
+
+  /** --- Barre d'étapes à 3 niveaux --- */
+  const STEPS: Array<'paiement_en_cours' | 'preuve_recue' | 'payé'> = [
+    'paiement_en_cours',
+    'preuve_recue',
+    'payé'
+  ];
+  // si Firestore contient encore "en_attente", on l'assimile à "paiement_en_cours"
+  const normalizedStatus =
+    reservation.statut === 'en_attente' ? 'paiement_en_cours' : reservation.statut;
+  const currentStepIndex = Math.max(0, STEPS.indexOf(normalizedStatus as any));
+
   const isConfirmed = reservation.statut === 'payé';
   const paymentMethod = getPaymentMethod(reservation.canal);
   const lastUpdated = reservation.updatedAt && !isNaN(new Date(reservation.updatedAt).getTime())
@@ -296,7 +316,7 @@ const ReservationDetailsPage: React.FC = () => {
       </header>
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
-        {/* Barre d’étapes */}
+        {/* Barre d’étapes (3 étapes) */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
                     className="bg-white rounded-xl p-4 shadow-xs border">
           <div className="flex justify-between items-center mb-3">
@@ -306,26 +326,26 @@ const ReservationDetailsPage: React.FC = () => {
           <div className="relative">
             <div className="absolute top-3 left-0 right-0 h-1 bg-gray-200 rounded-full z-0">
               <div className="h-full rounded-full transition-all duration-500"
-                   style={{ width: `${(currentStepIndex + 1) * 25}%`, backgroundColor: primaryColor }} />
+                   style={{ width: `${((currentStepIndex + 1) / STEPS.length) * 100}%`, backgroundColor: primaryColor }} />
             </div>
             <div className="relative z-10 flex justify-between">
-              {['en_attente','paiement_en_cours','preuve_recue','payé'].map((step, idx) => {
+              {STEPS.map((step, idx) => {
                 const isActive = idx <= currentStepIndex;
-                const isCurrent = reservation.statut === step;
-                const isVerification = reservation.statut === 'preuve_recue' && step === 'preuve_recue';
+                const isCurrent = idx === currentStepIndex;
+                const label =
+                  step === 'paiement_en_cours' ? 'Paiement' :
+                  step === 'preuve_recue' ? 'Vérification' : 'Confirmée';
                 return (
-                  <div key={step} className="flex flex-col items-center w-1/4">
+                  <div key={step} className="flex flex-col items-center w-1/3">
                     <div className={`h-6 w-6 rounded-full flex items-center justify-center mb-1 transition-colors
-                                    ${isActive ? 'ring-4 ring-opacity-30' : ''} ${isVerification ? 'animate-pulse' : ''}`}
+                                    ${isActive ? 'ring-4 ring-opacity-30' : ''}`}
                          style={{ backgroundColor: isActive ? primaryColor : '#e5e7eb',
                                   color: isActive ? safeTextColor(primaryColor) : '#6b7280',
                                   border: isCurrent ? `2px solid ${safeTextColor(primaryColor)}` : 'none' }}>
                       {isActive ? <CheckCircle className="h-3 w-3" /> : <div className="h-2 w-2 rounded-full bg-gray-400" />}
                     </div>
                     <span className={`text-xs text-center ${isActive ? 'font-medium text-gray-900' : 'text-gray-500'}`}>
-                      {step === 'en_attente' ? 'Enregistrée' :
-                       step === 'paiement_en_cours' ? 'Paiement' :
-                       step === 'preuve_recue' ? 'Vérification' : 'Confirmée'}
+                      {label}
                     </span>
                   </div>
                 );
@@ -421,7 +441,7 @@ const ReservationDetailsPage: React.FC = () => {
                 <p className="text-xs text-gray-500 mb-1">Paiement</p>
                 <div className="flex justify-between items-center">
                   <p className="text-sm font-medium text-gray-900">{reservation.montant.toLocaleString('fr-FR')} FCFA</p>
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{paymentMethod.text}</span>
+                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{getPaymentMethod(reservation.canal).text}</span>
                 </div>
               </div>
             </div>
@@ -453,7 +473,7 @@ const ReservationDetailsPage: React.FC = () => {
         <div className="max-w-md mx-auto space-y-2">
           <button
             onClick={() => {
-              const slugToUse = realSlug || slug;
+              const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
               navigate(`/${slugToUse}/receipt/${reservation.id}`, {
                 state: { reservation: { ...reservation, agencyNom: agencyName }, companyInfo }
               });

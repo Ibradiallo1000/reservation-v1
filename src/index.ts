@@ -6,6 +6,9 @@ admin.initializeApp();
 
 const REGION = "europe-west1";
 
+/* =========================
+ * Types & constantes
+ * ========================= */
 type Role =
   | "admin_platforme"
   | "admin_compagnie"
@@ -24,6 +27,9 @@ const DISPOSABLE = new Set([
   "sharklasers.com","grr.la","maildrop.cc",
 ]);
 
+/* =========================
+ * Helpers généraux
+ * ========================= */
 function assertCompanyAdmin(ctx: functions.https.CallableContext, companyId: string) {
   if (!ctx.auth) throw new functions.https.HttpsError("unauthenticated", "Connexion requise.");
   const tk = ctx.auth.token as any;
@@ -49,9 +55,9 @@ const normalizeNameKey = (s: string) =>
   s.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
    .replace(/\s+/g, " ").trim().toLowerCase();
 
-/**
+/* =========================================================
  * 1) VALIDATION EMAIL (format + MX + domaines jetables)
- */
+ * =======================================================*/
 export const validateEmail = functions
   .region(REGION)
   .https.onCall(async (data, ctx) => {
@@ -71,10 +77,10 @@ export const validateEmail = functions
     return { ok: true };
   });
 
-/**
- * UTIL: Crée (ou rattache) un user Auth + profils Firestore + indexs, retourne uid + resetLink
+/* =========================================================
+ * UTIL: Crée (ou rattache) un user Auth + profils Firestore + indexs
  * - Idempotent: si l'e-mail existe déjà → réutilise le compte
- */
+ * =======================================================*/
 async function createUserEverywhere(args: {
   companyId: string;
   attachAgencyId: string | null;
@@ -119,39 +125,50 @@ async function createUserEverywhere(args: {
 
   // Firestore (merge pour idempotence)
   const batch = db.batch();
-  batch.set(db.doc(`users/${uid}`), {
-    uid,
-    name,
-    email,
-    phone: phone ?? null,
-    role,
-    companyId,
-    agencyId: attachAgencyId,
-    status: "pending_verification",
-    updatedAt: now(),
-    ...(createdNew ? { createdAt: now() } : {}),
-  }, { merge: true });
+  batch.set(
+    db.doc(`users/${uid}`),
+    {
+      uid,
+      name,
+      email,
+      phone: phone ?? null,
+      role,
+      companyId,
+      agencyId: attachAgencyId,
+      status: "pending_verification",
+      updatedAt: now(),
+      ...(createdNew ? { createdAt: now() } : {}),
+    },
+    { merge: true }
+  );
 
-  batch.set(companyRef.collection("personnel").doc(uid), {
-    uid,
-    name,
-    email,
-    role,
-    agencyId: attachAgencyId,
-    updatedAt: now(),
-    ...(createdNew ? { createdAt: now() } : {}),
-  }, { merge: true });
-
-  if (attachAgencyId) {
-    batch.set(companyRef.collection("agences").doc(attachAgencyId)
-      .collection("staff").doc(uid), {
+  batch.set(
+    companyRef.collection("personnel").doc(uid),
+    {
       uid,
       name,
       email,
       role,
+      agencyId: attachAgencyId,
       updatedAt: now(),
       ...(createdNew ? { createdAt: now() } : {}),
-    }, { merge: true });
+    },
+    { merge: true }
+  );
+
+  if (attachAgencyId) {
+    batch.set(
+      companyRef.collection("agences").doc(attachAgencyId).collection("staff").doc(uid),
+      {
+        uid,
+        name,
+        email,
+        role,
+        updatedAt: now(),
+        ...(createdNew ? { createdAt: now() } : {}),
+      },
+      { merge: true }
+    );
   }
   await batch.commit();
 
@@ -159,11 +176,9 @@ async function createUserEverywhere(args: {
   return { uid, resetLink, reusedExisting: !createdNew };
 }
 
-/**
+/* =========================================================
  * 2) CREATION AGENCE + CHEF (CASCADE, atomique côté serveur)
- *   input: { companyId, agency: {...}, manager: { name, email, phone, role? } }
- *   return: { agencyId, manager: { uid, resetLink, reusedExisting } }
- */
+ * =======================================================*/
 export const companyCreateAgencyCascade = functions
   .region(REGION)
   .runWith({ timeoutSeconds: 120, memory: "256MB" })
@@ -238,9 +253,9 @@ export const companyCreateAgencyCascade = functions
     }
   });
 
-/**
+/* =========================================================
  * 3) UPDATE AGENCE + MANAGER
- */
+ * =======================================================*/
 export const companyUpdateAgencyAndManager = functions
   .region(REGION)
   .https.onCall(async (data, ctx) => {
@@ -359,15 +374,9 @@ export const companyUpdateAgencyAndManager = functions
     return { ok: true, resetLink };
   });
 
-/**
+/* =========================================================
  * 4) SUPPRESSION EN CASCADE D'UNE AGENCE
- *   input: { companyId, agencyId, staffAction, transferToAgencyId?, allowDeleteUsers? }
- *   comportement:
- *     - detach  : retire staff de l'agence, agencyId=null dans users/personnel, claims agencyId=null
- *     - transfer: transfère staff vers transferToAgencyId (vérifiée), claims agencyId=cible
- *     - disable : désactive Auth user + detach
- *     - delete  : supprime (Auth + Firestore) si allowDeleteUsers === true
- */
+ * =======================================================*/
 export const companyDeleteAgencyCascade = functions
   .region(REGION)
   .runWith({ timeoutSeconds: 300, memory: "512MB" })
@@ -490,9 +499,9 @@ export const companyDeleteAgencyCascade = functions
     return result;
   });
 
-/**
+/* =========================================================
  * 5) RÉENVOI LIEN RESET
- */
+ * =======================================================*/
 export const resendPasswordLink = functions
   .region(REGION)
   .https.onCall(async (data, ctx) => {
@@ -503,4 +512,248 @@ export const resendPasswordLink = functions
     }
     const link = await admin.auth().generatePasswordResetLink(email);
     return { resetLink: link };
+  });
+
+/* =========================================================
+ * 6) LIMITES DE PLAN & QUOTAS RÉSERVATIONS
+ *    - createReservation (atomique + quotas mensuels)
+ *    - submitPaymentProof (mise à jour stricte)
+ *    - triggers de comptage agences/users (filets de sécurité)
+ * =======================================================*/
+type Channel = "online" | "guichet";
+
+type PlanLimits = {
+  maxAgences?: number | null;
+  maxUsers?: number | null;
+  monthlyReservationOnline?: number | null;
+  monthlyReservationGuichet?: number | null;
+};
+
+const monthKey = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+const numOrInfinity = (v?: number | null) =>
+  typeof v === "number" && v >= 0 ? v : Number.POSITIVE_INFINITY;
+
+/** Charge les limites de plan (inline ou via /plans/{planId}) */
+async function loadPlanLimits(companyId: string): Promise<PlanLimits> {
+  const db = admin.firestore();
+  const companySnap = await db.doc(`companies/${companyId}`).get();
+  if (!companySnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Compagnie introuvable.");
+  }
+  const comp = companySnap.data() || {};
+  const inline: any = comp.plan || {};
+  const hasInline =
+    inline &&
+    (inline.maxAgences != null ||
+      inline.maxUsers != null ||
+      inline.monthlyReservationOnline != null ||
+      inline.monthlyReservationGuichet != null);
+
+  if (hasInline) {
+    return {
+      maxAgences: inline.maxAgences ?? null,
+      maxUsers: inline.maxUsers ?? null,
+      monthlyReservationOnline: inline.monthlyReservationOnline ?? null,
+      monthlyReservationGuichet: inline.monthlyReservationGuichet ?? null,
+    };
+  }
+  const planId = (comp as any).planId || inline.planId;
+  if (planId) {
+    const planSnap = await db.doc(`plans/${planId}`).get();
+    if (planSnap.exists) {
+      const p: any = planSnap.data() || {};
+      return {
+        maxAgences: p.maxAgences ?? null,
+        maxUsers: p.maxUsers ?? null,
+        monthlyReservationOnline: p.monthlyReservationOnline ?? null,
+        monthlyReservationGuichet: p.monthlyReservationGuichet ?? null,
+      };
+    }
+  }
+  // Par défaut: pas de limites (Infinity). Adapte si tu veux un "Free" par défaut.
+  return { maxAgences: null, maxUsers: null, monthlyReservationOnline: null, monthlyReservationGuichet: null };
+}
+
+/** CREATE RESERVATION (quotas mensuels + transaction) */
+export const createReservation = functions
+  .region(REGION)
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onCall(async (data, ctx) => {
+    // Optionnel: exiger App Check: if (!ctx.app) throw new functions.https.HttpsError("failed-precondition","App Check requis.");
+    const { companyId, agencyId, channel, payload } = (data || {}) as {
+      companyId: string;
+      agencyId: string;
+      channel: Channel; // 'online' | 'guichet'
+      payload: Record<string, any>;
+    };
+    if (!companyId || !agencyId || !channel || !payload) {
+      throw new functions.https.HttpsError("invalid-argument", "Paramètres manquants.");
+    }
+
+    // Validation minimale
+    const required = ["nomClient", "telephone", "depart", "arrivee", "date", "heure", "montant"];
+    for (const f of required) {
+      if (payload[f] == null || `${payload[f]}`.trim() === "") {
+        throw new functions.https.HttpsError("invalid-argument", `Champ requis manquant: ${f}`);
+      }
+    }
+
+    const db = admin.firestore();
+    const limits = await loadPlanLimits(companyId);
+    const month = monthKey();
+    const usageRef = db.doc(`companies/${companyId}/usage/${month}`);
+    const companyRef = db.doc(`companies/${companyId}`);
+    const agencyRef = db.doc(`companies/${companyId}/agences/${agencyId}`);
+    const reservRef = db.collection(`companies/${companyId}/agences/${agencyId}/reservations`).doc();
+
+    const limitOnline = numOrInfinity(limits.monthlyReservationOnline);
+    const limitGuichet = numOrInfinity(limits.monthlyReservationGuichet);
+
+    const result = await db.runTransaction(async (tx) => {
+      const [compSnap, agSnap, usageSnap] = await Promise.all([
+        tx.get(companyRef),
+        tx.get(agencyRef),
+        tx.get(usageRef),
+      ]);
+      if (!compSnap.exists) throw new functions.https.HttpsError("not-found", "Compagnie introuvable.");
+      if (!agSnap.exists) throw new functions.https.HttpsError("not-found", "Agence introuvable.");
+
+      const usage = (usageSnap.exists ? usageSnap.data() : {}) as {
+        onlineReservations?: number;
+        guichetReservations?: number;
+      };
+      const usedOnline = usage.onlineReservations ?? 0;
+      const usedGuichet = usage.guichetReservations ?? 0;
+
+      if (channel === "online" && usedOnline + 1 > limitOnline) {
+        throw new functions.https.HttpsError(
+          "resource-exhausted",
+          "Limite mensuelle de réservations en ligne atteinte. Contactez l’admin plateforme pour upgrader le plan."
+        );
+      }
+      if (channel === "guichet" && usedGuichet + 1 > limitGuichet) {
+        throw new functions.https.HttpsError(
+          "resource-exhausted",
+          "Limite mensuelle de réservations guichet atteinte. Contactez l’admin plateforme pour upgrader le plan."
+        );
+      }
+
+      const nowTs = now();
+      const dataToWrite = {
+        ...payload,
+        id: reservRef.id,
+        companyId,
+        agencyId,
+        canal: channel === "online" ? "en_ligne" : "guichet",
+        statut: payload.statut ?? "en_attente",
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      };
+      tx.set(reservRef, dataToWrite);
+
+      const inc = admin.firestore.FieldValue.increment(1);
+      if (usageSnap.exists) {
+        tx.update(usageRef, {
+          ...(channel === "online" ? { onlineReservations: inc } : {}),
+          ...(channel === "guichet" ? { guichetReservations: inc } : {}),
+          updatedAt: nowTs,
+        });
+      } else {
+        tx.set(usageRef, {
+          month,
+          onlineReservations: usedOnline + (channel === "online" ? 1 : 0),
+          guichetReservations: usedGuichet + (channel === "guichet" ? 1 : 0),
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+      }
+
+      return { reservationId: reservRef.id };
+    });
+
+    return result; // { reservationId }
+  });
+
+/** SUBMIT PAYMENT PROOF (propre & centralisé) */
+export const submitPaymentProof = functions
+  .region(REGION)
+  .https.onCall(async (data, ctx) => {
+    const { companyId, agencyId, reservationId, preuveVia, preuveMessage, preuveFileUrl } = (data || {}) as {
+      companyId: string;
+      agencyId: string;
+      reservationId: string;
+      preuveVia?: string;
+      preuveMessage?: string;
+      preuveFileUrl?: string;
+    };
+    if (!companyId || !agencyId || !reservationId) {
+      throw new functions.https.HttpsError("invalid-argument", "Paramètres manquants.");
+    }
+
+    const db = admin.firestore();
+    const ref = db.doc(`companies/${companyId}/agences/${agencyId}/reservations/${reservationId}`);
+
+    await ref.update({
+      preuveVia: preuveVia ?? null,
+      preuveMessage: preuveMessage ?? null,
+      preuveFileUrl: preuveFileUrl ?? null,
+      statut: "preuve_reçue",
+      updatedAt: now(),
+    });
+    return { ok: true };
+  });
+
+/* =========================
+ * Triggers "filets de sécurité"
+ * ========================= */
+// Incrémente/décrémente counts.agences
+export const onAgencyCreated = functions.firestore
+  .document("companies/{companyId}/agences/{agencyId}")
+  .onCreate(async (snap, ctx) => {
+    const db = admin.firestore();
+    const ref = db.doc(`companies/${ctx.params.companyId}`);
+    await db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      const counts = (doc.data()?.counts ?? {}) as { agences?: number; users?: number };
+      tx.update(ref, { "counts.agences": (counts.agences ?? 0) + 1 });
+    });
+  });
+
+export const onAgencyDeleted = functions.firestore
+  .document("companies/{companyId}/agences/{agencyId}")
+  .onDelete(async (snap, ctx) => {
+    const db = admin.firestore();
+    const ref = db.doc(`companies/${ctx.params.companyId}`);
+    await db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      const counts = (doc.data()?.counts ?? {}) as { agences?: number; users?: number };
+      tx.update(ref, { "counts.agences": Math.max(0, (counts.agences ?? 0) - 1) });
+    });
+  });
+
+// Incrémente/décrémente counts.users sur companies/{companyId}/personnel
+export const onCompanyUserCreated = functions.firestore
+  .document("companies/{companyId}/personnel/{uid}")
+  .onCreate(async (snap, ctx) => {
+    const db = admin.firestore();
+    const ref = db.doc(`companies/${ctx.params.companyId}`);
+    await db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      const counts = (doc.data()?.counts ?? {}) as { agences?: number; users?: number };
+      tx.update(ref, { "counts.users": (counts.users ?? 0) + 1 });
+    });
+  });
+
+export const onCompanyUserDeleted = functions.firestore
+  .document("companies/{companyId}/personnel/{uid}")
+  .onDelete(async (snap, ctx) => {
+    const db = admin.firestore();
+    const ref = db.doc(`companies/${ctx.params.companyId}`);
+    await db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      const counts = (doc.data()?.counts ?? {}) as { agences?: number; users?: number };
+      tx.update(ref, { "counts.users": Math.max(0, (counts.users ?? 0) - 1) });
+    });
   });
