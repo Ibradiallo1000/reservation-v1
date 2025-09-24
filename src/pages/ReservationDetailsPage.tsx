@@ -292,33 +292,65 @@ const ReservationDetailsPage: React.FC = () => {
     : null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50/70 to-white pb-32">
+    <div
+      className="min-h-screen pb-32"
+      style={{ background: `linear-gradient(180deg, ${hexToRgba(primaryColor, 0.06)}, #ffffff)` }}
+    >
       <AnimatePresence>
         {showConfetti && <Confetti width={width} height={height} recycle={false} numberOfPieces={200}
                                    colors={[primaryColor, secondaryColor, '#ffffff']} />}
       </AnimatePresence>
 
-      <header className="sticky top-0 z-10 px-5 py-3 shadow-sm"
-              style={{ backgroundColor: hexToRgba(primaryColor, 0.98), color: safeTextColor(primaryColor) }}>
+      <header
+        className="sticky top-0 z-10 px-5 py-3 shadow-sm"
+        style={{
+          backgroundColor: hexToRgba(primaryColor, 0.98),
+          color: safeTextColor(primaryColor),
+          boxShadow: '0 1px 0 rgba(0,0,0,0.06)'
+        }}
+      >
         <div className="flex items-center justify-between max-w-md mx-auto">
           <button onClick={() => navigate(-1)} className="p-1.5 rounded-full hover:bg-white/10 transition-colors" aria-label="Retour">
             <ChevronLeft className="h-5 w-5" />
           </button>
           <h1 className="font-semibold text-base tracking-tight">Détails de réservation</h1>
           {companyInfo?.logoUrl
-            ? <LazyLoadImage src={companyInfo.logoUrl} alt="Logo" className="h-8 w-8 rounded-full object-cover border"
-                             style={{ borderColor: hexToRgba(safeTextColor(primaryColor), 0.2) }} effect="blur" />
-            : <div className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium border"
-                   style={{ backgroundColor: hexToRgba(safeTextColor(primaryColor), 0.1), borderColor: hexToRgba(safeTextColor(primaryColor), 0.2), color: safeTextColor(primaryColor) }}>
+            ? (
+              <LazyLoadImage
+                src={companyInfo.logoUrl}
+                alt="Logo"
+                className="h-8 w-8 rounded-full object-cover border"
+                style={{ borderColor: hexToRgba(safeTextColor(primaryColor), 0.18) }}
+                effect="blur"
+              />
+            )
+            : (
+              <div
+                className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium border"
+                style={{
+                  backgroundColor: hexToRgba(safeTextColor(primaryColor), 0.06),
+                  borderColor: hexToRgba(safeTextColor(primaryColor), 0.18),
+                  color: safeTextColor(primaryColor)
+                }}
+              >
                 {companyInfo?.name?.charAt(0) || 'C'}
-              </div>}
+              </div>
+            )}
         </div>
       </header>
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
         {/* Barre d’étapes (3 étapes) */}
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-                    className="bg-white rounded-xl p-4 shadow-xs border">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="rounded-xl p-4 border shadow-xs"
+          style={{
+            background: `linear-gradient(180deg, #ffffff, ${hexToRgba(primaryColor, 0.04)})`,
+            borderColor: hexToRgba(primaryColor, 0.12)
+          }}
+        >
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-sm font-semibold text-gray-800">Statut de votre réservation</h2>
             <span className="text-xs text-gray-500">{lastUpdated}</span>
@@ -355,16 +387,43 @@ const ReservationDetailsPage: React.FC = () => {
         </motion.div>
 
         {/* Bandeau statut + références */}
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-                    className={`${reservation.statut === 'payé' ? 'bg-emerald-50/80' :
-                                reservation.statut === 'preuve_recue' ? 'bg-violet-50/80' :
-                                reservation.statut === 'paiement_en_cours' ? 'bg-blue-50/80' :
-                                reservation.statut === 'en_attente' ? 'bg-amber-50/80' : 'bg-red-50/80'} p-4 rounded-xl flex items-start gap-3`}>
-          <div className={`p-2 rounded-lg bg-white/80 flex-shrink-0
-                           ${reservation.statut === 'payé' ? 'text-emerald-600' :
-                              reservation.statut === 'preuve_recue' ? 'text-violet-600' :
-                              reservation.statut === 'paiement_en_cours' ? 'text-blue-600' :
-                              reservation.statut === 'en_attente' ? 'text-amber-600' : 'text-red-600'}`}>
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="p-4 rounded-xl flex items-start gap-3 border"
+          style={{
+            background:
+              reservation.statut === 'payé'
+                ? hexToRgba('#10b981', 0.08)
+                : reservation.statut === 'preuve_recue'
+                ? hexToRgba('#7c3aed', 0.08)
+                : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente'
+                ? hexToRgba(primaryColor, 0.06)
+                : hexToRgba('#ef4444', 0.08),
+            borderColor:
+              reservation.statut === 'payé'
+                ? hexToRgba('#10b981', 0.20)
+                : reservation.statut === 'preuve_recue'
+                ? hexToRgba('#7c3aed', 0.20)
+                : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente'
+                ? hexToRgba(primaryColor, 0.18)
+                : hexToRgba('#ef4444', 0.20)
+          }}
+        >
+          <div
+            className="p-2 rounded-lg bg-white/80 flex-shrink-0"
+            style={{
+              color:
+                reservation.statut === 'payé'
+                  ? '#059669'
+                  : reservation.statut === 'preuve_recue'
+                  ? '#6d28d9'
+                  : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente'
+                  ? primaryColor
+                  : '#dc2626'
+            }}
+          >
             {reservation.statut === 'payé' ? <CheckCircle className="h-4 w-4" /> :
              reservation.statut === 'annule' ? <XCircle className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
           </div>
@@ -397,10 +456,18 @@ const ReservationDetailsPage: React.FC = () => {
         </motion.div>
 
         {/* Détails voyage */}
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-                    className="bg-white rounded-xl shadow-xs border overflow-hidden">
-          <div className="p-4 border-b">
-            <h2 className="font-semibold text-sm flex items-center gap-2">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="rounded-xl shadow-xs border overflow-hidden"
+          style={{
+            background: `linear-gradient(180deg, #ffffff, ${hexToRgba(primaryColor, 0.04)})`,
+            borderColor: hexToRgba(primaryColor, 0.12)
+          }}
+        >
+          <div className="p-4 border-b" style={{ borderColor: hexToRgba(primaryColor, 0.12) }}>
+            <h2 className="font-semibold text-sm flex items-center gap-2" style={{ color: '#111827' }}>
               <Ticket className="h-4 w-4" style={{ color: primaryColor }} />
               Détails du voyage
             </h2>
@@ -441,7 +508,7 @@ const ReservationDetailsPage: React.FC = () => {
                 <p className="text-xs text-gray-500 mb-1">Paiement</p>
                 <div className="flex justify-between items-center">
                   <p className="text-sm font-medium text-gray-900">{reservation.montant.toLocaleString('fr-FR')} FCFA</p>
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{getPaymentMethod(reservation.canal).text}</span>
+                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{paymentMethod.text}</span>
                 </div>
               </div>
             </div>
@@ -469,7 +536,10 @@ const ReservationDetailsPage: React.FC = () => {
         </motion.div>
       </main>
 
-      <div className="fixed bottom-0 left-0 w-full z-40 bg-white border-t border-gray-200 px-4 py-3 shadow-md">
+      <div
+        className="fixed bottom-0 left-0 w-full z-40 px-4 py-3 shadow-md border-t"
+        style={{ backgroundColor: '#ffffff', borderColor: 'rgba(0,0,0,0.06)' }}
+      >
         <div className="max-w-md mx-auto space-y-2">
           <button
             onClick={() => {
@@ -478,8 +548,13 @@ const ReservationDetailsPage: React.FC = () => {
                 state: { reservation: { ...reservation, agencyNom: agencyName }, companyInfo }
               });
             }}
-            className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${isConfirmed ? 'hover:opacity-90' : 'opacity-70 cursor-not-allowed'}`}
-            style={{ backgroundColor: primaryColor, color: safeTextColor(primaryColor) }}
+            className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${isConfirmed ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'}`}
+            style={{
+              background: isConfirmed
+                ? `linear-gradient(135deg, ${primaryColor}, ${secondaryColor || primaryColor})`
+                : `linear-gradient(135deg, ${hexToRgba(primaryColor,0.5)}, ${hexToRgba(secondaryColor||primaryColor,0.5)})`,
+              color: safeTextColor(primaryColor)
+            }}
             disabled={!isConfirmed}
           >
             <CheckCircle className="h-4 w-4" />
