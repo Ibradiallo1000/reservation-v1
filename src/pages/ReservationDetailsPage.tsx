@@ -57,8 +57,6 @@ interface CompanyInfo {
 /* ====== Mémoire locale (alignée avec la page de réservation) ====== */
 const PENDING_KEY = 'pendingReservation';
 const STEP_KEY = (slug?: string) => `mb:lastStep:${slug || ''}`;
-
-// ⚠️ Désormais, SEULES ces étapes sont "bloquantes"
 const isBlockingStatus = (s?: string) =>
   ['preuve_recue', 'payé'].includes(String(s || '').toLowerCase());
 
@@ -141,8 +139,7 @@ const ReservationDetailsPage: React.FC = () => {
 
   const fallbackColor = '#3b82f6';
   const primaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
-  const secondaryColor = companyInfo?.secondaryColor || '#e0f2fe';
-  const textColor = safeTextColor(primaryColor);
+  const secondaryColor = companyInfo?.secondaryColor || '#60a5fa'; // net, non translucide
 
   // 💾 Mémoriser que l’utilisateur est sur l’étape "details"
   useEffect(() => {
@@ -179,7 +176,6 @@ const ReservationDetailsPage: React.FC = () => {
           const next: Reservation = { ...data, id: snap.id, updatedAt: data?.updatedAt || new Date().toISOString() };
           setReservation(next);
 
-          // 🔒 Si statut final (payé/annule), on nettoie la mémoire anti-spam
           if (next.statut === 'payé' || next.statut === 'annule') {
             const pend = readPending();
             if (pend?.id === snap.id) clearPending();
@@ -217,7 +213,6 @@ const ReservationDetailsPage: React.FC = () => {
 
           setLoading(false);
 
-          // Normalise l’URL si on est venu par /mon-billet?r=TOKEN
           if (!id && hardId) {
             const slugToUse = (location as any)?.state?.slug || next.companySlug || slug;
             window.history.replaceState({}, '', `/${slugToUse}/reservation/${hardId}`);
@@ -247,10 +242,10 @@ const ReservationDetailsPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50/50">
+      <div className="min-h-screen flex items-center justify-center p-4" style={{ background: '#f8fafc' }}>
         <div className="flex flex-col items-center space-y-3">
           <Loader2 className="h-8 w-8 animate-spin" style={{ color: primaryColor }} />
-          <p className="text-gray-600 text-sm">Chargement de votre réservation...</p>
+          <p className="text-gray-700 text-sm">Chargement de votre réservation...</p>
         </div>
       </div>
     );
@@ -258,8 +253,8 @@ const ReservationDetailsPage: React.FC = () => {
 
   if (error || !reservation) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50/50">
-        <div className="bg-white rounded-xl shadow-sm p-6 max-w-md w-full text-center">
+      <div className="min-h-screen flex items-center justify-center p-4" style={{ background: '#f8fafc' }}>
+        <div className="bg-white rounded-xl shadow-sm p-6 max-w-md w-full text-center border border-gray-100">
           <XCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
           <h3 className="text-lg font-semibold text-gray-900 mb-2">Erreur</h3>
           <p className="text-gray-600 mb-5">{error || 'Réservation introuvable'}</p>
@@ -272,19 +267,15 @@ const ReservationDetailsPage: React.FC = () => {
     );
   }
 
-  const realSlug = (location as any)?.state?.slug || reservation.companySlug;
-
-  /** --- Barre d'étapes à 3 niveaux --- */
+  /** --- Étapes --- */
   const STEPS: Array<'paiement_en_cours' | 'preuve_recue' | 'payé'> = [
     'paiement_en_cours',
     'preuve_recue',
     'payé'
   ];
-  // si Firestore contient encore "en_attente", on l'assimile à "paiement_en_cours"
   const normalizedStatus =
     reservation.statut === 'en_attente' ? 'paiement_en_cours' : reservation.statut;
   const currentStepIndex = Math.max(0, STEPS.indexOf(normalizedStatus as any));
-
   const isConfirmed = reservation.statut === 'payé';
   const paymentMethod = getPaymentMethod(reservation.canal);
   const lastUpdated = reservation.updatedAt && !isNaN(new Date(reservation.updatedAt).getTime())
@@ -292,25 +283,30 @@ const ReservationDetailsPage: React.FC = () => {
     : null;
 
   return (
-    <div
-      className="min-h-screen pb-32"
-      style={{ background: `linear-gradient(180deg, ${hexToRgba(primaryColor, 0.06)}, #ffffff)` }}
-    >
+    <div className="min-h-screen pb-32" style={{ background: 'linear-gradient(180deg, #f8fafc, #ffffff)' }}>
       <AnimatePresence>
-        {showConfetti && <Confetti width={width} height={height} recycle={false} numberOfPieces={200}
-                                   colors={[primaryColor, secondaryColor, '#ffffff']} />}
+        {showConfetti && (
+          <Confetti
+            width={width}
+            height={height}
+            recycle={false}
+            numberOfPieces={200}
+            colors={[primaryColor, secondaryColor, '#ffffff']}
+          />
+        )}
       </AnimatePresence>
 
+      {/* Header net, sans opacité */}
       <header
         className="sticky top-0 z-10 px-5 py-3 shadow-sm"
         style={{
-          backgroundColor: hexToRgba(primaryColor, 0.98),
+          backgroundColor: primaryColor,
           color: safeTextColor(primaryColor),
           boxShadow: '0 1px 0 rgba(0,0,0,0.06)'
         }}
       >
         <div className="flex items-center justify-between max-w-md mx-auto">
-          <button onClick={() => navigate(-1)} className="p-1.5 rounded-full hover:bg-white/10 transition-colors" aria-label="Retour">
+          <button onClick={() => navigate(-1)} className="p-1.5 rounded-full hover:bg-black/10 transition-colors" aria-label="Retour">
             <ChevronLeft className="h-5 w-5" />
           </button>
           <h1 className="font-semibold text-base tracking-tight">Détails de réservation</h1>
@@ -320,7 +316,7 @@ const ReservationDetailsPage: React.FC = () => {
                 src={companyInfo.logoUrl}
                 alt="Logo"
                 className="h-8 w-8 rounded-full object-cover border"
-                style={{ borderColor: hexToRgba(safeTextColor(primaryColor), 0.18) }}
+                style={{ borderColor: 'rgba(255,255,255,0.25)' }}
                 effect="blur"
               />
             )
@@ -328,8 +324,8 @@ const ReservationDetailsPage: React.FC = () => {
               <div
                 className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium border"
                 style={{
-                  backgroundColor: hexToRgba(safeTextColor(primaryColor), 0.06),
-                  borderColor: hexToRgba(safeTextColor(primaryColor), 0.18),
+                  backgroundColor: 'rgba(255,255,255,0.15)',
+                  borderColor: 'rgba(255,255,255,0.35)',
                   color: safeTextColor(primaryColor)
                 }}
               >
@@ -340,41 +336,64 @@ const ReservationDetailsPage: React.FC = () => {
       </header>
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
-        {/* Barre d’étapes (3 étapes) */}
+        {/* Étapes – barre animée + “ping” sur l’étape en cours */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="rounded-xl p-4 border shadow-xs"
-          style={{
-            background: `linear-gradient(180deg, #ffffff, ${hexToRgba(primaryColor, 0.04)})`,
-            borderColor: hexToRgba(primaryColor, 0.12)
-          }}
+          transition={{ delay: 0.05 }}
+          className="rounded-xl p-4 border shadow-xs bg-white"
+          style={{ borderColor: 'rgba(0,0,0,0.06)' }}
         >
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-sm font-semibold text-gray-800">Statut de votre réservation</h2>
             <span className="text-xs text-gray-500">{lastUpdated}</span>
           </div>
+
           <div className="relative">
-            <div className="absolute top-3 left-0 right-0 h-1 bg-gray-200 rounded-full z-0">
-              <div className="h-full rounded-full transition-all duration-500"
-                   style={{ width: `${((currentStepIndex + 1) / STEPS.length) * 100}%`, backgroundColor: primaryColor }} />
-            </div>
+            <div className="absolute top-3 left-0 right-0 h-1 bg-gray-200 rounded-full z-0" />
+            <motion.div
+              className="absolute top-3 left-0 h-1 rounded-full z-0"
+              style={{ backgroundColor: primaryColor }}
+              initial={{ width: 0 }}
+              animate={{ width: `${((currentStepIndex + 1) / STEPS.length) * 100}%` }}
+              transition={{ type: 'spring', stiffness: 120, damping: 18 }}
+            />
             <div className="relative z-10 flex justify-between">
               {STEPS.map((step, idx) => {
                 const isActive = idx <= currentStepIndex;
-                const isCurrent = idx === currentStepIndex;
+                const isCurrent = idx === currentStepIndex && !isConfirmed;
                 const label =
                   step === 'paiement_en_cours' ? 'Paiement' :
                   step === 'preuve_recue' ? 'Vérification' : 'Confirmée';
+
                 return (
                   <div key={step} className="flex flex-col items-center w-1/3">
-                    <div className={`h-6 w-6 rounded-full flex items-center justify-center mb-1 transition-colors
-                                    ${isActive ? 'ring-4 ring-opacity-30' : ''}`}
-                         style={{ backgroundColor: isActive ? primaryColor : '#e5e7eb',
-                                  color: isActive ? safeTextColor(primaryColor) : '#6b7280',
-                                  border: isCurrent ? `2px solid ${safeTextColor(primaryColor)}` : 'none' }}>
-                      {isActive ? <CheckCircle className="h-3 w-3" /> : <div className="h-2 w-2 rounded-full bg-gray-400" />}
+                    <div className="relative mb-1">
+                      <div
+                        className="h-6 w-6 rounded-full flex items-center justify-center"
+                        style={{
+                          backgroundColor: isActive ? primaryColor : '#e5e7eb',
+                          color: isActive ? safeTextColor(primaryColor) : '#6b7280',
+                          border: isCurrent ? `2px solid ${safeTextColor(primaryColor)}` : 'none'
+                        }}
+                      >
+                        {idx < currentStepIndex
+                          ? <CheckCircle className="h-3.5 w-3.5" />
+                          : isCurrent
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <div className="h-2 w-2 rounded-full bg-gray-400" />}
+                      </div>
+                      {/* anneau “tic-tac” sur l’étape courante */}
+                      {isCurrent && (
+                        <span
+                          className="absolute inset-0 rounded-full"
+                          style={{
+                            border: `2px solid ${primaryColor}`,
+                            opacity: 0.45,
+                            animation: 'pingStep 1.2s cubic-bezier(0,0,0.2,1) infinite'
+                          }}
+                        />
+                      )}
                     </div>
                     <span className={`text-xs text-center ${isActive ? 'font-medium text-gray-900' : 'text-gray-500'}`}>
                       {label}
@@ -386,34 +405,27 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Bandeau statut + références */}
+        {/* Bandeau statut + références (fonds nets) */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="p-4 rounded-xl flex items-start gap-3 border"
+          transition={{ delay: 0.15 }}
+          className="p-4 rounded-xl flex items-start gap-3 border bg-white"
           style={{
-            background:
-              reservation.statut === 'payé'
-                ? hexToRgba('#10b981', 0.08)
-                : reservation.statut === 'preuve_recue'
-                ? hexToRgba('#7c3aed', 0.08)
-                : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente'
-                ? hexToRgba(primaryColor, 0.06)
-                : hexToRgba('#ef4444', 0.08),
             borderColor:
               reservation.statut === 'payé'
-                ? hexToRgba('#10b981', 0.20)
+                ? hexToRgba('#10b981', 0.2)
                 : reservation.statut === 'preuve_recue'
-                ? hexToRgba('#7c3aed', 0.20)
+                ? hexToRgba('#7c3aed', 0.2)
                 : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente'
-                ? hexToRgba(primaryColor, 0.18)
-                : hexToRgba('#ef4444', 0.20)
+                ? 'rgba(0,0,0,0.06)'
+                : hexToRgba('#ef4444', 0.2)
           }}
         >
           <div
-            className="p-2 rounded-lg bg-white/80 flex-shrink-0"
+            className="p-2 rounded-lg flex-shrink-0"
             style={{
+              backgroundColor: '#ffffff',
               color:
                 reservation.statut === 'payé'
                   ? '#059669'
@@ -455,18 +467,15 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        {/* Détails voyage */}
+        {/* Détails */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="rounded-xl shadow-xs border overflow-hidden"
-          style={{
-            background: `linear-gradient(180deg, #ffffff, ${hexToRgba(primaryColor, 0.04)})`,
-            borderColor: hexToRgba(primaryColor, 0.12)
-          }}
+          transition={{ delay: 0.22 }}
+          className="rounded-xl shadow-xs border overflow-hidden bg-white"
+          style={{ borderColor: 'rgba(0,0,0,0.06)' }}
         >
-          <div className="p-4 border-b" style={{ borderColor: hexToRgba(primaryColor, 0.12) }}>
+          <div className="p-4 border-b" style={{ borderColor: 'rgba(0,0,0,0.06)' }}>
             <h2 className="font-semibold text-sm flex items-center gap-2" style={{ color: '#111827' }}>
               <Ticket className="h-4 w-4" style={{ color: primaryColor }} />
               Détails du voyage
@@ -508,13 +517,13 @@ const ReservationDetailsPage: React.FC = () => {
                 <p className="text-xs text-gray-500 mb-1">Paiement</p>
                 <div className="flex justify-between items-center">
                   <p className="text-sm font-medium text-gray-900">{reservation.montant.toLocaleString('fr-FR')} FCFA</p>
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{paymentMethod.text}</span>
+                  <span className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">{paymentMethod.text}</span>
                 </div>
               </div>
             </div>
 
             {reservation.tripType === 'aller-retour' && (
-              <div className="text-xs text-gray-500 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
+              <div className="text-xs text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
                 <p className="font-medium text-gray-700 mb-1">Aller-retour</p>
                 <div className="flex justify-between">
                   <span>Aller: {reservation.seatsGo} place(s)</span>
@@ -525,8 +534,8 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }} className="text-center pt-4">
-          <div className="flex items-center justify-center gap-1 text-sm text-gray-500">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }} className="text-center pt-4">
+          <div className="flex items-center justify-center gap-1 text-sm text-gray-600">
             <Heart className="h-3.5 w-3.5 text-rose-400 fill-rose-400" />
             <span>Merci pour votre confiance</span>
           </div>
@@ -536,11 +545,12 @@ const ReservationDetailsPage: React.FC = () => {
         </motion.div>
       </main>
 
+      {/* CTA bas – net, pas d’opacité */}
       <div
         className="fixed bottom-0 left-0 w-full z-40 px-4 py-3 shadow-md border-t"
         style={{ backgroundColor: '#ffffff', borderColor: 'rgba(0,0,0,0.06)' }}
       >
-        <div className="max-w-md mx-auto space-y-2">
+        <div className="max-w-md mx-auto">
           <button
             onClick={() => {
               const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
@@ -551,8 +561,8 @@ const ReservationDetailsPage: React.FC = () => {
             className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${isConfirmed ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'}`}
             style={{
               background: isConfirmed
-                ? `linear-gradient(135deg, ${primaryColor}, ${secondaryColor || primaryColor})`
-                : `linear-gradient(135deg, ${hexToRgba(primaryColor,0.5)}, ${hexToRgba(secondaryColor||primaryColor,0.5)})`,
+                ? `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`
+                : `linear-gradient(135deg, ${hexToRgba(primaryColor,0.5)}, ${hexToRgba(secondaryColor,0.5)})`,
               color: safeTextColor(primaryColor)
             }}
             disabled={!isConfirmed}
@@ -562,6 +572,17 @@ const ReservationDetailsPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* petite keyframes locale pour l’anneau “ping” */}
+      <style>
+        {`
+          @keyframes pingStep {
+            0% { transform: scale(1); opacity: .45; }
+            80% { transform: scale(1.75); opacity: 0; }
+            100% { transform: scale(1.75); opacity: 0; }
+          }
+        `}
+      </style>
     </div>
   );
 };

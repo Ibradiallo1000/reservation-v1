@@ -70,11 +70,6 @@ export default function ReservationClientPage() {
 
   const paymentSectionRef = useRef<HTMLDivElement|null>(null);
 
-  /* refs pour empêcher la perte de focus quand on tape */
-  const nameRef = useRef<HTMLInputElement|null>(null);
-  const phoneRef = useRef<HTMLInputElement|null>(null);
-  const messageRef = useRef<HTMLTextAreaElement|null>(null); // <-- AJOUT
-
   const [agencyInfo, setAgencyInfo] = useState<{id?:string; nom?:string; telephone?:string; code?:string}>({});
   const [paymentMethods, setPaymentMethods] = useState<Record<string, {
     url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string;
@@ -263,24 +258,15 @@ export default function ReservationClientPage() {
 
   /* ------------------ HANDLERS ------------------ */
 
-  // Empêche la perte de focus (nom)
+  // Nom – simple set, pas de refocus
   const onNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    setPassenger(p => ({ ...p, fullName: v }));
-    requestAnimationFrame(() => nameRef.current?.focus());
+    setPassenger(p => ({ ...p, fullName: e.target.value }));
   };
 
-  // Téléphone : digits -> 8 max, affiche 2-2-2-2, garde focus
+  // Téléphone – digits -> 8 max, pas de refocus
   const onPhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = onlyDigits(e.target.value).slice(0, 8);
     setPassenger(p => ({ ...p, phone: raw }));
-    requestAnimationFrame(() => phoneRef.current?.focus());
-  };
-
-  // Preuve de paiement : garder le focus (CORRECTIF)
-  const onMessageChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setMessage(e.target.value);
-    requestAnimationFrame(() => messageRef.current?.focus());
   };
 
   const createReservationDraft = useCallback(async () => {
@@ -317,7 +303,7 @@ export default function ReservationClientPage() {
       const now = new Date();
       const reservation = {
         nomClient: passenger.fullName,
-        telephone: passenger.phone,
+        telephone: passenger.phone, // stocké sans espaces
         depart: selectedTrip.departure,
         arrivee: selectedTrip.arrival,
         date: selectedTrip.date,
@@ -598,13 +584,12 @@ export default function ReservationClientPage() {
                       <User className="h-5 w-5 text-gray-400" />
                     </div>
                     <input
-                      ref={nameRef}
                       className="h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none"
                       style={{ borderColor:'#E5E7EB' }}
                       placeholder="Nom complet *"
                       value={passenger.fullName}
                       onChange={onNameChange}
-                      autoComplete="off"
+                      autoComplete="name"
                     />
                   </div>
 
@@ -614,7 +599,6 @@ export default function ReservationClientPage() {
                       <Phone className="h-5 w-5 text-gray-400" />
                     </div>
                     <input
-                      ref={phoneRef}
                       className="h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none"
                       style={{ borderColor:'#E5E7EB' }}
                       placeholder="Téléphone (8 chiffres) *"
@@ -622,7 +606,7 @@ export default function ReservationClientPage() {
                       onChange={onPhoneChange}
                       inputMode="numeric"
                       pattern="[0-9]*"
-                      autoComplete="off"
+                      autoComplete="tel-national"
                     />
                     <div className="mt-1 text-[11px] text-gray-500">
                       Exemple : <span className="font-mono">12 34 56 78</span> — 8 chiffres requis
@@ -695,13 +679,12 @@ export default function ReservationClientPage() {
                       <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
                       <p className="text-xs text-gray-600 mb-3">Après votre paiement, copiez la référence reçue par SMS et collez-la ci-dessous.</p>
                       <textarea
-                        ref={messageRef}                 // <-- AJOUT
                         rows={3}
                         className="w-full border rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
                         style={{ borderColor:'#E5E7EB' }}
                         placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
                         value={message}
-                        onChange={onMessageChange}      // <-- AJOUT
+                        onChange={(e)=>setMessage(e.target.value)}
                       />
                     </div>
 
