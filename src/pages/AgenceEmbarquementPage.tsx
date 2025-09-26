@@ -18,7 +18,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { useLocation } from "react-router-dom";
 import { BrowserMultiFormatReader } from "@zxing/browser";
-import { BarcodeFormat, DecodeHintType } from "@zxing/library";
 
 /* ===================== Types ===================== */
 type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
@@ -39,7 +38,7 @@ interface Reservation {
   trajetId?: string;
   referenceCode?: string;
   controleurId?: string;
-  arrival?: string; // ancien alias possible
+  arrival?: string; // alias possible
 }
 
 interface WeeklyTrip {
@@ -51,7 +50,7 @@ interface WeeklyTrip {
 }
 
 type SelectedTrip = {
-  id?: string; // optionnel
+  id?: string;
   departure: string;
   arrival: string;
   heure: string;
@@ -69,7 +68,6 @@ function toLocalISO(d: Date) {
 const weekdayFR = (d: Date) =>
   d.toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
 
-// Parse un QR (URL /r/REF ou texte brut)
 function extractCode(raw: string): string {
   const t = (raw || "").trim();
   try {
@@ -82,17 +80,26 @@ function extractCode(raw: string): string {
     return t;
   }
 }
-
-// Compat des différents retours de @zxing/browser
 function getScanText(res: any): string {
   if (!res) return "";
   if (typeof res === "string") return res;
-  if (typeof res.getText === "function") return res.getText();
-  if (typeof res.text === "string") return res.text;
+  if (typeof (res as any).getText === "function") return (res as any).getText();
+  if (typeof (res as any).text === "string") return (res as any).text;
   return String(res);
 }
 
-// ---------- Normalisations robustes (évite les faux négatifs) ----------
+function stripAccents(s: string) {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+function normCity(v?: string): string {
+  return stripAccents(v || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+function normTime(v?: string): string | null {
+  if (!v) return null;
+  const m = v.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return m[1].padStart(2, "0") + ":" + m[2];
+}
 function normDate(v: any): string | null {
   if (!v) return null;
   if (typeof v === "string") {
@@ -110,34 +117,17 @@ function normDate(v: any): string | null {
   return null;
 }
 
-function normTime(v?: string): string | null {
-  if (!v) return null;
-  const m = v.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  return m[1].padStart(2, "0") + ":" + m[2];
-}
-
-function stripAccents(s: string) {
-  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-function normCity(v?: string): string {
-  return stripAccents(v || "").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-// Lookup robuste sans collectionGroup (respecte ta structure)
+// Lookup robuste par agence(s)
 async function findReservationByCode(
   companyId: string,
   agencyId: string | null | undefined,
   code: string
 ): Promise<{ resId: string; agencyId: string } | null> {
-  // Essai ciblé si agencyId connu
   if (agencyId) {
-    // par ID
     const directRef = doc(db, `companies/${companyId}/agences/${agencyId}/reservations`, code);
     const directSnap = await getDoc(directRef);
     if (directSnap.exists()) return { resId: directSnap.id, agencyId };
 
-    // par referenceCode
     const q1 = query(
       collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
       where("referenceCode", "==", code),
@@ -148,17 +138,13 @@ async function findReservationByCode(
     return null;
   }
 
-  // Fallback multi-agences
   const ags = await getDocs(collection(db, `companies/${companyId}/agences`));
 
-  // d’abord par ID direct
   for (const ag of ags.docs) {
     const dref = doc(db, `companies/${companyId}/agences/${ag.id}/reservations`, code);
     const ds = await getDoc(dref);
     if (ds.exists()) return { resId: ds.id, agencyId: ag.id };
   }
-
-  // puis par referenceCode
   for (const ag of ags.docs) {
     const q2 = query(
       collection(db, `companies/${companyId}/agences/${ag.id}/reservations`),
@@ -168,7 +154,6 @@ async function findReservationByCode(
     const s2 = await getDocs(q2);
     if (!s2.empty) return { resId: s2.docs[0].id, agencyId: ag.id };
   }
-
   return null;
 }
 
@@ -189,40 +174,35 @@ const AgenceEmbarquementPage: React.FC = () => {
   const userAgencyId = user?.agencyId ?? null;
   const uid = user?.uid ?? null;
 
-  // 🔹 Sélection d’agence (si user.agencyId absent)
   const [agencies, setAgencies] = useState<AgencyItem[]>([]);
   const [selectedAgencyId, setSelectedAgencyId] = useState<string | null>(userAgencyId);
 
-  // Date sélectionnée
   const [selectedDate, setSelectedDate] = useState<string>(
     location.state?.date || toLocalISO(new Date())
   );
 
-  // Trajets du jour + sélection
   const [trajetsDuJour, setTrajetsDuJour] = useState<WeeklyTrip[]>([]);
   const [selectedTrip, setSelectedTrip] = useState<SelectedTrip | null>(null);
 
-  // Réservations & UI
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
-  // ====== Scan caméra (ON/OFF) ======
+  // Scan caméra
   const [scanOn, setScanOn] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const lastScanRef = useRef<number>(0);
   const lastAlertRef = useRef<number>(0);
 
-  // ====== Affectation (bus / immat / chauffeur / chef) – optionnelle ======
+  // Affectation (optionnelle)
   const [assign, setAssign] = useState<{bus?: string; immat?: string; chauffeur?: string; chef?: string}>({});
 
-  /* ---------- Charger les agences si nécessaire ---------- */
+  /* ---------- Charger les agences ---------- */
   useEffect(() => {
     (async () => {
       if (!companyId) return;
       if (userAgencyId) {
-        // récup noms pour affichage
         if (!agencies.length) {
           const snap = await getDocs(collection(db, `companies/${companyId}/agences`));
           const list = snap.docs.map(d => ({ id: d.id, nom: (d.data() as any)?.nom || (d.data() as any)?.name || d.id }));
@@ -230,7 +210,6 @@ const AgenceEmbarquementPage: React.FC = () => {
         }
         return;
       }
-      // Aucune agence rattachée => proposer le choix
       const snap = await getDocs(collection(db, `companies/${companyId}/agences`));
       const list = snap.docs.map(d => ({ id: d.id, nom: (d.data() as any)?.nom || (d.data() as any)?.name || d.id }));
       setAgencies(list);
@@ -238,7 +217,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     })();
   }, [companyId, userAgencyId, agencies.length]);
 
-  /* ---------- Affectation (bus/immat) liée au couple agence+trajet ---------- */
+  /* ---------- Affectation liée au trajet ---------- */
   useEffect(()=>{
     setAssign({});
     if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate) return;
@@ -258,7 +237,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     }).catch(()=>{});
   }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
 
-  /* ---------- Pré-remplissage depuis la navigation ---------- */
+  /* ---------- Pré-remplissage navigation ---------- */
   useEffect(() => {
     const st = location.state;
     if (!st?.trajet || !st?.heure) return;
@@ -271,7 +250,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     if (st.date) setSelectedDate(st.date);
   }, [location.state]);
 
-  /* ---------- Charger weeklyTrips du jour sélectionné ---------- */
+  /* ---------- WeeklyTrips du jour ---------- */
   useEffect(() => {
     const load = async () => {
       if (!companyId || !selectedAgencyId) { setTrajetsDuJour([]); return; }
@@ -304,7 +283,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     void load();
   }, [companyId, selectedAgencyId, selectedDate]); // eslint-disable-line
 
-  /* ---------- Écoute temps réel des réservations ---------- */
+  /* ---------- Écoute temps réel réservations ---------- */
   useEffect(() => {
     if (!companyId || !selectedAgencyId) { setReservations([]); return; }
     if (!selectedTrip || !selectedTrip.departure || !selectedTrip.arrival || !selectedTrip.heure) {
@@ -326,7 +305,6 @@ const AgenceEmbarquementPage: React.FC = () => {
       setIsLoading(false);
     };
 
-    // "payé"
     const qPaid = query(
       base,
       where("date", "==", selectedDate),
@@ -340,7 +318,6 @@ const AgenceEmbarquementPage: React.FC = () => {
       commit();
     }, () => setIsLoading(false)));
 
-    // "validé"
     const qValid = query(
       base,
       where("date", "==", selectedDate),
@@ -354,7 +331,6 @@ const AgenceEmbarquementPage: React.FC = () => {
       commit();
     }, () => setIsLoading(false)));
 
-    // Par trajetId si dispo (confort)
     if (selectedTrip.id) {
       const qById = query(
         base,
@@ -372,7 +348,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     return () => unsubs.forEach((u) => u());
   }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
 
-  /* ---------- Mise à jour transactionnelle (Embarqué / Absent) ---------- */
+  /* ---------- Mise à jour Embarqué / Absent ---------- */
   const updateStatut = useCallback(
     async (reservationId: string, statut: StatutEmbarquement) => {
       if (!companyId || !uid) return;
@@ -397,13 +373,11 @@ const AgenceEmbarquementPage: React.FC = () => {
           if (!snap.exists()) throw new Error("Réservation introuvable");
           const data = snap.data() as Reservation;
 
-          // Statut de base acceptable ?
           const base = (data.statut || "").toLowerCase();
           if (!["payé", "validé", "valide", "embarqué"].includes(base)) {
             throw new Error("Statut non éligible (doit être payé/validé).");
           }
 
-          // --- Contrôle anti-fraude robuste (normalisé) ---
           const dataDep = normCity(data.depart);
           const dataArr = normCity(data.arrivee || data.arrival);
           const dataHr  = normTime(data.heure || "");
@@ -414,23 +388,16 @@ const AgenceEmbarquementPage: React.FC = () => {
           const selHr   = normTime(selectedTrip.heure);
           const selDt   = normDate(selectedDate);
 
-          // 1) correspondance stricte par trajetId si connu
           const idMatch = !!(data.trajetId && selectedTrip?.id && data.trajetId === selectedTrip.id);
-          // 2) correspondance normalisée complète
           const fieldsMatch = (dataDep === selDep) && (dataArr === selArr) && (dataHr === selHr) && (dataDt === selDt);
-          // 3) tolérance minimale : même sens + même date (si heure non normalisée sur anciens billets)
           const softMatch = (dataDep === selDep) && (dataArr === selArr) && (dataDt === selDt);
 
           if (!(idMatch || fieldsMatch || softMatch)) {
-            console.warn("[EMBARK mismatch]", { dataDep, dataArr, dataHr, dataDt, selDep, selArr, selHr, selDt, dataTrajetId:data.trajetId, selectedTripId:selectedTrip?.id });
             throw new Error("Billet pour un autre départ (date/heure/trajet non concordants).");
           }
-          // -------------------------------------------------
 
-          // Idempotence
           if (data.statutEmbarquement === "embarqué" && statut === "embarqué") return;
 
-          // Patch
           const patch: any = {
             statutEmbarquement: statut,
             controleurId: uid,
@@ -440,7 +407,6 @@ const AgenceEmbarquementPage: React.FC = () => {
 
           tx.update(ref, patch);
 
-          // Log
           const logsRef = collection(
             db,
             `companies/${companyId}/agences/${selectedAgencyId}/boardingLogs`
@@ -506,7 +472,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     throw new Error("Aucun prochain départ disponible.");
   }
 
-  /* ---------- Action : Absent + Reprogrammer ---------- */
+  /* ---------- Absent + Reprogrammer ---------- */
   const absentEtReprogrammer = useCallback(async (reservationId: string) => {
     if (!companyId || !selectedAgencyId || !uid || !selectedTrip || !selectedDate) {
       alert("Contexte incomplet (agence, trajet ou date manquants).");
@@ -605,7 +571,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     [scanCode, companyId, selectedAgencyId, updateStatut]
   );
 
-  /* ---------- Scanner caméra (ZXing correctement initialisé) ---------- */
+  /* ---------- Scanner caméra (sans .hints) ---------- */
   useEffect(() => {
     if (!scanOn) {
       readerRef.current?.reset?.();
@@ -616,32 +582,19 @@ const AgenceEmbarquementPage: React.FC = () => {
       }
       return;
     }
-
-    const reader = new BrowserMultiFormatReader(); // ✅ aucun argument
-    // ✅ hints pour améliorer la détection
-    reader.hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-      BarcodeFormat.QR_CODE,
-      BarcodeFormat.CODE_128,
-      BarcodeFormat.CODE_39,
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-    ]);
-    reader.hints.set(DecodeHintType.TRY_HARDER, true);
-    (reader as any).timeBetweenDecodingAttempts = 250;
-
+    const reader = new BrowserMultiFormatReader();
     readerRef.current = reader;
-
-    let stopped = false;
 
     (async () => {
       try {
-        await reader.decodeFromVideoDevice(
-          null, // laisse ZXing choisir la meilleure caméra
+        // Caméra arrière par défaut
+        // @ts-ignore
+        await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: "environment" } } },
           videoRef.current as HTMLVideoElement,
           async (res: any) => {
-            if (stopped) return;
             const now = Date.now();
-            if (!res || now - lastScanRef.current < 1200) return; // anti double
+            if (!res || now - lastScanRef.current < 1200) return;
             lastScanRef.current = now;
 
             const raw = getScanText(res);
@@ -666,14 +619,44 @@ const AgenceEmbarquementPage: React.FC = () => {
             }
           }
         );
-      } catch (err) {
-        console.error("ZXing init failed", err);
-        alert("Impossible d’ouvrir la caméra. Vérifie les permissions (HTTPS/autorisation).");
+      } catch {
+        // Fallback: premier device
+        const devices = (await BrowserMultiFormatReader.listVideoInputDevices()) as unknown as Array<{ deviceId?: string }>;
+        const preferred: string | null = devices?.[0]?.deviceId ?? null;
+        await reader.decodeFromVideoDevice(
+          (preferred as unknown) as string | null,
+          videoRef.current as HTMLVideoElement,
+          async (res: any) => {
+            const now = Date.now();
+            if (!res || now - lastScanRef.current < 1200) return;
+            lastScanRef.current = now;
+
+            const raw = getScanText(res);
+            const code = extractCode(raw);
+            try {
+              const found = await findReservationByCode(companyId!, selectedAgencyId, code);
+              if (found) {
+                await updateStatut(found.resId, "embarqué");
+                new Audio("/beep.mp3").play().catch(() => {});
+              } else {
+                if (now - lastAlertRef.current > 2000) {
+                  lastAlertRef.current = now;
+                  alert("Billet introuvable.");
+                }
+              }
+            } catch (e) {
+              console.error(e);
+              if (now - lastAlertRef.current > 2000) {
+                lastAlertRef.current = now;
+                alert("Erreur lors du scan");
+              }
+            }
+          }
+        );
       }
     })();
 
     return () => {
-      stopped = true;
       readerRef.current?.reset?.();
       readerRef.current = null;
       if (videoRef.current?.srcObject) {
@@ -694,7 +677,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     );
   }, [reservations, searchTerm]);
 
-  /* ---------- Totaux utiles ---------- */
+  /* ---------- Totaux ---------- */
   const totals = useMemo(() => {
     let embarques = 0, absents = 0, total = 0;
     for (const r of reservations) {
@@ -760,7 +743,6 @@ const AgenceEmbarquementPage: React.FC = () => {
 
   return (
     <div className="min-h-screen" style={{ background: theme.bg }}>
-      {/* Styles locaux */}
       <style>{`
         .brand-logo{height:32px;width:auto;object-fit:contain}
         .case{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid #0f172a;border-radius:4px;background:#fff;cursor:pointer;user-select:none}
@@ -776,7 +758,7 @@ const AgenceEmbarquementPage: React.FC = () => {
       `}</style>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* ==== Filtre Agence + Date ==== */}
+        {/* Filtre Agence + Date */}
         <div className="bg-white rounded-xl border p-4 shadow-sm space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
@@ -844,7 +826,7 @@ const AgenceEmbarquementPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ==== Infos départ + actions ==== */}
+        {/* Infos départ + actions */}
         <div className="bg-white rounded-xl border shadow-sm">
           <div className="px-4 py-3 flex flex-wrap items-center gap-3">
             <div className="text-sm text-gray-500">Trajet</div>
@@ -858,7 +840,6 @@ const AgenceEmbarquementPage: React.FC = () => {
               )}
             </div>
 
-            {/* Infos bus/garage */}
             <div className="ml-auto grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
               <div><div className="text-gray-500">N° Bus</div><div className="font-medium">{assign.bus || "—"}</div></div>
               <div><div className="text-gray-500">Immat.</div><div className="font-medium">{assign.immat || "—"}</div></div>
@@ -912,7 +893,7 @@ const AgenceEmbarquementPage: React.FC = () => {
           )}
         </div>
 
-        {/* ==== Saisie manuelle (ID / référence) ==== */}
+        {/* Saisie manuelle */}
         <div className="bg-white rounded-xl border shadow-sm p-4">
           <div className="text-sm font-semibold mb-2" style={{ color: theme.secondary }}>
             Saisir une référence
@@ -935,9 +916,8 @@ const AgenceEmbarquementPage: React.FC = () => {
           </form>
         </div>
 
-        {/* ======== Zone imprimable ======== */}
+        {/* Zone imprimable */}
         <div id="print-area" className="bg-white rounded-xl border shadow-sm">
-          {/* En-tête imprimable */}
           <div className="px-4 pt-4">
             <div className="flex items-center gap-3">
               {company?.logoUrl && (
@@ -964,7 +944,6 @@ const AgenceEmbarquementPage: React.FC = () => {
               )}
             </div>
 
-            {/* Ligne infos bus/chauffeur */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 text-xs">
               <div className="border rounded-lg px-2 py-1">
                 N° Bus / Immat: {assign.bus || assign.immat ? `${assign.bus || ""} ${assign.immat || ""}` : "_________"}
@@ -978,7 +957,6 @@ const AgenceEmbarquementPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Table passagers */}
           <div className="overflow-x-auto mt-4">
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
@@ -1047,7 +1025,6 @@ const AgenceEmbarquementPage: React.FC = () => {
             </table>
           </div>
 
-          {/* Pied signatures */}
           <div className="grid grid-cols-3 gap-6 px-4 py-6 text-sm">
             <div><div className="border-t pt-2 text-center">Contrôleur / Chef d’embarquement</div></div>
             <div><div className="border-t pt-2 text-center">Chauffeur</div></div>
