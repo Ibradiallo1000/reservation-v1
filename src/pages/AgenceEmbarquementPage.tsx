@@ -36,6 +36,7 @@ interface Reservation {
   checkInTime?: any;
   trajetId?: string;
   referenceCode?: string;
+  qrCode?: string | null;
   controleurId?: string;
 }
 
@@ -108,11 +109,14 @@ const AgenceEmbarquementPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
+  // ====== État process embarquement ======
+  const [isClosed, setIsClosed] = useState(false);
+
   // ====== Scan caméra (ON/OFF) ======
   const [scanOn, setScanOn] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const controlsRef = useRef<any>(null);     // ⬅️ contrôleur ZXing (dispose d’un .stop())
+  const controlsRef = useRef<any>(null);
   const lastScanRef = useRef<number>(0);
   const lastAlertRef = useRef<number>(0);
 
@@ -272,7 +276,6 @@ const AgenceEmbarquementPage: React.FC = () => {
           if (!snap.exists()) throw new Error("Réservation introuvable");
           const data = snap.data() as Reservation;
 
-          // Statut de base acceptable ?
           const base = (data.statut || "").toLowerCase();
           if (!["payé", "validé", "valide", "embarqué"].includes(base)) {
             throw new Error("Statut non éligible (doit être payé/validé).");
@@ -336,7 +339,6 @@ const AgenceEmbarquementPage: React.FC = () => {
     baseTrip: { id?: string; departure: string; arrival: string; heure: string; },
     baseDate: string
   ): Promise<{ date: string; heure: string }> {
-    // Récupérer le weeklyTrip cible
     let target: any | null = null;
     if (baseTrip.id) {
       const s = await getDoc(doc(dbRef, `companies/${companyId}/agences/${agencyId}/weeklyTrips/${baseTrip.id}`));
@@ -351,7 +353,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     if (!target) throw new Error("Trajet hebdo introuvable.");
 
     const start = new Date(`${baseDate}T${baseTrip.heure || "00:00"}:00`);
-    for (let add = 0; add < 14; add++) { // horizon 2 semaines
+    for (let add = 0; add < 14; add++) {
       const d = new Date(start);
       d.setDate(d.getDate() + add);
       const dayName = d.toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
@@ -381,14 +383,13 @@ const AgenceEmbarquementPage: React.FC = () => {
     if (!resSnap.exists()) return alert("Réservation introuvable.");
     const data = resSnap.data() as Reservation & Record<string, any>;
 
-    // Anti-double reprogrammation (idempotence simple)
+    // Idempotence simple : éviter X reprogrammations
     if (data.noShowAt || data.reprogrammedOnce === true) {
-      alert("Déjà reprogrammé ou marqué absent.");
+      alert("Déjà reprogrammé ou déjà marqué absent.");
       return;
     }
 
     try {
-      // 1) Calcul du prochain départ
       const next = await computeNextDeparture(
         db, companyId, agencyId,
         {
@@ -400,7 +401,6 @@ const AgenceEmbarquementPage: React.FC = () => {
         (data.date || selectedDate)!
       );
 
-      // 2) Batch : absent + clone + log
       const batch = writeBatch(db);
 
       // (a) marquer absent l'original
@@ -411,7 +411,7 @@ const AgenceEmbarquementPage: React.FC = () => {
         reprogrammedOnce: true,
       });
 
-      // (b) créer la nouvelle réservation clonée
+      // (b) nouvelle réservation sur prochain départ (même agence)
       const newRef = doc(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`));
       batch.set(newRef, {
         companyId, agencyId,
@@ -448,6 +448,35 @@ const AgenceEmbarquementPage: React.FC = () => {
     }
   }, [companyId, agencyId, uid, selectedTrip, selectedDate]);
 
+  /* ---------- BULK : reprogrammer tous les absents après clôture ---------- */
+  const reprogrammerTousLesAbsents = useCallback(async () => {
+    if (!companyId || !agencyId || !uid || !selectedTrip || !selectedDate) return;
+    const absents = reservations.filter(r =>
+      (r.statut === "payé" || r.statut === "validé" || r.statut === "valide") &&
+      r.statutEmbarquement !== "embarqué"
+    );
+    for (const r of absents) {
+      await absentEtReprogrammer(r.id);
+    }
+    alert(`Reprogrammation effectuée pour ${absents.length} passager(s).`);
+  }, [reservations, companyId, agencyId, uid, selectedTrip, selectedDate, absentEtReprogrammer]);
+
+  /* ---------- Recherche agence uniquement ---------- */
+  async function findInAgencyByCode(code: string, companyId: string, agencyId: string) {
+    // a) ID direct
+    const refById = doc(db, `companies/${companyId}/agences/${agencyId}/reservations`, code);
+    const snapId = await getDoc(refById);
+    if (snapId.exists()) return refById;
+
+    // b) referenceCode ou qrCode
+    const base = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
+    for (const f of ["referenceCode", "qrCode"] as const) {
+      const qs = await getDocs(query(base, where(f as any, "==", code)));
+      if (qs.size === 1) return qs.docs[0].ref;
+    }
+    return null;
+  }
+
   /* ---------- Saisie manuelle (ID / référence) ---------- */
   const [scanCode, setScanCode] = useState("");
   const submitManual = useCallback(
@@ -456,33 +485,13 @@ const AgenceEmbarquementPage: React.FC = () => {
       const code = extractCode(scanCode);
       if (!code || !companyId || !agencyId) return;
       try {
-        // par ID
-        const idRef = doc(
-          db,
-          `companies/${companyId}/agences/${agencyId}/reservations`,
-          code
-        );
-        const idSnap = await getDoc(idRef);
-        if (idSnap.exists()) {
-          await updateStatut(code, "embarqué");
-          setScanCode("");
+        const ref = await findInAgencyByCode(code, companyId, agencyId);
+        if (!ref) {
+          alert("Billet introuvable.");
           return;
         }
-        // par referenceCode
-        const qRef = query(
-          collection(
-            db,
-            `companies/${companyId}/agences/${agencyId}/reservations`
-          ),
-          where("referenceCode", "==", code)
-        );
-        const qs = await getDocs(qRef);
-        if (qs.size === 1) {
-          await updateStatut(qs.docs[0].id, "embarqué");
-          setScanCode("");
-        } else {
-          alert("Réservation introuvable (ou référence multiple).");
-        }
+        await updateStatut(ref.id, "embarqué");
+        setScanCode("");
       } catch (err) {
         console.error(err);
         alert("Erreur lors de la validation manuelle.");
@@ -522,41 +531,21 @@ const AgenceEmbarquementPage: React.FC = () => {
 
     (async () => {
       try {
-        // Caméra arrière par défaut si possible
         // @ts-ignore
         const controls = await reader.decodeFromConstraints(
           { video: { facingMode: { ideal: "environment" } } },
           videoRef.current as HTMLVideoElement,
           async (res: any) => {
             const now = Date.now();
-            if (!res || now - lastScanRef.current < 1200) return; // anti double
+            if (!res || now - lastScanRef.current < 1200) return;
             lastScanRef.current = now;
 
+            if (!companyId || !agencyId) return;
             const code = extractCode(res.getText());
             try {
-              // ID direct
-              const idRef = doc(
-                db,
-                `companies/${companyId}/agences/${agencyId}/reservations`,
-                code
-              );
-              const idSnap = await getDoc(idRef);
-              if (idSnap.exists()) {
-                await updateStatut(code, "embarqué");
-                new Audio("/beep.mp3").play().catch(() => {});
-                return;
-              }
-              // referenceCode
-              const qRef = query(
-                collection(
-                  db,
-                  `companies/${companyId}/agences/${agencyId}/reservations`
-                ),
-                where("referenceCode", "==", code)
-              );
-              const qs = await getDocs(qRef);
-              if (qs.size === 1) {
-                await updateStatut(qs.docs[0].id, "embarqué");
+              const ref = await findInAgencyByCode(code, companyId, agencyId);
+              if (ref) {
+                await updateStatut(ref.id, "embarqué");
                 new Audio("/beep.mp3").play().catch(() => {});
               } else {
                 if (now - lastAlertRef.current > 2000) {
@@ -573,9 +562,9 @@ const AgenceEmbarquementPage: React.FC = () => {
             }
           }
         );
-        controlsRef.current = controls; // ⬅️ pour pouvoir stop()
+        controlsRef.current = controls;
       } catch {
-        // Fallback: premier device
+        // Fallback device ID
         const devices = (await BrowserMultiFormatReader.listVideoInputDevices()) as unknown as Array<{ deviceId?: string }>;
         const preferred: string | null = devices?.[0]?.deviceId ?? null;
         const controls = await reader.decodeFromVideoDevice(
@@ -585,22 +574,13 @@ const AgenceEmbarquementPage: React.FC = () => {
             const now = Date.now();
             if (!res || now - lastScanRef.current < 1200) return;
             lastScanRef.current = now;
+
+            if (!companyId || !agencyId) return;
             const code = extractCode(res.getText());
             try {
-              const idRef = doc(db, `companies/${companyId}/agences/${agencyId}/reservations`, code);
-              const idSnap = await getDoc(idRef);
-              if (idSnap.exists()) {
-                await updateStatut(code, "embarqué");
-                new Audio("/beep.mp3").play().catch(() => {});
-                return;
-              }
-              const qRef = query(
-                collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
-                where("referenceCode", "==", code)
-              );
-              const qs = await getDocs(qRef);
-              if (qs.size === 1) {
-                await updateStatut(qs.docs[0].id, "embarqué");
+              const ref = await findInAgencyByCode(code, companyId, agencyId);
+              if (ref) {
+                await updateStatut(ref.id, "embarqué");
                 new Audio("/beep.mp3").play().catch(() => {});
               } else {
                 if (now - lastAlertRef.current > 2000) {
@@ -617,7 +597,7 @@ const AgenceEmbarquementPage: React.FC = () => {
             }
           }
         );
-        controlsRef.current = controls; // ⬅️ idem
+        controlsRef.current = controls;
       }
     })();
 
@@ -763,7 +743,7 @@ const AgenceEmbarquementPage: React.FC = () => {
 
         {/* ==== Infos départ + actions ==== */}
         <div className="bg-white rounded-xl border shadow-sm">
-          <div className="px-4 py-3 flex flex-wrap items-center gap-3">
+          <div className="px-4 py-3 flex flex-wrap items-center gap-4">
             <div className="text-sm text-gray-500">Trajet</div>
             <div className="font-semibold">
               {selectedTrip ? (
@@ -784,10 +764,11 @@ const AgenceEmbarquementPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="px-4 pb-3 flex flex-wrap items-center gap-4">
+          <div className="px-4 pb-3 flex flex-wrap items-center gap-3">
             <div className="text-xs text-gray-600">
               Total: <b>{totals.total}</b> • Embarqués: <b>{totals.embarques}</b> • Absents: <b>{totals.absents}</b>
             </div>
+
             <input
               type="text"
               placeholder="Rechercher nom / téléphone…"
@@ -795,16 +776,16 @@ const AgenceEmbarquementPage: React.FC = () => {
               onChange={(e) => setSearchTerm(e.target.value)}
               className="px-3 py-2 border rounded-lg text-sm"
             />
+
             <button
               type="button"
               onClick={() => setScanOn((v) => !v)}
-              className={`px-3 py-2 rounded-lg text-sm ${
-                scanOn ? "bg-emerald-600 text-white" : "bg-gray-200 text-gray-700"
-              }`}
+              className={`px-3 py-2 rounded-lg text-sm ${scanOn ? "bg-emerald-600 text-white" : "bg-gray-200 text-gray-700"}`}
               title="Activer le scanner (QR / code-barres)"
             >
               {scanOn ? "Scanner ON" : "Scanner OFF"}
             </button>
+
             <button
               type="button"
               onClick={() => window.print()}
@@ -813,6 +794,29 @@ const AgenceEmbarquementPage: React.FC = () => {
             >
               🖨️ Imprimer
             </button>
+
+            {!isClosed ? (
+              <button
+                type="button"
+                onClick={() => setIsClosed(true)}
+                className="px-3 py-2 rounded-lg text-sm border text-rose-700 border-rose-200"
+                title="Clôturer l’embarquement (puis traiter les absents)"
+              >
+                Clôturer l’embarquement
+              </button>
+            ) : (
+              <>
+                <span className="text-sm font-semibold text-rose-600">Embarquement clôturé</span>
+                <button
+                  type="button"
+                  onClick={reprogrammerTousLesAbsents}
+                  className="px-3 py-2 rounded-lg text-sm border"
+                  title="Reprogrammer tous les no-show vers le prochain départ"
+                >
+                  Reprogrammer tous les absents
+                </button>
+              </>
+            )}
           </div>
 
           {scanOn && (
@@ -837,7 +841,7 @@ const AgenceEmbarquementPage: React.FC = () => {
             <input
               value={scanCode}
               onChange={(e) => setScanCode(e.target.value)}
-              placeholder="ID Firestore ou référence (REF-…)"
+              placeholder="ID Firestore ou référence (REF-/QR-…)"
               className="flex-1 px-3 py-2 border rounded-lg text-sm"
             />
             <button
@@ -903,7 +907,7 @@ const AgenceEmbarquementPage: React.FC = () => {
                   <th className="px-3 py-2 text-left">Téléphone</th>
                   <th className="px-3 py-2 text-left">Canal</th>
                   <th className="px-3 py-2 text-center w-24">Embarqué</th>
-                  <th className="px-3 py-2 text-center w-28">Absent</th>
+                  <th className="px-3 py-2 text-center w-28">Absence/Reprog.</th>
                 </tr>
               </thead>
               <tbody>
@@ -938,13 +942,9 @@ const AgenceEmbarquementPage: React.FC = () => {
                           />
                         </td>
                         <td className="px-3 py-2 text-center">
-                          <div className="flex flex-col items-center gap-1">
-                            <button
-                              className="case"
-                              data-checked={absent}
-                              onClick={() => updateStatut(r.id, absent ? "embarqué" : "absent")}
-                              title="Basculer Absent / Embarqué"
-                            />
+                          {/* Pendant le scan : pas de marquage absent par bouton, on scanne seulement.
+                              Après clôture : on autorise reprogrammation pour les NON embarqués. */}
+                          {isClosed && !embarked ? (
                             <button
                               className="text-[11px] px-2 py-1 rounded border hover:bg-gray-50"
                               onClick={() => absentEtReprogrammer(r.id)}
@@ -952,7 +952,9 @@ const AgenceEmbarquementPage: React.FC = () => {
                             >
                               Absent + Reprog.
                             </button>
-                          </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">{absent ? "Absent" : "—"}</span>
+                          )}
                         </td>
                       </tr>
                     );

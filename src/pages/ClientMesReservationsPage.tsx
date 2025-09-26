@@ -102,8 +102,8 @@ const ClientMesReservationsPage: React.FC = () => {
 
   // 🎨 Thème (par défaut, puis surcharge si slug trouvé)
   const [theme, setTheme] = useState({
-    primary: "#ea580c",   // orange-600
-    secondary: "#f97316", // orange-500
+    primary: "#ea580c",
+    secondary: "#f97316",
   });
 
   const [phone, setPhone] = useState("");
@@ -193,6 +193,9 @@ const ClientMesReservationsPage: React.FC = () => {
       );
       return;
     }
+    // on normalise la variable utilisée dans les requêtes Firestore
+    // (la donnée en base est déjà stockée telle quelle; si tu veux forcer la normalisation,
+    // fais-le côté écriture)
     setError("");
     setLoading(true);
     setRows([]);
@@ -209,7 +212,6 @@ const ClientMesReservationsPage: React.FC = () => {
           setError("Compagnie introuvable.");
         } else {
           const cdoc = companies.docs[0];
-          // s’assure que le thème correspond à la compagnie
           const d = cdoc.data() as any;
           setTheme((t) => ({
             ...t,
@@ -269,14 +271,13 @@ const ClientMesReservationsPage: React.FC = () => {
 
       {/* Body */}
       <main className="max-w-3xl mx-auto p-4 space-y-4">
-        {/* Formulaire téléphone avec instruction */}
+        {/* Formulaire téléphone */}
         <section className="bg-white border rounded-xl p-4">
           <label className="text-sm font-medium text-gray-800">
             Numéro de téléphone
           </label>
           <p className="mt-1 text-xs text-gray-500">
-            Saisissez le numéro utilisé lors de vos réservations
-            format local, puis appuyez sur{" "}
+            Saisissez le numéro utilisé lors de vos réservations puis appuyez sur{" "}
             <span className="font-medium">Rechercher</span>.
           </p>
           <div className="mt-3 flex gap-2">
@@ -320,27 +321,23 @@ const ClientMesReservationsPage: React.FC = () => {
             <div className="p-6 text-sm text-gray-500">Aucun résultat.</div>
           ) : (
             <>
-              <ul className="">
+              <ul>
                 {displayed.map((r) => {
-                  const dateTxt =
-                    toDayjs(r.date)?.format("dddd D MMMM YYYY") || "—";
+                  const dateTxt = toDayjs(r.date)?.format("dddd D MMMM YYYY") || "—";
                   const heure = r.heure || "";
                   const from = r.depart || "—";
                   const to = r.arrivee || r.arrival || "—";
                   const places = r.nombre_places ?? r.seatsGo ?? undefined;
                   const amount = r.montant_total ?? r.montant ?? undefined;
 
+                  const isPaid = /pay|confirm/i.test(String(r.statut || ""));
+
                   return (
-                    <li
-                      key={`${r.companyId}_${r.agencyId}_${r.id}`}
-                      className="relative"
-                    >
-                      {/* Carte stylée */}
+                    <li key={`${r.companyId}_${r.agencyId}_${r.id}`} className="relative">
                       <div
                         className="m-3 rounded-2xl border bg-white shadow-sm hover:shadow-md transition-all overflow-hidden"
                         style={{ borderColor: `${theme.primary}30` }}
                       >
-                        {/* Bande colorée à gauche */}
                         <span
                           className="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl"
                           style={{ backgroundColor: theme.primary }}
@@ -353,8 +350,10 @@ const ClientMesReservationsPage: React.FC = () => {
                               </div>
 
                               <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border"
-                                      style={{ backgroundColor: `${theme.secondary}15`, borderColor: `${theme.secondary}30`, color: "#374151" }}>
+                                <span
+                                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border"
+                                  style={{ backgroundColor: `${theme.secondary}15`, borderColor: `${theme.secondary}30`, color: "#374151" }}
+                                >
                                   <Calendar className="w-3.5 h-3.5" />
                                   {dateTxt} {heure && `· ${heure}`}
                                 </span>
@@ -374,8 +373,10 @@ const ClientMesReservationsPage: React.FC = () => {
                                 )}
 
                                 {typeof amount === "number" && (
-                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border"
-                                        style={{ backgroundColor: `${theme.primary}12`, borderColor: `${theme.primary}30`, color: "#374151" }}>
+                                  <span
+                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border"
+                                    style={{ backgroundColor: `${theme.primary}12`, borderColor: `${theme.primary}30`, color: "#374151" }}
+                                  >
                                     <CreditCard className="w-3.5 h-3.5" />
                                     {amount.toLocaleString("fr-FR")} FCFA
                                   </span>
@@ -387,19 +388,23 @@ const ClientMesReservationsPage: React.FC = () => {
                               </div>
                             </div>
 
+                            {/* 🚀 Redirection conditionnelle */}
                             <div className="shrink-0">
                               <button
-                                onClick={() =>
-                                  navigate(
-                                    `/${r.companySlug || slug || ""}/reservation/${r.id}`,
-                                    {
-                                      state: {
-                                        companyId: r.companyId,
-                                        agencyId: r.agencyId,
-                                      },
-                                    }
-                                  )
-                                }
+                                onClick={() => {
+                                  const baseSlug = r.companySlug || slug || "";
+                                  if (isPaid) {
+                                    // Reçu direct
+                                    navigate(`/${baseSlug}/receipt/${r.id}`, {
+                                      state: { reservation: r },
+                                    });
+                                  } else {
+                                    // Détails (suivi paiement)
+                                    navigate(`/${baseSlug}/reservation/${r.id}`, {
+                                      state: { companyId: r.companyId, agencyId: r.agencyId },
+                                    });
+                                  }
+                                }}
                                 className="text-sm px-3 py-1.5 rounded-lg border shadow-sm hover:bg-gray-50"
                                 style={{ borderColor: `${theme.primary}40` }}
                               >
@@ -418,9 +423,7 @@ const ClientMesReservationsPage: React.FC = () => {
                 <div className="p-4 border-t flex justify-center">
                   <button
                     onClick={() =>
-                      setVisibleCount((c) =>
-                        Math.min(c + LOAD_MORE_STEP, rows.length)
-                      )
+                      setVisibleCount((c) => Math.min(c + LOAD_MORE_STEP, rows.length))
                     }
                     className="text-sm px-4 py-2 rounded-lg border hover:bg-gray-50"
                     style={{ borderColor: `${theme.primary}40` }}
