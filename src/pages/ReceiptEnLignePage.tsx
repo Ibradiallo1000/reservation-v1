@@ -1,6 +1,7 @@
+// src/pages/ReceiptEnLignePage.tsx
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { doc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { doc, getDoc, collectionGroup, getDocs, query, where, limit } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { ChevronLeft, Download, Printer, Home, MapPin, User, Ticket, CreditCard, ArrowRight } from 'lucide-react';
 import QRCode from 'react-qr-code';
@@ -50,8 +51,8 @@ const ReceiptEnLignePage: React.FC = () => {
   const { id, slug } = useParams<{ id: string; slug: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { companyInfo: locationCompanyInfo, reservation: reservationFromState, companyId: stCompanyId, agencyId: stAgencyId } =
-    (location.state || {}) as { companyInfo?: CompanyInfo; reservation?: Reservation; companyId?: string; agencyId?: string };
+  const { companyInfo: locationCompanyInfo, reservation: reservationFromState } =
+    (location.state || {}) as { companyInfo?: CompanyInfo; reservation?: Reservation };
 
   const [reservation, setReservation] = useState<Reservation | null>(reservationFromState || null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(locationCompanyInfo || null);
@@ -68,54 +69,27 @@ const ReceiptEnLignePage: React.FC = () => {
     if (inline) setAgencyName(inline);
   }, [reservationFromState?.nomAgence, reservationFromState?.agencyNom, reservationFromState?.agenceNom]);
 
-  // ✅ Fallback sans collectionGroup : lecture directe (state) ou via slug → agences
+  // ✅ Fallback : charger la réservation (collectionGroup) si accès direct
   useEffect(() => {
-    (async () => {
+    const load = async () => {
       if (reservation || !id) return;
 
-      // 1) Lecture directe si companyId + agencyId fournis via state
-      if (stCompanyId && stAgencyId) {
-        const r = await getDoc(doc(db, 'companies', stCompanyId, 'agences', stAgencyId, 'reservations', id)).catch(() => null as any);
-        if (r && r.exists()) {
-          setReservation({ ...(r.data() as Reservation), id: r.id });
-          return;
-        }
+      // 1) Essayer par docId (rare)
+      let snap = await getDocs(query(collectionGroup(db, 'reservations'), where('__name__', '==', id), limit(1)));
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        setReservation({ ...(d.data() as Reservation), id: d.id });
+        return;
       }
-
-      // 2) Sinon : retrouver la compagnie via le slug, puis boucler les agences
-      try {
-        const companies = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)));
-        if (companies.empty) return;
-        const companyId = companies.docs[0].id;
-
-        const agences = await getDocs(collection(db, 'companies', companyId, 'agences'));
-        for (const ag of agences.docs) {
-          const one = await getDoc(doc(db, 'companies', companyId, 'agences', ag.id, 'reservations', id));
-          if (one.exists()) {
-            setReservation({ ...(one.data() as Reservation), id: one.id });
-
-            if (!companyInfo) {
-              const cs = await getDoc(doc(db, 'companies', companyId));
-              if (cs.exists()) {
-                const d = cs.data() as any;
-                setCompanyInfo({
-                  id: cs.id,
-                  name: d?.name || d?.nom || 'Votre compagnie',
-                  couleurPrimaire: d?.couleurPrimaire || d?.primaryColor,
-                  couleurSecondaire: d?.couleurSecondaire || d?.secondaryColor,
-                  logoUrl: d?.logoUrl,
-                  telephone: d?.telephone,
-                  slug: d?.slug,
-                  code: d?.code
-                });
-              }
-            }
-            return;
-          }
-        }
-      } catch { /* ignore */ }
-    })();
-  }, [id, reservation, slug, stCompanyId, stAgencyId, companyInfo]);
+      // 2) Essayer par referenceCode
+      snap = await getDocs(query(collectionGroup(db, 'reservations'), where('referenceCode', '==', id), limit(1)));
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        setReservation({ ...(d.data() as Reservation), id: d.id });
+      }
+    };
+    load();
+  }, [id, reservation]);
 
   // Charger les infos compagnie si absentes
   useEffect(() => {
@@ -140,39 +114,39 @@ const ReceiptEnLignePage: React.FC = () => {
   }, [companyInfo, reservation?.companyId]);
 
   // Récupérer le vrai nom d’agence si nécessaire
-  useEffect(() => {
-    // si déjà fourni par la réservation → on l'affiche
-    const inline = reservation?.nomAgence || reservation?.agencyNom || reservation?.agenceNom;
-    if (inline) {
-      setAgencyName(inline);
-      return;
-    }
-    // garde-fou : on sort si l'un manque
-    if (!reservation?.companyId || !reservation?.agencyId) return;
+useEffect(() => {
+  // si déjà fourni par la réservation → on l'affiche
+  const inline = reservation?.nomAgence || reservation?.agencyNom || reservation?.agenceNom;
+  if (inline) {
+    setAgencyName(inline);
+    return;
+  }
+  // garde-fou : on sort si l'un manque
+  if (!reservation?.companyId || !reservation?.agencyId) return;
 
-    // ✅ Narrowing explicite après le guard
-    const companyId: string = reservation.companyId;
-    const agencyId: string = reservation.agencyId;
+  // ✅ Narrowing explicite après le guard : plus "string | undefined"
+  const companyId: string = reservation.companyId;
+  const agencyId: string = reservation.agencyId;
 
-    (async () => {
-      try {
-        const agRef = doc(db, 'companies', companyId, 'agences', agencyId);
-        const ag = await getDoc(agRef);
-        if (ag.exists()) {
-          const a = ag.data() as any;
-          setAgencyName(a?.nom || a?.name || 'Agence');
-        }
-      } catch {
-        /* ignore */
+  (async () => {
+    try {
+      const agRef = doc(db, 'companies', companyId, 'agences', agencyId);
+      const ag = await getDoc(agRef);
+      if (ag.exists()) {
+        const a = ag.data() as any;
+        setAgencyName(a?.nom || a?.name || 'Agence');
       }
-    })();
-  }, [
-    reservation?.companyId,
-    reservation?.agencyId,
-    reservation?.nomAgence,
-    reservation?.agencyNom,
-    reservation?.agenceNom
-  ]);
+    } catch {
+      /* ignore */
+    }
+  })();
+}, [
+  reservation?.companyId,
+  reservation?.agencyId,
+  reservation?.nomAgence,
+  reservation?.agencyNom,
+  reservation?.agenceNom
+]);
 
   const emissionDate =
     reservation?.createdAt?.seconds
@@ -312,7 +286,7 @@ const ReceiptEnLignePage: React.FC = () => {
               Code d'embarquement
             </h3>
             <div className="flex justify-center">
-              <QRCode value={qrValue} size={100} fgColor="#000000" bgColor="#ffffff" level="H" />
+              <QRCode value={qrValue} size={80} fgColor={primaryColor} />
             </div>
             <p className="text-xs text-gray-600 mt-2">Date d’émission : {emissionDate}</p>
             <p className="text-xs text-gray-600">Validité : 1 mois à compter de la date d’émission</p>
