@@ -1,4 +1,3 @@
-// src/pages/ReceiptGuichetPage.tsx
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, collectionGroup, getDocs, query, where, limit } from 'firebase/firestore';
@@ -210,7 +209,7 @@ const ReceiptGuichetPage: React.FC = () => {
   const secondaryColor = company.couleurSecondaire;
   const textColor = safeTextColor(primaryColor);
 
-  const Slip: React.FC<{ copy: 'Comptabilité' | 'Contrôle' | 'Client'; note: string; }> = ({ copy, note }) => (
+  const Slip: React.FC<{ copy: 'Comptabilité' | 'Contrôle' | 'Client'; note: string; }> = ({ copy }) => (
     <div className="bg-white rounded-lg shadow-sm overflow-hidden" style={{ width: '81mm', margin: '0 auto' }}>
       {/* Top */}
       <div className="flex justify-between items-center border-b pb-2 mb-2 px-3" style={{ borderColor: hexToRgba(primaryColor, 0.3) }}>
@@ -298,11 +297,11 @@ const ReceiptGuichetPage: React.FC = () => {
           </div>
         </div>
 
-        {/* QR */}
+        {/* QR (noir/blanc + H) */}
         <div className="mt-2 p-1 rounded border border-gray-200 flex flex-col items-center">
           <h3 className="text-xs font-semibold mb-1" style={{ color: primaryColor }}>Code d'embarquement</h3>
           <div className="bg-white p-1 rounded border" style={{ borderColor: primaryColor }}>
-            <QRCode value={qrValue} size={60} fgColor={primaryColor} level="H" />
+            <QRCode value={qrValue} size={80} fgColor="#000000" bgColor="#ffffff" level="H" />
           </div>
           <p className="mt-2 text-[10px] text-gray-600 text-center">
             Date d’émission : {emissionDate}
@@ -379,11 +378,11 @@ const ReceiptGuichetPage: React.FC = () => {
       {/* Zone imprimable */}
       <div className="max-w-[81mm] mx-auto p-2 print:p-0" id="print-receipt">
         <div ref={receiptRef} style={{ width: '81mm', margin: '0 auto' }}>
-          <Slip copy="Comptabilité" note="À remettre au comptable par le guichetier immédiatement après la vente." />
+          <Slip copy="Comptabilité" note="" />
           <div className="perf" />
-          <Slip copy="Contrôle" note="À découper et conserver par le contrôleur lors de l’embarquement." />
+          <Slip copy="Contrôle" note="" />
           <div className="perf" />
-          <Slip copy="Client" note="À conserver par le passager jusqu’à la fin du voyage." />
+          <Slip copy="Client" note="" />
         </div>
 
         {/* Actions (écran) */}

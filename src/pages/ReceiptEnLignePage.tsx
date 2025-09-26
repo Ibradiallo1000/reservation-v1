@@ -1,4 +1,3 @@
-// src/pages/ReceiptEnLignePage.tsx
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
@@ -313,7 +312,7 @@ const ReceiptEnLignePage: React.FC = () => {
               Code d'embarquement
             </h3>
             <div className="flex justify-center">
-              <QRCode value={qrValue} size={80} fgColor={primaryColor} />
+              <QRCode value={qrValue} size={100} fgColor="#000000" bgColor="#ffffff" level="H" />
             </div>
             <p className="text-xs text-gray-600 mt-2">Date d’émission : {emissionDate}</p>
             <p className="text-xs text-gray-600">Validité : 1 mois à compter de la date d’émission</p>
