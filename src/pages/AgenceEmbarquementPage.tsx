@@ -112,6 +112,7 @@ const AgenceEmbarquementPage: React.FC = () => {
   const [scanOn, setScanOn] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+  const controlsRef = useRef<any>(null);     // ⬅️ contrôleur ZXing (dispose d’un .stop())
   const lastScanRef = useRef<number>(0);
   const lastAlertRef = useRef<number>(0);
 
@@ -490,15 +491,30 @@ const AgenceEmbarquementPage: React.FC = () => {
     [scanCode, companyId, agencyId, updateStatut]
   );
 
+  /* ---------- Arrêt propre du scanner ---------- */
+  function stopScanner() {
+    try {
+      if (controlsRef.current && typeof controlsRef.current.stop === "function") {
+        controlsRef.current.stop();
+      }
+    } catch {}
+    try {
+      if (readerRef.current && typeof (readerRef.current as any).reset === "function") {
+        (readerRef.current as any).reset();
+      }
+    } catch {}
+    controlsRef.current = null;
+    readerRef.current = null;
+    if (videoRef.current?.srcObject) {
+      (videoRef.current.srcObject as MediaStream)?.getTracks().forEach((t) => t.stop());
+      videoRef.current.srcObject = null;
+    }
+  }
+
   /* ---------- Scanner caméra ---------- */
   useEffect(() => {
     if (!scanOn) {
-      readerRef.current?.reset();
-      readerRef.current = null;
-      if (videoRef.current?.srcObject) {
-        (videoRef.current.srcObject as MediaStream)?.getTracks().forEach((t) => t.stop());
-        videoRef.current.srcObject = null;
-      }
+      stopScanner();
       return;
     }
     const reader = new BrowserMultiFormatReader();
@@ -508,7 +524,7 @@ const AgenceEmbarquementPage: React.FC = () => {
       try {
         // Caméra arrière par défaut si possible
         // @ts-ignore
-        await reader.decodeFromConstraints(
+        const controls = await reader.decodeFromConstraints(
           { video: { facingMode: { ideal: "environment" } } },
           videoRef.current as HTMLVideoElement,
           async (res: any) => {
@@ -557,11 +573,12 @@ const AgenceEmbarquementPage: React.FC = () => {
             }
           }
         );
+        controlsRef.current = controls; // ⬅️ pour pouvoir stop()
       } catch {
         // Fallback: premier device
         const devices = (await BrowserMultiFormatReader.listVideoInputDevices()) as unknown as Array<{ deviceId?: string }>;
         const preferred: string | null = devices?.[0]?.deviceId ?? null;
-        await reader.decodeFromVideoDevice(
+        const controls = await reader.decodeFromVideoDevice(
           (preferred as unknown) as string | null,
           videoRef.current as HTMLVideoElement,
           async (res) => {
@@ -600,17 +617,11 @@ const AgenceEmbarquementPage: React.FC = () => {
             }
           }
         );
+        controlsRef.current = controls; // ⬅️ idem
       }
     })();
 
-    return () => {
-      readerRef.current?.reset();
-      readerRef.current = null;
-      if (videoRef.current?.srcObject) {
-        (videoRef.current.srcObject as MediaStream)?.getTracks().forEach((t) => t.stop());
-        videoRef.current.srcObject = null;
-      }
-    };
+    return () => stopScanner();
   }, [scanOn, companyId, agencyId, updateStatut]);
 
   /* ---------- Filtre recherche ---------- */
