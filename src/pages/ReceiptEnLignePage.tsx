@@ -1,7 +1,7 @@
 // src/pages/ReceiptEnLignePage.tsx
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collectionGroup, getDocs, query, where, limit } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { ChevronLeft, Download, Printer, Home, MapPin, User, Ticket, CreditCard, ArrowRight } from 'lucide-react';
 import QRCode from 'react-qr-code';
@@ -47,7 +47,6 @@ interface CompanyInfo {
   code?: string;
 }
 
-// ---------- Page ----------
 const ReceiptEnLignePage: React.FC = () => {
   const { id, slug } = useParams<{ id: string; slug: string }>();
   const navigate = useNavigate();
@@ -57,7 +56,7 @@ const ReceiptEnLignePage: React.FC = () => {
 
   const [reservation, setReservation] = useState<Reservation | null>(reservationFromState || null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(locationCompanyInfo || null);
-  const [agencyName, setAgencyName] = useState<string>('Agence'); // sera remplacé si trouvé
+  const [agencyName, setAgencyName] = useState<string>('Agence');
   const receiptRef = useRef<HTMLDivElement>(null);
 
   const primaryColor = companyInfo?.couleurPrimaire || '#8b3a2f';
@@ -70,12 +69,23 @@ const ReceiptEnLignePage: React.FC = () => {
     if (inline) setAgencyName(inline);
   }, [reservationFromState?.nomAgence, reservationFromState?.agencyNom, reservationFromState?.agenceNom]);
 
-  // Fallback : charger la réservation si l’accès est direct
+  // ✅ Fallback : charger la réservation (collectionGroup) si accès direct
   useEffect(() => {
     const load = async () => {
-      if (!reservation && id) {
-        const snap = await getDoc(doc(db, 'reservations', id)).catch(() => null as any);
-        if (snap && snap.exists()) setReservation({ ...(snap.data() as Reservation), id: snap.id });
+      if (reservation || !id) return;
+
+      // 1) Essayer par docId (rare)
+      let snap = await getDocs(query(collectionGroup(db, 'reservations'), where('__name__', '==', id), limit(1)));
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        setReservation({ ...(d.data() as Reservation), id: d.id });
+        return;
+      }
+      // 2) Essayer par referenceCode
+      snap = await getDocs(query(collectionGroup(db, 'reservations'), where('referenceCode', '==', id), limit(1)));
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        setReservation({ ...(d.data() as Reservation), id: d.id });
       }
     };
     load();
@@ -104,33 +114,39 @@ const ReceiptEnLignePage: React.FC = () => {
   }, [companyInfo, reservation?.companyId]);
 
   // Récupérer le vrai nom d’agence si nécessaire
-  useEffect(() => {
-    // si déjà fourni par la réservation (nomAgence / agencyNom / agenceNom) → on l'affiche
-    const inline = reservation?.nomAgence || reservation?.agencyNom || reservation?.agenceNom;
-    if (inline) {
-      setAgencyName(inline);
-      return;
-    }
-    // sinon on va lire l'agence dans Firestore
-    if (!reservation?.companyId || !reservation?.agencyId) return;
+useEffect(() => {
+  // si déjà fourni par la réservation → on l'affiche
+  const inline = reservation?.nomAgence || reservation?.agencyNom || reservation?.agenceNom;
+  if (inline) {
+    setAgencyName(inline);
+    return;
+  }
+  // garde-fou : on sort si l'un manque
+  if (!reservation?.companyId || !reservation?.agencyId) return;
 
-    // ---- Narrowing explicite pour TypeScript ----
-    const companyId: string = reservation.companyId;
-    const agencyId: string = reservation.agencyId;
+  // ✅ Narrowing explicite après le guard : plus "string | undefined"
+  const companyId: string = reservation.companyId;
+  const agencyId: string = reservation.agencyId;
 
-    (async () => {
-      try {
-        const agRef = doc(db, 'companies', companyId, 'agences', agencyId);
-        const ag = await getDoc(agRef);
-        if (ag.exists()) {
-          const a = ag.data() as any;
-          setAgencyName(a?.nom || a?.name || 'Agence');
-        }
-      } catch {
-        /* ignore */
+  (async () => {
+    try {
+      const agRef = doc(db, 'companies', companyId, 'agences', agencyId);
+      const ag = await getDoc(agRef);
+      if (ag.exists()) {
+        const a = ag.data() as any;
+        setAgencyName(a?.nom || a?.name || 'Agence');
       }
-    })();
-  }, [reservation?.companyId, reservation?.agencyId, reservation?.nomAgence, reservation?.agencyNom, reservation?.agenceNom]);
+    } catch {
+      /* ignore */
+    }
+  })();
+}, [
+  reservation?.companyId,
+  reservation?.agencyId,
+  reservation?.nomAgence,
+  reservation?.agencyNom,
+  reservation?.agenceNom
+]);
 
   const emissionDate =
     reservation?.createdAt?.seconds
@@ -141,7 +157,6 @@ const ReceiptEnLignePage: React.FC = () => {
     ? format(parseISO(reservation.date), 'dd/MM/yyyy', { locale: fr })
     : '';
 
-  // Export PDF
   const handlePDF = useCallback(() => {
     if (!receiptRef.current) return;
     const filename = `recu-${reservation?.referenceCode || reservation?.id || 'billet'}.pdf`;
@@ -164,13 +179,12 @@ const ReceiptEnLignePage: React.FC = () => {
     );
   }
 
-  // On affiche la référence déjà enregistrée
+  // QR = URL publique /r/:ref (le scanner sait extraire la ref)
   const receiptNumber = reservation.referenceCode || '—';
   const qrValue = `${window.location.origin}/r/${encodeURIComponent(receiptNumber)}`;
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header avec couleur primaire */}
       <header className="sticky top-0 z-20 px-4 py-2 shadow-sm" style={{ backgroundColor: primaryColor, color: textColor }}>
         <div className="flex items-center justify-between max-w-md mx-auto">
           <button onClick={() => navigate(-1)} className="p-2 rounded-full" aria-label="Retour">
@@ -194,7 +208,7 @@ const ReceiptEnLignePage: React.FC = () => {
 
       <main className="max-w-md mx-auto px-4 py-6">
         <div ref={receiptRef} className="bg-white rounded-lg shadow-sm border p-4">
-          {/* En-tête société + agence + n° reçu */}
+          {/* En-tête */}
           <div className="flex justify-between items-center border-b pb-2 mb-2" style={{ borderColor: hexToRgba(primaryColor, 0.3) }}>
             <div className="flex items-center gap-2">
               {companyInfo.logoUrl && (
@@ -266,7 +280,7 @@ const ReceiptEnLignePage: React.FC = () => {
             </div>
           </div>
 
-          {/* QR – Code d’embarquement */}
+          {/* QR */}
           <div className="text-center border-t pt-3">
             <h3 className="text-sm font-semibold mb-2" style={{ color: primaryColor }}>
               Code d'embarquement
@@ -285,7 +299,7 @@ const ReceiptEnLignePage: React.FC = () => {
         </div>
       </main>
 
-      {/* Actions fixes */}
+      {/* Actions */}
       <div
         className="fixed bottom-0 left-0 right-0 bg-white border-t py-3 px-4 grid grid-cols-3 gap-2"
         style={{ borderColor: hexToRgba(primaryColor, 0.3) }}

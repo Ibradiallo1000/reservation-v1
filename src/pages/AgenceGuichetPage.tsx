@@ -1077,10 +1077,6 @@ const AgenceGuichetPage: React.FC = () => {
                   Quitter
                 </button>
               </div>
-
-              {/* Bouton paramètres (conserve ton composant) */}
-              <div className="h-6 w-px bg-gray-200" />
-              <Button leftIcon={<Settings className="h-4 w-4" />}>Paramètres</Button>
             </div>
           </div>
         </div>

@@ -2,15 +2,15 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { doc, getDoc, collectionGroup, getDocs, query, where, limit } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { db } from '@/firebaseConfig';
 import QRCode from 'react-qr-code';
 import html2pdf from 'html2pdf.js';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, Download, Home, MapPin, Printer, User, Ticket, CreditCard, ArrowRight } from 'lucide-react';
-import { hexToRgba, safeTextColor } from '../utils/color';
-import LoadingSpinner from '../components/LoadingSpinner';
-import ErrorMessage from '../components/ErrorMessage';
+import { hexToRgba, safeTextColor } from '@/utils/color';
+import LoadingSpinner from '@/components/LoadingSpinner';
+import ErrorMessage from '@/components/ErrorMessage';
 
 type ReservationStatus = 'confirmé' | 'annulé' | 'en attente' | 'payé' | string;
 type PaymentMethod = 'espèces' | 'mobile_money' | 'carte' | string;
@@ -87,12 +87,22 @@ const ReceiptGuichetPage: React.FC = () => {
     }
   }, []);
 
-  /** Fallback: charge la réservation via collectionGroup quand on arrive par URL directe */
+  /** ✅ Fallback: charge la réservation via collectionGroup (refCode d’abord, puis docId) */
   const fetchReservationFallback = useCallback(async () => {
     if (!id) throw new Error('ID manquant');
-    const q = query(collectionGroup(db, 'reservations'), where('qrCode', '==', id), limit(1));
-    const snap = await getDocs(q);
+
+    // 1) par referenceCode
+    let qRef = query(collectionGroup(db, 'reservations'), where('referenceCode', '==', id), limit(1));
+    let snap = await getDocs(qRef);
+
+    // 2) sinon par docId
+    if (snap.empty) {
+      qRef = query(collectionGroup(db, 'reservations'), where('__name__', '==', id), limit(1));
+      snap = await getDocs(qRef);
+    }
+
     if (snap.empty) throw new Error('Réservation introuvable');
+
     const d = snap.docs[0];
     const data = d.data() as any;
     const parts = d.ref.path.split('/'); // companies/{companyId}/agences/{agencyId}/reservations/{resId}
@@ -119,7 +129,7 @@ const ReceiptGuichetPage: React.FC = () => {
     const raw = snap.data() as any;
     return {
       id: snap.id,
-      nom: raw.nom,
+      nom: raw.nom || raw.name,
       logoUrl: raw.logoUrl,
       couleurPrimaire: raw.theme?.primary || raw.couleurPrimaire || '#3b82f6',
       couleurSecondaire: raw.theme?.secondary || raw.couleurSecondaire || '#93c5fd',
@@ -148,7 +158,6 @@ const ReceiptGuichetPage: React.FC = () => {
     })();
   }, [fetchCompany, fetchReservationFallback, reservationFromState, companyInfoFromState]);
 
-  // Numéro de billet : toujours la référence pro si présente
   const receiptNumber = useMemo(() => {
     if (!reservation) return 'BIL-000000';
     if (reservation.referenceCode) return reservation.referenceCode;
@@ -158,14 +167,13 @@ const ReceiptGuichetPage: React.FC = () => {
     return `AGC-${dep}${arr}-${code}`;
   }, [reservation]);
 
-  // QR: basé sur la référence (plus stable pour contrôle)
+  // ✅ QR cohérent avec scanner (URL publique /r/:reference)
   const qrValue = useMemo(() => {
     const base = window.location.origin;
     const ref = reservation?.referenceCode || reservation?.id;
     return `${base}/r/${encodeURIComponent(ref || '')}`;
   }, [reservation?.referenceCode, reservation?.id]);
 
-  // ✅ Date d'émission, comme sur le reçu en ligne
   const emissionDate = useMemo(() => {
     const ca = reservation?.createdAt;
     let d: Date | undefined;
@@ -202,7 +210,6 @@ const ReceiptGuichetPage: React.FC = () => {
   const secondaryColor = company.couleurSecondaire;
   const textColor = safeTextColor(primaryColor);
 
-  /* ---------- Composant interne : un volet (copie) ---------- */
   const Slip: React.FC<{ copy: 'Comptabilité' | 'Contrôle' | 'Client'; note: string; }> = ({ copy, note }) => (
     <div className="bg-white rounded-lg shadow-sm overflow-hidden" style={{ width: '81mm', margin: '0 auto' }}>
       {/* Top */}
@@ -219,7 +226,6 @@ const ReceiptGuichetPage: React.FC = () => {
           )}
           <div className="leading-tight">
             <h2 className="text-sm font-bold" style={{ color: primaryColor }}>{company.nom}</h2>
-            {/* ✅ Affiche bien le NOM D'AGENCE, pas "WEB" */}
             <p className="text-[11px] text-gray-700 flex items-center gap-1">
               <MapPin className="h-3 w-3 text-gray-500" />
               {(reservation.agencyNom || reservation.nomAgence || 'Agence').trim()}
@@ -292,13 +298,12 @@ const ReceiptGuichetPage: React.FC = () => {
           </div>
         </div>
 
-        {/* QR + Date d'émission + Validité */}
+        {/* QR */}
         <div className="mt-2 p-1 rounded border border-gray-200 flex flex-col items-center">
           <h3 className="text-xs font-semibold mb-1" style={{ color: primaryColor }}>Code d'embarquement</h3>
           <div className="bg-white p-1 rounded border" style={{ borderColor: primaryColor }}>
             <QRCode value={qrValue} size={60} fgColor={primaryColor} level="H" />
           </div>
-          {/* ✅ Ajouts pour cohérence avec le reçu en ligne */}
           <p className="mt-2 text-[10px] text-gray-600 text-center">
             Date d’émission : {emissionDate}
           </p>
@@ -307,7 +312,7 @@ const ReceiptGuichetPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Footer + note */}
+        {/* Footer */}
         <div className="mt-2 pt-2 border-t border-gray-200 text-center" style={{ fontSize: '10px', color: '#4b5563' }}>
           <p className="mb-1">Merci d'avoir choisi {company.nom}</p>
           <p className="italic mb-1">Présentez-vous 1H avant le départ</p>
@@ -315,7 +320,7 @@ const ReceiptGuichetPage: React.FC = () => {
           <p className="mt-0.5 text-[9px] text-gray-400">
             Ref {reservation.referenceCode || reservation.id} • Guichetier {reservation.guichetierCode || '—'} • Shift {reservation.shiftId || '—'}
           </p>
-          <p className="mt-1 text-[9px] text-gray-500">{note}</p>
+          <p className="mt-1 text-[9px] text-gray-500">À découper et conserver selon le volet.</p>
         </div>
       </div>
     </div>
@@ -330,7 +335,6 @@ const ReceiptGuichetPage: React.FC = () => {
         ['--text-on-primary' as any]: textColor
       }}
     >
-      {/* Styles impression : ne montrer QUE #print-receipt, largeur 80mm */}
       <style>{`
         @media print {
           body * { visibility: hidden !important; }
@@ -348,7 +352,7 @@ const ReceiptGuichetPage: React.FC = () => {
         .badge-copy { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 6px; border: 1px solid #e5e7eb; background: #f9fafb; }
       `}</style>
 
-      {/* Header (écran) */}
+      {/* Header */}
       <header className="sticky top-0 z-50 px-4 py-3 shadow-sm no-print" style={{ backgroundColor: primaryColor, color: textColor }}>
         <div className="flex items-center justify-between max-w-7xl mx-auto">
           <button onClick={handleBack} className="p-2 rounded-full hover:bg-white/10 transition" aria-label="Retour">
@@ -372,7 +376,7 @@ const ReceiptGuichetPage: React.FC = () => {
         </div>
       </header>
 
-      {/* Zone imprimable : 3 volets empilés */}
+      {/* Zone imprimable */}
       <div className="max-w-[81mm] mx-auto p-2 print:p-0" id="print-receipt">
         <div ref={receiptRef} style={{ width: '81mm', margin: '0 auto' }}>
           <Slip copy="Comptabilité" note="À remettre au comptable par le guichetier immédiatement après la vente." />
@@ -382,7 +386,7 @@ const ReceiptGuichetPage: React.FC = () => {
           <Slip copy="Client" note="À conserver par le passager jusqu’à la fin du voyage." />
         </div>
 
-        {/* Actions (écran seulement) */}
+        {/* Actions (écran) */}
         <div className="no-print mt-3 grid grid-cols-1 gap-2" style={{ width: '81mm', margin: '0 auto' }}>
           <button
             onClick={handlePDF}
