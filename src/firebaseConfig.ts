@@ -5,7 +5,7 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
   connectFirestoreEmulator,
-  setLogLevel, // ⬅️ pour calmer la verbosité
+  setLogLevel,
 } from 'firebase/firestore';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
@@ -26,17 +26,20 @@ const firebaseConfig = {
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 /* ===================== SERVICES ===================== */
-/** ✅ Nouvelle API : cache persistant multi-onglets + tolérance réseau */
+const FORCE_LONG_POLLING =
+  import.meta?.env?.VITE_FIRESTORE_FORCE_LONG_POLLING === 'true';
+
 const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
     tabManager: persistentMultipleTabManager(),
   }),
   ignoreUndefinedProperties: true,
-  // rend les connexions plus fiables quand WebChannel est bloqué par le réseau/DNS
-  experimentalAutoDetectLongPolling: true,
-  // experimentalForceLongPolling: true, // <-- décommente si réseau vraiment récalcitrant
+
+  // Options supportées pour améliorer la compat réseau
+  experimentalAutoDetectLongPolling: !FORCE_LONG_POLLING,
+  experimentalForceLongPolling: FORCE_LONG_POLLING,
 });
-setLogLevel('error'); // coupe les logs verbeux Firestore en console
+setLogLevel('error');
 
 const auth = getAuth(app);
 const storage = getStorage(app);
@@ -52,10 +55,10 @@ export const dbReady = (async () => {
       connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
       connectStorageEmulator(storage, '127.0.0.1', 9199);
       connectFunctionsEmulator(functions, '127.0.0.1', 5001);
-      console.info('✅ Emulateurs Firebase connectés (Firestore/Auth/Storage/Functions).');
+      console.info('✅ Emulateurs Firebase connectés.');
     }
   } catch (e) {
-    console.warn('⚠️ Initialisation Firestore partielle (continuer en mode dégradé).', e);
+    console.warn('⚠️ Initialisation partielle (mode dégradé).', e);
   }
 })();
 
