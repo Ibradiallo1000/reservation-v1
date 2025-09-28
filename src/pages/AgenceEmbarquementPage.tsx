@@ -91,9 +91,14 @@ function getScanText(res: any): string {
 function stripAccents(s: string) {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
+
+// ✅ Normalisation plus tolérante: enlève accents, ponctuation, tirets, NBSP, etc.
 function normCity(v?: string): string {
-  return stripAccents(v || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const s = stripAccents((v || "").toLowerCase());
+  const s2 = s.replace(/[^a-z0-9]+/g, " ");
+  return s2.replace(/\s+/g, " ").trim();
 }
+
 function normTime(v?: string): string | null {
   if (!v) return null;
   const m = v.trim().match(/^(\d{1,2}):(\d{2})$/);
@@ -126,42 +131,107 @@ function normDate(v: any): string | null {
   return null;
 }
 
-// Lookup robuste par agence(s)
+/* ===================== Recherche robuste ===================== */
+// ⚠️ Remplace l’ancienne version par celle-ci (priorise le contexte courant)
 async function findReservationByCode(
   companyId: string,
   agencyId: string | null | undefined,
-  code: string
+  code: string,
+  context?: {
+    dep?: string; arr?: string; date?: string; heure?: string; weeklyTripId?: string | null;
+  }
 ): Promise<{ resId: string; agencyId: string } | null> {
+  const normalize = {
+    city: (v?: string) => (v ? stripAccents(v).toLowerCase().trim() : ""),
+    date: (v?: any) => (v ? normDate(v) : null),
+    time: (v?: string) => (v ? normTime(v) : null),
+  };
+
+  const ctx = {
+    dep: normalize.city(context?.dep),
+    arr: normalize.city(context?.arr),
+    date: normalize.date(context?.date),
+    heure: normalize.time(context?.heure),
+    id: context?.weeklyTripId || null,
+  };
+
+  const relevance = (d: any) => {
+    let s = 0;
+    const dDep = normalize.city(d.depart);
+    const dArr = normalize.city(d.arrivee || d.arrival);
+    const dDate = normalize.date(d.date);
+    const dHeure = normalize.time(d.heure);
+    if (ctx.id && d.trajetId && d.trajetId === ctx.id) s += 100;
+    if (dDep && ctx.dep && dDep === ctx.dep) s += 20;
+    if (dArr && ctx.arr && dArr === ctx.arr) s += 20;
+    if (dDate && ctx.date && dDate === ctx.date) s += 30;
+    if (dHeure && ctx.heure && dHeure === ctx.heure) s += 10;
+    return s;
+  };
+
+  const bestInSnap = (snap: any) => {
+    if (snap.empty) return null;
+    let best: any = null;
+    let bestScore = -1;
+    snap.docs.forEach((docSnap: any) => {
+      const sc = relevance(docSnap.data());
+      if (sc > bestScore) { bestScore = sc; best = docSnap; }
+    });
+    return best || snap.docs[0];
+  };
+
+  // 1) Priorité à l’agence courante
   if (agencyId) {
+    // a) ID direct
     const directRef = doc(db, `companies/${companyId}/agences/${agencyId}/reservations`, code);
     const directSnap = await getDoc(directRef);
     if (directSnap.exists()) return { resId: directSnap.id, agencyId };
 
+    // b) referenceCode (peut retourner plusieurs => on choisit la meilleure)
     const q1 = query(
       collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
-      where("referenceCode", "==", code),
-      fsLimit(1)
+      where("referenceCode", "==", code)
     );
     const s1 = await getDocs(q1);
-    if (!s1.empty) return { resId: s1.docs[0].id, agencyId };
+    const best = bestInSnap(s1);
+    if (best) return { resId: best.id, agencyId };
   }
 
+  // 2) Multi-agences (meilleure concordance globale)
   const ags = await getDocs(collection(db, `companies/${companyId}/agences`));
 
+  // a) Par ID direct
   for (const ag of ags.docs) {
     const dref = doc(db, `companies/${companyId}/agences/${ag.id}/reservations`, code);
     const ds = await getDoc(dref);
     if (ds.exists()) return { resId: ds.id, agencyId: ag.id };
   }
+
+  // b) Par referenceCode, choisir le meilleur match
+  let bestDoc: any = null;
+  let bestAgency: string | null = null;
+  let bestScore = -1;
+
   for (const ag of ags.docs) {
     const q2 = query(
       collection(db, `companies/${companyId}/agences/${ag.id}/reservations`),
-      where("referenceCode", "==", code),
-      fsLimit(1)
+      where("referenceCode", "==", code)
     );
     const s2 = await getDocs(q2);
-    if (!s2.empty) return { resId: s2.docs[0].id, agencyId: ag.id };
+    if (!s2.empty) {
+      const candidate = bestInSnap(s2);
+      if (candidate) {
+        const sc = relevance(candidate.data());
+        if (sc > bestScore) {
+          bestScore = sc;
+          bestDoc = candidate;
+          bestAgency = ag.id;
+        }
+      }
+    }
   }
+
+  if (bestDoc && bestAgency) return { resId: bestDoc.id, agencyId: bestAgency };
   return null;
 }
 
@@ -372,15 +442,89 @@ const AgenceEmbarquementPage: React.FC = () => {
 
       try {
         await runTransaction(db, async (tx) => {
+          // ====== LECTURES D'ABORD ======
           const snap = await tx.get(resRef);
           if (!snap.exists()) throw new Error("Réservation introuvable");
           const data = snap.data() as any;
 
+          // Comparaisons normalisées
+          const dataDep = normCity(data.depart);
+          const dataArr = normCity(data.arrivee || data.arrival);
+          const dataHr  = normTime(data.heure || "");
+          const dataDt  = normDate(data.date);
+
+          const selDep  = normCity(selectedTrip!.departure);
+          const selArr  = normCity(selectedTrip!.arrival);
+          const selHr   = normTime(selectedTrip!.heure);
+          const selDt   = normDate(selectedDate);
+
+          const idMatch     = !!(data.trajetId && selectedTrip?.id && data.trajetId === selectedTrip.id);
+          const fieldsMatch = (dataDep === selDep) && (dataArr === selArr) && (dataHr === selHr) && (dataDt === selDt);
+          const softMatch   = (dataDep === selDep) && (dataArr === selArr) && (dataDt === selDt); // on ignore l'heure
+
+          // Si les IDs diffèrent, on tente une comparaison par libellé via weeklyTrips
+          let weeklyTripMatch = false;
+          const selTripId = selectedTrip?.id ?? data.trajetId ?? null;
+          const resTripId = data.trajetId ?? null;
+
+          if (!idMatch && (selTripId || resTripId)) {
+            try {
+              let selTripMeta: { departure?: string; arrival?: string } | null = null;
+              let resTripMeta: { departure?: string; arrival?: string } | null = null;
+
+              if (selectedTrip?.id) {
+                const tSelRef = doc(db, `companies/${companyId}/agences/${agencyIdToUse}/weeklyTrips/${selectedTrip.id}`);
+                const tSelSnap = await tx.get(tSelRef);
+                if (tSelSnap.exists()) {
+                  const d = tSelSnap.data() as any;
+                  selTripMeta = { departure: d?.departure, arrival: d?.arrival };
+                }
+              } else if (selTripId) {
+                const tSelRef = doc(db, `companies/${companyId}/agences/${agencyIdToUse}/weeklyTrips/${selTripId}`);
+                const tSelSnap = await tx.get(tSelRef);
+                if (tSelSnap.exists()) {
+                  const d = tSelSnap.data() as any;
+                  selTripMeta = { departure: d?.departure, arrival: d?.arrival };
+                }
+              }
+
+              if (resTripId) {
+                const tResRef = doc(db, `companies/${companyId}/agences/${agencyIdToUse}/weeklyTrips/${resTripId}`);
+                const tResSnap = await tx.get(tResRef);
+                if (tResSnap.exists()) {
+                  const d = tResSnap.data() as any;
+                  resTripMeta = { departure: d?.departure, arrival: d?.arrival };
+                }
+              }
+
+              if (selTripMeta && resTripMeta) {
+                const selDep2 = normCity(selTripMeta.departure);
+                const selArr2 = normCity(selTripMeta.arrival);
+                const resDep2 = normCity(resTripMeta.departure);
+                const resArr2 = normCity(resTripMeta.arrival);
+                weeklyTripMatch = (selDep2 === resDep2) && (selArr2 === resArr2);
+              }
+            } catch {
+              // lecture weeklyTrips non bloquante
+            }
+          }
+
+          // Concordance obligatoire
+          if (!(idMatch || fieldsMatch || softMatch || weeklyTripMatch)) {
+            console.warn("[EMBARK][MATCH_FAIL]", {
+              dataDep, dataArr, dataHr, dataDt,
+              selDep, selArr, selHr, selDt,
+              idMatch, fieldsMatch, softMatch, weeklyTripMatch,
+              dataTripId: data.trajetId, selectedTripId: selectedTrip?.id
+            });
+            throw new Error("Billet pour un autre départ (date/heure/trajet non concordants).");
+          }
+
+          // État & lock
           if (data.statutEmbarquement === "embarqué") {
             throw new Error("Déjà embarqué");
           }
 
-          // Verrou anti-double
           const lockRef = doc(
             db,
             `companies/${companyId}/agences/${agencyIdToUse}/boardingLocks/${reservationId}`
@@ -389,6 +533,8 @@ const AgenceEmbarquementPage: React.FC = () => {
           if (lockSnap.exists()) {
             throw new Error("Déjà embarqué");
           }
+
+          // ====== ECRITURES ======
           tx.set(lockRef, {
             reservationId,
             by: uid,
@@ -397,25 +543,6 @@ const AgenceEmbarquementPage: React.FC = () => {
             date: selectedDate,
             heure: selectedTrip?.heure ?? data.heure ?? null,
           });
-
-          // Contrôles
-          const dataDep = normCity(data.depart);
-          const dataArr = normCity(data.arrivee || data.arrival);
-          const dataHr  = normTime(data.heure || "");
-          const dataDt  = normDate(data.date);
-
-          const selDep  = normCity(selectedTrip.departure);
-          const selArr  = normCity(selectedTrip.arrival);
-          const selHr   = normTime(selectedTrip.heure);
-          const selDt   = normDate(selectedDate);
-
-          const idMatch = !!(data.trajetId && selectedTrip?.id && data.trajetId === selectedTrip.id);
-          const fieldsMatch = (dataDep === selDep) && (dataArr === selArr) && (dataHr === selHr) && (dataDt === selDt);
-          const softMatch   = (dataDep === selDep) && (dataArr === selArr) && (dataDt === selDt);
-
-          if (!(idMatch || fieldsMatch || softMatch)) {
-            throw new Error("Billet pour un autre départ (date/heure/trajet non concordants).");
-          }
 
           const patch: any = {
             statutEmbarquement: statut,
@@ -572,6 +699,87 @@ const AgenceEmbarquementPage: React.FC = () => {
     }
   }, [companyId, selectedAgencyId, uid, selectedTrip, selectedDate]);
 
+  /* ---------- Clôturer l’embarquement (tous absents) ---------- */
+  const cloturerEmbarquement = useCallback(async () => {
+    if (!companyId || !selectedAgencyId || !uid || !selectedTrip || !selectedDate) {
+      alert("Contexte incomplet (agence, trajet ou date manquants).");
+      return;
+    }
+    if (reservations.length === 0) {
+      alert("Aucune réservation à traiter.");
+      return;
+    }
+
+    try {
+      const batch = writeBatch(db);
+      const absents: Reservation[] = reservations.filter(r => r.statutEmbarquement !== "embarqué");
+
+      for (const r of absents) {
+        // update absent
+        const resRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${r.id}`);
+        batch.update(resRef, {
+          statutEmbarquement: "absent",
+          noShowAt: serverTimestamp(),
+          noShowBy: uid,
+          reprogrammedOnce: true,
+        });
+
+        // compute next trip & create new reservation if possible
+        try {
+          const next = await computeNextDeparture(
+            db, companyId, selectedAgencyId,
+            {
+              id: r.trajetId || selectedTrip.id,
+              departure: r.depart || selectedTrip.departure,
+              arrival: r.arrivee || r.arrival || selectedTrip.arrival,
+              heure: r.heure || selectedTrip.heure,
+            },
+            normDate(r.date) || selectedDate
+          );
+
+          const newRef = doc(collection(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations`));
+          batch.set(newRef, {
+            companyId, agencyId: selectedAgencyId,
+            depart: r.depart, arrivee: r.arrivee || r.arrival,
+            trajetId: r.trajetId || selectedTrip.id || null,
+            date: next.date, heure: next.heure,
+            nomClient: r.nomClient, telephone: r.telephone,
+            seatsGo: (r as any).seatsGo || 1,
+            canal: "report",
+            statut: "validé",
+            statutEmbarquement: "en_attente",
+            sourceReservationId: r.id,
+            createdBy: uid,
+            createdAt: serverTimestamp(),
+          });
+
+          const logRef = doc(collection(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingLogs`));
+          batch.set(logRef, {
+            reservationId: r.id,
+            trajetId: r.trajetId || selectedTrip.id || null,
+            departure: r.depart,
+            arrival: r.arrivee || r.arrival,
+            date: selectedDate,
+            heure: selectedTrip.heure,
+            result: "ABSENT_REPROG",
+            nextDate: next.date,
+            nextHeure: next.heure,
+            controleurId: uid,
+            scannedAt: serverTimestamp(),
+          });
+        } catch (err) {
+          console.warn("Pas de prochain départ pour", r.id, err);
+        }
+      }
+
+      await batch.commit();
+      alert("Embarquement clôturé. Absents reprogrammés.");
+    } catch (e) {
+      console.error(e);
+      alert("Erreur lors de la clôture.");
+    }
+  }, [companyId, selectedAgencyId, uid, selectedTrip, selectedDate, reservations]);
+
   /* ---------- Saisie manuelle (ID / référence) ---------- */
   const [scanCode, setScanCode] = useState("");
   const submitManual = useCallback(
@@ -583,7 +791,18 @@ const AgenceEmbarquementPage: React.FC = () => {
       if (!code) return;
 
       try {
-        const found = await findReservationByCode(companyId, selectedAgencyId, code);
+        const found = await findReservationByCode(
+          companyId,
+          selectedAgencyId,
+          code,
+          selectedTrip ? {
+            dep: selectedTrip.departure,
+            arr: selectedTrip.arrival,
+            date: selectedDate,
+            heure: selectedTrip.heure,
+            weeklyTripId: selectedTrip.id || null,
+          } : undefined
+        );
         if (found) {
           await updateStatut(found.resId, "embarqué", found.agencyId);
           setScanCode("");
@@ -595,7 +814,7 @@ const AgenceEmbarquementPage: React.FC = () => {
         alert("Erreur lors de la validation manuelle.");
       }
     },
-    [scanCode, companyId, selectedAgencyId, updateStatut]
+    [scanCode, companyId, selectedAgencyId, updateStatut, selectedTrip, selectedDate]
   );
 
   /* ---------- Scanner caméra (AUTO embarquement) ---------- */
@@ -626,7 +845,18 @@ const AgenceEmbarquementPage: React.FC = () => {
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
-              const found = await findReservationByCode(companyId!, selectedAgencyId, code);
+              const found = await findReservationByCode(
+                companyId!,
+                selectedAgencyId,
+                code,
+                selectedTrip ? {
+                  dep: selectedTrip.departure,
+                  arr: selectedTrip.arrival,
+                  date: selectedDate,
+                  heure: selectedTrip.heure,
+                  weeklyTripId: selectedTrip.id || null,
+                } : undefined
+              );
               if (found) {
                 await updateStatut(found.resId, "embarqué", found.agencyId);
               } else {
@@ -659,7 +889,18 @@ const AgenceEmbarquementPage: React.FC = () => {
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
-              const found = await findReservationByCode(companyId!, selectedAgencyId, code);
+              const found = await findReservationByCode(
+                companyId!,
+                selectedAgencyId,
+                code,
+                selectedTrip ? {
+                  dep: selectedTrip.departure,
+                  arr: selectedTrip.arrival,
+                  date: selectedDate,
+                  heure: selectedTrip.heure,
+                  weeklyTripId: selectedTrip.id || null,
+                } : undefined
+              );
               if (found) {
                 await updateStatut(found.resId, "embarqué", found.agencyId);
               } else {
@@ -688,7 +929,7 @@ const AgenceEmbarquementPage: React.FC = () => {
         videoRef.current.srcObject = null;
       }
     };
-  }, [scanOn, companyId, selectedAgencyId, updateStatut]);
+  }, [scanOn, companyId, selectedAgencyId, updateStatut, selectedTrip, selectedDate]);
 
   /* ---------- Filtre recherche ---------- */
   const filtered = useMemo(() => {
@@ -909,6 +1150,15 @@ const AgenceEmbarquementPage: React.FC = () => {
             >
               🖨️ Imprimer
             </button>
+            <button
+              type="button"
+              onClick={cloturerEmbarquement}
+              className="px-3 py-2 rounded-lg text-sm bg-red-600 text-white"
+              title="Clôturer l’embarquement"
+              disabled={!selectedTrip || !selectedAgencyId}
+            >
+              🚍 Clôturer
+            </button>
           </div>
 
           {scanOn && (
@@ -996,6 +1246,7 @@ const AgenceEmbarquementPage: React.FC = () => {
                   <th className="px-3 py-2 text-left">Client</th>
                   <th className="px-3 py-2 text-left">Téléphone</th>
                   <th className="px-3 py-2 text-left">Canal</th>
+                  <th className="px-3 py-2 text-left">Référence</th>
                   <th className="px-3 py-2 text-center w-24">Embarqué</th>
                   <th className="px-3 py-2 text-center w-28">Absent</th>
                 </tr>
@@ -1003,13 +1254,13 @@ const AgenceEmbarquementPage: React.FC = () => {
               <tbody>
                 {isLoading ? (
                   <tr>
-                    <td className="px-3 py-4 text-gray-500" colSpan={6}>
+                    <td className="px-3 py-4 text-gray-500" colSpan={7}>
                       Chargement…
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-4 text-gray-400" colSpan={6}>
+                    <td className="px-3 py-4 text-gray-400" colSpan={7}>
                       Aucun passager trouvé
                     </td>
                   </tr>
@@ -1023,6 +1274,7 @@ const AgenceEmbarquementPage: React.FC = () => {
                         <td className="px-3 py-2">{r.nomClient || "—"}</td>
                         <td className="px-3 py-2">{r.telephone || "—"}</td>
                         <td className="px-3 py-2 capitalize">{r.canal || "—"}</td>
+                        <td className="px-3 py-2">{r.referenceCode || r.id}</td>
                         <td className="px-3 py-2 text-center">
                           <button
                             className="case"

@@ -1,3 +1,4 @@
+// src/AppRoutes.tsx
 import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
@@ -69,6 +70,8 @@ const MediaPage = lazy(() => import("./pages/MediaPage"));
 const AgenceShiftHistoryPage = lazy(() => import("./pages/AgenceShiftHistoryPage"));
 const AgenceComptabilitePage = lazy(() => import("./pages/AgenceComptabilitePage"));
 const AgenceShiftPage = lazy(() => import("./pages/AgenceShiftPage"));
+/* ✅ Ajout Affectation Véhicule */
+const AffectationVehiculePage = lazy(() => import("./pages/AffectationVehiculePage"));
 
 /* ---------- Shell d’agence ---------- */
 const AgenceShellPage = lazy(() => import("./pages/AgenceShellPage"));
@@ -154,7 +157,7 @@ const AppRoutes = () => {
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
         <Route path="/:slug/cookies" element={<CookiesPage />} />
 
-        {/* ========= ADMIN (unique, avec PageHeaderProvider) ========= */}
+        {/* ========= ADMIN ========= */}
         <Route
           path="/admin"
           element={
@@ -179,7 +182,7 @@ const AppRoutes = () => {
           <Route path="media" element={<MediaPage />} />
         </Route>
 
-        {/* COMPAGNIE (privé) */}
+        {/* COMPAGNIE */}
         <Route
           path="/compagnie"
           element={
@@ -200,10 +203,9 @@ const AppRoutes = () => {
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />
           <Route path="compagnies/:companyId" element={<AdminCompanyDetail />} />
-          {/* ❌ plus de route privée “/compagnie/:slug/mes-reservations” */}
         </Route>
 
-        {/* SHELL D’AGENCE (privé) */}
+        {/* AGENCE */}
         <Route
           path="/agence"
           element={
@@ -217,7 +219,8 @@ const AppRoutes = () => {
           <Route path="reservations" element={<AgenceReservationsPage />} />
           <Route path="embarquement" element={<AgenceEmbarquementPage />} />
           <Route path="trajets" element={<AgenceTrajetsPage />} />
-          <Route path="garage" element={<AgenceShiftHistoryPage />} />
+          {/* ✅ Ici on pointe vers AffectationVehiculePage */}
+          <Route path="garage" element={<AffectationVehiculePage />} />
           <Route path="recettes" element={<AgenceRecettesPage />} />
           <Route path="finances" element={<AgenceFinancesPage />} />
           <Route path="personnel" element={<AgencePersonnelPage />} />
@@ -225,7 +228,7 @@ const AppRoutes = () => {
           <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
         </Route>
 
-        {/* HORS SHELL (privé) */}
+        {/* HORS SHELL */}
         <Route
           path="/agence/guichet"
           element={
@@ -243,7 +246,7 @@ const AppRoutes = () => {
           }
         />
 
-        {/* VALIDATIONS (privé) */}
+        {/* VALIDATIONS */}
         <Route
           path="/compta/validations"
           element={
@@ -275,10 +278,8 @@ const AppRoutes = () => {
         {/* DYNAMIQUES PUBLIQUES */}
         <Route path="/:slug/reserver" element={<ReservationClientPage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
-        {/* lien court basé sur un token public */}
         <Route path="/:slug/mon-billet" element={<ReservationDetailsPage />} />
         <Route path="/:slug/upload-preuve/:id" element={<LegacyUploadRedirect />} />
-        {/* ✅ Mes réservations publiques (plateforme & vitrine compagnie) */}
         <Route path="/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/:slug/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/:slug/*" element={<RouteResolver />} />

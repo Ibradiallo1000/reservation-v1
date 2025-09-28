@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, matchPath } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/hooks/useCompanyTheme';
 import {
-  LayoutDashboard, Ticket, MapPinned, Coins, Users, ClipboardList,
+  LayoutDashboard, MapPinned, Coins, Users, ClipboardList,
   Settings, LogOut, Wrench
 } from 'lucide-react';
 
@@ -21,10 +21,11 @@ const Sidebar: React.FC = () => {
     { label: 'Embarquement', path: '/agence/embarquement', icon: <MapPinned className="w-5 h-5" />,       permission: 'embarquement' },
     { label: 'Trajets',      path: '/agence/trajets',      icon: <MapPinned className="w-5 h-5" />,       permission: 'manage_routes' },
     { label: 'Recettes',     path: '/agence/recettes',     icon: <Coins className="w-5 h-5" />,           permission: 'manage_income' },
-    // Chef de garage (affectations véhicules/équipages)
-    { label: 'Garage',       path: '/agence/garage',       icon: <Wrench className="w-5 h-5" />,          permission: 'garage_manage' },
+
+    // ✅ Nouveau libellé + chemin pour l’affectation
+    { label: 'Affectations bus & équipage', path: '/agence/affectations', icon: <Wrench className="w-5 h-5" />, permission: 'garage_manage' },
+
     { label: 'Personnel',    path: '/agence/personnel',    icon: <Users className="w-5 h-5" />,           permission: 'manage_staff' },
-    // (⚠️ “Guichet” retiré du scope admin agence)
   ], [hasPermission]);
 
   const isActive = (path?: string) => path ? !!matchPath({ path, end:false }, location.pathname) : false;
@@ -43,11 +44,17 @@ const Sidebar: React.FC = () => {
       >
         <div className="p-5 border-b border-white/20 flex items-center gap-3">
           {user?.agencyLogoUrl ? (
-            <img src={user.agencyLogoUrl} alt={user.agencyName} className="h-10 w-10 rounded-full object-cover border border-gray-200"
-                 onError={(e)=>{ (e.target as HTMLImageElement).src='/default-company.png'; }} />
+            <img
+              src={user.agencyLogoUrl}
+              alt={user.agencyName}
+              className="h-10 w-10 rounded-full object-cover border border-gray-200"
+              onError={(e)=>{ (e.target as HTMLImageElement).src='/default-company.png'; }}
+            />
           ) : (
-            <div className="h-10 w-10 rounded-full flex items-center justify-center font-bold uppercase"
-                 style={{ backgroundColor: theme.colors.secondary, color: theme.colors.text }}>
+            <div
+              className="h-10 w-10 rounded-full flex items-center justify-center font-bold uppercase"
+              style={{ backgroundColor: theme.colors.secondary, color: theme.colors.text }}
+            >
               {user?.agencyName?.charAt(0) || 'A'}
             </div>
           )}
