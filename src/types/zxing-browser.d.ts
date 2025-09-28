@@ -1,5 +1,6 @@
 declare module '@zxing/browser' {
   export class BrowserMultiFormatReader {
+    hints: any;
     static listVideoInputDevices() {
       throw new Error("Method not implemented.");
     }

@@ -28,17 +28,18 @@ interface Reservation {
   telephone?: string;
   depart?: string;
   arrivee?: string;
-  date?: any;     // string "YYYY-MM-DD" ou Firestore Timestamp
-  heure?: string; // "HH:mm" ou "H:mm"
-  canal?: string; // "guichet" | "en_ligne" | ...
+  date?: any;
+  heure?: string;
+  canal?: string;
   montant?: number;
-  statut?: string; // "payé" | "validé" | "embarqué" | ...
+  statut?: string;
   statutEmbarquement?: StatutEmbarquement;
   checkInTime?: any;
   trajetId?: string;
   referenceCode?: string;
   controleurId?: string;
-  arrival?: string; // alias possible
+  arrival?: string;
+  seatsGo?: number;
 }
 
 interface WeeklyTrip {
@@ -91,21 +92,17 @@ function getScanText(res: any): string {
 function stripAccents(s: string) {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
-
-// ✅ Normalisation plus tolérante: enlève accents, ponctuation, tirets, NBSP, etc.
 function normCity(v?: string): string {
   const s = stripAccents((v || "").toLowerCase());
   const s2 = s.replace(/[^a-z0-9]+/g, " ");
   return s2.replace(/\s+/g, " ").trim();
 }
-
 function normTime(v?: string): string | null {
   if (!v) return null;
   const m = v.trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
   return m[1].padStart(2, "0") + ":" + m[2];
 }
-/** ✅ Local (pas d’UTC) */
 function normDate(v: any): string | null {
   if (!v) return null;
   if (typeof v === "string") {
@@ -117,22 +114,13 @@ function normDate(v: any): string | null {
   }
   if (typeof v === "object" && "seconds" in v) {
     const d = new Date((v as any).seconds * 1000);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
+    return toLocalISO(d);
   }
-  if (v instanceof Date) {
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, "0");
-    const day = String(v.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
+  if (v instanceof Date) return toLocalISO(v);
   return null;
 }
 
 /* ===================== Recherche robuste ===================== */
-// ⚠️ Remplace l’ancienne version par celle-ci (priorise le contexte courant)
 async function findReservationByCode(
   companyId: string,
   agencyId: string | null | undefined,
@@ -180,14 +168,11 @@ async function findReservationByCode(
     return best || snap.docs[0];
   };
 
-  // 1) Priorité à l’agence courante
   if (agencyId) {
-    // a) ID direct
     const directRef = doc(db, `companies/${companyId}/agences/${agencyId}/reservations`, code);
     const directSnap = await getDoc(directRef);
     if (directSnap.exists()) return { resId: directSnap.id, agencyId };
 
-    // b) referenceCode (peut retourner plusieurs => on choisit la meilleure)
     const q1 = query(
       collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
       where("referenceCode", "==", code)
@@ -197,17 +182,14 @@ async function findReservationByCode(
     if (best) return { resId: best.id, agencyId };
   }
 
-  // 2) Multi-agences (meilleure concordance globale)
   const ags = await getDocs(collection(db, `companies/${companyId}/agences`));
 
-  // a) Par ID direct
   for (const ag of ags.docs) {
     const dref = doc(db, `companies/${companyId}/agences/${ag.id}/reservations`, code);
     const ds = await getDoc(dref);
     if (ds.exists()) return { resId: ds.id, agencyId: ag.id };
   }
 
-  // b) Par referenceCode, choisir le meilleur match
   let bestDoc: any = null;
   let bestAgency: string | null = null;
   let bestScore = -1;
@@ -361,7 +343,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     void load();
   }, [companyId, selectedAgencyId, selectedDate]); // eslint-disable-line
 
-  /* ---------- Écoute temps réel réservations (inclut EMBARQUÉ) ---------- */
+  /* ---------- Écoute temps réel réservations (inclut EMBARQUÉ/ABSENT) ---------- */
   useEffect(() => {
     if (!companyId || !selectedAgencyId) { setReservations([]); return; }
     if (!selectedTrip || !selectedTrip.departure || !selectedTrip.arrival || !selectedTrip.heure) {
@@ -376,14 +358,16 @@ const AgenceEmbarquementPage: React.FC = () => {
     const bag = new Map<string, Reservation>();
 
     const commit = () => {
-      const list = Array.from(bag.values()).sort((a, b) =>
-        (a.nomClient || "").localeCompare(b.nomClient || "")
-      );
+      const list = Array.from(bag.values()).sort((a, b) => {
+        const aRep = !!(a.canal === "report" || (a as any).sourceReservationId);
+        const bRep = !!(b.canal === "report" || (b as any).sourceReservationId);
+        if (aRep !== bRep) return aRep ? -1 : 1; // reports d'abord
+        return (a.nomClient || "").localeCompare(b.nomClient || "");
+      });
       setReservations(list);
       setIsLoading(false);
     };
 
-    // Unique listener par champs "départ/arrivée/heure/date" + statut IN
     const qAll = query(
       base,
       where("date", "==", selectedDate),
@@ -397,8 +381,6 @@ const AgenceEmbarquementPage: React.FC = () => {
       commit();
     }, () => setIsLoading(false)));
 
-    // Optionnel: si on a un trajetId, on écoute aussi par id (au cas où certains billets
-    // ne portent pas les champs de libellé mais seulement l'id).
     if (selectedTrip.id) {
       const qById = query(
         base,
@@ -416,7 +398,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     return () => unsubs.forEach((u) => u());
   }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
 
-  /* ---------- Mise à jour Embarqué / Absent (AUTO + verrou) ---------- */
+  /* ---------- Mise à jour Embarqué / Absent (verrou + concordance) ---------- */
   const updateStatut = useCallback(
     async (
       reservationId: string,
@@ -442,12 +424,11 @@ const AgenceEmbarquementPage: React.FC = () => {
 
       try {
         await runTransaction(db, async (tx) => {
-          // ====== LECTURES D'ABORD ======
           const snap = await tx.get(resRef);
           if (!snap.exists()) throw new Error("Réservation introuvable");
           const data = snap.data() as any;
 
-          // Comparaisons normalisées
+          // normaliser pour comparer
           const dataDep = normCity(data.depart);
           const dataArr = normCity(data.arrivee || data.arrival);
           const dataHr  = normTime(data.heure || "");
@@ -460,13 +441,12 @@ const AgenceEmbarquementPage: React.FC = () => {
 
           const idMatch     = !!(data.trajetId && selectedTrip?.id && data.trajetId === selectedTrip.id);
           const fieldsMatch = (dataDep === selDep) && (dataArr === selArr) && (dataHr === selHr) && (dataDt === selDt);
-          const softMatch   = (dataDep === selDep) && (dataArr === selArr) && (dataDt === selDt); // on ignore l'heure
+          const softMatch   = (dataDep === selDep) && (dataArr === selArr) && (dataDt === selDt);
 
-          // Si les IDs diffèrent, on tente une comparaison par libellé via weeklyTrips
+          // lecture weeklyTrips si nécessaire
           let weeklyTripMatch = false;
           const selTripId = selectedTrip?.id ?? data.trajetId ?? null;
           const resTripId = data.trajetId ?? null;
-
           if (!idMatch && (selTripId || resTripId)) {
             try {
               let selTripMeta: { departure?: string; arrival?: string } | null = null;
@@ -504,45 +484,35 @@ const AgenceEmbarquementPage: React.FC = () => {
                 const resArr2 = normCity(resTripMeta.arrival);
                 weeklyTripMatch = (selDep2 === resDep2) && (selArr2 === resArr2);
               }
-            } catch {
-              // lecture weeklyTrips non bloquante
-            }
+            } catch {}
           }
 
-          // Concordance obligatoire
           if (!(idMatch || fieldsMatch || softMatch || weeklyTripMatch)) {
-            console.warn("[EMBARK][MATCH_FAIL]", {
-              dataDep, dataArr, dataHr, dataDt,
-              selDep, selArr, selHr, selDt,
-              idMatch, fieldsMatch, softMatch, weeklyTripMatch,
-              dataTripId: data.trajetId, selectedTripId: selectedTrip?.id
-            });
             throw new Error("Billet pour un autre départ (date/heure/trajet non concordants).");
           }
 
-          // État & lock
-          if (data.statutEmbarquement === "embarqué") {
+          // verrou uniquement pour EMBARQUÉ (évite double-scan)
+          if (data.statutEmbarquement === "embarqué" && statut === "embarqué") {
             throw new Error("Déjà embarqué");
           }
-
           const lockRef = doc(
             db,
             `companies/${companyId}/agences/${agencyIdToUse}/boardingLocks/${reservationId}`
           );
           const lockSnap = await tx.get(lockRef);
-          if (lockSnap.exists()) {
+          if (lockSnap.exists() && statut === "embarqué") {
             throw new Error("Déjà embarqué");
           }
-
-          // ====== ECRITURES ======
-          tx.set(lockRef, {
-            reservationId,
-            by: uid,
-            at: serverTimestamp(),
-            tripId: selectedTrip?.id ?? data.trajetId ?? null,
-            date: selectedDate,
-            heure: selectedTrip?.heure ?? data.heure ?? null,
-          });
+          if (statut === "embarqué" && !lockSnap.exists()) {
+            tx.set(lockRef, {
+              reservationId,
+              by: uid,
+              at: serverTimestamp(),
+              tripId: selectedTrip?.id ?? data.trajetId ?? null,
+              date: selectedDate,
+              heure: selectedTrip?.heure ?? data.heure ?? null,
+            });
+          }
 
           const patch: any = {
             statutEmbarquement: statut,
@@ -552,7 +522,6 @@ const AgenceEmbarquementPage: React.FC = () => {
           if (statut === "embarqué") patch.statut = "embarqué";
           tx.update(resRef, patch);
 
-          // Log
           const logsRef = collection(
             db,
             `companies/${companyId}/agences/${agencyIdToUse}/boardingLogs`
@@ -626,7 +595,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     throw new Error("Aucun prochain départ disponible.");
   }
 
-  /* ---------- Absent + Reprogrammer ---------- */
+  /* ---------- Absent + Reprogrammer (gardé pour la clôture) ---------- */
   const absentEtReprogrammer = useCallback(async (reservationId: string) => {
     if (!companyId || !selectedAgencyId || !uid || !selectedTrip || !selectedDate) {
       alert("Contexte incomplet (agence, trajet ou date manquants).");
@@ -639,8 +608,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     const data = resSnap.data() as Reservation & Record<string, any>;
 
     if (data.noShowAt || data.reprogrammedOnce === true) {
-      alert("Déjà reprogrammé ou marqué absent.");
-      return;
+      return; // silencieux
     }
 
     try {
@@ -656,7 +624,6 @@ const AgenceEmbarquementPage: React.FC = () => {
       );
 
       const batch = writeBatch(db);
-
       batch.update(resRef, {
         statutEmbarquement: "absent",
         noShowAt: serverTimestamp(),
@@ -692,14 +659,31 @@ const AgenceEmbarquementPage: React.FC = () => {
       });
 
       await batch.commit();
-      alert(`Reprogrammé au ${next.date} • ${next.heure}`);
     } catch (e: any) {
       console.error(e);
-      alert(e?.message || "Échec de la reprogrammation.");
     }
   }, [companyId, selectedAgencyId, uid, selectedTrip, selectedDate]);
 
-  /* ---------- Clôturer l’embarquement (tous absents) ---------- */
+  /* ---------- Clé du départ + état clôture ---------- */
+  const tripKey = useMemo(() => {
+    if (!selectedTrip || !selectedDate) return null;
+    const dep = normCity(selectedTrip.departure);
+    const arr = normCity(selectedTrip.arrival);
+    const hr  = normTime(selectedTrip.heure);
+    const dt  = normDate(selectedDate);
+    if (!dep || !arr || !hr || !dt) return null;
+    return `${dep}_${arr}_${hr}_${dt}`;
+  }, [selectedTrip, selectedDate]);
+  const [isClosed, setIsClosed] = useState(false);
+
+  useEffect(() => {
+    if (!companyId || !selectedAgencyId || !tripKey) { setIsClosed(false); return; }
+    const ref = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingClosures/${tripKey}`);
+    const unsub = onSnapshot(ref, (s) => setIsClosed(s.exists()));
+    return () => unsub();
+  }, [companyId, selectedAgencyId, tripKey]);
+
+  /* ---------- Clôturer : un seul passage + verrou + reprogrammation ---------- */
   const cloturerEmbarquement = useCallback(async () => {
     if (!companyId || !selectedAgencyId || !uid || !selectedTrip || !selectedDate) {
       alert("Contexte incomplet (agence, trajet ou date manquants).");
@@ -709,22 +693,63 @@ const AgenceEmbarquementPage: React.FC = () => {
       alert("Aucune réservation à traiter.");
       return;
     }
+    if (!tripKey) {
+      alert("Trajet invalide.");
+      return;
+    }
+
+    const lockRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingClosures/${tripKey}`);
 
     try {
-      const batch = writeBatch(db);
-      const absents: Reservation[] = reservations.filter(r => r.statutEmbarquement !== "embarqué");
+      // 1) Transaction de verrou + marquage des absents
+      await runTransaction(db, async (tx) => {
+        const lockSnap = await tx.get(lockRef);
+        if (lockSnap.exists()) {
+          throw new Error("DEJA_CLOTURE");
+        }
 
-      for (const r of absents) {
-        // update absent
-        const resRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${r.id}`);
-        batch.update(resRef, {
-          statutEmbarquement: "absent",
-          noShowAt: serverTimestamp(),
-          noShowBy: uid,
-          reprogrammedOnce: true,
+        // Marquer comme ABSENT tout ce qui n'est pas embarqué
+        for (const r of reservations) {
+          const embarked = r.statutEmbarquement === "embarqué";
+          if (!embarked) {
+            const resRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${r.id}`);
+            tx.update(resRef, {
+              statutEmbarquement: "absent",
+              noShowAt: serverTimestamp(),
+              noShowBy: uid,
+            });
+          }
+        }
+
+        // Écrire le verrou de clôture
+        tx.set(lockRef, {
+          closedAt: serverTimestamp(),
+          closedBy: uid,
+          date: selectedDate,
+          heure: selectedTrip.heure,
+          departure: selectedTrip.departure,
+          arrival: selectedTrip.arrival,
         });
+      });
 
-        // compute next trip & create new reservation if possible
+      // 2) Reprogrammer les absents (sans doublons)
+      const batch = writeBatch(db);
+
+      for (const r of reservations) {
+        const embarked = r.statutEmbarquement === "embarqué";
+        if (embarked) continue;
+
+        if ((r as any).reprogrammedOnce === true) continue;
+
+        const exists = await getDocs(
+          query(
+            collection(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations`),
+            where("sourceReservationId", "==", r.id),
+            fsLimit(1)
+          )
+        );
+        if (!exists.empty) continue;
+
         try {
           const next = await computeNextDeparture(
             db, companyId, selectedAgencyId,
@@ -753,6 +778,9 @@ const AgenceEmbarquementPage: React.FC = () => {
             createdAt: serverTimestamp(),
           });
 
+          const srcRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${r.id}`);
+          batch.update(srcRef, { reprogrammedOnce: true });
+
           const logRef = doc(collection(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingLogs`));
           batch.set(logRef, {
             reservationId: r.id,
@@ -773,14 +801,18 @@ const AgenceEmbarquementPage: React.FC = () => {
       }
 
       await batch.commit();
-      alert("Embarquement clôturé. Absents reprogrammés.");
-    } catch (e) {
-      console.error(e);
-      alert("Erreur lors de la clôture.");
+      alert("Clôture effectuée. Absents marqués et reprogrammés (si possible).");
+    } catch (e: any) {
+      if (String(e?.message || e) === "DEJA_CLOTURE") {
+        alert("Déjà clôturé : aucune action répétée.");
+      } else {
+        console.error(e);
+        alert("Erreur lors de la clôture.");
+      }
     }
-  }, [companyId, selectedAgencyId, uid, selectedTrip, selectedDate, reservations]);
+  }, [companyId, selectedAgencyId, uid, selectedTrip, selectedDate, reservations, tripKey]);
 
-  /* ---------- Saisie manuelle (ID / référence) ---------- */
+  /* ---------- Saisie manuelle ---------- */
   const [scanCode, setScanCode] = useState("");
   const submitManual = useCallback(
     async (e: React.FormEvent) => {
@@ -817,7 +849,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     [scanCode, companyId, selectedAgencyId, updateStatut, selectedTrip, selectedDate]
   );
 
-  /* ---------- Scanner caméra (AUTO embarquement) ---------- */
+  /* ---------- Scanner caméra ---------- */
   useEffect(() => {
     if (!scanOn) {
       readerRef.current?.reset?.();
@@ -833,7 +865,7 @@ const AgenceEmbarquementPage: React.FC = () => {
 
     (async () => {
       try {
-        // @ts-ignore - contraintes avec caméra arrière
+        // @ts-ignore
         await reader.decodeFromConstraints(
           { video: { facingMode: { ideal: "environment" } } },
           videoRef.current as HTMLVideoElement,
@@ -875,7 +907,6 @@ const AgenceEmbarquementPage: React.FC = () => {
           }
         );
       } catch {
-        // Fallback: premier device
         const devices = (await BrowserMultiFormatReader.listVideoInputDevices()) as unknown as Array<{ deviceId?: string }>;
         const preferred: string | null = devices?.[0]?.deviceId ?? null;
         await reader.decodeFromVideoDevice(
@@ -931,7 +962,7 @@ const AgenceEmbarquementPage: React.FC = () => {
     };
   }, [scanOn, companyId, selectedAgencyId, updateStatut, selectedTrip, selectedDate]);
 
-  /* ---------- Filtre recherche ---------- */
+  /* ---------- Filtre & Totaux ---------- */
   const filtered = useMemo(() => {
     const t = searchTerm.toLowerCase().trim();
     if (!t) return reservations;
@@ -942,15 +973,16 @@ const AgenceEmbarquementPage: React.FC = () => {
     );
   }, [reservations, searchTerm]);
 
-  /* ---------- Totaux ---------- */
   const totals = useMemo(() => {
-    let embarques = 0, absents = 0, total = 0;
+    let totalRes = 0, totalSeats = 0, seatsEmbarques = 0, seatsAbsents = 0;
     for (const r of reservations) {
-      total += 1;
-      if (r.statutEmbarquement === "embarqué") embarques++;
-      else if (r.statutEmbarquement === "absent") absents++;
+      const seats = r.seatsGo ?? 1;
+      totalRes += 1;
+      totalSeats += seats;
+      if (r.statutEmbarquement === "embarqué") seatsEmbarques += seats;
+      if (r.statutEmbarquement === "absent") seatsAbsents += seats;
     }
-    return { total, embarques, absents };
+    return { totalRes, totalSeats, seatsEmbarques, seatsAbsents };
   }, [reservations]);
 
   const humanDate = useMemo(() => {
@@ -1009,27 +1041,60 @@ const AgenceEmbarquementPage: React.FC = () => {
   return (
     <div className="min-h-screen" style={{ background: theme.bg }}>
       <style>{`
-        .brand-logo{height:32px;width:auto;object-fit:contain}
-        .case{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid #0f172a;border-radius:4px;background:#fff;cursor:pointer;user-select:none}
+        .brand-logo{height:40px;width:auto;object-fit:contain}
+        .case{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid #0f172a;border-radius:6px;background:#fff;cursor:pointer;user-select:none}
         .case[data-checked="true"]::after{content:"✓";font-weight:700}
 
-        /* ✅ Styles d'état des lignes */
-        tr.embarked { background:#f1f5f9; color:#475569; }      /* gris clair */
-        tr.embarked .case { border-color:#64748b; }
-        tr.absent   { background:#fff7ed; }                    /* orangé très léger */
+        tr.embarked { background:#f8fafc; color:#334155; }
+
+        .thin-table { table-layout: fixed; }
+        .thin-table th, .thin-table td { padding: 6px 8px; }
+        .col-idx{width:40px}
+        .col-client{width:24%}
+        .col-phone{width:14%}
+        .col-canal{width:12%}
+        .col-ref{width:18%}
+        .col-seats{width:8%}
+        .col-emb{width:8%}
+        .col-abs{width:8%}
+
+        @media (max-width: 640px){
+          .col-client{width:38%}
+          .col-phone{width:18%}
+          .col-ref{width:22%}
+        }
+
+        /* Header imprimable centré */
+        #print-area .title{ text-align:center; font-weight:800; font-size:18px; }
+        #print-area .subtitle{ text-align:center; color:#334155; font-size:14px; margin-top:2px; }
+
+        #print-area .meta-card {
+          border: 1px solid #e5e7eb;
+          background: #f9fafb;
+          border-radius: 0.5rem;
+          padding: 0.5rem 0.75rem;
+        }
+
+        /* zones signatures épurées */
+        #print-area .sig-box {
+          border: 1px solid #000;
+          min-height: 28mm;
+          border-radius: 6px;
+        }
+        #print-area .sig-caption { text-align:center; margin-top:6px; }
 
         @media print{
           body * { visibility: hidden; }
           #print-area, #print-area * { visibility: visible; }
           #print-area { position: absolute; inset: 0; padding: 0 8mm; }
-          .brand-logo{height:20px}
+          .brand-logo{height:26px}
           .case{width:14px;height:14px;border:1.5px solid #000;border-radius:0}
           .case::after{font-size:12px;line-height:1}
-          tr.embarked, tr.absent { background:transparent !important; color:inherit !important; }
+          tr.embarked { background:transparent !important; color:inherit !important; }
         }
       `}</style>
 
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         {/* Filtre Agence + Date */}
         <div className="bg-white rounded-xl border p-4 shadow-sm space-y-3">
           <div className="flex flex-wrap items-center gap-3">
@@ -1100,7 +1165,7 @@ const AgenceEmbarquementPage: React.FC = () => {
 
         {/* Infos départ + actions */}
         <div className="bg-white rounded-xl border shadow-sm">
-          <div className="px-4 py-3 flex flex-wrap items-center gap-3">
+          <div className="px-4 pt-4 flex flex-wrap items-center gap-3">
             <div className="text-sm text-gray-500">Trajet</div>
             <div className="font-semibold">
               {selectedTrip ? (
@@ -1111,19 +1176,41 @@ const AgenceEmbarquementPage: React.FC = () => {
                 "Aucun trajet sélectionné"
               )}
             </div>
-
-            <div className="ml-auto grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-              <div><div className="text-gray-500">N° Bus</div><div className="font-medium">{assign.bus || "—"}</div></div>
-              <div><div className="text-gray-500">Immat.</div><div className="font-medium">{assign.immat || "—"}</div></div>
-              <div className="hidden md:block"><div className="text-gray-500">Chauffeur</div><div className="font-medium">{assign.chauffeur || "—"}</div></div>
-              <div className="hidden md:block"><div className="text-gray-500">Chef embarquement</div><div className="font-medium">{assign.chef || "—"}</div></div>
+            <div className="ml-auto flex items-center gap-2 text-xs">
+              <div className="px-2 py-1 rounded bg-gray-100 border">
+                <span className="text-gray-500">Réservations:</span> <b>{totals.totalRes}</b>
+              </div>
+              <div className="px-2 py-1 rounded bg-gray-100 border">
+                <span className="text-gray-500">Places:</span> <b>{totals.totalSeats}</b>
+              </div>
+              <div className="px-2 py-1 rounded bg-gray-100 border">
+                <span className="text-gray-500">Embarquées:</span> <b>{totals.seatsEmbarques}</b>
+              </div>
+              <div className="px-2 py-1 rounded bg-gray-100 border">
+                <span className="text-gray-500">Absentes:</span> <b>{totals.seatsAbsents}</b>
+              </div>
             </div>
           </div>
 
-          <div className="px-4 pb-3 flex flex-wrap items-center gap-4">
-            <div className="text-xs text-gray-600">
-              Total: <b>{totals.total}</b> • Embarqués: <b>{totals.embarques}</b> • Absents: <b>{totals.absents}</b>
+          {/* Cartes info bus / chauffeur / contrôleur */}
+          <div className="px-4 pb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="border rounded-lg p-3 bg-gray-50">
+              <div className="text-xs text-gray-500 mb-1">Bus / Immat</div>
+              <div className="font-medium">
+                {assign.bus || assign.immat ? `${assign.bus || "—"} / ${assign.immat || "—"}` : "— / —"}
+              </div>
             </div>
+            <div className="border rounded-lg p-3 bg-gray-50">
+              <div className="text-xs text-gray-500 mb-1">Chauffeur</div>
+              <div className="font-medium">{assign.chauffeur || "—"}</div>
+            </div>
+            <div className="border rounded-lg p-3 bg-gray-50">
+              <div className="text-xs text-gray-500 mb-1">Contrôleur</div>
+              <div className="font-medium">{assign.chef || "—"}</div>
+            </div>
+          </div>
+
+          <div className="px-4 pb-3 flex flex-wrap items-center gap-3">
             <input
               type="text"
               placeholder="Rechercher nom / téléphone…"
@@ -1153,11 +1240,11 @@ const AgenceEmbarquementPage: React.FC = () => {
             <button
               type="button"
               onClick={cloturerEmbarquement}
-              className="px-3 py-2 rounded-lg text-sm bg-red-600 text-white"
-              title="Clôturer l’embarquement"
-              disabled={!selectedTrip || !selectedAgencyId}
+              className={`px-3 py-2 rounded-lg text-sm ${isClosed ? "bg-gray-300 text-gray-600" : "bg-red-600 text-white"}`}
+              title={isClosed ? "Déjà clôturé" : "Clôturer l’embarquement"}
+              disabled={!selectedTrip || !selectedAgencyId || isClosed}
             >
-              🚍 Clôturer
+              {isClosed ? "Clôturé" : "🚍 Clôturer"}
             </button>
           </div>
 
@@ -1200,67 +1287,96 @@ const AgenceEmbarquementPage: React.FC = () => {
         {/* Zone imprimable */}
         <div id="print-area" className="bg-white rounded-xl border shadow-sm">
           <div className="px-4 pt-4">
-            <div className="flex items-center gap-3">
-              {company?.logoUrl && (
-                <img
-                  src={(company as any).logoUrl}
-                  alt={(company as any)?.nom}
-                  className="brand-logo"
-                />
-              )}
-              <div>
-                <div className="font-extrabold">
-                  {(company as any)?.nom || "Compagnie"}
-                </div>
-                <div className="text-xs text-gray-500">
-                  {(user as any)?.agencyName || agencies.find(a => a.id === selectedAgencyId)?.nom || "Agence"} • Tel. {(company as any)?.telephone || "—"}
+            {/* Bandeau logo + société + agence */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {company?.logoUrl && (
+                  <img
+                    src={(company as any).logoUrl}
+                    alt={(company as any)?.nom}
+                    className="brand-logo"
+                  />
+                )}
+                <div>
+                  <div className="font-extrabold text-lg">
+                    {(company as any)?.nom || "Compagnie"}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {(user as any)?.agencyName || agencies.find(a => a.id === selectedAgencyId)?.nom || "Agence"} • Tel. {(company as any)?.telephone || "—"}
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="mt-3 text-sm">
-              <b>Liste d’embarquement</b>
+            {/* Titre centré + destination */}
+            <div className="mt-2">
+              <div className="title">Liste d’embarquement</div>
               {selectedTrip && (
-                <> — {selectedTrip.departure} → {selectedTrip.arrival} • {humanDate} • {selectedTrip.heure}</>
+                <div className="subtitle">
+                  {selectedTrip.departure} → {selectedTrip.arrival} • {humanDate} • {selectedTrip.heure}
+                </div>
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 text-xs">
-              <div className="border rounded-lg px-2 py-1">
-                N° Bus / Immat: {assign.bus || assign.immat ? `${assign.bus || ""} ${assign.immat || ""}` : "_________"}
+            {/* Méta + totaux */}
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
+              <div className="meta-card">
+                <div className="text-xs text-gray-500">Bus / Immat</div>
+                <div className="font-medium">
+                  {(assign.bus || "—") + " / " + (assign.immat || "—")}
+                </div>
               </div>
-              <div className="border rounded-lg px-2 py-1">
-                Chauffeur: {assign.chauffeur || "______________"}
+              <div className="meta-card">
+                <div className="text-xs text-gray-500">Chauffeur</div>
+                <div className="font-medium">{assign.chauffeur || "—"}</div>
               </div>
-              <div className="border rounded-lg px-2 py-1">
-                Contrôleur: {assign.chef || "______________"}
+              <div className="meta-card">
+                <div className="text-xs text-gray-500">Contrôleur</div>
+                <div className="font-medium">{assign.chef || "—"}</div>
+              </div>
+              <div className="meta-card">
+                <div className="text-xs text-gray-500">Totaux</div>
+                <div className="font-medium">
+                  R: {totals.totalRes} • P: {totals.totalSeats} • E: {totals.seatsEmbarques} • A: {totals.seatsAbsents}
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="overflow-x-auto mt-4">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto mt-3">
+            <table className="w-full text-sm thin-table">
+              <colgroup>
+                <col className="col-idx" />
+                <col className="col-client" />
+                <col className="col-phone" />
+                <col className="col-canal" />
+                <col className="col-ref" />
+                <col className="col-seats" />
+                <col className="col-emb" />
+                <col className="col-abs" />
+              </colgroup>
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-left w-12">#</th>
-                  <th className="px-3 py-2 text-left">Client</th>
-                  <th className="px-3 py-2 text-left">Téléphone</th>
-                  <th className="px-3 py-2 text-left">Canal</th>
-                  <th className="px-3 py-2 text-left">Référence</th>
-                  <th className="px-3 py-2 text-center w-24">Embarqué</th>
-                  <th className="px-3 py-2 text-center w-28">Absent</th>
+                  <th className="text-left">#</th>
+                  <th className="text-left">Client</th>
+                  <th className="text-left">Téléphone</th>
+                  <th className="text-left">Canal</th>
+                  <th className="text-left">Référence</th>
+                  <th className="text-center">Places</th>
+                  <th className="text-center">Embarqué</th>
+                  <th className="text-center">Absent</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
                   <tr>
-                    <td className="px-3 py-4 text-gray-500" colSpan={7}>
+                    <td className="py-4 text-gray-500" colSpan={8}>
                       Chargement…
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-4 text-gray-400" colSpan={7}>
+                    <td className="py-4 text-gray-400" colSpan={8}>
                       Aucun passager trouvé
                     </td>
                   </tr>
@@ -1268,37 +1384,30 @@ const AgenceEmbarquementPage: React.FC = () => {
                   filtered.map((r, idx) => {
                     const embarked = r.statutEmbarquement === "embarqué";
                     const absent   = r.statutEmbarquement === "absent";
+                    const seats = r.seatsGo ?? 1;
                     return (
-                      <tr key={r.id} className={`border-t ${embarked ? "embarked" : absent ? "absent" : ""}`}>
-                        <td className="px-3 py-2">{idx + 1}</td>
-                        <td className="px-3 py-2">{r.nomClient || "—"}</td>
-                        <td className="px-3 py-2">{r.telephone || "—"}</td>
-                        <td className="px-3 py-2 capitalize">{r.canal || "—"}</td>
-                        <td className="px-3 py-2">{r.referenceCode || r.id}</td>
-                        <td className="px-3 py-2 text-center">
+                      <tr key={r.id} className={`border-t ${embarked ? "embarked" : ""}`}>
+                        <td>{idx + 1}</td>
+                        <td className="truncate">{r.nomClient || "—"}</td>
+                        <td className="truncate">{r.telephone || "—"}</td>
+                        <td className="capitalize truncate">{r.canal || "—"}</td>
+                        <td className="truncate">{r.referenceCode || r.id}</td>
+                        <td className="text-center font-semibold">{seats}</td>
+                        <td className="text-center">
                           <button
                             className="case"
                             data-checked={embarked}
-                            onClick={() => updateStatut(r.id, embarked ? "absent" : "embarqué")}
-                            title="Basculer Embarqué / Absent"
+                            onClick={() => updateStatut(r.id, embarked ? "en_attente" : "embarqué")}
+                            title="Basculer Embarqué"
                           />
                         </td>
-                        <td className="px-3 py-2 text-center">
-                          <div className="flex flex-col items-center gap-1">
-                            <button
-                              className="case"
-                              data-checked={absent}
-                              onClick={() => updateStatut(r.id, absent ? "embarqué" : "absent")}
-                              title="Basculer Absent / Embarqué"
-                            />
-                            <button
-                              className="text-[11px] px-2 py-1 rounded border hover:bg-gray-50"
-                              onClick={() => absentEtReprogrammer(r.id)}
-                              title="Marquer absent et reprogrammer au prochain départ"
-                            >
-                              Absent + Reprog.
-                            </button>
-                          </div>
+                        <td className="text-center">
+                          <button
+                            className="case"
+                            data-checked={absent}
+                            onClick={() => updateStatut(r.id, absent ? "en_attente" : "absent")}
+                            title="Basculer Absent"
+                          />
                         </td>
                       </tr>
                     );
@@ -1308,10 +1417,22 @@ const AgenceEmbarquementPage: React.FC = () => {
             </table>
           </div>
 
-          <div className="grid grid-cols-3 gap-6 px-4 py-6 text-sm">
-            <div><div className="border-t pt-2 text-center">Contrôleur / Chef d’embarquement</div></div>
-            <div><div className="border-t pt-2 text-center">Chauffeur</div></div>
-            <div><div className="border-t pt-2 text-center">Visa Agence</div></div>
+          {/* Signatures */}
+          <div className="px-4 py-6 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              <div>
+                <div className="sig-box" />
+                <div className="sig-caption">Contrôleur / Chef d’embarquement — Nom & Signature</div>
+              </div>
+              <div>
+                <div className="sig-box" />
+                <div className="sig-caption">Chauffeur — Nom & Signature</div>
+              </div>
+              <div>
+                <div className="sig-box" />
+                <div className="sig-caption">Visa Agence</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
