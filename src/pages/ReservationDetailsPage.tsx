@@ -179,6 +179,7 @@ const ReservationDetailsPage: React.FC = () => {
     try { localStorage.setItem(STEP_KEY(slug), 'details'); } catch {}
   }, [slug]);
 
+  // 🔄 Chargement / abonnement Firestore
   useEffect(() => {
     if ((!id && !token) || !slug) { setError('Paramètres manquants'); setLoading(false); return; }
     let unsub: undefined | (() => void);
@@ -260,8 +261,9 @@ const ReservationDetailsPage: React.FC = () => {
     })();
 
     return () => { if (unsub) unsub(); };
-  }, [id, token, slug]);
+  }, [id, token, slug]); // ← pas de return conditionnel avant ce hook
 
+  // 🎉 Confetti
   useEffect(() => {
     if (reservation?.statut === 'payé') {
       const k = `celebrated-${reservation.id}`;
@@ -273,6 +275,25 @@ const ReservationDetailsPage: React.FC = () => {
       }
     }
   }, [reservation?.statut, reservation?.id]);
+
+  /* ===== Décision d’affichage : billet direct ou stepper ? ===== */
+  const canal = String(reservation?.canal || '').toLowerCase();
+  const rank = statusRank(reservation || undefined);
+  const showTicketDirect = !!reservation && (canal === 'guichet' || rank >= 2); // guichet OU payé/embarqué → billet direct
+
+  /* 🚀 Redirection automatique si billet disponible (PLACÉ AVANT TOUT RETURN) */
+  useEffect(() => {
+    if (!showTicketDirect || !reservation) return;
+    const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
+    navigate(`/${slugToUse}/receipt/${reservation.id}`, {
+      replace: true,
+      state: { reservation: { ...reservation, agencyNom: agencyName, canal }, companyInfo }
+    });
+  }, [showTicketDirect, reservation, agencyName, companyInfo, canal, slug, location, navigate]);
+
+  // ———————————————————————————————————————
+  // ⚠️ Tous les hooks sont déclarés AVANT ces returns
+  // ———————————————————————————————————————
 
   if (loading) {
     return (
@@ -300,21 +321,6 @@ const ReservationDetailsPage: React.FC = () => {
       </div>
     );
   }
-
-  /* ===== Décision d’affichage : billet direct ou stepper ? ===== */
-  const canal = String(reservation.canal || '').toLowerCase();
-  const rank = statusRank(reservation);
-  const showTicketDirect = canal === 'guichet' || rank >= 2; // guichet OU payé/embarqué → billet direct
-
-  /* ===== 🚀 Redirection automatique si billet disponible ===== */
-  useEffect(() => {
-    if (!showTicketDirect || !reservation) return;
-    const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
-    navigate(`/${slugToUse}/receipt/${reservation.id}`, {
-      replace: true,
-      state: { reservation: { ...reservation, agencyNom: agencyName, canal }, companyInfo }
-    });
-  }, [showTicketDirect, reservation, agencyName, companyInfo, canal, slug, location, navigate]);
 
   /** --- Étapes (uniquement pour l’en-ligne non confirmé) --- */
   const STEPS: Array<'paiement_en_cours' | 'preuve_recue' | 'payé'> = ['paiement_en_cours', 'preuve_recue', 'payé'];
