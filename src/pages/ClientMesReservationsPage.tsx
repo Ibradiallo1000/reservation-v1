@@ -51,6 +51,9 @@ export type Reservation = {
   // couleurs vitrine (optionnel)
   couleurPrimaire?: string;
   couleurSecondaire?: string;
+
+  // 👇 NEW: pour badge canal
+  canal?: "guichet" | "en_ligne" | string;
 };
 
 const toDayjs = (d: Reservation["date"]) => {
@@ -179,6 +182,9 @@ const ClientMesReservationsPage: React.FC = () => {
 
           statut: r.statut,
           lieu_depart: r.lieu_depart,
+
+          // 👇 NEW
+          canal: r.canal || undefined,
         });
       });
     }
@@ -193,6 +199,8 @@ const ClientMesReservationsPage: React.FC = () => {
       );
       return;
     }
+    // On garde exactement le numéro saisi (pas de normalisation stricte en DB ici)
+    // car tes réservations sont déjà enregistrées en format cohérent côté guichet/en ligne.
     setError("");
     setLoading(true);
     setRows([]);
@@ -382,8 +390,14 @@ const ClientMesReservationsPage: React.FC = () => {
                                 )}
                               </div>
 
-                              <div className="mt-3">
+                              {/* 👇 NEW: statut + badge canal */}
+                              <div className="mt-3 flex items-center gap-2">
                                 <StatusPill s={r.statut} />
+                                {r.canal && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 border text-gray-700">
+                                    {r.canal === "guichet" ? "Guichet" : "En ligne"}
+                                  </span>
+                                )}
                               </div>
                             </div>
 
