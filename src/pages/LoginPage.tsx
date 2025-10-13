@@ -1,204 +1,171 @@
-// src/pages/LoginPage.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState, useCallback } from "react";
 import {
   signInWithEmailAndPassword,
-  onAuthStateChanged,
   sendPasswordResetEmail,
-  getIdTokenResult
-} from 'firebase/auth';
-import { auth, db } from '../firebaseConfig';
-import { doc, getDoc } from 'firebase/firestore';
-import { useNavigate } from 'react-router-dom';
-import { permissionsByRole } from '@/roles-permissions';
-import { Eye, EyeOff, Mail, Lock, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+  getIdTokenResult,
+} from "firebase/auth";
+import { auth, db } from "../firebaseConfig";
+import { doc, getDoc } from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
+import { permissionsByRole } from "@/roles-permissions";
+import { Eye, EyeOff, Mail, Lock, AlertCircle, CheckCircle2, Loader2, LogOut, ArrowRight } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext"; // ← pour logout
 
 type AnyRole = keyof typeof permissionsByRole | string;
 
-// --------- normalisation des rôles (robuste aux variantes)
 const normalizeRole = (r?: string): AnyRole => {
-  const raw = (r || 'user').toString().trim();
-  const lc = raw.toLowerCase();
-  if (lc === 'chef_agence' || lc === 'chefagence') return 'chefAgence';
-  if (lc === 'admin plateforme' || lc === 'admin_platforme') return 'admin_platforme';
-  if (lc === 'admin compagnie' || lc === 'admin_compagnie') return 'admin_compagnie';
-  if (lc === 'agent_courrier' || lc === 'agentcourrier') return 'agentCourrier';
-  if (lc === 'superviseur') return 'superviseur';
-  if (lc === 'guichetier') return 'guichetier';
-  if (lc === 'comptable') return 'comptable';
-  if (lc === 'compagnie') return 'compagnie';
-  if (lc === 'embarquement') return 'embarquement';
-  return 'user';
+  const raw = (r || "user").toString().trim().toLowerCase();
+  if (raw === "chef_agence" || raw === "chefagence") return "chefAgence";
+  if (raw === "admin plateforme" || raw === "admin_platforme") return "admin_platforme";
+  if (raw === "admin compagnie" || raw === "admin_compagnie") return "admin_compagnie";
+  if (raw === "agent_courrier" || raw === "agentcourrier") return "agentCourrier";
+  if (raw === "superviseur") return "superviseur";
+  if (raw === "guichetier") return "guichetier";
+  if (raw === "comptable") return "comptable";
+  if (raw === "compagnie") return "compagnie";
+  if (raw === "embarquement") return "embarquement";
+  return "user";
 };
 
 const routeForRole = (role: AnyRole) => {
   switch (role) {
-    case 'admin_platforme':
-      return '/admin/dashboard';
-    case 'admin_compagnie':
-    case 'compagnie':
-      return '/compagnie/dashboard';
-    case 'chefAgence':
-      return '/agence/dashboard';
-    case 'guichetier':
-      return '/agence/guichet';
-    case 'superviseur':
-    case 'agentCourrier':
-      return '/agence/dashboard';
-    case 'embarquement':
-      return '/agence/embarquement';
-    case 'comptable':
-      return '/agence/comptabilite';
+    case "admin_platforme":
+      return "/admin/dashboard";
+    case "admin_compagnie":
+    case "compagnie":
+      return "/compagnie/dashboard";
+    case "chefAgence":
+    case "superviseur":
+    case "agentCourrier":
+      return "/agence/dashboard";
+    case "guichetier":
+      return "/agence/guichet";
+    case "embarquement":
+      return "/agence/embarquement";
+    case "comptable":
+      return "/agence/comptabilite";
     default:
-      return '/';
+      return "/";
   }
 };
 
-// --------- helpers validation
-const isValidEmail = (val: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
+const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 const MIN_PWD = 6;
 
 const LoginPage: React.FC = () => {
-  const [email, setEmail] = useState('');
-  const [motDePasse, setMotDePasse] = useState('');
+  const [email, setEmail] = useState("");
+  const [motDePasse, setMotDePasse] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-
-  const [emailError, setEmailError] = useState<string>('');
-  const [pwdError, setPwdError] = useState<string>('');
-
-  const [message, setMessage] = useState<string>('');
-  const [messageType, setMessageType] = useState<'success' | 'error' | ''>('');
+  const [emailError, setEmailError] = useState("");
+  const [pwdError, setPwdError] = useState("");
+  const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<"success" | "error" | "">("");
 
   const navigate = useNavigate();
+  const { logout } = useAuth();
 
-  // --------- util: décide du rôle (claims d'abord, sinon Firestore)
-  const resolveRoleAndRedirect = async (uid: string) => {
-    // force refresh du token pour récupérer les *claims* (role, companyId, etc.)
-    const tokenRes = await getIdTokenResult(auth.currentUser!, true);
-    const claims = tokenRes.claims as any;
-
-    // DEBUG utile si ça coince
-    console.log('claims after login:', claims);
-
+  const resolveRoleAndRedirect = useCallback(async (uid: string) => {
+    const claims = (await getIdTokenResult(auth.currentUser!)).claims as any;
     let role: AnyRole | undefined = claims?.role ? normalizeRole(String(claims.role)) : undefined;
 
-    // fallback Firestore si pas de claim
     if (!role || !(role in permissionsByRole)) {
-      const snap = await getDoc(doc(db, 'users', uid));
-      if (snap.exists()) {
-        const data = snap.data() as any;
-        role = normalizeRole(data?.role);
-      }
+      const snap = await getDoc(doc(db, "users", uid));
+      if (snap.exists()) role = normalizeRole((snap.data() as any)?.role);
     }
-
     if (!role || !(role in permissionsByRole)) {
       setMessage("Votre compte n'a pas encore de rôle valide. Contactez un administrateur.");
-      setMessageType('error');
+      setMessageType("error");
       return;
     }
-
-    // on garde quelques infos utiles pour l'app
-    localStorage.setItem(
-      'user',
-      JSON.stringify({
-        uid,
-        email: auth.currentUser?.email,
-        role,
-        companyId: (claims && claims.companyId) || undefined,
-        agencyId: (claims && claims.agencyId) || undefined
-      })
-    );
-
     navigate(routeForRole(role), { replace: true });
-  };
+  }, [navigate]);
 
-  // --------- redirection auto si déjà connecté
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
-      if (!u) return;
-      try {
-        await resolveRoleAndRedirect(u.uid);
-      } catch (e) {
-        console.error('auto-redirect error:', e);
-      }
-    });
-    return () => unsub();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // ❌ IMPORTANT : pas d’auto-redir si auth.currentUser existe.
+  // (Si tu veux forcer une reconnexion obligatoire, tu peux décommenter ceci:)
+  // useEffect(() => { logout().catch(() => {}); }, [logout]);
 
-  // --------- validation handlers
-  const validateEmail = (val = email) => {
-    if (!val.trim()) return setEmailError('Adresse e-mail requise.');
-    if (!isValidEmail(val)) return setEmailError('Adresse e-mail invalide.');
-    setEmailError('');
-  };
-  const validatePwd = (val = motDePasse) => {
-    if (!val) return setPwdError('Mot de passe requis.');
-    if (val.length < MIN_PWD) return setPwdError(`Au moins ${MIN_PWD} caractères.`);
-    setPwdError('');
-  };
-
-  // --------- submit
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setMessage('');
-    setMessageType('');
+    setMessage("");
+    setMessageType("");
 
-    validateEmail();
-    validatePwd();
-    if (!email || !motDePasse || emailError || pwdError) return;
+    const emailOK = isValidEmail(email);
+    const pwdOK = motDePasse.length >= MIN_PWD;
+    setEmailError(emailOK ? "" : "Adresse e-mail invalide.");
+    setPwdError(pwdOK ? "" : `Au moins ${MIN_PWD} caractères.`);
+    if (!emailOK || !pwdOK || isLoading) return;
 
     setIsLoading(true);
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), motDePasse);
-
-      // très important: forcer le rafraîchissement du token pour récupérer les claims
-      await getIdTokenResult(cred.user, true);
-
+      await getIdTokenResult(cred.user); // pas de refresh forcé
       await resolveRoleAndRedirect(cred.user.uid);
     } catch (err: any) {
-      console.error('login error:', err);
-      setMessage('Erreur de connexion : ' + (err?.message || ''));
-      setMessageType('error');
+      console.error("login error:", err);
+      setMessage("Erreur de connexion : " + (err?.message || ""));
+      setMessageType("error");
     } finally {
       setIsLoading(false);
     }
   };
 
-  // --------- reset password
   const handleResetPassword = async () => {
-    setMessage('');
-    setMessageType('');
-
-    if (!email.trim()) {
-      setEmailError('Renseigne ton e-mail pour réinitialiser le mot de passe.');
-      return;
-    }
-    if (!isValidEmail(email)) {
-      setEmailError('Adresse e-mail invalide.');
-      return;
-    }
+    setMessage("");
+    setMessageType("");
+    if (!email.trim()) return setEmailError("Renseigne ton e-mail pour réinitialiser le mot de passe.");
+    if (!isValidEmail(email)) return setEmailError("Adresse e-mail invalide.");
     try {
       await sendPasswordResetEmail(auth, email.trim());
       setMessage("Un e-mail de réinitialisation t'a été envoyé.");
-      setMessageType('success');
+      setMessageType("success");
     } catch (err: any) {
-      setMessage("Échec de l'envoi : " + (err?.message || ''));
-      setMessageType('error');
+      setMessage("Échec de l'envoi : " + (err?.message || ""));
+      setMessageType("error");
     }
   };
 
-  const isDisabled = isLoading || !!emailError || !!pwdError || !email.trim() || !motDePasse;
+  const disabled =
+    isLoading || !isValidEmail(email) || motDePasse.length < MIN_PWD || !!emailError || !!pwdError;
+
+  const already = !!auth.currentUser; // ← session active ?
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-orange-50 via-white to-amber-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="relative bg-white border border-orange-100 rounded-2xl shadow-xl shadow-orange-100/50">
+          {/* Bandeau si déjà connecté */}
+          {already && (
+            <div className="px-6 py-3 bg-amber-50 border-b border-amber-200 rounded-t-2xl text-sm text-amber-800 flex items-center justify-between gap-3">
+              <span>Vous êtes déjà connecté.</span>
+              <div className="flex gap-2">
+                <button
+                  className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-orange-600 text-white text-xs font-medium hover:bg-orange-700"
+                  onClick={async () => {
+                    const claims = (await getIdTokenResult(auth.currentUser!)).claims as any;
+                    const role = normalizeRole(claims?.role);
+                    navigate(routeForRole(role), { replace: true });
+                  }}
+                >
+                  Continuer <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 bg-white text-amber-800 text-xs font-medium border border-amber-300 hover:bg-amber-100"
+                  onClick={() => logout()}
+                >
+                  <LogOut className="h-3.5 w-3.5" /> Se déconnecter
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Formulaire de connexion (toujours visible) */}
           <div className="px-8 pt-8 text-center">
             <div className="mx-auto h-12 w-12 rounded-2xl bg-orange-500/10 flex items-center justify-center">
               <svg viewBox="0 0 24 24" className="h-6 w-6 text-orange-600">
-                <circle cx="12" cy="12" r="9" fill="currentColor" opacity="0.15"/>
-                <circle cx="12" cy="12" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5"/>
-                <circle cx="12" cy="12" r="2" fill="currentColor"/>
+                <circle cx="12" cy="12" r="9" fill="currentColor" opacity="0.15" />
+                <circle cx="12" cy="12" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <circle cx="12" cy="12" r="2" fill="currentColor" />
               </svg>
             </div>
             <h1 className="mt-4 text-2xl font-bold tracking-tight text-slate-900">Connexion</h1>
@@ -217,10 +184,10 @@ const LoginPage: React.FC = () => {
                   type="email"
                   placeholder="exemple@domaine.com"
                   value={email}
-                  onChange={(e) => { setEmail(e.target.value); if (emailError) validateEmail(e.target.value); }}
-                  onBlur={() => validateEmail()}
-                  className={`w-full rounded-xl border bg-white pl-10 pr-3 py-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none ring-2 ring-transparent transition
-                    ${emailError ? 'border-red-300 focus:ring-red-100' : 'border-slate-200 focus:border-orange-500 focus:ring-orange-100'}`}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className={`w-full rounded-xl border bg-white pl-10 pr-3 py-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none ring-2 ring-transparent transition ${
+                    emailError ? "border-red-300 focus:ring-red-100" : "border-slate-200 focus:border-orange-500 focus:ring-orange-100"
+                  }`}
                   autoComplete="email"
                 />
               </div>
@@ -235,20 +202,20 @@ const LoginPage: React.FC = () => {
                 </span>
                 <input
                   id="password"
-                  type={showPwd ? 'text' : 'password'}
+                  type={showPwd ? "text" : "password"}
                   placeholder="••••••••"
                   value={motDePasse}
-                  onChange={(e) => { setMotDePasse(e.target.value); if (pwdError) validatePwd(e.target.value); }}
-                  onBlur={() => validatePwd()}
-                  className={`w-full rounded-xl border bg-white pl-10 pr-10 py-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none ring-2 ring-transparent transition
-                    ${pwdError ? 'border-red-300 focus:ring-red-100' : 'border-slate-200 focus:border-orange-500 focus:ring-orange-100'}`}
+                  onChange={(e) => setMotDePasse(e.target.value)}
+                  className={`w-full rounded-xl border bg-white pl-10 pr-10 py-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none ring-2 ring-transparent transition ${
+                    pwdError ? "border-red-300 focus:ring-red-100" : "border-slate-200 focus:border-orange-500 focus:ring-orange-100"
+                  }`}
                   autoComplete="current-password"
+                  minLength={MIN_PWD}
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPwd(v => !v)}
+                  onClick={() => setShowPwd((v) => !v)}
                   className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 transition"
-                  aria-label={showPwd ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
                 >
                   {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -267,25 +234,26 @@ const LoginPage: React.FC = () => {
             </div>
 
             {message && (
-              <div className={`flex items-start gap-2 rounded-xl border px-3 py-2.5
-                ${messageType === 'success' ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
-                {messageType === 'success'
-                  ? <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5" />
-                  : <AlertCircle className="h-4 w-4 text-red-500 mt-0.5" />
-                }
-                <p className={`text-sm ${messageType === 'success' ? 'text-emerald-800' : 'text-red-700'}`}>{message}</p>
+              <div className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 ${
+                messageType === "success" ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"
+              }`}>
+                {messageType === "success" ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-red-500 mt-0.5" />
+                )}
+                <p className={`text-sm ${messageType === "success" ? "text-emerald-800" : "text-red-700"}`}>{message}</p>
               </div>
             )}
 
             <button
               type="submit"
-              disabled={isLoading || !!emailError || !!pwdError || !email.trim() || !motDePasse}
-              className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition
-                ${(isLoading || !!emailError || !!pwdError || !email.trim() || !motDePasse)
-                  ? 'bg-orange-300/70 cursor-not-allowed'
-                  : 'bg-orange-600 hover:bg-orange-700 active:bg-orange-800 shadow-lg shadow-orange-600/20'}`}
+              disabled={disabled}
+              className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition ${
+                disabled ? "bg-orange-300/70 cursor-not-allowed" : "bg-orange-600 hover:bg-orange-700 active:bg-orange-800 shadow-lg shadow-orange-600/20"
+              }`}
             >
-              {isLoading ? (<><Loader2 className="h-4 w-4 animate-spin" />Connexion en cours...</>) : 'Se connecter'}
+              {isLoading ? (<><Loader2 className="h-4 w-4 animate-spin" />Connexion en cours...</>) : "Se connecter"}
             </button>
 
             <p className="text-center text-xs text-slate-500">

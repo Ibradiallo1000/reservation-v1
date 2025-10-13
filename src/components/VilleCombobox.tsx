@@ -1,23 +1,43 @@
-import React, { useState, useEffect } from "react";
+// src/components/home/ui/VilleCombobox.tsx
+import React, { useEffect, useState } from "react";
 import { MapPin } from "lucide-react";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
-interface VilleComboboxProps {
-  label: string;
+type VilleComboboxProps = {
   value: string;
-  onChange: (value: string) => void;
-}
+  onChange: (val: string) => void;
+  placeholder?: string;
+  required?: boolean;
+};
 
-const VilleCombobox: React.FC<VilleComboboxProps> = ({ label, value, onChange }) => {
+const VilleCombobox: React.FC<VilleComboboxProps> = ({
+  value,
+  onChange,
+  placeholder = "Ville…",
+  required = false,
+}) => {
   const [cities, setCities] = useState<string[]>([]);
   const [filtered, setFiltered] = useState<string[]>([]);
   const [showList, setShowList] = useState(false);
 
+  // Charge la liste des villes une seule fois
   useEffect(() => {
     const fetchCities = async () => {
-      const snap = await getDocs(collection(db, "villes"));
-      setCities(snap.docs.map((doc) => doc.data().nom));
+      try {
+        const snap = await getDocs(collection(db, "villes"));
+        const names = snap.docs
+          .map((doc) => {
+            const data = doc.data() as any;
+            return (data?.nom ?? "").toString().trim();
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b, "fr"));
+        setCities(names);
+      } catch (err) {
+        console.error("Erreur chargement villes:", err);
+        setCities([]); // fallback pour éviter le crash du module
+      }
     };
     fetchCities();
   }, []);
@@ -25,7 +45,8 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({ label, value, onChange })
   const handleInput = (val: string) => {
     onChange(val);
     if (val) {
-      setFiltered(cities.filter((city) => city.toLowerCase().startsWith(val.toLowerCase())));
+      const low = val.toLowerCase();
+      setFiltered(cities.filter((c) => c.toLowerCase().includes(low)).slice(0, 50));
       setShowList(true);
     } else {
       setFiltered([]);
@@ -33,31 +54,35 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({ label, value, onChange })
     }
   };
 
+  const choose = (val: string) => {
+    onChange(val);
+    setShowList(false);
+  };
+
   return (
     <div className="flex-1 relative">
-      <div className="flex items-center border rounded px-3 py-2">
+      <div className="flex items-center border rounded px-3 py-2 bg-white">
         <MapPin className="h-5 w-5 text-orange-500 mr-2" />
         <input
           type="text"
           value={value}
           onChange={(e) => handleInput(e.target.value)}
-          placeholder={label}
+          onFocus={() => value ? setShowList(true) : void 0}
+          placeholder={placeholder}
+          required={required}
           className="flex-1 outline-none"
-          required
         />
       </div>
+
       {showList && filtered.length > 0 && (
-        <ul className="absolute z-10 bg-white border mt-1 rounded shadow w-full max-h-40 overflow-y-auto">
-          {filtered.map((city, i) => (
+        <ul className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white shadow">
+          {filtered.map((c) => (
             <li
-              key={i}
-              onClick={() => {
-                onChange(city);
-                setShowList(false);
-              }}
-              className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
+              key={c}
+              className="px-3 py-2 hover:bg-orange-50 cursor-pointer"
+              onMouseDown={() => choose(c)} // onMouseDown pour éviter blur avant le click
             >
-              {city}
+              {c}
             </li>
           ))}
         </ul>

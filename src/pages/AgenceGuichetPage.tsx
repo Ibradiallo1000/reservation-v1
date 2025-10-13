@@ -2,15 +2,24 @@
 // ===================================================================
 // Guichet : VENTE EN ESPÈCES UNIQUEMENT (canal=guichet)
 // - Paiement forcé à "espèces"
-// - Gestion de poste : none → pending → active/paused → closed
+// - Gestion de poste : none → (Demander l’activation) → pending → active/paused → closed
 // - Places restantes (live) : statut = 'payé', somme seatsGo, fallback 30, onSnapshot
-// - Onglets : Guichet / Rapport / Historique
-// - UI (ce fichier) : thème plus présent, cartes & boutons 3D, barre bas = bouton unique
+// - Onglets locaux : Guichet / Rapport / Historique
+// - AMÉLIORATIONS (ce fichier) :
+//   • En-tête Rapport minimal (titre + date du jour / plage si chevauchement)
+//   • Suppression bouton Imprimer dans le Rapport (on n’imprime que depuis Historique)
+//   • Boutons/puces modernisés avec dégradé thème
+//   • Édition rapide étendue : nom, téléphone, places (aller/retour), montant (+ motif)
+//   • Annulation soignée
+//   • ⚠️ Changement trajet/date/heure : à traiter par “reporté” + revente (sécurisé).
+//   • Vente accélérée : caches (company/agency/seller) + écriture unique setDoc
+//   • Header responsive (flex-wrap, truncate, réorganisation sur mobile)
+//   • ✅ Détails utilisateur + rôle en haut à droite + bouton Déconnexion (icône)
 // ===================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  collection, getDocs, query, where, Timestamp, doc, getDoc,
+  collection, getDocs, query, where, Timestamp, addDoc, doc, getDoc,
   updateDoc, orderBy, onSnapshot, runTransaction, setDoc, limit, serverTimestamp
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
@@ -26,14 +35,11 @@ import ReceiptModal, {
 
 import {
   Building2, MapPin, CalendarDays, Clock4,
-  Ticket, RefreshCw, Pencil, XCircle, LogOut, User2
+  Ticket, RefreshCw, Pencil, XCircle, Settings, LogOut, User2
 } from 'lucide-react';
 
-// ---------- Helpers UI ----------
-const tint = (hex: string, opacity = 0.12) =>
-  `color-mix(in srgb, ${hex} ${Math.round(opacity*100)}%, white)`;
+import Button from '@/ui/Button';
 
-// ---------- Types ----------
 type TripType = 'aller_simple' | 'aller_retour';
 
 type WeeklyTrip = {
@@ -98,7 +104,7 @@ const DAYS_IN_ADVANCE = 8;
 const MAX_SEATS_FALLBACK = 30;
 const DEFAULT_COMPANY_SLUG = 'compagnie-par-defaut';
 
-// ---------- Utils Firestore ----------
+/* ----------------------- Utils Firestore ----------------------- */
 async function getSellerCodeFromFirestore(uid?: string | null) {
   try {
     if (!uid) return null;
@@ -111,7 +117,7 @@ async function getSellerCodeFromFirestore(uid?: string | null) {
   }
 }
 
-// Génère une référence unique, de façon atomique (anti-collisions)
+// Génère une référence unique, de façon atomique (anti collisions)
 async function generateReferenceCodeForTripInstance(opts: {
   companyId: string; companyCode?: string;
   agencyId: string;  agencyCode?: string;
@@ -125,8 +131,11 @@ async function generateReferenceCodeForTripInstance(opts: {
     const snap = await tx.get(counterRef);
     const last = snap.exists() ? ((snap.data() as any).lastSeq || 0) : 0;
     const n = last + 1;
-    if (!snap.exists()) tx.set(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
-    else tx.update(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
+    if (!snap.exists()) {
+      tx.set(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
+    } else {
+      tx.update(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
+    }
     return n;
   }).catch(async () => {
     await setDoc(counterRef, { lastSeq: 1, updatedAt: Timestamp.now() }, { merge: true });
@@ -147,7 +156,7 @@ function seatBadgeStyle(remaining: number | undefined, total: number) {
   return { bg: 'bg-red-100', text: 'text-red-700', label };
 }
 
-// ---------- Modal d’édition ----------
+/* ----------------------- Modal d’édition (étendue) ----------------------- */
 type EditModalProps = {
   open: boolean;
   onClose: () => void;
@@ -193,42 +202,70 @@ const EditReservationModal: React.FC<EditModalProps> = ({ open, onClose, initial
   if (!open || !initial) return null;
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white border shadow-2xl p-5" style={{ borderColor: tint('#111827', .12) }}>
+      <div className="w-full max-w-md rounded-2xl bg-white border shadow-lg p-5">
         <div className="text-lg font-semibold mb-3">Modifier la réservation</div>
         <div className="space-y-3">
-          <input className="w-full border rounded-lg px-3 py-2" placeholder="Nom du client" value={nomClient} onChange={(e)=>setNomClient(e.target.value)} />
-          <input className="w-full border rounded-lg px-3 py-2" placeholder="Téléphone" value={telephone} onChange={(e)=>setTelephone(e.target.value)} />
+          <input
+            className="w-full border rounded-lg px-3 py-2"
+            placeholder="Nom du client"
+            value={nomClient}
+            onChange={(e)=>setNomClient(e.target.value)}
+          />
+          <input
+            className="w-full border rounded-lg px-3 py-2"
+            placeholder="Téléphone"
+            value={telephone}
+            onChange={(e)=>setTelephone(e.target.value)}
+          />
           <div className="grid grid-cols-2 gap-2">
             <div>
               <div className="text-sm mb-1">Places (Aller)</div>
               <div className="flex items-center gap-2">
-                <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md" onClick={()=>setSeatsGo(Math.max(1, seatsGo-1))}>-</button>
-                <div className="flex-1 text-center font-semibold py-2 rounded-lg bg-gray-50 border">{seatsGo}</div>
-                <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md" onClick={()=>setSeatsGo(seatsGo+1)}>+</button>
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsGo(Math.max(1, seatsGo-1))}>-</button>
+                <div className="flex-1 text-center font-semibold py-2 rounded bg-gray-50">{seatsGo}</div>
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsGo(seatsGo+1)}>+</button>
               </div>
             </div>
             <div>
               <div className="text-sm mb-1">Places (Retour)</div>
               <div className="flex items-center gap-2">
-                <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md" onClick={()=>setSeatsReturn(Math.max(0, seatsReturn-1))}>-</button>
-                <div className="flex-1 text-center font-semibold py-2 rounded-lg bg-gray-50 border">{seatsReturn}</div>
-                <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md" onClick={()=>setSeatsReturn(seatsReturn+1)}>+</button>
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsReturn(Math.max(0, seatsReturn-1))}>-</button>
+                <div className="flex-1 text-center font-semibold py-2 rounded bg-gray-50">{seatsReturn}</div>
+                <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50" onClick={()=>setSeatsReturn(seatsReturn+1)}>+</button>
               </div>
             </div>
           </div>
           <div>
             <div className="text-sm mb-1">Montant (FCFA)</div>
-            <input type="number" className="w-full border rounded-lg px-3 py-2" value={montant} onChange={(e)=>setMontant(Math.max(0, Number(e.target.value||0)))} />
+            <input
+              type="number"
+              className="w-full border rounded-lg px-3 py-2"
+              value={montant}
+              onChange={(e)=>setMontant(Math.max(0, Number(e.target.value||0)))}
+            />
           </div>
-          <input className="w-full border rounded-lg px-3 py-2" placeholder="Motif de modification (optionnel)" value={reason} onChange={(e)=>setReason(e.target.value)} />
+          <input
+            className="w-full border rounded-lg px-3 py-2"
+            placeholder="Motif de modification (optionnel)"
+            value={reason}
+            onChange={(e)=>setReason(e.target.value)}
+          />
         </div>
         <div className="mt-5 flex items-center justify-end gap-2">
-          <button className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm" onClick={onClose}>Annuler</button>
+          <button className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50" onClick={onClose}>Annuler</button>
           <button
             disabled={isSaving || !nomClient}
-            className="px-4 py-2 rounded-xl text-white font-semibold shadow-lg hover:shadow-xl active:translate-y-[1px] disabled:opacity-50"
+            className="px-4 py-2 rounded-lg text-white disabled:opacity-50"
             style={{ background: 'linear-gradient(90deg, #2563EB, #1D4ED8)' }}
-            onClick={() => onSave({ id: initial.id, nomClient, telephone, seatsGo, seatsReturn, montant, editReason: reason || undefined })}
+            onClick={() => onSave({
+              id: initial.id,
+              nomClient,
+              telephone,
+              seatsGo,
+              seatsReturn,
+              montant,
+              editReason: reason || undefined
+            })}
           >
             {isSaving ? 'Enregistrement…' : 'Enregistrer'}
           </button>
@@ -238,23 +275,31 @@ const EditReservationModal: React.FC<EditModalProps> = ({ open, onClose, initial
   );
 };
 
-// ------------------------------ Page ------------------------------
+/* ------------------------------ Page ------------------------------ */
 const AgenceGuichetPage: React.FC = () => {
   const auth = useAuth() as any;
+  // On récupère signOutSafe si exposé par l'AuthContext
   const { user, company, signOutSafe } = auth ?? {};
 
   const handleLogout = useCallback(async () => {
     try {
-      if (typeof signOutSafe === 'function') { await signOutSafe(); return; }
-      if (typeof auth?.logout === 'function') { await auth.logout(); return; }
-      window.location.href = '/logout';
+      if (typeof signOutSafe === 'function') {
+        await signOutSafe();
+        return;
+      }
+      if (typeof auth?.logout === 'function') {
+        await auth.logout();
+        return;
+      }
+      window.location.href = '/logout'; // route utilitaire
     } catch (e) {
       console.error('logout error', e);
       window.location.href = '/login';
     }
   }, [signOutSafe, auth]);
 
-  const { activeShift, startShift, pauseShift, continueShift, closeShift, refresh } = useActiveShift();
+  const shiftApi = useActiveShift();
+  const { activeShift, startShift, pauseShift, continueShift, closeShift, refresh } = shiftApi;
 
   const theme = useCompanyTheme(company) || { primary: '#EA580C', secondary: '#F97316' };
 
@@ -264,6 +309,7 @@ const AgenceGuichetPage: React.FC = () => {
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState<string>('Compagnie');
   const [agencyName, setAgencyName] = useState<string>('Agence');
+  const [companyPhone, setCompanyPhone] = useState<string>('');
 
   const [departure, setDeparture] = useState<string>('');
   const [arrival, setArrival] = useState<string>('');
@@ -284,9 +330,11 @@ const AgenceGuichetPage: React.FC = () => {
   const [tickets, setTickets] = useState<TicketRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
 
-  // Rapports
+  // Rapports en attente
   const [pendingReports, setPendingReports] = useState<ShiftReport[]>([]);
   const [loadingPending, setLoadingPending] = useState(false);
+
+  // Historique validés
   const [historyReports, setHistoryReports] = useState<ShiftReport[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -314,8 +362,13 @@ const AgenceGuichetPage: React.FC = () => {
   const [cancelingId, setCancelingId] = useState<string | null>(null);
 
   // CACHES accélération vente
-  const [companyMeta, setCompanyMeta] = useState({ name: 'Compagnie', code: 'COMP', slug: DEFAULT_COMPANY_SLUG, logo: null as string | null, phone: '' });
-  const [agencyMeta, setAgencyMeta]   = useState({ name: 'Agence', code: 'AGC', phone: '' });
+  const [companyMeta, setCompanyMeta] = useState({
+    name: 'Compagnie', code: 'COMP', slug: DEFAULT_COMPANY_SLUG,
+    logo: null as string | null, phone: ''
+  });
+  const [agencyMeta, setAgencyMeta] = useState({
+    name: 'Agence', code: 'AGC', phone: ''
+  });
   const [sellerCodeCached, setSellerCodeCached] = useState<string>('GUEST');
 
   const availableDates = useMemo(
@@ -332,7 +385,7 @@ const AgenceGuichetPage: React.FC = () => {
     return d.getTime() < Date.now();
   }, []);
 
-  // -------- INIT socle + CACHES --------
+  /* -------------------- INIT socle + CACHES -------------------- */
   useEffect(() => {
     (async () => {
       try {
@@ -347,6 +400,9 @@ const AgenceGuichetPage: React.FC = () => {
         if (compSnap.exists()) {
           const c = compSnap.data() as any;
           const name = c.nom || c.name || 'Compagnie';
+          setCompanyLogo(c.logoUrl || c.logo || null);
+          setCompanyName(name);
+          setCompanyPhone(c.telephone || '');
           setCompanyMeta({
             name,
             code: makeShortCode(name, c.code),
@@ -354,7 +410,6 @@ const AgenceGuichetPage: React.FC = () => {
             logo: c.logoUrl || c.logo || null,
             phone: c.telephone || ''
           });
-          setCompanyName(name);
         }
 
         // agency
@@ -383,7 +438,7 @@ const AgenceGuichetPage: React.FC = () => {
     })();
   }, [user?.uid, user?.companyId, user?.agencyId]);
 
-  // -------- Live remaining seats --------
+  /* -------------------- Live remaining seats -------------------- */
   const loadRemainingForDate = useCallback(async (
     dateISO: string,
     dep: string,
@@ -394,17 +449,26 @@ const AgenceGuichetPage: React.FC = () => {
     try {
       if (!user?.companyId || !user?.agencyId) return;
 
-      if (remainingUnsubRef.current) { remainingUnsubRef.current(); remainingUnsubRef.current = undefined; }
+      if (remainingUnsubRef.current) {
+        remainingUnsubRef.current();
+        remainingUnsubRef.current = undefined;
+      }
 
       const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
-      const qy = query(rRef, where('date', '==', dateISO), where('depart', '==', dep), where('arrivee', '==', arr));
+      const qy = query(
+        rRef,
+        where('date', '==', dateISO),
+        where('depart', '==', dep),
+        where('arrivee', '==', arr)
+      );
 
       const unsub = onSnapshot(qy, (snap) => {
         const usedByTrip: Record<string, number> = {};
+
         snap.forEach((d) => {
           const r = d.data() as any;
           const statut = String(r.statut || '').toLowerCase();
-          if (statut !== 'payé') return;
+          if (statut !== 'payé') return; // ne compter que "payé"
           const tripKey = r.trajetId;
           const seats = Number(r.seatsGo || 0);
           usedByTrip[tripKey] = (usedByTrip[tripKey] || 0) + seats;
@@ -426,13 +490,18 @@ const AgenceGuichetPage: React.FC = () => {
           setFilteredTrips(filtered);
 
           if (pickFirst && filtered.length > 0) {
-            const firstWithSeats = filtered.find(f => (f.remainingSeats ?? 1) > 0) || filtered[0];
+            const firstWithSeats = filtered.find(f => {
+              const rs = f.remainingSeats;
+              return (rs === undefined) ? true : rs > 0;
+            }) || filtered[0];
             setSelectedTrip(prevSel => prevSel ?? firstWithSeats);
           }
 
           return next;
         });
-      }, (err) => console.error('[GUICHET] loadRemainingForDate:snapshot:error', err));
+      }, (err) => {
+        console.error('[GUICHET] loadRemainingForDate:snapshot:error', err);
+      });
 
       remainingUnsubRef.current = unsub;
     } catch (e) {
@@ -440,10 +509,11 @@ const AgenceGuichetPage: React.FC = () => {
     }
   }, [isPastTime, user?.companyId, user?.agencyId]);
 
-  // -------- Recherche trajets --------
+  /* -------------------- Recherche trajets -------------------- */
   const searchTrips = useCallback(async (dep: string, arr: string) => {
     try {
       setTrips([]); setFilteredTrips([]); setSelectedTrip(null); setSelectedDate('');
+
       if (!dep || !arr || !user?.companyId || !user?.agencyId) return;
 
       const weeklyRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
@@ -461,7 +531,15 @@ const AgenceGuichetPage: React.FC = () => {
           if ((w.departure || '').toLowerCase().trim() !== dep.toLowerCase().trim()) return;
           if ((w.arrival || '').toLowerCase().trim() !== arr.toLowerCase().trim()) return;
           (w.horaires?.[jour] || []).forEach(h => {
-            out.push({ id: `${w.id}_${dateISO}_${h}`, date: dateISO, time: h, departure: w.departure, arrival: w.arrival, price: w.price, places: w.places || MAX_SEATS_FALLBACK });
+            out.push({
+              id: `${w.id}_${dateISO}_${h}`,
+              date: dateISO,
+              time: h,
+              departure: w.departure,
+              arrival: w.arrival,
+              price: w.price,
+              places: w.places || MAX_SEATS_FALLBACK
+            });
           });
         });
       }
@@ -474,15 +552,20 @@ const AgenceGuichetPage: React.FC = () => {
       setSelectedDate(firstDate);
       setSelectedTrip(null);
 
-      if (firstDate) await loadRemainingForDate(firstDate, dep, arr, future, true);
-      else setFilteredTrips([]);
+      if (firstDate) {
+        await loadRemainingForDate(firstDate, dep, arr, future, true);
+      } else {
+        setFilteredTrips([]);
+      }
     } catch (e) {
       console.error('[GUICHET] searchTrips:error', e);
     }
   }, [isPastTime, user?.agencyId, user?.companyId, loadRemainingForDate]);
 
   useEffect(() => {
-    if (!arrival) { setTrips([]); setFilteredTrips([]); setSelectedTrip(null); setSelectedDate(''); return; }
+    if (!arrival) {
+      setTrips([]); setFilteredTrips([]); setSelectedTrip(null); setSelectedDate(''); return;
+    }
     searchTrips(departure, arrival);
   }, [arrival, departure, searchTrips]);
 
@@ -492,9 +575,13 @@ const AgenceGuichetPage: React.FC = () => {
     await loadRemainingForDate(date, departure, arrival, undefined, true);
   }, [arrival, departure, loadRemainingForDate]);
 
-  useEffect(() => () => { if (remainingUnsubRef.current) remainingUnsubRef.current(); }, []);
+  useEffect(() => {
+    return () => {
+      if (remainingUnsubRef.current) { remainingUnsubRef.current(); remainingUnsubRef.current = undefined; }
+    };
+  }, []);
 
-  // -------- Prix total --------
+  /* -------------------- Prix total -------------------- */
   const totalPrice = useMemo(() => {
     if (!selectedTrip) return 0;
     const base = selectedTrip.price;
@@ -504,7 +591,7 @@ const AgenceGuichetPage: React.FC = () => {
 
   const validPhone = (v: string) => /\d{7,}/.test((v||'').replace(/\D/g,''));
 
-  // -------- Réservation --------
+  /* -------------------- Réservation (écriture unique + caches) -------------------- */
   const handleReservation = useCallback(async () => {
     if (!selectedTrip || !nomClient || !telephone) return;
     if (!canSell) { alert('Démarrez/activez votre poste.'); return; }
@@ -519,6 +606,7 @@ const AgenceGuichetPage: React.FC = () => {
 
     setIsProcessing(true);
     try {
+      // 1) référence atomique (transaction)
       const referenceCode = await generateReferenceCodeForTripInstance({
         companyId: user!.companyId,
         companyCode: companyMeta.code,
@@ -528,6 +616,7 @@ const AgenceGuichetPage: React.FC = () => {
         sellerCode: sellerCodeCached || staffCodeForSale
       });
 
+      // 2) Pré-créer l'ID du doc pour écrire EN UNE FOIS
       const colRef = collection(db, `companies/${user!.companyId}/agences/${user!.agencyId}/reservations`);
       const newRef = doc(colRef);
       const newId = newRef.id;
@@ -550,8 +639,10 @@ const AgenceGuichetPage: React.FC = () => {
         createdAt: Timestamp.now(),
       };
 
+      // ÉCRITURE UNIQUE
       await setDoc(newRef, data);
 
+      // Reçu (aucune relecture nécessaire)
       setReceiptData({
         id: newId, nomClient, telephone,
         date: data.date, heure: data.heure, depart: data.depart, arrivee: data.arrivee,
@@ -573,6 +664,7 @@ const AgenceGuichetPage: React.FC = () => {
       });
       setShowReceipt(true);
 
+      // Reset UI (le live mettra à jour)
       setNomClient(''); setTelephone('');
       setTripType('aller_simple'); setPlacesAller(1); setPlacesRetour(0);
 
@@ -590,9 +682,10 @@ const AgenceGuichetPage: React.FC = () => {
     loadRemainingForDate
   ]);
 
-  // -------- Annulation / Édition --------
+  /* -------------------- Annulation / Édition -------------------- */
   const cancelReservation = useCallback(async (row: TicketRow) => {
     if (!user?.companyId || !user?.agencyId) return;
+    // garde-fous
     if (row.canal && row.canal !== 'guichet') { alert("Annulation autorisée ici uniquement pour les ventes guichet."); return; }
     if (row.statutEmbarquement === 'embarqué') { alert("Impossible d'annuler : passager déjà embarqué."); return; }
 
@@ -606,8 +699,12 @@ const AgenceGuichetPage: React.FC = () => {
         statut: 'annulé',
         updatedAt: serverTimestamp(),
         cancelReason: reason || null,
-        canceledBy: { id: user.uid, name: user.displayName || user.email || null }
+        canceledBy: {
+          id: user.uid,
+          name: user.displayName || user.email || null,
+        }
       });
+      // MAJ UI locale — on ne retire pas la ligne pour garder la trace
       setTickets((prev) => prev.map(t => t.id === row.id ? { ...t, montant: 0 } : t));
     } catch (e) {
       console.error('[GUICHET] cancelReservation:error', e);
@@ -643,10 +740,21 @@ const AgenceGuichetPage: React.FC = () => {
         seatsReturn: Math.max(0, payload.seatsReturn || 0),
         montant: Math.max(0, payload.montant || 0),
         updatedAt: serverTimestamp(),
-        editedBy: { id: user.uid, name: user.displayName || user.email || null, reason: payload.editReason || null }
+        editedBy: {
+          id: user.uid,
+          name: user.displayName || user.email || null,
+          reason: payload.editReason || null
+        }
       });
+      // MAJ liste locale
       setTickets(prev => prev.map(t => t.id === payload.id
-        ? { ...t, nomClient: payload.nomClient, telephone: payload.telephone, seatsGo: Math.max(1, payload.seatsGo || 1), seatsReturn: Math.max(0, payload.seatsReturn || 0), montant: Math.max(0, payload.montant || 0) }
+        ? { ...t,
+            nomClient: payload.nomClient,
+            telephone: payload.telephone,
+            seatsGo: Math.max(1, payload.seatsGo || 1),
+            seatsReturn: Math.max(0, payload.seatsReturn || 0),
+            montant: Math.max(0, payload.montant || 0)
+          }
         : t
       ));
       setEditOpen(false);
@@ -659,7 +767,7 @@ const AgenceGuichetPage: React.FC = () => {
     }
   }, [user?.companyId, user?.agencyId, user?.uid]);
 
-  // -------- Rapport Live --------
+  /* -------------------- Live ventes du poste courant -------------------- */
   const loadReport = useCallback(async () => {
     try {
       if (!user?.companyId || !user?.agencyId || !activeShift?.id) { setTickets([]); return; }
@@ -699,25 +807,36 @@ const AgenceGuichetPage: React.FC = () => {
     return agg;
   }, [tickets]);
 
-  // Période pour l'entête Rapport
+  // Période d’affichage du bloc Rapport (si chevauchement de jours)
   const reportDateLabel = useMemo(() => {
     const start = activeShift?.startAt?.toDate?.() || activeShift?.startTime?.toDate?.();
     const end = activeShift?.endAt?.toDate?.() || new Date();
     if (!start) return new Date().toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
     const d1 = start.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric' });
     const d2 = end.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric' });
-    return (d1 === d2) ? d1 : `du ${d1} au ${d2}`;
+    return (d1 === d2)
+      ? d1
+      : `du ${d1} au ${d2}`;
   }, [activeShift?.startAt, activeShift?.startTime, activeShift?.endAt]);
 
-  // -------- Pending & History --------
+  /* -------------------- Rapports en attente (shiftReports) -------------------- */
   const loadPendingReports = useCallback(async () => {
     try {
       if (!user?.companyId || !user?.agencyId || !user?.uid) { setPendingReports([]); return; }
       setLoadingPending(true);
       const base = `companies/${user.companyId}/agences/${user.agencyId}`;
       const repRef = collection(db, `${base}/shiftReports`);
-      const snap = await getDocs(query(repRef, where('userId', '==', user.uid), where('accountantValidated', '==', false)));
-      const snap2 = await getDocs(query(repRef, where('userId', '==', user.uid), where('accountantValidated', '==', true), where('managerValidated', '==', false)));
+      const snap = await getDocs(query(
+        repRef,
+        where('userId', '==', user.uid),
+        where('accountantValidated', '==', false)
+      ));
+      const snap2 = await getDocs(query(
+        repRef,
+        where('userId', '==', user.uid),
+        where('accountantValidated', '==', true),
+        where('managerValidated', '==', false)
+      ));
       const rows: ShiftReport[] = [...snap.docs, ...snap2.docs]
         .reduce((acc, d) => {
           const r = d.data() as any;
@@ -735,6 +854,7 @@ const AgenceGuichetPage: React.FC = () => {
           return acc;
         }, [] as ShiftReport[])
         .sort((a,b) => (b.endAt?.toMillis?.() ?? 0) - (a.endAt?.toMillis?.() ?? 0));
+
       setPendingReports(rows);
     } catch (e) {
       console.error('[GUICHET] loadPendingReports:error', e);
@@ -743,13 +863,21 @@ const AgenceGuichetPage: React.FC = () => {
     }
   }, [user?.companyId, user?.agencyId, user?.uid]);
 
+  /* -------------------- Historique (shiftReports validés) -------------------- */
   const loadHistory = useCallback(async () => {
     try {
       if (!user?.companyId || !user?.agencyId || !user?.uid) { setHistoryReports([]); return; }
       setLoadingHistory(true);
       const base = `companies/${user.companyId}/agences/${user.agencyId}`;
       const repRef = collection(db, `${base}/shiftReports`);
-      const snap = await getDocs(query(repRef, where('userId', '==', user.uid), where('accountantValidated', '==', true), where('managerValidated', '==', true), orderBy('endAt', 'desc'), limit(50)));
+      const snap = await getDocs(query(
+        repRef,
+        where('userId', '==', user.uid),
+        where('accountantValidated', '==', true),
+        where('managerValidated', '==', true),
+        orderBy('endAt', 'desc'),
+        limit(50)
+      ));
       const rows: ShiftReport[] = snap.docs.map(d => {
         const r = d.data() as any;
         return {
@@ -774,22 +902,20 @@ const AgenceGuichetPage: React.FC = () => {
 
   useEffect(() => {
     if (tab === 'rapport') {
-      if (activeShift?.id && (status === 'active' || status === 'paused' || status === 'pending')) void loadReport();
-      else setTickets([]);
+      if (activeShift?.id && (status === 'active' || status === 'paused' || status === 'pending')) {
+        void loadReport();
+      } else {
+        setTickets([]);
+      }
       void loadPendingReports();
     }
   }, [tab, loadReport, loadPendingReports, activeShift?.id, status]);
 
   useEffect(() => { if (tab === 'historique') void loadHistory(); }, [tab, loadHistory]);
 
-  // ------------------------------ JSX ------------------------------
+  /* ------------------------------------ JSX ------------------------------------ */
   return (
-    <div
-      className="min-h-screen"
-      style={{
-        background: `linear-gradient(135deg, ${tint(theme.primary, .14)} 0%, ${tint(theme.secondary, .12)} 28%, #ffffff 70%)`
-      }}
-    >
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <style>{`
         @media print {
           body * { visibility: hidden !important; }
@@ -800,14 +926,14 @@ const AgenceGuichetPage: React.FC = () => {
         @page { size: auto; margin: 10mm; }
       `}</style>
 
-      {/* EN-TÊTE */}
+      {/* EN-TÊTE GLOBAL — responsive */}
       <div className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/70">
         <div className="max-w-7xl mx-auto px-4 py-3">
           <div className="flex flex-wrap items-center gap-3">
-            {/* Logo + agence */}
+            {/* Bloc logo + info agence */}
             <div className="flex items-center gap-3 min-w-0">
-              {companyMeta.logo
-                ? <img src={companyMeta.logo} alt="logo" className="h-10 w-10 rounded object-contain border flex-shrink-0" />
+              {companyLogo
+                ? <img src={companyLogo} alt="logo" className="h-10 w-10 rounded object-contain border flex-shrink-0" />
                 : <div className="h-10 w-10 rounded bg-gray-200 grid place-items-center flex-shrink-0"><Building2 className="h-5 w-5 text-gray-500"/></div>}
               <div className="min-w-0">
                 <div
@@ -823,27 +949,46 @@ const AgenceGuichetPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Tabs */}
+            {/* Tabs — passent dessous sur mobile */}
             <div className="order-3 md:order-none w-full md:w-auto">
               <div className="inline-flex rounded-xl p-1 bg-gray-100 shadow-inner w-full md:w-auto">
-                {(['guichet','rapport','historique'] as const).map(k => (
-                  <button
-                    key={k}
-                    type="button"
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab===k ? 'text-white shadow-md' : 'hover:bg-white'}`}
-                    onClick={() => setTab(k)}
-                    style={tab===k ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` } : {}}
-                  >
-                    {k[0].toUpperCase()+k.slice(1)}
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='guichet' ? 'text-white' : 'hover:bg-white'}`}
+                  onClick={() => setTab('guichet')}
+                  style={tab==='guichet'
+                    ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                    : {}}
+                >
+                  Guichet
+                </button>
+                <button
+                  type="button"
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='rapport' ? 'text-white' : 'hover:bg-white'}`}
+                  onClick={() => setTab('rapport')}
+                  style={tab==='rapport'
+                    ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                    : {}}
+                >
+                  Rapport
+                </button>
+                <button
+                  type="button"
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition ${tab==='historique' ? 'text-white' : 'hover:bg-white'}`}
+                  onClick={() => setTab('historique')}
+                  style={tab==='historique'
+                    ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
+                    : { color: theme.primary }}
+                >
+                  Historique
+                </button>
               </div>
             </div>
 
-            {/* État + actions + user */}
+            {/* État + actions + Détails utilisateur (à droite) */}
             <div className="ml-auto flex items-center gap-3 flex-wrap">
               <div
-                className="px-3 py-1 rounded-lg text-xs font-medium shadow-sm"
+                className="px-3 py-1 rounded-lg text-xs font-medium transition-colors"
                 style={{
                   backgroundColor:
                     status==='active' ? '#DCFCE7'
@@ -866,12 +1011,12 @@ const AgenceGuichetPage: React.FC = () => {
 
               {status==='active' && (
                 <>
-                  <button className="px-3 py-2 rounded-xl border text-sm bg-white shadow hover:shadow-md"
+                  <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition"
                           onClick={() => pauseShift().catch((e:any)=>alert(e?.message||'Erreur'))}>
                     Pause
                   </button>
                   <button
-                    className="px-3 py-2 rounded-xl text-white text-sm font-semibold shadow-lg hover:shadow-xl active:translate-y-[1px]"
+                    className="px-3 py-2 rounded-lg text-white text-sm shadow-sm hover:shadow transition"
                     style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
                     onClick={() => { if (window.confirm('Clôturer ce poste ? Vous ne pourrez plus vendre après clôture.')) { closeShift().catch((e:any)=>alert(e?.message||'Erreur')); setTab('rapport'); } }}
                   >
@@ -882,12 +1027,12 @@ const AgenceGuichetPage: React.FC = () => {
 
               {status==='paused' && (
                 <>
-                  <button className="px-3 py-2 rounded-xl text-white text-sm font-semibold shadow-lg hover:shadow-xl active:translate-y-[1px]"
+                  <button className="px-3 py-2 rounded-lg text-white text-sm shadow-sm hover:shadow transition"
                           style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
                           onClick={() => continueShift().catch((e:any)=>alert(e?.message||'Erreur'))}>
                     Continuer
                   </button>
-                  <button className="px-3 py-2 rounded-xl border text-sm bg-white shadow hover:shadow-md"
+                  <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition"
                           onClick={() => { if (window.confirm('Clôturer ce poste ?')) { closeShift().catch((e:any)=>alert(e?.message||'Erreur')); setTab('rapport'); } }}>
                     Clôturer
                   </button>
@@ -895,22 +1040,23 @@ const AgenceGuichetPage: React.FC = () => {
               )}
 
               {status==='pending' && (
-                <button className="px-3 py-2 rounded-xl border text-sm bg-white shadow hover:shadow-md"
+                <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition"
                         onClick={() => refresh().catch(()=>{})}>
                   <RefreshCw className="h-4 w-4 inline mr-1" /> Actualiser
                 </button>
               )}
 
               {status==='none' && (
-                <button className="px-3 py-2 rounded-xl text-white text-sm font-semibold shadow-lg hover:shadow-xl active:translate-y-[1px]"
+                <button className="px-3 py-2 rounded-lg text-white text-sm shadow-sm hover:shadow transition"
                         style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
                         onClick={() => startShift().catch((e:any)=>alert(e?.message||'Erreur'))}>
                   Demander l’activation
                 </button>
               )}
 
+              {/* Détails utilisateur en haut à droite */}
               <div className="h-6 w-px bg-gray-200" />
-              <div className="hidden sm:flex items-center gap-3 rounded-xl border bg-white px-3 py-2 max-w-[280px] shadow">
+              <div className="hidden sm:flex items-center gap-3 rounded-xl border bg-white px-3 py-2 max-w-[280px]">
                 <div className="h-8 w-8 rounded-full bg-gray-100 grid place-items-center">
                   <User2 className="h-4 w-4 text-gray-500" />
                 </div>
@@ -923,7 +1069,7 @@ const AgenceGuichetPage: React.FC = () => {
                   </div>
                 </div>
                 <button
-                  className="ml-1 px-2.5 py-1.5 rounded-lg border text-xs bg-white shadow hover:shadow-md inline-flex items-center gap-1"
+                  className="ml-1 px-2.5 py-1.5 rounded-lg border text-xs bg-white hover:bg-gray-50 inline-flex items-center gap-1"
                   onClick={handleLogout}
                   title="Se déconnecter"
                 >
@@ -931,40 +1077,46 @@ const AgenceGuichetPage: React.FC = () => {
                   Quitter
                 </button>
               </div>
+
+
             </div>
           </div>
         </div>
-        <div className="h-1 w-full" style={{ background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }} />
       </div>
 
-      {/* =================== RAPPORT =================== */}
+      {/* =================== CONTENU: RAPPORT =================== */}
       {tab==='rapport' && (
         <div id="report-print" className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-          <div className="bg-white rounded-2xl border shadow-lg p-4" style={{borderColor: tint(theme.primary,.25)}}>
+          {/* En-tête minimal Rapport */}
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
             <div className="flex items-center justify-between">
-              <div className="text-2xl font-bold" style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>Rapport</div>
+              <div className="text-2xl font-bold"
+                   style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>
+                Rapport
+              </div>
               <div className="text-sm text-gray-600">{reportDateLabel}</div>
             </div>
           </div>
 
+          {/* A. Live ventes (uniquement si poste en cours) */}
           {(status==='active' || status==='paused' || status==='pending') && (
             <div className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-2xl border p-4 bg-white shadow-lg hover:shadow-xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+                <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
                   <div className="text-sm text-gray-500">Billets</div>
                   <div className="text-2xl font-bold">{totals.billets}</div>
                 </div>
-                <div className="rounded-2xl border p-4 bg-white shadow-lg hover:shadow-xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+                <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
                   <div className="text-sm text-gray-500">Montant</div>
                   <div className="text-2xl font-bold">{totals.montant.toLocaleString('fr-FR')} FCFA</div>
                 </div>
-                <div className="rounded-2xl border p-4 bg-white shadow-lg hover:shadow-xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+                <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
                   <div className="text-sm text-gray-500">Réservations</div>
                   <div className="text-2xl font-bold">{tickets.length}</div>
                 </div>
               </div>
 
-              <div className="rounded-2xl border bg-white p-4 shadow-lg hover:shadow-xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+              <div className="rounded-xl border bg-white p-4 shadow-sm hover:shadow transition">
                 <div className="font-semibold mb-3">Ventes du poste en cours (canal: guichet, paiement: espèces)</div>
 
                 {loadingReport ? (
@@ -972,7 +1124,7 @@ const AgenceGuichetPage: React.FC = () => {
                 ) : !tickets.length ? (
                   <div className="text-gray-500">Aucune vente pour ce poste pour le moment.</div>
                 ) : (
-                  <div className="overflow-hidden rounded-lg border" style={{borderColor: tint(theme.primary,.25)}}>
+                  <div className="overflow-hidden rounded-lg border">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50">
                         <tr>
@@ -1001,7 +1153,7 @@ const AgenceGuichetPage: React.FC = () => {
                             <td className="px-3 py-2">
                               <div className="flex items-center justify-end gap-2">
                                 <button
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-white shadow hover:shadow-md"
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-white"
                                   style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
                                   title="Modifier (nom, tél., places, montant)"
                                   onClick={() => openEdit(t)}
@@ -1029,8 +1181,8 @@ const AgenceGuichetPage: React.FC = () => {
             </div>
           )}
 
-          {/* Sessions en attente */}
-          <div className="rounded-2xl border bg-white p-4 shadow-lg hover:shadow-xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+          {/* B. Sessions en attente de validation */}
+          <div className="rounded-2xl border bg-white p-4 shadow-sm hover:shadow transition">
             <div className="font-semibold mb-2">Mes sessions en attente de validation</div>
             {loadingPending ? (
               <div className="text-gray-500">Chargement…</div>
@@ -1042,20 +1194,26 @@ const AgenceGuichetPage: React.FC = () => {
                   const start = rep.startAt?.toDate?.() ? rep.startAt.toDate() : new Date();
                   const end   = rep.endAt?.toDate?.() ? rep.endAt.toDate() : new Date();
                   return (
-                    <div key={rep.shiftId} className="border rounded-xl p-4 hover:shadow-md transition" style={{borderColor: tint(theme.primary,.25)}}>
+                    <div key={rep.shiftId} className="border rounded-xl p-4 hover:shadow-sm transition">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-semibold">Session #{rep.shiftId.slice(0,6)} — {rep.userName || 'Guichetier'} ({rep.userCode || '—'})</div>
-                          <div className="text-xs text-gray-500">Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleString('fr-FR')}</div>
+                          <div className="text-xs text-gray-500">
+                            Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleString('fr-FR')}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className={`px-2 py-1 rounded text-xs ${rep.accountantValidated ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>Comptable {rep.accountantValidated ? 'OK' : 'en attente'}</span>
-                          <span className={`px-2 py-1 rounded text-xs ${rep.managerValidated ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>Chef {rep.managerValidated ? 'OK' : 'en attente'}</span>
+                          <span className={`px-2 py-1 rounded text-xs ${rep.accountantValidated ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            Comptable {rep.accountantValidated ? 'OK' : 'en attente'}
+                          </span>
+                          <span className={`px-2 py-1 rounded text-xs ${rep.managerValidated ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            Chef {rep.managerValidated ? 'OK' : 'en attente'}
+                          </span>
                         </div>
                       </div>
 
                       {!!rep.details?.length && (
-                        <div className="mt-3 overflow-hidden rounded border" style={{borderColor: tint(theme.primary,.25)}}>
+                        <div className="mt-3 overflow-hidden rounded border">
                           <table className="w-full text-sm">
                             <thead className="bg-gray-50">
                               <tr>
@@ -1087,15 +1245,15 @@ const AgenceGuichetPage: React.FC = () => {
         </div>
       )}
 
-      {/* =================== HISTORIQUE =================== */}
+      {/* =================== CONTENU: HISTORIQUE =================== */}
       {tab==='historique' && (
         <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-          <div className="bg-white rounded-2xl border shadow-lg p-4" style={{borderColor: tint(theme.primary,.25)}}>
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
             <div className="text-lg font-semibold">Historique de mes sessions (validées)</div>
             <div className="text-sm text-gray-500">Guichetier : {(user?.displayName || user?.email) ?? '—'} ({sellerCodeUI})</div>
           </div>
 
-          <div className="rounded-2xl border bg-white p-4 shadow-lg" style={{borderColor: tint(theme.primary,.25)}}>
+          <div className="rounded-2xl border bg-white p-4 shadow-sm">
             {loadingHistory ? (
               <div className="text-gray-500">Chargement…</div>
             ) : historyReports.length === 0 ? (
@@ -1106,11 +1264,13 @@ const AgenceGuichetPage: React.FC = () => {
                   const start = rep.startAt?.toDate?.() ? rep.startAt.toDate() : new Date();
                   const end   = rep.endAt?.toDate?.() ? rep.endAt.toDate() : new Date();
                   return (
-                    <div key={rep.shiftId} className="border rounded-xl p-4 hover:shadow-md transition" style={{borderColor: tint(theme.primary,.25)}}>
+                    <div key={rep.shiftId} className="border rounded-xl p-4 hover:shadow-sm transition">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-semibold">Session #{rep.shiftId.slice(0,6)} — {rep.userName || 'Guichetier'} ({rep.userCode || '—'})</div>
-                          <div className="text-xs text-gray-500">Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleDateString('fr-FR',{ weekday:'long', day:'numeric', month:'long', year:'numeric' })} {end.toLocaleTimeString('fr-FR')}</div>
+                          <div className="text-xs text-gray-500">
+                            Début: {start.toLocaleString('fr-FR')} — Fin: {end.toLocaleDateString('fr-FR',{ weekday:'long', day:'numeric', month:'long', year:'numeric' })} {end.toLocaleTimeString('fr-FR')}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-700">Comptable OK</span>
@@ -1119,7 +1279,7 @@ const AgenceGuichetPage: React.FC = () => {
                       </div>
 
                       {!!rep.details?.length && (
-                        <div className="mt-3 overflow-hidden rounded border" style={{borderColor: tint(theme.primary,.25)}}>
+                        <div className="mt-3 overflow-hidden rounded border">
                           <table className="w-full text-sm">
                             <thead className="bg-gray-50">
                               <tr>
@@ -1144,7 +1304,11 @@ const AgenceGuichetPage: React.FC = () => {
                       )}
 
                       <div className="no-print mt-3 flex items-center justify-end">
-                        <button className="px-3 py-2 rounded-xl border bg-white shadow hover:shadow-md" onClick={() => window.print()} title="Imprimer le rapport">
+                        <button
+                          className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50"
+                          onClick={() => window.print()}
+                          title="Imprimer le rapport"
+                        >
                           🖨️ Imprimer
                         </button>
                       </div>
@@ -1157,15 +1321,15 @@ const AgenceGuichetPage: React.FC = () => {
         </div>
       )}
 
-      {/* =================== GUICHET (VENTE) =================== */}
+      {/* =================== CONTENU: GUICHET (VENTE) =================== */}
       {tab==='guichet' && (
         <div className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* G, Recherche */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="rounded-2xl border shadow-xl p-6 bg-white hover:shadow-2xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+            <div className="rounded-2xl border shadow-sm p-6 bg-white hover:shadow transition">
               <div className="mb-4">
-                <h1 className="text-2xl font-bold" style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>Guichet de vente</h1>
-                <p className="text-gray-600 text-sm flex items-center gap-2">
+                <h1 className="text-2xl font-bold">Guichet de vente</h1>
+                <p className="text-gray-500 text-sm flex items-center gap-2">
                   <MapPin className="h-4 w-4"/><span>Départ :</span>
                   <span className="font-medium">{departure || '—'}</span>
                 </p>
@@ -1182,7 +1346,7 @@ const AgenceGuichetPage: React.FC = () => {
                 </div>
               )}
 
-              <div className="mb-2 text-sm text-gray-700">Choisissez une ville d'arrivée :</div>
+              <div className="mb-2 text-sm text-gray-600">Choisissez une ville d'arrivée :</div>
               <div className="flex flex-wrap gap-2">
                 {allArrivals.length === 0 && <span className="text-gray-400 text-sm">Aucune destination configurée.</span>}
                 {allArrivals.map(v => {
@@ -1191,10 +1355,10 @@ const AgenceGuichetPage: React.FC = () => {
                     <button
                       key={v}
                       onClick={() => setArrival(v)}
-                      className={`px-3 py-2 rounded-full text-sm border transition shadow-sm ${active ? 'text-white' : 'text-gray-700 hover:bg-gray-50'}`}
+                      className={`px-3 py-2 rounded-full text-sm border transition ${active ? 'text-white' : 'text-gray-700 hover:bg-gray-50'}`}
                       style={active
                         ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, borderColor:'transparent' }
-                        : { borderColor: tint(theme.primary,.3), backgroundColor:'white' }}
+                        : { borderColor:'#E5E7EB', backgroundColor:'white' }}
                     >{v}</button>
                   );
                 })}
@@ -1202,7 +1366,7 @@ const AgenceGuichetPage: React.FC = () => {
             </div>
 
             {/* Dates */}
-            <div className="rounded-2xl border shadow-xl p-6 bg-white hover:shadow-2xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+            <div className="rounded-2xl border shadow-sm p-6 bg-white hover:shadow transition">
               <h3 className="font-semibold mb-3 flex items-center gap-2"><CalendarDays className="h-5 w-5"/><span>Dates disponibles</span></h3>
               <div className="flex flex-wrap gap-2">
                 {availableDates.map(d => {
@@ -1214,12 +1378,12 @@ const AgenceGuichetPage: React.FC = () => {
                       key={d}
                       disabled={!has}
                       onClick={() => has && handleSelectDate(d)}
-                      className={`w-16 h-16 rounded-xl border text-center transition ${act ? 'text-white shadow-md' : ''} ${!has ? 'opacity-40 cursor-not-allowed' : 'hover:shadow-sm'}`}
+                      className={`w-16 h-16 rounded-xl border text-center transition ${act ? 'text-white' : ''} ${!has ? 'opacity-40 cursor-not-allowed' : 'hover:shadow-sm'}`}
                       style={act
-                        ? { background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, borderColor: 'transparent' }
-                        : { background:'white', borderColor: tint(theme.primary,.3) }}
+                        ? { background: theme.primary, borderColor: theme.primary }
+                        : { background:'white', borderColor:'#E5E7EB' }}
                     >
-                      <div className="text-[11px]">{day.toLocaleDateString('fr-FR',{weekday:'short'})}</div>
+                      <div className="text-xs">{day.toLocaleDateString('fr-FR',{weekday:'short'})}</div>
                       <div className="text-lg font-bold">{day.getDate()}</div>
                     </button>
                   );
@@ -1228,12 +1392,12 @@ const AgenceGuichetPage: React.FC = () => {
             </div>
 
             {/* Horaires */}
-            <div className="rounded-2xl border shadow-xl p-6 bg-white hover:shadow-2xl transition" style={{borderColor: tint(theme.primary,.25)}}>
+            <div className="rounded-2xl border shadow-sm p-6 bg-white hover:shadow transition">
               <h3 className="font-semibold mb-2 flex items-center gap-2"><Clock4 className="h-5 w-5"/><span>Horaires disponibles</span></h3>
               {filteredTrips.length === 0 ? (
                 <div className="text-gray-400 text-sm">Aucun horaire pour cette date.</div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 gap-2">
                   {filteredTrips.map(t => {
                     const active = selectedTrip?.id === t.id;
                     const seat = seatBadgeStyle(t.remainingSeats, t.places || MAX_SEATS_FALLBACK);
@@ -1241,10 +1405,10 @@ const AgenceGuichetPage: React.FC = () => {
                       <button
                         key={t.id}
                         onClick={() => setSelectedTrip(t)}
-                        className={`text-left px-4 py-3 rounded-2xl border transition ${active ? 'shadow-lg ring-1' : 'hover:shadow'} `}
+                        className={`text-left px-4 py-3 rounded-xl border transition ${active ? 'shadow ring-1' : 'hover:shadow-sm'}`}
                         style={active
-                          ? { borderColor: theme.primary, backgroundColor: tint(theme.primary,.15) }
-                          : { borderColor: tint(theme.primary,.3), backgroundColor: 'white' }}
+                          ? { borderColor: theme.primary, backgroundColor: '#F5F7FF' }
+                          : { borderColor: '#E5E7EB', backgroundColor: 'white' }}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -1274,7 +1438,7 @@ const AgenceGuichetPage: React.FC = () => {
           </div>
 
           {/* Réservation (droite) */}
-          <div className="bg-white rounded-2xl shadow-xl border h-max sticky top-24 p-6 transition duration-200 ease-out hover:shadow-2xl" style={{borderColor: tint(theme.primary,.25)}}>
+          <div className="bg-white rounded-2xl shadow-sm border h-max sticky top-24 p-6 transition duration-200 ease-out hover:shadow">
             <h3 className="text-xl font-bold mb-4" style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>
               Détails de la réservation
             </h3>
@@ -1288,15 +1452,15 @@ const AgenceGuichetPage: React.FC = () => {
             )}
 
             {selectedTrip ? (
-              <div className="mb-4 p-4 rounded-2xl border shadow-sm" style={{borderColor: tint(theme.primary,.35), backgroundColor: tint(theme.primary,.12)}}>
+              <div className="mb-4 p-4 rounded-xl border" style={{borderColor: theme.primary, backgroundColor: '#F8FAFF'}}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-semibold">{selectedTrip.departure} → {selectedTrip.arrival}</div>
-                    <div className="text-sm text-gray-600">
+                    <div className="text-sm text-gray-500">
                       {new Date(selectedTrip.date).toLocaleDateString('fr-FR',{weekday:'long', day:'numeric', month:'long'})}
                     </div>
                   </div>
-                  <div className="px-2 py-1 rounded-md bg-white shadow text-sm font-semibold" style={{color: theme.primary}}>
+                  <div className="px-2 py-1 rounded-md bg-white shadow text-sm" style={{color: theme.primary}}>
                     {selectedTrip.time}
                   </div>
                 </div>
@@ -1305,7 +1469,7 @@ const AgenceGuichetPage: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="mb-4 p-4 rounded-2xl border border-dashed text-gray-500 text-sm" style={{borderColor: tint(theme.primary,.35)}}>
+              <div className="mb-4 p-4 rounded-xl border border-dashed text-gray-500 text-sm">
                 Sélectionnez un horaire pour continuer.
               </div>
             )}
@@ -1314,7 +1478,7 @@ const AgenceGuichetPage: React.FC = () => {
             <div className="mb-3 inline-flex bg-gray-100 p-1 rounded-xl w-full shadow-inner">
               <button
                 type="button"
-                className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${tripType==='aller_simple' ? 'text-white shadow' : 'hover:bg-white'}`}
+                className={`flex-1 py-2 rounded-lg text-sm transition ${tripType==='aller_simple' ? 'text-white' : 'hover:bg-white'}`}
                 onClick={() => { setTripType('aller_simple'); setPlacesRetour(0); }}
                 style={tripType==='aller_simple'
                   ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
@@ -1324,7 +1488,7 @@ const AgenceGuichetPage: React.FC = () => {
               </button>
               <button
                 type="button"
-                className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${tripType==='aller_retour' ? 'text-white shadow' : 'hover:bg-white'}`}
+                className={`flex-1 py-2 rounded-lg text-sm transition ${tripType==='aller_retour' ? 'text-white' : 'hover:bg-white'}`}
                 onClick={() => setTripType('aller_retour')}
                 style={tripType==='aller_retour'
                   ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }
@@ -1345,54 +1509,82 @@ const AgenceGuichetPage: React.FC = () => {
               <div>
                 <div className="text-sm mb-1">Nombre de places (Aller)</div>
                 <div className="flex items-center gap-2">
-                  <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md transition" onClick={() => setPlacesAller(p => Math.max(1, p-1))}>-</button>
-                  <div className="flex-1 text-center font-bold py-2 rounded-lg bg-gray-50 border">{placesAller}</div>
-                  <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md transition" onClick={() => setPlacesAller(p => p+1)}>+</button>
+                  <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesAller(p => Math.max(1, p-1))}>-</button>
+                  <div className="flex-1 text-center font-bold py-2 rounded bg-gray-50">{placesAller}</div>
+                  <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesAller(p => p+1)}>+</button>
                 </div>
               </div>
               {tripType === 'aller_retour' && (
                 <div>
                   <div className="text-sm mb-1">Nombre de places (Retour)</div>
                   <div className="flex items-center gap-2">
-                    <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md transition" onClick={() => setPlacesRetour(p => Math.max(0, p-1))}>-</button>
-                    <div className="flex-1 text-center font-bold py-2 rounded-lg bg-gray-50 border">{placesRetour}</div>
-                    <button type="button" className="px-3 py-2 rounded-lg border bg-white shadow hover:shadow-md transition" onClick={() => setPlacesRetour(p => p+1)}>+</button>
+                    <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesRetour(p => Math.max(0, p-1))}>-</button>
+                    <div className="flex-1 text-center font-bold py-2 rounded bg-gray-50">{placesRetour}</div>
+                    <button type="button" className="px-3 py-2 rounded border bg-white hover:bg-gray-50 transition" onClick={() => setPlacesRetour(p => p+1)}>+</button>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Total (dans la carte, pas en bas) */}
-            <div className="mt-4 p-4 rounded-2xl" style={{ background: tint(theme.primary,.14) }}>
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-gray-700">Total à payer (ESPÈCES)</div>
-                <div className="text-2xl font-extrabold" style={{ color: theme.primary }}>
-                  {totalPrice.toLocaleString('fr-FR')} FCFA
-                </div>
+            {/* Total */}
+            <div className="mt-4 p-4 rounded-xl bg-gray-50 flex items-center justify-between">
+              <div className="text-sm text-gray-600">Total à payer (ESPÈCES)</div>
+              <div className="text-2xl font-bold" style={{ color: theme.primary }}>
+                {totalPrice.toLocaleString('fr-FR')} FCFA
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* ====== BARRE BAS : uniquement sur l’onglet Guichet, et bouton SEUL ====== */}
-      {tab==='guichet' && (
-        <div className="sticky bottom-0 z-10">
-          <div className="max-w-7xl mx-auto px-4 pb-4">
-            <div className="bg-white/95 backdrop-blur rounded-2xl border shadow-xl p-3 flex items-center justify-end" style={{borderColor: tint(theme.primary,.25)}}>
+      {/* BARRE BAS (avec bouton déconnexion) */}
+      <div className="sticky bottom-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 pb-4">
+          <div className="bg-white/95 backdrop-blur rounded-2xl border shadow-md p-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-gradient-to-br from-gray-200 to-gray-100 grid place-items-center border">
+                <Ticket className="h-5 w-5 text-gray-500" />
+              </div>
+              <div className="leading-tight">
+                <div className="text-sm font-semibold">
+                  {(user?.displayName || user?.email) ?? '—'} <span className="text-gray-500">({sellerCodeUI})</span>
+                </div>
+                <div className="text-xs text-gray-500">{(user as any)?.role || 'guichetier'}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {/* Déconnexion visible aussi en bas */}
               <button
-                className="px-6 py-3 rounded-2xl text-white font-bold disabled:opacity-50 shadow-lg hover:shadow-2xl active:translate-y-[1px] transition"
-                disabled={!canSell || !selectedTrip || !nomClient || !telephone || !validPhone(telephone) || totalPrice<=0 || isProcessing}
-                style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
-                onClick={handleReservation}
-                title="Valider la réservation"
+                className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-gray-50 transition hidden sm:inline-flex items-center gap-2"
+                onClick={handleLogout}
+                title="Se déconnecter"
               >
-                {isProcessing ? 'Traitement…' : 'Valider la réservation'}
+                <LogOut className="h-4 w-4" />
+                Déconnexion
               </button>
+
+              {tab==='guichet' && (
+                <>
+                  <div className="text-sm text-gray-600">Total:</div>
+                  <div className="text-xl font-extrabold" style={{ color: theme.primary }}>
+                    {totalPrice.toLocaleString('fr-FR')} FCFA
+                  </div>
+                  <button
+                    className="px-5 py-3 rounded-xl text-white font-bold disabled:opacity-50 shadow-sm hover:shadow transition"
+                    disabled={!canSell || !selectedTrip || !nomClient || !telephone || !validPhone(telephone) || totalPrice<=0 || isProcessing}
+                    style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                    onClick={handleReservation}
+                    title="Valider la réservation"
+                  >
+                    {isProcessing ? 'Traitement…' : 'Valider la réservation'}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Modale d’édition */}
       <EditReservationModal
@@ -1403,7 +1595,6 @@ const AgenceGuichetPage: React.FC = () => {
         isSaving={isSavingEdit}
       />
 
-      {/* Reçu */}
       {showReceipt && receiptData && receiptCompany && (
         <ReceiptModal
           open={showReceipt}

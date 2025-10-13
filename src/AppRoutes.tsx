@@ -1,4 +1,3 @@
-// src/AppRoutes.tsx
 import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
@@ -9,42 +8,37 @@ import SplashScreen from "@/components/SplashScreen";
 import AdminCompanyPlan from "@/pages/AdminCompanyPlan";
 import PlansManager from "@/pages/PlansManager";
 import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
-/* ---------- Pages statiques ---------- */
 import MentionsPage from "@/pages/MentionsPage";
 import ConfidentialitePage from "@/pages/ConfidentialitePage";
 import ConditionsPage from "@/pages/ConditionsPage";
 import CookiesPage from "@/pages/CookiesPage";
 import AdminCompanyDetail from "@/pages/AdminCompanyDetail";
-/* ---------- Pages isolées ---------- */
 import AgenceEmbarquementPage from "@/pages/AgenceEmbarquementPage";
 import ReservationPrintPage from "@/pages/ReservationPrintPage";
 import ReservationDetailsPage from "@/pages/ReservationDetailsPage";
 import AdminParametresPlatformPage from "./pages/AdminParametresPlatformPage";
 import ValidationComptablePage from "@/pages/ValidationComptablePage";
 import ValidationChefAgencePage from "@/pages/ValidationChefAgencePage";
+import FinishSignIn from "@/pages/FinishSignIn";
 
-/* ---------- Lazy public ---------- */
 const HomePage = lazy(() => import("./pages/HomePage"));
 const PlatformSearchResultsPage = lazy(() => import("./pages/PlatformSearchResultsPage"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const Register = lazy(() => import("./pages/Register"));
 const ListeVillesPage = lazy(() => import("./pages/ListeVillesPage"));
 
-/* ---------- Réservation ---------- */
 const ReservationClientPage = lazy(() => import("./pages/ReservationClientPage"));
 const ClientMesReservationsPage = lazy(() => import("./pages/ClientMesReservationsPage"));
 
-/* ---------- Admin ---------- */
 const AdminSidebarLayout = lazy(() => import("./pages/AdminSidebarLayout"));
 const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
 const AdminCompagniesPage = lazy(() => import("./pages/AdminCompagniesPage"));
-const AdminAjouterCompagnie = lazy(() => import("./pages/AdminAjouterCompagnie"));
 const AdminModifierCompagniePage = lazy(() => import("./pages/AdminModifierCompagniePage"));
 const AdminStatistiquesPage = lazy(() => import("./pages/AdminStatistiquesPage"));
 const AdminReservationsPage = lazy(() => import("./pages/AdminReservationsPage"));
 const AdminFinancesPage = lazy(() => import("./pages/AdminFinancesPage"));
+const AdminCompagnieAjouterPage = lazy(() => import("./pages/AdminCompagnieAjouterPage")); // ✅
 
-/* ---------- Compagnie ---------- */
 const CompagnieLayout = lazy(() => import("./components/layout/CompagnieLayout"));
 const CompagnieDashboard = lazy(() => import("./pages/CompagnieDashboard"));
 const CompagnieAgencesPage = lazy(() => import("./pages/CompagnieAgencesPage"));
@@ -57,7 +51,6 @@ const CompanyPaymentSettingsPage = lazy(() => import("./pages/CompanyPaymentSett
 const AvisModerationPage = lazy(() => import("./pages/AvisModerationPage"));
 const ParametresPlan = lazy(() => import("./pages/ParametresPlan"));
 
-/* ---------- Agence ---------- */
 const DashboardAgencePage = lazy(() => import("./pages/DashboardAgencePage"));
 const AgenceReservationsPage = lazy(() => import("./pages/AgenceReservationsPage"));
 const AgenceGuichetPage = lazy(() => import("./pages/AgenceGuichetPage"));
@@ -70,13 +63,9 @@ const MediaPage = lazy(() => import("./pages/MediaPage"));
 const AgenceShiftHistoryPage = lazy(() => import("./pages/AgenceShiftHistoryPage"));
 const AgenceComptabilitePage = lazy(() => import("./pages/AgenceComptabilitePage"));
 const AgenceShiftPage = lazy(() => import("./pages/AgenceShiftPage"));
-/* ✅ Ajout Affectation Véhicule */
 const AffectationVehiculePage = lazy(() => import("./pages/AffectationVehiculePage"));
-
-/* ---------- Shell d’agence ---------- */
 const AgenceShellPage = lazy(() => import("./pages/AgenceShellPage"));
 
-/* ===================== RÔLES & PERMISSIONS ===================== */
 export const routePermissions = {
   compagnieLayout: ["admin_compagnie", "compagnie"] as const,
   agenceShell: ["chefAgence", "superviseur", "agentCourrier", "admin_compagnie"] as const,
@@ -122,7 +111,6 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={isHome ? null : <PageLoader fullScreen />}>
       <Routes key={pathname}>
-        {/* HOME + Splash */}
         <Route
           path="/"
           element={
@@ -151,7 +139,7 @@ const AppRoutes = () => {
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
-        {/* Mentions / Légal */}
+        <Route path="/finishSignIn" element={<FinishSignIn />} /> {/* ✅ déplacé ici (racine) */}
         <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
@@ -170,8 +158,11 @@ const AppRoutes = () => {
         >
           <Route index element={<AdminDashboard />} />
           <Route path="dashboard" element={<AdminDashboard />} />
+          {/* ✅ Liste compagnies */}
           <Route path="compagnies" element={<AdminCompagniesPage />} />
-          <Route path="compagnies/ajouter" element={<AdminAjouterCompagnie />} />
+          {/* ✅ Ajout compagnie */}
+          <Route path="compagnies/ajouter" element={<AdminCompagnieAjouterPage />} />
+          {/* Édition / plan / autres */}
           <Route path="compagnies/:id/modifier" element={<AdminModifierCompagniePage />} />
           <Route path="compagnies/:companyId/plan" element={<AdminCompanyPlan />} />
           <Route path="plans" element={<PlansManager />} />
@@ -219,13 +210,13 @@ const AppRoutes = () => {
           <Route path="reservations" element={<AgenceReservationsPage />} />
           <Route path="embarquement" element={<AgenceEmbarquementPage />} />
           <Route path="trajets" element={<AgenceTrajetsPage />} />
-          {/* ✅ Ici on pointe vers AffectationVehiculePage */}
           <Route path="garage" element={<AffectationVehiculePage />} />
           <Route path="recettes" element={<AgenceRecettesPage />} />
           <Route path="finances" element={<AgenceFinancesPage />} />
           <Route path="personnel" element={<AgencePersonnelPage />} />
           <Route path="shift" element={<AgenceShiftPage />} />
           <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
+          {/* ❌ supprimé d’ici : <Route path="/finishSignIn" .../> */}
         </Route>
 
         {/* HORS SHELL */}

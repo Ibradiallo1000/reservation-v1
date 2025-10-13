@@ -1,15 +1,22 @@
 import React from "react";
+import clsx from "clsx";
 
-export default function SectionTitle({
-  children,
-  className = "",
-}: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`mb-6 ${className}`}>
-      <h2 className="text-orange-600 text-2xl md:text-3xl font-extrabold tracking-tight">
-        {children}
-      </h2>
-      <div className="mt-2 h-1 w-16 bg-orange-500 rounded"></div>
-    </div>
-  );
-}
+type Props = React.PropsWithChildren<{
+  className?: string;
+}>;
+
+/** Titre centré, propre, sans traits parasites */
+const SectionTitle: React.FC<Props> = ({ children, className }) => (
+  <h2
+    className={clsx(
+      "text-center font-extrabold tracking-tight",
+      "text-2xl md:text-[28px] text-gray-900",
+      "mb-4",
+      className
+    )}
+  >
+    {children}
+  </h2>
+);
+
+export default SectionTitle;

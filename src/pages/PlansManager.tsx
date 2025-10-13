@@ -1,5 +1,6 @@
+// src/pages/PlansManager.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { db } from "@/firebaseConfig";
+import { db, dbReady } from "@/firebaseConfig";
 import {
   addDoc,
   collection,
@@ -51,13 +52,49 @@ export default function PlansManager() {
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
-    const q = query(collection(db, "plans"), orderBy("priceMonthly", "asc"));
-    const snap = await getDocs(q);
-    setPlans(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+    try {
+      const q = query(collection(db, "plans"), orderBy("priceMonthly", "asc"));
+      const snap = await getDocs(q);
+
+      console.log(
+        "Plans.size =",
+        snap.size,
+        "projectId =",
+        (db.app.options as any).projectId,
+        "useEmulators =",
+        import.meta?.env?.VITE_USE_EMULATORS
+      );
+
+      const rows = snap.docs.map((d) => {
+        const x = d.data() as any;
+        // Normalisations robustes (vieux champs / variantes)
+        return {
+          id: d.id,
+          ...x,
+          name: x.name ?? x.nom ?? "",
+          maxAgences: x.maxAgences ?? x.maxAgencies ?? 1,
+          features: {
+            publicPage: x.features?.publicPage ?? x.publicPage ?? false,
+            onlineBooking: x.features?.onlineBooking ?? x.onlineBooking ?? false,
+            guichet: x.features?.guichet ?? x.guichet ?? false,
+          },
+        } as Plan;
+      });
+
+      setPlans(rows);
+    } catch (err) {
+      console.error("Erreur lecture plans:", err);
+      alert("Impossible de charger les plans (voir console).");
+      setPlans([]);
+    }
   };
 
   useEffect(() => {
-    load();
+    (async () => {
+      // Garantit la bonne cible (prod vs émulateur) avant la requête
+      await dbReady;
+      await load();
+    })();
   }, []);
 
   const isEdit = useMemo(() => Boolean(editing.id), [editing.id]);
@@ -177,7 +214,7 @@ export default function PlansManager() {
               {p.features.onlineBooking && (
                 <li>
                   Commission online :{" "}
-                  <b>{Math.round(p.commissionOnline * 100)}%</b>
+                  <b>{Math.round((p.commissionOnline || 0) * 100)}%</b>
                 </li>
               )}
               {p.minimumMonthly > 0 && (
@@ -224,7 +261,9 @@ export default function PlansManager() {
           </div>
         ))}
         {plans.length === 0 && (
-          <div className="text-sm text-gray-500">Aucun plan créé pour le moment.</div>
+          <div className="text-sm text-gray-500">
+            Aucun plan créé pour le moment.
+          </div>
         )}
       </div>
 
@@ -313,7 +352,6 @@ export default function PlansManager() {
           />
         </label>
 
-        {/* Champs conditionnels */}
         <label className="text-sm">
           Commission en ligne (%) {editing.features.onlineBooking ? "" : "(désactivé)"}
           <input
@@ -321,7 +359,7 @@ export default function PlansManager() {
             type="number"
             step="0.1"
             disabled={!editing.features.onlineBooking}
-            value={editing.features.onlineBooking ? editing.commissionOnline * 100 : 0}
+            value={editing.features.onlineBooking ? (editing.commissionOnline || 0) * 100 : 0}
             onChange={(e) =>
               setEditing({
                 ...editing,
@@ -333,7 +371,7 @@ export default function PlansManager() {
 
         <label className="text-sm">
           Frais guichet (FCFA / billet) {editing.features.guichet ? "" : "(désactivé)"}
-        <input
+          <input
             className="border rounded p-2 mt-1 w-full disabled:opacity-50"
             type="number"
             disabled={!editing.features.guichet}

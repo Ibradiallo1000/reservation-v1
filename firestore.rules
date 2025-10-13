@@ -1,9 +1,351 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ⛔ DEV UNIQUEMENT
+
+    /* =================================================================== *
+     *                                HELPERS                              *
+     * =================================================================== */
+
+    // Est-ce que l'utilisateur est connecté ?
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+
+    // Document users/{uid} comme source de vérité pour role/companyId/agencyId
+    function userDoc() {
+      return isLoggedIn()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        : null;
+    }
+
+    // Admin de PLATEFORME (via users.role OU via custom claims)
+    function isPlatformAdmin() {
+      return isLoggedIn() && (
+        userDoc().role == "admin_platforme" ||
+        request.auth.token.role == "admin_platforme" ||
+        request.auth.token.admin == true
+      );
+    }
+
+    // Admin d'une COMPAGNIE donnée (via users OU via custom claims)
+    function isCompanyAdmin(companyId) {
+      return isLoggedIn() && (
+        (userDoc().role == "admin_compagnie" && userDoc().companyId == companyId) ||
+        (request.auth.token.role == "admin_compagnie" && request.auth.token.companyId == companyId)
+      );
+    }
+
+    // Membre d'une AGENCE (rôles opérationnels)
+    function isAgencyStaff(companyId, agencyId) {
+      return isLoggedIn() &&
+             userDoc().companyId == companyId &&
+             userDoc().agencyId == agencyId &&
+             (userDoc().role in ["chefAgence","guichetier","comptable","superviseur"]);
+    }
+
+    // La COMPAGNIE a sa page publique/vitrine activée ?
+    function isPublicCompany(companyId) {
+      return get(/databases/$(database)/documents/companies/$(companyId)).data.publicPageEnabled == true;
+    }
+
+
+    /* =================================================================== *
+     *                               USERS                                 *
+     * =================================================================== */
+
+    // Chaque utilisateur lit/écrit son propre doc. Plateforme lit/écrit tout.
+    match /users/{uid} {
+      allow read:  if isLoggedIn() && (request.auth.uid == uid || isPlatformAdmin());
+      allow write: if isLoggedIn() && (request.auth.uid == uid || isPlatformAdmin());
+    }
+
+
+    /* =================================================================== *
+     *                               PUBLIC                                *
+     * =================================================================== */
+
+    // Ressources réellement publiques (ex: liste de villes pour autocomplétion)
+    match /villes/{doc=**} {
+      allow read: if true;
+      // allow write: if isPlatformAdmin();
+    }
+
+
+    /* =================================================================== *
+     *                            RÉSERVATIONS                              *
+     * =================================================================== */
+
+    // Schéma top-level (legacy)
+    match /reservations/{id} {
+      allow create: if true; // création ouverte (réservation en ligne)
+      allow read, write: if isPlatformAdmin();
+    }
+
+    // Réservations sous une compagnie (legacy si utilisé)
+    match /companies/{companyId}/reservations/{resId} {
+      allow read, write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+    }
+
+
+    /* =================================================================== *
+     *                          COMPANIES (ARBRE)                          *
+     * =================================================================== */
+
+    match /companies/{companyId} {
+
+      /* ---------- Doc racine compagnie ---------- */
+      // ✅ IMPORTANT : Règle alignée avec la query côté client
+      // Lecture publique si le document a publicPageEnabled==true ET status=="actif",
+      // ou si l'utilisateur est admin (plateforme/compagnie).
+      allow read: if
+          (resource.data.publicPageEnabled == true && resource.data.status == "actif")
+          || isPlatformAdmin()
+          || isCompanyAdmin(companyId);
+
+      /* ---------- OUVERTURE TOTALE EN LECTURE POUR LA VITRINE ----------- */
+      // Si la compagnie a publicPageEnabled == true, tout son contenu
+      // (branding, pages, theme, footer, etc.) est lisible publiquement.
+      match /{allSubCollections=**} {
+        allow read: if isPublicCompany(companyId);
+        // aucune écriture publique
+      }
+
+      // Écritures réservées aux admins (plateforme/compagnie)
+      allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+
+      /* ---------- LECTURE PUBLIQUE GLOBALE POUR VITRINE ----------------- */
+      // Si la compagnie a la vitrine activée, TOUT son sous-arbre est lisible
+      // en lecture seule (pages, branding, sections, etc.). Les écritures
+      // restent limitées aux admins via les autres règles.
+      match /{any=**} {
+        allow read: if isPublicCompany(companyId);
+        // ne donne AUCUNE écriture ; les autres règles gèrent déjà les writes
+      }
+
+      /* ---------- Agences (métadonnées) ---------- */
+      match /agences/{agencyId} {
+        // Lecture publique si la compagnie est publique ET l’agence est visible/active.
+        allow read: if isPlatformAdmin()
+                    || isCompanyAdmin(companyId)
+                    || (isPublicCompany(companyId) &&
+                        (resource.data.agencyPublic == true || resource.data.status == "actif"));
+        // Écritures : admins uniquement
+        allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Horaires publics pour recherche ---------- */
+      match /agences/{agencyId}/weeklyTrips/{tripId} {
+        // Lecture publique si vitrine activée
+        allow read: if isPlatformAdmin()
+                    || isCompanyAdmin(companyId)
+                    || isPublicCompany(companyId);
+        // Écritures : admins uniquement
+        allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Réservations imbriquées (structure actuelle) ---------- */
+      match /agences/{agencyId}/reservations/{resId} {
+        // Lecture : plateforme / admin compagnie / staff agence / propriétaire
+        allow read: if isPlatformAdmin()
+                    || isCompanyAdmin(companyId)
+                    || isAgencyStaff(companyId, agencyId)
+                    || (isLoggedIn() && resource.data.userId == request.auth.uid);
+        // Création ouverte : réservation en ligne
+        allow create: if true;
+        // MAJ/Suppression : plateforme / admin compagnie / staff
+        allow update, delete: if isPlatformAdmin()
+                               || isCompanyAdmin(companyId)
+                               || isAgencyStaff(companyId, agencyId);
+      }
+
+      /* ---------- Avis sous-collection compagnie ---------- */
+      match /avis/{avisId} {
+        // Lecture publique si published/visible ; admins toujours ok
+        allow read: if isPlatformAdmin() || isCompanyAdmin(companyId)
+                    || resource.data.published == true
+                    || resource.data.visible == true;
+        // Écritures : admins
+        allow create, update, delete: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Moyens de paiement affichables ---------- */
+      match /paymentMethods/{pmId} {
+        // Lecture publique si vitrine activée + flag isPublic
+        allow read: if isPlatformAdmin()
+                    || isCompanyAdmin(companyId)
+                    || (isPublicCompany(companyId) && resource.data.isPublic == true);
+        // Écritures : admins
+        allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Suggestions / messages visiteurs ---------- */
+      match /suggestions/{suggId} {
+        // Lecture publique si vitrine activée
+        allow read: if isPlatformAdmin()
+                    || isCompanyAdmin(companyId)
+                    || isPublicCompany(companyId);
+        // Création ouverte au public si vitrine activée
+        allow create: if isPublicCompany(companyId);
+        // MAJ / suppression : admins
+        allow update, delete: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Whitelist "vitrine" sans flag public (syntaxe valide) -- */
+      // Autorise la lecture de certaines sous-collections de config vitrine
+      // quand la compagnie est publique.
+      match /{cfg}/{docId} {
+        allow read: if isPublicCompany(companyId) &&
+                     (cfg in ["homeConfig","public","sections","seo","theme","branding","publicSettings","pages","footer","header"]);
+        allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Fallback 1 niveau : lecture si flag public ------------- */
+      match /{anySubCol}/{anyDoc} {
+        allow read: if isPublicCompany(companyId) &&
+                     (resource.data.isPublic == true || resource.data.visible == true);
+        allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Fallback profond : lecture si flag public -------------- */
+      match /{anySubCol}/{anyDoc}/{deep=**} {
+        allow read: if isPublicCompany(companyId) &&
+                     (resource.data.isPublic == true || resource.data.visible == true);
+        allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+
+      /* ---------- Catch-all du SOUS-ARBRE companies/* -------------------- */
+      match /{sub=**} {
+        allow read, write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+      }
+    }
+
+
+    /* =================================================================== *
+     *                              IMAGES                                 *
+     * =================================================================== */
+
+    // Schéma sous-compagnie
+    match /companies/{companyId}/imagesBibliotheque/{imgId} {
+      allow read, write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+    }
+
+    // Schéma top-level avec champ companyId (utilisé par sélecteurs & vitrine)
+    match /imagesBibliotheque/{imgId} {
+      // Lecture : plateforme OU
+      //           public si la compagnie est publique et que l'image lui appartient OU
+      //           utilisateur connecté de la même compagnie.
+      allow read: if isPlatformAdmin()
+                  || (isPublicCompany(resource.data.companyId) &&
+                      resource.data.companyId != null)
+                  || (isLoggedIn() && resource.data.companyId == userDoc().companyId);
+
+      // Création : plateforme OU utilisateur connecté écrivant pour SA compagnie
+      allow create: if isPlatformAdmin()
+                    || (isLoggedIn()
+                        && request.resource.data.companyId == userDoc().companyId);
+
+      // MAJ/Suppression : plateforme OU même compagnie (connecté)
+      allow update, delete: if isPlatformAdmin()
+                            || (isLoggedIn()
+                                && resource.data.companyId == userDoc().companyId);
+    }
+
+    // Médias globaux de plateforme
+    match /mediaPlatform/{doc=**} {
+      allow read:  if isLoggedIn() || isPlatformAdmin();
+      allow write: if isPlatformAdmin();
+    }
+
+
+    /* =================================================================== *
+     *                            AVIS CLIENTS                              *
+     * =================================================================== */
+
+    match /avis/{avisId} {
+      allow read: if isPlatformAdmin()
+                  || (isLoggedIn() && resource.data.companyId == userDoc().companyId)
+                  || (resource.data.visible == true)
+                  || (resource.data.published == true);
+      allow create: if isPlatformAdmin()
+                    || (isLoggedIn()
+                        && request.resource.data.companyId == userDoc().companyId);
+      allow update, delete: if isPlatformAdmin()
+                            || (isLoggedIn()
+                                && resource.data.companyId == userDoc().companyId);
+    }
+
+
+    /* =================================================================== *
+     *                                PLANS                                *
+     * =================================================================== */
+
+    match /plans/{planId} {
+      allow read: if isLoggedIn() || isPlatformAdmin();
+      allow write: if isPlatformAdmin();
+    }
+
+
+    /* =================================================================== *
+     *                        PARAMÈTRES / STATS (VAR)                     *
+     * =================================================================== */
+
+    match /platform/{doc=**} {
+      allow read: if true;
+      allow write: if isPlatformAdmin();
+    }
+
+    match /stats/{doc=**} {
+      allow read, write: if isPlatformAdmin();
+    }
+
+    match /statistics/{doc=**} {
+      allow read, write: if isPlatformAdmin();
+    }
+
+
+    /* =================================================================== *
+     *            BLOC GÉNÉRIQUE top-level à champ companyId               *
+     * =================================================================== */
+
+    match /{topLevel}/{docId} {
+      // Création : plateforme OU utilisateur connecté écrivant pour SA compagnie
+      allow create: if isPlatformAdmin()
+                    || (isLoggedIn()
+                        && request.resource.data.companyId != null
+                        && request.resource.data.companyId == userDoc().companyId);
+
+      // Lecture/MAJ/Suppression : plateforme OU propriétaire (même companyId)
+      allow read, update, delete: if isPlatformAdmin()
+                                  || (isLoggedIn()
+                                      && resource.data.companyId != null
+                                      && resource.data.companyId == userDoc().companyId);
+    }
+
+
+    /* =================================================================== *
+     *                   FIX PAGE PUBLIQUE (rappels explicites)            *
+     * =================================================================== */
+
+    match /companies/{companyId}/agences/{agencyId} {
+      allow read: if isPlatformAdmin() || isCompanyAdmin(companyId) || isPublicCompany(companyId);
+    }
+
+    match /companies/{companyId}/agences/{agencyId}/weeklyTrips/{tripId} {
+      allow read: if isPlatformAdmin() || isCompanyAdmin(companyId) || isPublicCompany(companyId);
+    }
+
+    match /companies/{companyId}/suggestions/{suggId} {
+      allow read, create: if isPlatformAdmin() || isCompanyAdmin(companyId) || isPublicCompany(companyId);
+    }
+
+
+    /* =================================================================== *
+     *                           CATCH-ALL (DENY)                          *
+     * =================================================================== */
+
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

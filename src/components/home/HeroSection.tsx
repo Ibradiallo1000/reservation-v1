@@ -1,3 +1,4 @@
+// src/components/home/HeroSection.tsx
 import React from "react";
 import { Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -8,57 +9,65 @@ const HeroSection: React.FC = () => {
   const [arrival, setArrival] = React.useState("");
   const navigate = useNavigate();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const from = (departure || "").trim();
-    const to = (arrival || "").trim();
-    if (!from || !to) return;
-    if (from.toLowerCase() === to.toLowerCase()) return;
+    const from = departure.trim();
+    const to = arrival.trim();
+    if (!from || !to || from.toLowerCase() === to.toLowerCase()) return;
     navigate("/resultats", { state: { departure: from, arrival: to } });
   };
 
+  const disabled =
+    !departure || !arrival || departure.toLowerCase() === arrival.toLowerCase();
+
   return (
     <section
-      className="relative text-white py-24 md:py-32"
+      className="relative overflow-hidden"
       style={{
-        background: `
-          radial-gradient(circle at top left, rgba(249,115,22,0.25), transparent 60%),
-          radial-gradient(circle at bottom right, rgba(255,102,0,0.25), transparent 70%),
-          linear-gradient(180deg, #0d0d0d 0%, #1a1a1a 100%)
-        `,
+        background:
+          "radial-gradient(60% 80% at 15% 10%, rgba(255,102,0,.18), transparent 60%), radial-gradient(50% 70% at 85% 20%, rgba(249,115,22,.16), transparent 60%), linear-gradient(180deg,#121212 0%, #1b1b1b 100%)",
       }}
     >
-      <div className="max-w-4xl mx-auto px-4 text-center">
-        <h1 className="text-4xl md:text-6xl font-extrabold mb-6 leading-tight">
+      <div className="max-w-5xl mx-auto px-4 py-16 md:py-24 text-center">
+        <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white">
           Voyagez avec <span className="text-orange-500">Teliya</span>
         </h1>
-        <p className="text-lg mb-8 text-gray-200">
-          Réservez vos billets en ligne, trouvez les meilleurs trajets en Afrique.
+        <p className="mt-4 text-gray-300 text-lg">
+          Réservez vos billets en ligne et trouvez les meilleurs trajets en Afrique.
         </p>
 
+        {/* carte “verre” uniquement pour le formulaire */}
         <form
-          onSubmit={handleSubmit}
-          className="bg-white text-gray-800 rounded-lg shadow-xl flex flex-col md:flex-row p-4 gap-4 max-w-3xl mx-auto"
+          onSubmit={submit}
+          className="mt-8 mx-auto max-w-3xl flex flex-col md:flex-row gap-4
+                     rounded-2xl border border-white/15 bg-white/10 backdrop-blur-md
+                     shadow-[0_10px_30px_rgba(0,0,0,.35)] p-4"
         >
           <VilleCombobox
-            label="Ville de départ"
             value={departure}
             onChange={setDeparture}
+            placeholder="Ville de départ"
           />
           <VilleCombobox
-            label="Ville d’arrivée"
             value={arrival}
             onChange={setArrival}
+            placeholder="Ville d’arrivée"
           />
-
           <button
             type="submit"
-            className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded flex items-center justify-center transition-colors duration-200"
+            disabled={disabled}
+            className={`inline-flex items-center justify-center px-6 py-2 rounded-xl font-semibold text-white
+              ${disabled ? "bg-orange-300 cursor-not-allowed" : "bg-orange-600 hover:bg-orange-700"}
+            `}
           >
-            <Search className="h-5 w-5 mr-2" /> Rechercher
+            <Search className="h-5 w-5 mr-2" />
+            Rechercher
           </button>
         </form>
       </div>
+
+      {/* lueur douce en bas */}
+      <div className="pointer-events-none absolute bottom-0 inset-x-0 h-24 bg-gradient-to-t from-black/40 to-transparent" />
     </section>
   );
 };

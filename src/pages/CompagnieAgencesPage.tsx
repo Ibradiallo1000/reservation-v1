@@ -1,18 +1,23 @@
 // =============================================
-// src/pages/CompagnieAgencesPage.tsx  (version sécurisée + modal de suppression)
-// - Création d’agence via Callable atomique (validateEmail + companyCreateAgencyCascade)
-// - Suppression via Callable en cascade (companyDeleteAgencyCascade)
-// - Plus de createUserWithEmailAndPassword côté front
+// src/pages/CompagnieAgencesPage.tsx
+// Mode dégradé SANS Functions (pas besoin du plan Blaze)
+// - Crée l'agence côté client (Firestore)
+// - Crée une "invitation" et envoie un lien de connexion par e-mail au gérant
+// - Le gérant termine sur /finishSignIn qui crée le doc users/{uid}
 // =============================================
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
   getDocs,
+  addDoc,
   doc,
   updateDoc,
+  serverTimestamp,
+  query,
+  where,
+  getDoc,
 } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
-import { db, functions } from "../firebaseConfig";
+import { db, auth } from "../firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import useCompanyTheme from "@/hooks/useCompanyTheme";
@@ -20,6 +25,9 @@ import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useNavigate } from "react-router-dom";
+import {
+  sendSignInLinkToEmail,
+} from "firebase/auth";
 
 // ===== Leaflet assets
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -58,7 +66,13 @@ const onlyDigits = (s: string) => s.replace(/\D/g, "");
 const isValidEmailFormat = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const isValidPhone = (s: string) => s.length >= 8 && s.length <= 15;
 
-// -------- Modal de suppression (inline) ----------
+// ---- actionCodeSettings pour le lien e-mail
+const actionCodeSettings = {
+  url: `${window.location.origin}/finishSignIn`,
+  handleCodeInApp: true,
+};
+
+// -------- Modal de suppression (inchangé) ----------
 const DeleteAgencyModal: React.FC<{
   open: boolean;
   onClose: () => void;
@@ -71,7 +85,6 @@ const DeleteAgencyModal: React.FC<{
   const [target, setTarget] = useState<string>("");
 
   useEffect(() => {
-    // reset à l'ouverture
     if (open) {
       setAction("detach");
       setTarget("");
@@ -81,7 +94,6 @@ const DeleteAgencyModal: React.FC<{
   if (!open) return null;
 
   const otherAgencies = agences.filter(a => a.id && a.id !== agencyIdToDelete);
-
   const canConfirm =
     action !== "transfer" || (action === "transfer" && target && target.length > 0);
 
@@ -223,7 +235,6 @@ const CompagnieAgencesPage: React.FC = () => {
     longitude: "",
   });
 
-  const [isChecking, setIsChecking] = useState(false);
   const [emailError, setEmailError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -234,11 +245,6 @@ const CompagnieAgencesPage: React.FC = () => {
 
   const couleurPrincipale = theme.colors?.primary || user?.companyColor || "#2563eb";
   const companyId = user?.companyId;
-
-  // callable helpers
-  const callableValidateEmail = httpsCallable(functions, "validateEmail");
-  const callableCreate = httpsCallable(functions, "companyCreateAgencyCascade");
-  const callableDeleteCascade = httpsCallable(functions, "companyDeleteAgencyCascade");
 
   const MapClickHandler = ({
     onPositionChange,
@@ -351,6 +357,35 @@ const CompagnieAgencesPage: React.FC = () => {
     setEmailError("");
   };
 
+  // ===== Création d'une invitation + envoi e-mail
+  async function createInviteAndSendLink(payload: {
+    companyId: string;
+    agencyId: string;
+    manager: { name: string; email: string; phone: string; role: "chefAgence" };
+  }) {
+    // 1) Enregistrer l'invitation (root "invites")
+    const inviteRef = await addDoc(collection(db, "invites"), {
+      email: payload.manager.email,
+      name: payload.manager.name,
+      phone: payload.manager.phone,
+      role: payload.manager.role,
+      companyId: payload.companyId,
+      agencyId: payload.agencyId,
+      status: "pending",
+      createdAt: serverTimestamp(),
+    });
+
+    // 2) Envoyer le lien d'e-mail sign-in
+    await sendSignInLinkToEmail(auth, payload.manager.email, actionCodeSettings);
+    // Sauvegarder l'email pour la page FinishSignIn
+    window.localStorage.setItem("emailForSignIn", payload.manager.email);
+
+    alert(
+      `✅ Invitation envoyée à ${payload.manager.email}.\n\n` +
+      `Lien de connexion par e-mail envoyé. L’invitation (#${inviteRef.id}) sera consommée lors de la première connexion.`
+    );
+  }
+
   // ===== Submit (create/update)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -373,7 +408,7 @@ const CompagnieAgencesPage: React.FC = () => {
 
     try {
       if (editingId) {
-        // === Mise à jour AGENCE uniquement (pas de credentials ici)
+        // === Mise à jour AGENCE (pas de credentials ici)
         const agenceRef = doc(db, "companies", companyId, "agences", editingId);
         await updateDoc(agenceRef, {
           nomAgence: formData.nomAgence,
@@ -382,55 +417,49 @@ const CompagnieAgencesPage: React.FC = () => {
           quartier: formData.quartier || "",
           type: formData.type || "",
           nomGerant: formData.nomGerant,
-          emailGerant: formData.emailGerant, // affichage
+          emailGerant: formData.emailGerant,
           telephone: formData.telephone,
           latitude: formData.latitude ? parseFloat(formData.latitude) : null,
           longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+          updatedAt: serverTimestamp(),
         });
         alert("✅ Agence mise à jour avec succès");
       } else {
-        // === Création agence + chef d’agence (atomique côté serveur)
-        setIsChecking(true);
-        await callableValidateEmail({ email: formData.emailGerant });
-        setIsChecking(false);
+        // === Création agence côté client
+        const newAgenceRef = await addDoc(collection(db, "companies", companyId, "agences"), {
+          nomAgence: formData.nomAgence,
+          ville: formData.ville,
+          pays: formData.pays,
+          quartier: formData.quartier || "",
+          type: formData.type || "",
+          statut: "active" as Statut,
+          nomGerant: formData.nomGerant,
+          emailGerant: formData.emailGerant,
+          telephone: formData.telephone,
+          latitude: formData.latitude ? parseFloat(formData.latitude) : null,
+          longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+          createdAt: serverTimestamp(),
+          createdBy: user?.uid || null,
+        });
 
-        const payload = {
+        // === Invitation + lien e-mail pour créer le compte du gérant
+        await createInviteAndSendLink({
           companyId,
-          agency: {
-            nomAgence: formData.nomAgence,
-            ville: formData.ville,
-            pays: formData.pays,
-            quartier: formData.quartier || "",
-            type: formData.type || "",
-            statut: "active" as Statut,
-            latitude: formData.latitude ? parseFloat(formData.latitude) : null,
-            longitude: formData.longitude ? parseFloat(formData.longitude) : null,
-          },
+          agencyId: newAgenceRef.id,
           manager: {
             name: formData.nomGerant,
             email: formData.emailGerant,
             phone: formData.telephone,
             role: "chefAgence",
           },
-        };
-
-        const res: any = await callableCreate(payload);
-        const { agencyId, manager } = res.data || {};
-        alert(
-          `✅ Agence créée (ID: ${agencyId}).\n\nLien de définition du mot de passe pour le chef d’agence:\n${manager?.resetLink || "(indisponible)"}`
-        );
+        });
       }
 
       resetForm();
       fetchAgences();
     } catch (err: any) {
       console.error("Erreur pendant handleSubmit:", err?.code, err?.message, err);
-      if (err?.code === "permission-denied") {
-        alert("Permissions insuffisantes (Firestore rules).");
-      } else {
-        alert(`Erreur: ${err?.message ?? err?.code ?? "Erreur inconnue"}`);
-      }
-      setIsChecking(false);
+      alert(`Erreur: ${err?.message ?? err?.code ?? "Erreur inconnue"}`);
     }
   };
 
@@ -452,48 +481,22 @@ const CompagnieAgencesPage: React.FC = () => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // ---- Ouverture du modal de suppression
+  // ---- Suppression (modal) : ici on laisse l’UI; (la cascade totale requiert Functions)
   const openDeleteModal = (agencyId: string) => {
     setAgencyIdToDelete(agencyId);
     setDeleteModalOpen(true);
   };
-
-  // ---- Confirmation du modal : appel callable cascade
-  const confirmDelete = async (action: StaffAction, transferToAgencyId: string | null) => {
-    if (!companyId || !agencyIdToDelete) return;
-    setDeleteLoading(true);
-    try {
-      const res: any = await callableDeleteCascade({
-        companyId,
-        agencyId: agencyIdToDelete,
-        staffAction: action,
-        transferToAgencyId: transferToAgencyId,
-        allowDeleteUsers: action === "delete",
-      });
-      alert(
-        `✅ Agence supprimée.\n` +
-          `Staff traité: ${res?.data?.staffCount ?? 0}\n` +
-          (res?.data?.transferred?.length ? `Transférés: ${res.data.transferred.length}\n` : "") +
-          (res?.data?.detached?.length ? `Détachés: ${res.data.detached.length}\n` : "") +
-          (res?.data?.disabled?.length ? `Désactivés: ${res.data.disabled.length}\n` : "") +
-          (res?.data?.deleted?.length ? `Supprimés: ${res.data.deleted.length}\n` : "")
-      );
-      setDeleteModalOpen(false);
-      setAgencyIdToDelete(null);
-      fetchAgences();
-    } catch (e: any) {
-      console.error(e);
-      alert(`❌ Erreur: ${e?.message || e?.code || "échec inconnu"}`);
-    } finally {
-      setDeleteLoading(false);
-    }
+  const confirmDelete = async () => {
+    alert("Suppression en cascade complète requiert les Cloud Functions (plan Blaze).");
+    setDeleteModalOpen(false);
+    setAgencyIdToDelete(null);
   };
 
   const handleToggleStatut = async (agence: Agence) => {
     if (!companyId || !agence.id) return;
     const newStatut: Statut = agence.statut === "active" ? "inactive" : "active";
     try {
-      await updateDoc(doc(db, "companies", companyId, "agences", agence.id), { statut: newStatut });
+      await updateDoc(doc(db, "companies", companyId, "agences", agence.id), { statut: newStatut, updatedAt: serverTimestamp() });
       fetchAgences();
     } catch (error) {
       console.error("Erreur lors du changement de statut:", error);
@@ -675,7 +678,6 @@ const CompagnieAgencesPage: React.FC = () => {
               type="submit"
               className="px-4 py-2 rounded-md shadow-sm text-sm font-medium text-white hover:bg-opacity-90"
               style={{ backgroundColor: couleurPrincipale }}
-              disabled={isChecking}
             >
               {editingId ? "Mettre à jour l'agence" : "Ajouter l'agence"}
             </button>
@@ -779,7 +781,6 @@ const CompagnieAgencesPage: React.FC = () => {
                         setShowForm(true);
                         handleEdit(ag);
                       }}
-
                       className="inline-flex justify-center items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white"
                       style={{ backgroundColor: couleurPrincipale }}
                     >
@@ -854,7 +855,7 @@ const CompagnieAgencesPage: React.FC = () => {
       <DeleteAgencyModal
         open={deleteModalOpen}
         onClose={() => !deleteLoading && setDeleteModalOpen(false)}
-        onConfirm={confirmDelete}
+        onConfirm={() => confirmDelete()}
         agences={agences}
         agencyIdToDelete={agencyIdToDelete}
         loading={deleteLoading}

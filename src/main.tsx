@@ -4,8 +4,12 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./index.css";
 import "./i18n";
+import { setupSwAutoUpdate } from "./sw-updater";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// ✅ Enregistre le Service Worker + auto-update (skipWaiting + reload)
+setupSwAutoUpdate();
 
 (async () => {
   const rootEl = document.getElementById("root") as HTMLElement | null;

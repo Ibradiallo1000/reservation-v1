@@ -1,87 +1,91 @@
-// =============================================
-// src/components/CompanyDashboard/KpiHeader.tsx
-// =============================================
 import React from "react";
-import { useNavigate } from "react-router-dom";
+import { LucideIcon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { useNavigate } from "react-router-dom";
 
-type Item = {
-  icon: React.ComponentType<{ className?: string }>;
+interface KpiItem {
+  icon: LucideIcon;
   label: string;
-  value: string;
+  value: string | number;
   sub?: string;
-  /** chemin optionnel : si présent, la carte devient cliquable */
   to?: string;
-};
+}
 
-export function KpiHeader({
-  loading,
-  couleurPrimaire,
-  couleurSecondaire,
-  items,
-}: {
-  loading: boolean;
+interface KpiHeaderProps {
+  items: KpiItem[];
   couleurPrimaire?: string;
   couleurSecondaire?: string;
-  items: Item[];
-}) {
+  loading?: boolean;
+}
+
+/**
+ * Affiche une rangée de KPI (indicateurs chiffrés)
+ * avec icônes, valeur et sous-texte.
+ * Utilisé dans le Dashboard Compagnie.
+ */
+export const KpiHeader: React.FC<KpiHeaderProps> = ({
+  items,
+  couleurPrimaire = "#f97316", // orange
+  couleurSecondaire = "#fb923c", // orange clair
+  loading = false,
+}) => {
   const navigate = useNavigate();
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-24 w-full rounded-xl" />
+          <Skeleton key={i} className="h-20 rounded-xl" />
         ))}
       </div>
     );
   }
 
-  const primary = couleurPrimaire || "#b91c1c";
-  const secondary = couleurSecondaire || "#f59e0b";
-
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-      {items.map((it, idx) => {
-        const Icon = it.icon;
-        const clickable = Boolean(it.to);
-        return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      {items.map(({ icon: Icon, label, value, sub, to }, i) => {
+        const card = (
           <div
-            key={idx}
-            role={clickable ? "button" : undefined}
-            tabIndex={clickable ? 0 : -1}
-            onClick={() => it.to && navigate(it.to)}
-            onKeyDown={(e) => {
-              if (clickable && (e.key === "Enter" || e.key === " ")) {
-                e.preventDefault();
-                navigate(it.to!);
-              }
+            key={i}
+            className="p-4 rounded-xl shadow-sm bg-white border border-gray-100 flex flex-col gap-2 transition hover:shadow-md hover:-translate-y-0.5"
+            style={{
+              borderTop: `3px solid ${couleurPrimaire}`,
             }}
-            className={cn(
-              "rounded-xl border bg-white p-4 transition-all duration-200 select-none",
-              "flex items-center gap-3",
-              clickable ? "cursor-pointer hover:shadow-md" : "cursor-default"
-            )}
           >
-            <div
-              className="h-10 w-10 rounded-lg flex items-center justify-center text-white shrink-0"
-              style={{ background: secondary }}
-            >
-              <Icon className="h-5 w-5" />
+            <div className="flex items-center gap-2 text-gray-700">
+              <Icon
+                size={20}
+                style={{ color: couleurPrimaire }}
+                className="flex-shrink-0"
+              />
+              <span className="font-medium text-sm">{label}</span>
             </div>
-            <div className="min-w-0">
-              <p className="text-xs text-muted-foreground truncate">{it.label}</p>
-              <p className="text-lg font-semibold leading-tight truncate" style={{ color: primary }}>
-                {it.value}
-              </p>
-              {it.sub && (
-                <p className="text-[11px] text-muted-foreground truncate">{it.sub}</p>
-              )}
+            <div className="text-2xl font-bold" style={{ color: couleurPrimaire }}>
+              {value}
             </div>
+            {sub && (
+              <div className="text-xs text-gray-500" style={{ color: couleurSecondaire }}>
+                {sub}
+              </div>
+            )}
           </div>
+        );
+
+        return to ? (
+          <button
+            key={i}
+            onClick={() => navigate(to)}
+            className="text-left focus:outline-none focus:ring-2 focus:ring-offset-2 rounded-xl transition"
+            style={{
+              boxShadow: "none",
+            }}
+          >
+            {card}
+          </button>
+        ) : (
+          card
         );
       })}
     </div>
   );
-}
+};

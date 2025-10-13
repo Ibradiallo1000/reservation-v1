@@ -27,6 +27,34 @@
         { "fieldPath": "date", "order": "ASCENDING" },
         { "fieldPath": "time", "order": "ASCENDING" }
       ]
+    },
+
+    
+    {
+      "collectionId": "companies",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "publicPageEnabled", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "companies",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "publicPageEnabled", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "companies",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "publicPageEnabled", "order": "ASCENDING" },
+        { "fieldPath": "pays", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

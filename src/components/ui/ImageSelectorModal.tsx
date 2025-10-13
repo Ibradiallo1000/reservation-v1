@@ -1,13 +1,12 @@
 // src/components/ui/ImageSelectorModal.tsx
 import React, { useEffect, useRef, useState } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 type ImageDoc = {
   id: string;
   url: string;
   nom?: string;
-  companyId?: string;
   type?: string;
 };
 
@@ -18,9 +17,9 @@ export interface Props {
   onClose: () => void;
   /** Titre facultatif affiché en haut de la modale */
   title?: string;
-  /** Source des images : platform (par défaut) ou company */
+  /** Source des images : platform ou company (défaut) */
   source?: Source;
-  /** Requis si source === "company" */
+  /** Requis si source === "company" (par défaut) */
   companyId?: string;
 }
 
@@ -28,7 +27,8 @@ const ImageSelectorModal: React.FC<Props> = ({
   onSelect,
   onClose,
   title = "Choisir une image",
-  source = "platform",
+  // ✅ défaut = company pour éviter d’aller sur mediaPlatform
+  source = "company",
   companyId,
 }) => {
   const [images, setImages] = useState<ImageDoc[]>([]);
@@ -44,25 +44,28 @@ const ImageSelectorModal: React.FC<Props> = ({
       setErr(null);
       try {
         let snap;
+
         if (source === "platform") {
-          // ✅ images de la plateforme
-          snap = await getDocs(collection(db, "mediaPlatform"));
+          // ⚠️ Réservé à l’admin plateforme selon tes rules
+          const qy = query(collection(db, "mediaPlatform")); // ajouter orderBy si champ présent
+          snap = await getDocs(qy);
         } else {
-          // ✅ images d'une compagnie
+          // ✅ images d'une compagnie : SOUS-COLLECTION
           if (!companyId) {
             setImages([]);
             setLoading(false);
             return;
           }
-          const qy = query(
-            collection(db, "imagesBibliotheque"),
-            where("companyId", "==", companyId)
-          );
+          const path = `companies/${companyId}/imagesBibliotheque`;
+          const qy = query(collection(db, path), orderBy("createdAt", "desc"));
           snap = await getDocs(qy);
         }
 
         if (!alive) return;
-        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as ImageDoc[];
+        const list: ImageDoc[] = snap.docs.map((d) => {
+          const data = d.data() as any;
+          return { id: d.id, url: data.url, nom: data.nom, type: data.type };
+        });
         setImages(list);
       } catch (e) {
         if (!alive) return;
@@ -129,7 +132,7 @@ const ImageSelectorModal: React.FC<Props> = ({
         ) : images.length === 0 ? (
           <p className="text-gray-600 text-sm">
             {source === "platform"
-              ? "Aucune image plateforme pour le moment."
+              ? "Aucune image plateforme disponible."
               : "Aucune image trouvée pour cette compagnie."}
           </p>
         ) : (

@@ -1,62 +1,73 @@
-// =============================================
-// src/components/CompanyDashboard/TimeFilterBar.tsx
-// =============================================
 import React from "react";
-import { ChevronDown } from "lucide-react";
+import { Calendar, Filter } from "lucide-react";
 
-export type RangeKey = "month" | "prev_month" | "ytd" | "12m" | "custom";
+export type RangeKey = "day" | "month" | "prev_month" | "ytd" | "12m" | "custom";
 
-export function TimeFilterBar({
+interface Props {
+  range: RangeKey;
+  setRange: (v: RangeKey) => void;
+  customStart: string | null;
+  setCustomStart: (v: string | null) => void;
+  customEnd: string | null;
+  setCustomEnd: (v: string | null) => void;
+}
+
+export const TimeFilterBar: React.FC<Props> = ({
   range,
   setRange,
   customStart,
   setCustomStart,
   customEnd,
   setCustomEnd,
-}: {
-  range: RangeKey;
-  setRange: React.Dispatch<React.SetStateAction<RangeKey>>;
-  customStart: string | null;
-  setCustomStart: (v: string | null) => void;
-  customEnd: string | null;
-  setCustomEnd: (v: string | null) => void;
-}) {
+}) => {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <select
-        className="h-9 rounded-lg border bg-white px-3 pr-8 text-sm outline-none shadow-sm"
-        value={range}
-        onChange={(e) => setRange(e.target.value as RangeKey)}
-      >
-        <option value="month">Mois en cours</option>
-        <option value="prev_month">Mois précédent</option>
-        <option value="ytd">Depuis le 1er janvier</option>
-        <option value="12m">12 derniers mois</option>
-        <option value="custom">Plage personnalisée…</option>
-      </select>
+    <div className="flex flex-wrap gap-2 items-center">
+      {/* Filtres rapides */}
+      {([
+        { key: "day", label: "Jour" },
+        { key: "month", label: "Mois en cours" },
+        { key: "prev_month", label: "Mois précédent" },
+        { key: "ytd", label: "Depuis janvier" },
+        { key: "12m", label: "12 derniers mois" },
+        { key: "custom", label: "Personnalisé" },
+      ] as { key: RangeKey; label: string }[]).map((opt) => (
+        <button
+          key={opt.key}
+          onClick={() => setRange(opt.key)}
+          className={`px-3 py-1 text-sm rounded-full border transition ${
+            range === opt.key
+              ? "bg-orange-600 text-white border-orange-600"
+              : "bg-white text-gray-700 hover:bg-gray-100 border-gray-300"
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
 
+      {/* Filtres de date personnalisée */}
       {range === "custom" && (
         <div className="flex items-center gap-2">
-          <input
-            type="date"
-            className="h-9 rounded-lg border bg-white px-3 text-sm shadow-sm"
-            value={customStart ?? ""}
-            onChange={(e) => setCustomStart(e.target.value || null)}
-          />
-          <span className="text-sm text-muted-foreground">→</span>
-          <input
-            type="date"
-            className="h-9 rounded-lg border bg-white px-3 text-sm shadow-sm"
-            value={customEnd ?? ""}
-            onChange={(e) => setCustomEnd(e.target.value || null)}
-          />
+          <div className="flex items-center gap-1">
+            <Calendar className="h-4 w-4 text-gray-500" />
+            <input
+              type="date"
+              value={customStart || ""}
+              onChange={(e) => setCustomStart(e.target.value || null)}
+              className="border rounded px-2 py-1 text-sm"
+            />
+          </div>
+          <span className="text-gray-500">→</span>
+          <div className="flex items-center gap-1">
+            <Calendar className="h-4 w-4 text-gray-500" />
+            <input
+              type="date"
+              value={customEnd || ""}
+              onChange={(e) => setCustomEnd(e.target.value || null)}
+              className="border rounded px-2 py-1 text-sm"
+            />
+          </div>
         </div>
       )}
-
-      <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-        <ChevronDown className="h-4 w-4" />
-        <span>Changer la période</span>
-      </div>
     </div>
   );
-}
+};

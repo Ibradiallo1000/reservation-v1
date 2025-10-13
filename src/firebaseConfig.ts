@@ -4,6 +4,7 @@ import {
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  memoryLocalCache,
   connectFirestoreEmulator,
   setLogLevel,
 } from 'firebase/firestore';
@@ -28,34 +29,48 @@ const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 /* ===================== SERVICES ===================== */
 const FORCE_LONG_POLLING =
   import.meta?.env?.VITE_FIRESTORE_FORCE_LONG_POLLING === 'true';
+const DISABLE_PERSISTENCE =
+  import.meta?.env?.VITE_FIRESTORE_DISABLE_PERSISTENCE === 'true';
 
 const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager(),
-  }),
+  localCache: DISABLE_PERSISTENCE
+    ? memoryLocalCache()
+    : persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
   ignoreUndefinedProperties: true,
-
-  // Options supportées pour améliorer la compat réseau
   experimentalAutoDetectLongPolling: !FORCE_LONG_POLLING,
   experimentalForceLongPolling: FORCE_LONG_POLLING,
 });
+
+// Réduit le bruit en prod tout en gardant les erreurs visibles
 setLogLevel('error');
 
 const auth = getAuth(app);
 const storage = getStorage(app);
-const functions = getFunctions(app);
 
-/* ===================== EMULATEURS (optionnel) ===================== */
-const useEmulators = import.meta?.env?.VITE_USE_EMULATORS === 'true';
+/** Région alignée sur les Functions déployées */
+const functions = getFunctions(app, 'europe-west1');
+
+/* ===================== EMULATEURS : uniquement en local ===================== */
+// On n’active JAMAIS les émulateurs en prod Netlify, même si la variable est mal réglée.
+const wantEmulators = import.meta?.env?.VITE_USE_EMULATORS === 'true';
+const isLocalhost =
+  typeof window !== 'undefined' &&
+  ['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+// Active seulement si on est en local ET si la variable le demande.
+const shouldUseEmulators = isLocalhost && wantEmulators;
 
 export const dbReady = (async () => {
   try {
-    if (useEmulators) {
+    if (shouldUseEmulators) {
       connectFirestoreEmulator(db, '127.0.0.1', 8080);
       connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
       connectStorageEmulator(storage, '127.0.0.1', 9199);
       connectFunctionsEmulator(functions, '127.0.0.1', 5001);
-      console.info('✅ Emulateurs Firebase connectés.');
+      console.info('✅ Emulateurs Firebase connectés (local).');
+    } else if (wantEmulators && !isLocalhost) {
+      // Cas piège : variable mal réglée en prod
+      console.warn('⚠️ VITE_USE_EMULATORS=true ignoré en prod (sécurité).');
     }
   } catch (e) {
     console.warn('⚠️ Initialisation partielle (mode dégradé).', e);

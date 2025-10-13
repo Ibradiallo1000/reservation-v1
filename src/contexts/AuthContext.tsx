@@ -1,31 +1,19 @@
-// ✅ src/contexts/AuthContext.tsx
 import React, {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  useCallback,
+  createContext, useContext, useEffect, useMemo, useRef, useState, useCallback,
 } from "react";
 import {
-  onAuthStateChanged,
-  signOut,
-  setPersistence,
-  browserLocalPersistence,
-  User as FirebaseUser,
-  getIdToken,
+  onIdTokenChanged, signOut, setPersistence, browserLocalPersistence, User as FirebaseUser,
 } from "firebase/auth";
 import { doc, getDoc, Timestamp } from "firebase/firestore";
 import { auth, db } from "../firebaseConfig";
 import { Role, permissionsByRole } from "@/roles-permissions";
 import { Company } from "@/types/companyTypes";
 
-/* ===================== Types ===================== */
 export interface CustomUser {
   uid: string;
   email: string;
   displayName?: string;
 
-  // société / agence
   companyId: string;
   role: Role;
   nom: string;
@@ -34,7 +22,6 @@ export interface CustomUser {
   agencyId: string;
   agencyName: string;
 
-  // UI / extras
   lastLogin?: Date | null;
   permissions?: string[];
   companyLogo?: string;
@@ -51,12 +38,9 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   hasPermission: (permission: string) => boolean;
-
-  /** ✅ Ajout : id de la compagnie active */
   companyId: string | null;
-
-  /** ✅ Maintenant typé Company */
   company: Company | null;
+  isPlatformAdmin: boolean;            // 👈 ajouté
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -67,9 +51,8 @@ const AuthContext = createContext<AuthContextType>({
   hasPermission: () => false,
   companyId: null,
   company: null,
+  isPlatformAdmin: false,
 });
-
-/* ===================== Helpers ===================== */
 
 const normalizeRole = (r?: string): Role => {
   const raw = (r ?? "user").trim();
@@ -86,22 +69,13 @@ const toDate = (v: any): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-/* ===================== Provider ===================== */
-
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<CustomUser | null>(null);
-  const [loading, setLoading] = useState(true);
   const [company, setCompany] = useState<Company | null>(null);
+  const [loading, setLoading] = useState(true);
+  const subscribedRef = useRef(false);
 
-  const fetchUserData = useCallback(async (firebaseUser: FirebaseUser) => {
-    try {
-      await getIdToken(firebaseUser, true);
-    } catch {
-      /* ignore */
-    }
-
+  const fetchUserDoc = useCallback(async (firebaseUser: FirebaseUser) => {
     const userRef = doc(db, "users", firebaseUser.uid);
     const snap = await getDoc(userRef);
     if (!snap.exists()) throw new Error("Document utilisateur non trouvé");
@@ -109,7 +83,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const data: any = snap.data() || {};
     const role: Role = normalizeRole(data.role);
 
-    // Fusion des permissions
     const mergedPermissions = Array.from(
       new Set([...(data.permissions || []), ...(permissionsByRole[role] || [])])
     );
@@ -117,8 +90,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const custom: CustomUser = {
       uid: firebaseUser.uid,
       email: firebaseUser.email || data.email || "",
-      displayName:
-        firebaseUser.displayName || data.displayName || data.nom || "",
+      displayName: firebaseUser.displayName || data.displayName || data.nom || "",
 
       companyId: data.companyId || "",
       role,
@@ -152,15 +124,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     } else {
       setCompany(null);
     }
-
-    return custom;
   }, []);
 
   const refreshUser = useCallback(async () => {
-    if (auth.currentUser) {
-      await fetchUserData(auth.currentUser);
-    }
-  }, [fetchUserData]);
+    if (auth.currentUser) await fetchUserDoc(auth.currentUser);
+  }, [fetchUserDoc]);
 
   const logout = useCallback(async () => {
     await signOut(auth);
@@ -179,57 +147,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   useEffect(() => {
-    let unsub: (() => void) | undefined;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    (async () => {
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+      } catch (e) {
+        console.error("Erreur de persistance Firebase:", e);
+      }
+      if (subscribedRef.current) return;
+      subscribedRef.current = true;
 
-    setPersistence(auth, browserLocalPersistence)
-      .then(() => {
-        unsub = onAuthStateChanged(auth, async (fbUser) => {
-          try {
-            if (fbUser) {
-              await fetchUserData(fbUser);
-            } else {
-              setUser(null);
-              setCompany(null);
-            }
-          } catch (e) {
-            console.error("Erreur auth state:", e);
+      const unsub = onIdTokenChanged(auth, async (fbUser) => {
+        try {
+          if (fbUser) {
+            await fetchUserDoc(fbUser);
+          } else {
             setUser(null);
             setCompany(null);
-          } finally {
-            if (timeoutId) clearTimeout(timeoutId);
-            setLoading(false);
           }
-        });
-
-        timeoutId = setTimeout(() => setLoading(false), 2500);
-      })
-      .catch((e) => {
-        console.error("Erreur de persistance Firebase:", e);
-        setLoading(false);
+        } catch (e) {
+          console.error("Erreur auth state:", e);
+          setUser(null);
+          setCompany(null);
+        } finally {
+          setLoading(false);
+        }
       });
 
-    return () => {
-      if (unsub) unsub();
-      if (timeoutId) clearTimeout(timeoutId);
-    };
-  }, [fetchUserData]);
+      return () => unsub();
+    })();
+  }, [fetchUserDoc]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        loading,
-        logout,
-        refreshUser,
-        hasPermission,
-        companyId: user?.companyId || null,
-        company,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const isPlatformAdmin = useMemo(
+    () => normalizeRole(user?.role) === "admin_platforme",
+    [user]
   );
+
+  const value = useMemo(
+    () => ({
+      user,
+      loading,
+      logout,
+      refreshUser,
+      hasPermission,
+      companyId: user?.companyId || null,
+      company,
+      isPlatformAdmin,                 // 👈 exposé
+    }),
+    [user, loading, logout, refreshUser, hasPermission, company, isPlatformAdmin]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {

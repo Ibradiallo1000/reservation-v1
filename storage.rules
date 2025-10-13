@@ -1,11 +1,54 @@
 rules_version = '2';
-
-// Craft rules based on data in your Firestore database
-// allow write: if firestore.get(
-//    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
 service firebase.storage {
   match /b/{bucket}/o {
-    match /{allPaths=**} {
+
+    /* ===== Helpers (claims uniquement) ===== */
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+
+    function isPlatformAdmin() {
+      return isLoggedIn() && (
+        request.auth.token.role == "admin_platforme" ||
+        request.auth.token.admin == true
+      );
+    }
+
+    function isCompanyAdmin(companyId) {
+      return isLoggedIn() &&
+        request.auth.token.role == "admin_compagnie" &&
+        request.auth.token.companyId == companyId;
+    }
+
+    /* ===== Fichiers d’une compagnie =====
+       Exemple de chemins côté app :
+       - companies/{companyId}/logos/xxx.png
+       - companies/{companyId}/images/xxx.jpg
+       - companies/{companyId}/docs/xxx.pdf
+    */
+    match /companies/{companyId}/{allPaths=**} {
+      // Lecture publique (afficher logos/images sur le site)
+      allow read: if true;
+
+      // Upload / update / delete par plateforme ou admin de cette compagnie
+      allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+    }
+
+    /* ===== Espace plateforme privé =====
+       (ex: assets globaux non publics si tu en stockes dans Storage)
+    */
+    match /platform/{allPaths=**} {
+      allow read, write: if isPlatformAdmin();
+    }
+
+    /* ===== Dossier explicitement public (optionnel) ===== */
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write: if isPlatformAdmin();
+    }
+
+    /* ===== Par défaut : refus ===== */
+    match /{path=**} {
       allow read, write: if false;
     }
   }
