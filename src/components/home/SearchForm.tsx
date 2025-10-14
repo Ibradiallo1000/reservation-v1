@@ -16,7 +16,7 @@ const SearchForm: React.FC = () => {
     <div className="bg-white shadow-lg rounded-xl p-6 max-w-xl mx-auto">
       <h2 className="text-lg font-semibold text-gray-800 mb-4">Trouvez votre prochain trajet</h2>
       <div className="space-y-4">
-        // src/components/home/SearchForm.tsx
+       
 <VilleCombobox
   value={departure}
   onChange={setDeparture}
