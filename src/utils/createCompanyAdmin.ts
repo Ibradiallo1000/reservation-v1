@@ -13,18 +13,15 @@ import {
   updateProfile,
 } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { db, firebaseConfig } from "@/firebaseConfig";
+import { db } from "@/firebaseConfig";
 
 /**
- * Crée un compte "admin_compagnie" sans casser la session courante :
- * - Utilise une app Firebase "secondaire" dédiée à la création du compte
- * - Écrit users/{uid} avec le rôle et l’affectation companyId
- * - Envoie un e-mail de réinitialisation de mot de passe
+ * Crée un compte "admin_compagnie" SANS casser la session courante.
+ * Utilise une app Firebase "secondaire" (admin-secondary) pour l’opération.
  *
- * IMPORTANT :
- * - Tes règles Firestore exigent que l'appelant soit admin plateforme pour écrire users/{autreUid}.
- *   Donc, l’utilisateur actuellement connecté dans l’app principale doit être "admin_platforme".
- * - Le provider Email/Password doit être activé dans Firebase Auth.
+ * ⚠️ Tes règles Firestore exigent que l’utilisateur courant soit admin plateforme
+ *    pour écrire dans users/{autreUid}.
+ * ⚠️ Le provider Email/Password doit être activé dans Firebase Auth.
  */
 export async function createCompanyAdminOnClient(opts: {
   email: string;
@@ -34,24 +31,26 @@ export async function createCompanyAdminOnClient(opts: {
 }) {
   const { email, fullName, phone, companyId } = opts;
 
-  // 1) Récupère ou crée l’app secondaire pour ne pas toucher la session courante
   const secondaryName = "admin-secondary";
   let secondary: FirebaseApp | null = null;
+
   try {
-    // Réutilise si elle existe déjà
+    // ← IMPORTANT : on réutilise la config de l’app principale
+    const baseOptions = getApp().options;
+
+    // Réutilise l’app secondaire si elle existe déjà
     const existing = getApps().find((a) => a.name === secondaryName);
-    secondary = existing ?? initializeApp(firebaseConfig, secondaryName);
+    secondary = existing ?? initializeApp(baseOptions, secondaryName);
 
     const secAuth = getAuth(secondary);
 
-    // 2) Créer le compte avec un mot de passe temporaire (respecte de base quelques contraintes)
+    // Mot de passe temporaire “fort” pour passer la création
     const tempPwd = Math.random().toString(36).slice(-10) + "Aa!1";
 
     let cred;
     try {
       cred = await createUserWithEmailAndPassword(secAuth, email, tempPwd);
     } catch (e: any) {
-      // Messages plus propres pour les cas fréquents
       if (e?.code === "auth/email-already-in-use") {
         throw new Error("Cet e-mail est déjà utilisé.");
       }
@@ -64,17 +63,14 @@ export async function createCompanyAdminOnClient(opts: {
       throw e;
     }
 
-    // 3) Met à jour le displayName
+    // Display name (non bloquant si ça échoue)
     try {
       await updateProfile(cred.user, { displayName: fullName });
-    } catch {
-      // Non bloquant si le profile ne peut pas être mis à jour tout de suite
-    }
+    } catch {}
 
     const uid = cred.user.uid;
 
-    // 4) Créer/Màj le doc users/{uid} avec le rôle & l’affectation
-    // ⚠️ Nécessite que l’utilisateur courant (app principale) soit admin plateforme selon tes règles.
+    // Écrit/merge le doc users/{uid} (rôle + affectation)
     await setDoc(
       doc(db, "users", uid),
       {
@@ -92,24 +88,20 @@ export async function createCompanyAdminOnClient(opts: {
       { merge: true }
     );
 
-    // 5) Force une réinitialisation de mot de passe
-    // (l’utilisateur définira son mot de passe final via l’e-mail)
+    // Envoie l’e-mail de réinitialisation (l’utilisateur choisira son vrai mot de passe)
     try {
       await sendPasswordResetEmail(secAuth, email);
-    } catch (e: any) {
-      // Non bloquant, mais on renvoie l’info au dessus
-      console.warn("Impossible d’envoyer l’e-mail de réinitialisation :", e?.code || e);
+    } catch (e) {
+      console.warn("Impossible d’envoyer l’e-mail de réinitialisation :", e);
     }
 
     return { ok: true, uid };
   } finally {
-    // 6) Nettoyage de l’app secondaire pour éviter les fuites de ressources
+    // Nettoyage propre de l’app secondaire
     if (secondary) {
       try {
         await deleteApp(secondary);
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
   }
 }
