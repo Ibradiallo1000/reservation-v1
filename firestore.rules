@@ -95,13 +95,12 @@ service cloud.firestore {
     match /companies/{companyId} {
 
       /* ---------- Doc racine compagnie ---------- */
-      // ✅ IMPORTANT : Règle alignée avec la query côté client
-      // Lecture publique si le document a publicPageEnabled==true ET status=="actif",
-      // ou si l'utilisateur est admin (plateforme/compagnie).
+      // ✅ Lecture publique si vitrine activée.
+      // On NE bloque PAS s’il n’y a pas de champ status.
       allow read: if
-          (resource.data.publicPageEnabled == true && resource.data.status == "actif")
-          || isPlatformAdmin()
-          || isCompanyAdmin(companyId);
+        (resource.data.publicPageEnabled == true) ||
+        isPlatformAdmin() ||
+        isCompanyAdmin(companyId);
 
       /* ---------- OUVERTURE TOTALE EN LECTURE POUR LA VITRINE ----------- */
       // Si la compagnie a publicPageEnabled == true, tout son contenu
@@ -251,12 +250,14 @@ service cloud.firestore {
                                 && resource.data.companyId == userDoc().companyId);
     }
 
-    // Médias globaux de plateforme
+    // Médias globaux de plateforme (assets de vitrine)
     match /mediaPlatform/{doc=**} {
-      allow read:  if isLoggedIn() || isPlatformAdmin();
+      // Lecture publique si isPublic==true. Connectés/admins lisent aussi.
+      allow read:  if resource.data.isPublic == true
+                   || isLoggedIn()
+                   || isPlatformAdmin();
       allow write: if isPlatformAdmin();
     }
-
 
     /* =================================================================== *
      *                            AVIS CLIENTS                              *
@@ -281,7 +282,10 @@ service cloud.firestore {
      * =================================================================== */
 
     match /plans/{planId} {
-      allow read: if isLoggedIn() || isPlatformAdmin();
+      // Ouvre la lecture publique UNIQUEMENT si le plan est marqué public
+      allow read:  if resource.data.isPublic == true
+                   || isLoggedIn()
+                   || isPlatformAdmin();
       allow write: if isPlatformAdmin();
     }
 

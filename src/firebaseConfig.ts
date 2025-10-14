@@ -12,6 +12,9 @@ import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 
+// ✅ App Check (protège Firestore/Storage/Functions)
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
+
 /* ===================== CONFIG FIREBASE ===================== */
 const firebaseConfig = {
   apiKey: 'AIzaSyB9sGzgvdzhxxhIshtPprPix7oBfCB2OuM',
@@ -25,6 +28,37 @@ const firebaseConfig = {
 
 /* ===================== INIT APP (idempotent) ===================== */
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+/* ===================== App Check ===================== */
+/**
+ * Prod : reCAPTCHA v3 avec clé site dans VITE_RECAPTCHA_V3_KEY
+ * Dev  : possibilité d'activer un token debug (voir console note ci-dessous)
+ */
+const RECAPTCHA_SITE_KEY = import.meta?.env?.VITE_RECAPTCHA_V3_KEY;
+
+if (typeof window !== 'undefined') {
+  // Optionnel : activer un token debug en local (à n'utiliser qu'en dev)
+  // - Soit tu mets VITE_APPCHECK_DEBUG=true dans .env.local
+  // - Soit tu tapes dans la console : localStorage.setItem('FIREBASE_APPCHECK_DEBUG_TOKEN', 'true');
+  const wantDebug =
+    import.meta?.env?.VITE_APPCHECK_DEBUG === 'true' &&
+    ['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+  if (wantDebug) {
+    // @ts-ignore: variable debug reconnue par SDK
+    self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    try {
+      localStorage.setItem('FIREBASE_APPCHECK_DEBUG_TOKEN', 'true');
+    } catch {}
+  }
+
+  if (RECAPTCHA_SITE_KEY) {
+    initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+      isTokenAutoRefreshEnabled: true,
+    });
+  }
+}
 
 /* ===================== SERVICES ===================== */
 const FORCE_LONG_POLLING =
@@ -77,4 +111,4 @@ export const dbReady = (async () => {
   }
 })();
 
-export { app, db, auth, storage, functions };
+export { app, db, auth, storage, functions, firebaseConfig };

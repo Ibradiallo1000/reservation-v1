@@ -1,4 +1,3 @@
-// src/components/home/HeroSection.tsx
 import React from "react";
 import { Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -17,8 +16,7 @@ const HeroSection: React.FC = () => {
     navigate("/resultats", { state: { departure: from, arrival: to } });
   };
 
-  const disabled =
-    !departure || !arrival || departure.toLowerCase() === arrival.toLowerCase();
+  const disabled = !departure || !arrival || departure.toLowerCase() === arrival.toLowerCase();
 
   return (
     <section
@@ -29,35 +27,28 @@ const HeroSection: React.FC = () => {
       }}
     >
       <div className="max-w-5xl mx-auto px-4 py-16 md:py-24 text-center">
-        <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white">
-          Voyagez avec <span className="text-orange-500">Teliya</span>
+        {/* ✅ nouveau wording : plateforme + voyages interurbains */}
+        <h1 className="text-3xl md:text-6xl font-extrabold tracking-tight text-white">
+          Réservez vos <span className="text-orange-500">trajets</span> interurbains avec <span className="text-orange-500">Teliya</span>
         </h1>
-        <p className="mt-4 text-gray-300 text-lg">
-          Réservez vos billets en ligne et trouvez les meilleurs trajets en Afrique.
+        <p className="mt-4 text-gray-200/90 text-lg">
+          La plateforme qui regroupe les compagnies <span className="font-semibold">locales</span> : comparez les horaires et réservez en quelques clics.
         </p>
 
-        {/* carte “verre” uniquement pour le formulaire */}
+        {/* carte “verre” */}
         <form
           onSubmit={submit}
           className="mt-8 mx-auto max-w-3xl flex flex-col md:flex-row gap-4
                      rounded-2xl border border-white/15 bg-white/10 backdrop-blur-md
                      shadow-[0_10px_30px_rgba(0,0,0,.35)] p-4"
         >
-          <VilleCombobox
-            value={departure}
-            onChange={setDeparture}
-            placeholder="Ville de départ"
-          />
-          <VilleCombobox
-            value={arrival}
-            onChange={setArrival}
-            placeholder="Ville d’arrivée"
-          />
+          <VilleCombobox value={departure} onChange={setDeparture} placeholder="Ville de départ" />
+          <VilleCombobox value={arrival} onChange={setArrival} placeholder="Ville d’arrivée" />
           <button
             type="submit"
             disabled={disabled}
             className={`inline-flex items-center justify-center px-6 py-2 rounded-xl font-semibold text-white
-              ${disabled ? "bg-orange-300 cursor-not-allowed" : "bg-orange-600 hover:bg-orange-700"}
+              ${disabled ? "bg-orange-300/60 cursor-not-allowed" : "bg-orange-600 hover:bg-orange-700"}
             `}
           >
             <Search className="h-5 w-5 mr-2" />
@@ -66,7 +57,6 @@ const HeroSection: React.FC = () => {
         </form>
       </div>
 
-      {/* lueur douce en bas */}
       <div className="pointer-events-none absolute bottom-0 inset-x-0 h-24 bg-gradient-to-t from-black/40 to-transparent" />
     </section>
   );

@@ -1,43 +1,98 @@
-import React, { useEffect, useState } from "react";
-import { ShieldCheck, Zap, Globe, TrendingUp } from "lucide-react";
+import React from "react";
+import { ShieldCheck, Zap, MapPin, CreditCard } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
-const FEATURES = [
-  { icon: ShieldCheck, title: "Sécurité",  desc: "Paiements sécurisés et fiables" },
-  { icon: Zap,        title: "Rapidité",  desc: "Réservez vos billets en quelques secondes" },
-  { icon: Globe,      title: "Couverture",desc: "Des trajets dans toute l’Afrique de l’Ouest" },
-  { icon: TrendingUp, title: "Économie",  desc: "Les meilleurs prix garantis" },
+/* =============================================
+   CONTENU : 4 raisons de faire confiance à Teliya
+   ============================================= */
+const ITEMS = [
+  {
+    icon: MapPin,
+    title: "Réseau local de confiance",
+    text: "Nous travaillons avec des compagnies reconnues de votre région pour des trajets interurbains fiables.",
+  },
+  {
+    icon: Zap,
+    title: "Réservation rapide",
+    text: "Choisissez la compagnie, l’horaire et réservez en quelques secondes — sans appels ni files d’attente.",
+  },
+  {
+    icon: CreditCard,
+    title: "Paiements sécurisés",
+    text: "Moyens de paiement adaptés (mobile money, carte) et suivi automatique de votre réservation.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Confirmation & assistance",
+    text: "Notifications claires, reçu de réservation et support en cas de changement ou d’imprévu.",
+  },
 ];
 
+/* =============================================
+   Composant principal
+   ============================================= */
 const FeaturesSection: React.FC = () => {
-  const [i, setI] = useState(0);
+  const [idx, setIdx] = React.useState(0);
 
-  useEffect(() => {
-    const id = setInterval(() => setI(v => (v + 1) % FEATURES.length), 4000);
+  // Rotation automatique (4,5 secondes)
+  React.useEffect(() => {
+    const id = setInterval(() => setIdx((i) => (i + 1) % ITEMS.length), 4500);
     return () => clearInterval(id);
   }, []);
 
-  const F = FEATURES[i];
+  const item = ITEMS[idx];
+  const Icon = item.icon;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 text-center">
-      <div className="mx-auto max-w-md bg-white border border-orange-200 rounded-xl shadow-sm p-6">
-        <div className="flex flex-col items-center gap-2">
-          <F.icon className="h-7 w-7 text-orange-600" />
-          <h3 className="text-lg font-semibold text-gray-900">{F.title}</h3>
-          <p className="text-sm text-gray-600">{F.desc}</p>
-        </div>
-      </div>
+    <div className="mx-auto max-w-3xl px-4 text-center">
+      <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900 dark:text-white">
+        Pourquoi nous faire confiance ?
+      </h2>
+      <p className="mt-1 text-sm text-orange-600 dark:text-orange-400">
+        Teliya regroupe les compagnies locales pour vous simplifier chaque trajet.
+      </p>
 
-      {/* Puces d’état */}
-      <div className="mt-4 flex justify-center gap-2">
-        {FEATURES.map((_, idx) => (
-          <button
+      {/* Carte principale avec transition douce */}
+      <div className="mt-6 relative overflow-hidden rounded-2xl bg-white dark:bg-gray-900 border border-black/5 dark:border-white/10 shadow-md">
+        <AnimatePresence mode="wait">
+          <motion.div
             key={idx}
-            onClick={() => setI(idx)}
-            className={`h-2 w-2 rounded-full ${i === idx ? "bg-orange-600" : "bg-orange-200"}`}
-            aria-label={`Aller à la carte ${idx + 1}`}
-          />
-        ))}
+            initial={{ y: -30, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 30, opacity: 0 }}
+            transition={{ duration: 0.5, ease: "easeOut" }}
+            className="p-6 md:p-8"
+          >
+            <div className="flex items-center justify-center gap-3 mb-3">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-300">
+                <Icon className="h-5 w-5" />
+              </span>
+              <div className="text-lg md:text-xl font-semibold text-gray-900 dark:text-white">
+                {item.title}
+              </div>
+            </div>
+
+            <p className="text-sm md:text-base text-gray-700 dark:text-gray-300 max-w-xl mx-auto leading-relaxed">
+              {item.text}
+            </p>
+
+            {/* Petits points de navigation */}
+            <div className="mt-6 flex justify-center gap-1.5">
+              {ITEMS.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setIdx(i)}
+                  className={`h-1.5 rounded-full transition-all ${
+                    i === idx
+                      ? "w-6 bg-orange-600"
+                      : "w-3 bg-gray-300 dark:bg-gray-700"
+                  }`}
+                  aria-label={`Aller à la carte ${i + 1}`}
+                />
+              ))}
+            </div>
+          </motion.div>
+        </AnimatePresence>
       </div>
     </div>
   );
