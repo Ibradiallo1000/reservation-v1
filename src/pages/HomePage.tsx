@@ -4,7 +4,6 @@ import HeroSection from "@/components/home/HeroSection";
 import PartnersSection from "@/components/home/PartnersSection";
 import FeaturesSection from "@/components/home/FeaturesSection";
 import TestimonialsSection from "@/components/home/TestimonialsSection";
-import CTASection from "@/components/home/CTASection";
 import Footer from "@/components/home/Footer";
 
 const HomePage: React.FC = () => {
@@ -33,10 +32,6 @@ const HomePage: React.FC = () => {
 
         <section className="py-8 md:py-10 bg-white dark:bg-gray-950">
           <TestimonialsSection />
-        </section>
-
-        <section className="py-10 md:py-12 bg-orange-600 text-white">
-          <CTASection />
         </section>
       </main>
 
