@@ -145,13 +145,4 @@ async function staleWhileRevalidate(request) {
     .catch(() => cached);
 
   return cached || fetchPromise;
-}
-
-// ————————————————————————————————
-// Mise à jour instantanée: permet au client d'activer la nouvelle version
-//   reg?.waiting?.postMessage({ type: 'SKIP_WAITING' })
-// ————————————————————————————————
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-  }
-});
+};
