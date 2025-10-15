@@ -133,7 +133,7 @@ const Header: React.FC = () => {
             aria-label="Voir mes réservations"
             title="Voir mes réservations"
           >
-            <Ticket className="h-5 w-5" />
+            <Ticket className="h-4 w-4" />
             <span>Mes réservations</span>
           </button>
 
