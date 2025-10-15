@@ -46,7 +46,9 @@ service cloud.firestore {
 
     // La COMPAGNIE a sa page publique/vitrine activée ?
     function isPublicCompany(companyId) {
-      return get(/databases/$(database)/documents/companies/$(companyId)).data.publicPageEnabled == true;
+      // 👉 Devient FAUX uniquement si le champ est explicitement à false.
+      //    Si le champ est absent ou true → c’est public.
+      return !(get(/databases/$(database)/documents/companies/$(companyId)).data.publicPageEnabled == false);
     }
 
 
@@ -94,13 +96,12 @@ service cloud.firestore {
 
     match /companies/{companyId} {
 
-      /* ---------- Doc racine compagnie ---------- */
-      // ✅ Lecture publique si vitrine activée.
-      // On NE bloque PAS s’il n’y a pas de champ status.
-      allow read: if
-        (resource.data.publicPageEnabled == true) ||
-        isPlatformAdmin() ||
-        isCompanyAdmin(companyId);
+        /* ---------- Doc racine compagnie ---------- */
+  // 🔓 Public sauf si explicitement désactivé (publicPageEnabled == false)
+  // (aucune dépendance à get() → plus de boucle, la liste s'affiche)
+  allow read: if !(resource.data.publicPageEnabled == false)
+              || isPlatformAdmin()
+              || isCompanyAdmin(companyId);
 
       /* ---------- OUVERTURE TOTALE EN LECTURE POUR LA VITRINE ----------- */
       // Si la compagnie a publicPageEnabled == true, tout son contenu
@@ -332,7 +333,10 @@ service cloud.firestore {
      * =================================================================== */
 
     match /companies/{companyId}/agences/{agencyId} {
-      allow read: if isPlatformAdmin() || isCompanyAdmin(companyId) || isPublicCompany(companyId);
+      // 👉 vitrine ouverte = agences lisibles sans autres drapeaux
+      allow read: if isPlatformAdmin()
+                  || isCompanyAdmin(companyId)
+                  || isPublicCompany(companyId);
     }
 
     match /companies/{companyId}/agences/{agencyId}/weeklyTrips/{tripId} {
