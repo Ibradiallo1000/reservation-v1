@@ -52,7 +52,7 @@ const HeroSection: React.FC = () => {
         {/* Carte “verre” */}
         <form
           onSubmit={submit}
-          className="mt-8 mx-auto max-w-3xl rounded-2xl border border-white/20 bg-white/10 backdrop-blur-xl shadow-[0_16px_48px_rgba(0,0,0,.5)] p-5 md:p-6"
+          className="mt-4 mx-auto max-w-3xl rounded-2xl border border-white/20 bg-white/10 backdrop-blur-xl shadow-[0_16px_48px_rgba(0,0,0,.5)] p-5 md:p-6"
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             <div className="text-left">
