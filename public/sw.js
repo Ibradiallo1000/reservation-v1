@@ -1,19 +1,24 @@
 /* eslint-disable no-undef */
 
 /**
- * Teliya Service Worker — MAJ sur demande (aucun rafraîchissement imposé)
- * - App-shell précaché
+ * Teliya Service Worker — anti-rafraîchissement automatique
+ * - App-shell précaché (offline OK)
  * - HTML: Network-First (+ navigation preload) avec fallback offline.html
- * - Assets: Stale-While-Revalidate
+ * - Assets (images/icônes/polices/css): Stale-While-Revalidate
  * - Nettoyage des vieux caches
- * - NO auto refresh: pas de skipWaiting() ni clients.claim() automatiques
+ * - ❗️Pas de skipWaiting/clients.claim automatiques ⇒ pas de reload auto
+ * - MAJ uniquement si l’app envoie {type:'SKIP_WAITING'} (manuel)
  */
 
-const VERSION = 'v1.0.2';                    // ⬅️ change à chaque modif du SW
+// ————————————————————————————————
+// Version & caches
+// ————————————————————————————————
+const VERSION = 'v1.0.2'; // incrémente si tu changes STATIC_ASSETS
 const STATIC_CACHE = `teliya-static-${VERSION}`;
 
+// App-shell minimal
 const STATIC_ASSETS = [
-  '/', // si le serveur renvoie index.html pour "/"
+  '/', // SPA: si ton serveur renvoie index.html pour "/"
   '/images/teliya-logo.jpg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -21,47 +26,57 @@ const STATIC_ASSETS = [
   '/offline.html',
 ];
 
-/* -------------------------- install: precache -------------------------- */
+// ————————————————————————————————
+// Install: precache (❌ pas de skipWaiting automatique)
+// ————————————————————————————————
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE).then((cache) => cache.addAll(STATIC_ASSETS)).catch(() => {})
   );
-  // ❌ NE PAS appeler self.skipWaiting() ici
+  // ❌ on NE fait PAS self.skipWaiting() ici pour éviter le basculement auto
 });
 
-/* --------- activate: cleanup + (optionnel) navigation preload ---------- */
+// ————————————————————————————————
+// Activate: cleanup + navigation preload (❌ pas de clients.claim())
+// ————————————————————————————————
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     if ('navigationPreload' in self.registration) {
       try { await self.registration.navigationPreload.enable(); } catch {}
     }
-    // ❌ NE PAS faire clients.claim() (évite un controllerchange immédiat)
-    // nettoyage des anciens caches
+
+    // ❌ pas de clients.claim() => pas de controllerchange forcé côté clients
+
     const keys = await caches.keys();
-    await Promise.all(
-      keys
-        .filter((k) => k.startsWith('teliya-static-') && k !== STATIC_CACHE)
-        .map((k) => caches.delete(k))
-    );
+    const deletions = keys
+      .filter((k) => k.startsWith('teliya-static-') && k !== STATIC_CACHE)
+      .map((k) => caches.delete(k));
+    await Promise.all(deletions);
   })());
 });
 
-/* ------------------------------ fetch --------------------------------- */
+// ————————————————————————————————
+// Fetch
+// ————————————————————————————————
 self.addEventListener('fetch', (event) => {
   const req = event.request;
+  const url = new URL(req.url);
+
   if (req.method !== 'GET') return;
 
-  const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
 
-  // 1) HTML / navigations
-  const isHTML = req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html');
+  // HTML navigations
+  const isHTML =
+    req.mode === 'navigate' ||
+    (req.headers.get('accept') || '').includes('text/html');
+
   if (isHTML && sameOrigin) {
     event.respondWith(networkFirstHTML(event));
     return;
   }
 
-  // 2) Assets (images/icônes/polices/css)
+  // Assets statiques : SWR
   if (
     sameOrigin &&
     /\.(?:png|jpg|jpeg|webp|avif|svg|ico|gif|css|woff2?)$/i.test(url.pathname)
@@ -69,10 +84,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(staleWhileRevalidate(req));
     return;
   }
-
-  // 3) le reste: laisser passer
 });
 
+// Network-First pour HTML (avec navigation preload + fallback offline.html)
 async function networkFirstHTML(event) {
   const preload = 'preloadResponse' in event ? event.preloadResponse : null;
 
@@ -82,6 +96,7 @@ async function networkFirstHTML(event) {
       cacheHTML(event.request, preloaded.clone());
       return preloaded;
     }
+
     const fresh = await fetch(event.request);
     cacheHTML(event.request, fresh.clone());
     return fresh;
@@ -94,7 +109,7 @@ async function networkFirstHTML(event) {
 
     return new Response('<h1>Hors connexion</h1>', {
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      status: 200,
+      status: 200
     });
   }
 }
@@ -106,6 +121,7 @@ async function cacheHTML(request, response) {
   } catch {}
 }
 
+// Stale-While-Revalidate pour assets
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(STATIC_CACHE);
   const cached = await cache.match(request);
@@ -120,14 +136,13 @@ async function staleWhileRevalidate(request) {
   return cached || fetchPromise;
 }
 
-/* --------------- MAJ sur demande: message depuis la page --------------- */
-/** Depuis l’app (bouton “Mettre à jour”):
- *   const reg = await navigator.serviceWorker.getRegistration();
- *   reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
- *   // La page NE se recharge pas ici tant que tu ne le fais pas toi-même.
- */
+// ————————————————————————————————
+// Mise à jour MANUELLE uniquement
+// L’app peut appeler: reg.waiting?.postMessage({ type: 'SKIP_WAITING' })
+// ————————————————————————————————
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting(); // active la nouvelle SW, sans reload automatique
+    // Ici on accepte la nouvelle version uniquement si l’app le demande.
+    self.skipWaiting();
   }
 });
