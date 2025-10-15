@@ -129,7 +129,7 @@ const Header: React.FC = () => {
           {/* Lien Mes Réservations — pas de fond, texte orange */}
           <button
             onClick={goBookings}
-            className="ml-4 inline-flex items-center gap-1.5 text-2sm md:text-base font-semibold text-orange-600 hover:text-orange-700 transition"
+            className="ml-2 inline-flex items-center gap-1.5 text-1.5sm md:text-base font-semibold text-orange-600 hover:text-orange-700 transition"
             aria-label="Voir mes réservations"
             title="Voir mes réservations"
           >
