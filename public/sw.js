@@ -1,86 +1,67 @@
 /* eslint-disable no-undef */
 
 /**
- * Teliya Service Worker — simple & robuste
- * - App-shell léger précaché
+ * Teliya Service Worker — MAJ sur demande (aucun rafraîchissement imposé)
+ * - App-shell précaché
  * - HTML: Network-First (+ navigation preload) avec fallback offline.html
- * - Assets (images/icônes/polices/css): Stale-While-Revalidate
+ * - Assets: Stale-While-Revalidate
  * - Nettoyage des vieux caches
- * - Mise à jour instantanée (skipWaiting via message)
+ * - NO auto refresh: pas de skipWaiting() ni clients.claim() automatiques
  */
 
-// ————————————————————————————————
-// Version & caches
-// ————————————————————————————————
-const VERSION = 'v1.0.1'; // ⬅️ incrémente à chaque déploiement si tu modifies STATIC_ASSETS
+const VERSION = 'v1.0.2';                    // ⬅️ change à chaque modif du SW
 const STATIC_CACHE = `teliya-static-${VERSION}`;
 
-// App-shell minimal (80/20)
 const STATIC_ASSETS = [
-  '/', // SPA: si ton serveur renvoie index.html pour "/"
+  '/', // si le serveur renvoie index.html pour "/"
   '/images/teliya-logo.jpg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
-  '/offline.html', // ⬅️ page de secours hors-ligne
+  '/offline.html',
 ];
 
-// ————————————————————————————————
-// Install: precache + skipWaiting
-// ————————————————————————————————
+/* -------------------------- install: precache -------------------------- */
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE).then((cache) => cache.addAll(STATIC_ASSETS)).catch(() => {})
   );
-  self.skipWaiting();
+  // ❌ NE PAS appeler self.skipWaiting() ici
 });
 
-// ————————————————————————————————
-// Activate: claim + cleanup + navigation preload
-// ————————————————————————————————
+/* --------- activate: cleanup + (optionnel) navigation preload ---------- */
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     if ('navigationPreload' in self.registration) {
       try { await self.registration.navigationPreload.enable(); } catch {}
     }
-
-    await self.clients.claim();
-
+    // ❌ NE PAS faire clients.claim() (évite un controllerchange immédiat)
+    // nettoyage des anciens caches
     const keys = await caches.keys();
-    const deletions = keys
-      .filter((k) => k.startsWith('teliya-static-') && k !== STATIC_CACHE)
-      .map((k) => caches.delete(k));
-    await Promise.all(deletions);
+    await Promise.all(
+      keys
+        .filter((k) => k.startsWith('teliya-static-') && k !== STATIC_CACHE)
+        .map((k) => caches.delete(k))
+    );
   })());
 });
 
-// ————————————————————————————————
-// Fetch strategies
-// - HTML (navigate): Network-First (+preload) → cache → offline.html
-// - Assets (images/icônes/polices/css): Stale-While-Revalidate
-// - Others: pass-through
-// ————————————————————————————————
+/* ------------------------------ fetch --------------------------------- */
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-  const url = new URL(req.url);
-
-  // On ne gère que GET
   if (req.method !== 'GET') return;
 
-  // Même origine uniquement
+  const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
 
-  // 1) HTML navigations
-  const isHTML =
-    req.mode === 'navigate' ||
-    (req.headers.get('accept') || '').includes('text/html');
-
+  // 1) HTML / navigations
+  const isHTML = req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html');
   if (isHTML && sameOrigin) {
     event.respondWith(networkFirstHTML(event));
     return;
   }
 
-  // 2) Assets statiques
+  // 2) Assets (images/icônes/polices/css)
   if (
     sameOrigin &&
     /\.(?:png|jpg|jpeg|webp|avif|svg|ico|gif|css|woff2?)$/i.test(url.pathname)
@@ -89,38 +70,31 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3) Par défaut: laisser le navigateur faire
+  // 3) le reste: laisser passer
 });
 
-// Network-First pour HTML (avec navigation preload + fallback offline.html)
 async function networkFirstHTML(event) {
   const preload = 'preloadResponse' in event ? event.preloadResponse : null;
 
   try {
-    // Réponse préchargée par le navigateur (si activée)
     const preloaded = preload ? await preload : undefined;
     if (preloaded) {
       cacheHTML(event.request, preloaded.clone());
       return preloaded;
     }
-
-    // Sinon, fetch réseau
     const fresh = await fetch(event.request);
     cacheHTML(event.request, fresh.clone());
     return fresh;
   } catch {
-    // Réseau KO → chercher en cache
     const cached = await caches.match(event.request);
     if (cached) return cached;
 
-    // Dernier recours: page hors-ligne dédiée
     const offline = await caches.match('/offline.html');
     if (offline) return offline;
 
-    // Si vraiment rien
     return new Response('<h1>Hors connexion</h1>', {
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
-      status: 200
+      status: 200,
     });
   }
 }
@@ -132,7 +106,6 @@ async function cacheHTML(request, response) {
   } catch {}
 }
 
-// Stale-While-Revalidate pour assets
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(STATIC_CACHE);
   const cached = await cache.match(request);
@@ -145,4 +118,16 @@ async function staleWhileRevalidate(request) {
     .catch(() => cached);
 
   return cached || fetchPromise;
-};
+}
+
+/* --------------- MAJ sur demande: message depuis la page --------------- */
+/** Depuis l’app (bouton “Mettre à jour”):
+ *   const reg = await navigator.serviceWorker.getRegistration();
+ *   reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
+ *   // La page NE se recharge pas ici tant que tu ne le fais pas toi-même.
+ */
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting(); // active la nouvelle SW, sans reload automatique
+  }
+});
