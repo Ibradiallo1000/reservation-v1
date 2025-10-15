@@ -44,13 +44,10 @@ const HeroSection: React.FC = () => {
       }}
     >
       <div className="max-w-5xl mx-auto px-4 py-16 md:py-24 text-center">
-        <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight drop-shadow-[0_2px_8px_rgba(0,0,0,.5)]">
-          Réservez vos <span className="text-orange-500">trajets</span> interurbains avec{" "}
+        <h1 className="text-3xl md:text-6xl font-extrabold tracking-tight drop-shadow-[0_2px_8px_rgba(0,0,0,.5)]">
+          Réservez vos <span className="text-orange-500">trajets</span> en un clic avec{" "}
           <span className="text-orange-500">Teliya</span>
         </h1>
-        <p className="mt-3 text-lg text-white/95 drop-shadow-[0_1px_6px_rgba(0,0,0,.45)]">
-          Comparez les compagnies locales et réservez vos billets en toute simplicité.
-        </p>
 
         {/* Carte “verre” */}
         <form
@@ -68,15 +65,6 @@ const HeroSection: React.FC = () => {
             </div>
 
             <div className="flex md:block justify-center -mt-1 md:mt-0">
-              <button
-                type="button"
-                onClick={swapCities}
-                title="Échanger les villes"
-                aria-label="Échanger les villes"
-                className="inline-flex items-center justify-center rounded-full h-10 w-10 shadow-md bg-gradient-to-br from-orange-600 to-orange-500 text-white hover:brightness-110 active:scale-95 transition"
-              >
-                <ArrowLeftRight className={`h-5 w-5 transition-transform ${spin ? "rotate-180" : ""}`} />
-              </button>
             </div>
 
             <div className="text-left">
