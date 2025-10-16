@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+// src/components/public/HeroSection.tsx  (version compagnie adaptée au style plateforme)
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Search, ArrowRight } from 'lucide-react';
+import { Search, ArrowLeftRight } from 'lucide-react';
 import { Company } from '@/types/companyTypes';
 import { useTranslation } from 'react-i18next';
 import VilleCombobox from '@/components/public/VilleCombobox';
@@ -12,15 +13,19 @@ interface HeroSectionProps {
   isMobile?: boolean;
 }
 
+const FALLBACK_BG =
+  'https://images.unsplash.com/photo-1518684079-3c830dcef090?auto=format&fit=crop&w=1920&q=80';
+
 const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
-  const [departure, setDeparture] = React.useState('');
-  const [arrival, setArrival] = React.useState('');
+  const [departure, setDeparture] = useState('');
+  const [arrival, setArrival] = useState('');
+  const [spin, setSpin] = useState(false);
   const { t } = useTranslation();
   const villeOptions = useVilleOptions(company.id);
 
   const bannerRef = useRef<HTMLImageElement | null>(null);
 
-  // Applique fetchpriority sans warning (lowercase, via setAttribute)
+  // Applique fetchpriority sans warning (via setAttribute)
   useEffect(() => {
     if (bannerRef.current) {
       try {
@@ -29,87 +34,129 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
     }
   }, [company?.banniereUrl]);
 
+  const couleurPrimaire = company.couleurPrimaire || '#FF6600';
+  const accroche = company.accroche || t('defaultSlogan');
+  const instruction = company.instructionRecherche || t('searchInstruction');
+
+  const disabled =
+    !departure.trim() ||
+    !arrival.trim() ||
+    departure.trim().toLowerCase() === arrival.trim().toLowerCase();
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSearch(departure.trim().toLowerCase(), arrival.trim().toLowerCase());
+    if (disabled) return;
+    onSearch(departure.trim(), arrival.trim());
   };
 
-  const couleurPrimaire = company.couleurPrimaire || '#3B82F6';
+  const swapCities = () => {
+    setSpin(true);
+    setDeparture((d) => {
+      const old = d;
+      setArrival(old2 => (old2 = arrival));
+      return arrival;
+    });
+    setArrival((a) => a); // déjà mis à jour ci-dessus
+    setTimeout(() => setSpin(false), 280);
+  };
 
   return (
-    <section className="relative w-full min-h-[600px] flex items-center justify-center overflow-hidden bg-gray-100">
+    <section
+      className="relative overflow-hidden text-white"
+      style={{
+        // 4 calques comme la page plateforme (verre sur image + voile + fallback + dégradé)
+        backgroundImage: `
+          linear-gradient(rgba(0,0,0,.62), rgba(0,0,0,.62)),
+          url(${company.banniereUrl || ''}),
+          url(${FALLBACK_BG}),
+          linear-gradient(180deg, #0f0f0f 0%, #1a1a1a 100%)
+        `,
+        backgroundSize: 'cover, cover, cover, cover',
+        backgroundPosition: 'center, center, center, center',
+        backgroundRepeat: 'no-repeat',
+      }}
+    >
+      {/* Si on a une bannière, on la charge “réelle” sous le même visuel */}
       {company.banniereUrl && (
-        <div className="absolute inset-0 z-0 overflow-hidden">
-          <img
-            ref={bannerRef}
-            src={company.banniereUrl}
-            alt={`Bannière ${company.nom}`}
-            className="w-full h-full object-cover object-center img-fade is-loaded"
-            width="100%"
-            height="100%"
-            decoding="async"
-            loading="eager"
-            style={{ objectPosition: 'center center', minHeight: '100%', minWidth: '100%' }}
-            {...({ fetchpriority: 'high' } as any)}   // ✅ passe à React sans warning
-          />
-          <div className="absolute inset-0 bg-black/30" />
-        </div>
+        <img
+          ref={bannerRef}
+          src={company.banniereUrl}
+          alt={`Bannière ${company.nom}`}
+          className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none"
+          width="100%"
+          height="100%"
+          decoding="async"
+          loading="eager"
+          {...({ fetchpriority: 'high' } as any)}
+        />
       )}
 
-      <motion.div
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-        className="absolute top-8 left-1/2 transform -translate-x-1/2 z-10"
-      >
-        <div className="text-white text-xl md:text-2xl font-semibold text-center">
-          {company.accroche || t('defaultSlogan')}
-        </div>
-      </motion.div>
+      <div className="max-w-5xl mx-auto px-3 py-10 md:py-24 text-center">
+        <h1 className="text-3xl md:text-6xl font-extrabold tracking-tight drop-shadow-[0_2px_8px_rgba(0,0,0,.5)]">
+          {accroche}
+        </h1>
 
-      <div className="relative z-10 w-full max-w-5xl px-5">
-        <motion.form
+        {/* Carte “verre” comme la plateforme */}
+        <form
           onSubmit={handleSubmit}
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.2, duration: 0.5 }}
-          className="bg-transparent rounded-xl border border-white px-6 py-4 backdrop-blur-md"
+          className="mt-4 mx-auto max-w-3xl rounded-2xl border border-white/20 bg-white/10 backdrop-blur-xl shadow-[0_16px_48px_rgba(0,0,0,.45)] p-5 md:p-6"
         >
-          <p className="text-sm md:text-base font-semibold mb-4 text-white">
-            {company.instructionRecherche || t('searchInstruction')}
+          <p className="text-xs md:text-sm font-semibold uppercase text-orange-200 mb-3">
+            {instruction}
           </p>
 
-          <div className="flex flex-col md:flex-row items-center gap-4">
-            <div className="w-full md:w-1/3">
-              <VilleCombobox
-                label={t('departureCity')}
-                value={departure}
-                onChange={setDeparture}
-                options={villeOptions}
-              />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+            {/* Ville départ */}
+            <div className="text-left">
+              <p className="text-[11px] font-semibold uppercase text-orange-200 mb-1.5">
+                {t('departureCity')}
+              </p>
+              <div className="rounded-xl border border-white/30 bg-white/85 text-gray-900 shadow-md focus-within:ring-2 focus-within:ring-orange-400/80">
+                <VilleCombobox
+                  value={departure}
+                  onChange={setDeparture}
+                  options={villeOptions}
+                  placeholder={t('departureCity') as string} label={''}                />
+              </div>
             </div>
 
-            <div className="w-full md:w-1/3">
-              <VilleCombobox
-                label={t('arrivalCity')}
-                value={arrival}
-                onChange={setArrival}
-                options={villeOptions}
-              />
+            {/* Ville arrivée */}
+            <div className="text-left">
+              <p className="text-[11px] font-semibold uppercase text-orange-200 mb-1.5">
+                {t('arrivalCity')}
+              </p>
+              <div className="rounded-xl border border-white/30 bg-white/85 text-gray-900 shadow-md focus-within:ring-2 focus-within:ring-orange-400/80">
+                <VilleCombobox
+                  value={arrival}
+                  onChange={setArrival}
+                  options={villeOptions}
+                  placeholder={t('arrivalCity') as string} label={''}                />
+              </div>
             </div>
 
-            <button
-              type="submit"
-              className="w-full md:w-auto px-5 py-2 rounded-md text-white font-semibold flex items-center justify-center gap-2"
-              style={{ backgroundColor: couleurPrimaire }}
-            >
-              <Search className="h-4 w-4" />
-              {t('searchTrip')}
-              <ArrowRight className="h-4 w-4" />
-            </button>
+            {/* Bouton rechercher */}
+            <div className="md:col-span-3">
+              <button
+                type="submit"
+                disabled={disabled}
+                className={`w-full inline-flex items-center justify-center px-6 py-3 rounded-xl font-semibold text-white shadow-[0_10px_20px_rgba(255,102,0,.35)] transition
+                ${
+                  disabled
+                    ? 'bg-orange-300/70 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-orange-600 to-orange-500 hover:brightness-110'
+                }`}
+                style={!disabled ? { backgroundImage: `linear-gradient(90deg, ${couleurPrimaire}, ${couleurPrimaire})` } : undefined}
+              >
+                <Search className="h-5 w-5 mr-2" />
+                {t('searchTrip')}
+              </button>
+            </div>
           </div>
-        </motion.form>
+        </form>
       </div>
+
+      {/* Dégradé en bas pour fondre avec la section suivante */}
+      <div className="pointer-events-none absolute bottom-0 inset-x-0 h-28 bg-gradient-to-t from-black/55 to-transparent" />
     </section>
   );
 };
