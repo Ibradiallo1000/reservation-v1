@@ -15,7 +15,6 @@ import {
   serverTimestamp,
   query,
   where,
-  getDoc,
 } from "firebase/firestore";
 import { db, auth } from "../firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -25,9 +24,7 @@ import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useNavigate } from "react-router-dom";
-import {
-  sendSignInLinkToEmail,
-} from "firebase/auth";
+import { sendSignInLinkToEmail } from "firebase/auth";
 
 // ===== Leaflet assets
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -55,24 +52,26 @@ interface Agence {
   longitude?: number | null;
 }
 
+// ===== Helpers de formatage/normalisation
 const formatNom = (s: string) =>
-  s
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase()
-    .replace(/\b\p{L}/gu, (c) => c.toUpperCase());
+  s.replace(/\s+/g, " ").trim().toLowerCase().replace(/\b\p{L}/gu, (c) => c.toUpperCase());
 
 const onlyDigits = (s: string) => s.replace(/\D/g, "");
 const isValidEmailFormat = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const isValidPhone = (s: string) => s.length >= 8 && s.length <= 15;
 
-// ---- actionCodeSettings pour le lien e-mail
+const norm = (s: string) =>
+  s.normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toLowerCase();
+const slugify = (s: string) => norm(s).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+const normalizeEmail = (s: string) => s.trim().toLowerCase();
+
+// ---- actionCodeSettings pour le lien e-mail (ajoute ce domaine dans Auth > Domaines autorisés)
 const actionCodeSettings = {
   url: `${window.location.origin}/finishSignIn`,
   handleCodeInApp: true,
 };
 
-// -------- Modal de suppression (inchangé) ----------
+// -------- Modal de suppression (UI uniquement en mode dégradé) ----------
 const DeleteAgencyModal: React.FC<{
   open: boolean;
   onClose: () => void;
@@ -93,9 +92,8 @@ const DeleteAgencyModal: React.FC<{
 
   if (!open) return null;
 
-  const otherAgencies = agences.filter(a => a.id && a.id !== agencyIdToDelete);
-  const canConfirm =
-    action !== "transfer" || (action === "transfer" && target && target.length > 0);
+  const otherAgencies = agences.filter((a) => a.id && a.id !== agencyIdToDelete);
+  const canConfirm = action !== "transfer" || (action === "transfer" && target && target.length > 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -195,7 +193,7 @@ const DeleteAgencyModal: React.FC<{
             Annuler
           </button>
           <button
-            onClick={() => onConfirm(action, action === "transfer" ? (target || null) : null)}
+            onClick={() => onConfirm(action, action === "transfer" ? target || null : null)}
             disabled={!canConfirm || loading}
             className={`px-4 py-2 rounded-md text-white ${loading ? "opacity-70" : ""} ${
               action === "delete" ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"
@@ -246,11 +244,7 @@ const CompagnieAgencesPage: React.FC = () => {
   const couleurPrincipale = theme.colors?.primary || user?.companyColor || "#2563eb";
   const companyId = user?.companyId;
 
-  const MapClickHandler = ({
-    onPositionChange,
-  }: {
-    onPositionChange: (lat: number, lng: number) => void;
-  }) => {
+  const MapClickHandler = ({ onPositionChange }: { onPositionChange: (lat: number, lng: number) => void }) => {
     useMapEvents({
       click(e) {
         onPositionChange(e.latlng.lat, e.latlng.lng);
@@ -282,7 +276,7 @@ const CompagnieAgencesPage: React.FC = () => {
     try {
       const agencesRef = collection(db, "companies", companyId, "agences");
       const snap = await getDocs(agencesRef);
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Agence[];
+      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Agence[];
       setAgences(list);
       setCurrentPage(1);
     } catch (error: any) {
@@ -365,7 +359,7 @@ const CompagnieAgencesPage: React.FC = () => {
   }) {
     // 1) Enregistrer l'invitation (root "invites")
     const inviteRef = await addDoc(collection(db, "invites"), {
-      email: payload.manager.email,
+      email: normalizeEmail(payload.manager.email),
       name: payload.manager.name,
       phone: payload.manager.phone,
       role: payload.manager.role,
@@ -376,13 +370,16 @@ const CompagnieAgencesPage: React.FC = () => {
     });
 
     // 2) Envoyer le lien d'e-mail sign-in
-    await sendSignInLinkToEmail(auth, payload.manager.email, actionCodeSettings);
-    // Sauvegarder l'email pour la page FinishSignIn
-    window.localStorage.setItem("emailForSignIn", payload.manager.email);
+    await sendSignInLinkToEmail(auth, normalizeEmail(payload.manager.email), actionCodeSettings);
+    // Sauvegarder l'email (normalisé) pour la page FinishSignIn
+    window.localStorage.setItem("emailForSignIn", normalizeEmail(payload.manager.email));
+
+    // 3) Marquer "sent"
+    await updateDoc(inviteRef, { status: "sent", sentAt: serverTimestamp() });
 
     alert(
       `✅ Invitation envoyée à ${payload.manager.email}.\n\n` +
-      `Lien de connexion par e-mail envoyé. L’invitation (#${inviteRef.id}) sera consommée lors de la première connexion.`
+        `Lien de connexion par e-mail envoyé. L’invitation (#${inviteRef.id}) sera consommée lors de la première connexion.`
     );
   }
 
@@ -408,16 +405,21 @@ const CompagnieAgencesPage: React.FC = () => {
 
     try {
       if (editingId) {
-        // === Mise à jour AGENCE (pas de credentials ici)
+        // === Mise à jour AGENCE
         const agenceRef = doc(db, "companies", companyId, "agences", editingId);
         await updateDoc(agenceRef, {
+          companyId,
           nomAgence: formData.nomAgence,
+          nomAgenceNorm: norm(formData.nomAgence),
           ville: formData.ville,
+          villeNorm: norm(formData.ville),
           pays: formData.pays,
+          paysNorm: norm(formData.pays),
+          slug: slugify(formData.nomAgence),
           quartier: formData.quartier || "",
           type: formData.type || "",
           nomGerant: formData.nomGerant,
-          emailGerant: formData.emailGerant,
+          emailGerant: normalizeEmail(formData.emailGerant),
           telephone: formData.telephone,
           latitude: formData.latitude ? parseFloat(formData.latitude) : null,
           longitude: formData.longitude ? parseFloat(formData.longitude) : null,
@@ -425,16 +427,52 @@ const CompagnieAgencesPage: React.FC = () => {
         });
         alert("✅ Agence mise à jour avec succès");
       } else {
+        // === Anti-doublon agence (nom/ville/pays normalisés)
+        const agencesRef = collection(db, "companies", companyId, "agences");
+        const dupSnap = await getDocs(
+          query(
+            agencesRef,
+            where("nomAgenceNorm", "==", norm(formData.nomAgence)),
+            where("villeNorm", "==", norm(formData.ville)),
+            where("paysNorm", "==", norm(formData.pays))
+          )
+        );
+        if (!dupSnap.empty) {
+          alert("Une agence avec ce nom/ville/pays existe déjà.");
+          return;
+        }
+
+        // === Anti multi-invites pour le même email (pending/sent)
+        const invitesSnap = await getDocs(
+          query(
+            collection(db, "invites"),
+            where("email", "==", normalizeEmail(formData.emailGerant)),
+            where("companyId", "==", companyId),
+            // Créez l'index composite si Firestore le demande
+            where("status", "in", ["pending", "sent"] as any)
+          )
+        );
+        if (!invitesSnap.empty) {
+          const id = invitesSnap.docs[0].id;
+          alert(`Une invitation est déjà en attente pour ${formData.emailGerant} (invite #${id}).`);
+          return;
+        }
+
         // === Création agence côté client
         const newAgenceRef = await addDoc(collection(db, "companies", companyId, "agences"), {
+          companyId,
           nomAgence: formData.nomAgence,
+          nomAgenceNorm: norm(formData.nomAgence),
           ville: formData.ville,
+          villeNorm: norm(formData.ville),
           pays: formData.pays,
+          paysNorm: norm(formData.pays),
+          slug: slugify(formData.nomAgence),
           quartier: formData.quartier || "",
           type: formData.type || "",
           statut: "active" as Statut,
           nomGerant: formData.nomGerant,
-          emailGerant: formData.emailGerant,
+          emailGerant: normalizeEmail(formData.emailGerant),
           telephone: formData.telephone,
           latitude: formData.latitude ? parseFloat(formData.latitude) : null,
           longitude: formData.longitude ? parseFloat(formData.longitude) : null,
@@ -487,7 +525,7 @@ const CompagnieAgencesPage: React.FC = () => {
     setDeleteModalOpen(true);
   };
   const confirmDelete = async () => {
-    alert("Suppression en cascade complète requiert les Cloud Functions (plan Blaze).");
+    alert("La suppression en cascade complète requiert les Cloud Functions (plan Blaze).");
     setDeleteModalOpen(false);
     setAgencyIdToDelete(null);
   };
@@ -496,7 +534,10 @@ const CompagnieAgencesPage: React.FC = () => {
     if (!companyId || !agence.id) return;
     const newStatut: Statut = agence.statut === "active" ? "inactive" : "active";
     try {
-      await updateDoc(doc(db, "companies", companyId, "agences", agence.id), { statut: newStatut, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, "companies", companyId, "agences", agence.id), {
+        statut: newStatut,
+        updatedAt: serverTimestamp(),
+      });
       fetchAgences();
     } catch (error) {
       console.error("Erreur lors du changement de statut:", error);
@@ -518,7 +559,7 @@ const CompagnieAgencesPage: React.FC = () => {
           className="flex items-center px-4 py-2 rounded-md shadow-sm text-white font-medium"
           style={{ backgroundColor: couleurPrincipale }}
         >
-          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
           {showForm ? "Masquer le formulaire" : "Ajouter une nouvelle agence"}
@@ -526,7 +567,10 @@ const CompagnieAgencesPage: React.FC = () => {
       </div>
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md mb-8 border border-gray-200">
+        <form
+          onSubmit={handleSubmit}
+          className="bg-white p-6 rounded-lg shadow-md mb-8 border border-gray-200"
+        >
           <h3 className="text-lg font-semibold mb-4" style={{ color: couleurPrincipale }}>
             {editingId ? "Modifier une agence" : "Ajouter une nouvelle agence"}
           </h3>
@@ -660,7 +704,9 @@ const CompagnieAgencesPage: React.FC = () => {
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <MapClickHandler onPositionChange={handlePositionChange} />
                 {formData.latitude && formData.longitude && (
-                  <Marker position={[parseFloat(formData.latitude), parseFloat(formData.longitude)]} />
+                  <Marker
+                    position={[parseFloat(formData.latitude), parseFloat(formData.longitude)]}
+                  />
                 )}
               </MapContainer>
             </div>
@@ -708,8 +754,18 @@ const CompagnieAgencesPage: React.FC = () => {
 
       {agences.length === 0 && !loading ? (
         <div className="bg-white p-8 rounded-lg shadow-sm border border-gray-200 text-center">
-          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+          <svg
+            className="mx-auto h-12 w-12 text-gray-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1}
+              d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
+            />
           </svg>
           <h3 className="mt-2 text-lg font-medium text-gray-900">Aucune agence enregistrée</h3>
           <p className="mt-1 text-sm text-gray-500">Commencez par ajouter votre première agence.</p>
@@ -719,7 +775,7 @@ const CompagnieAgencesPage: React.FC = () => {
               className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white"
               style={{ backgroundColor: couleurPrincipale }}
             >
-              <svg className="-ml-1 mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
               Ajouter une agence
@@ -753,14 +809,34 @@ const CompagnieAgencesPage: React.FC = () => {
 
                   <div className="mt-4 border-t border-gray-200 pt-4">
                     <div className="flex items-center text-sm text-gray-500 mb-2">
-                      <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      <svg
+                        className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                        />
                       </svg>
                       {ag.emailGerant}
                     </div>
                     <div className="flex items-center text-sm text-gray-500">
-                      <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                      <svg
+                        className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"
+                        />
                       </svg>
                       {ag.telephone}
                     </div>
@@ -771,8 +847,18 @@ const CompagnieAgencesPage: React.FC = () => {
                       onClick={() => goToDashboard(ag.id!)}
                       className="flex-1 inline-flex justify-center items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
                     >
-                      <svg className="-ml-1 mr-2 h-5 w-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      <svg
+                        className="-ml-1 mr-2 h-5 w-5 text-gray-500"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2z"
+                        />
                       </svg>
                       Dashboard
                     </button>
@@ -785,7 +871,12 @@ const CompagnieAgencesPage: React.FC = () => {
                       style={{ backgroundColor: couleurPrincipale }}
                     >
                       <svg className="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                        />
                       </svg>
                       Modifier
                     </button>

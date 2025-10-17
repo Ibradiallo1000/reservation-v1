@@ -9,6 +9,14 @@ const auth = admin.auth();
 const storage = admin.storage();
 
 /* -------------------------------------------------------
+   Config
+------------------------------------------------------- */
+const APP_RESET_URL =
+  process.env.APP_RESET_URL ||
+  (functions.config()?.app?.reset_url as string) ||
+  "https://monbillet-95b77.web.app/login";
+
+/* -------------------------------------------------------
    Helpers
 ------------------------------------------------------- */
 
@@ -27,20 +35,30 @@ function assertAuthenticated(ctx: functions.https.CallableContext) {
   }
 }
 
-function assertCompanyAdmin(ctx: functions.https.CallableContext) {
-  assertAuthenticated(ctx);
-  const role = String((ctx.auth!.token as any)?.role || "").toLowerCase();
-  // autorise admin_platforme ou admin_compagnie
-  if (!(role === "admin_platforme" || role === "admin compagnie" || role === "admin_compagnie")) {
-    throw new functions.https.HttpsError("permission-denied", "Rôle admin_compagnie (ou admin_platforme) requis.");
-  }
+function roleOf(ctx: functions.https.CallableContext) {
+  return String(((ctx.auth?.token as any)?.role || "")).toLowerCase().trim();
+}
+function isPlatform(ctx: functions.https.CallableContext) {
+  const t = (ctx.auth?.token as any) || {};
+  return roleOf(ctx) === "admin_platforme" || t.admin === true;
 }
 
 function assertPlatformAdmin(ctx: functions.https.CallableContext) {
   assertAuthenticated(ctx);
-  const role = String((ctx.auth!.token as any)?.role || "").toLowerCase();
-  if (!(role === "admin_platforme" || role === "admin plateforme")) {
+  if (!isPlatform(ctx)) {
     throw new functions.https.HttpsError("permission-denied", "Rôle admin_platforme requis.");
+  }
+}
+
+/** Vérifie que l’appelant a le droit d’agir sur companyId (platforme ou admin_compagnie de cette companyId) */
+function assertCompanyScope(ctx: functions.https.CallableContext, companyId: string) {
+  assertAuthenticated(ctx);
+  const t = (ctx.auth!.token as any) || {};
+  const role = String(t.role || "").toLowerCase().trim();
+  const sameCompany = String(t.companyId || "") === companyId;
+  const isCompanyAdmin = (role === "admin_compagnie" || role === "admin compagnie") && sameCompany;
+  if (!(isPlatform(ctx) || isCompanyAdmin)) {
+    throw new functions.https.HttpsError("permission-denied", "Portée compagnie invalide.");
   }
 }
 
@@ -53,6 +71,29 @@ async function deleteStoragePrefix(bucketName: string, prefix: string) {
   );
 }
 
+function normalizeEmail(s?: string) {
+  return String(s || "").trim().toLowerCase();
+}
+function normalizePhone(p?: string) {
+  return (p || "").replace(/\s+/g, "");
+}
+function slugify(s: string) {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+async function setClaims(uid: string, claims: Record<string, any>) {
+  try {
+    await auth.setCustomUserClaims(uid, claims);
+  } catch (e) {
+    functions.logger.warn("setCustomUserClaims fail", uid, e);
+  }
+}
+
 /* -------------------------------------------------------
    1) validateEmail (CALLABLE)
    - Vérifie si un email existe déjà dans Firebase Auth
@@ -62,7 +103,7 @@ export const validateEmail = functions
   .https.onCall(async (data, context) => {
     try {
       assertAuthenticated(context);
-      const email = String(data?.email || "").trim().toLowerCase();
+      const email = normalizeEmail(data?.email);
       if (!email) {
         throw new functions.https.HttpsError("invalid-argument", "email manquant.");
       }
@@ -87,7 +128,8 @@ export const validateEmail = functions
    2) companyCreateAgencyCascade (CALLABLE)
    - Crée l’agence dans companies/{companyId}/agences
    - Crée le chef d’agence dans Auth + doc users/{uid}
-   - Retourne un lien de réinitialisation de mot de passe
+   - Assigne claims { role:'chefAgence', companyId, agencyId }
+   - Retourne un lien de réinitialisation de mot de passe + mustRefreshToken
 ------------------------------------------------------- */
 export const companyCreateAgencyCascade = functions
   .region("europe-west1")
@@ -97,20 +139,28 @@ export const companyCreateAgencyCascade = functions
     functions.logger.info("companyCreateAgencyCascade call", { data, uid: context.auth?.uid });
 
     try {
-      assertCompanyAdmin(context);
-
       const companyId = String(data?.companyId || "").trim();
       if (!companyId) {
         throw new functions.https.HttpsError("invalid-argument", "companyId manquant.");
       }
+      assertCompanyScope(context, companyId);
 
       const agency = (data?.agency || {}) as {
-        nomAgence: string; ville: string; pays: string; quartier?: string; type?: string;
-        statut?: "active" | "inactive"; latitude?: number | null; longitude?: number | null;
+        nomAgence: string;
+        ville: string;
+        pays: string;
+        quartier?: string;
+        type?: string;
+        statut?: "active" | "inactive";
+        latitude?: number | null;
+        longitude?: number | null;
       };
 
       const manager = (data?.manager || {}) as {
-        name: string; email: string; phone?: string; role?: string;
+        name: string;
+        email: string;
+        phone?: string;
+        role?: string; // ignoré, on force chefAgence
       };
 
       if (!agency.nomAgence || !agency.ville || !agency.pays) {
@@ -129,11 +179,14 @@ export const companyCreateAgencyCascade = functions
 
       // 1) créer agence
       const agencesCol = companyRef.collection("agences");
-      const agenceRef = agencesCol.doc();
+      const agenceRef = agencesCol.doc(); // id auto
       const agenceDoc = {
         nomAgence: agency.nomAgence,
+        slug: slugify(agency.nomAgence),
         ville: agency.ville,
+        villeNorm: agency.ville.trim().toLowerCase(),
         pays: agency.pays,
+        paysNorm: agency.pays.trim().toLowerCase(),
         quartier: agency.quartier || "",
         type: agency.type || "",
         statut: agency.statut || "active",
@@ -144,26 +197,38 @@ export const companyCreateAgencyCascade = functions
       };
       await agenceRef.set(agenceDoc);
 
-      // 2) créer chef d’agence (Auth)
-      //    Si l’email existe déjà, on réutilise l’utilisateur
+      // 2) créer/récupérer chef d’agence (Auth)
+      const email = normalizeEmail(manager.email);
+      const phone = normalizePhone(manager.phone);
       let userRecord: admin.auth.UserRecord | null = null;
       try {
-        userRecord = await auth.getUserByEmail(manager.email);
+        userRecord = await auth.getUserByEmail(email);
       } catch (e: any) {
         if (e?.code !== "auth/user-not-found") throw e;
       }
       if (!userRecord) {
         userRecord = await auth.createUser({
-          email: manager.email,
+          email,
           displayName: manager.name,
-          phoneNumber: manager.phone && manager.phone.startsWith("+") ? manager.phone : undefined,
+          phoneNumber: phone && phone.startsWith("+") ? phone : undefined,
           emailVerified: false,
           disabled: false,
         });
       }
 
-      // 3) claims / profil
+      // 3) gérer conflits de rattachement (si user avait déjà d’autres claims agence)
       const uid = userRecord.uid;
+      const existing = await auth.getUser(uid);
+      const c = (existing.customClaims || {}) as any;
+      if (c.agencyId && (c.agencyId !== agenceRef.id || c.companyId !== companyId)) {
+        // Politique par défaut : on bloque (évite d’écraser des responsabilités ailleurs)
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Cet utilisateur est déjà rattaché à une autre agence. Détache/transfer avant."
+        );
+      }
+
+      // 4) claims / profil
       const role = "chefAgence";
       await auth.setCustomUserClaims(uid, {
         role,
@@ -171,23 +236,23 @@ export const companyCreateAgencyCascade = functions
         agencyId: agenceRef.id,
       });
 
-      // 4) doc users/{uid}
       const userDoc = {
-        email: manager.email,
+        email,
         displayName: manager.name,
         role,
         companyId,
         agencyId: agenceRef.id,
         agencyName: agency.nomAgence,
-        telephone: manager.phone || "",
+        telephone: phone || "",
+        status: "actif",
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
       await db.doc(`users/${uid}`).set(userDoc, { merge: true });
 
       // 5) lien de reset password
-      const resetLink = await auth.generatePasswordResetLink(manager.email, {
-        url: "https://monbillet-95b77.web.app/login", // adapte si tu as une autre URL
+      const resetLink = await auth.generatePasswordResetLink(email, {
+        url: APP_RESET_URL,
         handleCodeInApp: true,
       });
 
@@ -198,11 +263,11 @@ export const companyCreateAgencyCascade = functions
         ms: Date.now() - start,
       });
 
-      return { ok: true, agencyId: agenceRef.id, manager: { uid, resetLink } };
+      // mustRefreshToken: le client devra rafraîchir son token après connexion
+      return { ok: true, agencyId: agenceRef.id, manager: { uid, resetLink }, mustRefreshToken: true };
     } catch (err: any) {
       functions.logger.error("companyCreateAgencyCascade FAILED", err);
       if (err instanceof functions.https.HttpsError) throw err;
-      // Exemple d’erreurs Auth courantes → surface des messages plus explicites
       if (typeof err?.code === "string" && err?.code.startsWith("auth/")) {
         throw new functions.https.HttpsError("failed-precondition", err.message || err.code);
       }
@@ -213,19 +278,23 @@ export const companyCreateAgencyCascade = functions
 /* -------------------------------------------------------
    3) companyDeleteAgencyCascade (CALLABLE)
    - Supprime l’agence + traite le staff (détacher / transférer / désactiver / supprimer)
+   - Met à jour aussi les custom claims selon l’action
 ------------------------------------------------------- */
 export const companyDeleteAgencyCascade = functions
   .region("europe-west1")
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .https.onCall(async (data, context) => {
     try {
-      assertCompanyAdmin(context);
-
       const { companyId, agencyId, staffAction, transferToAgencyId, allowDeleteUsers } = (data || {}) as {
-        companyId?: string; agencyId?: string; staffAction?: "detach" | "transfer" | "disable" | "delete";
-        transferToAgencyId?: string | null; allowDeleteUsers?: boolean;
+        companyId?: string;
+        agencyId?: string;
+        staffAction?: "detach" | "transfer" | "disable" | "delete";
+        transferToAgencyId?: string | null;
+        allowDeleteUsers?: boolean;
       };
-      if (!companyId || !agencyId) throw new functions.https.HttpsError("invalid-argument", "companyId/agencyId manquant.");
+      if (!companyId || !agencyId)
+        throw new functions.https.HttpsError("invalid-argument", "companyId/agencyId manquant.");
+      assertCompanyScope(context, companyId);
 
       const companyRef = db.doc(`companies/${companyId}`);
       const agRef = companyRef.collection("agences").doc(agencyId);
@@ -233,39 +302,87 @@ export const companyDeleteAgencyCascade = functions
       if (!agSnap.exists) return { ok: true, note: "already deleted" };
 
       // 1) staff lié à l’agence
-      const usersSnap = await db.collection("users").where("agencyId", "==", agencyId).where("companyId", "==", companyId).get();
+      const usersSnap = await db
+        .collection("users")
+        .where("agencyId", "==", agencyId)
+        .where("companyId", "==", companyId)
+        .get();
       const staffUids = usersSnap.docs.map((d) => d.id);
 
-      // 2) action
+      // 2) action (Firestore + claims + Auth)
       const ops: Array<(b: FirebaseFirestore.WriteBatch) => void> = [];
+
       if (staffAction === "transfer") {
-        if (!transferToAgencyId) throw new functions.https.HttpsError("invalid-argument", "transferToAgencyId manquant.");
-        usersSnap.forEach((d) => {
-          ops.push((b) => b.update(d.ref, { agencyId: transferToAgencyId, updatedAt: admin.firestore.FieldValue.serverTimestamp() }));
-        });
+        if (!transferToAgencyId)
+          throw new functions.https.HttpsError("invalid-argument", "transferToAgencyId manquant.");
+        usersSnap.forEach((d) =>
+          ops.push((b) =>
+            b.update(d.ref, {
+              agencyId: transferToAgencyId,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            })
+          )
+        );
+        await Promise.all(
+          staffUids.map(async (uid) => {
+            const current = await auth.getUser(uid);
+            await setClaims(uid, { ...(current.customClaims || {}), companyId, agencyId: transferToAgencyId });
+          })
+        );
       } else if (staffAction === "detach") {
-        usersSnap.forEach((d) => {
-          ops.push((b) => b.update(d.ref, { agencyId: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }));
-        });
+        usersSnap.forEach((d) =>
+          ops.push((b) =>
+            b.update(d.ref, {
+              agencyId: admin.firestore.FieldValue.delete(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            })
+          )
+        );
+        await Promise.all(
+          staffUids.map(async (uid) => {
+            const current = await auth.getUser(uid);
+            const cc = { ...(current.customClaims || {}) };
+            delete (cc as any).agencyId;
+            await setClaims(uid, cc);
+          })
+        );
       } else if (staffAction === "disable") {
-        usersSnap.forEach((d) => {
-          ops.push((b) => b.update(d.ref, { agencyId: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }));
-        });
-        await Promise.all(staffUids.map((uid) => auth.updateUser(uid, { disabled: true }).catch((e) => functions.logger.warn("disable fail", uid, e))));
+        usersSnap.forEach((d) =>
+          ops.push((b) =>
+            b.update(d.ref, {
+              agencyId: admin.firestore.FieldValue.delete(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            })
+          )
+        );
+        await Promise.all(
+          staffUids.map(async (uid) => {
+            const current = await auth.getUser(uid);
+            const cc = { ...(current.customClaims || {}) };
+            delete (cc as any).agencyId;
+            await setClaims(uid, cc);
+            await auth.updateUser(uid, { disabled: true }).catch((e) => functions.logger.warn("disable fail", uid, e));
+          })
+        );
       } else if (staffAction === "delete" && allowDeleteUsers) {
         usersSnap.forEach((d) => ops.push((b) => b.delete(d.ref)));
-        await Promise.all(staffUids.map((uid) =>
-          auth.deleteUser(uid).catch((e: any) => {
-            if (e?.code !== "auth/user-not-found") functions.logger.warn("delete user fail", uid, e);
-          })
-        ));
+        await Promise.all(
+          staffUids.map((uid) =>
+            auth.deleteUser(uid).catch((e: any) => {
+              if (e?.code !== "auth/user-not-found") functions.logger.warn("delete user fail", uid, e);
+            })
+          )
+        );
       }
 
       if (ops.length) await commitInChunks(ops);
 
-      // 3) supprimer l’agence + éventuels sous-docs simples
-      // (si tu as beaucoup de sous-collections, remplace par recursiveDelete)
-      await agRef.delete();
+      // 3) supprimer l’agence (récursif)
+      if (typeof (db as any).recursiveDelete === "function") {
+        await (db as any).recursiveDelete(agRef, { retries: 3 });
+      } else {
+        await agRef.delete();
+      }
 
       return {
         ok: true,
@@ -283,7 +400,7 @@ export const companyDeleteAgencyCascade = functions
   });
 
 /* -------------------------------------------------------
-   4) deleteCompany (tu avais déjà — je le garde)
+   4) deleteCompany
 ------------------------------------------------------- */
 export const deleteCompany = functions
   .region("europe-west1")
