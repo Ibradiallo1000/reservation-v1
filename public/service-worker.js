@@ -1,129 +1,140 @@
+// service-worker.js
 /* eslint-disable no-undef */
+/**
+ * Teliya Service Worker — comportement contrôlé
+ * - Precache app shell
+ * - HTML: Network-First (+ navigation preload) avec fallback offline.html
+ * - Assets: Stale-While-Revalidate
+ * - Nettoyage caches
+ * - **PAS** de mise à jour instantanée automatique
+ */
 
-// ⚙️ versionne le cache à chaque déploiement
-const APP_VERSION = 'v1.0.3';
-const CACHE_NAME = `teliya-${APP_VERSION}`;
+const VERSION = 'v1.0.1'; // incrémente si tu changes les assets précachés
+const STATIC_CACHE = `teliya-static-${VERSION}`;
 
-// 🔒 n’essaie JAMAIS de gérer des schémas non http(s)
-const isHttp = (reqOrUrl) => {
-  const url = typeof reqOrUrl === 'string' ? reqOrUrl : reqOrUrl.url;
-  return url.startsWith('http://') || url.startsWith('https://');
-};
-
-// 📦 fichiers “app shell” optionnels à pré-cacher (tu peux compléter)
-const PRECACHE_URLS = [
-  '/',                      // shell
-  '/index.html',
-  '/manifest.webmanifest',
-  '/images/hero-fallback.jpg',
-  '/images/teliya-logo.svg',
+const STATIC_ASSETS = [
+  '/',
+  '/images/teliya-logo.jpg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
+  '/offline.html',
 ];
 
-// 🧩 INSTALL — pré-cache en filtrant les URLs non http(s)
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(async (cache) => {
-      const toCache = PRECACHE_URLS.filter(isHttp); // sécurité
-      try {
-        await cache.addAll(toCache);
-      } catch (e) {
-        // En dev, certaines ressources peuvent manquer: on ignore
-        console.warn('[SW] Precache warning:', e);
-      }
-    }).then(() => self.skipWaiting())
+    caches.open(STATIC_CACHE)
+      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .catch(() => {})
   );
+
+  // IMPORTANT : ne pas forcer l'activation automatique
+  // self.skipWaiting(); <-- retiré volontairement pour éviter reloads auto
 });
 
-// 🧹 ACTIVATE — supprime les vieux caches et prend la main
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    (async () => {
-      const keys = await caches.keys();
-      await Promise.all(
-        keys.map((key) => (key !== CACHE_NAME ? caches.delete(key) : Promise.resolve()))
-      );
-      await self.clients.claim();
-    })()
-  );
+  event.waitUntil((async () => {
+    if ('navigationPreload' in self.registration) {
+      try { await self.registration.navigationPreload.enable(); } catch {}
+    }
+
+    // NOTE : clients.claim() permettrait à la nouvelle SW de prendre le contrôle immédiatement
+    // mais cela peut provoquer des reloads implicites dans certaines configurations. On le commente.
+    // await self.clients.claim();
+
+    // cleanup anciens caches
+    const keys = await caches.keys();
+    const deletions = keys
+      .filter((k) => k.startsWith('teliya-static-') && k !== STATIC_CACHE)
+      .map((k) => caches.delete(k));
+    await Promise.all(deletions);
+  })());
 });
 
-// 🔁 FETCH — stratégie:
-// - Navigations/documents: Network-First (offline fallback sur cache)
-// - GET same-origin: Stale-While-Revalidate
-// - Tout le reste: laisse passer (network)
+// fetch strategies identiques
 self.addEventListener('fetch', (event) => {
-  const { request } = event;
+  const req = event.request;
+  const url = new URL(req.url);
+  if (req.method !== 'GET') return;
 
-  // 🚫 On n'intercepte pas:
-  // - non-HTTP(S) (ex: chrome-extension://)
-  // - méthodes ≠ GET
-  if (!isHttp(request) || request.method !== 'GET') return;
+  const sameOrigin = url.origin === self.location.origin;
+  const isHTML =
+    req.mode === 'navigate' ||
+    (req.headers.get('accept') || '').includes('text/html');
 
-  const url = new URL(request.url);
-  const isNavigation = request.mode === 'navigate';
-
-  // 📄 Pages / navigations → Network First
-  if (isNavigation) {
-    event.respondWith(
-      (async () => {
-        try {
-          const fresh = await fetch(request);
-          // clone avant mise en cache
-          const cache = await caches.open(CACHE_NAME);
-          cache.put(request, fresh.clone());
-          return fresh;
-        } catch {
-          const cached = await caches.match(request);
-          // fallback vers index pour SPA si page non trouvée dans le cache
-          return cached || caches.match('/index.html');
-        }
-      })()
-    );
+  if (isHTML && sameOrigin) {
+    event.respondWith(networkFirstHTML(event));
     return;
   }
 
-  // 🏠 Même origine → Stale-While-Revalidate
-  if (url.origin === self.location.origin) {
-    event.respondWith(
-      (async () => {
-        const cache = await caches.open(CACHE_NAME);
-        const cached = await cache.match(request);
-        const networkPromise = fetch(request)
-          .then((resp) => {
-            // On n’essaie pas de mettre en cache les réponses opaques / invalides
-            if (resp && resp.status === 200 && resp.type === 'basic') {
-              cache.put(request, resp.clone());
-            }
-            return resp;
-          })
-          .catch(() => undefined);
-
-        // Renvoie le cache immédiatement si dispo, sinon réseau
-        return cached || networkPromise || fetch(request);
-      })()
-    );
+  if (
+    sameOrigin &&
+    /\.(?:png|jpg|jpeg|webp|avif|svg|ico|gif|css|woff2?)$/i.test(url.pathname)
+  ) {
+    event.respondWith(staleWhileRevalidate(req));
     return;
   }
 
-  // 🌍 Cross-origin → Network First simple (pas de cache de chrome-extension, etc.)
-  event.respondWith(
-    (async () => {
-      try {
-        return await fetch(request);
-      } catch {
-        // offline: tente une version en cache si elle existe
-        const cached = await caches.match(request);
-        return cached || new Response('Offline', { status: 503, statusText: 'Offline' });
-      }
-    })()
-  );
+  // otherwise default
 });
 
-// ✉️ Support “SKIP_WAITING” envoyé depuis l’app
-self.addEventListener('message', (event) => {
-  if (event?.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
+async function networkFirstHTML(event) {
+  const preload = 'preloadResponse' in event ? event.preloadResponse : null;
+  try {
+    const preloaded = preload ? await preload : undefined;
+    if (preloaded) {
+      cacheHTML(event.request, preloaded.clone());
+      return preloaded;
+    }
+    const fresh = await fetch(event.request);
+    cacheHTML(event.request, fresh.clone());
+    return fresh;
+  } catch {
+    const cached = await caches.match(event.request);
+    if (cached) return cached;
+    const offline = await caches.match('/offline.html');
+    if (offline) return offline;
+    return new Response('<h1>Hors connexion</h1>', {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      status: 200
+    });
   }
+}
+
+async function cacheHTML(request, response) {
+  try {
+    const cache = await caches.open(STATIC_CACHE);
+    await cache.put(request, response);
+  } catch {}
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(STATIC_CACHE);
+  const cached = await cache.match(request);
+  const fetchPromise = fetch(request)
+    .then((res) => {
+      cache.put(request, res.clone()).catch(() => {});
+      return res;
+    })
+    .catch(() => cached);
+  return cached || fetchPromise;
+}
+
+/**
+ * Lorsque le navigateur installe une nouvelle version du SW,
+ * la nouvelle instance reste dans `waiting` tant que la page n'a pas demandé
+ * explicitement l'activation. Ici on notifie les clients qu'une nouvelle version est prête.
+ */
+self.addEventListener('message', async (event) => {
+  // On accepte un message explicite de type SKIP_WAITING s'il vient du client (optionnel).
+  if (event?.data?.type === 'SKIP_WAITING') {
+    await self.skipWaiting();
+    return;
+  }
+});
+
+// Lorsqu'une nouvelle version arrive, on essaie d'informer les clients.
+// Note : ceci ne forçera pas le reload, ça permet juste au front d'afficher un toast.
+self.addEventListener('updatefound', () => {
+  // pas de code ici côté SW ; c'est la registration côté client qui capte l'updatefound
 });

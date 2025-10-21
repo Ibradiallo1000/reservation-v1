@@ -4,12 +4,17 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./index.css";
 import "./i18n";
-import { setupSwAutoUpdate } from "./sw-updater";
+import { registerServiceWorker } from './registerServiceWorker';
+registerServiceWorker();
+
+// écoute globale pour afficher bannière
+window.addEventListener('sw:updated', (e: any) => {
+  // affiche un toast / bannière dans ton UI avec bouton "Mettre à jour"
+  // tu peux récupérer registration via e.detail.registration et appeler skipWaiting si l'utilisateur confirme.
+});
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// ✅ Enregistre le Service Worker + auto-update (skipWaiting + reload)
-setupSwAutoUpdate();
 
 (async () => {
   const rootEl = document.getElementById("root") as HTMLElement | null;

@@ -1,40 +1,58 @@
 // src/sw-updater.ts
-// Détecte une nouvelle version, force skipWaiting et recharge l'app.
+/**
+ * Helper pour déclencher activation de la SW waiting + reload.
+ * Expose un export nommé applyServiceWorkerUpdate (et un export default pour compatibilité).
+ */
 
-export function setupSwAutoUpdate() {
-  if (!('serviceWorker' in navigator)) return;
+export async function applyServiceWorkerUpdate(registration: ServiceWorkerRegistration | null) {
+  if (!registration) return;
 
-  // Enregistre le SW (fichier placé dans /public/service-worker.js)
-  navigator.serviceWorker.register('/service-worker.js').then((reg) => {
-    // Vérifie immédiatement s'il existe une mise à jour
-    reg.update();
+  const waiting = registration.waiting;
+  if (!waiting) return;
 
-    // Quand une nouvelle version est trouvée
-    reg.addEventListener('updatefound', () => {
-      const newWorker = reg.installing;
-      if (!newWorker) return;
+  try {
+    // Demande à la SW d'activer immédiatement
+    waiting.postMessage({ type: "SKIP_WAITING" });
+  } catch {
+    // silence
+  }
 
-      newWorker.addEventListener('statechange', () => {
-        // "installed" + il y a déjà un controller => on remplace l’ancienne version
-        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-          newWorker.postMessage({ type: 'SKIP_WAITING' });
+  // Attendre activation (ou timeout 5s)
+  await new Promise<void>((resolve) => {
+    let resolved = false;
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve();
+      }
+    }, 5000);
+
+    const onStateChange = (ev: Event) => {
+      try {
+        // @ts-ignore - certains navigateurs passent l'objet
+        const target: any = ev?.target;
+        if (target && target.state === "activated" && !resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          try { target.removeEventListener("statechange", onStateChange); } catch {}
+          resolve();
         }
-      });
-    });
-  });
+      } catch {
+        // ignore
+      }
+    };
 
-  // Quand le nouveau SW prend le contrôle, on recharge la page
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    // évite les rechargements multiples
-    if ((window as any).__reloadedBySw) return;
-    (window as any).__reloadedBySw = true;
-    window.location.reload();
-  });
-
-  // Re-vérifier à chaque retour au premier plan
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      navigator.serviceWorker.getRegistration().then((r) => r?.update());
+    try {
+      waiting.addEventListener("statechange", onStateChange);
+    } catch {
+      // addEventListener peut échouer dans certaines implémentations -> on résout au timeout
     }
   });
+
+  // Puis reload pour charger les nouveaux assets
+  try {
+    window.location.reload();
+  } catch {}
 }
+
+export default applyServiceWorkerUpdate;
