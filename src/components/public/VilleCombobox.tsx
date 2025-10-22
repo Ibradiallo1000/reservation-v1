@@ -1,112 +1,83 @@
-// ✅ Composant VilleCombobox mis à jour avec chargement des villes depuis Firestore
+// src/components/public/VilleCombobox.tsx
+import React, { useMemo } from "react";
 
-import React, { useEffect, useState } from 'react';
-import { Combobox } from '@headlessui/react';
-import { Check, ChevronDown } from 'lucide-react';
-import { db } from '@/firebaseConfig';
-import { collection, getDocs } from 'firebase/firestore';
-
-interface VilleComboboxProps {
-  label: string;
-  placeholder?: string;
+type VilleComboboxProps = {
   value: string;
-  onChange: (value: string) => void;
-  highlightColor?: string;
-  options: string[]; // ← AJOUTE CETTE LIGNE
-}
+  onChange: (value: string) => void; // <-- n'accepte QUE string (jamais null)
+  placeholder?: string;
+  label?: string;
+  options?: string[]; // liste simple d'options (nom de villes)
+  disabled?: boolean;
+  id?: string;
+  className?: string;
+};
 
+/**
+ * VilleCombobox
+ * - Composant simple, robuste et typé TS.
+ * - Appelle onChange avec une chaîne ("" si vide). Ne transmet jamais null.
+ * - Fournit un datalist HTML pour suggestions (compatible SSR/build).
+ *
+ * Si tu utilises un Combobox plus riche (HeadlessUI), adapte l'implémentation
+ * interne ; l'API externe reste stable : onChange(value: string).
+ */
 const VilleCombobox: React.FC<VilleComboboxProps> = ({
-  label,
-  placeholder = 'Choisissez une ville',
   value,
   onChange,
-  highlightColor = '#3B82F6',
+  placeholder = "Choisir une ville",
+  label,
+  options = [],
+  disabled = false,
+  id,
+  className,
 }) => {
-  const [query, setQuery] = useState('');
-  const [options, setOptions] = useState<string[]>([]);
+  // id fallback pour associer label/datalist
+  const inputId = id || "ville-combobox-" + Math.random().toString(36).slice(2, 9);
+  const datalistId = `${inputId}-list`;
 
-  useEffect(() => {
-    const fetchVilles = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, 'villes'));
-        const villes = snapshot.docs.map((doc) => doc.data().nom).filter(Boolean);
-        setOptions(villes);
-      } catch (err) {
-        console.error('Erreur chargement villes :', err);
-      }
-    };
-    fetchVilles();
-  }, []);
+  // onChange wrapper : convertit null/undefined en "" avant d'appeler le parent
+  const handleChange = (v: string | null | undefined) => {
+    const str = v ?? "";
+    onChange(str);
+  };
 
-  const filtered =
-    query === ''
-      ? options
-      : options.filter((v) =>
-          v.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').includes(
-            query.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '')
-          )
-        );
+  const normalizedOptions = useMemo(
+    () =>
+      Array.isArray(options)
+        ? options.filter(Boolean).map((o) => String(o))
+        : [],
+    [options]
+  );
 
   return (
-    <div className="w-full">
-      <Combobox value={value} onChange={onChange}>
-        <Combobox.Label className="block text-sm font-medium text-white mb-1">
+    <div className={className}>
+      {label && (
+        <label htmlFor={inputId} className="block text-xs font-semibold text-gray-700 mb-1">
           {label}
-        </Combobox.Label>
-        <div className="relative">
-          <Combobox.Input
-            className="w-full border border-gray-300 rounded-md py-2 pl-3 pr-10 text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            displayValue={(v: string) => v}
-            value={value}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              onChange(event.target.value);
-            }}
-            placeholder={placeholder}
-            autoComplete="off"
-          />
-          <Combobox.Button className="absolute inset-y-0 right-0 flex items-center pr-3">
-            <ChevronDown className="h-4 w-4 text-gray-400" />
-          </Combobox.Button>
+        </label>
+      )}
 
-          {filtered.length > 0 && (
-            <Combobox.Options className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black/5 focus:outline-none sm:text-sm">
-              {filtered.map((option, index) => (
-                <Combobox.Option
-                  key={index}
-                  value={option}
-                  className={({ active }) =>
-                    `relative cursor-pointer select-none py-2 pl-10 pr-4 ${
-                      active ? 'text-white' : 'text-gray-900'
-                    }`
-                  }
-                >
-                  {({ selected, active }) => (
-                    <div
-                      style={{ backgroundColor: active ? highlightColor : undefined }}
-                      className="w-full h-full"
-                    >
-                      <span
-                        className={`block truncate ${selected ? 'font-semibold' : 'font-normal'}`}
-                      >
-                        {option}
-                      </span>
-                      {selected && (
-                        <span
-                          className="absolute inset-y-0 left-0 flex items-center pl-3"
-                          style={{ color: active ? 'white' : highlightColor }}
-                        >
-                          <Check className="h-4 w-4" aria-hidden="true" />
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </Combobox.Option>
-              ))}
-            </Combobox.Options>
-          )}
-        </div>
-      </Combobox>
+      <div>
+        <input
+          id={inputId}
+          list={datalistId}
+          value={value}
+          onChange={(e) => handleChange(e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          className="w-full px-3 py-2 rounded-lg border bg-white text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-orange-400/60 focus:border-orange-500"
+          aria-label={label || placeholder}
+          autoComplete="off"
+        />
+
+        {normalizedOptions.length > 0 && (
+          <datalist id={datalistId}>
+            {normalizedOptions.map((opt, idx) => (
+              <option value={opt} key={idx} />
+            ))}
+          </datalist>
+        )}
+      </div>
     </div>
   );
 };
