@@ -92,7 +92,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({ company, onSearch }) => {
       )}
 
       <div className="max-w-5xl mx-auto px-3 py-10 md:py-24 text-center">
-        <h1 className="text-3xl md:text-6xl font-extrabold tracking-tight drop-shadow-[0_2px_8px_rgba(0,0,0,.5)]">
+        <h1 className="text-2xl md:text-6xl font-extrabold tracking-tight drop-shadow-[0_2px_8px_rgba(0,0,0,.5)]">
           {accroche}
         </h1>
 
