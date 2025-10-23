@@ -6,7 +6,11 @@ import "./index.css";
 import "./i18n";
 import { registerServiceWorker } from './registerServiceWorker';
 registerServiceWorker();
-
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((regs) => {
+    regs.forEach((r) => r.unregister());
+  });
+}
 // écoute globale pour afficher bannière
 window.addEventListener('sw:updated', (e: any) => {
   // affiche un toast / bannière dans ton UI avec bouton "Mettre à jour"
