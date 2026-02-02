@@ -1,10 +1,16 @@
 // src/pages/AgenceShiftPage.tsx
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams, Link, useNavigate } from 'react-router-dom';
-import { addDoc, collection, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
-import { db } from '@/firebaseConfig';
-import { useAuth } from '@/contexts/AuthContext';
-import { useActiveShift } from '@/hooks/useActiveShift';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams, Link, useNavigate } from "react-router-dom";
+import {
+  addDoc,
+  collection,
+  serverTimestamp,
+  doc,
+  updateDoc,
+} from "firebase/firestore";
+import { db } from "@/firebaseConfig";
+import { useAuth } from "@/contexts/AuthContext";
+import { useActiveShift } from "@/hooks/useActiveShift";
 
 const AgenceShiftPage: React.FC = () => {
   const navigate = useNavigate();
@@ -12,84 +18,130 @@ const AgenceShiftPage: React.FC = () => {
   const { user } = useAuth();
   const { activeShift } = useActiveShift();
   const [loading, setLoading] = useState(false);
-  const staffCode =
-    (user as any)?.staffCode || (user as any)?.codeCourt || (user as any)?.code || '—';
 
+  const staffCode =
+    (user as any)?.staffCode ||
+    (user as any)?.codeCourt ||
+    (user as any)?.code ||
+    "—";
+
+  // 🔒 Vérification logique
   const canOperate = useMemo(
     () => !!user?.companyId && !!user?.agencyId && !!user?.uid,
     [user?.companyId, user?.agencyId, user?.uid]
   );
 
+  // ✅ IDs sécurisés pour TypeScript
+  const companyId = user?.companyId;
+  const agencyId = user?.agencyId;
+
+  /* =========================
+     OUVRIR LE POSTE
+  ========================= */
   const openShift = useCallback(async () => {
-    if (!canOperate) return;
+    if (!canOperate || !companyId || !agencyId) return;
+
     setLoading(true);
     try {
       await addDoc(
-        collection(db, 'companies', user!.companyId, 'agences', user!.agencyId, 'shifts'),
+        collection(db, "companies", companyId, "agences", agencyId, "shifts"),
         {
           isOpen: true,
           openedAt: serverTimestamp(),
           openedBy: {
             uid: user!.uid,
-            displayName: user!.displayName || user!.email || '—',
+            displayName: user!.displayName || user!.email || "—",
             staffCode,
           },
-          companyId: user!.companyId,
-          agencyId: user!.agencyId,
+          companyId,
+          agencyId,
         }
       );
-      navigate('/agence/guichet');
+
+      navigate("/agence/guichet");
     } finally {
       setLoading(false);
     }
-  }, [canOperate, navigate, staffCode, user]);
+  }, [canOperate, companyId, agencyId, navigate, staffCode, user]);
 
+  /* =========================
+     FERMER LE POSTE
+  ========================= */
   const closeShift = useCallback(async () => {
-    if (!canOperate || !activeShift?.id) return;
+    if (!canOperate || !companyId || !agencyId || !activeShift?.id) return;
+
     setLoading(true);
     try {
       await updateDoc(
-        doc(db, 'companies', user!.companyId, 'agences', user!.agencyId, 'shifts', activeShift.id),
+        doc(
+          db,
+          "companies",
+          companyId,
+          "agences",
+          agencyId,
+          "shifts",
+          activeShift.id
+        ),
         {
           isOpen: false,
           closedAt: serverTimestamp(),
           closedBy: {
             uid: user!.uid,
-            displayName: user!.displayName || user!.email || '—',
+            displayName: user!.displayName || user!.email || "—",
             staffCode,
           },
         }
       );
-      navigate('/agence/guichet');
+
+      navigate("/agence/guichet");
     } finally {
       setLoading(false);
     }
-  }, [activeShift?.id, canOperate, navigate, staffCode, user]);
+  }, [
+    activeShift?.id,
+    canOperate,
+    companyId,
+    agencyId,
+    navigate,
+    staffCode,
+    user,
+  ]);
 
-  // Exécution automatique via ?action=open|close
+  /* =========================
+     ACTION AUTO (?action=open|close)
+  ========================= */
   useEffect(() => {
-    const action = params.get('action');
-    if (action === 'open' && !activeShift && !loading) openShift();
-    if (action === 'close' && activeShift && !loading) closeShift();
+    const action = params.get("action");
+    if (action === "open" && !activeShift && !loading) openShift();
+    if (action === "close" && activeShift && !loading) closeShift();
   }, [params, activeShift, loading, openShift, closeShift]);
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Gestion du poste</h1>
-        <Link to="/agence/guichet" className="px-3 py-2 rounded-lg border">Retour guichet</Link>
+        <Link to="/agence/guichet" className="px-3 py-2 rounded-lg border">
+          Retour guichet
+        </Link>
       </div>
 
       <div className="rounded-xl border p-4 space-y-3">
         <div className="text-sm text-gray-600">
-          Guichetier : <strong>{user?.displayName || user?.email}</strong> (<strong>{staffCode}</strong>)
+          Guichetier :{" "}
+          <strong>{user?.displayName || user?.email}</strong> (
+          <strong>{staffCode}</strong>)
         </div>
+
         <div className="text-sm">
-          État actuel :{' '}
+          État actuel :{" "}
           {activeShift ? (
-            <span className="text-green-700 font-semibold">Poste actif (#{activeShift.id?.slice?.(0,6)})</span>
+            <span className="text-green-700 font-semibold">
+              Poste actif (#{activeShift.id?.slice?.(0, 6)})
+            </span>
           ) : (
-            <span className="text-amber-700 font-semibold">Aucun poste ouvert</span>
+            <span className="text-amber-700 font-semibold">
+              Aucun poste ouvert
+            </span>
           )}
         </div>
 
@@ -97,14 +149,19 @@ const AgenceShiftPage: React.FC = () => {
           <button
             disabled={loading || !!activeShift || !canOperate}
             onClick={openShift}
-            className={`px-4 py-2 rounded-lg border ${activeShift ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`px-4 py-2 rounded-lg border ${
+              activeShift ? "opacity-50 cursor-not-allowed" : ""
+            }`}
           >
             Activer le poste
           </button>
+
           <button
             disabled={loading || !activeShift || !canOperate}
             onClick={closeShift}
-            className={`px-4 py-2 rounded-lg border ${!activeShift ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`px-4 py-2 rounded-lg border ${
+              !activeShift ? "opacity-50 cursor-not-allowed" : ""
+            }`}
           >
             Clôturer le poste
           </button>
