@@ -165,27 +165,28 @@ const AdminCompagnieAjouterPage: React.FC = () => {
 
     try {
       const payload = {
-        nom: nom.trim(),
-        slug: slug.trim(),
-        email: email.trim() || null,
-        telephone: telephone.trim() || null,
-        pays: pays.trim() || null,
-        status,
-        adminEmail: adminEmail.trim() || null,
+  nom: nom.trim(),
+  slug: slug.trim(),
+  email: email.trim() || null,
+  telephone: telephone.trim() || null,
+  pays: pays.trim() || null,
+  status,
+  adminEmail: adminEmail.trim() || null,
 
-        planId: selectedPlanId,
-        plan: selectedPlan.name,
-        commissionOnline: selectedPlan.commissionOnline,
-        feeGuichet: selectedPlan.feeGuichet,
-        minimumMonthly: selectedPlan.minimumMonthly,
-        maxAgences: selectedPlan.maxAgences,
+  planId: selectedPlanId,
+  plan: selectedPlan.name,
 
-        publicPageEnabled: selectedPlan.features.publicPage,
-        onlineBookingEnabled: selectedPlan.features.onlineBooking,
-        guichetEnabled: selectedPlan.features.guichet,
+  commissionOnline: selectedPlan.commissionOnline ?? 0,
+  feeGuichet: selectedPlan.feeGuichet ?? 0,
+  minimumMonthly: selectedPlan.minimumMonthly ?? 0,
+  maxAgences: selectedPlan.maxAgences ?? 0,
 
-        updatedAt: serverTimestamp(),
-      };
+  publicPageEnabled: selectedPlan.features?.publicPage ?? false,
+  onlineBookingEnabled: selectedPlan.features?.onlineBooking ?? false,
+  guichetEnabled: selectedPlan.features?.guichet ?? false,
+
+  updatedAt: serverTimestamp(),
+};
 
       let companyId = id;
 
