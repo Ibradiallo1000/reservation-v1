@@ -11,9 +11,7 @@ import {
   query,
   where,
   getDoc,
-  runTransaction,
   limit,
-  increment,
 } from "firebase/firestore";
 import { db, auth } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -38,12 +36,71 @@ interface Agent {
   createdAt: any;
 }
 
-/* ===================== HELPERS CODES ===================== */
-/** Compteur par rôle -> code lisible. 
- * guichetier => G###
- * comptable  => ACC###
- * (le reste: pas de code automatique)
+/* ===================== SYNC FONCTION ===================== */
+/**
+ * Synchronise les agents existants de /users vers la sous-collection de l'agence
+ * Pour les agents créés avant l'implémentation de la sous-collection
  */
+async function syncRootUsersToAgency(
+  companyId: string,
+  agencyId: string
+) {
+  try {
+    // Récupérer tous les users de cette compagnie/agence
+    const rootSnap = await getDocs(
+      query(
+        collection(db, "users"),
+        where("companyId", "==", companyId),
+        where("agencyId", "==", agencyId)
+      )
+    );
+
+    console.log(`📥 ${rootSnap.docs.length} agents trouvés dans /users`);
+
+    // Pour chaque user, créer un document dans la sous-collection agence
+    for (const d of rootSnap.docs) {
+      const userData = d.data();
+      
+      // Ne pas synchroniser les admins plateforme
+      if (userData.role === "admin_platforme") continue;
+      
+      // S'assurer que les champs essentiels existent
+      const safeData = {
+        ...userData,
+        uid: d.id,
+        displayName: userData.displayName || "Nom inconnu",
+        email: userData.email || "Email inconnu",
+        role: userData.role || "guichetier",
+        active: userData.active !== false,
+        companyId: userData.companyId || companyId,
+        agencyId: userData.agencyId || agencyId,
+        createdAt: userData.createdAt || Timestamp.now(),
+      };
+      
+      await setDoc(
+        doc(
+          db,
+          "companies",
+          companyId,
+          "agences",
+          agencyId,
+          "users",
+          d.id
+        ),
+        safeData,
+        { merge: true }
+      );
+    }
+
+    console.log(`✅ Synchronisation terminée pour ${companyId}/${agencyId}`);
+    return rootSnap.docs.length;
+  } catch (error) {
+    console.error("❌ Erreur lors de la synchronisation:", error);
+    return 0;
+  }
+}
+
+/* ===================== HELPERS CODES ===================== */
 async function allocateStaffCode(params: {
   companyId: string;
   agencyId: string;
@@ -66,17 +123,15 @@ async function allocateStaffCode(params: {
   );
 
   try {
-    // 1. D'abord, lire la valeur actuelle SANS transaction
+    // 1. Lire la valeur actuelle
     const snap = await getDoc(counterRef);
     let currentValue = 1;
     
     if (snap.exists()) {
       currentValue = (snap.data().lastSeq || 0) + 1;
-    } else {
-      currentValue = 1;
     }
     
-    // 2. Écrire la nouvelle valeur (sans transaction pour éviter batchGet)
+    // 2. Écrire la nouvelle valeur
     await setDoc(counterRef, {
       lastSeq: currentValue,
       updatedAt: Timestamp.now()
@@ -92,7 +147,7 @@ async function allocateStaffCode(params: {
   } catch (error) {
     console.error("Erreur allocateStaffCode:", error);
     
-    // Fallback: utiliser timestamp si Firestore échoue
+    // Fallback: utiliser timestamp
     const timestamp = Date.now();
     const fallbackCode = timestamp.toString().slice(-6);
     
@@ -161,6 +216,7 @@ const AgencePersonnelPage: React.FC = () => {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hasSynced, setHasSynced] = useState(false);
 
   const [editId, setEditId] = useState<string | null>(null);
   const [editDisplayName, setEditDisplayName] = useState("");
@@ -189,27 +245,77 @@ const AgencePersonnelPage: React.FC = () => {
         "users"
       );
       const snap = await getDocs(ref);
-      const list = snap.docs.map(
-        (d) => ({ id: d.id, ...d.data() } as Agent)
-      );
+      
+      // Transformer les documents en objets Agent avec des valeurs par défaut
+      const list = snap.docs
+        .map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            uid: data.uid || d.id,
+            displayName: data.displayName || "Nom inconnu",
+            email: data.email || "Email inconnu",
+            telephone: data.telephone || "",
+            role: (data.role as Role) || "guichetier",
+            active: data.active !== false,
+            companyId: data.companyId || user.companyId!,
+            agencyId: data.agencyId || user.agencyId!,
+            agencyName: data.agencyName || "",
+            staffCode: data.staffCode,
+            codeCourt: data.codeCourt,
+            createdAt: data.createdAt || Timestamp.now(),
+          } as Agent;
+        })
+        .filter(agent => agent.uid && agent.displayName); // Filtrer les agents valides
 
       // Backfill local: si guichetier/comptable sans code => en attribuer un
       const toFix = list.filter(a => (a.role === "guichetier" || a.role === "comptable") && !a.staffCode);
-      for (const a of toFix) {
-        const localRef = doc(db, "companies", a.companyId, "agences", a.agencyId, "users", a.id!);
-        const rootRef = doc(db, "users", a.uid);
-        await ensureAgentHasCode(localRef, rootRef, a);
-      }
-
-      // Recharger si on a fait du backfill
+      
       if (toFix.length > 0) {
+        console.log(`🔄 Backfill pour ${toFix.length} agents sans code`);
+        
+        for (const a of toFix) {
+          if (a.id && a.uid) {
+            const localRef = doc(db, "companies", a.companyId, "agences", a.agencyId, "users", a.id);
+            const rootRef = doc(db, "users", a.uid);
+            await ensureAgentHasCode(localRef, rootRef, a);
+          }
+        }
+
+        // Recharger après backfill
         const snap2 = await getDocs(ref);
-        const list2 = snap2.docs.map((d) => ({ id: d.id, ...d.data() } as Agent));
-        setAgents(list2.sort((a, b) => a.displayName.localeCompare(b.displayName)));
+        const list2 = snap2.docs
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              uid: data.uid || d.id,
+              displayName: data.displayName || "Nom inconnu",
+              email: data.email || "Email inconnu",
+              telephone: data.telephone || "",
+              role: (data.role as Role) || "guichetier",
+              active: data.active !== false,
+              companyId: data.companyId || user.companyId!,
+              agencyId: data.agencyId || user.agencyId!,
+              agencyName: data.agencyName || "",
+              staffCode: data.staffCode,
+              codeCourt: data.codeCourt,
+              createdAt: data.createdAt || Timestamp.now(),
+            } as Agent;
+          })
+          .filter(agent => agent.uid && agent.displayName);
+        
+        setAgents(list2.sort((a, b) => 
+          (a.displayName || "").localeCompare(b.displayName || "")
+        ));
       } else {
-        setAgents(list.sort((a, b) => a.displayName.localeCompare(b.displayName)));
+        // Aucun backfill nécessaire
+        setAgents(list.sort((a, b) => 
+          (a.displayName || "").localeCompare(b.displayName || "")
+        ));
       }
 
+      console.log(`✅ ${list.length} agents chargés`);
     } catch (err) {
       console.error("loadAgents err:", err);
       setMessage("❌ Erreur lors du chargement des agents.");
@@ -217,9 +323,35 @@ const AgencePersonnelPage: React.FC = () => {
   };
 
   useEffect(() => {
-    loadAgents();
+    const initAgents = async () => {
+      if (!user?.companyId || !user?.agencyId) return;
+
+      // Vérifier si des agents existent déjà dans l'agence
+      const ref = collection(
+        db,
+        "companies",
+        user.companyId,
+        "agences",
+        user.agencyId,
+        "users"
+      );
+      const snap = await getDocs(ref);
+      
+      // Si aucun agent dans l'agence mais que l'utilisateur est chef d'agence
+      // Synchroniser les agents existants depuis /users
+      if (snap.empty && user.role === "chefAgence" && !hasSynced) {
+        console.log("🔄 Synchronisation des agents existants...");
+        await syncRootUsersToAgency(user.companyId, user.agencyId);
+        setHasSynced(true);
+      }
+      
+      // Charger les agents
+      await loadAgents();
+    };
+
+    initAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.companyId, user?.agencyId]);
+  }, [user?.companyId, user?.agencyId, user?.role]);
 
   const resetForm = () => {
     setEmail("");
