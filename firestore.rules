@@ -128,6 +128,23 @@ match /companies/{companyId} {
     allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
 
     /* =========================
+       COUNTERS (FIX BATCHGET - NO GET() CALLS)
+    ========================= */
+    match /counters/{counterId} {
+      // ✅ Utilise les claims directement depuis le token auth
+      allow read, write: if 
+        isAuth() 
+        && (
+          // Platform admin (vérifié via token)
+          request.auth.token.role == "admin_platforme"
+          // Company admin pour cette compagnie
+          || (request.auth.token.companyId == companyId && request.auth.token.role == "admin_compagnie")
+          // Agency manager (chefAgence) pour cette agence
+          || (request.auth.token.companyId == companyId && request.auth.token.agencyId == agencyId && request.auth.token.role == "chefAgence")
+        );
+    }
+
+    /* =========================
        USERS D'AGENCE (PERSONNEL AGENCE)
     ========================= */
     match /users/{agentId} {
