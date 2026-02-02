@@ -231,21 +231,6 @@ const AdminCompagnieAjouterPage: React.FC = () => {
   }
 
   if (loading) return <div className="p-6">Chargement…</div>;
-async function testMinimalFirestore() {
-  try {
-    console.log("🧪 Test minimal Firestore – START");
-    const ref = await addDoc(collection(db, "companies"), {
-      test: "ping",
-      createdAt: serverTimestamp(),
-    });
-    console.log("✅ Test minimal OK – id:", ref.id);
-  } catch (e: any) {
-    console.error("❌ Test minimal ÉCHEC", {
-      code: e?.code,
-      message: e?.message,
-    });
-  }
-}
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -301,13 +286,6 @@ async function testMinimalFirestore() {
             Annuler
           </Link>
         </div>
-<button
-  type="button"
-  onClick={testMinimalFirestore}
-  className="bg-blue-600 text-white px-4 py-2 rounded-lg"
->
-  Test minimal Firestore
-</button>
 
         {message && (
           <p className={message.type === "error" ? "text-red-600" : "text-green-600"}>
