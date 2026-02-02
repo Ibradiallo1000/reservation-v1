@@ -69,7 +69,7 @@ interface AuthContextType {
   isLoggingOut: boolean;
 }
 
-const AuthContext = createContext<AuthContextType>(null as any);
+export const AuthContext = createContext<AuthContextType>(null as any);
 
 /* =========================
    Utils
