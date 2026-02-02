@@ -13,6 +13,7 @@ import {
   getDoc,
   runTransaction,
   limit,
+  increment,
 } from "firebase/firestore";
 import { db, auth } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -38,7 +39,7 @@ interface Agent {
 }
 
 /* ===================== HELPERS CODES ===================== */
-/** Compteur transactionnel par rôle -> code lisible. 
+/** Compteur par rôle -> code lisible. 
  * guichetier => G###
  * comptable  => ACC###
  * (le reste: pas de code automatique)
@@ -50,49 +51,79 @@ async function allocateStaffCode(params: {
 }): Promise<string | undefined> {
   const { companyId, agencyId, role } = params;
 
-  // guichetier : on garde ton chemin existant pour compat
-  if (role === "guichetier") {
-    const counterRef = doc(db, "companies", companyId, "agences", agencyId, "counters", "guichetier");
-    const next = await runTransaction(db, async (tx) => {
-      const snap = await tx.get(counterRef);
-      const last = snap.exists() ? (snap.data() as any).lastSeq || 0 : 0;
-      const n = last + 1;
-      tx.set(counterRef, { lastSeq: n, updatedAt: Timestamp.now() }, { merge: true });
-      return n;
-    });
-    return "G" + String(next).padStart(3, "0"); // G001
+  if (!["guichetier", "comptable"].includes(role)) {
+    return undefined;
   }
 
-  // comptable : nouveau compteur dédié
-  if (role === "comptable") {
-    const counterRef = doc(db, "companies", companyId, "agences", agencyId, "counters", "comptable");
-    const next = await runTransaction(db, async (tx) => {
-      const snap = await tx.get(counterRef);
-      const last = snap.exists() ? (snap.data() as any).lastSeq || 0 : 0;
-      const n = last + 1;
-      tx.set(counterRef, { lastSeq: n, updatedAt: Timestamp.now() }, { merge: true });
-      return n;
-    });
-    return "ACC" + String(next).padStart(3, "0"); // ACC001
-  }
+  const counterRef = doc(
+    db, 
+    "companies", 
+    companyId, 
+    "agences", 
+    agencyId, 
+    "counters", 
+    role
+  );
 
-  // autres rôles : pas de code auto
+  try {
+    // 1. D'abord, lire la valeur actuelle SANS transaction
+    const snap = await getDoc(counterRef);
+    let currentValue = 1;
+    
+    if (snap.exists()) {
+      currentValue = (snap.data().lastSeq || 0) + 1;
+    } else {
+      currentValue = 1;
+    }
+    
+    // 2. Écrire la nouvelle valeur (sans transaction pour éviter batchGet)
+    await setDoc(counterRef, {
+      lastSeq: currentValue,
+      updatedAt: Timestamp.now()
+    }, { merge: true });
+    
+    // 3. Générer le code
+    if (role === "guichetier") {
+      return "G" + String(currentValue).padStart(3, "0");
+    } else if (role === "comptable") {
+      return "ACC" + String(currentValue).padStart(3, "0");
+    }
+    
+  } catch (error) {
+    console.error("Erreur allocateStaffCode:", error);
+    
+    // Fallback: utiliser timestamp si Firestore échoue
+    const timestamp = Date.now();
+    const fallbackCode = timestamp.toString().slice(-6);
+    
+    if (role === "guichetier") {
+      return "G" + fallbackCode.slice(0, 3);
+    } else if (role === "comptable") {
+      return "ACC" + fallbackCode.slice(0, 3);
+    }
+  }
+  
   return undefined;
 }
 
 /** Vérifie s'il existe déjà un comptable pour l'agence. */
 async function hasComptableAlready(companyId: string, agencyId: string) {
-  const ref = collection(db, "users");
-  const snap = await getDocs(
-    query(
-      ref,
-      where("companyId", "==", companyId),
-      where("agencyId", "==", agencyId),
-      where("role", "==", "comptable"),
-      limit(1)
-    )
-  );
-  return !snap.empty;
+  try {
+    const ref = collection(db, "users");
+    const snap = await getDocs(
+      query(
+        ref,
+        where("companyId", "==", companyId),
+        where("agencyId", "==", agencyId),
+        where("role", "==", "comptable"),
+        limit(1)
+      )
+    );
+    return !snap.empty;
+  } catch (error) {
+    console.error("Erreur hasComptableAlready:", error);
+    return false;
+  }
 }
 
 /** Backfill : si un agent guichetier/comptable n'a pas de code, on en génère un. */
@@ -101,17 +132,22 @@ async function ensureAgentHasCode(agentDocRef: any, rootUserRef: any, agent: Age
   if (!["guichetier", "comptable"].includes(agent.role)) return;
   if (agent.staffCode) return;
 
-  const code = await allocateStaffCode({
-    companyId: agent.companyId,
-    agencyId: agent.agencyId,
-    role: agent.role,
-  });
-  if (!code) return;
+  try {
+    const code = await allocateStaffCode({
+      companyId: agent.companyId,
+      agencyId: agent.agencyId,
+      role: agent.role,
+    });
+    
+    if (!code) return;
 
-  await updateDoc(agentDocRef, { staffCode: code, codeCourt: code });
-  const rootSnap = await getDoc(rootUserRef);
-  if (rootSnap.exists()) {
-    await updateDoc(rootUserRef, { staffCode: code, codeCourt: code });
+    await updateDoc(agentDocRef, { staffCode: code, codeCourt: code });
+    const rootSnap = await getDoc(rootUserRef);
+    if (rootSnap.exists()) {
+      await updateDoc(rootUserRef, { staffCode: code, codeCourt: code });
+    }
+  } catch (error) {
+    console.error("Erreur ensureAgentHasCode:", error);
   }
 }
 
@@ -158,15 +194,14 @@ const AgencePersonnelPage: React.FC = () => {
       );
 
       // Backfill local: si guichetier/comptable sans code => en attribuer un
-      // (on fait ça en tâche de fond, et on rafraîchit la liste ensuite)
       const toFix = list.filter(a => (a.role === "guichetier" || a.role === "comptable") && !a.staffCode);
       for (const a of toFix) {
         const localRef = doc(db, "companies", a.companyId, "agences", a.agencyId, "users", a.id!);
-        const rootRef  = doc(db, "users", a.uid);
+        const rootRef = doc(db, "users", a.uid);
         await ensureAgentHasCode(localRef, rootRef, a);
       }
 
-      // re-read si on a fait du backfill
+      // Recharger si on a fait du backfill
       if (toFix.length > 0) {
         const snap2 = await getDocs(ref);
         const list2 = snap2.docs.map((d) => ({ id: d.id, ...d.data() } as Agent));
@@ -195,7 +230,6 @@ const AgencePersonnelPage: React.FC = () => {
   };
 
   /* ===================== ACTIONS ===================== */
-
   const handleAdd = async () => {
     if (!user?.companyId || !user?.agencyId) {
       setMessage("⚠️ Contexte agence/compagnie manquant.");
@@ -224,7 +258,7 @@ const AgencePersonnelPage: React.FC = () => {
         }
       }
 
-      // 1) Créer l’utilisateur dans Auth
+      // 1) Créer l'utilisateur dans Auth
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(cred.user, { displayName });
       const uid = cred.user.uid;
@@ -260,7 +294,7 @@ const AgencePersonnelPage: React.FC = () => {
       );
 
       // 4) Doc local agence
-      const localRef = await addDoc(
+      await addDoc(
         collection(
           db,
           "companies",
@@ -306,7 +340,7 @@ const AgencePersonnelPage: React.FC = () => {
     setBusy(true);
 
     try {
-      // subcollection agence
+      // Subcollection agence
       const localRef = doc(
         db,
         "companies",
@@ -318,7 +352,7 @@ const AgencePersonnelPage: React.FC = () => {
       );
       await updateDoc(localRef, { active: next });
 
-      // doc racine
+      // Doc racine
       if (agent.uid) {
         const rootRef = doc(db, "users", agent.uid);
         await updateDoc(rootRef, { active: next });
@@ -357,12 +391,12 @@ const AgencePersonnelPage: React.FC = () => {
         editId
       );
 
-      // on récupère l'agent complet pour connaître uid / anciens champs
+      // On récupère l'agent complet
       const beforeSnap = await getDoc(localRef);
       const before = beforeSnap.exists() ? (beforeSnap.data() as Agent) : null;
       if (!before) throw new Error("Agent introuvable.");
 
-      // Si on veut passer quelqu'un en comptable, vérifier la règle 1/comptable/agence
+      // Si on veut passer quelqu'un en comptable, vérifier la règle
       if (editRole === "comptable" && before.role !== "comptable") {
         const exists = await hasComptableAlready(user.companyId, user.agencyId);
         if (exists) {
@@ -372,14 +406,14 @@ const AgencePersonnelPage: React.FC = () => {
         }
       }
 
-      // subcollection agence
+      // Subcollection agence
       await updateDoc(localRef, {
         displayName: editDisplayName,
         telephone: editTelephone,
         role: editRole,
       });
 
-      // doc racine
+      // Doc racine
       const uid = before.uid;
       if (uid) {
         const rootRef = doc(db, "users", uid);
@@ -389,7 +423,7 @@ const AgencePersonnelPage: React.FC = () => {
           role: editRole,
         });
 
-        // Si guichetier/comptable et pas encore de code => en générer un
+        // Si guichetier/comptable et pas encore de code
         if ((editRole === "guichetier" || editRole === "comptable") && !before.staffCode) {
           const code = await allocateStaffCode({
             companyId: user.companyId,
@@ -403,26 +437,22 @@ const AgencePersonnelPage: React.FC = () => {
         }
       }
 
-      // refresh local state
-      const afterSnap = await getDoc(localRef);
-      const after = afterSnap.exists() ? ({ id: editId, ...afterSnap.data() } as Agent) : null;
-
+      // Refresh local state
       setAgents((prev) =>
         prev.map((a) =>
           a.id === editId
             ? {
                 ...a,
-                displayName: after?.displayName || editDisplayName,
-                telephone: after?.telephone || editTelephone,
-                role: after?.role || editRole,
-                staffCode: after?.staffCode,
-                codeCourt: after?.codeCourt,
+                displayName: editDisplayName,
+                telephone: editTelephone,
+                role: editRole,
               }
             : a
         )
       );
 
       setEditId(null);
+      setMessage("✅ Agent modifié avec succès.");
     } catch (err) {
       console.error("edit save err:", err);
       setMessage("❌ Erreur lors de la modification.");
@@ -462,31 +492,28 @@ const AgencePersonnelPage: React.FC = () => {
         if (rootSnap.exists()) await deleteDoc(rootRef);
       }
 
-      // 3) Appeler la Cloud Function pour supprimer dans AUTH
+      // 3) Appeler Cloud Function pour supprimer dans AUTH (si configurée)
       if (agent.uid) {
-        const functions = getFunctions();
-        const fn = httpsCallable(functions, "adminDeleteUser");
-        await fn({ uid: agent.uid });
+        try {
+          const functions = getFunctions();
+          const fn = httpsCallable(functions, "adminDeleteUser");
+          await fn({ uid: agent.uid });
+        } catch (fnError) {
+          console.warn("Cloud Function non disponible:", fnError);
+        }
       }
 
       setAgents((prev) => prev.filter((a) => a.id !== agent.id));
-      setMessage("✅ Agent supprimé partout.");
+      setMessage("✅ Agent supprimé.");
     } catch (err) {
       console.error("delete err:", err);
-      setMessage(
-        "❌ Suppression partielle. Vérifie la console et la Cloud Function."
-      );
+      setMessage("❌ Erreur lors de la suppression.");
     } finally {
       setBusy(false);
     }
   };
 
-  function setEditStart(agent: Agent): void {
-    throw new Error("Function not implemented.");
-  }
-
   /* ===================== UI ===================== */
-
   return (
     <div className="p-6 max-w-5xl mx-auto min-h-screen"
          style={{ background: "#f7f7fb" }}>
@@ -531,7 +558,7 @@ const AgencePersonnelPage: React.FC = () => {
             <option value="guichetier">Guichetier</option>
             <option value="controleur">Contrôleur</option>
             <option value="comptable">Comptable</option>
-            <option value="chefAgence">Chef d’agence</option>
+            <option value="chefAgence">Chef d'agence</option>
           </select>
           <input
             value={password}
@@ -550,7 +577,7 @@ const AgencePersonnelPage: React.FC = () => {
             background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})`,
           }}
         >
-          {busy ? "⏳ Traitement..." : "Ajouter l’agent"}
+          {busy ? "⏳ Traitement..." : "Ajouter l'agent"}
         </button>
         {message && (
           <p className="mt-3 text-center text-sm text-gray-700">{message}</p>
@@ -563,7 +590,7 @@ const AgencePersonnelPage: React.FC = () => {
         <div className="p-4 border-b" style={{ borderColor: theme.secondary }}>
           <h2 className="text-lg font-semibold"
               style={{ color: theme.secondary }}>
-            Agents de cette agence
+            Agents de cette agence ({agents.length})
           </h2>
         </div>
 
@@ -575,13 +602,14 @@ const AgencePersonnelPage: React.FC = () => {
               <div key={agent.id}
                    className="p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                 {/* Infos */}
-                <div>
+                <div className="flex-1">
                   {editId === agent.id ? (
                     <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
                       <input
                         value={editDisplayName}
                         onChange={(e) => setEditDisplayName(e.target.value)}
                         className="border p-2 rounded"
+                        placeholder="Nom"
                       />
                       <input
                         value={editTelephone}
@@ -591,25 +619,20 @@ const AgencePersonnelPage: React.FC = () => {
                       />
                       <select
                         value={editRole}
-                        onChange={(e) =>
-                          setEditRole(e.target.value as Role)
-                        }
+                        onChange={(e) => setEditRole(e.target.value as Role)}
                         className="border p-2 rounded"
                       >
                         <option value="guichetier">Guichetier</option>
                         <option value="controleur">Contrôleur</option>
                         <option value="comptable">Comptable</option>
-                        <option value="chefAgence">Chef d’agence</option>
+                        <option value="chefAgence">Chef d'agence</option>
                       </select>
                       <div className="text-sm text-gray-500 flex items-center">
-                        Code:&nbsp;
-                        <span className="font-mono">
-                          {agent.staffCode || "—"}
-                        </span>
+                        Code: <span className="font-mono ml-1">{agent.staffCode || "—"}</span>
                       </div>
                       <div className="text-xs text-gray-500 flex items-center">
-                        Statut:&nbsp;
-                        <span className={agent.active ? "text-green-600" : "text-red-600"}>
+                        Statut: 
+                        <span className={`ml-1 ${agent.active ? "text-green-600" : "text-red-600"}`}>
                           {agent.active ? "Actif" : "Désactivé"}
                         </span>
                       </div>
@@ -618,9 +641,7 @@ const AgencePersonnelPage: React.FC = () => {
                     <>
                       <p className="font-semibold text-gray-900">
                         {agent.displayName}{" "}
-                        <span className="text-gray-500 text-sm">
-                          • {agent.role}
-                        </span>
+                        <span className="text-gray-500 text-sm">• {agent.role}</span>
                         {(agent.role === "guichetier" || agent.role === "comptable") && (
                           <span className="ml-2 px-2 py-0.5 rounded bg-gray-100 font-mono text-xs">
                             {agent.staffCode || "—"}
@@ -633,11 +654,7 @@ const AgencePersonnelPage: React.FC = () => {
                       </p>
                       <p className="text-xs">
                         Statut :{" "}
-                        <span
-                          className={
-                            agent.active ? "text-green-600" : "text-red-600"
-                          }
-                        >
+                        <span className={agent.active ? "text-green-600" : "text-red-600"}>
                           {agent.active ? "Actif" : "Désactivé"}
                         </span>
                       </p>
@@ -667,7 +684,7 @@ const AgencePersonnelPage: React.FC = () => {
                   ) : (
                     <>
                       <button
-                        onClick={() => setEditStart(agent)}
+                        onClick={() => handleEditStart(agent)}
                         className="px-3 py-1 rounded border"
                       >
                         Modifier

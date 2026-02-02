@@ -1,22 +1,16 @@
-// =============================================
 // src/pages/CompagnieAgencesPage.tsx
-// Mode dégradé SANS Functions (pas besoin du plan Blaze)
-// - Crée l'agence côté client (Firestore)
-// - Crée une "invitation" et envoie un lien de connexion par e-mail au gérant
-// - Le gérant termine sur /finishSignIn qui crée le doc users/{uid}
-// =============================================
+// Version corrigée — création via Cloud Function + modal suppression inclus
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
   getDocs,
-  addDoc,
   doc,
   updateDoc,
   serverTimestamp,
   query,
-  where,
+  addDoc,
 } from "firebase/firestore";
-import { db, auth } from "../firebaseConfig";
+import { db, functions, dbReady } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import useCompanyTheme from "@/hooks/useCompanyTheme";
@@ -24,9 +18,9 @@ import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useNavigate } from "react-router-dom";
-import { sendSignInLinkToEmail } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
 
-// ===== Leaflet assets
+// Leaflet assets
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "/leaflet/marker-icon-2x.png",
@@ -48,30 +42,76 @@ interface Agence {
   emailGerant: string;
   nomGerant: string;
   telephone: string;
+  invitationId?: string;
   latitude?: number | null;
   longitude?: number | null;
 }
 
-// ===== Helpers de formatage/normalisation
+// --- Types pour les payloads / réponses des Cloud Functions
+interface CreateAgencyRequest {
+  companyId: string;
+  agence: {
+    nomAgence: string;
+    ville?: string;
+    pays?: string;
+    quartier?: string;
+    type?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    statut?: Statut;
+  };
+  manager: {
+    name: string;
+    email: string;
+    phone?: string;
+    role?: string;
+  };
+}
+
+interface CreateAgencyResponse {
+  success?: boolean;
+  agencyId?: string;
+  uid?: string;
+  resetLink?: string;
+  message?: string;
+}
+
+interface DeleteAgencyRequest {
+  companyId: string;
+  agencyId: string;
+  action: StaffAction;
+  transferToAgencyId?: string | null;
+}
+
+interface DeleteAgencyResponse {
+  success?: boolean;
+  message?: string;
+}
+
+// Helpers
 const formatNom = (s: string) =>
   s.replace(/\s+/g, " ").trim().toLowerCase().replace(/\b\p{L}/gu, (c) => c.toUpperCase());
 
 const onlyDigits = (s: string) => s.replace(/\D/g, "");
 const isValidEmailFormat = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
-const isValidPhone = (s: string) => s.length >= 8 && s.length <= 15;
+const isValidPhone = (s: string) => {
+  const digits = onlyDigits(s);
+  return digits.length >= 8 && digits.length <= 15;
+};
 
 const norm = (s: string) =>
   s.normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toLowerCase();
 const slugify = (s: string) => norm(s).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 const normalizeEmail = (s: string) => s.trim().toLowerCase();
 
-// ---- actionCodeSettings pour le lien e-mail (ajoute ce domaine dans Auth > Domaines autorisés)
 const actionCodeSettings = {
   url: `${window.location.origin}/finishSignIn`,
   handleCodeInApp: true,
 };
 
-// -------- Modal de suppression (UI uniquement en mode dégradé) ----------
+/* =========================
+   DeleteAgencyModal
+========================= */
 const DeleteAgencyModal: React.FC<{
   open: boolean;
   onClose: () => void;
@@ -207,6 +247,9 @@ const DeleteAgencyModal: React.FC<{
   );
 };
 
+/* =========================
+   Main page component
+========================= */
 const CompagnieAgencesPage: React.FC = () => {
   const { user, company } = useAuth();
   const theme = useCompanyTheme(company);
@@ -219,7 +262,6 @@ const CompagnieAgencesPage: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(6);
 
-  // Form state
   const [formData, setFormData] = useState({
     nomAgence: "",
     ville: "",
@@ -235,8 +277,8 @@ const CompagnieAgencesPage: React.FC = () => {
 
   const [emailError, setEmailError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
 
-  // Modal suppression
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [agencyIdToDelete, setAgencyIdToDelete] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -253,7 +295,6 @@ const CompagnieAgencesPage: React.FC = () => {
     return null;
   };
 
-  // ===== Header dynamique
   useEffect(() => {
     setHeader({
       title: "Agences",
@@ -265,7 +306,7 @@ const CompagnieAgencesPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agences.length, theme.colors.primary, theme.colors.secondary]);
 
-  // ===== Fetch agences
+  // fetchAgences now waits for dbReady (ensures emulators / firestore initialisation is done)
   const fetchAgences = async () => {
     if (!companyId) {
       console.warn("companyId manquant — impossible de charger les agences");
@@ -274,25 +315,44 @@ const CompagnieAgencesPage: React.FC = () => {
     }
     setLoading(true);
     try {
+      await dbReady; // attend l'initialisation (emulateurs si activés)
       const agencesRef = collection(db, "companies", companyId, "agences");
-      const snap = await getDocs(agencesRef);
+      // optionnel: tri si tu veux
+      const snap = await getDocs(query(agencesRef));
       const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Agence[];
       setAgences(list);
       setCurrentPage(1);
     } catch (error: any) {
       console.error("Erreur Firestore (agences):", error?.code, error?.message, error);
-      alert("Une erreur est survenue lors du chargement des agences");
+      alert("Une erreur est survenue lors du chargement des agences : " + (error?.message || String(error)));
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchAgences();
+    // fetchAgences when companyId changes — but ensure dbReady
+    if (!companyId) {
+      setAgences([]);
+      return;
+    }
+    let mounted = true;
+    (async () => {
+      try {
+        await dbReady;
+        if (!mounted) return;
+        await fetchAgences();
+      } catch (e) {
+        console.warn("dbReady error", e);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId]);
 
-  // ===== Pagination
+  // Pagination calculations
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentAgences = useMemo(
@@ -301,7 +361,7 @@ const CompagnieAgencesPage: React.FC = () => {
   );
   const totalPages = Math.ceil(agences.length / itemsPerPage);
 
-  // ===== Form handlers
+  // Form handlers
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type } = e.target;
 
@@ -351,61 +411,90 @@ const CompagnieAgencesPage: React.FC = () => {
     setEmailError("");
   };
 
-  // ===== Création d'une invitation + envoi e-mail
-  async function createInviteAndSendLink(payload: {
-    companyId: string;
-    agencyId: string;
-    manager: { name: string; email: string; phone: string; role: "chefAgence" };
-  }) {
-    // 1) Enregistrer l'invitation (root "invites")
-    const inviteRef = await addDoc(collection(db, "invites"), {
-      email: normalizeEmail(payload.manager.email),
-      name: payload.manager.name,
-      phone: payload.manager.phone,
-      role: payload.manager.role,
-      companyId: payload.companyId,
-      agencyId: payload.agencyId,
+  const handleCreateAgency = async () => {
+  if (!companyId) {
+    alert("Aucune compagnie associée");
+    return;
+  }
+
+  if (!formData.nomAgence.trim()) {
+    alert("Nom de l'agence requis");
+    return;
+  }
+
+  if (!isValidEmailFormat(formData.emailGerant)) {
+    setEmailError("Email invalide");
+    return;
+  }
+
+  if (!isValidPhone(formData.telephone)) {
+    alert("Téléphone invalide");
+    return;
+  }
+
+  setCreating(true);
+
+  try {
+    // 1️⃣ créer l’agence
+    const agenceRef = await addDoc(
+      collection(db, "companies", companyId, "agences"),
+      {
+        companyId,
+        nomAgence: formData.nomAgence.trim(),
+        nomAgenceNorm: norm(formData.nomAgence),
+        ville: formData.ville.trim(),
+        villeNorm: norm(formData.ville),
+        pays: formData.pays.trim(),
+        paysNorm: norm(formData.pays),
+        quartier: formData.quartier || "",
+        type: formData.type || "",
+        statut: "active",
+        emailGerant: normalizeEmail(formData.emailGerant),
+        nomGerant: formatNom(formData.nomGerant || ""),
+        telephone: onlyDigits(formData.telephone),
+        latitude: formData.latitude ? parseFloat(formData.latitude) : null,
+        longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+        createdAt: serverTimestamp(),
+      }
+    );
+
+    // 2️⃣ créer l’invitation
+    const invitationRef = await addDoc(collection(db, "invitations"), {
+      email: normalizeEmail(formData.emailGerant),
+      role: "chefAgence",
+      companyId,
+      agencyId: agenceRef.id,
       status: "pending",
       createdAt: serverTimestamp(),
     });
 
-    // 2) Envoyer le lien d'e-mail sign-in
-    await sendSignInLinkToEmail(auth, normalizeEmail(payload.manager.email), actionCodeSettings);
-    // Sauvegarder l'email (normalisé) pour la page FinishSignIn
-    window.localStorage.setItem("emailForSignIn", normalizeEmail(payload.manager.email));
-
-    // 3) Marquer "sent"
-    await updateDoc(inviteRef, { status: "sent", sentAt: serverTimestamp() });
+    // 3️⃣ lier invitation → agence
+    await updateDoc(agenceRef, {
+      invitationId: invitationRef.id,
+    });
 
     alert(
-      `✅ Invitation envoyée à ${payload.manager.email}.\n\n` +
-        `Lien de connexion par e-mail envoyé. L’invitation (#${inviteRef.id}) sera consommée lors de la première connexion.`
+      `✅ Agence créée.\n\nLien d’activation :\n${window.location.origin}/accept-invitation/${invitationRef.id}`
     );
-  }
 
-  // ===== Submit (create/update)
+    resetForm();
+    fetchAgences();
+  } catch (err: any) {
+    console.error(err);
+    alert("Erreur lors de la création de l'agence");
+  } finally {
+    setCreating(false);
+  }
+};
+
+
+  // Submit (create/update)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!companyId) {
-      alert("Aucune compagnie associée à cet utilisateur");
-      return;
-    }
-
-    // validations UI
-    const emailOk = isValidEmailFormat(formData.emailGerant);
-    const phoneOk = isValidPhone(formData.telephone);
-    if (!emailOk) {
-      setEmailError("Format email invalide");
-      return;
-    }
-    if (!phoneOk) {
-      alert("Téléphone invalide (8–15 chiffres)");
-      return;
-    }
-
-    try {
-      if (editingId) {
-        // === Mise à jour AGENCE
+    if (editingId) {
+      // update existing agency (client-side update)
+      if (!companyId || !editingId) return;
+      try {
         const agenceRef = doc(db, "companies", companyId, "agences", editingId);
         await updateDoc(agenceRef, {
           companyId,
@@ -420,85 +509,23 @@ const CompagnieAgencesPage: React.FC = () => {
           type: formData.type || "",
           nomGerant: formData.nomGerant,
           emailGerant: normalizeEmail(formData.emailGerant),
-          telephone: formData.telephone,
+          telephone: onlyDigits(formData.telephone),
           latitude: formData.latitude ? parseFloat(formData.latitude) : null,
           longitude: formData.longitude ? parseFloat(formData.longitude) : null,
           updatedAt: serverTimestamp(),
         });
         alert("✅ Agence mise à jour avec succès");
-      } else {
-        // === Anti-doublon agence (nom/ville/pays normalisés)
-        const agencesRef = collection(db, "companies", companyId, "agences");
-        const dupSnap = await getDocs(
-          query(
-            agencesRef,
-            where("nomAgenceNorm", "==", norm(formData.nomAgence)),
-            where("villeNorm", "==", norm(formData.ville)),
-            where("paysNorm", "==", norm(formData.pays))
-          )
-        );
-        if (!dupSnap.empty) {
-          alert("Une agence avec ce nom/ville/pays existe déjà.");
-          return;
-        }
-
-        // === Anti multi-invites pour le même email (pending/sent)
-        const invitesSnap = await getDocs(
-          query(
-            collection(db, "invites"),
-            where("email", "==", normalizeEmail(formData.emailGerant)),
-            where("companyId", "==", companyId),
-            // Créez l'index composite si Firestore le demande
-            where("status", "in", ["pending", "sent"] as any)
-          )
-        );
-        if (!invitesSnap.empty) {
-          const id = invitesSnap.docs[0].id;
-          alert(`Une invitation est déjà en attente pour ${formData.emailGerant} (invite #${id}).`);
-          return;
-        }
-
-        // === Création agence côté client
-        const newAgenceRef = await addDoc(collection(db, "companies", companyId, "agences"), {
-          companyId,
-          nomAgence: formData.nomAgence,
-          nomAgenceNorm: norm(formData.nomAgence),
-          ville: formData.ville,
-          villeNorm: norm(formData.ville),
-          pays: formData.pays,
-          paysNorm: norm(formData.pays),
-          slug: slugify(formData.nomAgence),
-          quartier: formData.quartier || "",
-          type: formData.type || "",
-          statut: "active" as Statut,
-          nomGerant: formData.nomGerant,
-          emailGerant: normalizeEmail(formData.emailGerant),
-          telephone: formData.telephone,
-          latitude: formData.latitude ? parseFloat(formData.latitude) : null,
-          longitude: formData.longitude ? parseFloat(formData.longitude) : null,
-          createdAt: serverTimestamp(),
-          createdBy: user?.uid || null,
-        });
-
-        // === Invitation + lien e-mail pour créer le compte du gérant
-        await createInviteAndSendLink({
-          companyId,
-          agencyId: newAgenceRef.id,
-          manager: {
-            name: formData.nomGerant,
-            email: formData.emailGerant,
-            phone: formData.telephone,
-            role: "chefAgence",
-          },
-        });
+        resetForm();
+        fetchAgences();
+      } catch (err: any) {
+        console.error("Erreur update agence:", err);
+        alert("Erreur: " + (err?.message || err));
       }
-
-      resetForm();
-      fetchAgences();
-    } catch (err: any) {
-      console.error("Erreur pendant handleSubmit:", err?.code, err?.message, err);
-      alert(`Erreur: ${err?.message ?? err?.code ?? "Erreur inconnue"}`);
+      return;
     }
+
+    // creation path -> use cloud function cascade
+    await handleCreateAgency();
   };
 
   const handleEdit = (agence: Agence) => {
@@ -519,15 +546,53 @@ const CompagnieAgencesPage: React.FC = () => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // ---- Suppression (modal) : ici on laisse l’UI; (la cascade totale requiert Functions)
   const openDeleteModal = (agencyId: string) => {
     setAgencyIdToDelete(agencyId);
     setDeleteModalOpen(true);
   };
-  const confirmDelete = async () => {
-    alert("La suppression en cascade complète requiert les Cloud Functions (plan Blaze).");
-    setDeleteModalOpen(false);
-    setAgencyIdToDelete(null);
+
+  // confirmDelete now receives action and transferToAgencyId
+  const confirmDelete = async (action: StaffAction, transferToAgencyId: string | null) => {
+    if (!agencyIdToDelete || !companyId) {
+      setDeleteModalOpen(false);
+      return;
+    }
+
+    setDeleteLoading(true);
+    try {
+      await dbReady;
+      const payload: DeleteAgencyRequest = {
+        companyId,
+        agencyId: agencyIdToDelete,
+        action,
+        transferToAgencyId: transferToAgencyId || undefined,
+      };
+
+      const cf = httpsCallable<DeleteAgencyRequest, DeleteAgencyResponse>(functions, "companyDeleteAgencyCascade");
+      const res = await cf(payload);
+      const data = res.data;
+
+      if (data?.success) {
+        alert("Suppression traitée avec succès.");
+        setDeleteModalOpen(false);
+        setAgencyIdToDelete(null);
+        await fetchAgences();
+      } else {
+        console.warn("companyDeleteAgencyCascade returned:", data);
+        alert(data?.message || "Erreur lors de la suppression de l'agence.");
+      }
+    } catch (err: any) {
+      console.error("Erreur delete agency (function):", err);
+      const code = err?.code || err?.status || "";
+      if (code === "permission-denied" || code === "unauthenticated") {
+        alert("Permission refusée — vous n'êtes pas autorisé à supprimer une agence.");
+      } else {
+        const details = err?.details ? `\nDétails: ${JSON.stringify(err.details)}` : "";
+        alert("Erreur lors de la suppression : " + (err?.message || String(err)) + details);
+      }
+    } finally {
+      setDeleteLoading(false);
+    }
   };
 
   const handleToggleStatut = async (agence: Agence) => {
@@ -549,7 +614,7 @@ const CompagnieAgencesPage: React.FC = () => {
     navigate(`/compagnie/agence/${agencyId}/dashboard`);
   };
 
-  // ===== Render
+  // Render
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-8">
@@ -559,7 +624,7 @@ const CompagnieAgencesPage: React.FC = () => {
           className="flex items-center px-4 py-2 rounded-md shadow-sm text-white font-medium"
           style={{ backgroundColor: couleurPrincipale }}
         >
-        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
           {showForm ? "Masquer le formulaire" : "Ajouter une nouvelle agence"}
@@ -571,163 +636,164 @@ const CompagnieAgencesPage: React.FC = () => {
           onSubmit={handleSubmit}
           className="bg-white p-6 rounded-lg shadow-md mb-8 border border-gray-200"
         >
-          <h3 className="text-lg font-semibold mb-4" style={{ color: couleurPrincipale }}>
-            {editingId ? "Modifier une agence" : "Ajouter une nouvelle agence"}
-          </h3>
+          <fieldset disabled={creating} className={creating ? "opacity-60" : ""}>
+            <h3 className="text-lg font-semibold mb-4" style={{ color: couleurPrincipale }}>
+              {editingId ? "Modifier une agence" : "Ajouter une nouvelle agence"}
+            </h3>
 
-          <div className="grid md:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Nom de l'agence *</label>
-                <input
-                  name="nomAgence"
-                  value={formData.nomAgence}
-                  onChange={handleInputChange}
-                  className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Ville *</label>
-                <input
-                  name="ville"
-                  value={formData.ville}
-                  onChange={handleInputChange}
-                  className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Pays *</label>
-                <input
-                  name="pays"
-                  value={formData.pays}
-                  onChange={handleInputChange}
-                  className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Quartier</label>
-                <input
-                  name="quartier"
-                  value={formData.quartier}
-                  onChange={handleInputChange}
-                  className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Type</label>
-                <input
-                  name="type"
-                  value={formData.type}
-                  onChange={handleInputChange}
-                  className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Nom du gérant *</label>
-                <input
-                  name="nomGerant"
-                  value={formData.nomGerant}
-                  onChange={handleInputChange}
-                  className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Email du gérant *</label>
-                <input
-                  name="emailGerant"
-                  type="email"
-                  value={formData.emailGerant}
-                  onChange={handleInputChange}
-                  className={`form-input w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 ${
-                    formData.emailGerant && !isValidEmailFormat(formData.emailGerant)
-                      ? "border-red-500 focus:ring-red-400"
-                      : "border-gray-300 focus:ring-blue-500"
-                  }`}
-                  required
-                />
-                {emailError && <p className="text-red-600 text-sm mt-1">{emailError}</p>}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Téléphone *</label>
-                <input
-                  name="telephone"
-                  inputMode="numeric"
-                  value={formData.telephone}
-                  onChange={handleInputChange}
-                  minLength={8}
-                  maxLength={15}
-                  className={`form-input w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 ${
-                    formData.telephone && !isValidPhone(formData.telephone)
-                      ? "border-red-500 focus:ring-red-400"
-                      : "border-gray-300 focus:ring-blue-500"
-                  }`}
-                  required
-                  placeholder="Ex.: 78953098"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-6">
-            <label className="block text-sm font-medium mb-1">
-              📍 Position géographique{" "}
-              {formData.latitude && formData.longitude && (
-                <span className="text-gray-500 ml-2">
-                  ({formData.latitude}, {formData.longitude})
-                </span>
-              )}
-            </label>
-            <p className="text-sm text-gray-500 mb-2">Cliquez sur la carte pour positionner l'agence</p>
-            <div className="h-64 rounded-lg border border-gray-300 overflow-hidden">
-              <MapContainer
-                center={[
-                  formData.latitude ? parseFloat(formData.latitude) : 12.6392,
-                  formData.longitude ? parseFloat(formData.longitude) : -8.0029,
-                ]}
-                zoom={formData.latitude ? 15 : 12}
-                className="h-full w-full"
-                scrollWheelZoom
-              >
-                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                <MapClickHandler onPositionChange={handlePositionChange} />
-                {formData.latitude && formData.longitude && (
-                  <Marker
-                    position={[parseFloat(formData.latitude), parseFloat(formData.longitude)]}
+            <div className="grid md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Nom de l'agence *</label>
+                  <input
+                    name="nomAgence"
+                    value={formData.nomAgence}
+                    onChange={handleInputChange}
+                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
                   />
-                )}
-              </MapContainer>
-            </div>
-          </div>
+                </div>
 
-          <div className="flex justify-end space-x-3 mt-6">
-            <button
-              type="button"
-              onClick={resetForm}
-              className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              Annuler
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 rounded-md shadow-sm text-sm font-medium text-white hover:bg-opacity-90"
-              style={{ backgroundColor: couleurPrincipale }}
-            >
-              {editingId ? "Mettre à jour l'agence" : "Ajouter l'agence"}
-            </button>
-          </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Ville *</label>
+                  <input
+                    name="ville"
+                    value={formData.ville}
+                    onChange={handleInputChange}
+                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Pays *</label>
+                  <input
+                    name="pays"
+                    value={formData.pays}
+                    onChange={handleInputChange}
+                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Quartier</label>
+                  <input
+                    name="quartier"
+                    value={formData.quartier}
+                    onChange={handleInputChange}
+                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Type</label>
+                  <input
+                    name="type"
+                    value={formData.type}
+                    onChange={handleInputChange}
+                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Nom du gérant *</label>
+                  <input
+                    name="nomGerant"
+                    value={formData.nomGerant}
+                    onChange={handleInputChange}
+                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Email du gérant *</label>
+                  <input
+                    name="emailGerant"
+                    type="email"
+                    value={formData.emailGerant}
+                    onChange={handleInputChange}
+                    className={`form-input w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 ${
+                      formData.emailGerant && !isValidEmailFormat(formData.emailGerant)
+                        ? "border-red-500 focus:ring-red-400"
+                        : "border-gray-300 focus:ring-blue-500"
+                    }`}
+                    required
+                  />
+                  {emailError && <p className="text-red-600 text-sm mt-1">{emailError}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">Téléphone *</label>
+                  <input
+                    name="telephone"
+                    inputMode="numeric"
+                    value={formData.telephone}
+                    onChange={handleInputChange}
+                    minLength={8}
+                    maxLength={15}
+                    className={`form-input w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 ${
+                      formData.telephone && !isValidPhone(formData.telephone)
+                        ? "border-red-500 focus:ring-red-400"
+                        : "border-gray-300 focus:ring-blue-500"
+                    }`}
+                    required
+                    placeholder="Ex.: 78953098"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <label className="block text-sm font-medium mb-1">
+                📍 Position géographique{" "}
+                {formData.latitude && formData.longitude && (
+                  <span className="text-gray-500 ml-2">
+                    ({formData.latitude}, {formData.longitude})
+                  </span>
+                )}
+              </label>
+              <p className="text-sm text-gray-500 mb-2">Cliquez sur la carte pour positionner l'agence</p>
+              <div className="h-64 rounded-lg border border-gray-300 overflow-hidden">
+                <MapContainer
+                  center={[
+                    formData.latitude ? parseFloat(formData.latitude) : 12.6392,
+                    formData.longitude ? parseFloat(formData.longitude) : -8.0029,
+                  ]}
+                  zoom={formData.latitude ? 15 : 12}
+                  className="h-full w-full"
+                  scrollWheelZoom
+                >
+                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                  <MapClickHandler onPositionChange={handlePositionChange} />
+                  {formData.latitude && formData.longitude && (
+                    <Marker position={[parseFloat(formData.latitude), parseFloat(formData.longitude)]} />
+                  )}
+                </MapContainer>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                type="button"
+                onClick={resetForm}
+                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={creating}
+                className="px-4 py-2 rounded-md shadow-sm text-sm font-medium text-white hover:bg-opacity-90"
+                style={{ backgroundColor: couleurPrincipale }}
+              >
+                {editingId ? "Mettre à jour l'agence" : creating ? "Création…" : "Ajouter l'agence"}
+              </button>
+            </div>
+          </fieldset>
         </form>
       )}
 
@@ -824,6 +890,19 @@ const CompagnieAgencesPage: React.FC = () => {
                       </svg>
                       {ag.emailGerant}
                     </div>
+                    {ag.invitationId && (
+                      <div className="mb-2">
+                        <a
+                          href={`/accept-invitation/${(ag as any).invitationId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 underline hover:text-blue-800"
+                        >
+                          👉 Accepter l’invitation du gérant
+                        </a>
+                       </div>
+                     )}
+
                     <div className="flex items-center text-sm text-gray-500">
                       <svg
                         className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400"
@@ -946,7 +1025,7 @@ const CompagnieAgencesPage: React.FC = () => {
       <DeleteAgencyModal
         open={deleteModalOpen}
         onClose={() => !deleteLoading && setDeleteModalOpen(false)}
-        onConfirm={() => confirmDelete()}
+        onConfirm={(action, transferToAgencyId) => confirmDelete(action, transferToAgencyId)}
         agences={agences}
         agencyIdToDelete={agencyIdToDelete}
         loading={deleteLoading}

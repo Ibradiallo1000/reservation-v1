@@ -1,4 +1,5 @@
-import "./firebaseConfig";
+// src/index.tsx
+import { initFirebase } from "./firebaseConfig";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
@@ -7,7 +8,7 @@ import "./index.css";
 import "./i18n";
 import { handleFirestoreError } from "./utils/firestoreErrorHandler";
 
-/* ================== Interception globale des erreurs d’index ================== */
+/* ================== Interception globale des erreurs Firestore ================== */
 /** On évite de patcher plusieurs fois pendant le HMR */
 const w = window as any;
 if (!w.__teliya_boot_patched) {
@@ -24,18 +25,17 @@ if (!w.__teliya_boot_patched) {
   };
   window.addEventListener("unhandledrejection", onUnhandled);
 
-  // 2) Erreurs "classiques" (ex. throw new Error(...))
+  // 2) Erreurs classiques
   const onError = (event: ErrorEvent) => {
     const err: any = event?.error;
     const msg = String(err?.message ?? "");
     if (err?.code === "failed-precondition" && msg.includes("create_index")) {
       handleFirestoreError(err);
-      // on laisse quand même la stack aller en console
     }
   };
   window.addEventListener("error", onError);
 
-  // 3) console.error -> remonte un lien propre quand c'est un failed-precondition
+  // 3) Interception console.error
   const originalConsoleError = console.error.bind(console);
   console.error = (...args: any[]) => {
     const err = args?.[0];
@@ -48,9 +48,8 @@ if (!w.__teliya_boot_patched) {
 }
 /* ============================================================================ */
 
-/** Nettoyage des Service Workers existants (on garde le guard pour ne pas surprendre plus tard) */
+/** Désactivation forcée des anciens Service Workers */
 if ("serviceWorker" in navigator) {
-  // Mets à false si tu réactives un SW ensuite.
   const FORCE_UNREGISTER_SW = true;
   if (FORCE_UNREGISTER_SW) {
     navigator.serviceWorker.getRegistrations().then((regs) => {
@@ -59,23 +58,38 @@ if ("serviceWorker" in navigator) {
   }
 }
 
-/** Typage propre de l’option future (évite @ts-ignore) */
+/** Typage Router v7 */
 type RouterFuture = Partial<{
   v7_startTransition: boolean;
   v7_relativeSplatPath: boolean;
 }>;
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <BrowserRouter
-      future={
-        {
-          v7_startTransition: true,
-          v7_relativeSplatPath: true,
-        } as RouterFuture
-      }
-    >
-      <App />
-    </BrowserRouter>
-  </React.StrictMode>
-);
+/* ===================== Boot app (attend initFirebase) ===================== */
+(async () => {
+  try {
+    await initFirebase(); // connecte émulateurs si activés
+  } catch (err) {
+    console.warn("⚠️ initFirebase a échoué — on continue :", err);
+  }
+
+  const rootEl = document.getElementById("root");
+  if (!rootEl) {
+    console.error("❌ Impossible de trouver #root");
+    return;
+  }
+
+  ReactDOM.createRoot(rootEl).render(
+    <React.StrictMode>
+      <BrowserRouter
+        future={
+          {
+            v7_startTransition: true,
+            v7_relativeSplatPath: true,
+          } as RouterFuture
+        }
+      >
+        <App />
+      </BrowserRouter>
+    </React.StrictMode>
+  );
+})();

@@ -236,6 +236,7 @@ const AgenceEmbarquementPage: React.FC = () => {
 
   const [agencies, setAgencies] = useState<AgencyItem[]>([]);
   const [selectedAgencyId, setSelectedAgencyId] = useState<string | null>(userAgencyId);
+  const [agencyInfo, setAgencyInfo] = useState<any | null>(null);
 
   const [selectedDate, setSelectedDate] = useState<string>(
     location.state?.date || toLocalISO(new Date())
@@ -276,6 +277,25 @@ const AgenceEmbarquementPage: React.FC = () => {
       if (list.length === 1) setSelectedAgencyId(list[0].id);
     })();
   }, [companyId, userAgencyId, agencies.length]);
+
+  /* ---------- Charger les infos de l’agence sélectionnée ---------- */
+useEffect(() => {
+  if (!companyId || !selectedAgencyId) {
+    setAgencyInfo(null);
+    return;
+  }
+
+  const ref = doc(
+    db,
+    `companies/${companyId}/agences/${selectedAgencyId}`
+  );
+
+  getDoc(ref).then((snap) => {
+    if (snap.exists()) {
+      setAgencyInfo({ id: snap.id, ...(snap.data() as any) });
+    }
+  });
+}, [companyId, selectedAgencyId]);
 
   /* ---------- Affectation liée au trajet ---------- */
   useEffect(()=>{
@@ -1104,7 +1124,7 @@ const AgenceEmbarquementPage: React.FC = () => {
               </span>
               {selectedAgencyId ? (
                 <span className="px-2 py-1 rounded border bg-gray-50 text-sm">
-                  {agencies.find(a => a.id === selectedAgencyId)?.nom || "—"}
+                  {agencyInfo?.nomAgence || "—"}
                 </span>
               ) : (
                 <select
@@ -1299,11 +1319,11 @@ const AgenceEmbarquementPage: React.FC = () => {
                 )}
                 <div>
                   <div className="font-extrabold text-lg">
-                    {(company as any)?.nom || "Compagnie"}
-                  </div>
+                  {company?.nom ?? "—"}
+                </div>
                   <div className="text-xs text-gray-500">
-                    {(user as any)?.agencyName || agencies.find(a => a.id === selectedAgencyId)?.nom || "Agence"} • Tel. {(company as any)?.telephone || "—"}
-                  </div>
+                  {agencyInfo?.nomAgence || "Agence"} • Tel. {agencyInfo?.telephone || "—"}
+                 </div>
                 </div>
               </div>
             </div>

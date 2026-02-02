@@ -25,9 +25,9 @@ const MENU: MenuItem[] = [
   { label: "Réservations", icon: FileText, path: "reservations" },
   { label: "Finances", icon: DollarSign, path: "finances" },
   { label: "Statistiques", icon: BarChart2, path: "statistiques" },
-  { label: "Plans & tarifs", icon: DollarSign, path: "plans" },            // /admin/plans
-  { label: "Médias", icon: ImageIcon, path: "media" },                      // /admin/media
-  { label: "Paramètres", icon: Settings, path: "parametres-platforme" },    // /admin/parametres-platforme
+  { label: "Plans & tarifs", icon: DollarSign, path: "plans" },
+  { label: "Médias", icon: ImageIcon, path: "media" },
+  { label: "Paramètres", icon: Settings, path: "parametres-platforme" },
 ];
 
 const AdminSidebarLayout: React.FC = () => {
@@ -57,12 +57,13 @@ const AdminSidebarLayout: React.FC = () => {
     Array.isArray(user?.role) ? user.role.join(", ") : user?.role || "—";
 
   return (
-    <div className="h-screen overflow-hidden">
+    // app-root : s'assure que le fond couvre tout l'écran et évite bande visible
+    <div className="app-root h-screen overflow-hidden bg-[hsl(var(--background))] bg-white">
       <div className="grid grid-cols-[auto_1fr] h-full min-h-0">
         {/* === SIDEBAR === */}
         <aside
           className={[
-            "bg-orange-600 text-white relative flex flex-col",
+            "bg-orange-600 text-white relative flex flex-col min-h-screen z-30",
             "transition-all duration-300",
             collapsed ? "w-[84px]" : "w-64",
           ].join(" ")}
@@ -159,10 +160,12 @@ const AdminSidebarLayout: React.FC = () => {
           </header>
 
           {/* Contenu emboîté */}
-          <main className="flex-1 min-h-0 overflow-y-auto bg-transparent p-4 md:p-6">
-            <div className="bg-white rounded-l-3xl shadow-[0_8px_24px_rgba(0,0,0,0.08)] border border-orange-100">
-              <div className="p-4 md:p-6">
-                <Outlet />
+          <main className="flex-1 min-h-0 overflow-y-auto bg-[hsl(var(--background))] p-4 md:p-6">
+            <div className="h-full flex items-stretch">
+              <div className="bg-white w-full rounded-none md:rounded-l-3xl shadow-[0_8px_24px_rgba(0,0,0,0.08)] border border-orange-100 overflow-hidden">
+                <div className="p-4 md:p-6">
+                  <Outlet />
+                </div>
               </div>
             </div>
           </main>

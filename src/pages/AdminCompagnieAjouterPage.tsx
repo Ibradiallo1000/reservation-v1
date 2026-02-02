@@ -1,16 +1,17 @@
-// src/pages/AdminCompagnieAjouterPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  addDoc,
   collection,
   doc,
   getDoc,
   getDocs,
   orderBy,
   query,
+  serverTimestamp,
+  updateDoc,
 } from "firebase/firestore";
-import { db, functions } from "@/firebaseConfig"; // assure-toi que 'functions' est exporté depuis firebaseConfig
-import { httpsCallable } from "firebase/functions";
-import { useNavigate, Link } from "react-router-dom";
+import { db } from "@/firebaseConfig";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 /* =========================
    Types
@@ -18,24 +19,30 @@ import { useNavigate, Link } from "react-router-dom";
 type PlanDoc = {
   name: string;
   priceMonthly: number;
-  quotaReservations?: number;
-  overagePerReservation?: number;
-  commissionOnline: number; // 0.01 = 1%
-  feeGuichet: number;       // FCFA / billet
-  minimumMonthly: number;   // FCFA
+  commissionOnline: number;
+  feeGuichet: number;
+  minimumMonthly: number;
   maxAgences: number;
-  features: { publicPage: boolean; onlineBooking: boolean; guichet: boolean };
+  features: {
+    publicPage: boolean;
+    onlineBooking: boolean;
+    guichet: boolean;
+  };
 };
 
-type PlanOption = { id: string; name: string; priceMonthly?: number };
+type PlanOption = {
+  id: string;
+  name: string;
+  priceMonthly: number;
+};
 
 /* =========================
    Utils
 ========================= */
 const nf = new Intl.NumberFormat("fr-FR");
 
-function slugify(input: string) {
-  return input
+function slugify(value: string) {
+  return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
@@ -47,375 +54,243 @@ function slugify(input: string) {
    Component
 ========================= */
 const AdminCompagnieAjouterPage: React.FC = () => {
+  const { id } = useParams();
+  const isEdit = !!id;
   const navigate = useNavigate();
 
-  // ------- state formulaire (compagnie)
+  /* -------- Compagnie -------- */
   const [nom, setNom] = useState("");
   const [slug, setSlug] = useState("");
   const [email, setEmail] = useState("");
   const [telephone, setTelephone] = useState("");
   const [pays, setPays] = useState("");
+  const [status, setStatus] = useState<"actif" | "inactif">("actif");
 
-  // ------- state formulaire (admin principal)
-  const [adminNom, setAdminNom] = useState("");
+  /* -------- Admin principal -------- */
   const [adminEmail, setAdminEmail] = useState("");
-  const [adminTelephone, setAdminTelephone] = useState("");
 
-  // ------- state plans
+  /* -------- Plans -------- */
   const [plans, setPlans] = useState<PlanOption[]>([]);
-  const [selectedPlanId, setSelectedPlanId] = useState<string>("");
+  const [selectedPlanId, setSelectedPlanId] = useState("");
   const [selectedPlan, setSelectedPlan] = useState<PlanDoc | null>(null);
 
-  // ------- ui
+  /* -------- UI -------- */
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<null | { type: "info" | "error"; text: string }>(null);
 
-  /* Charger la liste des plans */
+  /* =========================
+     Charger plans
+  ========================= */
   useEffect(() => {
     (async () => {
-      try {
-        const snap = await getDocs(query(collection(db, "plans"), orderBy("priceMonthly", "asc")));
-        const opts: PlanOption[] = snap.docs.map((d) => {
-          const data = d.data() as any;
-          return {
-            id: d.id,
-            name: String(data?.name ?? d.id),
-            priceMonthly: Number(data?.priceMonthly ?? 0),
-          };
-        });
-        setPlans(opts);
-      } catch (e) {
-        console.error(e);
-        setMessage({ type: "error", text: "Erreur lors du chargement des plans." });
-      } finally {
-        setLoading(false);
-      }
+      const snap = await getDocs(
+        query(collection(db, "plans"), orderBy("priceMonthly", "asc"))
+      );
+      setPlans(
+        snap.docs.map((d) => ({
+          id: d.id,
+          name: d.data().name,
+          priceMonthly: d.data().priceMonthly,
+        }))
+      );
     })();
   }, []);
 
-  /* Charger le plan sélectionné pour le récap */
+  /* =========================
+     Charger compagnie (édition)
+  ========================= */
   useEffect(() => {
+    if (!isEdit) {
+      setLoading(false);
+      return;
+    }
+
     (async () => {
-      if (!selectedPlanId) {
-        setSelectedPlan(null);
+      const snap = await getDoc(doc(db, "companies", id!));
+      if (!snap.exists()) {
+        navigate("/admin/compagnies");
         return;
       }
-      try {
-        const pSnap = await getDoc(doc(db, "plans", selectedPlanId));
-        setSelectedPlan(pSnap.exists() ? (pSnap.data() as PlanDoc) : null);
-      } catch (e) {
-        console.error(e);
-        setSelectedPlan(null);
-      }
+
+      const d = snap.data();
+      setNom(d.nom ?? "");
+      setSlug(d.slug ?? "");
+      setEmail(d.email ?? "");
+      setTelephone(d.telephone ?? "");
+      setPays(d.pays ?? "");
+      setStatus(d.status ?? "actif");
+      setSelectedPlanId(d.planId ?? "");
+      setAdminEmail(d.adminEmail ?? "");
+      setLoading(false);
+    })();
+  }, [id, isEdit, navigate]);
+
+  /* =========================
+     Charger plan sélectionné
+  ========================= */
+  useEffect(() => {
+    if (!selectedPlanId) {
+      setSelectedPlan(null);
+      return;
+    }
+
+    (async () => {
+      const snap = await getDoc(doc(db, "plans", selectedPlanId));
+      setSelectedPlan(snap.exists() ? (snap.data() as PlanDoc) : null);
     })();
   }, [selectedPlanId]);
 
-  /* Slug auto à partir du nom tant que l’utilisateur ne force pas le champ */
+  /* =========================
+     Slug auto
+  ========================= */
   useEffect(() => {
-    if (!nom) return;
-    setSlug((prev) => {
-      const auto = slugify(nom);
-      if (!prev || prev === slugify(prev)) return auto;
-      return prev;
-    });
-  }, [nom]);
+    if (!isEdit && nom) setSlug(slugify(nom));
+  }, [nom, isEdit]);
 
-  /* Validation */
-  const canSubmit = useMemo(() => {
-    const base =
-      nom.trim().length >= 2 &&
-      slug.trim().length >= 2 &&
-      selectedPlanId &&
-      !!selectedPlan &&
-      adminNom.trim().length >= 3 &&
-      /\S+@\S+\.\S+/.test(adminEmail) &&
-      !saving;
+  const canSubmit = useMemo(
+    () => nom && slug && selectedPlan && !saving,
+    [nom, slug, selectedPlan, saving]
+  );
 
-    return base;
-  }, [nom, slug, selectedPlanId, selectedPlan, adminNom, adminEmail, saving]);
-
-  /* Soumission : appelle la Cloud Function createCompanyAndAdmin */
-  async function handleCreateCompany(e: React.FormEvent) {
+  /* =========================
+     Enregistrement
+  ========================= */
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit || !selectedPlan) return;
 
     setSaving(true);
     setMessage(null);
 
-    const payload = {
-      company: {
+    try {
+      const payload = {
         nom: nom.trim(),
         slug: slug.trim(),
         email: email.trim() || null,
         telephone: telephone.trim() || null,
         pays: pays.trim() || null,
+        status,
+        adminEmail: adminEmail.trim() || null,
+
         planId: selectedPlanId,
-      },
-      admin: {
-        fullName: adminNom.trim(),
-        email: adminEmail.trim(),
-        telephone: adminTelephone.trim() || null,
-      },
-      sendResetEmail: true,
-    };
+        plan: selectedPlan.name,
+        commissionOnline: selectedPlan.commissionOnline,
+        feeGuichet: selectedPlan.feeGuichet,
+        minimumMonthly: selectedPlan.minimumMonthly,
+        maxAgences: selectedPlan.maxAgences,
 
-    try {
-      const cf = httpsCallable(functions, "createCompanyAndAdmin");
-      await cf(payload);
+        publicPageEnabled: selectedPlan.features.publicPage,
+        onlineBookingEnabled: selectedPlan.features.onlineBooking,
+        guichetEnabled: selectedPlan.features.guichet,
 
-      setMessage({ type: "info", text: "Compagnie créée. L’email de réinitialisation a été envoyé à l’admin." });
-      setTimeout(() => {
-        navigate("/admin/compagnies", { replace: true, state: { created: true } });
-      }, 700);
-    } catch (e: any) {
-      console.error(e);
-      const txt =
-        (e?.message as string)?.includes("auth/operation-not-allowed")
-          ? "Auth: Email/Password n’est pas activé dans Firebase Authentication."
-          : "Erreur lors de la création. Vérifiez les champs et réessayez.";
-      setMessage({ type: "error", text: txt });
+        updatedAt: serverTimestamp(),
+      };
+
+      let companyId = id;
+
+      if (isEdit) {
+        await updateDoc(doc(db, "companies", id!), payload);
+      } else {
+        const ref = await addDoc(collection(db, "companies"), {
+          ...payload,
+          createdAt: serverTimestamp(),
+        });
+        companyId = ref.id;
+
+        /* =========================
+           INVITATION AUTO (CLÉ DU SYSTÈME)
+        ========================= */
+        if (adminEmail.trim()) {
+          const invitationRef = await addDoc(collection(db, "invitations"), {
+            email: adminEmail.trim().toLowerCase(),
+            role: "admin_compagnie",
+            companyId,
+            status: "pending",
+            createdAt: serverTimestamp(),
+          });
+
+          // 🔗 liaison visible dans la liste
+          await updateDoc(doc(db, "companies", companyId), {
+            invitationId: invitationRef.id,
+          });
+        }
+      }
+
+      navigate("/admin/compagnies");
+    } catch (err) {
+      console.error(err);
+      setMessage({
+        type: "error",
+        text: "Erreur lors de l’enregistrement de la compagnie.",
+      });
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) {
-    return (
-      <div className="p-8">
-        <div className="animate-pulse h-6 w-40 rounded bg-gray-200 mb-4" />
-        <div className="animate-pulse h-32 w-full rounded bg-gray-100" />
-      </div>
-    );
-  }
+  if (loading) return <div className="p-6">Chargement…</div>;
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="mb-6">
-        <div className="text-sm text-gray-500">
-          <Link to="/admin/compagnies" className="hover:underline">Compagnies</Link>
-          <span className="mx-2">/</span>
-          <span className="text-gray-700">Ajouter</span>
+    <div className="p-6 max-w-5xl mx-auto">
+      <h1 className="text-2xl font-bold text-orange-700 mb-4">
+        {isEdit ? "Modifier la compagnie" : "Ajouter une compagnie"}
+      </h1>
+
+      <form onSubmit={handleSubmit} className="bg-white border rounded-xl p-5 space-y-4">
+        <input className="input" value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Nom *" />
+        <input className="input" value={slug} onChange={(e) => setSlug(slugify(e.target.value))} placeholder="Slug *" />
+        <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email compagnie" />
+        <input className="input" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="Téléphone" />
+        <input className="input" value={pays} onChange={(e) => setPays(e.target.value)} placeholder="Pays" />
+
+        <input
+          className="input"
+          value={adminEmail}
+          onChange={(e) => setAdminEmail(e.target.value)}
+          placeholder="Email admin principal (invitation)"
+        />
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Plan *</label>
+          <select
+            className="input"
+            value={selectedPlanId}
+            onChange={(e) => setSelectedPlanId(e.target.value)}
+            required
+          >
+            <option value="">— Sélectionner un plan —</option>
+            {plans.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} • {nf.format(p.priceMonthly)} FCFA
+              </option>
+            ))}
+          </select>
         </div>
-        <h1 className="text-2xl font-extrabold mt-1 text-orange-700">Ajouter une compagnie</h1>
-        <p className="text-gray-600 mt-1">
-          Créez la compagnie, assignez un <b>plan</b>, et définissez l’<b>administrateur principal</b>.
-          Un mail de réinitialisation du mot de passe sera envoyé automatiquement.
-        </p>
-      </div>
 
-      {message && (
-        <div
-          className={`mb-5 rounded-lg border px-4 py-3 text-sm ${
-            message.type === "error"
-              ? "border-red-200 bg-red-50 text-red-700"
-              : "border-blue-200 bg-blue-50 text-blue-700"
-          }`}
-        >
-          {message.text}
+        <select className="input" value={status} onChange={(e) => setStatus(e.target.value as any)}>
+          <option value="actif">Actif</option>
+          <option value="inactif">Inactif</option>
+        </select>
+
+        <div className="flex gap-3">
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg"
+          >
+            {saving ? "Enregistrement…" : "Enregistrer"}
+          </button>
+          <Link to="/admin/compagnies" className="px-4 py-2 border rounded-lg">
+            Annuler
+          </Link>
         </div>
-      )}
 
-      {/* Form */}
-      <form onSubmit={handleCreateCompany} className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Col 1 : Infos compagnie */}
-        <section className="lg:col-span-2">
-          <div className="rounded-2xl border shadow-sm bg-white">
-            <div className="border-b px-5 py-3 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-800">Infos compagnie</h2>
-              <span className="text-xs text-gray-400">Champs * requis</span>
-            </div>
-
-            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label className="block">
-                <span className="text-sm text-gray-700">Nom *</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
-                  value={nom}
-                  onChange={(e) => setNom(e.target.value)}
-                  placeholder="Ex: Diallo Trans"
-                  required
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm text-gray-700">Slug *</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
-                  value={slug}
-                  onChange={(e) => setSlug(slugify(e.target.value))}
-                  placeholder="ex: diallo-trans"
-                  required
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm text-gray-700">Email</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="contact@exemple.com"
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm text-gray-700">Téléphone</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2"
-                  value={telephone}
-                  onChange={(e) => setTelephone(e.target.value)}
-                  placeholder="+223 74 00 00 00"
-                />
-              </label>
-
-              <label className="block md:col-span-2">
-                <span className="text-sm text-gray-700">Pays</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2"
-                  value={pays}
-                  onChange={(e) => setPays(e.target.value)}
-                  placeholder="Ex: Mali"
-                />
-              </label>
-            </div>
-          </div>
-
-          {/* Admin principal */}
-          <div className="rounded-2xl border shadow-sm bg-white mt-5">
-            <div className="border-b px-5 py-3">
-              <h2 className="font-semibold text-gray-800">Admin principal</h2>
-            </div>
-
-            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label className="block">
-                <span className="text-sm text-gray-700">Nom complet *</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2"
-                  value={adminNom}
-                  onChange={(e) => setAdminNom(e.target.value)}
-                  placeholder="Ex: Ibrahim Diallo"
-                  required
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm text-gray-700">Email (admin) *</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2"
-                  type="email"
-                  value={adminEmail}
-                  onChange={(e) => setAdminEmail(e.target.value)}
-                  placeholder="prenom.nom@exemple.com"
-                  required
-                />
-              </label>
-
-              <label className="block md:col-span-2">
-                <span className="text-sm text-gray-700">Téléphone (admin)</span>
-                <input
-                  className="mt-1 w-full border rounded-lg px-3 py-2"
-                  value={adminTelephone}
-                  onChange={(e) => setAdminTelephone(e.target.value)}
-                  placeholder="+223 74 00 00 00"
-                />
-              </label>
-            </div>
-          </div>
-        </section>
-
-        {/* Col 2 : Récap Plan (sticky) */}
-        <aside className="lg:col-span-1">
-          <div className="lg:sticky lg:top-6 space-y-4">
-            <div className="rounded-2xl border shadow-sm bg-white">
-              <div className="border-b px-5 py-3">
-                <h2 className="font-semibold text-gray-800">Plan</h2>
-              </div>
-
-              <div className="p-5">
-                <label className="block text-sm text-gray-700 font-medium mb-1">
-                  Plan (obligatoire)
-                </label>
-                <select
-                  className="border rounded-lg px-3 py-2 w-full"
-                  value={selectedPlanId}
-                  onChange={(e) => setSelectedPlanId(e.target.value)}
-                  required
-                >
-                  <option value="">— Sélectionner un plan —</option>
-                  {plans.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} {p.priceMonthly != null ? `• ${nf.format(p.priceMonthly)} FCFA / mois` : ""}
-                    </option>
-                  ))}
-                </select>
-
-                {selectedPlan && (
-                  <div className="mt-4 text-sm text-gray-800 rounded-xl border bg-gray-50 p-4">
-                    <div className="font-semibold mb-2">Récapitulatif</div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Nom</span>
-                        <b>{selectedPlan.name}</b>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Mensuel</span>
-                        <b>{nf.format(selectedPlan.priceMonthly)} FCFA</b>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Agences max</span>
-                        <b>{selectedPlan.maxAgences}</b>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Commission online</span>
-                        <b>{Math.round((selectedPlan.commissionOnline || 0) * 100)}%</b>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Frais guichet</span>
-                        <b>{nf.format(selectedPlan.feeGuichet)} FCFA / billet</b>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Minimum mensuel</span>
-                        <b>{nf.format(selectedPlan.minimumMonthly)} FCFA</b>
-                      </div>
-                      <div className="pt-2 text-gray-600">
-                        Features :{" "}
-                        <b>
-                          {selectedPlan.features?.publicPage ? "Vitrine" : "—"},{" "}
-                          {selectedPlan.features?.onlineBooking ? "Réservation en ligne" : "—"},{" "}
-                          {selectedPlan.features?.guichet ? "Guichet" : "—"}
-                        </b>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="submit"
-                disabled={!canSubmit}
-                className={`flex-1 px-4 py-2.5 rounded-xl text-white shadow-sm transition ${
-                  canSubmit
-                    ? "bg-orange-600 hover:bg-orange-700"
-                    : "bg-gray-400 cursor-not-allowed"
-                }`}
-              >
-                {saving ? "Création…" : "Créer la compagnie"}
-              </button>
-
-              <Link
-                to="/admin/compagnies"
-                className="px-4 py-2.5 rounded-xl border bg-white hover:bg-gray-50 text-gray-700"
-              >
-                ← Retour
-              </Link>
-            </div>
-          </div>
-        </aside>
+        {message && (
+          <p className={message.type === "error" ? "text-red-600" : "text-green-600"}>
+            {message.text}
+          </p>
+        )}
       </form>
     </div>
   );

@@ -26,6 +26,8 @@ const PlatformSearchResultsPage = lazy(() => import("./pages/PlatformSearchResul
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const Register = lazy(() => import("./pages/Register"));
 const ListeVillesPage = lazy(() => import("./pages/ListeVillesPage"));
+const AcceptInvitationPage = lazy(() => import("./pages/AcceptInvitationPage"));
+const AgenceRapportsPage = lazy(() => import("./pages/AgenceRapportsPage"));
 
 const ReservationClientPage = lazy(() => import("./pages/ReservationClientPage"));
 const ClientMesReservationsPage = lazy(() => import("./pages/ClientMesReservationsPage"));
@@ -144,6 +146,16 @@ const AppRoutes = () => {
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
         <Route path="/:slug/cookies" element={<CookiesPage />} />
+        {/* PUBLIC */}
+<Route path="/login" element={<LoginPage />} />
+<Route path="/register" element={<Register />} />
+<Route path="/finishSignIn" element={<FinishSignIn />} />
+
+{/* ✅ ACCEPTATION INVITATION */}
+<Route
+  path="/accept-invitation/:invitationId"
+  element={<AcceptInvitationPage />}
+/>
 
         {/* ========= ADMIN ========= */}
         <Route
@@ -171,6 +183,7 @@ const AppRoutes = () => {
           <Route path="statistiques" element={<AdminStatistiquesPage />} />
           <Route path="parametres-platforme" element={<AdminParametresPlatformPage />} />
           <Route path="media" element={<MediaPage />} />
+
         </Route>
 
         {/* COMPAGNIE */}
@@ -216,6 +229,8 @@ const AppRoutes = () => {
           <Route path="personnel" element={<AgencePersonnelPage />} />
           <Route path="shift" element={<AgenceShiftPage />} />
           <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
+          <Route path="rapports" element={<AgenceRapportsPage />} />
+
           {/* ❌ supprimé d’ici : <Route path="/finishSignIn" .../> */}
         </Route>
 
