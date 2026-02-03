@@ -1,4 +1,4 @@
-import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
 export const generateWeeklyTrips = async (
@@ -11,7 +11,7 @@ export const generateWeeklyTrips = async (
   agencyId: string
 ): Promise<string> => {
   try {
-    const weeklyTripsRef = collection(
+    const tripsCollection = collection(
       db,
       'companies',
       companyId,
@@ -19,20 +19,26 @@ export const generateWeeklyTrips = async (
       agencyId,
       'weeklyTrips'
     );
-
-    const docRef = await addDoc(weeklyTripsRef, {
-      departure,
-      arrival,
-      price,
-      horaires,
-      places,
+    
+    const newTripRef = doc(tripsCollection);
+    
+    const tripData = {
+      id: newTripRef.id,
+      departure: departure.trim(),
+      arrival: arrival.trim(),
+      price: price,
+      places: places,
+      horaires: horaires,
       active: true,
       createdAt: Timestamp.now(),
-    });
-
-    return docRef.id;
+      updatedAt: Timestamp.now()
+    };
+    
+    await setDoc(newTripRef, tripData);
+    
+    return newTripRef.id;
   } catch (error) {
-    console.error('Erreur lors de la création du trajet hebdomadaire :', error);
+    console.error('Erreur lors de la création du trajet:', error);
     throw error;
   }
 };
