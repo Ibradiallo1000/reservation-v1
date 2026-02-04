@@ -1,6 +1,14 @@
 // src/pages/AgenceComptabilitePage.tsx
-// Comptabilité d’agence (contrôle des postes, réceptions, rapports, caisse)
-// ———————————————————————————————————————————————————————————————
+// Comptabilité d'agence (contrôle des postes, réceptions, rapports, caisse)
+// ============================================================================
+// RESPONSABLE : Comptable d'agence
+// OBJECTIF : Contrôle financier des opérations de vente en guichet
+// FONCTIONNALITÉS :
+// 1. Contrôle des postes de vente (activation/pause/clôture)
+// 2. Réception et validation des remises de caisse
+// 3. Consultation des rapports détaillés
+// 4. Gestion de la caisse d'agence (entrées/sorties/soldes)
+// ============================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -13,11 +21,15 @@ import useCompanyTheme from '@/hooks/useCompanyTheme';
 import {
   Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4,
   Download, FileText, HandIcon, LogOut, MapPin, Pause, Play, Plus, StopCircle,
-  Ticket, Wallet, Info as InfoIcon
+  Ticket, Wallet, Info as InfoIcon, Shield, Receipt, BarChart3
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-/* ========================= TYPES ========================= */
+/* ============================================================================
+   SECTION : TYPES ET INTERFACES
+   Description : Définition des structures de données principales
+   ============================================================================ */
+
 type ShiftStatus = 'pending' | 'active' | 'paused' | 'closed' | 'validated';
 
 type ShiftDoc = {
@@ -73,7 +85,7 @@ type AccountantProfile = {
   code?: string;
 };
 
-// Agrégats compta (réceptions)
+// Agrégats compta pour les réceptions
 type ShiftAgg = {
   reservations: number;
   tickets: number;
@@ -82,7 +94,11 @@ type ShiftAgg = {
   mmExpected: number;
 };
 
-/* ============== Caisse ============== */
+/* ============================================================================
+   SECTION : TYPES CAISSE
+   Description : Structures pour la gestion de la caisse d'agence
+   ============================================================================ */
+
 type CashDay = { dateISO: string; entrees: number; sorties: number; solde: number };
 type MovementKind = 'depense' | 'transfert_banque';
 
@@ -94,12 +110,16 @@ type NewOutForm = {
   note?: string;
 };
 
-/* ========================= HELPERS ========================= */
+/* ============================================================================
+   SECTION : HELPER FUNCTIONS
+   Description : Fonctions utilitaires pour le formatage et les calculs
+   ============================================================================ */
+
 const fmtMoney = (n: number) => `${(n || 0).toLocaleString('fr-FR')} FCFA`;
 const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
 const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 1, 0, 0, 0, 0);
 
-// Formats FR
+// Formats français pour les dates
 const fmtDT = (d?: Date | null) =>
   d ? d.toLocaleString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
 const fmtD  = (dISO?: string) => {
@@ -108,25 +128,41 @@ const fmtD  = (dISO?: string) => {
   return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric' });
 };
 
-/* ============================= PAGE ============================ */
+/* ============================================================================
+   SECTION : COMPOSANT PRINCIPAL
+   Description : Page principale de comptabilité d'agence
+   ============================================================================ */
+
 const AgenceComptabilitePage: React.FC = () => {
+  console.log('[AgenceCompta] Initialisation de la page de comptabilité');
+  
   const navigate = useNavigate();
   const { user, company, logout } = useAuth() as any;
   const theme = useCompanyTheme(company) || { primary: '#EA580C', secondary: '#F97316' };
 
-  // header branding
+  /* ============================================================================
+     SECTION : ÉTATS REACT - HEADER ET BRANDING
+     Description : Données d'entreprise et d'agence pour l'affichage
+     ============================================================================ */
+  
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState<string>('Compagnie');
   const [agencyName, setAgencyName] = useState<string>('Agence');
 
-  // tabs
+  /* ============================================================================
+     SECTION : ÉTATS REACT - NAVIGATION ET UTILISATEUR
+     Description : Gestion des onglets et profil comptable
+     ============================================================================ */
+  
   const [tab, setTab] = useState<'controle' | 'receptions' | 'rapports' | 'caisse'>('controle');
-
-  // accountant
   const [accountant, setAccountant] = useState<AccountantProfile | null>(null);
   const [accountantCode, setAccountantCode] = useState<string>('ACCOUNT');
 
-  // shifts
+  /* ============================================================================
+     SECTION : ÉTATS REACT - POSTES DE VENTE
+     Description : Liste des postes groupés par statut
+     ============================================================================ */
+  
   const [pendingShifts, setPendingShifts] = useState<ShiftDoc[]>([]);
   const [activeShifts, setActiveShifts] = useState<ShiftDoc[]>([]);
   const [pausedShifts, setPausedShifts] = useState<ShiftDoc[]>([]);
@@ -134,25 +170,45 @@ const AgenceComptabilitePage: React.FC = () => {
   const [validatedShifts, setValidatedShifts] = useState<ShiftDoc[]>([]);
   const [validatedLimit, setValidatedLimit] = useState(10);
 
-  // reports
+  /* ============================================================================
+     SECTION : ÉTATS REACT - RAPPORTS
+     Description : Données pour les rapports détaillés
+     ============================================================================ */
+  
   const [tickets, setTickets] = useState<TicketRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
   const [selectedShiftForReport, setSelectedShiftForReport] = useState<string>('');
   const [dedupCollapsed, setDedupCollapsed] = useState<number>(0);
 
-  // receptions
+  /* ============================================================================
+     SECTION : ÉTATS REACT - RÉCEPTIONS
+     Description : Gestion des saisies pour la réception d'espèces
+     ============================================================================ */
+  
   const [receptionInputs, setReceptionInputs] = useState<Record<string, { cashReceived: string }>>({});
   const [savingShiftIds, setSavingShiftIds] = useState<Record<string, boolean>>({});
 
-  // caches / live
+  /* ============================================================================
+     SECTION : ÉTATS REACT - CACHES ET STATISTIQUES LIVE
+     Description : Cache utilisateurs et statistiques en temps réel
+     ============================================================================ */
+  
   const [usersCache, setUsersCache] = useState<Record<string, { name?: string; email?: string; code?: string }>>({});
   const [liveStats, setLiveStats] = useState<Record<string, { reservations: number; tickets: number; amount: number }>>({});
   const liveUnsubsRef = useRef<Record<string, () => void>>({});
 
-  // agrégats compta
+  /* ============================================================================
+     SECTION : ÉTATS REACT - AGRÉGATS COMPTABLES
+     Description : Calculs agrégés pour la validation des réceptions
+     ============================================================================ */
+  
   const [aggByShift, setAggByShift] = useState<Record<string, ShiftAgg>>({});
 
-  // CAISSE
+  /* ============================================================================
+     SECTION : ÉTATS REACT - CAISSE D'AGENCE
+     Description : Gestion des mouvements de caisse et filtres
+     ============================================================================ */
+  
   const [useCustomRange, setUseCustomRange] = useState(false);
   const [monthValue, setMonthValue] = useState<string>(() => {
     const d = new Date();
@@ -165,43 +221,72 @@ const AgenceComptabilitePage: React.FC = () => {
   const [totOut, setTotOut] = useState(0);
   const [loadingCash, setLoadingCash] = useState(false);
 
+  /* ============================================================================
+     SECTION : ÉTATS REACT - MODALES
+     Description : Gestion des modales pour les sorties de caisse
+     ============================================================================ */
+  
   const [showOutModal, setShowOutModal] = useState(false);
   const [outForm, setOutForm] = useState<NewOutForm>({ kind: 'depense', montant: '', libelle: '', banque: '', note: '' });
 
-  /* ---------- Init header + accountant ---------- */
+  /* ============================================================================
+     SECTION : INITIALISATION DU HEADER ET PROFIL COMPTABLE
+     Description : Chargement des données d'entreprise et du profil utilisateur
+     ============================================================================ */
+  
   useEffect(() => {
+    console.log('[AgenceCompta] Chargement des données header et profil');
+    
     (async () => {
-      if (!user?.companyId || !user?.agencyId) return;
-
-      const compSnap = await getDoc(doc(db, 'companies', user.companyId));
-      if (compSnap.exists()) {
-        const c = compSnap.data() as any;
-        setCompanyLogo(c.logoUrl || c.logo || null);
-        setCompanyName(c.nom || c.name || 'Compagnie');
-      }
-      const agSnap = await getDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}`));
-      if (agSnap.exists()) {
-        const a = agSnap.data() as any;
-        const ville = a?.ville || a?.city || a?.nomVille || a?.villeDepart || '';
-        setAgencyName(a?.nomAgence || a?.nom || ville || 'Agence');
+      if (!user?.companyId || !user?.agencyId) {
+        console.warn('[AgenceCompta] Données utilisateur incomplètes');
+        return;
       }
 
-      const uSnap = await getDoc(doc(db, 'users', user.uid));
-      if (uSnap.exists()) {
-        const u = uSnap.data() as any;
-        const prof: AccountantProfile = {
-          id: user.uid,
-          displayName: u.displayName || user.displayName || '',
-          email: u.email || user.email || '',
-          staffCode: u.staffCode, codeCourt: u.codeCourt, code: u.code,
-        };
-        setAccountant(prof);
-        setAccountantCode(u.staffCode || u.codeCourt || u.code || 'ACCOUNT');
+      try {
+        // Chargement des données de la compagnie
+        const compSnap = await getDoc(doc(db, 'companies', user.companyId));
+        if (compSnap.exists()) {
+          const c = compSnap.data() as any;
+          setCompanyLogo(c.logoUrl || c.logo || null);
+          setCompanyName(c.nom || c.name || 'Compagnie');
+          console.log(`[AgenceCompta] Compagnie chargée: ${c.nom || c.name}`);
+        }
+
+        // Chargement des données de l'agence
+        const agSnap = await getDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}`));
+        if (agSnap.exists()) {
+          const a = agSnap.data() as any;
+          const ville = a?.ville || a?.city || a?.nomVille || a?.villeDepart || '';
+          setAgencyName(a?.nomAgence || a?.nom || ville || 'Agence');
+          console.log(`[AgenceCompta] Agence chargée: ${a?.nomAgence || a?.nom || ville}`);
+        }
+
+        // Chargement du profil comptable
+        const uSnap = await getDoc(doc(db, 'users', user.uid));
+        if (uSnap.exists()) {
+          const u = uSnap.data() as any;
+          const prof: AccountantProfile = {
+            id: user.uid,
+            displayName: u.displayName || user.displayName || '',
+            email: u.email || user.email || '',
+            staffCode: u.staffCode, codeCourt: u.codeCourt, code: u.code,
+          };
+          setAccountant(prof);
+          setAccountantCode(u.staffCode || u.codeCourt || u.code || 'ACCOUNT');
+          console.log(`[AgenceCompta] Comptable identifié: ${prof.displayName} (${accountantCode})`);
+        }
+      } catch (error) {
+        console.error('[AgenceCompta] Erreur lors du chargement des données:', error);
       }
     })().catch(console.error);
   }, [user?.uid, user?.companyId, user?.agencyId]);
 
-  /* ---------- Normalisation doc shift ---------- */
+  /* ============================================================================
+     SECTION : NORMALISATION DES DONNÉES SHIFT
+     Description : Uniformisation des données de poste depuis Firestore
+     ============================================================================ */
+  
   const normalizeShift = (id: string, r: any): ShiftDoc => ({
     id,
     userId: r.userId || r.openedById || '',
@@ -228,15 +313,29 @@ const AgenceComptabilitePage: React.FC = () => {
     comptable: r.comptable,
   });
 
-  /* ---------- Subscribe shifts ---------- */
+  /* ============================================================================
+     SECTION : ABONNEMENT AUX POSTES DE VENTE
+     Description : Écoute en temps réel des changements dans Firestore
+     ============================================================================ */
+  
   useEffect(() => {
-    if (!user?.companyId || !user?.agencyId) return;
+    console.log('[AgenceCompta] Démarrage de l\'écoute des postes');
+    
+    if (!user?.companyId || !user?.agencyId) {
+      console.warn('[AgenceCompta] Abandon de l\'écoute - IDs manquants');
+      return;
+    }
+    
     const ref = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
     const unsub = onSnapshot(ref, async (snap) => {
+      console.log(`[AgenceCompta] Mise à jour des postes: ${snap.docs.length} document(s)`);
+      
       const all = snap.docs.map(d => normalizeShift(d.id, d.data()));
 
+      // Cache des informations utilisateur
       const needed = Array.from(new Set(all.map(s => s.userId).filter(uid => !!uid && !usersCache[uid])));
       if (needed.length) {
+        console.log(`[AgenceCompta] Chargement de ${needed.length} utilisateur(s) manquant(s)`);
         const entries = await Promise.all(needed.map(async uid => {
           const us = await getDoc(doc(db, 'users', uid));
           if (!us.exists()) return [uid, {}] as const;
@@ -250,37 +349,60 @@ const AgenceComptabilitePage: React.FC = () => {
         setUsersCache(prev => Object.fromEntries([...Object.entries(prev), ...entries]));
       }
 
+      // Tri par temps
       const byTime = (s: ShiftDoc) =>
         (s.validatedAt?.toMillis?.() ?? 0) ||
         (s.endTime?.toMillis?.() ?? 0) ||
         (s.startTime?.toMillis?.() ?? 0);
 
+      // Mise à jour des listes groupées par statut
       setPendingShifts(all.filter(s => s.status === 'pending').sort((a,b)=>byTime(b)-byTime(a)));
       setActiveShifts(all.filter(s => s.status === 'active').sort((a,b)=>byTime(b)-byTime(a)));
       setPausedShifts(all.filter(s => s.status === 'paused').sort((a,b)=>byTime(b)-byTime(a)));
       setClosedShifts(all.filter(s => s.status === 'closed').sort((a,b)=>byTime(b)-byTime(a)));
       setValidatedShifts(all.filter(s => s.status === 'validated').sort((a,b)=>byTime(b)-byTime(a)));
+
+      console.log('[AgenceCompta] Postes mis à jour:', {
+        pending: all.filter(s => s.status === 'pending').length,
+        active: all.filter(s => s.status === 'active').length,
+        paused: all.filter(s => s.status === 'paused').length,
+        closed: all.filter(s => s.status === 'closed').length,
+        validated: all.filter(s => s.status === 'validated').length
+      });
     });
-    return () => unsub();
+    
+    return () => {
+      console.log('[AgenceCompta] Arrêt de l\'écoute des postes');
+      unsub();
+    };
   }, [user?.companyId, user?.agencyId]);
 
-  /* ---------- Live stats (active + paused) ---------- */
+  /* ============================================================================
+     SECTION : STATISTIQUES EN TEMPS RÉEL
+     Description : Calcul des stats live pour les postes actifs/en pause
+     ============================================================================ */
+  
   useEffect(() => {
+    console.log('[AgenceCompta] Mise à jour des statistiques live');
+    
     if (!user?.companyId || !user?.agencyId) return;
     const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
 
-    // Nettoyer les écoutes inutiles
+    // Nettoyage des écouteurs inutiles
     for (const id of Object.keys(liveUnsubsRef.current)) {
       const stillNeeded = !![...activeShifts, ...pausedShifts].find(s => s.id === id);
       if (!stillNeeded) {
+        console.log(`[AgenceCompta] Arrêt de l'écoute pour le poste ${id}`);
         liveUnsubsRef.current[id]?.();
         delete liveUnsubsRef.current[id];
       }
     }
 
-    // Ajouter les écoutes pour active + paused
+    // Ajout des écouteurs pour les postes actifs/en pause
     for (const s of [...activeShifts, ...pausedShifts]) {
       if (liveUnsubsRef.current[s.id]) continue;
+      
+      console.log(`[AgenceCompta] Démarrage de l'écoute pour le poste ${s.id}`);
       const qLive = query(rRef, where('shiftId', '==', s.id), where('canal', '==', 'guichet'));
       const unsub = onSnapshot(qLive, (snap) => {
         let reservations = 0, tickets = 0, amount = 0;
@@ -296,17 +418,27 @@ const AgenceComptabilitePage: React.FC = () => {
     }
 
     return () => {
+      console.log('[AgenceCompta] Nettoyage des écouteurs live');
       for (const k of Object.keys(liveUnsubsRef.current)) liveUnsubsRef.current[k]?.();
       liveUnsubsRef.current = {};
     };
   }, [activeShifts, pausedShifts, user?.companyId, user?.agencyId]);
 
-  /* ---------- Agrégats pour réceptions ---------- */
+  /* ============================================================================
+     SECTION : AGRÉGATS POUR RÉCEPTIONS
+     Description : Calcul des montants attendus pour validation comptable
+     ============================================================================ */
+  
   useEffect(() => {
+    console.log('[AgenceCompta] Calcul des agrégats pour réceptions');
+    
     (async () => {
       if (!user?.companyId || !user?.agencyId) return;
       const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
       const map: Record<string, ShiftAgg> = {};
+      
+      console.log(`[AgenceCompta] ${closedShifts.length} poste(s) clôturé(s) à analyser`);
+      
       for (const s of closedShifts) {
         const snap = await getDocs(query(rRef, where('shiftId', '==', s.id)));
         let reservations = 0, tickets = 0, amount = 0, cashExpected = 0;
@@ -320,109 +452,179 @@ const AgenceComptabilitePage: React.FC = () => {
         });
         map[s.id] = { reservations, tickets, amount, cashExpected, mmExpected: 0 };
       }
+      
       setAggByShift(map);
-    })().catch((e) => console.error('[Compta] Erreur agrégats réceptions:', e));
+      console.log('[AgenceCompta] Agrégats calculés:', Object.keys(map).length);
+    })().catch((e) => console.error('[AgenceCompta] Erreur agrégats réceptions:', e));
   }, [closedShifts, user?.companyId, user?.agencyId]);
 
-  /* ---------- Actions (activer / pause / continuer) ---------- */
-  const activateShift  = useCallback(async (id:string)=>{
-    if(!user?.companyId||!user?.agencyId||!accountant) return;
+  /* ============================================================================
+     SECTION : ACTIONS SUR LES POSTES
+     Description : Gestion du cycle de vie des postes (activation/pause/continuer)
+     ============================================================================ */
+  
+  const activateShift = useCallback(async (id:string) => {
+    console.log(`[AgenceCompta] Activation du poste ${id}`);
+    
+    if(!user?.companyId||!user?.agencyId||!accountant) {
+      console.warn('[AgenceCompta] Données manquantes pour l\'activation');
+      return;
+    }
+    
     const base = `companies/${user.companyId}/agences/${user.agencyId}`;
     const sRef = doc(db,`${base}/shifts/${id}`);
     const repRef = doc(db,`${base}/shiftReports/${id}`);
 
-    await runTransaction(db, async (tx) => {
-      const snap = await tx.get(sRef);
-      if (!snap.exists()) throw new Error('Poste introuvable');
-      const cur = snap.data() as any;
-      const now = Timestamp.now();
-      const start = cur.startTime || cur.openedAt || now;
+    try {
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(sRef);
+        if (!snap.exists()) throw new Error('Poste introuvable');
+        const cur = snap.data() as any;
+        const now = Timestamp.now();
+        const start = cur.startTime || cur.openedAt || now;
 
-      tx.update(sRef, {
-        status: 'active',
-        startTime: cur.startTime ?? now,
+        tx.update(sRef, {
+          status: 'active',
+          startTime: cur.startTime ?? now,
+        });
+
+        tx.set(repRef, {
+          companyId: user.companyId,
+          agencyId: user.agencyId,
+          userId: cur.userId || cur.openedById || '',
+          userName: cur.userName || cur.userEmail || '',
+          userCode: cur.userCode || cur.openedByCode || '',
+          startAt: start,
+          updatedAt: now,
+        }, { merge: true });
       });
-
-      tx.set(repRef, {
-        companyId: user.companyId,
-        agencyId: user.agencyId,
-        userId: cur.userId || cur.openedById || '',
-        userName: cur.userName || cur.userEmail || '',
-        userCode: cur.userCode || cur.openedByCode || '',
-        startAt: start,
-        updatedAt: now,
-      }, { merge: true });
-    });
+      
+      console.log(`[AgenceCompta] Poste ${id} activé avec succès`);
+    } catch (error) {
+      console.error(`[AgenceCompta] Erreur lors de l'activation du poste ${id}:`, error);
+      alert('Erreur lors de l\'activation du poste');
+    }
   },[user?.companyId,user?.agencyId,accountant]);
 
-  const pauseShift     = useCallback(async (id:string)=>{
+  const pauseShift = useCallback(async (id:string) => {
+    console.log(`[AgenceCompta] Mise en pause du poste ${id}`);
+    
     if(!user?.companyId||!user?.agencyId) return;
-    await updateDoc(doc(db,`companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`),{status:'paused'});
+    
+    try {
+      await updateDoc(doc(db,`companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`),{status:'paused'});
+      console.log(`[AgenceCompta] Poste ${id} mis en pause`);
+    } catch (error) {
+      console.error(`[AgenceCompta] Erreur lors de la pause du poste ${id}:`, error);
+    }
   },[user?.companyId,user?.agencyId]);
 
-  const continueShift  = useCallback(async (id:string)=>{
+  const continueShift = useCallback(async (id:string) => {
+    console.log(`[AgenceCompta] Reprise du poste ${id}`);
+    
     if(!user?.companyId||!user?.agencyId) return;
-    await updateDoc(doc(db,`companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`),{status:'active'});
+    
+    try {
+      await updateDoc(doc(db,`companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`),{status:'active'});
+      console.log(`[AgenceCompta] Poste ${id} repris`);
+    } catch (error) {
+      console.error(`[AgenceCompta] Erreur lors de la reprise du poste ${id}:`, error);
+    }
   },[user?.companyId,user?.agencyId]);
 
-  /* ---------- PATCH comptable backfill : closeShift forcé ---------- */
+  /* ============================================================================
+     SECTION : CLÔTURE FORCÉE PAR LE COMPTABLE
+     Description : Clôture administrative d'un poste avec rattachement des transactions
+     ============================================================================ */
+  
   const closeShift = useCallback(async (id: string, opts?: { forcedByAccountant?: boolean }) => {
+    console.log(`[AgenceCompta] Clôture du poste ${id}`, opts);
+    
     if (!user?.companyId || !user?.agencyId) return;
 
     const base = `companies/${user.companyId}/agences/${user.agencyId}`;
     const shiftRef = doc(db, `${base}/shifts/${id}`);
     const rRef = collection(db, `${base}/reservations`);
 
-    const sSnap = await getDoc(shiftRef);
-    if (!sSnap.exists()) { alert('Poste introuvable'); return; }
-    const sDoc = sSnap.data() as any;
+    try {
+      const sSnap = await getDoc(shiftRef);
+      if (!sSnap.exists()) { 
+        console.warn(`[AgenceCompta] Poste ${id} introuvable`);
+        alert('Poste introuvable'); 
+        return; 
+      }
+      
+      const sDoc = sSnap.data() as any;
+      const end = Timestamp.now();
+      
+      console.log(`[AgenceCompta] Mise à jour du statut du poste ${id} en 'closed'`);
+      await updateDoc(shiftRef, { status: 'closed', endTime: end });
 
-    const end = Timestamp.now();
-    await updateDoc(shiftRef, { status: 'closed', endTime: end });
+      if (!opts?.forcedByAccountant) return;
 
-    if (!opts?.forcedByAccountant) return;
+      // Rattachement des transactions orphelines
+      const startRaw = sDoc.startTime?.toDate?.() ?? sDoc.openedAt?.toDate?.() ?? new Date();
+      const endRaw   = end.toDate();
+      const start = new Date(startRaw.getTime() - 5 * 60 * 1000);
+      const endW  = new Date(endRaw.getTime() + 6 * 60 * 60 * 1000);
 
-    const startRaw = sDoc.startTime?.toDate?.() ?? sDoc.openedAt?.toDate?.() ?? new Date();
-    const endRaw   = end.toDate();
-    const start = new Date(startRaw.getTime() - 5 * 60 * 1000);
-    const endW  = new Date(endRaw.getTime() + 6 * 60 * 60 * 1000);
+      const userId   = sDoc.userId || sDoc.openedById || '';
+      const userCode = sDoc.userCode || sDoc.openedByCode || '';
 
-    const userId   = sDoc.userId || sDoc.openedById || '';
-    const userCode = sDoc.userCode || sDoc.openedByCode || '';
+      const q1 = query(
+        rRef,
+        where('createdAt', '>=', Timestamp.fromDate(start)),
+        where('createdAt', '<=', Timestamp.fromDate(endW)),
+        orderBy('createdAt','asc')
+      );
+      const snap = await getDocs(q1);
 
-    const q1 = query(
-      rRef,
-      where('createdAt', '>=', Timestamp.fromDate(start)),
-      where('createdAt', '<=', Timestamp.fromDate(endW)),
-      orderBy('createdAt','asc')
-    );
-    const snap = await getDocs(q1);
+      const toPatch = snap.docs.filter(d => {
+        const r = d.data() as any;
+        if (r.shiftId) return false;
+        const canal = String(r.canal || '').toLowerCase();
+        const isCounter = canal === 'guichet' || (canal === '' && String(r.paiement||'').toLowerCase().includes('esp'));
+        const sameSeller =
+          (!!userId   && r.guichetierId   === userId) ||
+          (!!userCode && r.guichetierCode === userCode);
+        return isCounter && sameSeller;
+      });
 
-    const toPatch = snap.docs.filter(d => {
-      const r = d.data() as any;
-      if (r.shiftId) return false;
-      const canal = String(r.canal || '').toLowerCase();
-      const isCounter = canal === 'guichet' || (canal === '' && String(r.paiement||'').toLowerCase().includes('esp'));
-      const sameSeller =
-        (!!userId   && r.guichetierId   === userId) ||
-        (!!userCode && r.guichetierCode === userCode);
-      return isCounter && sameSeller;
-    });
+      if (toPatch.length) {
+        console.log(`[AgenceCompta] Rattachement de ${toPatch.length} transaction(s) au poste ${id}`);
+        const batch = writeBatch(db);
+        toPatch.forEach(d => batch.update(d.ref, { shiftId: id }));
+        await batch.commit();
+      }
 
-    if (toPatch.length) {
-      const batch = writeBatch(db);
-      toPatch.forEach(d => batch.update(d.ref, { shiftId: id }));
-      await batch.commit();
+      console.log(`[AgenceCompta] Poste ${id} clôturé avec succès`);
+    } catch (error) {
+      console.error(`[AgenceCompta] Erreur lors de la clôture du poste ${id}:`, error);
+      alert('Erreur lors de la clôture du poste');
     }
   }, [user?.companyId, user?.agencyId]);
 
-  /* ---------- Réception (tampon comptable + reçu) ---------- */
+  /* ============================================================================
+     SECTION : RÉCEPTION ET VALIDATION COMPTABLE
+     Description : Validation des remises d'espèces et génération de reçus
+     ============================================================================ */
+  
   const setReceptionInput = (shiftId: string, value: string) =>
     setReceptionInputs(prev => ({ ...prev, [shiftId]: { cashReceived: value } }));
 
   const validateReception = useCallback(async (shift: ShiftDoc) => {
-    if (!user?.companyId || !user?.agencyId || !accountant) return;
-    if (savingShiftIds[shift.id]) return;
+    console.log(`[AgenceCompta] Validation de la réception pour le poste ${shift.id}`);
+    
+    if (!user?.companyId || !user?.agencyId || !accountant) {
+      console.warn('[AgenceCompta] Données manquantes pour la validation');
+      return;
+    }
+    
+    if (savingShiftIds[shift.id]) {
+      console.log(`[AgenceCompta] Validation déjà en cours pour le poste ${shift.id}`);
+      return;
+    }
+    
     setSavingShiftIds(p => ({ ...p, [shift.id]: true }));
 
     const inputs = receptionInputs[shift.id] || { cashReceived: '0' };
@@ -431,8 +633,15 @@ const AgenceComptabilitePage: React.FC = () => {
       const n = Number(clean);
       return Number.isFinite(n) && n >= 0 ? n : NaN;
     };
+    
     const cashRcv = toAmount(inputs.cashReceived || '');
-    if (!Number.isFinite(cashRcv)) { alert('Montant espèces reçu invalide.'); setSavingShiftIds(p=>({...p, [shift.id]:false})); return; }
+    if (!Number.isFinite(cashRcv)) { 
+      console.warn(`[AgenceCompta] Montant invalide: ${inputs.cashReceived}`);
+      alert('Montant espèces reçu invalide.'); 
+      setSavingShiftIds(p=>({...p, [shift.id]:false})); 
+      return; 
+    }
+    
     const mmRcv = 0;
 
     const shiftRef = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts/${shift.id}`);
@@ -451,20 +660,26 @@ const AgenceComptabilitePage: React.FC = () => {
         const s = await tx.get(shiftRef);
         if (!s.exists()) throw new Error('Poste introuvable.');
         const cur = s.data() as any;
+        
         if (cur.status !== 'closed' && cur.status !== 'validated') {
           throw new Error('Seuls les postes clôturés peuvent être validés.');
         }
 
         const now = Timestamp.now();
         const startAt = cur.startTime || cur.openedAt || now;
-        const endAt = cur.endTime || now; // PATCH: assure une date de fin
+        const endAt = cur.endTime || now;
 
         const rcpt = {
-          shiftId: shift.id, userId: shift.userId, userCode: shift.userCode || '',
-          companyId: user.companyId, agencyId: user.agencyId,
+          shiftId: shift.id, 
+          userId: shift.userId, 
+          userCode: shift.userCode || '',
+          companyId: user.companyId, 
+          agencyId: user.agencyId,
           totalAmount: agg?.amount ?? (cur.totalAmount || 0),
-          cashExpected: computedCashExpected || 0, cashReceived: cashRcv,
-          mmExpected: computedMmExpected || 0, mmReceived: mmRcv,
+          cashExpected: computedCashExpected || 0, 
+          cashReceived: cashRcv,
+          mmExpected: computedMmExpected || 0, 
+          mmReceived: mmRcv,
           accountantId: accountant.id,
           accountantName: accountant.displayName || accountant.email || '',
           accountantCode,
@@ -475,7 +690,6 @@ const AgenceComptabilitePage: React.FC = () => {
 
         tx.set(newRef, rcpt);
 
-        // Ne pas passer en "validated" ici
         tx.update(shiftRef, {
           status: 'closed',
           endTime: endAt,
@@ -515,121 +729,165 @@ const AgenceComptabilitePage: React.FC = () => {
       });
 
       setReceptionInputs(prev => ({ ...prev, [shift.id]: { cashReceived: '' } }));
+      console.log(`[AgenceCompta] Réception validée pour le poste ${shift.id}, reçu ${newReceiptId}`);
       alert('Réception enregistrée ✓');
-      if (newReceiptId) navigate(`/agence/receipt/${newReceiptId}`);
+      
+      if (newReceiptId) {
+        navigate(`/agence/receipt/${newReceiptId}`);
+      }
     } catch (e: any) {
+      console.error(`[AgenceCompta] Erreur lors de la validation du poste ${shift.id}:`, e);
       alert(e?.message || 'Erreur lors de la validation.');
     } finally {
       setSavingShiftIds(p => ({ ...p, [shift.id]: false }));
     }
   }, [user?.companyId, user?.agencyId, accountant, accountantCode, receptionInputs, aggByShift, navigate, savingShiftIds]);
 
-  /* ---------- Rapport (fallback + dédup) ---------- */
+  /* ============================================================================
+     SECTION : RAPPORTS DÉTAILLÉS
+     Description : Génération des rapports de vente avec déduplication
+     ============================================================================ */
+  
   const loadReportForShift = useCallback(async (shiftId: string) => {
-    if (!user?.companyId || !user?.agencyId || !shiftId) { setTickets([]); setDedupCollapsed(0); return; }
+    console.log(`[AgenceCompta] Chargement du rapport pour le poste ${shiftId}`);
+    
+    if (!user?.companyId || !user?.agencyId || !shiftId) { 
+      console.log('[AgenceCompta] Données manquantes pour le rapport');
+      setTickets([]); 
+      setDedupCollapsed(0); 
+      return; 
+    }
+    
     setLoadingReport(true);
     setSelectedShiftForReport(shiftId);
 
-    const base = `companies/${user.companyId}/agences/${user.agencyId}`;
-    const rRef = collection(db, `${base}/reservations`);
-    const sRef = doc(db, `${base}/shifts/${shiftId}`);
-    const sSnap = await getDoc(sRef);
-    const sDoc: any = sSnap.exists() ? sSnap.data() : {};
-    const startRaw = sDoc.startTime?.toDate?.() ?? sDoc.openedAt?.toDate?.() ?? null;
-    const endRaw   = sDoc.endTime?.toDate?.()   ?? sDoc.closedAt?.toDate?.()   ?? null;
-    const userId   = sDoc.userId || sDoc.openedById || '';
-    const userCode = sDoc.userCode || sDoc.openedByCode || '';
+    try {
+      const base = `companies/${user.companyId}/agences/${user.agencyId}`;
+      const rRef = collection(db, `${base}/reservations`);
+      const sRef = doc(db, `${base}/shifts/${shiftId}`);
+      const sSnap = await getDoc(sRef);
+      const sDoc: any = sSnap.exists() ? sSnap.data() : {};
+      
+      const startRaw = sDoc.startTime?.toDate?.() ?? sDoc.openedAt?.toDate?.() ?? null;
+      const endRaw   = sDoc.endTime?.toDate?.()   ?? sDoc.closedAt?.toDate?.()   ?? null;
+      const userId   = sDoc.userId || sDoc.openedById || '';
+      const userCode = sDoc.userCode || sDoc.openedByCode || '';
 
-    const start = startRaw ? new Date(startRaw.getTime() - 5 * 60 * 1000) : null;
-    const end   = endRaw   ? new Date(endRaw.getTime()   + 6 * 60 * 60 * 1000) : null;
+      const start = startRaw ? new Date(startRaw.getTime() - 5 * 60 * 1000) : null;
+      const end   = endRaw   ? new Date(endRaw.getTime()   + 6 * 60 * 60 * 1000) : null;
 
-    const snap1 = await getDocs(query(
-      rRef,
-      where('shiftId','==', shiftId),
-      where('canal', '==', 'guichet'),
-      orderBy('createdAt','asc')
-    ));
-
-    let extraDocs: any[] = [];
-    if (start && end) {
-      const snapAll = await getDocs(query(
+      // Réservations attachées au shift
+      const snap1 = await getDocs(query(
         rRef,
-        where('createdAt','>=', Timestamp.fromDate(start)),
+        where('shiftId','==', shiftId),
+        where('canal', '==', 'guichet'),
         orderBy('createdAt','asc')
       ));
-      extraDocs = snapAll.docs.filter(d => {
-        const r = d.data() as any;
-        const dt = r.createdAt?.toDate?.() ?? new Date(0);
-        const inRange = dt >= start && dt <= end;
-        const canal = String(r.canal || '').toLowerCase();
-        const isCounter = canal === 'guichet' ||
-                          (canal === '' && String(r.paiement||'').toLowerCase().includes('esp'));
-        const sameSeller =
-          (!!userId   && r.guichetierId   === userId) ||
-          (!!userCode && r.guichetierCode === userCode);
-        const noShiftId = !r.shiftId || r.shiftId === '';
-        return inRange && isCounter && sameSeller && noShiftId;
-      });
-    }
 
-    const mk = (d:any) => {
-      const r = d.data() as any;
-      return {
-        id: d.id, referenceCode: r.referenceCode, date: r.date, heure: r.heure,
-        depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone,
-        seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0,
-        paiement: r.paiement, createdAt: r.createdAt, guichetierCode: r.guichetierCode || '', canal: r.canal,
-      } as TicketRow;
-    };
-
-    const rawDocs = [...snap1.docs, ...extraDocs];
-    const raw = rawDocs.map(mk).filter(r =>
-      String(r.canal||'').toLowerCase() === 'guichet' ||
-      (String(r.canal||'') === '' && String(r.paiement||'').toLowerCase().includes('esp'))
-    );
-
-    const norm = (v?: string) => String(v || '').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
-    const keyOf = (t: TicketRow) =>
-      (t.referenceCode && norm(t.referenceCode)) ||
-      [norm(t.date), norm(t.heure), norm(t.depart), norm(t.arrivee), norm(t.nomClient), norm(t.telephone)].join('|');
-
-    const map = new Map<string, TicketRow>();
-    for (const t of raw) {
-      const k = keyOf(t);
-      const prev = map.get(k);
-      if (!prev) map.set(k, t);
-      else {
-        const prevTs = (prev.createdAt?.toMillis?.() ?? 0);
-        const curTs  = (t.createdAt?.toMillis?.() ?? 0);
-        map.set(k, curTs >= prevTs ? t : prev);
+      let extraDocs: any[] = [];
+      // Recherche des transactions orphelines dans la période
+      if (start && end) {
+        const snapAll = await getDocs(query(
+          rRef,
+          where('createdAt','>=', Timestamp.fromDate(start)),
+          orderBy('createdAt','asc')
+        ));
+        extraDocs = snapAll.docs.filter(d => {
+          const r = d.data() as any;
+          const dt = r.createdAt?.toDate?.() ?? new Date(0);
+          const inRange = dt >= start && dt <= end;
+          const canal = String(r.canal || '').toLowerCase();
+          const isCounter = canal === 'guichet' ||
+                            (canal === '' && String(r.paiement||'').toLowerCase().includes('esp'));
+          const sameSeller =
+            (!!userId   && r.guichetierId   === userId) ||
+            (!!userCode && r.guichetierCode === userCode);
+          const noShiftId = !r.shiftId || r.shiftId === '';
+          return inRange && isCounter && sameSeller && noShiftId;
+        });
       }
-    }
 
-    const rows = [...map.values()].sort((a,b)=>(a.createdAt?.toMillis?.() ?? 0) - (b.createdAt?.toMillis?.() ?? 0));
-    setTickets(rows);
-    setDedupCollapsed(raw.length - rows.length);
-    setLoadingReport(false);
+      const mk = (d:any) => {
+        const r = d.data() as any;
+        return {
+          id: d.id, referenceCode: r.referenceCode, date: r.date, heure: r.heure,
+          depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone,
+          seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0,
+          paiement: r.paiement, createdAt: r.createdAt, guichetierCode: r.guichetierCode || '', canal: r.canal,
+        } as TicketRow;
+      };
+
+      const rawDocs = [...snap1.docs, ...extraDocs];
+      const raw = rawDocs.map(mk).filter(r =>
+        String(r.canal||'').toLowerCase() === 'guichet' ||
+        (String(r.canal||'') === '' && String(r.paiement||'').toLowerCase().includes('esp'))
+      );
+
+      // Déduplication basée sur les références uniques
+      const norm = (v?: string) => String(v || '').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
+      const keyOf = (t: TicketRow) =>
+        (t.referenceCode && norm(t.referenceCode)) ||
+        [norm(t.date), norm(t.heure), norm(t.depart), norm(t.arrivee), norm(t.nomClient), norm(t.telephone)].join('|');
+
+      const map = new Map<string, TicketRow>();
+      for (const t of raw) {
+        const k = keyOf(t);
+        const prev = map.get(k);
+        if (!prev) map.set(k, t);
+        else {
+          const prevTs = (prev.createdAt?.toMillis?.() ?? 0);
+          const curTs  = (t.createdAt?.toMillis?.() ?? 0);
+          map.set(k, curTs >= prevTs ? t : prev);
+        }
+      }
+
+      const rows = [...map.values()].sort((a,b)=>(a.createdAt?.toMillis?.() ?? 0) - (b.createdAt?.toMillis?.() ?? 0));
+      setTickets(rows);
+      setDedupCollapsed(raw.length - rows.length);
+      
+      console.log(`[AgenceCompta] Rapport chargé: ${rows.length} ligne(s), ${raw.length - rows.length} doublon(s) éliminé(s)`);
+    } catch (error) {
+      console.error(`[AgenceCompta] Erreur lors du chargement du rapport:`, error);
+      alert('Erreur lors du chargement du rapport');
+    } finally {
+      setLoadingReport(false);
+    }
   }, [user?.companyId, user?.agencyId]);
 
+  /* ============================================================================
+     SECTION : CALCULS DES TOTAUX
+     Description : Agrégation des montants pour les rapports et statistiques
+     ============================================================================ */
+  
   const totals = useMemo(() => {
     const agg = { billets: 0, montant: 0 };
     for (const t of tickets) {
       const nb = (t.seatsGo || 0) + (t.seatsReturn || 0);
-      agg.billets += nb; agg.montant += t.montant || 0;
+      agg.billets += nb; 
+      agg.montant += t.montant || 0;
     }
     return agg;
   }, [tickets]);
 
   const liveTotalsGlobal = useMemo(() => {
     let reservations = 0, tickets = 0, amount = 0;
-    for (const s of [...activeShifts, ...pausedShifts]) { // inclut pause
+    for (const s of [...activeShifts, ...pausedShifts]) {
       const lv = liveStats[s.id];
-      if (lv) { reservations += lv.reservations; tickets += lv.tickets; amount += lv.amount; }
+      if (lv) { 
+        reservations += lv.reservations; 
+        tickets += lv.tickets; 
+        amount += lv.amount; 
+      }
     }
+    console.log('[AgenceCompta] Totaux globaux live:', { reservations, tickets, amount });
     return { reservations, tickets, amount };
   }, [activeShifts, pausedShifts, liveStats]);
 
-  /* ================= CAISSE: chargement ================= */
+  /* ============================================================================
+     SECTION : GESTION DE LA CAISSE - CONFIGURATION
+     Description : Configuration des périodes pour les rapports de caisse
+     ============================================================================ */
+  
   const currentRange = useMemo(() => {
     if (useCustomRange && rangeFrom && rangeTo) {
       const from = new Date(rangeFrom); from.setHours(0,0,0,0);
@@ -641,183 +899,333 @@ const AgenceComptabilitePage: React.FC = () => {
     return { from: startOfMonth(d), to: endOfMonth(d) };
   }, [useCustomRange, rangeFrom, rangeTo, monthValue]);
 
+  /* ============================================================================
+     SECTION : GESTION DE LA CAISSE - CHARGEMENT DES DONNÉES
+     Description : Récupération et agrégation des mouvements de caisse
+     ============================================================================ */
+  
   const reloadCash = useCallback(async () => {
+    console.log('[AgenceCompta] Chargement des données de caisse', currentRange);
+    
     if (!user?.companyId || !user?.agencyId) return;
     setLoadingCash(true);
 
-    const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashReceipts`);
-    const mRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`);
+    try {
+      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashReceipts`);
+      const mRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`);
 
-    const qR = query(rRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
-    const qM = query(mRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
+      const qR = query(rRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
+      const qM = query(mRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
 
-    const [sr, sm] = await Promise.all([getDocs(qR), getDocs(qM)]);
+      const [sr, sm] = await Promise.all([getDocs(qR), getDocs(qM)]);
 
-    const map: Record<string, { in: number; out: number }> = {};
+      const map: Record<string, { in: number; out: number }> = {};
 
-    sr.forEach(d => {
-      const r = d.data() as any;
-      const dt = r.createdAt?.toDate?.() ?? new Date();
-      if (dt < currentRange.from || dt >= currentRange.to) return;
-      const key = dt.toISOString().split('T')[0];
-      const inc = Number(r.cashReceived || 0);
-      if (!map[key]) map[key] = { in: 0, out: 0 };
-      map[key].in += Math.max(0, inc);
-    });
+      // Agrégation des entrées (reçus de caisse)
+      sr.forEach(d => {
+        const r = d.data() as any;
+        const dt = r.createdAt?.toDate?.() ?? new Date();
+        if (dt < currentRange.from || dt >= currentRange.to) return;
+        const key = dt.toISOString().split('T')[0];
+        const inc = Number(r.cashReceived || 0);
+        if (!map[key]) map[key] = { in: 0, out: 0 };
+        map[key].in += Math.max(0, inc);
+      });
 
-    sm.forEach(d => {
-      const r = d.data() as any;
-      const dt = r.createdAt?.toDate?.() ?? new Date();
-      if (dt < currentRange.from || dt >= currentRange.to) return;
-      const key = dt.toISOString().split('T')[0];
-      const kind = String(r.kind || '');
-      const amount = Number(r.amount || 0);
-      if (!map[key]) map[key] = { in: 0, out: 0 };
-      if (kind === 'depense' || kind === 'transfert_banque') {
-        map[key].out += Math.max(0, amount);
-      } else if (kind === 'entree_manual') {
-        map[key].in += Math.max(0, amount);
+      // Agrégation des sorties (dépenses et transferts)
+      sm.forEach(d => {
+        const r = d.data() as any;
+        const dt = r.createdAt?.toDate?.() ?? new Date();
+        if (dt < currentRange.from || dt >= currentRange.to) return;
+        const key = dt.toISOString().split('T')[0];
+        const kind = String(r.kind || '');
+        const amount = Number(r.amount || 0);
+        if (!map[key]) map[key] = { in: 0, out: 0 };
+        if (kind === 'depense' || kind === 'transfert_banque') {
+          map[key].out += Math.max(0, amount);
+        } else if (kind === 'entree_manual') {
+          map[key].in += Math.max(0, amount);
+        }
+      });
+
+      const sortedKeys = Object.keys(map).sort();
+      let running = 0;
+      const rows: CashDay[] = [];
+      let IN = 0, OUT = 0;
+      
+      for (const k of sortedKeys) {
+        const e = map[k].in || 0;
+        const s = map[k].out || 0;
+        if (e === 0 && s === 0) continue;
+        running += e - s;
+        IN += e; OUT += s;
+        rows.push({ dateISO: k, entrees: e, sorties: s, solde: running });
       }
-    });
 
-    const sortedKeys = Object.keys(map).sort();
-    let running = 0;
-    const rows: CashDay[] = [];
-    let IN = 0, OUT = 0;
-    for (const k of sortedKeys) {
-      const e = map[k].in || 0;
-      const s = map[k].out || 0;
-      if (e === 0 && s === 0) continue;
-      running += e - s;
-      IN += e; OUT += s;
-      rows.push({ dateISO: k, entrees: e, sorties: s, solde: running });
+      setDays(rows);
+      setTotIn(IN);
+      setTotOut(OUT);
+      
+      console.log('[AgenceCompta] Données de caisse chargées:', { 
+        jours: rows.length, 
+        entrées: IN, 
+        sorties: OUT, 
+        solde: IN - OUT 
+      });
+    } catch (error) {
+      console.error('[AgenceCompta] Erreur lors du chargement de la caisse:', error);
+      alert('Erreur lors du chargement des données de caisse');
+    } finally {
+      setLoadingCash(false);
     }
-
-    setDays(rows);
-    setTotIn(IN);
-    setTotOut(OUT);
-    setLoadingCash(false);
   }, [user?.companyId, user?.agencyId, currentRange]);
 
-  useEffect(() => { void reloadCash(); }, [reloadCash]);
+  useEffect(() => { 
+    console.log('[AgenceCompta] Déclenchement du chargement de la caisse');
+    void reloadCash(); 
+  }, [reloadCash]);
 
-  /* ========== Caisse: nouvelles sorties ========== */
+  /* ============================================================================
+     SECTION : GESTION DE LA CAISSE - NOUVELLES SORTIES
+     Description : Création de nouveaux mouvements de sortie (dépenses/transferts)
+     ============================================================================ */
+  
   const createOutMovement = async () => {
+    console.log('[AgenceCompta] Création d\'un nouveau mouvement de sortie', outForm);
+    
     if (!user?.companyId || !user?.agencyId) return;
+    
     const amount = Number(outForm.montant || 0);
-    if (!Number.isFinite(amount) || amount <= 0) { alert('Montant invalide'); return; }
-    const payload = {
-      kind: outForm.kind,
-      amount,
-      label: outForm.libelle || (outForm.kind === 'transfert_banque' ? 'Transfert vers banque' : 'Dépense'),
-      bankName: outForm.kind === 'transfert_banque' ? (outForm.banque || '') : '',
-      note: outForm.note || '',
-      companyId: user.companyId,
-      agencyId: user.agencyId,
-      accountantId: accountant?.id || null,
-      accountantCode,
-      createdAt: Timestamp.now(),
-    };
-    await addDoc(collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`), payload);
-    setShowOutModal(false);
-    setOutForm({ kind: 'depense', montant: '', libelle: '', banque: '', note: '' });
-    await reloadCash();
+    if (!Number.isFinite(amount) || amount <= 0) { 
+      console.warn('[AgenceCompta] Montant invalide pour le mouvement');
+      alert('Montant invalide'); 
+      return; 
+    }
+    
+    try {
+      const payload = {
+        kind: outForm.kind,
+        amount,
+        label: outForm.libelle || (outForm.kind === 'transfert_banque' ? 'Transfert vers banque' : 'Dépense'),
+        bankName: outForm.kind === 'transfert_banque' ? (outForm.banque || '') : '',
+        note: outForm.note || '',
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        accountantId: accountant?.id || null,
+        accountantCode,
+        createdAt: Timestamp.now(),
+      };
+      
+      await addDoc(collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`), payload);
+      
+      console.log('[AgenceCompta] Mouvement de sortie enregistré avec succès');
+      setShowOutModal(false);
+      setOutForm({ kind: 'depense', montant: '', libelle: '', banque: '', note: '' });
+      await reloadCash();
+    } catch (error) {
+      console.error('[AgenceCompta] Erreur lors de l\'enregistrement du mouvement:', error);
+      alert('Erreur lors de l\'enregistrement du mouvement');
+    }
   };
 
+  /* ============================================================================
+     SECTION : HELPER FUNCTIONS - RECHERCHE
+     Description : Fonctions utilitaires pour la recherche de données
+     ============================================================================ */
+  
   const findShift = useCallback(
     (id?: string) => [...activeShifts, ...pausedShifts, ...closedShifts, ...validatedShifts].find(s => s.id === id),
     [activeShifts, pausedShifts, closedShifts, validatedShifts]
   );
 
-  /* ============================ UI ============================ */
+  /* ============================================================================
+     SECTION : RENDU PRINCIPAL
+     Description : Interface utilisateur de la page de comptabilité
+     ============================================================================ */
+  
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      {/* Header (responsive + badge comptable) */}
-      <div className="sticky top-0 z-10 border-b bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/65">
-        <div className="max-w-7xl mx-auto px-4 py-3">
-          <div className="flex flex-wrap items-center gap-3">
+      {/* ============================================================================
+         HEADER : EN-TÊTE AVEC BRANDING ET NAVIGATION
+         Description : Logo, nom d'entreprise, onglets et informations comptable
+         ============================================================================ */}
+      
+      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur-sm supports-[backdrop-filter]:bg-white/90 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             {/* Branding */}
-            <div className="flex items-center gap-3 min-w-0">
-              {companyLogo
-                ? <img src={companyLogo} alt="logo" className="h-10 w-10 rounded-xl object-contain border bg-white p-1 flex-shrink-0" />
-                : <div className="h-10 w-10 rounded-xl bg-gray-200 grid place-items-center flex-shrink-0"><Building2 className="h-5 w-5 text-gray-600"/></div>}
-              <div className="min-w-0">
-                <div
-                  className="text-lg font-extrabold tracking-tight truncate"
-                  style={{background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
-                  title={companyName}
-                >
-                  {companyName}
-                </div>
-                <div className="text-xs text-gray-600 flex items-center gap-1 truncate">
-                  <MapPin className="h-3.5 w-3.5 flex-shrink-0"/><span className="truncate">{agencyName}</span>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
+                {companyLogo ? (
+                  <div className="relative">
+                    <img 
+                      src={companyLogo} 
+                      alt="Logo compagnie" 
+                      className="h-12 w-12 rounded-xl object-contain border-2 border-white shadow-md"
+                    />
+                    <div className="absolute -bottom-1 -right-1 h-5 w-5 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-full border border-white flex items-center justify-center">
+                      <Shield className="h-3 w-3 text-white" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 border-2 border-white shadow-md grid place-items-center">
+                    <Building2 className="h-6 w-6 text-gray-600"/>
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div
+                    className="text-xl font-bold tracking-tight truncate bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent"
+                    title={companyName}
+                  >
+                    {companyName}
+                  </div>
+                  <div className="text-sm text-gray-600 flex items-center gap-1.5 truncate">
+                    <MapPin className="h-4 w-4 flex-shrink-0"/>
+                    <span className="truncate">{agencyName}</span>
+                    <span className="text-xs px-2 py-0.5 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 rounded-full">
+                      Comptabilité
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Tabs — passent à la ligne sur mobile */}
-            <div className="order-3 md:order-none w-full md:w-auto">
-              <div className="inline-flex rounded-2xl p-1 bg-slate-100 shadow-inner w-full md:w-auto">
-                <TabButton active={tab==='controle'}   onClick={()=>setTab('controle')}   label="Contrôle des postes" theme={theme}/>
-                <TabButton active={tab==='receptions'} onClick={()=>setTab('receptions')} label="Réceptions de caisse" theme={theme}/>
-                <TabButton active={tab==='rapports'}   onClick={()=>setTab('rapports')}   label="Rapports"            theme={theme}/>
-                <TabButton active={tab==='caisse'}     onClick={()=>setTab('caisse')}     label="Caisse agence"       theme={theme}/>
+            {/* Onglets */}
+            <div className="w-full sm:w-auto">
+              <div className="inline-flex rounded-2xl p-1.5 bg-gradient-to-r from-slate-100 to-slate-50 shadow-inner w-full sm:w-auto">
+                <TabButton 
+                  active={tab==='controle'}   
+                  onClick={()=>setTab('controle')}   
+                  label="Contrôle" 
+                  icon={<Activity className="h-4 w-4" />}
+                  theme={theme}
+                />
+                <TabButton 
+                  active={tab==='receptions'} 
+                  onClick={()=>setTab('receptions')} 
+                  label="Réceptions" 
+                  icon={<HandIcon className="h-4 w-4" />}
+                  theme={theme}
+                />
+                <TabButton 
+                  active={tab==='rapports'}   
+                  onClick={()=>setTab('rapports')}   
+                  label="Rapports" 
+                  icon={<BarChart3 className="h-4 w-4" />}
+                  theme={theme}
+                />
+                <TabButton 
+                  active={tab==='caisse'}     
+                  onClick={()=>setTab('caisse')}     
+                  label="Caisse" 
+                  icon={<Banknote className="h-4 w-4" />}
+                  theme={theme}
+                />
               </div>
             </div>
 
-            {/* Actions + badge rôle */}
-            <div className="ml-auto flex items-center gap-2 flex-wrap">
+            {/* Actions et profil */}
+            <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
               {accountant && (
-                <span className="px-3 py-1 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 shadow-sm">
-                  Comptable • {(accountant.displayName || accountant.email || '—')} ({accountantCode || '—'})
-                </span>
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 shadow-sm">
+                  <div className="h-7 w-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
+                    {accountant.displayName?.charAt(0) || 'C'}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-gray-900 truncate">
+                      {(accountant.displayName || accountant.email || '—')}
+                    </div>
+                    <div className="text-xs text-gray-600 truncate">
+                      {accountantCode || '—'}
+                    </div>
+                  </div>
+                </div>
               )}
               <button
-                onClick={async () => { await logout(); navigate('/login'); }}
-                className="inline-flex items-center gap-1 px-3 py-2 text-sm rounded-lg border bg-white hover:bg-slate-50 shadow-sm"
+                onClick={async () => { 
+                  console.log('[AgenceCompta] Déconnexion du comptable');
+                  await logout(); 
+                  navigate('/login'); 
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50 shadow-sm transition-colors"
                 title="Déconnexion"
               >
-                <LogOut className="h-4 w-4"/> <span className="hidden sm:inline">Déconnexion</span>
+                <LogOut className="h-4 w-4"/> 
+                <span className="hidden sm:inline">Déconnexion</span>
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* ====== CONTRÔLE ====== */}
+      {/* ============================================================================
+         CONTENU PRINCIPAL
+         Description : Contenu des différents onglets
+         ============================================================================ */}
+      
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6 sm:space-y-8">
+        {/* ============================================================================
+           ONGLET : CONTRÔLE DES POSTES
+           Description : Gestion des postes de vente en temps réel
+           ============================================================================ */}
+        
         {tab === 'controle' && (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <IconKpi icon={<Ticket className="h-5 w-5"/>} label="Billets (en direct)" value={liveTotalsGlobal.tickets.toString()} theme={theme}/>
-              <IconKpi icon={<Wallet className="h-5 w-5"/>} label="Montant (en direct)" value={fmtMoney(liveTotalsGlobal.amount)} theme={theme}/>
-              <IconKpi icon={<Activity className="h-5 w-5"/>} label="Réservations (en direct)" value={liveTotalsGlobal.reservations.toString()} theme={theme}/>
+          <div className="space-y-6 sm:space-y-8">
+            {/* KPI Globaux */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+              <KpiCard 
+                icon={<Ticket className="h-6 w-6" />} 
+                label="Billets vendus" 
+                value={liveTotalsGlobal.tickets.toString()} 
+                sublabel="en direct"
+                theme={theme}
+                emphasis={false}
+              />
+              <KpiCard 
+                icon={<Wallet className="h-6 w-6" />} 
+                label="Chiffre d'affaires" 
+                value={fmtMoney(liveTotalsGlobal.amount)} 
+                sublabel="en direct"
+                theme={theme}
+                emphasis={true}
+              />
+              <KpiCard 
+                icon={<Activity className="h-6 w-6" />} 
+                label="Réservations" 
+                value={liveTotalsGlobal.reservations.toString()} 
+                sublabel="en direct"
+                theme={theme}
+                emphasis={false}
+              />
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <MiniStat tone="indigo" label="En attente"  value={pendingShifts.length}/>
-              <MiniStat tone="green"  label="En service"  value={activeShifts.length}/>
-              <MiniStat tone="amber"  label="En pause"    value={pausedShifts.length}/>
-              <MiniStat tone="rose"   label="Clôturés"    value={closedShifts.length}/>
-              <MiniStat tone="slate"  label="Validés"     value={validatedShifts.length}/>
+            {/* Stats rapides */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
+              <StatCard tone="indigo" label="En attente" value={pendingShifts.length} icon={<Clock4 className="h-4 w-4" />} />
+              <StatCard tone="emerald" label="En service" value={activeShifts.length} icon={<Play className="h-4 w-4" />} />
+              <StatCard tone="amber" label="En pause" value={pausedShifts.length} icon={<Pause className="h-4 w-4" />} />
+              <StatCard tone="rose" label="Clôturés" value={closedShifts.length} icon={<StopCircle className="h-4 w-4" />} />
+              <StatCard tone="slate" label="Validés" value={validatedShifts.length} icon={<CheckCircle2 className="h-4 w-4" />} />
             </div>
 
+            {/* Postes en attente */}
             <SectionShifts
-              title="Postes en attente d’activation"
-              hint="Le guichetier est connecté mais ne peut pas vendre tant que vous n’activez pas."
+              title="Postes en attente d'activation"
+              hint="Le guichetier est connecté mais ne peut pas vendre tant que vous n'activez pas."
               icon={<Clock4 className="h-5 w-5" />}
               list={pendingShifts}
               usersCache={usersCache}
               liveStats={{}}
               theme={theme}
               actions={(s) => (
-                <GradientButton onClick={() => activateShift(s.id)} theme={theme}>
-                  Activer
-                </GradientButton>
+                <PrimaryButton onClick={() => activateShift(s.id)} theme={theme}>
+                  <Play className="h-4 w-4 mr-2" />
+                  Activer le poste
+                </PrimaryButton>
               )}
             />
 
+            {/* Postes en service */}
             <SectionShifts
               title="Postes en service"
               hint="Statistiques mises à jour en direct."
@@ -827,54 +1235,76 @@ const AgenceComptabilitePage: React.FC = () => {
               liveStats={liveStats}
               theme={theme}
               actions={(s) => (
-                <div className="flex gap-2">
-                  <OutlineButton onClick={() => pauseShift(s.id)}><Pause className="h-4 w-4 mr-1 inline" /> Pause</OutlineButton>
-                  <GradientButton
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <SecondaryButton onClick={() => pauseShift(s.id)}>
+                    <Pause className="h-4 w-4 mr-2" /> 
+                    Pause
+                  </SecondaryButton>
+                  <PrimaryButton
                     onClick={() => {
                       if (confirm('Clôturer ce poste maintenant ?')) closeShift(s.id, { forcedByAccountant: true });
                     }}
                     theme={theme}
                   >
-                    <StopCircle className="h-4 w-4 mr-1 inline" /> Clôturer
-                  </GradientButton>
+                    <StopCircle className="h-4 w-4 mr-2" /> 
+                    Clôturer
+                  </PrimaryButton>
                 </div>
               )}
             />
 
+            {/* Postes en pause */}
             <SectionShifts
               title="Postes en pause"
               hint="Peuvent être remis en service."
               icon={<Pause className="h-5 w-5" />}
               list={pausedShifts}
               usersCache={usersCache}
-              liveStats={liveStats}   
+              liveStats={liveStats}
               theme={theme}
               actions={(s) => (
-                <div className="flex gap-2">
-                  <GradientButton onClick={() => continueShift(s.id)} theme={theme}>Continuer</GradientButton>
-                  <OutlineButton onClick={() => { if (confirm('Clôturer ce poste ?')) closeShift(s.id, { forcedByAccountant: true }); }}>Clôturer</OutlineButton>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <PrimaryButton onClick={() => continueShift(s.id)} theme={theme}>
+                    <Play className="h-4 w-4 mr-2" />
+                    Continuer
+                  </PrimaryButton>
+                  <SecondaryButton onClick={() => { if (confirm('Clôturer ce poste ?')) closeShift(s.id, { forcedByAccountant: true }); }}>
+                    Clôturer
+                  </SecondaryButton>
                 </div>
               )}
             />
-            {/* on montre les stats même en pause */}
           </div>
         )}
 
-        {/* ====== RÉCEPTIONS ====== */}
+        {/* ============================================================================
+           ONGLET : RÉCEPTIONS DE CAISSE
+           Description : Validation des remises d'espèces des postes clôturés
+           ============================================================================ */}
+        
         {tab === 'receptions' && (
-          <div className="space-y-4">
+          <div className="space-y-6 sm:space-y-8">
             <SectionHeader
-              icon={<HandIcon className="h-5 w-5" />}
-              title="Réceptions à valider"
-              subtitle="Validez la remise d’espèces des postes clôturés."
+              icon={<Receipt className="h-6 w-6" />}
+              title="Réceptions de caisse à valider"
+              subtitle="Validez la remise d'espèces des postes clôturés par les guichetiers."
             />
 
             {(() => {
-              // ✅ ne montrer que les postes non encore validés par le comptable
               const toReceive = closedShifts.filter(s => !s.comptable?.validated);
-              if (toReceive.length === 0) return <Empty> Aucune clôture en attente.</Empty>;
+              
+              if (toReceive.length === 0) {
+                return (
+                  <EmptyState
+                    icon={<CheckCircle2 className="h-12 w-12" />}
+                    title="Aucune réception en attente"
+                    description="Toutes les remises de caisse ont été validées."
+                  />
+                );
+              }
+              
               return (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                   {toReceive.map(s => {
                     const payBy = s.payBy || {};
                     const inputs = receptionInputs[s.id] || { cashReceived: '' };
@@ -895,63 +1325,96 @@ const AgenceComptabilitePage: React.FC = () => {
                     const code = ui.code || s.userCode || '—';
 
                     return (
-                      <div key={s.id} className="rounded-2xl border bg-white p-4 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-xs text-gray-500">Guichetier</div>
-                            <div className="font-semibold">{name} <span className="text-gray-500 text-xs">({code})</span></div>
-                          </div>
-                          {/* On n’affiche plus l’ID de poste */}
-                          <div className="text-right">
-                            <div className="text-xs text-gray-500">Poste</div>
-                            <div className="font-medium text-gray-400">&nbsp;</div>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
-                          <Info label="Début" value={s.startTime ? fmtDT(new Date(s.startTime.toDate?.() ?? s.startTime)) : '—'} />
-                          <Info label="Fin" value={s.endTime ? fmtDT(new Date(s.endTime.toDate?.() ?? s.endTime)) : '—'} />
-                          <Info label="Réservations" value={reservationsAgg.toString()} />
-                          <Info label="Billets" value={ticketsAgg.toString()} />
-                          <Info label="Montant total" value={fmtMoney(amountAgg)} />
-                          <Info label="Espèces (attendu)" value={fmtMoney(cashExpectedAgg)} />
-                          <Info label="Mobile Money (info)" value={fmtMoney(mmExpectedAgg)} />
-                        </div>
-
-                        {mmExpectedAgg > 0 && (
-                          <div className="mt-2 flex items-start gap-2 text-xs text-slate-700 bg-slate-50 border border-slate-100 p-2 rounded">
-                            <InfoIcon className="h-4 w-4 mt-[1px]" />
-                            <span>Mobile Money : paiements en ligne (non remis par le guichetier).</span>
-                          </div>
-                        )}
-
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <div className="col-span-2 sm:col-span-1">
-                            <div className="text-xs text-gray-600 mb-1">Espèces reçues</div>
-                            <input
-                              type="number" min="0" inputMode="numeric"
-                              className="w-full border rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2"
-                              style={{outlineColor: theme.primary}}
-                              placeholder="0"
-                              value={inputs.cashReceived}
-                              onChange={e => setReceptionInput(s.id, e.target.value)}
-                            />
-                          </div>
-                          <div className="col-span-2 sm:col-span-1">
-                            <div className="text-xs text-gray-600 mb-1">Écart (reçu - attendu)</div>
-                            <div className={`w-full border rounded-lg px-3 py-2 bg-gray-50 ${ecart === 0 ? 'text-gray-700' : ecart > 0 ? 'text-green-700' : 'text-red-700'}`}>
-                              {Number.isFinite(ecart) ? fmtMoney(ecart) : '—'}
+                      <div key={s.id} className="group relative">
+                        <div className="absolute inset-0 bg-gradient-to-br from-white to-gray-50 rounded-2xl transform group-hover:scale-[1.02] transition-all duration-300"></div>
+                        <div className="relative rounded-2xl border border-gray-200 bg-white/80 p-5 shadow-sm hover:shadow-lg transition-all duration-300">
+                          {/* En-tête du poste */}
+                          <div className="flex items-start justify-between gap-3 mb-4">
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Guichetier</div>
+                              <div className="font-semibold text-gray-900 truncate">
+                                {name} 
+                                <span className="text-gray-500 text-sm ml-2">({code})</span>
+                              </div>
+                            </div>
+                            <div className="flex-shrink-0">
+                              <div className="px-3 py-1 rounded-full bg-gradient-to-r from-amber-50 to-amber-100 border border-amber-200">
+                                <div className="text-xs font-medium text-amber-800">À valider</div>
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <div className="mt-3 flex items-center justify-between">
-                          <OutlineButton onClick={() => { setTab('rapports'); loadReportForShift(s.id); }}>
-                            <FileText className="h-4 w-4 inline mr-1" /> Voir détails
-                          </OutlineButton>
-                          <GradientButton disabled={disableValidate || !!savingShiftIds[s.id]} onClick={() => validateReception(s)} theme={theme}>
-                            <CheckCircle2 className="h-4 w-4 inline mr-1" /> Valider la réception
-                          </GradientButton>
+                          {/* Statistiques du poste */}
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                            <InfoCard label="Réservations" value={reservationsAgg.toString()} />
+                            <InfoCard label="Billets" value={ticketsAgg.toString()} />
+                            <InfoCard label="Montant total" value={fmtMoney(amountAgg)} emphasis />
+                            <InfoCard label="Espèces attendu" value={fmtMoney(cashExpectedAgg)} emphasis />
+                          </div>
+
+                          {/* Période */}
+                          <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50">
+                            <div className="text-xs text-gray-600 mb-1">Période de vente</div>
+                            <div className="text-sm font-medium text-gray-900">
+                              {s.startTime ? fmtDT(new Date(s.startTime.toDate?.() ?? s.startTime)) : '—'} 
+                              <span className="mx-2 text-gray-400">→</span>
+                              {s.endTime ? fmtDT(new Date(s.endTime.toDate?.() ?? s.endTime)) : '—'}
+                            </div>
+                          </div>
+
+                          {/* Saisie de réception */}
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-2">
+                                Espèces reçues <span className="text-red-500">*</span>
+                              </label>
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  inputMode="numeric"
+                                  className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent text-lg font-medium"
+                                  style={{ outlineColor: theme.primary }}
+                                  placeholder="0"
+                                  value={inputs.cashReceived}
+                                  onChange={e => setReceptionInput(s.id, e.target.value)}
+                                />
+                                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">
+                                  FCFA
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="p-3 rounded-xl border" style={{ 
+                              borderColor: ecart === 0 ? '#d1fae5' : ecart > 0 ? '#bbf7d0' : '#fecaca',
+                              backgroundColor: ecart === 0 ? '#f0fdf4' : ecart > 0 ? '#dcfce7' : '#fef2f2'
+                            }}>
+                              <div className="text-xs font-medium text-gray-700 mb-1">Écart (reçu - attendu)</div>
+                              <div className={`text-lg font-bold ${ecart === 0 ? 'text-emerald-700' : ecart > 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                {Number.isFinite(ecart) ? fmtMoney(ecart) : '—'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                            <SecondaryButton 
+                              onClick={() => { setTab('rapports'); loadReportForShift(s.id); }}
+                              className="w-full sm:w-auto"
+                            >
+                              <FileText className="h-4 w-4 mr-2" /> 
+                              Voir le détail
+                            </SecondaryButton>
+                            <PrimaryButton 
+                              disabled={disableValidate || !!savingShiftIds[s.id]} 
+                              onClick={() => validateReception(s)} 
+                              theme={theme}
+                              className="w-full sm:w-auto"
+                            >
+                              <CheckCircle2 className="h-4 w-4 mr-2" /> 
+                              {savingShiftIds[s.id] ? 'Validation...' : 'Valider la réception'}
+                            </PrimaryButton>
+                          </div>
                         </div>
                       </div>
                     );
@@ -962,192 +1425,369 @@ const AgenceComptabilitePage: React.FC = () => {
           </div>
         )}
 
-        {/* ====== RAPPORTS ====== */}
+        {/* ============================================================================
+           ONGLET : RAPPORTS
+           Description : Consultation détaillée des ventes par poste
+           ============================================================================ */}
+        
         {tab === 'rapports' && (
-          <div className="space-y-4">
-            <div className="rounded-2xl border shadow-sm p-4 bg-white">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-lg font-bold">
-                  <FileText className="h-5 w-5" /> Rapports par poste
+          <div className="space-y-6 sm:space-y-8">
+            {/* Sélecteur de poste */}
+            <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
+                    <BarChart3 className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-gray-900">Rapports détaillés par poste</div>
+                    <div className="text-sm text-gray-600">Analyse complète des ventes guichet</div>
+                  </div>
                 </div>
-                <select
-                  className="border rounded-lg px-3 py-2 text-sm bg-white shadow-sm"
-                  value={selectedShiftForReport}
-                  onChange={(e) => loadReportForShift(e.target.value)}
-                >
-                  <option value="">— Choisir un poste —</option>
-                  {[...activeShifts, ...pausedShifts, ...closedShifts, ...validatedShifts].map(s => {
-                    const ui   = usersCache[s.userId] || {};
-                    const name = ui.name || s.userName || s.userEmail || s.userId;
-                    const code = ui.code || s.userCode || '—';
-                    const start = s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime) : null;
-                    const end   = s.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime)   : null;
+                <div className="w-full sm:w-96">
+                  <select
+                    className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm"
+                    style={{ outlineColor: theme.primary }}
+                    value={selectedShiftForReport}
+                    onChange={(e) => loadReportForShift(e.target.value)}
+                  >
+                    <option value="">— Sélectionnez un poste —</option>
+                    {[...activeShifts, ...pausedShifts, ...closedShifts, ...validatedShifts].map(s => {
+                      const ui   = usersCache[s.userId] || {};
+                      const name = ui.name || s.userName || s.userEmail || s.userId;
+                      const code = ui.code || s.userCode || '—';
+                      const start = s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime) : null;
+                      const end   = s.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime)   : null;
 
-                    const statutFr =
-                      s.status === 'active'    ? 'En service'  :
-                      s.status === 'paused'    ? 'En pause'    :
-                      s.status === 'closed'    ? 'Clôturé'     :
-                      s.status === 'validated' ? 'Validé'      : 'En attente';
+                      const statutFr =
+                        s.status === 'active'    ? 'En service'  :
+                        s.status === 'paused'    ? 'En pause'    :
+                        s.status === 'closed'    ? 'Clôturé'     :
+                        s.status === 'validated' ? 'Validé'      : 'En attente';
 
-                    const periode = `${fmtDT(start)} → ${fmtDT(end)}`;
+                      const periode = `${start ? start.toLocaleDateString('fr-FR') : '?'} → ${end ? end.toLocaleDateString('fr-FR') : '?'}`;
 
-                    return <option key={s.id} value={s.id}>{`${name} (${code}) — ${periode} — ${statutFr}`}</option>;
-                  })}
-                </select>
+                      return (
+                        <option key={s.id} value={s.id}>
+                          {`${name} (${code}) • ${periode} • ${statutFr}`}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
               </div>
-              <div className="text-sm text-gray-500 mt-1">
-                Sélectionnez un poste pour lister ses réservations guichet (paiement espèces).
-                {dedupCollapsed > 0 && (
-                  <span className="ml-2 text-xs text-slate-500">
-                    {dedupCollapsed} doublon{dedupCollapsed>1?'s':''} consolidé{dedupCollapsed>1?'s':''}.
-                  </span>
-                )}
-              </div>
-
+              
               {selectedShiftForReport && (() => {
                 const s = findShift(selectedShiftForReport);
                 const start = s?.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime) : null;
                 const end   = s?.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime)   : null;
                 return (
-                  <div className="mt-1 text-xs text-slate-500">
-                    Période du poste : {fmtDT(start)} → {fmtDT(end)}
+                  <div className="mt-2 text-sm text-gray-600">
+                    Période analysée : {fmtDT(start)} → {fmtDT(end)}
+                    {dedupCollapsed > 0 && (
+                      <span className="ml-3 px-2 py-1 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 text-xs font-medium">
+                        {dedupCollapsed} doublon{dedupCollapsed>1?'s':''} consolidé{dedupCollapsed>1?'s':''}
+                      </span>
+                    )}
                   </div>
                 );
               })()}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <IconKpi icon={<Ticket className="h-5 w-5"/>} label="Billets" value={totals.billets.toString()} theme={theme}/>
-              <IconKpi icon={<Wallet className="h-5 w-5"/>} label="Montant" value={fmtMoney(totals.montant)} theme={theme}/>
-              <IconKpi icon={<Activity className="h-5 w-5"/>} label="Réservations" value={tickets.length.toString()} theme={theme}/>
+            {/* KPI du rapport */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+              <KpiCard 
+                icon={<Ticket className="h-6 w-6" />} 
+                label="Billets vendus" 
+                value={totals.billets.toString()} 
+                theme={theme}
+                emphasis={false}
+              />
+              <KpiCard 
+                icon={<Wallet className="h-6 w-6" />} 
+                label="Chiffre d'affaires" 
+                value={fmtMoney(totals.montant)} 
+                theme={theme}
+                emphasis={true}
+              />
+              <KpiCard 
+                icon={<Activity className="h-6 w-6" />} 
+                label="Réservations" 
+                value={tickets.length.toString()} 
+                theme={theme}
+                emphasis={false}
+              />
             </div>
 
-            <div className="rounded-2xl border bg-white p-4 shadow-sm">
-              <div className="font-semibold mb-3">Détails des réservations</div>
+            {/* Tableau détaillé */}
+            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-5">
+                <div className="text-lg font-bold text-gray-900">Détail des réservations</div>
+                <div className="text-sm text-gray-600">
+                  {tickets.length} ligne{tickets.length > 1 ? 's' : ''}
+                </div>
+              </div>
+              
               {loadingReport ? (
-                <div className="text-gray-500">Chargement…</div>
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <div className="h-12 w-12 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin mx-auto mb-3"></div>
+                    <div className="text-gray-600">Chargement des données...</div>
+                  </div>
+                </div>
               ) : !tickets.length ? (
-                <Empty>Aucune donnée pour ce poste.</Empty>
+                <EmptyState
+                  icon={<FileText className="h-12 w-12" />}
+                  title="Aucune donnée disponible"
+                  description="Sélectionnez un poste pour afficher son rapport détaillé"
+                />
               ) : (
-                <div className="overflow-hidden rounded-lg border">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <Th>Date</Th><Th>Heure</Th><Th>Trajet</Th><Th>Client</Th><Th>Tél.</Th>
-                        <Th align="right">Billets</Th><Th align="right">Montant</Th><Th align="right">Paiement</Th><Th align="right">Vendeur</Th><Th align="right">Réf.</Th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tickets.map(t => (
-                        <tr key={t.id} className="border-t">
-                          <Td>{fmtD(t.date)}</Td>
-                          <Td>{t.heure}</Td>
-                          <Td>{t.depart} → {t.arrivee}</Td>
-                          <Td>{t.nomClient}</Td>
-                          <Td>{t.telephone || ''}</Td>
-                          <Td align="right">{(t.seatsGo||0)+(t.seatsReturn||0)}</Td>
-                          <Td align="right">{fmtMoney(t.montant)}</Td>
-                          <Td align="right">{t.paiement || ''}</Td>
-                          <Td align="right">{t.guichetierCode || ''}</Td>
-                          <Td align="right"><span className="text-xs text-gray-500">{t.referenceCode || t.id}</span></Td>
+                <div className="overflow-hidden rounded-xl border border-gray-200">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
+                        <tr>
+                          <Th>Date/Heure</Th>
+                          <Th>Trajet</Th>
+                          <Th>Client</Th>
+                          <Th align="right">Billets</Th>
+                          <Th align="right">Montant</Th>
+                          <Th align="right">Vendeur</Th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {tickets.map((t, index) => (
+                          <tr key={t.id} className={`hover:bg-gray-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                            <Td>
+                              <div className="font-medium">{fmtD(t.date)}</div>
+                              <div className="text-xs text-gray-500">{t.heure}</div>
+                            </Td>
+                            <Td>
+                              <div className="font-medium">{t.depart} → {t.arrivee}</div>
+                            </Td>
+                            <Td>
+                              <div className="font-medium">{t.nomClient}</div>
+                              {t.telephone && <div className="text-xs text-gray-500">{t.telephone}</div>}
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium">{(t.seatsGo||0)+(t.seatsReturn||0)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-bold text-gray-900">{fmtMoney(t.montant)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+                                {t.guichetierCode || '—'}
+                              </span>
+                            </Td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* ====== CAISSE ====== */}
+        {/* ============================================================================
+           ONGLET : CAISSE AGENCE
+           Description : Gestion des mouvements financiers de l'agence
+           ============================================================================ */}
+        
         {tab === 'caisse' && (
-          <div className="space-y-4">
-            <div className="rounded-2xl border shadow-sm p-4 bg-white">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-lg font-bold">
-                  <Banknote className="h-5 w-5" /> Caisse agence
-                </div>
-                <div className="flex items-center gap-2">
-                  <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-slate-50"
-                          onClick={() => setShowOutModal(true)}>
-                    <Plus className="h-4 w-4 inline mr-1" /> Nouveau transfert / dépense
-                  </button>
-                  <button
-                    className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-slate-50"
-                    onClick={() => exportCsv(days)}
-                    title="Exporter CSV"
-                  >
-                    <Download className="h-4 w-4 inline mr-1" /> Export CSV
-                  </button>
-                </div>
-              </div>
-
-              {/* Filtres */}
-              <div className="mt-3 flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={useCustomRange} onChange={(e)=>setUseCustomRange(e.target.checked)} />
-                  Période personnalisée
-                </label>
-                {!useCustomRange && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-600">Mois :</span>
-                    <input type="month" className="border rounded-lg px-3 py-2 text-sm"
-                      value={monthValue} onChange={(e)=>setMonthValue(e.target.value)} />
+          <div className="space-y-6 sm:space-y-8">
+            {/* En-tête et filtres */}
+            <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-emerald-50 to-green-50 flex items-center justify-center">
+                    <Banknote className="h-6 w-6 text-emerald-600" />
                   </div>
-                )}
-                {useCustomRange && (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-gray-600">Du</span>
-                      <input type="date" className="border rounded-lg px-3 py-2 text-sm"
-                        value={rangeFrom} onChange={(e)=>setRangeFrom(e.target.value)} />
+                  <div>
+                    <div className="text-xl font-bold text-gray-900">Caisse d'agence</div>
+                    <div className="text-sm text-gray-600">Gestion des mouvements financiers</div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <PrimaryButton 
+                    onClick={() => setShowOutModal(true)} 
+                    theme={theme}
+                    className="whitespace-nowrap"
+                  >
+                    <Plus className="h-4 w-4 mr-2" /> 
+                    Nouveau mouvement
+                  </PrimaryButton>
+                  <SecondaryButton
+                    onClick={() => exportCsv(days)}
+                    disabled={days.length === 0}
+                    className="whitespace-nowrap"
+                  >
+                    <Download className="h-4 w-4 mr-2" /> 
+                    Export CSV
+                  </SecondaryButton>
+                </div>
+              </div>
+
+              {/* Filtres de période */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input 
+                      type="checkbox" 
+                      checked={useCustomRange} 
+                      onChange={(e)=>setUseCustomRange(e.target.checked)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Période personnalisée
+                  </label>
+                </div>
+                
+                <div className="flex flex-wrap items-center gap-4">
+                  {!useCustomRange ? (
+                    <div className="flex items-center gap-3">
+                      <div className="text-sm font-medium text-gray-700">Période :</div>
+                      <div className="relative">
+                        <input 
+                          type="month" 
+                          className="border border-gray-300 rounded-xl px-4 py-2.5 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm"
+                          style={{ outlineColor: theme.primary }}
+                          value={monthValue} 
+                          onChange={(e)=>setMonthValue(e.target.value)} 
+                        />
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-gray-600">Au</span>
-                      <input type="date" className="border rounded-lg px-3 py-2 text-sm"
-                        value={rangeTo} onChange={(e)=>setRangeTo(e.target.value)} />
-                    </div>
-                  </>
-                )}
-                <button className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-slate-50" onClick={reloadCash}>Actualiser</button>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-3">
+                        <div className="text-sm font-medium text-gray-700">Du</div>
+                        <input 
+                          type="date" 
+                          className="border border-gray-300 rounded-xl px-4 py-2.5 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm"
+                          style={{ outlineColor: theme.primary }}
+                          value={rangeFrom} 
+                          onChange={(e)=>setRangeFrom(e.target.value)} 
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-sm font-medium text-gray-700">Au</div>
+                        <input 
+                          type="date" 
+                          className="border border-gray-300 rounded-xl px-4 py-2.5 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm"
+                          style={{ outlineColor: theme.primary }}
+                          value={rangeTo} 
+                          onChange={(e)=>setRangeTo(e.target.value)} 
+                        />
+                      </div>
+                    </>
+                  )}
+                  
+                  <SecondaryButton onClick={reloadCash} disabled={loadingCash}>
+                    {loadingCash ? 'Actualisation...' : 'Actualiser'}
+                  </SecondaryButton>
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <IconKpi icon={<Wallet className="h-5 w-5"/>} label="Entrées (période)" value={fmtMoney(totIn)} theme={theme}/>
-              <IconKpi icon={<AlertTriangle className="h-5 w-5"/>} label="Sorties (période)" value={fmtMoney(totOut)} theme={theme}/>
-              <IconKpi icon={<Banknote className="h-5 w-5"/>} label="Solde (période)" value={fmtMoney(totIn - totOut)} theme={theme}/>
+            {/* KPI de caisse */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+              <KpiCard 
+                icon={<Wallet className="h-6 w-6" />} 
+                label="Entrées totales" 
+                value={fmtMoney(totIn)} 
+                theme={theme}
+                emphasis={false}
+              />
+              <KpiCard 
+                icon={<AlertTriangle className="h-6 w-6" />} 
+                label="Sorties totales" 
+                value={fmtMoney(totOut)} 
+                theme={theme}
+                emphasis={false}
+              />
+              <KpiCard 
+                icon={<Banknote className="h-6 w-6" />} 
+                label="Solde de période" 
+                value={fmtMoney(totIn - totOut)} 
+                sublabel={totIn - totOut >= 0 ? "Positif" : "Déficitaire"}
+                theme={theme}
+                emphasis={true}
+              />
             </div>
 
-            <div className="rounded-2xl border bg-white p-4 shadow-sm">
-              <div className="font-semibold mb-3">Journal (jours avec mouvements)</div>
+            {/* Journal de caisse */}
+            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-5">
+                <div className="text-lg font-bold text-gray-900">Journal des mouvements</div>
+                <div className="text-sm text-gray-600">
+                  {days.length} jour{days.length > 1 ? 's' : ''} avec activité
+                </div>
+              </div>
+              
               {loadingCash ? (
-                <div className="text-gray-500">Chargement…</div>
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <div className="h-12 w-12 border-4 border-gray-200 border-t-emerald-500 rounded-full animate-spin mx-auto mb-3"></div>
+                    <div className="text-gray-600">Chargement des données de caisse...</div>
+                  </div>
+                </div>
               ) : days.length === 0 ? (
-                <Empty>Aucun mouvement sur la période.</Empty>
+                <EmptyState
+                  icon={<Banknote className="h-12 w-12" />}
+                  title="Aucun mouvement enregistré"
+                  description={`Aucun mouvement de caisse sur la période sélectionnée`}
+                />
               ) : (
-                <div className="overflow-hidden rounded-lg border">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <Th>Date</Th>
-                        <Th align="right">Entrées</Th>
-                        <Th align="right">Sorties</Th>
-                        <Th align="right">Solde</Th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {days.map(d => (
-                        <tr key={d.dateISO} className="border-t">
-                          <Td>{new Date(d.dateISO).toLocaleDateString('fr-FR',{weekday:'long', day:'numeric', month:'long', year:'numeric'})}</Td>
-                          <Td align="right">{fmtMoney(d.entrees)}</Td>
-                          <Td align="right">{fmtMoney(d.sorties)}</Td>
-                          <Td align="right">{fmtMoney(d.solde)}</Td>
+                <div className="overflow-hidden rounded-xl border border-gray-200">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
+                        <tr>
+                          <Th>Date</Th>
+                          <Th align="right">Entrées</Th>
+                          <Th align="right">Sorties</Th>
+                          <Th align="right">Solde journalier</Th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {days.map((d, index) => (
+                          <tr key={d.dateISO} className={`hover:bg-gray-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                            <Td>
+                              <div className="font-medium">
+                                {new Date(d.dateISO).toLocaleDateString('fr-FR', {
+                                  weekday: 'long',
+                                  day: 'numeric',
+                                  month: 'long',
+                                  year: 'numeric'
+                                })}
+                              </div>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium text-emerald-700">{fmtMoney(d.entrees)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium text-rose-700">{fmtMoney(d.sorties)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className={`font-bold ${d.solde >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                {fmtMoney(d.solde)}
+                              </span>
+                            </Td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      {/* Pied de tableau avec totaux */}
+                      <tfoot className="bg-gradient-to-r from-gray-50 to-gray-100/80 border-t-2 border-gray-300">
+                        <tr>
+                          <Td className="font-bold text-gray-900">TOTAUX</Td>
+                          <Td align="right" className="font-bold text-emerald-700">{fmtMoney(totIn)}</Td>
+                          <Td align="right" className="font-bold text-rose-700">{fmtMoney(totOut)}</Td>
+                          <Td align="right" className="font-bold text-gray-900">{fmtMoney(totIn - totOut)}</Td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -1155,37 +1795,128 @@ const AgenceComptabilitePage: React.FC = () => {
         )}
       </div>
 
-      {/* MODAL SORTIE / TRANSFERT */}
+      {/* ============================================================================
+         MODALE : NOUVEAU MOUVEMENT DE SORTIE
+         Description : Formulaire pour enregistrer une dépense ou un transfert
+         ============================================================================ */}
+      
       {showOutModal && (
-        <div className="fixed inset-0 bg-black/40 grid place-items-center z-20">
-          <div className="w-[520px] max-w-[95vw] bg-white rounded-2xl p-4 shadow-lg">
-            <div className="text-lg font-bold mb-3">Nouveau transfert / dépense</div>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-sm flex items-center gap-2">
-                  <input type="radio" name="kind" checked={outForm.kind==='depense'} onChange={()=>setOutForm(f=>({...f,kind:'depense'}))}/> Dépense
-                </label>
-                <label className="text-sm flex items-center gap-2">
-                  <input type="radio" name="kind" checked={outForm.kind==='transfert_banque'} onChange={()=>setOutForm(f=>({...f,kind:'transfert_banque'}))}/> Transfert banque
-                </label>
-              </div>
-              <input className="w-full border rounded-lg px-3 py-2" placeholder="Libellé"
-                     value={outForm.libelle} onChange={e=>setOutForm(f=>({...f,libelle:e.target.value}))}/>
-              {outForm.kind==='transfert_banque' && (
-                <input className="w-full border rounded-lg px-3 py-2" placeholder="Banque / Compte"
-                       value={outForm.banque} onChange={e=>setOutForm(f=>({...f,banque:e.target.value}))}/>
-              )}
-              <input type="number" min="0" inputMode="numeric" className="w-full border rounded-lg px-3 py-2"
-                     placeholder="Montant" value={outForm.montant}
-                     onChange={e=>setOutForm(f=>({...f, montant:e.target.value}))}/>
-              <textarea className="w-full border rounded-lg px-3 py-2" placeholder="Note (facultatif)"
-                        value={outForm.note} onChange={e=>setOutForm(f=>({...f, note:e.target.value}))}/>
+        <div className="fixed inset-0 bg-black/50 grid place-items-center z-50 p-4">
+          <div className="w-full max-w-md bg-white rounded-2xl p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <div className="text-xl font-bold text-gray-900">Nouveau mouvement de sortie</div>
+              <button
+                onClick={() => setShowOutModal(false)}
+                className="h-8 w-8 rounded-full flex items-center justify-center hover:bg-gray-100"
+              >
+                <span className="text-gray-500">×</span>
+              </button>
             </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <OutlineButton onClick={()=>setShowOutModal(false)}>Annuler</OutlineButton>
-              <GradientButton onClick={createOutMovement} theme={theme}>
-                <Plus className="h-4 w-4 inline mr-1"/> Enregistrer
-              </GradientButton>
+            
+            <div className="space-y-5">
+              {/* Type de mouvement */}
+              <div>
+                <div className="text-sm font-medium text-gray-700 mb-3">Type de mouvement</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    className={`p-4 rounded-xl border-2 text-center transition-all ${outForm.kind === 'depense' 
+                      ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                      : 'border-gray-200 bg-gray-50 text-gray-700 hover:border-gray-300'}`}
+                    onClick={() => setOutForm(f => ({...f, kind: 'depense'}))}
+                  >
+                    <div className="font-medium">Dépense</div>
+                    <div className="text-xs text-gray-500 mt-1">Achat, frais, etc.</div>
+                  </button>
+                  <button
+                    type="button"
+                    className={`p-4 rounded-xl border-2 text-center transition-all ${outForm.kind === 'transfert_banque' 
+                      ? 'border-blue-500 bg-blue-50 text-blue-700' 
+                      : 'border-gray-200 bg-gray-50 text-gray-700 hover:border-gray-300'}`}
+                    onClick={() => setOutForm(f => ({...f, kind: 'transfert_banque'}))}
+                  >
+                    <div className="font-medium">Transfert banque</div>
+                    <div className="text-xs text-gray-500 mt-1">Vers compte bancaire</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Champs du formulaire */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Libellé <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ outlineColor: theme.primary }}
+                  placeholder="Ex: Achat fournitures bureau"
+                  value={outForm.libelle}
+                  onChange={e => setOutForm(f => ({...f, libelle: e.target.value}))}
+                />
+              </div>
+
+              {outForm.kind === 'transfert_banque' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Banque / Compte
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ outlineColor: theme.primary }}
+                    placeholder="Ex: BICIS - Compte principal"
+                    value={outForm.banque}
+                    onChange={e => setOutForm(f => ({...f, banque: e.target.value}))}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Montant (FCFA) <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="0"
+                    inputMode="numeric"
+                    className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent text-lg font-medium"
+                    style={{ outlineColor: theme.primary }}
+                    placeholder="0"
+                    value={outForm.montant}
+                    onChange={e => setOutForm(f => ({...f, montant: e.target.value}))}
+                  />
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-medium">
+                    FCFA
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Note (facultatif)
+                </label>
+                <textarea
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent resize-none"
+                  style={{ outlineColor: theme.primary }}
+                  placeholder="Informations complémentaires..."
+                  rows={3}
+                  value={outForm.note}
+                  onChange={e => setOutForm(f => ({...f, note: e.target.value}))}
+                />
+              </div>
+            </div>
+
+            {/* Actions de la modale */}
+            <div className="mt-8 flex justify-end gap-3">
+              <SecondaryButton onClick={() => setShowOutModal(false)}>
+                Annuler
+              </SecondaryButton>
+              <PrimaryButton onClick={createOutMovement} theme={theme}>
+                <Plus className="h-4 w-4 mr-2" />
+                Enregistrer le mouvement
+              </PrimaryButton>
             </div>
           </div>
         </div>
@@ -1194,91 +1925,193 @@ const AgenceComptabilitePage: React.FC = () => {
   );
 };
 
-/* =================== UI SUB-COMPONENTS =================== */
-const TabButton: React.FC<{active:boolean; onClick:()=>void; label:string; theme:{primary:string;secondary:string}}> = ({active,onClick,label,theme}) => (
+/* ============================================================================
+   SECTION : COMPOSANTS UI RÉUTILISABLES
+   Description : Composants d'interface utilisateur modulaires
+   ============================================================================ */
+
+const TabButton: React.FC<{
+  active: boolean; 
+  onClick: () => void; 
+  label: string;
+  icon: React.ReactNode;
+  theme: { primary: string; secondary: string };
+}> = ({ active, onClick, label, icon, theme }) => (
   <button
-    className={`px-4 py-2 rounded-2xl text-sm font-medium transition-all ${active ? 'text-white shadow' : 'hover:bg-white'}`}
+    className={`
+      flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium transition-all
+      ${active 
+        ? 'text-white shadow-lg transform scale-105' 
+        : 'text-gray-600 hover:text-gray-900 hover:bg-white/80'
+      }
+    `}
     onClick={onClick}
-    style={active ? { background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` } : {}}
+    style={active ? { 
+      background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
+      boxShadow: `0 4px 12px ${theme.primary}40`
+    } : {}}
   >
-    {label}
+    {icon}
+    <span className="whitespace-nowrap">{label}</span>
   </button>
 );
 
-const GradientButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & {theme:{primary:string;secondary:string}}> = ({theme, className='', ...p}) => (
-  <button {...p}
-    className={`px-3 py-2 rounded-lg text-white text-sm shadow-sm disabled:opacity-50 ${className}`}
-    style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
-  />
+const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  theme: { primary: string; secondary: string };
+}> = ({ theme, className = '', children, ...props }) => (
+  <button
+    {...props}
+    className={`
+      inline-flex items-center justify-center px-5 py-3 rounded-xl text-white font-medium 
+      shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200
+      disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none
+      ${className}
+    `}
+    style={{ 
+      background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
+      boxShadow: `0 4px 12px ${theme.primary}40`
+    }}
+  >
+    {children}
+  </button>
 );
 
-const OutlineButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = (p) => (
-  <button {...p} className="px-3 py-2 rounded-lg border text-sm bg-white hover:bg-slate-50 shadow-sm" />
+const SecondaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ 
+  className = '', 
+  children, 
+  ...props 
+}) => (
+  <button
+    {...props}
+    className={`
+      inline-flex items-center justify-center px-5 py-3 rounded-xl border-2 border-gray-200 
+      bg-white text-gray-700 font-medium shadow-sm hover:shadow-md hover:border-gray-300 
+      hover:bg-gray-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
+      ${className}
+    `}
+  >
+    {children}
+  </button>
 );
 
-const IconKpi: React.FC<{icon:React.ReactNode; label:string; value:string; theme:{primary:string;secondary:string}}> = ({icon,label,value,theme}) => (
-  <div className="rounded-2xl border p-4 bg-white shadow-sm hover:shadow-md transition-shadow">
-    <div className="flex items-center justify-between">
-      <div className="text-sm text-gray-500">{label}</div>
-      <div className="h-8 w-8 rounded-lg grid place-items-center"
-           style={{background:`linear-gradient(45deg, ${theme.primary}22, ${theme.secondary}22)`}}>
+const KpiCard: React.FC<{
+  icon: React.ReactNode; 
+  label: string; 
+  value: string; 
+  sublabel?: string;
+  theme: { primary: string; secondary: string };
+  emphasis: boolean;
+}> = ({ icon, label, value, sublabel, theme, emphasis }) => (
+  <div
+  className={`relative overflow-hidden rounded-2xl border border-gray-200 p-5 bg-white shadow-sm
+    hover:shadow-md transition-all duration-300
+    ${emphasis ? 'ring-2 ring-offset-2' : ''}`}
+  style={
+    emphasis
+      ? { ['--tw-ring-color' as any]: theme.primary }
+      : undefined
+  }
+>
+    <div className="absolute top-0 right-0 h-20 w-20 opacity-10">
+      <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full blur-xl"></div>
+    </div>
+    
+    <div className="flex items-start justify-between mb-4">
+      <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">{label}</div>
+      <div className="h-10 w-10 rounded-xl grid place-items-center"
+           style={{background: `linear-gradient(135deg, ${theme.primary}20, ${theme.secondary}20)`}}>
         <span className="text-gray-700">{icon}</span>
       </div>
     </div>
-    <div className="text-2xl font-extrabold mt-1">{value}</div>
+    
+    <div className="space-y-1">
+      <div className={`font-bold ${emphasis ? 'text-3xl' : 'text-2xl'} text-gray-900`}>{value}</div>
+      {sublabel && <div className="text-xs font-medium text-gray-500">{sublabel}</div>}
+    </div>
   </div>
 );
 
-const MiniStat: React.FC<{tone:'indigo'|'green'|'amber'|'rose'|'slate'; label:string; value:number}> = ({tone,label,value}) => {
-  const map:any = {
-    indigo: ['bg-indigo-50','text-indigo-700'],
-    green:  ['bg-green-50','text-green-700'],
-    amber:  ['bg-amber-50','text-amber-700'],
-    rose:   ['bg-rose-50','text-rose-700'],
-    slate:  ['bg-slate-50','text-slate-700'],
-  };
+const StatCard: React.FC<{
+  tone: 'indigo'|'emerald'|'amber'|'rose'|'slate'; 
+  label: string; 
+  value: number;
+  icon: React.ReactNode;
+}> = ({ tone, label, value, icon }) => {
+  const styles = {
+    indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-100' },
+    emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-100' },
+    amber: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-100' },
+    rose: { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-100' },
+    slate: { bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-100' },
+  }[tone];
+
   return (
-    <div className="rounded-2xl border p-4 bg-white shadow-sm">
-      <div className={`inline-flex px-2 py-0.5 rounded ${map[tone][0]} text-xs ${map[tone][1]}`}>{label}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
+    <div className={`rounded-2xl border ${styles.border} p-4 bg-white shadow-sm hover:shadow-md transition-shadow`}>
+      <div className="flex items-center justify-between mb-2">
+        <div className={`px-2.5 py-1 rounded-lg text-xs font-medium ${styles.bg} ${styles.text}`}>
+          {label}
+        </div>
+        <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${styles.bg}`}>
+          <span className={styles.text}>{icon}</span>
+        </div>
+      </div>
+      <div className="text-2xl font-bold text-gray-900">{value}</div>
     </div>
   );
 };
 
-const SectionHeader: React.FC<{icon:React.ReactNode; title:string; subtitle?:string}> = ({icon,title,subtitle}) => (
-  <div className="rounded-2xl border shadow-sm p-4 bg-white">
-    <div className="flex items-center gap-2 text-lg font-bold">{icon} {title}</div>
-    {subtitle && <div className="text-sm text-gray-500 mt-1">{subtitle}</div>}
+const SectionHeader: React.FC<{
+  icon: React.ReactNode; 
+  title: string; 
+  subtitle?: string;
+}> = ({ icon, title, subtitle }) => (
+  <div className="rounded-2xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
+    <div className="flex items-center gap-4">
+      <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
+        {icon}
+      </div>
+      <div>
+        <div className="text-xl font-bold text-gray-900">{title}</div>
+        {subtitle && <div className="text-sm text-gray-600 mt-1">{subtitle}</div>}
+      </div>
+    </div>
   </div>
 );
 
-/* Cartes modernisées + responsive */
 const SectionShifts: React.FC<{
-  title: string; hint?: string; icon: React.ReactNode;
+  title: string; 
+  hint?: string; 
+  icon: React.ReactNode;
   list: ShiftDoc[];
   usersCache: Record<string, { name?: string; email?: string; code?: string }>;
   liveStats: Record<string, { reservations: number; tickets: number; amount: number }>;
   actions: (s: ShiftDoc) => React.ReactNode;
-  theme:{primary:string;secondary:string};
+  theme: { primary: string; secondary: string };
 }> = ({ title, hint, icon, list, usersCache, liveStats, actions, theme }) => (
-  <div className="rounded-2xl border shadow-sm p-4 bg-white">
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2 text-lg font-bold">{icon}<span>{title}</span></div>
-      <div className="text-xs font-medium px-2 py-1 rounded bg-slate-100 text-slate-700 shadow-inner">
-        {list.length} poste{list.length>1?'s':''}
+  <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+    <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center gap-3">
+        <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
+          {icon}
+        </div>
+        <div>
+          <div className="text-lg font-bold text-gray-900">{title}</div>
+          {hint && <div className="text-sm text-gray-600">{hint}</div>}
+        </div>
+      </div>
+      <div className="text-sm font-medium px-3 py-1.5 rounded-full bg-gradient-to-r from-gray-100 to-gray-200 text-gray-700 shadow-inner">
+        {list.length} poste{list.length > 1 ? 's' : ''}
       </div>
     </div>
-    {hint && <div className="text-sm text-gray-500 mt-1">{hint}</div>}
 
     {list.length === 0 ? (
-      <Empty>Aucun poste.</Empty>
+      <EmptyState
+        icon={icon}
+        title={`Aucun ${title.toLowerCase()}`}
+        description="Aucun poste dans cet état pour le moment"
+      />
     ) : (
-      <div
-        className="
-          grid gap-3 mt-3
-          [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]
-        "
-      >
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {list.map(s => {
           const ui   = usersCache[s.userId] || {};
           const name = ui.name || s.userName || s.userEmail || s.userId;
@@ -1288,62 +2121,59 @@ const SectionShifts: React.FC<{
           const tickets      = (live?.tickets      ?? s.totalTickets      ?? 0);
           const amount       = (live?.amount       ?? s.totalAmount       ?? 0);
 
-          const statusLabel =
-            s.status==='active'   ? 'En service' :
-            s.status==='paused'   ? 'En pause'   :
-            s.status==='closed'   ? 'Clôturé'    :
-            s.status==='pending'  ? 'En attente' : 'Validé';
-
-          const statusTone =
-            s.status==='active'   ? 'bg-green-50 text-green-700 ring-green-200' :
-            s.status==='paused'   ? 'bg-amber-50 text-amber-700 ring-amber-200' :
-            s.status==='closed'   ? 'bg-rose-50 text-rose-700 ring-rose-200' :
-            s.status==='pending'  ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' :
-                                    'bg-slate-50 text-slate-700 ring-slate-200';
+          const statusConfig = {
+            active: { label: 'En service', colors: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+            paused: { label: 'En pause', colors: 'bg-amber-50 text-amber-700 border-amber-200' },
+            closed: { label: 'Clôturé', colors: 'bg-rose-50 text-rose-700 border-rose-200' },
+            pending: { label: 'En attente', colors: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+            validated: { label: 'Validé', colors: 'bg-slate-50 text-slate-700 border-slate-200' },
+          }[s.status];
 
           return (
             <div
               key={s.id}
-              className="
-                group relative rounded-2xl
-                ring-1 ring-slate-200 bg-white
-                hover:ring-slate-300 hover:shadow-md
-                transition-all"
+              className="group relative rounded-2xl border border-gray-200 bg-white p-5 
+                         hover:border-gray-300 hover:shadow-lg transition-all duration-300"
             >
-              {/* halo dégradé subtile au survol */}
+              {/* Effet de survol */}
               <div
-                className="absolute inset-0 rounded-2xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{background:`linear-gradient(135deg, ${theme.primary}22, ${theme.secondary}22)`}}
+                className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                style={{background: `linear-gradient(135deg, ${theme.primary}08, ${theme.secondary}08)`}}
               />
 
-              <div className="relative p-4">
-                <div className="flex items-start justify-between gap-3">
+              <div className="relative">
+                {/* En-tête */}
+                <div className="flex items-start justify-between gap-3 mb-4">
                   <div className="min-w-0">
-                    <div className="text-xs text-gray-500">Guichetier</div>
-                    <div className="font-semibold truncate">
-                      {name} <span className="text-gray-500 text-xs">({code})</span>
+                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Guichetier</div>
+                    <div className="font-semibold text-gray-900 truncate">
+                      {name} 
+                      <span className="text-gray-500 text-sm ml-2">({code})</span>
                     </div>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-lg text-xs font-medium ring-1 ${statusTone}`}>
-                    {statusLabel}
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium border ${statusConfig.colors}`}>
+                    {statusConfig.label}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
-                  <Info label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} />
-                  <Info label="Fin"   value={s.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime).toLocaleString('fr-FR')   : '—'} />
-                  <Info label="Réservations" value={reservations.toString()} />
-                  <Info label="Billets"       value={tickets.toString()} />
+                {/* Statistiques */}
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <InfoCard label="Réservations" value={reservations.toString()} />
+                  <InfoCard label="Billets" value={tickets.toString()} />
+                  <InfoCard label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} />
+                  <InfoCard label="Fin" value={s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} />
                 </div>
 
-                <div className="mt-3 p-3 rounded-xl bg-slate-50/60 ring-1 ring-slate-100 flex items-center justify-between">
-                  <div className="text-xs text-slate-600">Montant</div>
-                  <div className="text-lg font-extrabold" style={{color: theme.primary}}>
+                {/* Montant total */}
+                <div className="mb-5 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
+                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Montant total</div>
+                  <div className="text-xl font-bold" style={{ color: theme.primary }}>
                     {fmtMoney(amount)}
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center justify-end gap-2">
+                {/* Actions */}
+                <div className="flex justify-end">
                   {actions(s)}
                 </div>
               </div>
@@ -1355,39 +2185,98 @@ const SectionShifts: React.FC<{
   </div>
 );
 
-const Info: React.FC<{label: string; value: string;}> = ({ label, value }) => (
+const InfoCard: React.FC<{ label: string; value: string; emphasis?: boolean }> = ({ 
+  label, 
+  value, 
+  emphasis = false 
+}) => (
   <div>
-    <div className="text-xs text-gray-500">{label}</div>
-    <div className="font-medium">{value}</div>
+    <div className="text-xs text-gray-500 mb-1">{label}</div>
+    <div className={`font-medium ${emphasis ? 'text-gray-900' : 'text-gray-700'}`}>{value}</div>
   </div>
 );
 
-const Empty: React.FC<{children:React.ReactNode}> = ({children}) => (
-  <div className="text-gray-500 rounded-2xl border bg-white p-6 text-center shadow-sm">{children}</div>
+const EmptyState: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}> = ({ icon, title, description }) => (
+  <div className="text-center py-12 px-4 rounded-2xl border-2 border-dashed border-gray-300 bg-gradient-to-b from-white to-gray-50/50">
+    <div className="inline-flex h-16 w-16 rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 items-center justify-center mb-4">
+      {icon}
+    </div>
+    <div className="text-lg font-medium text-gray-900 mb-2">{title}</div>
+    <div className="text-sm text-gray-600 max-w-md mx-auto">{description}</div>
+  </div>
 );
 
-const Th: React.FC<{children:React.ReactNode; align?:"left"|"right"}> = ({children,align="left"}) => (
-  <th className={`px-3 py-2 ${align === 'right' ? 'text-right' : 'text-left'} font-semibold text-slate-700`}>{children}</th>
-);
-const Td: React.FC<{children:React.ReactNode; align?:"left"|"right"}> = ({children,align="left"}) => (
-  <td className={`px-3 py-2 ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</td>
+const Th: React.FC<{
+  children: React.ReactNode;
+  align?: "left" | "right";
+  className?: string;
+}> = ({ children, align = "left", className = "" }) => (
+  <th
+    className={`px-4 py-3 text-xs font-semibold text-gray-700 uppercase tracking-wider
+      ${align === 'right' ? 'text-right' : 'text-left'}
+      ${className}`}
+  >
+    {children}
+  </th>
 );
 
-/* CSV export simple */
+const Td: React.FC<{
+  children: React.ReactNode;
+  align?: "left" | "right";
+  className?: string;
+}> = ({ children, align = "left", className = "" }) => (
+  <td
+    className={`px-4 py-3
+      ${align === 'right' ? 'text-right' : 'text-left'}
+      ${className}`}
+  >
+    {children}
+  </td>
+);
+
+/* ============================================================================
+   SECTION : FONCTIONS UTILITAIRES - EXPORT CSV
+   Description : Export des données de caisse au format CSV
+   ============================================================================ */
+
 function exportCsv(rows: CashDay[]) {
-  if (!rows.length) { alert('Aucune donnée à exporter'); return; }
-  const header = ['Date','Entrees','Sorties','Solde'];
-  const body = rows.map(r => [
-    new Date(r.dateISO).toLocaleDateString('fr-FR'),
-    r.entrees, r.sorties, r.solde
-  ].join(','));
-  const csv = [header.join(','), ...body].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'caisse.csv';
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  console.log('[AgenceCompta] Export CSV des données de caisse');
+  
+  if (!rows.length) { 
+    console.warn('[AgenceCompta] Aucune donnée à exporter');
+    alert('Aucune donnée à exporter'); 
+    return; 
+  }
+  
+  try {
+    const header = ['Date', 'Entrées (FCFA)', 'Sorties (FCFA)', 'Solde (FCFA)'];
+    const body = rows.map(r => [
+      new Date(r.dateISO).toLocaleDateString('fr-FR'),
+      r.entrees.toLocaleString('fr-FR'),
+      r.sorties.toLocaleString('fr-FR'),
+      r.solde.toLocaleString('fr-FR')
+    ].join(';'));
+    
+    const csv = [header.join(';'), ...body].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `caisse_agence_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    console.log('[AgenceCompta] Export CSV terminé avec succès');
+  } catch (error) {
+    console.error('[AgenceCompta] Erreur lors de l\'export CSV:', error);
+    alert('Erreur lors de l\'export CSV');
+  }
 }
 
 export default AgenceComptabilitePage;

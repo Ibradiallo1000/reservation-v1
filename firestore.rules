@@ -1,440 +1,85 @@
 rules_version = '2';
 
 service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuth() {
+      return request.auth != null;
+    }
+    
+    function uid() {
+      return request.auth.uid;
+    }
+    
+    /* =========================
+       USERS - Collection globale
+       ========================= */
+    match /users/{userId} {
+      // CRITIQUE: Autoriser la lecture à tous les utilisateurs authentifiés
+      // Car les comptables doivent voir les guichetiers, les chefs voient leur équipe, etc.
+      allow read: if isAuth();
+      
+      // Créer: seulement à l'inscription (son propre document)
+      allow create: if isAuth() && uid() == userId;
+      
+      // Mettre à jour: seulement son propre document
+      allow update: if isAuth() && uid() == userId;
+      
+      // Liste: désactivé pour sécurité (utilisation get avec ID spécifique)
+      allow list: if false;
+    }
 
-match /databases/{database}/documents {
-
-/* =========================
-   HELPERS
-========================= */
-
-function isAuth() {
-  return request.auth != null;
-}
-
-function uid() {
-  return request.auth.uid;
-}
-
-function userDoc() {
-  return get(/databases/$(database)/documents/users/$(uid())).data;
-}
-
-function isPlatformAdmin() {
-  return isAuth() && userDoc().role == "admin_platforme";
-}
-
-function isCompanyAdmin(companyId) {
-  return isAuth()
-    && userDoc().companyId == companyId
-    && (
-      userDoc().role == "admin_compagnie" ||
-      userDoc().role == "compagnie"
-    );
-}
-
-function isAgencyUser(companyId, agencyId) {
-  return isAuth()
-    && userDoc().companyId == companyId
-    && userDoc().agencyId == agencyId
-    && (
-      userDoc().role == "chefAgence"
-      || userDoc().role == "agence"
-      || userDoc().role == "agent_agence"
-    );
-}
-
-function isAgencyManager(companyId, agencyId) {
-  return isAuth()
-    && userDoc().companyId == companyId
-    && userDoc().agencyId == agencyId
-    && userDoc().role == "chefAgence";
-}
-
-/* =========================
-   PUBLIC PROFILES
-========================= */
-match /publicProfiles/{hash} {
-  allow read: if true;
-  allow write: if false;
-}
-
-/* =========================
-   USERS (RACINE - UTILISATEURS SYSTÈME)
-========================= */
-match /users/{userId} {
-  allow create: if isAuth() && uid() == userId;
-  
+    /* =========================
+       COMPANIES
+       ========================= */
+    match /companies/{companyId} {
+  // Lire la compagnie seulement si l'utilisateur appartient à cette compagnie
   allow read: if isAuth()
-    && (
-      uid() == userId
-      || isPlatformAdmin()
-      || (
-        userDoc().companyId == resource.data.companyId
-        && userDoc().agencyId == resource.data.agencyId
-        && (
-          userDoc().role == "chefAgence"
-          || userDoc().role == "admin_compagnie"
-        )
-      )
-    );
-    
-  allow update: if isAuth()
-    && (
-      uid() == userId
-      || isPlatformAdmin()
-    );
-    
-  allow delete: if false;
-}
+    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId;
 
-/* =========================
-   PLANS
-========================= */
-match /plans/{planId} {
-  allow read: if true;
-  allow write: if isPlatformAdmin();
-}
+  // Écriture compagnie (à adapter plus tard)
+  allow write: if false;
 
-/* =========================
-   COMPANIES
-========================= */
-match /companies/{companyId} {
-  // Lire uniquement si on appartient à la compagnie
-  allow read: if isPlatformAdmin() || isCompanyAdmin(companyId);
-
-  // ✨ L'admin plateforme OU l'admin de la compagnie
-  allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
-
-  /* =========================
-     AGENCES
-  ========================= */
   match /agences/{agencyId} {
-    // 🔐 Lecture de SA PROPRE agence uniquement
-    allow read: if
-      isPlatformAdmin()
-      || isCompanyAdmin(companyId)
-      || isAgencyUser(companyId, agencyId);
-      
-    // 🔑 Autoriser LIST des agences pour un utilisateur d'agence
-    allow list: if
-      isPlatformAdmin()
-      || isCompanyAdmin(companyId)
-      || (
-        isAuth()
-        && userDoc().companyId == companyId
-      );
-      
-    allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+    // Lire l'agence seulement si même compagnie
+    allow read: if isAuth()
+      && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId;
+
+    // Écriture agence (à adapter plus tard)
+    allow write: if false;
+
+    // 🔒 TOUTES les sous-collections de l'agence
+    match /{collection}/{document} {
+      allow read, write: if isAuth()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId;
+    }
+  }
+}
 
     /* =========================
-       COUNTERS (FIX BATCHGET - NO GET() CALLS)
-    ========================= */
-    match /counters/{counterId} {
-      // ✅ Utilise les claims directement depuis le token auth
-      allow read, write: if 
-        isAuth() 
-        && (
-          // Platform admin (vérifié via token)
-          request.auth.token.role == "admin_platforme"
-          // Company admin pour cette compagnie
-          || (request.auth.token.companyId == companyId && request.auth.token.role == "admin_compagnie")
-          // Agency manager (chefAgence) pour cette agence
-          || (request.auth.token.companyId == companyId && request.auth.token.agencyId == agencyId && request.auth.token.role == "chefAgence")
-        );
+       INVITATIONS
+       ========================= */
+    match /invitations/{invitationId} {
+      allow read, write: if isAuth();
     }
 
     /* =========================
-       USERS D'AGENCE (PERSONNEL AGENCE)
-    ========================= */
-    match /users/{agentId} {
-      allow read: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-        
-      allow create, update: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyManager(companyId, agencyId);
-        
-      allow delete: if false;
-    }
-
-    /* =========================
-       RECETTES AGENCE
-    ========================= */
-    match /recettes/{recetteId} {
-      allow read, create: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-        
-      allow update, delete: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId);
-    }
-
-    /* =========================
-       RÉSERVATIONS AGENCE
-    ========================= */
-    match /reservations/{reservationId} {
-      allow read, write: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-    }
-
-    /* =========================
-       BOARDING (EMBARQUEMENT)
-    ========================= */
-    match /boardingLocks/{docId} {
-      allow read, write: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-    }
-
-    match /boardingClosures/{docId} {
-      allow read, write: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-    }
-
-    match /boardingLogs/{docId} {
-      allow read, write: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-    }
-
-    /* =========================
-       AFFECTATIONS
-    ========================= */
-    match /affectations/{docId} {
-      allow read: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-        
-      allow write: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId);
-    }
-
-    /* =========================
-       SHIFTS (POSTES GUICHET)
-    ========================= */
-    match /shifts/{shiftId} {
-      allow read: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-        
-      allow write: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || (
-          isAgencyUser(companyId, agencyId)
-          && request.resource.data.userId == uid()
-        );
-    }
-
-    /* =========================
-       SHIFT REPORTS
-    ========================= */
-    match /shiftReports/{reportId} {
-      allow read: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyUser(companyId, agencyId);
-        
-      allow write: if
-        isPlatformAdmin()
-        || isCompanyAdmin(companyId)
-        || isAgencyManager(companyId, agencyId);
-    }
-
-    /* =========================
-       WEEKLY TRIPS
-    ========================= */
-    match /weeklyTrips/{tripId} {
+       PUBLIC
+       ========================= */
+    match /publicProfiles/{hash} {
       allow read: if true;
-      allow write: if isPlatformAdmin() || isCompanyAdmin(companyId);
+    }
+    
+    match /plans/{planId} {
+      allow read: if true;
+      allow write: if false; // Admin seulement
     }
 
     /* =========================
-       COMPTABILITÉ DES AGENCES
-    ========================= */
-    match /cashReceipts/{docId} {
-      allow read: if isPlatformAdmin()
-        || (
-          isAuth()
-          && userDoc().role == "admin_compagnie"
-          && userDoc().companyId == companyId
-        );
-        
-      allow write: if false;
-    }
-
-    match /cashMovements/{docId} {
-      allow read: if isPlatformAdmin()
-        || (
-          isAuth()
-          && userDoc().role == "admin_compagnie"
-          && userDoc().companyId == companyId
-        );
-        
-      allow write: if false;
+       FALLBACK: TOUT REFUSER
+       ========================= */
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
-
-  /* =========================
-     IMAGES COMPAGNIE (RACINE)
-  ========================= */
-  match /images/{imageId} {
-    allow read, write: if isPlatformAdmin() || isCompanyAdmin(companyId);
-  }
-
-  /* =========================
-     BIBLIOTHÈQUE IMAGES COMPAGNIE
-  ========================= */
-  match /imagesBibliotheque/{imageId} {
-    allow read, write: if isCompanyAdmin(companyId);
-  }
-
-  /* =========================
-     AVIS CLIENTS (PAR COMPAGNIE)
-  ========================= */
-  match /avis/{avisId} {
-    // Lecture des avis
-    allow read: if isPlatformAdmin()
-      || isCompanyAdmin(companyId);
-      
-    // Création / mise à jour / suppression (modération)
-    allow write: if isCompanyAdmin(companyId);
-  }
-}
-
-/* =========================
-   AVIS CLIENTS (RACINE - POUR COLLECTION GROUP QUERIES)
-========================= */
-match /avis/{avisId} {
-  allow read: if isPlatformAdmin()
-    || (
-      isAuth()
-      && userDoc().role == "admin_compagnie"
-      && userDoc().companyId == resource.data.companyId
-    );
-    
-  allow write: if isPlatformAdmin();
-}
-
-/* =========================
-   PAYMENT METHODS
-========================= */
-match /paymentMethods/{methodId} {
-  allow read, write: if isPlatformAdmin()
-    || isCompanyAdmin(resource.data.companyId);
-}
-
-/* =========================
-   MEDIAS
-========================= */
-match /medias/{mediaId} {
-  allow read, write: if isPlatformAdmin()
-    || isCompanyAdmin(resource.data.companyId);
-}
-
-/* =========================
-   COMPANY STATS / COMPTABILITÉ
-========================= */
-match /companyStats/{companyId} {
-  allow read: if isPlatformAdmin()
-    || (
-      isAuth()
-      && userDoc().role == "admin_compagnie"
-      && userDoc().companyId == companyId
-    );
-    
-  allow write: if isPlatformAdmin();
-}
-
-/* =========================
-   INVITATIONS
-========================= */
-match /invitations/{invitationId} {
-  // Lecture publique (page acceptation)
-  allow read: if true;
-  
-  // Création autorisée :
-  // - admin plateforme
-  // - admin compagnie POUR SA compagnie
-  allow create: if isAuth()
-    && (
-      isPlatformAdmin()
-      || (
-        userDoc().role == "admin_compagnie"
-        && request.resource.data.companyId == userDoc().companyId
-      )
-    );
-    
-  // Acceptation de l'invitation
-  allow update: if request.auth != null
-    && resource.data.status == "pending"
-    && request.resource.data.status == "accepted";
-}
-
-/* =========================
-   PLATFORM
-========================= */
-match /platform/{docId} {
-  allow read, write: if isPlatformAdmin();
-}
-
-match /platformStats/{docId} {
-  allow read: if isPlatformAdmin();
-  allow write: if false;
-}
-
-match /adminDashboard/{docId} {
-  allow read: if isPlatformAdmin();
-  allow write: if false;
-}
-
-match /mediaPlatform/{mediaId} {
-  allow read, write: if isPlatformAdmin();
-}
-
-/* =========================
-   VILLES
-========================= */
-match /villes/{villeId} {
-  allow read: if true;
-  allow write: if isPlatformAdmin();
-}
-
-/* =========================
-   COLLECTION GROUPS (ADMIN)
-========================= */
-match /{path=**}/reservations/{reservationId} {
-  allow read: if isPlatformAdmin();
-}
-
-match /{path=**}/agences/{agencyId} {
-  allow read: if isPlatformAdmin();
-}
-
-match /{path=**}/weeklyTrips/{tripId} {
-  allow read: if isPlatformAdmin();
-}
-
-/* =========================
-   FALLBACK
-========================= */
-match /{document=**} {
-  allow read, write: if false;
-}
-}
 }
