@@ -1,17 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import {
-  collection,
-  collectionGroup,
-  getDocs,
-  query,
-  where,
-} from 'firebase/firestore';
+import { collection, collectionGroup, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import { Bus, Search, ArrowLeft, ArrowRight } from 'lucide-react';
 
-/* ================= TYPES ================= */
-
+/* =========================
+   TYPES
+========================= */
 interface SearchCriteria {
   departure: string;
   arrival: string;
@@ -22,7 +17,6 @@ interface Company {
   nom: string;
   slug: string;
   logoUrl?: string;
-  rating?: number;
   couleurPrimaire?: string;
 }
 
@@ -35,9 +29,9 @@ interface Trajet {
   companyId: string;
 }
 
-/* ================= HELPERS ================= */
-
-// Normalisation STRICTEMENT côté JS
+/* =========================
+   UTILS
+========================= */
 const normalize = (s: string) =>
   s
     ?.trim()
@@ -48,40 +42,41 @@ const normalize = (s: string) =>
 const capitalize = (s: string) =>
   s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
 
-/* ================= PAGE ================= */
-
+/* =========================
+   COMPONENT
+========================= */
 const PlatformSearchResultsPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
 
-  // 1️⃣ depuis location.state (desktop)
+  /* ---------- critères ---------- */
   const stateCrit = location.state as SearchCriteria | null;
 
-  // 2️⃣ fallback query params (mobile / refresh)
-  const qp = {
-    departure: (params.get('departure') || params.get('from') || '').trim(),
-    arrival: (params.get('arrival') || params.get('to') || '').trim(),
+  const qpCrit: SearchCriteria = {
+    departure: params.get('from') || '',
+    arrival: params.get('to') || '',
   };
 
-  // Critères unifiés
-  const criteres: SearchCriteria | null = useMemo(() => {
+  const criteres = useMemo<SearchCriteria | null>(() => {
     if (stateCrit?.departure && stateCrit?.arrival) return stateCrit;
-    if (qp.departure && qp.arrival) return qp;
+    if (qpCrit.departure && qpCrit.arrival) return qpCrit;
     return null;
-  }, [stateCrit, qp.departure, qp.arrival]);
+  }, [stateCrit, qpCrit.departure, qpCrit.arrival]);
 
+  /* ---------- state ---------- */
   const [companies, setCompanies] = useState<Record<string, Company>>({});
   const [groupedTrajets, setGroupedTrajets] = useState<Record<string, Trajet[]>>(
     {}
   );
-  const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('');
 
-  /* ================= FETCH ================= */
-
+  /* =========================
+     FETCH DATA (CORRIGÉ)
+  ========================= */
   useEffect(() => {
-    if (!criteres) {
+    if (!criteres?.departure || !criteres?.arrival) {
       setGroupedTrajets({});
       setLoading(false);
       return;
@@ -91,43 +86,49 @@ const PlatformSearchResultsPage: React.FC = () => {
       setLoading(true);
 
       try {
-        /* ===== COMPANIES ===== */
+        /* ----- companies ----- */
         const companiesSnap = await getDocs(collection(db, 'companies'));
         const companiesMap: Record<string, Company> = {};
+
         companiesSnap.forEach((d) => {
-          companiesMap[d.id] = { id: d.id, ...(d.data() as any) };
+          const data = d.data() as Omit<Company, 'id'>;
+
+          companiesMap[d.id] = {
+            ...data,
+            id: d.id,
+          };
         });
+
         setCompanies(companiesMap);
 
-        /* ===== WEEKLY TRIPS ===== */
-        const depRaw = criteres.departure.trim();
-        const arrRaw = criteres.arrival.trim();
-
-        // 🔥 Requête volontairement SIMPLE
-        const qRef = query(
-          collectionGroup(db, 'weeklyTrips'),
-          where('departure', '==', depRaw)
-        );
-
-        const snap = await getDocs(qRef);
+        /* ----- weeklyTrips (SANS where !) ----- */
+        const tripsSnap = await getDocs(collectionGroup(db, 'weeklyTrips'));
 
         const grouped: Record<string, Trajet[]> = {};
+        const depNorm = normalize(criteres.departure);
+        const arrNorm = normalize(criteres.arrival);
 
-        snap.forEach((docSnap) => {
+        tripsSnap.forEach((docSnap) => {
           const data = docSnap.data() as any;
 
-          // 🧠 Filtrage intelligent côté JS (corrige le bug mobile)
-          if (normalize(data.arrival) !== normalize(arrRaw)) return;
+          if (
+            normalize(data.departure) !== depNorm ||
+            normalize(data.arrival) !== arrNorm
+          ) {
+            return;
+          }
 
+          // path: companies/{companyId}/agences/{agencyId}/weeklyTrips/{id}
           const companyId = docSnap.ref.path.split('/')[1];
 
-          const trajet: Trajet = {
+          (grouped[companyId] ||= []).push({
             id: docSnap.id,
             companyId,
-            ...data,
-          };
-
-          (grouped[companyId] ||= []).push(trajet);
+            departure: data.departure,
+            arrival: data.arrival,
+            price: data.price,
+            places: data.places || 0,
+          });
         });
 
         setGroupedTrajets(grouped);
@@ -140,33 +141,32 @@ const PlatformSearchResultsPage: React.FC = () => {
     };
 
     fetchData();
-  }, [criteres]);
+  }, [criteres?.departure, criteres?.arrival]);
 
-  /* ================= FILTER ================= */
-
-  const filteredCompanies = useMemo(() => {
+  /* ---------- filtre compagnies ---------- */
+  const filteredCompanyIds = useMemo(() => {
     const ids = Object.keys(groupedTrajets);
-    const term = filter.toLowerCase();
-    return ids.filter((companyId) => {
-      const company = companies[companyId];
-      return term ? company?.nom?.toLowerCase().includes(term) : true;
-    });
+    if (!filter.trim()) return ids;
+    return ids.filter((id) =>
+      companies[id]?.nom?.toLowerCase().includes(filter.toLowerCase())
+    );
   }, [groupedTrajets, companies, filter]);
 
-  /* ================= UI ================= */
-
+  /* =========================
+     UI
+  ========================= */
   if (!criteres) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-gray-600">Paramètres de recherche manquants.</p>
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Paramètres manquants</p>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* ===== HEADER ===== */}
-      <header className="bg-white shadow-md sticky top-0 z-50">
+      {/* HEADER */}
+      <header className="bg-white shadow sticky top-0 z-50">
         <div className="max-w-5xl mx-auto flex items-center justify-between px-4 py-3">
           <button
             onClick={() => navigate('/')}
@@ -175,47 +175,40 @@ const PlatformSearchResultsPage: React.FC = () => {
             <ArrowLeft className="w-5 h-5 mr-1" />
             Retour
           </button>
-          <div className="flex items-center gap-2">
-            <img
-              src="/icons/icon-192.png"
-              alt="Teliya"
-              className="w-7 h-7 rounded-full"
-            />
-            <span className="font-bold text-xl text-orange-600">Teliya</span>
-          </div>
+          <span className="font-bold text-orange-600 text-xl">Teliya</span>
         </div>
       </header>
 
-      {/* ===== ROUTE + FILTRE ===== */}
-      <div className="max-w-5xl mx-auto px-4 mt-6 space-y-3">
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-          <span className="px-3 py-1.5 rounded-xl bg-orange-50 border border-orange-200 font-semibold truncate">
+      {/* ROUTE */}
+      <div className="max-w-5xl mx-auto px-4 mt-6">
+        <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
+          <span className="px-3 py-1.5 rounded-xl bg-orange-50 border font-semibold truncate">
             {capitalize(criteres.departure)}
           </span>
-          <ArrowRight className="h-4 w-4 text-gray-400 mx-auto" />
-          <span className="px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 font-semibold justify-self-end truncate">
+          <ArrowRight className="text-gray-400" />
+          <span className="px-3 py-1.5 rounded-xl bg-emerald-50 border font-semibold truncate text-right">
             {capitalize(criteres.arrival)}
           </span>
         </div>
 
-        <div className="relative w-full sm:w-[320px] sm:ml-auto">
+        <div className="relative mt-3 sm:w-[320px] sm:ml-auto">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filtrer par compagnie"
-            className="pl-9 border rounded-lg py-2 px-3 text-sm w-full focus:ring-2 focus:ring-orange-500"
+            className="pl-9 border rounded-lg py-2 px-3 text-sm w-full"
           />
         </div>
       </div>
 
-      {/* ===== RESULTS ===== */}
+      {/* RESULTS */}
       <div className="max-w-5xl mx-auto p-4">
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="h-10 w-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : filteredCompanies.length === 0 ? (
+        ) : filteredCompanyIds.length === 0 ? (
           <div className="text-center py-12">
             <p className="text-gray-600 mb-4">
               Aucune compagnie disponible pour ce trajet
@@ -229,11 +222,11 @@ const PlatformSearchResultsPage: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-3">
-            {filteredCompanies.map((companyId) => {
+            {filteredCompanyIds.map((companyId) => {
               const company = companies[companyId];
               const trajets = groupedTrajets[companyId];
               const prixMin = Math.min(...trajets.map((t) => t.price));
-              const totalPlaces = trajets.reduce(
+              const places = trajets.reduce(
                 (acc, t) => acc + (t.places || 0),
                 0
               );
@@ -244,28 +237,29 @@ const PlatformSearchResultsPage: React.FC = () => {
                   className="bg-white rounded-xl shadow-sm p-4 flex justify-between items-center border"
                 >
                   <div className="flex items-center gap-4 min-w-0">
-                    {company.logoUrl ? (
+                    {company?.logoUrl ? (
                       <img
                         src={company.logoUrl}
+                        alt={company.nom}
                         className="w-12 h-12 rounded-full object-cover border"
                       />
                     ) : (
-                      <div className="w-12 h-12 rounded-full bg-orange-50 border grid place-items-center">
+                      <div className="w-12 h-12 rounded-full grid place-items-center bg-orange-50 border">
                         <Bus className="text-orange-500" />
                       </div>
                     )}
-
-                    <div className="min-w-0">
+                    <div>
                       <h3
-                        className="font-semibold truncate"
+                        className="font-semibold"
                         style={{
-                          color: company.couleurPrimaire || '#ea580c',
+                          color:
+                            company?.couleurPrimaire || 'rgb(234,88,12)',
                         }}
                       >
-                        {company.nom}
+                        {company?.nom}
                       </h3>
                       <p className="text-xs text-gray-500">
-                        {totalPlaces} places disponibles
+                        {places} places disponibles
                       </p>
                     </div>
                   </div>
@@ -279,10 +273,12 @@ const PlatformSearchResultsPage: React.FC = () => {
                         navigate(
                           `/${company.slug}/booking?departure=${encodeURIComponent(
                             criteres.departure
-                          )}&arrival=${encodeURIComponent(criteres.arrival)}`
+                          )}&arrival=${encodeURIComponent(
+                            criteres.arrival
+                          )}`
                         )
                       }
-                      className="bg-orange-600 text-white px-4 py-2 rounded-lg w-full"
+                      className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm w-full"
                     >
                       Réserver
                     </button>
