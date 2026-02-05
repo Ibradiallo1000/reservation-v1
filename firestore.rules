@@ -1,85 +1,46 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
     function isAuth() {
       return request.auth != null;
     }
-    
-    function uid() {
-      return request.auth.uid;
-    }
-    
-    /* =========================
-       USERS - Collection globale
-       ========================= */
-    match /users/{userId} {
-      // CRITIQUE: Autoriser la lecture à tous les utilisateurs authentifiés
-      // Car les comptables doivent voir les guichetiers, les chefs voient leur équipe, etc.
-      allow read: if isAuth();
-      
-      // Créer: seulement à l'inscription (son propre document)
-      allow create: if isAuth() && uid() == userId;
-      
-      // Mettre à jour: seulement son propre document
-      allow update: if isAuth() && uid() == userId;
-      
-      // Liste: désactivé pour sécurité (utilisation get avec ID spécifique)
-      allow list: if false;
+
+    /* ========= PUBLIC ========= */
+
+    match /villes/{id} {
+      allow get, list: if true;
     }
 
-    /* =========================
-       COMPANIES
-       ========================= */
     match /companies/{companyId} {
-  // Lire la compagnie seulement si l'utilisateur appartient à cette compagnie
-  allow read: if isAuth()
-    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId;
+      allow get, list: if true;
 
-  // Écriture compagnie (à adapter plus tard)
-  allow write: if false;
+      match /agences/{agencyId} {
+        allow get, list: if true;
 
-  match /agences/{agencyId} {
-    // Lire l'agence seulement si même compagnie
-    allow read: if isAuth()
-      && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId;
+        match /weeklyTrips/{tripId} {
+          allow get, list: if true;
+        }
 
-    // Écriture agence (à adapter plus tard)
-    allow write: if false;
-
-    // 🔒 TOUTES les sous-collections de l'agence
-    match /{collection}/{document} {
-      allow read, write: if isAuth()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId;
-    }
-  }
-}
-
-    /* =========================
-       INVITATIONS
-       ========================= */
-    match /invitations/{invitationId} {
-      allow read, write: if isAuth();
+        match /reservations/{reservationId} {
+          allow get, list, create: if true;
+          allow update, delete: if isAuth();
+        }
+      }
     }
 
-    /* =========================
-       PUBLIC
-       ========================= */
-    match /publicProfiles/{hash} {
-      allow read: if true;
-    }
-    
-    match /plans/{planId} {
-      allow read: if true;
-      allow write: if false; // Admin seulement
+    match /paymentMethods/{id} {
+      allow get, list: if true;
     }
 
-    /* =========================
-       FALLBACK: TOUT REFUSER
-       ========================= */
-    match /{document=**} {
-      allow read, write: if false;
+    /* ========= INTERNE ========= */
+
+    match /users/{userId} {
+      allow get, list, create, update: if isAuth();
+    }
+
+    match /{path=**} {
+      allow get, list, create, update, delete: if isAuth();
     }
   }
 }
