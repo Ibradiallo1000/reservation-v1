@@ -30,6 +30,16 @@ interface Trajet {
 }
 
 /* =========================
+   AJOUT: Interface Reservation
+========================= */
+interface Reservation {
+  companyId: string;
+  weeklyTripId: string;
+  places: number;
+  statut: string;
+}
+
+/* =========================
    UTILS
 ========================= */
 const normalize = (s: string) =>
@@ -71,6 +81,11 @@ const PlatformSearchResultsPage: React.FC = () => {
   );
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
+
+  /* =========================
+     AJOUT: State pour les places réservées
+  ========================= */
+  const [reservedPlacesMap, setReservedPlacesMap] = useState<Record<string, number>>({});
 
   /* =========================
      FETCH DATA (CORRIGÉ)
@@ -132,6 +147,26 @@ const PlatformSearchResultsPage: React.FC = () => {
         });
 
         setGroupedTrajets(grouped);
+
+        /* =========================
+           AJOUT: Chargement des réservations
+        ========================= */
+        const reservationsSnap = await getDocs(collectionGroup(db, 'reservations'));
+
+        const reservedMap: Record<string, number> = {};
+
+        reservationsSnap.forEach((doc) => {
+          const r = doc.data() as Reservation;
+
+          // on ne compte que les réservations actives
+          if (!['en_attente', 'payé', 'preuve_recue'].includes(r.statut)) return;
+
+          const key = `${r.companyId}_${r.weeklyTripId}`;
+          reservedMap[key] = (reservedMap[key] || 0) + (r.places || 0);
+        });
+
+        setReservedPlacesMap(reservedMap);
+
       } catch (err) {
         console.error('❌ Erreur recherche plateforme:', err);
         setGroupedTrajets({});
@@ -226,10 +261,21 @@ const PlatformSearchResultsPage: React.FC = () => {
               const company = companies[companyId];
               const trajets = groupedTrajets[companyId];
               const prixMin = Math.min(...trajets.map((t) => t.price));
-              const places = trajets.reduce(
-                (acc, t) => acc + (t.places || 0),
-                0
-              );
+              
+              /* =========================
+                 MODIFICATION: Calcul des places réelles
+                 ❌ AVANT (capacité théorique):
+                 const places = trajets.reduce(
+                   (acc, t) => acc + (t.places || 0),
+                   0
+                 );
+                 
+                 ✅ APRÈS (places réelles):
+              ========================= */
+              const places = trajets.reduce((acc, t) => {
+                const reserved = reservedPlacesMap[`${t.companyId}_${t.id}`] || 0;
+                return acc + Math.max((t.places || 0) - reserved, 0);
+              }, 0);
 
               return (
                 <div
