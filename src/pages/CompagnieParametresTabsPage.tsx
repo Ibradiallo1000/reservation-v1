@@ -8,6 +8,7 @@ import ParametresSecurite from './ParametresSecurite';
 import ParametresReseauxPage from './ParametresReseauxPage';
 import ParametresLegauxPage from './ParametresLegauxPage';
 import ParametresPlan from './ParametresPlan';
+import ParametresServices from './ParametresServices';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { usePageHeader } from '@/contexts/PageHeaderContext';
@@ -18,15 +19,18 @@ import { db } from '@/firebaseConfig';
 import useCompanyTheme from '@/hooks/useCompanyTheme';
 import { Company } from '@/types/companyTypes';
 
-type TabKey = 'plan' | 'vitrine' | 'personnel' | 'securite' | 'reseaux' | 'legaux';
+type TabKey = 'plan' | 'vitrine' | 'personnel' | 'securite' | 'reseaux' | 'legaux' | 'services';
+
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'plan',      label: 'Plan & abonnement' },
   { key: 'vitrine',   label: 'Vitrine publique' },
+  { key: 'services', label: 'Services proposés' },
   { key: 'personnel', label: 'Personnel' },
   { key: 'securite',  label: 'Sécurité' },
   { key: 'reseaux',   label: 'Réseaux sociaux' },
   { key: 'legaux',    label: 'Mentions & politique' },
+  
 ];
 
 const CompagnieParametresTabsPage: React.FC = () => {
@@ -88,6 +92,8 @@ const CompagnieParametresTabsPage: React.FC = () => {
       case 'plan':      return <ParametresPlan />;
       case 'vitrine':
         return <ParametresVitrine />;
+      case 'services':
+        return <ParametresServices />;
       case 'personnel':
         return <ParametresPersonnel />;
       case 'securite':

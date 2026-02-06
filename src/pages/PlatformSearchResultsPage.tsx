@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { collection, collectionGroup, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
-import { Bus, Search, ArrowLeft, ArrowRight, Wind, Wifi, Zap, Coffee, Sofa } from 'lucide-react';
+import { Bus, Search, ArrowLeft, ArrowRight, Wind, Wifi, Zap, Coffee, Sofa, Tv, WifiOff, Smartphone, Utensils, Droplet } from 'lucide-react';
 
 /* =========================
    TYPES
@@ -18,6 +18,7 @@ interface Company {
   slug: string;
   logoUrl?: string;
   couleurPrimaire?: string;
+  services?: string[]; // Nouveau champ pour les services
 }
 
 interface Trajet {
@@ -53,15 +54,29 @@ const capitalize = (s: string) =>
   s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
 
 /* =========================
-   SERVICES ICONS CONFIG
+   MAPPING DES SERVICES AVEC ICÔNES
 ========================= */
-const serviceIcons = [
-  { icon: Wind, label: 'Climatisation', color: 'text-blue-500' },
-  { icon: Wifi, label: 'Wi-Fi', color: 'text-purple-500' },
-  { icon: Zap, label: 'Prise USB', color: 'text-yellow-500' },
-  { icon: Coffee, label: 'Boisson', color: 'text-orange-500' },
-  { icon: Sofa, label: 'Sièges confort', color: 'text-green-500' },
-];
+const SERVICE_ICON_MAP: Record<string, { icon: React.ElementType; label: string; color: string }> = {
+  // Wi-Fi
+  wifi: { icon: Wifi, label: 'Wi-Fi', color: 'text-purple-600' },
+  wifi_gratuit: { icon: Wifi, label: 'Wi-Fi gratuit', color: 'text-purple-600' },
+
+  // Climatisation
+  climatisation: { icon: Wind, label: 'Climatisation', color: 'text-blue-600' },
+  clim: { icon: Wind, label: 'Climatisation', color: 'text-blue-600' },
+
+  // USB
+  prise_usb: { icon: Zap, label: 'Prise USB', color: 'text-yellow-600' },
+  usb: { icon: Zap, label: 'Prise USB', color: 'text-yellow-600' },
+
+  // Sièges
+  sieges_confort: { icon: Sofa, label: 'Sièges confort', color: 'text-green-600' },
+  sieges: { icon: Sofa, label: 'Sièges confort', color: 'text-green-600' },
+
+  // TV
+  ecran_tv: { icon: Tv, label: 'Écran TV', color: 'text-red-600' },
+  tv: { icon: Tv, label: 'Écran TV', color: 'text-red-600' },
+};
 
 /* =========================
    COMPONENT
@@ -99,7 +114,7 @@ const PlatformSearchResultsPage: React.FC = () => {
   const [reservedPlacesMap, setReservedPlacesMap] = useState<Record<string, number>>({});
 
   /* =========================
-     FETCH DATA (CORRIGÉ)
+     FETCH DATA
   ========================= */
   useEffect(() => {
     if (!criteres?.departure || !criteres?.arrival) {
@@ -127,7 +142,7 @@ const PlatformSearchResultsPage: React.FC = () => {
 
         setCompanies(companiesMap);
 
-        /* ----- weeklyTrips (SANS where !) ----- */
+        /* ----- weeklyTrips ----- */
         const tripsSnap = await getDocs(collectionGroup(db, 'weeklyTrips'));
 
         const grouped: Record<string, Trajet[]> = {};
@@ -144,7 +159,6 @@ const PlatformSearchResultsPage: React.FC = () => {
             return;
           }
 
-          // path: companies/{companyId}/agences/{agencyId}/weeklyTrips/{id}
           const companyId = docSnap.ref.path.split('/')[1];
 
           (grouped[companyId] ||= []).push({
@@ -160,7 +174,7 @@ const PlatformSearchResultsPage: React.FC = () => {
         setGroupedTrajets(grouped);
 
         /* =========================
-           AJOUT: Chargement des réservations
+           Chargement des réservations (conservé pour compatibilité)
         ========================= */
         const reservationsSnap = await getDocs(collectionGroup(db, 'reservations'));
 
@@ -169,7 +183,6 @@ const PlatformSearchResultsPage: React.FC = () => {
         reservationsSnap.forEach((doc) => {
           const r = doc.data() as Reservation;
 
-          // on ne compte que les réservations actives
           if (!['en_attente', 'payé', 'preuve_recue'].includes(r.statut)) return;
 
           const key = `${r.companyId}_${r.weeklyTripId}`;
@@ -213,7 +226,7 @@ const PlatformSearchResultsPage: React.FC = () => {
     <div className="min-h-screen bg-gray-50">
       {/* HEADER */}
       <header className="bg-white shadow sticky top-0 z-50">
-        <div className="max-w-5xl mx-auto flex items-center justify-between px-4 py-3">
+        <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
           <button
             onClick={() => navigate('/')}
             className="flex items-center text-orange-600 hover:text-orange-700 transition-colors"
@@ -222,12 +235,12 @@ const PlatformSearchResultsPage: React.FC = () => {
             Retour
           </button>
           <span className="font-bold text-orange-600 text-xl">Teliya</span>
-          <div className="w-10"></div> {/* Pour équilibrer la flexbox */}
+          <div className="w-10"></div>
         </div>
       </header>
 
       {/* ROUTE */}
-      <div className="max-w-5xl mx-auto px-4 mt-6">
+      <div className="max-w-6xl mx-auto px-4 mt-4">
         <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
           <span className="px-3 py-1.5 rounded-xl bg-orange-50 border border-orange-100 font-semibold truncate">
             {capitalize(criteres.departure)}
@@ -238,7 +251,7 @@ const PlatformSearchResultsPage: React.FC = () => {
           </span>
         </div>
 
-        <div className="relative mt-4 sm:w-[320px] sm:ml-auto">
+        <div className="relative mt-3 sm:w-[320px] sm:ml-auto">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
           <input
             value={filter}
@@ -250,7 +263,7 @@ const PlatformSearchResultsPage: React.FC = () => {
       </div>
 
       {/* RESULTS */}
-      <div className="max-w-5xl mx-auto p-4 pb-8">
+      <div className="max-w-6xl mx-auto p-4 pb-6">
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="h-10 w-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
@@ -268,35 +281,37 @@ const PlatformSearchResultsPage: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {filteredCompanyIds.map((companyId) => {
               const company = companies[companyId];
               const trajets = groupedTrajets[companyId];
               const prixMin = Math.min(...trajets.map((t) => t.price));
+              const services = company?.services || [];
+              const servicesToShow = services.slice(0, 5); // Max 5 services
 
               return (
                 <div
                   key={companyId}
                   className="bg-white rounded-xl shadow-sm p-4 border border-gray-200 hover:shadow-md transition-shadow"
                 >
-                  {/* Mobile layout (stacked) */}
+                  {/* Mobile Layout */}
                   <div className="block md:hidden">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         {company?.logoUrl ? (
                           <img
                             src={company.logoUrl}
                             alt={company.nom}
-                            className="w-12 h-12 rounded-full object-cover border border-gray-200"
+                            className="w-10 h-10 rounded-full object-cover border border-gray-200"
                           />
                         ) : (
-                          <div className="w-12 h-12 rounded-full grid place-items-center bg-orange-50 border border-orange-100">
-                            <Bus className="text-orange-500" />
+                          <div className="w-10 h-10 rounded-full grid place-items-center bg-orange-50 border border-orange-100">
+                            <Bus className="text-orange-500 w-5 h-5" />
                           </div>
                         )}
                         <div className="min-w-0">
                           <h3
-                            className="font-semibold truncate"
+                            className="font-semibold truncate text-sm"
                             style={{
                               color: company?.couleurPrimaire || 'rgb(234,88,12)',
                             }}
@@ -304,26 +319,36 @@ const PlatformSearchResultsPage: React.FC = () => {
                             {company?.nom}
                           </h3>
                           {/* Services icons - Mobile */}
-                          <div className="flex items-center gap-2 mt-1.5">
-                            {serviceIcons.slice(0, 4).map((service, index) => {
-                              const Icon = service.icon;
-                              return (
-                                <div
-                                  key={index}
-                                  className={`${service.color} p-1 rounded-full bg-gray-50`}
-                                  title={service.label}
-                                >
-                                  <Icon className="w-3.5 h-3.5" />
-                                </div>
-                              );
-                            })}
-                          </div>
+                          {servicesToShow.length > 0 && (
+                            <div className="flex items-center gap-1 mt-1">
+                              {servicesToShow.map((serviceKey, index) => {
+                                const service = SERVICE_ICON_MAP[serviceKey];
+                                if (!service) return null;
+                                
+                                const Icon = service.icon;
+                                return (
+                                  <div
+                                    key={index}
+                                    className={`${service.color} p-0.5 rounded`}
+                                    title={service.label}
+                                  >
+                                    <Icon className="w-3 h-3" />
+                                  </div>
+                                );
+                              })}
+                              {services.length > 5 && (
+                                <span className="text-xs text-gray-500 ml-1">
+                                  +{services.length - 5}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
                     
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                      <div className="text-emerald-600 font-bold text-lg">
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                      <div className="text-emerald-600 font-bold text-base">
                         {prixMin.toLocaleString()} FCFA
                       </div>
                       <button
@@ -336,54 +361,70 @@ const PlatformSearchResultsPage: React.FC = () => {
                             )}`
                           )
                         }
-                        className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                        className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
                       >
                         Réserver
                       </button>
                     </div>
                   </div>
 
-                  {/* Desktop layout (side by side) */}
+                  {/* Desktop Layout - UNE SEULE LIGNE */}
                   <div className="hidden md:flex items-center justify-between">
-                    <div className="flex items-center gap-4 min-w-0 flex-1">
+                    {/* Logo + Nom */}
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
                       {company?.logoUrl ? (
                         <img
                           src={company.logoUrl}
                           alt={company.nom}
-                          className="w-14 h-14 rounded-full object-cover border border-gray-200"
+                          className="w-12 h-12 rounded-full object-cover border border-gray-200"
                         />
                       ) : (
-                        <div className="w-14 h-14 rounded-full grid place-items-center bg-orange-50 border border-orange-100">
-                          <Bus className="text-orange-500" />
+                        <div className="w-12 h-12 rounded-full grid place-items-center bg-orange-50 border border-orange-100">
+                          <Bus className="text-orange-500 w-6 h-6" />
                         </div>
                       )}
                       <div className="min-w-0">
                         <h3
-                          className="font-semibold text-lg truncate"
+                          className="font-semibold truncate"
                           style={{
                             color: company?.couleurPrimaire || 'rgb(234,88,12)',
                           }}
                         >
                           {company?.nom}
                         </h3>
+                        
                         {/* Services icons - Desktop */}
-                        <div className="flex items-center gap-2 mt-2">
-                          {serviceIcons.map((service, index) => {
-                            const Icon = service.icon;
-                            return (
-                              <div
-                                key={index}
-                                className={`${service.color} p-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors`}
-                                title={service.label}
-                              >
-                                <Icon className="w-4 h-4" />
-                              </div>
-                            );
-                          })}
-                        </div>
+                        {servicesToShow.length > 0 && (
+                          <div className="flex items-center gap-2 mt-1.5">
+                            {servicesToShow.map((serviceKey, index) => {
+                              const service = SERVICE_ICON_MAP[serviceKey];
+                              if (!service) return null;
+                              
+                              const Icon = service.icon;
+                              return (
+                                <div
+                                  key={index}
+                                  className={`${service.color} p-1 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors group relative`}
+                                  title={service.label}
+                                >
+                                  <Icon className="w-4 h-4" />
+                                  <span className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1 px-2 py-1 text-xs text-white bg-gray-800 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+                                    {service.label}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {services.length > 5 && (
+                              <span className="text-xs text-gray-500 ml-1">
+                                +{services.length - 5} service{services.length - 5 > 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
+                    {/* Prix + Bouton */}
                     <div className="flex items-center gap-6">
                       <div className="text-right">
                         <div className="text-emerald-600 font-bold text-xl">
@@ -401,7 +442,7 @@ const PlatformSearchResultsPage: React.FC = () => {
                             )}`
                           )
                         }
-                        className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-3 rounded-lg font-medium transition-colors whitespace-nowrap"
+                        className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap text-sm"
                       >
                         Réserver
                       </button>

@@ -3,6 +3,9 @@
 import type React from "react";
 import { Timestamp } from "firebase/firestore";
 
+/* =========================
+   SOCIAL & FOOTER
+========================= */
 export interface SocialMediaLinks {
   facebook?: string;
   instagram?: string;
@@ -32,6 +35,9 @@ export interface FooterConfig {
   testimonialsTitle?: string;
 }
 
+/* =========================
+   AGENCE
+========================= */
 export interface Agence {
   longitude: number;
   latitude: number;
@@ -45,8 +51,11 @@ export interface Agence {
   companyId: string;
 }
 
+/* =========================
+   TRIPS / SEARCH
+========================= */
 export interface TripSuggestion {
-  imageUrl?: string; // ✅ optionnel
+  imageUrl?: string;
   duration?: string;
   departure: string;
   arrival: string;
@@ -54,6 +63,9 @@ export interface TripSuggestion {
   frequency?: string;
 }
 
+/* =========================
+   HERO SECTION
+========================= */
 export interface CityInputProps {
   label: string;
   value: string;
@@ -89,6 +101,9 @@ export interface HeroSectionProps {
   t: (key: string) => string;
 }
 
+/* =========================
+   PAYMENTS
+========================= */
 export type PaymentMethod =
   | "espèces"
   | "mobile_money"
@@ -101,54 +116,66 @@ export interface PaymentConfig {
   defaultMethod?: PaymentMethod;
 }
 
-export interface Service {
-  id: string;
-  name: string;
-  description?: string;
-  price?: number;
-  icon?: string;
-}
-
+/* =========================
+   PLAN
+========================= */
 export type PlanType = "free" | "premium" | "pro" | "enterprise";
 
+/* =========================
+   COMPANY (✅ VERSION FINALE)
+========================= */
 export interface Company {
   id: string;
   nom: string;
   slug: string;
 
-  // ✅ Flags liés au plan (optionnels pour compatibilité avec les anciens docs)
-  publicPageEnabled?: boolean;       // vitrine active
-  onlineBookingEnabled?: boolean;    // réservation en ligne active
-  guichetEnabled?: boolean;          // guichet actif
+  /* --- Flags plan --- */
+  publicPageEnabled?: boolean;
+  onlineBookingEnabled?: boolean;
+  guichetEnabled?: boolean;
 
+  /* --- Infos générales --- */
   sousTitre?: string;
   description?: string;
   logoUrl?: string;
   banniereUrl?: string;
+
+  /* --- Thème --- */
   couleurPrimaire?: string;
   couleurSecondaire?: string;
   couleurAccent?: string;
   couleurTertiaire?: string;
   themeStyle?: string;
+
+  /* --- Contact --- */
   email?: string;
   pays?: string;
   telephone?: string;
   adresse?: string;
   horaires?: string;
+
+  /* --- Vitrine --- */
   accroche?: string;
   instructionRecherche?: string;
+  imagesSlider?: string[];
+  sliderImages?: string[];
+
+  /* ✅ SERVICES À BORD (clé Firestore → string[]) */
+  services?: string[];
+
+  /* --- Autres --- */
   socialMedia?: SocialMediaLinks;
   footerConfig?: FooterConfig;
   responsable?: string;
   plan?: PlanType;
+  commission?: number;
+
+  villesDisponibles?: string[];
+  suggestions?: string[];
+  featuredTrips?: any[];
+
+  paymentConfig?: PaymentConfig;
+
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
-  commission?: number;
-  imagesSlider?: string[];
-  sliderImages?: string[];
-  suggestions?: string[];
-  villesDisponibles?: string[];
-  services?: Service[];
-  featuredTrips?: any[];
-  paymentConfig?: PaymentConfig;
 }

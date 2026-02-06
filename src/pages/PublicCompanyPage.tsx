@@ -10,6 +10,7 @@ import VilleSuggestionBar from "@/components/public/VilleSuggestionBar";
 import LanguageSuggestionPopup from "@/components/public/LanguageSuggestionPopup";
 import HeroSection from "@/components/public/HeroSection";
 import CompanyImageSlider from "@/components/public/CompanyImageSlider";
+import CompanyServices from "@/components/public/CompanyServices";
 import Footer from "@/components/public/Footer";
 import AgencyList from "@/components/public/AgencyList";
 import AvisListePublic from "@/components/public/AvisListePublic";
@@ -63,6 +64,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     [agences]
   );
 
+  /* =========================
+     LOAD COMPANY
+  ========================= */
   useEffect(() => {
     if (company || !slug) return;
     (async () => {
@@ -89,6 +93,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     return () => clearTimeout(timer);
   }, []);
 
+  /* =========================
+     SUGGESTED TRIPS
+  ========================= */
   useEffect(() => {
     const fetchSuggestions = async () => {
       if (!company?.id) return;
@@ -142,6 +149,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     fetchSuggestions();
   }, [company]);
 
+  /* =========================
+     AGENCES
+  ========================= */
   useEffect(() => {
     const fetchAgences = async () => {
       if (!company?.id) return;
@@ -163,6 +173,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   const allowPublic = !!company?.publicPageEnabled;
   const allowOnline = allowPublic && !!company?.onlineBookingEnabled;
 
+  /* =========================
+     STATES
+  ========================= */
   if (error === "notFound") {
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
@@ -178,23 +191,20 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
       />
     );
   }
-
-  if (!company) {
-    return (
-      <div className="min-h-screen bg-white">
-        <div className="h-14 border-b" />
-      </div>
-    );
-  }
-
-  if (!allowPublic) {
+  if (!company || !allowPublic) {
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
 
+  /* =========================
+     RENDER
+  ========================= */
   return (
     <div
       className={`min-h-screen flex flex-col ${config.typography}`}
-      style={{ backgroundColor: colors.background || "#ffffff", color: colors.text }}
+      style={{
+        backgroundColor: colors.background || "#ffffff",
+        color: colors.text,
+      }}
     >
       <Header
         company={company}
@@ -225,24 +235,18 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               isMobile={isMobile}
             />
 
-            {/* 🔶 Retrouver ma réservation (spécifique à cette compagnie) */}
-            <section
-              aria-label="Retrouver ma réservation pour cette compagnie"
-              className="max-w-5xl mx-auto px-4 sm:px-6"
-            >
-              <div className="pt-4 sm:pt-6">
-                <ResumeLastReservation
-                  onlyForSlug={slug}
-                  primaryColor={colors.primary}
-                  secondaryColor={colors.secondary}
-                />
-              </div>
+            <section className="max-w-5xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6">
+              <ResumeLastReservation
+                onlyForSlug={slug}
+                primaryColor={colors.primary}
+                secondaryColor={colors.secondary}
+              />
             </section>
 
             <VilleSuggestionBar
               suggestions={suggestedTrips}
               company={company}
-              onSelect={(departure: string, arrival: string) => {
+              onSelect={(departure, arrival) => {
                 navigate(
                   `/${slug}/booking?departure=${encodeURIComponent(
                     departure
@@ -253,10 +257,18 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           </>
         )}
 
-        <CompanyImageSlider
+                <CompanyImageSlider
           images={company.imagesSlider || []}
           primaryColor={colors.primary}
         />
+
+        {/* ✅ SERVICES À BORD */}
+        {Array.isArray(company.services) && company.services.length > 0 && (
+          <CompanyServices
+            services={company.services}
+            primaryColor={colors.primary}
+          />
+        )}
 
         <AvisListePublic
           companyId={company.id}
