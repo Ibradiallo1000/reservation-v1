@@ -8,6 +8,8 @@ import {
   query,
   where,
   Timestamp,
+  onSnapshot,
+  Unsubscribe,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -125,28 +127,28 @@ const CompagnieReservationsPage: React.FC = () => {
   const [loading, setLoading] = useState({ agences: true, reservations: true });
   const [showFilters, setShowFilters] = useState(false);
 
-  // Filtres “détails”
+  // Filtres "détails"
   const [filterDepart, setFilterDepart] = useState("");
   const [filterArrivee, setFilterArrivee] = useState("");
   const [filterCanal, setFilterCanal] = useState<"tous" | "guichet" | "en ligne">("tous");
 
-  // Pagination “détails”
+  // Pagination "détails"
   const [currentPage, setCurrentPage] = useState(1);
   const detailsPerPage = 10;
 
   /* ----------------------------- Data load ------------------------------ */
+  // 1. Chargement des agences (une seule fois, pas en temps réel)
   useEffect(() => {
     if (!companyId) return;
-    (async () => {
-      setLoading({ agences: true, reservations: true });
-
-      // Agences
+    
+    const loadAgences = async () => {
+      setLoading((p) => ({ ...p, agences: true }));
+      
       const agencesSnap = await getDocs(
         collection(db, "companies", companyId, "agences")
       );
       const a: Agence[] = agencesSnap.docs.map((doc) => ({
         id: doc.id,
-        // on prend nomAgence si présent, sinon nom/ville
         nom:
           (doc.data() as any).nomAgence ||
           (doc.data() as any).nom ||
@@ -157,24 +159,37 @@ const CompagnieReservationsPage: React.FC = () => {
       }));
       setAgences(a);
       setLoading((p) => ({ ...p, agences: false }));
+    };
+    
+    loadAgences();
+  }, [companyId]);
 
-      // Réservations (bornées dans Firestore)
-      const all: Reservation[] = [];
-      for (const agence of a) {
-        const resRef = collection(
-          db,
-          "companies",
-          companyId,
-          "agences",
-          agence.id,
-          "reservations"
-        );
-        const qRange = query(
-          resRef,
-          where("createdAt", ">=", Timestamp.fromDate(start)),
-          where("createdAt", "<=", Timestamp.fromDate(end))
-        );
-        const snap = await getDocs(qRange);
+  // 2. Écoute en temps réel des réservations (pour toutes les agences)
+  useEffect(() => {
+    if (!companyId || agences.length === 0) return;
+
+    setLoading((p) => ({ ...p, reservations: true }));
+
+    const unsubscribers: Unsubscribe[] = [];
+    const buckets: Record<string, Reservation[]> = {};
+
+    agences.forEach((agence) => {
+      const resRef = collection(
+        db,
+        "companies",
+        companyId,
+        "agences",
+        agence.id,
+        "reservations"
+      );
+
+      const qRange = query(
+        resRef,
+        where("createdAt", ">=", Timestamp.fromDate(start)),
+        where("createdAt", "<=", Timestamp.fromDate(end))
+      );
+
+      const unsub = onSnapshot(qRange, (snap) => {
         const rows: Reservation[] = snap.docs.map((d) => {
           const data = d.data() as any;
           return {
@@ -183,30 +198,34 @@ const CompagnieReservationsPage: React.FC = () => {
             nomClient: data.nomClient,
             telephone: data.telephone,
             montant: data.montant || 0,
-            canal: (data.canal || "").toLowerCase().includes("ligne") ? "en ligne" : "guichet",
+            canal: (data.canal || "").toLowerCase().includes("ligne")
+              ? "en ligne"
+              : "guichet",
             statut: data.statut,
             depart: data.depart || "",
             arrivee: data.arrivee || "",
             createdAt: data.createdAt?.toDate?.() || null,
           };
         });
-        all.push(...rows);
-      }
 
-      // Grouper par agence
-      const buckets: Record<string, Reservation[]> = {};
-      for (const r of all) {
-        if (!buckets[r.agencyId]) buckets[r.agencyId] = [];
-        buckets[r.agencyId].push(r);
-      }
-      const grouped = Object.keys(buckets).map((k) => ({
-        agencyId: k,
-        reservations: buckets[k],
-      }));
-      setGroupedData(grouped);
-      setLoading((p) => ({ ...p, reservations: false }));
-    })();
-  }, [companyId, start, end]);
+        buckets[agence.id] = rows;
+
+        const grouped = Object.keys(buckets).map((k) => ({
+          agencyId: k,
+          reservations: buckets[k],
+        }));
+
+        setGroupedData(grouped);
+        setLoading((p) => ({ ...p, reservations: false }));
+      });
+
+      unsubscribers.push(unsub);
+    });
+
+    return () => {
+      unsubscribers.forEach((u) => u());
+    };
+  }, [companyId, agences, start, end]);
 
   /* ---------------------------- Derived data ---------------------------- */
   const findAgency = (id?: string | null) =>
@@ -323,7 +342,7 @@ const CompagnieReservationsPage: React.FC = () => {
                 : "bg-white/10 backdrop-blur text-white border-white/30 hover:bg-white/20"
             )}
           >
-            {p === "day" ? "Aujourd’hui" : p === "week" ? "Semaine" : "Mois"}
+            {p === "day" ? "Aujourd'hui" : p === "week" ? "Semaine" : "Mois"}
           </button>
         ))}
 
@@ -375,7 +394,7 @@ const CompagnieReservationsPage: React.FC = () => {
       <div className="p-6">
         <h1 className="text-xl font-semibold mb-2">Réservations</h1>
         <p className="text-sm text-muted-foreground">
-          Impossible d’identifier la compagnie (companyId manquant).
+          Impossible d'identifier la compagnie (companyId manquant).
         </p>
       </div>
     );
@@ -389,7 +408,7 @@ const CompagnieReservationsPage: React.FC = () => {
       }}
     >
       <div className="max-w-7xl mx-auto">
-        {/* Filtres haut (custom dates + filtres “détails”) */}
+        {/* Filtres haut (custom dates + filtres "détails") */}
         {showFilters && (
           <div
             className="rounded-2xl p-4 mb-6 border shadow-sm"
@@ -517,7 +536,7 @@ const CompagnieReservationsPage: React.FC = () => {
                           : "rgba(0,0,0,0.08)",
                     }}
                   >
-                    {/* Barre d’accent en haut */}
+                    {/* Barre d'accent en haut */}
                     <div
                       className="absolute left-0 right-0 top-0 h-1.5 rounded-t-2xl"
                       style={{
