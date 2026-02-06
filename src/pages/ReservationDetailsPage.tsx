@@ -9,7 +9,7 @@ import {
 import { db } from '@/firebaseConfig';
 import {
   ChevronLeft, MapPin, Clock, Calendar, CheckCircle, XCircle, Loader2,
-  CreditCard, Ticket, Heart, ChevronRight, Hash
+  CreditCard, Ticket, Heart, ChevronRight, Hash, Upload, ShieldCheck
 } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -18,7 +18,8 @@ import Confetti from 'react-confetti';
 import { useWindowSize } from '@react-hook/window-size';
 import { hexToRgba, safeTextColor } from '@/utils/color';
 
-type ReservationStatus = 'en_attente' | 'paiement_en_cours' | 'preuve_recue' | 'payé' | 'annule' | string;
+// === NOUVEAUX STATUTS (ALIGNÉS AVEC LA VISION) ===
+type ReservationStatus = 'en_attente' | 'verification' | 'confirme' | 'annule';
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
 interface Reservation {
@@ -35,11 +36,11 @@ interface Reservation {
   tripType: string;
   referenceCode?: string;
 
-  // ---- statut & canal
+  // === NOUVEAUX STATUTS ===
   statut: ReservationStatus;
   canal?: PaymentMethod;
 
-  // ---- champs possibles venant du back
+  // === Autres champs ===
   statutEmbarquement?: string;
   boarded?: boolean;
   boardedAt?: any;
@@ -47,7 +48,6 @@ interface Reservation {
   validatedAt?: any;
   paymentMethodLabel?: string;
 
-  // ---- autres
   companyId: string;
   companySlug: string;
   companyName?: string;
@@ -67,11 +67,9 @@ interface CompanyInfo {
   secondaryColor?: string;
 }
 
-/* ====== Mémoire locale (alignée avec la page de réservation) ====== */
+/* ====== Mémoire locale ====== */
 const PENDING_KEY = 'pendingReservation';
 const STEP_KEY = (slug?: string) => `mb:lastStep:${slug || ''}`;
-const isBlockingStatus = (s?: string) =>
-  ['preuve_recue', 'payé'].includes(String(s || '').toLowerCase());
 
 const readPending = () => {
   try { const raw = localStorage.getItem(PENDING_KEY); return raw ? JSON.parse(raw) : null; }
@@ -134,25 +132,31 @@ async function resolveByToken(slug: string, token: string) {
   return { ref: d.ref, companyId: parts[1], agencyId: parts[3], hardId: d.id };
 }
 
-/* ====== Classement de statut pour décider l’écran ====== */
-function statusRank(r?: Reservation) {
-  if (!r) return 0;
-  const s = (r.statut || '').toLowerCase();
-  const se = (r.statutEmbarquement || '').toLowerCase();
-
-  // 3 = embarqué
-  if (r.boarded || r.boardedAt || se.includes('embarq')) return 3;
-
-  // 2 = payé / confirmé
-  if (r.paidAt || r.validatedAt ||
-      ['pay', 'confirm', 'valid'].some(k => s.includes(k))) return 2;
-
-  // 1 = preuve reçue / en vérif
-  if (['preuve', 'verif', 'vérif'].some(k => s.includes(k))) return 1;
-
-  // 0 = attente paiement / brouillon
-  return 0;
+/* ====== Logique billet direct (SIMPLIFIÉE) ====== */
+function showTicketDirect(reservation: Reservation): boolean {
+  // Billet disponible uniquement si:
+  // 1. Réservation payée au guichet
+  // 2. OU réservation en ligne confirmée par l'admin
+  return reservation.canal === 'guichet' || reservation.statut === 'confirme';
 }
+
+/* ====== Configuration des étapes ====== */
+const STEPS_CONFIG = [
+  {
+    key: 'verification',
+    label: 'Preuve envoyée',
+    description: 'Preuve envoyée. En attente de vérification par la compagnie.',
+    icon: <Upload className="h-4 w-4" />,
+    isFinal: false
+  },
+  {
+    key: 'confirme',
+    label: 'Paiement confirmé',
+    description: 'Paiement confirmé. Votre billet est disponible.',
+    icon: <ShieldCheck className="h-4 w-4" />,
+    isFinal: true
+  }
+] as const;
 
 const ReservationDetailsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -174,7 +178,7 @@ const ReservationDetailsPage: React.FC = () => {
   const primaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
   const secondaryColor = companyInfo?.secondaryColor || '#60a5fa';
 
-  // 💾 On mémorise l’écran courant
+  // 💾 On mémorise l'écran courant
   useEffect(() => {
     try { localStorage.setItem(STEP_KEY(slug), 'details'); } catch {}
   }, [slug]);
@@ -207,14 +211,33 @@ const ReservationDetailsPage: React.FC = () => {
         unsub = onSnapshot(ref, async (snap) => {
           if (!snap.exists()) { setError('Réservation introuvable'); setLoading(false); return; }
           const data = snap.data() as any;
-          const next: Reservation = { ...data, id: snap.id, updatedAt: data?.updatedAt || new Date().toISOString() };
-          setReservation(next);
+          const next: Reservation = { 
+            ...data, 
+            id: snap.id, 
+            updatedAt: data?.updatedAt || new Date().toISOString() 
+          };
+          
+          // Normalisation des anciens statuts vers les nouveaux
+          const normalizedStatus = (() => {
+            const s = data.statut?.toLowerCase() || '';
+            if (['preuve_recue', 'verif', 'vérif'].some(k => s.includes(k))) return 'verification';
+            if (['pay', 'confirm', 'valid'].some(k => s.includes(k))) return 'confirme';
+            if (['annule', 'cancel'].some(k => s.includes(k))) return 'annule';
+            return 'en_attente' as ReservationStatus;
+          })();
 
-          if (next.statut === 'payé' || next.statut === 'annule') {
+          setReservation({
+            ...next,
+            statut: normalizedStatus
+          });
+
+          // Nettoyage de la mémoire locale si terminé
+          if (normalizedStatus === 'confirme' || normalizedStatus === 'annule') {
             const pend = readPending();
             if (pend?.id === snap.id) clearPending();
           }
 
+          // Récupération du nom de l'agence
           const inline = next.agencyNom || next.agenceNom;
           if (inline) setAgencyName(inline);
           else {
@@ -227,6 +250,7 @@ const ReservationDetailsPage: React.FC = () => {
             } catch {}
           }
 
+          // Récupération des infos de la compagnie
           if (!companyInfo) {
             try {
               const companyId = ref.path.split('/')[1];
@@ -247,7 +271,7 @@ const ReservationDetailsPage: React.FC = () => {
 
           setLoading(false);
 
-          // si arrivé via token, normaliser l’URL
+          // Normalisation de l'URL si arrivé via token
           if (!id && hardId) {
             const slugToUse = (location as any)?.state?.slug || next.companySlug || slug;
             window.history.replaceState({}, '', `/${slugToUse}/reservation/${hardId}`);
@@ -261,11 +285,11 @@ const ReservationDetailsPage: React.FC = () => {
     })();
 
     return () => { if (unsub) unsub(); };
-  }, [id, token, slug]); // ← pas de return conditionnel avant ce hook
+  }, [id, token, slug]);
 
-  // 🎉 Confetti
+  // 🎉 Confetti pour paiement confirmé
   useEffect(() => {
-    if (reservation?.statut === 'payé') {
+    if (reservation?.statut === 'confirme') {
       const k = `celebrated-${reservation.id}`;
       if (!localStorage.getItem(k)) {
         setShowConfetti(true);
@@ -276,24 +300,55 @@ const ReservationDetailsPage: React.FC = () => {
     }
   }, [reservation?.statut, reservation?.id]);
 
-  /* ===== Décision d’affichage : billet direct ou stepper ? ===== */
+  /* ===== Décision d'affichage ===== */
+  const isTicketAvailable = reservation ? showTicketDirect(reservation) : false;
   const canal = String(reservation?.canal || '').toLowerCase();
-  const rank = statusRank(reservation || undefined);
-  const showTicketDirect = !!reservation && (canal === 'guichet' || rank >= 2); // guichet OU payé/embarqué → billet direct
 
-  /* 🚀 Redirection automatique si billet disponible (PLACÉ AVANT TOUT RETURN) */
+  /* ===== Configuration de la timeline ===== */
+  const currentStepIndex = reservation 
+    ? Math.max(0, STEPS_CONFIG.findIndex(step => step.key === reservation.statut))
+    : -1;
+
+  const stepDescriptions: Record<string, string> = {
+    en_attente: 'Veuillez envoyer votre preuve de paiement.',
+    verification: 'Preuve envoyée. En attente de vérification par la compagnie.',
+    confirme: 'Paiement confirmé. Votre billet est disponible.',
+    annule: 'Cette réservation a été annulée.'
+  };
+
+  /* 🚀 Redirection automatique si billet disponible */
   useEffect(() => {
-    if (!showTicketDirect || !reservation) return;
+    if (!isTicketAvailable || !reservation) return;
     const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
     navigate(`/${slugToUse}/receipt/${reservation.id}`, {
       replace: true,
-      state: { reservation: { ...reservation, agencyNom: agencyName, canal }, companyInfo }
+      state: { 
+        reservation: { ...reservation, agencyNom: agencyName, canal }, 
+        companyInfo 
+      }
     });
-  }, [showTicketDirect, reservation, agencyName, companyInfo, canal, slug, location, navigate]);
+  }, [isTicketAvailable, reservation, agencyName, companyInfo, canal, slug, location, navigate]);
 
-  // ———————————————————————————————————————
-  // ⚠️ Tous les hooks sont déclarés AVANT ces returns
-  // ———————————————————————————————————————
+  // Méthode de paiement affichée
+  const paymentLabel =
+    canal === 'guichet'
+      ? 'Espèces'
+      : (reservation?.paymentMethodLabel ||
+         (reservation?.canal && reservation.canal !== 'en_ligne' 
+           ? String(reservation.canal).replace(/_/g,' ') 
+           : 'En ligne'));
+
+  const paymentChip = getPaymentChip(paymentLabel);
+  const lastUpdated = reservation?.updatedAt && !isNaN(new Date(reservation.updatedAt).getTime())
+    ? new Date(reservation.updatedAt).toLocaleString('fr-FR', { 
+        day: 'numeric', 
+        month: 'short', 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      })
+    : null;
+
+  // ===== RENDER =====
 
   if (loading) {
     return (
@@ -322,28 +377,10 @@ const ReservationDetailsPage: React.FC = () => {
     );
   }
 
-  /** --- Étapes (uniquement pour l’en-ligne non confirmé) --- */
-  const STEPS: Array<'paiement_en_cours' | 'preuve_recue' | 'payé'> = ['paiement_en_cours', 'preuve_recue', 'payé'];
-  const normalizedStatus =
-    reservation.statut === 'en_attente' ? 'paiement_en_cours' : reservation.statut;
-  const currentStepIndex = Math.max(0, STEPS.indexOf(normalizedStatus as any));
-
-  // Méthode de paiement affichée
-  const paymentLabel =
-    canal === 'guichet'
-      ? 'Espèces'
-      : (reservation.paymentMethodLabel ||
-         (reservation.canal && reservation.canal !== 'en_ligne' ? String(reservation.canal).replace(/_/g,' ') : 'En ligne'));
-
-  const paymentChip = getPaymentChip(paymentLabel);
-  const lastUpdated = reservation.updatedAt && !isNaN(new Date(reservation.updatedAt).getTime())
-    ? new Date(reservation.updatedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-    : null;
-
   return (
     <div className="min-h-screen pb-32" style={{ background: 'linear-gradient(180deg, #f8fafc, #ffffff)' }}>
       <AnimatePresence>
-        {reservation.statut === 'payé' && (
+        {reservation.statut === 'confirme' && (
           <Confetti
             width={width}
             height={height}
@@ -394,8 +431,8 @@ const ReservationDetailsPage: React.FC = () => {
       </header>
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
-        {/* Étapes – visibles UNIQUEMENT si pas billet direct */}
-        {!showTicketDirect && (
+        {/* Étapes – visibles uniquement pour réservations en ligne */}
+        {reservation.canal === 'en_ligne' && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -404,8 +441,8 @@ const ReservationDetailsPage: React.FC = () => {
             style={{ borderColor: 'rgba(0,0,0,0.06)' }}
           >
             <div className="flex justify-between items-center mb-3">
-              <h2 className="text-sm font-semibold text-gray-800">Statut de votre réservation</h2>
-              <span className="text-xs text-gray-500">{lastUpdated}</span>
+              <h2 className="text-sm font-semibold text-gray-800">Suivi de paiement</h2>
+              {lastUpdated && <span className="text-xs text-gray-500">{lastUpdated}</span>}
             </div>
 
             <div className="relative">
@@ -414,19 +451,19 @@ const ReservationDetailsPage: React.FC = () => {
                 className="absolute top-3 left-0 h-1 rounded-full z-0"
                 style={{ backgroundColor: primaryColor }}
                 initial={{ width: 0 }}
-                animate={{ width: `${((currentStepIndex + 1) / STEPS.length) * 100}%` }}
+                animate={{ 
+                  width: `${Math.max(0, ((currentStepIndex + 1) / STEPS_CONFIG.length) * 100)}%` 
+                }}
                 transition={{ type: 'spring', stiffness: 120, damping: 18 }}
               />
               <div className="relative z-10 flex justify-between">
-                {STEPS.map((step, idx) => {
+                {STEPS_CONFIG.map((step, idx) => {
                   const isActive = idx <= currentStepIndex;
-                  const isCurrent = idx === currentStepIndex && reservation.statut !== 'payé';
-                  const label =
-                    step === 'paiement_en_cours' ? 'Paiement' :
-                    step === 'preuve_recue' ? 'Vérification' : 'Confirmée';
+                  const isCurrent = idx === currentStepIndex && reservation.statut !== 'confirme';
+                  const IconComponent = step.icon;
 
                   return (
-                    <div key={step} className="flex flex-col items-center w-1/3">
+                    <div key={step.key} className="flex flex-col items-center w-1/2">
                       <div className="relative mb-1">
                         <div
                           className="h-6 w-6 rounded-full flex items-center justify-center"
@@ -438,11 +475,11 @@ const ReservationDetailsPage: React.FC = () => {
                         >
                           {idx < currentStepIndex
                             ? <CheckCircle className="h-3.5 w-3.5" />
-                            : isCurrent
+                            : isCurrent && reservation.statut === 'verification'
                               ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              : <div className="h-2 w-2 rounded-full bg-gray-400" />}
+                              : IconComponent}
                         </div>
-                        {isCurrent && (
+                        {isCurrent && reservation.statut === 'verification' && (
                           <span
                             className="absolute inset-0 rounded-full"
                             style={{
@@ -454,7 +491,7 @@ const ReservationDetailsPage: React.FC = () => {
                         )}
                       </div>
                       <span className={`text-xs text-center ${isActive ? 'font-medium text-gray-900' : 'text-gray-500'}`}>
-                        {label}
+                        {step.label}
                       </span>
                     </div>
                   );
@@ -472,13 +509,13 @@ const ReservationDetailsPage: React.FC = () => {
           className="p-4 rounded-xl flex items-start gap-3 border bg-white"
           style={{
             borderColor:
-              showTicketDirect
-                ? hexToRgba('#10b981', 0.2) // considéré comme confirmé pour l’affichage
-                : reservation.statut === 'preuve_recue'
+              reservation.statut === 'confirme'
+                ? hexToRgba('#10b981', 0.2)
+                : reservation.statut === 'verification'
                 ? hexToRgba('#7c3aed', 0.2)
-                : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente'
-                ? 'rgba(0,0,0,0.06)'
-                : hexToRgba('#ef4444', 0.2)
+                : reservation.statut === 'annule'
+                ? hexToRgba('#ef4444', 0.2)
+                : 'rgba(0,0,0,0.06)'
           }}
         >
           <div
@@ -486,47 +523,47 @@ const ReservationDetailsPage: React.FC = () => {
             style={{
               backgroundColor: '#ffffff',
               color:
-                showTicketDirect
+                reservation.statut === 'confirme'
                   ? '#059669'
-                  : reservation.statut === 'preuve_recue'
+                  : reservation.statut === 'verification'
                   ? '#6d28d9'
-                  : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente'
-                  ? primaryColor
-                  : '#dc2626'
+                  : reservation.statut === 'annule'
+                  ? '#dc2626'
+                  : primaryColor
             }}
           >
-            {showTicketDirect ? <CheckCircle className="h-4 w-4" /> :
-             reservation.statut === 'annule' ? <XCircle className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
+            {reservation.statut === 'confirme' ? <CheckCircle className="h-4 w-4" /> :
+             reservation.statut === 'annule' ? <XCircle className="h-4 w-4" /> :
+             reservation.statut === 'verification' ? <Upload className="h-4 w-4" /> :
+             <Loader2 className="h-4 w-4 animate-spin" />}
           </div>
-          <div>
+          <div className="flex-1">
             <p className="font-medium text-sm mb-1">
-              {showTicketDirect ? 'Confirmé'
-               : reservation.statut === 'annule' ? 'Annulé'
-               : reservation.statut === 'preuve_recue' ? 'Vérification'
-               : reservation.statut === 'paiement_en_cours' || reservation.statut === 'en_attente' ? 'Paiement en cours'
-               : 'Statut'}
+              {reservation.statut === 'confirme' ? 'Paiement confirmé' :
+               reservation.statut === 'annule' ? 'Annulé' :
+               reservation.statut === 'verification' ? 'En vérification' :
+               'En attente de preuve'}
             </p>
             <p className="text-xs text-gray-600">
-              {showTicketDirect ? 'Votre billet est disponible.'
-               : reservation.statut === 'annule' ? 'Cette réservation a été annulée.'
-               : reservation.statut === 'preuve_recue' ? 'Preuve reçue — confirmation en cours.'
-               : 'Votre paiement est en cours de vérification.'}
+              {stepDescriptions[reservation.statut] || stepDescriptions.en_attente}
             </p>
 
             {reservation.referenceCode && (
               <p className="mt-2 text-xs text-gray-700 flex items-center gap-1">
-                <Hash className="h-3 w-3" /> <span className="font-semibold">N°</span> {reservation.referenceCode}
+                <Hash className="h-3 w-3" /> 
+                <span className="font-semibold">N°</span> {reservation.referenceCode}
               </p>
             )}
             {agencyName && (
               <p className="text-xs text-gray-600 mt-1 flex items-center gap-1">
-                <MapPin className="h-3 w-3" /> <span className="font-semibold">Agence :</span> {agencyName}
+                <MapPin className="h-3 w-3" /> 
+                <span className="font-semibold">Agence :</span> {agencyName}
               </p>
             )}
           </div>
         </motion.div>
 
-        {/* Détails */}
+        {/* Détails du voyage */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -543,7 +580,9 @@ const ReservationDetailsPage: React.FC = () => {
 
           <div className="p-4 space-y-4">
             <div className="flex items-start gap-3">
-              <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0"><MapPin className="h-4 w-4 text-gray-600" /></div>
+              <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0">
+                <MapPin className="h-4 w-4 text-gray-600" />
+              </div>
               <div>
                 <p className="text-xs text-gray-500 mb-1">Itinéraire</p>
                 <p className="text-sm font-medium text-gray-900">
@@ -554,15 +593,21 @@ const ReservationDetailsPage: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="flex items-start gap-3">
-                <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0"><Calendar className="h-4 w-4 text-gray-600" /></div>
+                <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0">
+                  <Calendar className="h-4 w-4 text-gray-600" />
+                </div>
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Date</p>
-                  <p className="text-sm font-medium text-gray-900">{formatCompactDate(reservation.date)}</p>
+                  <p className="text-sm font-medium text-gray-900">
+                    {formatCompactDate(reservation.date)}
+                  </p>
                 </div>
               </div>
 
               <div className="flex items-start gap-3">
-                <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0"><Clock className="h-4 w-4 text-gray-600" /></div>
+                <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0">
+                  <Clock className="h-4 w-4 text-gray-600" />
+                </div>
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Heure</p>
                   <p className="text-sm font-medium text-gray-900">{reservation.heure}</p>
@@ -571,12 +616,18 @@ const ReservationDetailsPage: React.FC = () => {
             </div>
 
             <div className="flex items-start gap-3">
-              <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0"><CreditCard className="h-4 w-4 text-gray-600" /></div>
+              <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0">
+                <CreditCard className="h-4 w-4 text-gray-600" />
+              </div>
               <div className="flex-1">
                 <p className="text-xs text-gray-500 mb-1">Paiement</p>
                 <div className="flex justify-between items-center">
-                  <p className="text-sm font-medium text-gray-900">{reservation.montant.toLocaleString('fr-FR')} FCFA</p>
-                  <span className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">{paymentChip.text}</span>
+                  <p className="text-sm font-medium text-gray-900">
+                    {reservation.montant.toLocaleString('fr-FR')} FCFA
+                  </p>
+                  <span className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">
+                    {paymentChip.text}
+                  </span>
                 </div>
               </div>
             </div>
@@ -593,7 +644,12 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }} className="text-center pt-4">
+        <motion.div 
+          initial={{ opacity: 0 }} 
+          animate={{ opacity: 1 }} 
+          transition={{ delay: 0.35 }} 
+          className="text-center pt-4"
+        >
           <div className="flex items-center justify-center gap-1 text-sm text-gray-600">
             <Heart className="h-3.5 w-3.5 text-rose-400 fill-rose-400" />
             <span>Merci pour votre confiance</span>
@@ -614,25 +670,35 @@ const ReservationDetailsPage: React.FC = () => {
             onClick={() => {
               const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
               navigate(`/${slugToUse}/receipt/${reservation.id}`, {
-                state: { reservation: { ...reservation, agencyNom: agencyName, canal }, companyInfo }
+                state: { 
+                  reservation: { ...reservation, agencyNom: agencyName, canal }, 
+                  companyInfo 
+                }
               });
             }}
-            className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${showTicketDirect ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'}`}
+            className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${
+              isTicketAvailable ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'
+            }`}
             style={{
-              background: showTicketDirect
+              background: isTicketAvailable
                 ? `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`
                 : `linear-gradient(135deg, ${hexToRgba(primaryColor,0.5)}, ${hexToRgba(secondaryColor,0.5)})`,
               color: safeTextColor(primaryColor)
             }}
-            disabled={!showTicketDirect}
+            disabled={!isTicketAvailable}
           >
             <CheckCircle className="h-4 w-4" />
-            {showTicketDirect ? 'Voir mon billet' : 'Billet disponible après confirmation'}
+            {isTicketAvailable 
+              ? 'Voir mon billet' 
+              : reservation.statut === 'verification'
+                ? 'Billet disponible après confirmation'
+                : 'En attente de confirmation'
+            }
           </button>
         </div>
       </div>
 
-      {/* keyframes pour l’anneau “ping” */}
+      {/* keyframes pour l'anneau "ping" */}
       <style>
         {`
           @keyframes pingStep {
