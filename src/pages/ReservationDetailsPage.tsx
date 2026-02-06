@@ -75,9 +75,36 @@ const readPending = () => {
   try { const raw = localStorage.getItem(PENDING_KEY); return raw ? JSON.parse(raw) : null; }
   catch { return null; }
 };
+
+// 🔴 CORRECTION CRITIQUE : Fonction de nettoyage améliorée
 const clearPending = () => {
-  try { localStorage.removeItem(PENDING_KEY); } catch {}
-  try { sessionStorage.removeItem('reservationDraft'); } catch {}
+  try { 
+    localStorage.removeItem(PENDING_KEY); 
+    console.log('🧹 pendingReservation nettoyé du localStorage');
+  } catch (e) {
+    console.error('Erreur lors du nettoyage localStorage:', e);
+  }
+  
+  try { 
+    sessionStorage.removeItem('reservationDraft');
+    console.log('🧹 reservationDraft nettoyé du sessionStorage');
+  } catch (e) {
+    console.error('Erreur lors du nettoyage sessionStorage:', e);
+  }
+  
+  // Nettoyage supplémentaire des clés obsolètes
+  try {
+    const keysToRemove = [
+      'currentReservation',
+      'lastReservationId',
+      'pending_payment',
+      'mb_pending'
+    ];
+    keysToRemove.forEach(key => {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+    });
+  } catch (e) {}
 };
 
 const PAYMENT_METHODS = {
@@ -185,12 +212,17 @@ const ReservationDetailsPage: React.FC = () => {
 
   // 🔄 Chargement / abonnement Firestore
   useEffect(() => {
-    if ((!id && !token) || !slug) { setError('Paramètres manquants'); setLoading(false); return; }
+    if ((!id && !token) || !slug) { 
+      setError('Paramètres manquants'); 
+      setLoading(false); 
+      return; 
+    }
     let unsub: undefined | (() => void);
 
     (async () => {
       try {
         setLoading(true);
+        console.log(`🔍 Recherche réservation: ID=${id}, token=${token}, slug=${slug}`);
 
         let ref: DocumentReference, hardId = id || '';
         const st: any = location.state || {};
@@ -209,7 +241,16 @@ const ReservationDetailsPage: React.FC = () => {
         }
 
         unsub = onSnapshot(ref, async (snap) => {
-          if (!snap.exists()) { setError('Réservation introuvable'); setLoading(false); return; }
+          if (!snap.exists()) { 
+            // 🔴 CORRECTION CRITIQUE : Nettoyage forcé si réservation introuvable
+            console.warn('❌ Réservation introuvable dans Firestore, nettoyage du cache...');
+            clearPending();
+            
+            setError('Réservation introuvable ou expirée. Veuillez créer une nouvelle réservation.'); 
+            setLoading(false); 
+            return; 
+          }
+          
           const data = snap.data() as any;
           const next: Reservation = { 
             ...data, 
@@ -226,19 +267,32 @@ const ReservationDetailsPage: React.FC = () => {
             return 'en_attente' as ReservationStatus;
           })();
 
-          setReservation({
+          const finalReservation = {
             ...next,
             statut: normalizedStatus
-          });
+          };
+          
+          setReservation(finalReservation);
 
-          // Nettoyage de la mémoire locale si terminé
+          // 🔴 CORRECTION AMÉLIORÉE : Nettoyage plus agressif
+          const pend = readPending();
+          
+          // Nettoyage si réservation terminée OU si ancien ID différent
           if (normalizedStatus === 'confirme' || normalizedStatus === 'annule') {
-            const pend = readPending();
-            if (pend?.id === snap.id) clearPending();
+            if (pend?.id === snap.id) {
+              console.log('✅ Réservation terminée, nettoyage du cache');
+              clearPending();
+            }
+          }
+          
+          // Nettoyage si l'ID en cache ne correspond pas à la réservation actuelle
+          if (pend && pend.id !== snap.id) {
+            console.log('🔄 ID différent détecté, nettoyage ancien cache');
+            clearPending();
           }
 
           // Récupération du nom de l'agence
-          const inline = next.agencyNom || next.agenceNom;
+          const inline = finalReservation.agencyNom || finalReservation.agenceNom;
           if (inline) setAgencyName(inline);
           else {
             const companyId = ref.path.split('/')[1];
@@ -273,19 +327,31 @@ const ReservationDetailsPage: React.FC = () => {
 
           // Normalisation de l'URL si arrivé via token
           if (!id && hardId) {
-            const slugToUse = (location as any)?.state?.slug || next.companySlug || slug;
+            const slugToUse = (location as any)?.state?.slug || finalReservation.companySlug || slug;
             window.history.replaceState({}, '', `/${slugToUse}/reservation/${hardId}`);
           }
         }, (e) => {
-          setError(e?.message || 'Erreur de connexion'); setLoading(false);
+          console.error('❌ Erreur Firestore:', e);
+          // 🔴 CORRECTION : Nettoyage aussi en cas d'erreur
+          clearPending();
+          setError(e?.message || 'Erreur de connexion au serveur'); 
+          setLoading(false);
         });
       } catch (e: any) {
-        setError(e?.message || 'Impossible de localiser la réservation'); setLoading(false);
+        console.error('❌ Erreur générale:', e);
+        // 🔴 CORRECTION : Nettoyage aussi en cas d'erreur générale
+        clearPending();
+        setError(e?.message || 'Impossible de localiser la réservation'); 
+        setLoading(false);
       }
     })();
 
-    return () => { if (unsub) unsub(); };
-  }, [id, token, slug]);
+    return () => { 
+      if (unsub) {
+        unsub(); 
+      }
+    };
+  }, [id, token, slug, location, companyInfo]);
 
   // 🎉 Confetti pour paiement confirmé
   useEffect(() => {
@@ -319,14 +385,21 @@ const ReservationDetailsPage: React.FC = () => {
   /* 🚀 Redirection automatique si billet disponible */
   useEffect(() => {
     if (!isTicketAvailable || !reservation) return;
-    const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
-    navigate(`/${slugToUse}/receipt/${reservation.id}`, {
-      replace: true,
-      state: { 
-        reservation: { ...reservation, agencyNom: agencyName, canal }, 
-        companyInfo 
-      }
-    });
+    
+    // Vérification supplémentaire pour éviter les boucles
+    const currentPath = window.location.pathname;
+    const targetPath = `/${(location as any)?.state?.slug || reservation.companySlug || slug}/receipt/${reservation.id}`;
+    
+    if (currentPath !== targetPath) {
+      console.log('🚀 Redirection automatique vers le billet');
+      navigate(targetPath, {
+        replace: true,
+        state: { 
+          reservation: { ...reservation, agencyNom: agencyName, canal }, 
+          companyInfo 
+        }
+      });
+    }
   }, [isTicketAvailable, reservation, agencyName, companyInfo, canal, slug, location, navigate]);
 
   // Méthode de paiement affichée
@@ -348,6 +421,21 @@ const ReservationDetailsPage: React.FC = () => {
       })
     : null;
 
+  // 🔴 CORRECTION : Gestion du bouton "Retour"
+  const handleGoBack = () => {
+    // Nettoyage avant de revenir en arrière
+    clearPending();
+    navigate(-1);
+  };
+
+  // 🔴 CORRECTION : Gestion du bouton "Nouvelle réservation"
+  const handleNewReservation = () => {
+    // Nettoyage complet avant nouvelle réservation
+    clearPending();
+    const slugToUse = reservation?.companySlug || slug;
+    navigate(`/${slugToUse}`, { replace: true });
+  };
+
   // ===== RENDER =====
 
   if (loading) {
@@ -366,12 +454,31 @@ const ReservationDetailsPage: React.FC = () => {
       <div className="min-h-screen flex items-center justify-center p-4" style={{ background: '#f8fafc' }}>
         <div className="bg-white rounded-xl shadow-sm p-6 max-w-md w-full text-center border border-gray-100">
           <XCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Erreur</h3>
-          <p className="text-gray-600 mb-5">{error || 'Réservation introuvable'}</p>
-          <button onClick={() => navigate(-1)} className="px-5 py-2 rounded-lg text-sm font-medium shadow-sm"
-                  style={{ backgroundColor: primaryColor, color: safeTextColor(primaryColor) }}>
-            Retour
-          </button>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">Réservation introuvable</h3>
+          <p className="text-gray-600 mb-5">
+            {error || 'Cette réservation a expiré ou a été supprimée.'}
+          </p>
+          <div className="space-y-3">
+            <button 
+              onClick={handleNewReservation}
+              className="w-full px-5 py-3 rounded-lg text-sm font-medium shadow-sm"
+              style={{ 
+                backgroundColor: primaryColor, 
+                color: safeTextColor(primaryColor) 
+              }}
+            >
+              Créer une nouvelle réservation
+            </button>
+            <button 
+              onClick={handleGoBack}
+              className="w-full px-5 py-2.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+            >
+              Retour
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mt-4 pt-4 border-t border-gray-200">
+            💡 Conseil : Videz le cache de votre navigateur si le problème persiste.
+          </p>
         </div>
       </div>
     );
@@ -401,7 +508,11 @@ const ReservationDetailsPage: React.FC = () => {
         }}
       >
         <div className="flex items-center justify-between max-w-md mx-auto">
-          <button onClick={() => navigate(-1)} className="p-1.5 rounded-full hover:bg-black/10 transition-colors" aria-label="Retour">
+          <button 
+            onClick={handleGoBack} 
+            className="p-1.5 rounded-full hover:bg-black/10 transition-colors" 
+            aria-label="Retour"
+          >
             <ChevronLeft className="h-5 w-5" />
           </button>
           <h1 className="font-semibold text-base tracking-tight">Détails de réservation</h1>
@@ -694,6 +805,14 @@ const ReservationDetailsPage: React.FC = () => {
                 ? 'Billet disponible après confirmation'
                 : 'En attente de confirmation'
             }
+          </button>
+          
+          {/* 🔴 CORRECTION : Bouton "Nouvelle réservation" */}
+          <button
+            onClick={handleNewReservation}
+            className="w-full mt-3 py-2.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+          >
+            Créer une nouvelle réservation
           </button>
         </div>
       </div>

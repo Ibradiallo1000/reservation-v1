@@ -169,6 +169,7 @@ export interface Company {
   responsable?: string;
   plan?: PlanType;
   commission?: number;
+  preuveUrl?: string;
 
   villesDisponibles?: string[];
   suggestions?: string[];
