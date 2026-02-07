@@ -113,6 +113,7 @@ const PaymentProofSection = ({
   const isLocked = (existing?.statut === 'preuve_recue' || existing?.statut === 'confirme') ?? false;
   const isProofSent = existing?.statut === 'preuve_recue';
   const isConfirmed = existing?.statut === 'confirme';
+  const hasChosenPayment = !!paymentMethodKey;
   
   return (
     <section className="bg-white rounded-2xl border border-gray-100 p-4">
@@ -182,61 +183,87 @@ const PaymentProofSection = ({
         ))}
       </div>
 
-      <div className="mt-4">
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
-        <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
-      </div>
+      {/* Section preuve de paiement - UNIQUEMENT visible après choix d'un moyen de paiement */}
+      {hasChosenPayment && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="mt-4"
+        >
+          <div className="mb-3">
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
+            <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
+            
+            {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && !isLocked && (
+              <div className="mt-1 text-xs text-gray-600">
+                Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
+                  {paymentMethods[paymentMethodKey]!.ussdPattern!
+                    .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
+                    .replace('AMOUNT', String(
+                      existing?.montant || (selectedTrip ? selectedTrip.price * seats : 0)
+                    ))}
+                </span>
+              </div>
+            )}
+          </div>
 
-      {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && !isLocked && (
-        <div className="mt-1 text-xs text-gray-600">
-          Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
-            {paymentMethods[paymentMethodKey]!.ussdPattern!
-              .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
-              .replace('AMOUNT', String(
-                existing?.montant || (selectedTrip ? selectedTrip.price * seats : 0)
-              ))}
-          </span>
-        </div>
+          {!isLocked && (
+            <>
+              <div className="mt-3">
+                <div>
+                  <textarea
+                    ref={referenceInputRef}
+                    rows={3}
+                    className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
+                    placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
+                    value={message}
+                    onChange={e => setMessage(e.target.value)}
+                  />
+                  <div className="text-xs text-gray-500 mt-1">
+                    Minimum 4 caractères
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="text-xs text-amber-600">
+                  {!canConfirm && paymentMethodKey && (
+                    <span className="flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      Entrez une référence (≥ 4 caractères)
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={submitProofInline}
+                  disabled={uploading || !canConfirm || isLocked}
+                  title={!canConfirm ? "Ajoutez la référence" : isLocked ? "Le paiement a déjà été traité" : ""}
+                  className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
+                  style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
+                >
+                  {uploading ? 'Envoi…' : 'Confirmer l\'envoi'}
+                </button>
+              </div>
+            </>
+          )}
+        </motion.div>
       )}
 
-      {!isLocked && (
-        <>
-          <div className="mt-3">
-            <div>
-              <textarea
-                ref={referenceInputRef}
-                rows={3}
-                className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
-                placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
-                value={message}
-                onChange={e => setMessage(e.target.value)}
-              />
-              <div className="text-xs text-gray-500 mt-1">
-                Minimum 4 caractères
-              </div>
-            </div>
+      {/* Message d'instruction quand aucun moyen n'a encore été choisi */}
+      {!hasChosenPayment && !isLocked && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg"
+        >
+          <div className="flex items-center gap-2 text-gray-700">
+            <Info className="w-4 h-4 text-gray-500" />
+            <p className="text-xs">
+              Choisissez un moyen de paiement ci-dessus pour continuer.
+            </p>
           </div>
-
-          <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="text-xs text-amber-600">
-              {!canConfirm && paymentMethodKey && (
-                <span className="flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" />
-                  Entrez une référence (≥ 4 caractères)
-                </span>
-              )}
-            </div>
-            <button
-              onClick={submitProofInline}
-              disabled={uploading || !canConfirm || isLocked}
-              title={!canConfirm ? "Ajoutez la référence" : isLocked ? "Le paiement a déjà été traité" : ""}
-              className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
-              style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
-            >
-              {uploading ? 'Envoi…' : 'Confirmer l\'envoi'}
-            </button>
-          </div>
-        </>
+        </motion.div>
       )}
     </section>
   );
@@ -779,12 +806,17 @@ export default function ReservationClientPage() {
     }
   }, [hasActiveReservation, selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo]);
 
-  const onChoosePayment = (key: string) => {
+  const onChoosePayment = useCallback((key: string) => {
     setPaymentMethodKey(key); 
     setPaymentTriggeredAt(Date.now());
     setCurrentStep('proof');
     
+    // Scroll automatique vers le champ de preuve
     setTimeout(() => {
+      referenceInputRef.current?.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'center' 
+      });
       referenceInputRef.current?.focus();
     }, 300);
     
@@ -807,7 +839,7 @@ export default function ReservationClientPage() {
     } else if (ussd) {
       window.location.href = `tel:${encodeURIComponent(ussd)}`;
     }
-  };
+  }, [paymentMethods, existing, selectedTrip, seats, topPrice]);
 
   const paymentHints = useMemo(() => {
     if (!paymentMethodKey) return "Choisissez un moyen de paiement pour voir les instructions.";
