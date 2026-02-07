@@ -548,9 +548,9 @@ export default function ReservationClientPage() {
     }
     
     if (!passenger.phone.trim()) {
-      errors.phone = 'Le numéro de téléphone est requis';
-    } else if (!/^(\+223|0)\d{8}$/.test(passenger.phone.replace(/\s/g, ''))) {
-      errors.phone = 'Numéro malien valide requis (ex: 0XX XX XX XX)';
+    errors.phone = 'Le numéro de téléphone est requis';
+    } else if (!isValidMaliPhone(passenger.phone)) {
+    errors.phone = 'Numéro invalide (format attendu : 22 22 22 22)';
     }
     
     setFieldErrors(errors);
