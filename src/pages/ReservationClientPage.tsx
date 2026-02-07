@@ -1,10 +1,10 @@
 // src/pages/ReservationClientPage.tsx
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User } from 'lucide-react';
+import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info } from 'lucide-react';
 import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, serverTimestamp, getDoc,
 } from 'firebase/firestore';
@@ -61,68 +61,225 @@ type ExistingReservation = {
   referenceCode?: string;
 };
 
+// ===== Téléphone Mali (8 chiffres, format 22 22 22 22) =====
+const formatMaliPhone = (value: string) => {
+  const digits = value.replace(/\D/g, '').slice(0, 8); // uniquement chiffres, max 8
+  return digits.replace(/(\d{2})(?=\d)/g, '$1 ').trim();
+};
+
+const isValidMaliPhone = (value: string) => {
+  return value.replace(/\s/g, '').length === 8;
+};
+
+// Composant réutilisable pour la preuve de paiement
+const PaymentProofSection = ({ 
+  reservationId,
+  paymentMethods,
+  paymentMethodKey,
+  onChoosePayment,
+  message,
+  setMessage,
+  referenceInputRef,
+  canConfirm,
+  submitProofInline,
+  uploading,
+  paymentHints,
+  existing,
+  selectedTrip,
+  seats,
+  theme
+}: {
+  reservationId: string | null;
+  paymentMethods: Record<string, {
+    url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string;
+  }>;
+  paymentMethodKey: string | null;
+  onChoosePayment: (key: string) => void;
+  message: string;
+  setMessage: (message: string) => void;
+  referenceInputRef: React.RefObject<HTMLTextAreaElement>;
+  canConfirm: boolean;
+  submitProofInline: () => Promise<void>;
+  uploading: boolean;
+  paymentHints: string;
+  existing: ExistingReservation | null;
+  selectedTrip: any;
+  seats: number;
+  theme: any;
+}) => (
+  <section className="bg-white rounded-2xl border border-gray-100 p-4">
+    <h2 className="text-sm font-semibold text-gray-900 mb-2">
+      {reservationId ? 'Paiement' : 'Preuve de paiement'}
+    </h2>
+
+    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+      {Object.entries(paymentMethods).map(([k,m]) => m && (
+        <button
+          key={k}
+          onClick={() => onChoosePayment(k)}
+          className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition ${
+            paymentMethodKey === k ? 'bg-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100'
+          }`}
+          style={{ borderColor: paymentMethodKey === k ? theme.primary : '#e5e7eb' }}
+        >
+          {m.logoUrl ? (
+            <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" />
+          ) : (
+            <div className="h-6 w-6 rounded bg-gray-100" />
+          )}
+          <div className="text-left min-w-0">
+            <div className="font-medium capitalize truncate">{k.replace(/_/g,' ')}</div>
+            {m.merchantNumber && (
+              <div className="text-[11px] text-gray-500 truncate">N° {m.merchantNumber}</div>
+            )}
+          </div>
+          {paymentMethodKey === k && (
+            <div 
+              className="ml-auto h-5 w-5 rounded-full flex items-center justify-center" 
+              style={{ backgroundColor: theme.primary, color: '#fff' }}
+            >
+              <CheckCircle className="w-3 h-3" />
+            </div>
+          )}
+        </button>
+      ))}
+    </div>
+
+    <div className="mt-4">
+      <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
+      <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
+    </div>
+
+    {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && (
+      <div className="mt-1 text-xs text-gray-600">
+        Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
+          {paymentMethods[paymentMethodKey]!.ussdPattern!
+            .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
+            .replace('AMOUNT', String(
+              existing?.montant || (selectedTrip ? selectedTrip.price * seats : 0)
+            ))}
+        </span>
+      </div>
+    )}
+
+    <div className="mt-3">
+      <div>
+        <textarea
+          ref={referenceInputRef}
+          rows={3}
+          className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
+          placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
+          value={message}
+          onChange={e => setMessage(e.target.value)}
+        />
+        <div className="text-xs text-gray-500 mt-1">
+          Minimum 4 caractères
+        </div>
+      </div>
+    </div>
+
+    <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="text-xs text-amber-600">
+        {!canConfirm && paymentMethodKey && (
+          <span className="flex items-center gap-1">
+            <AlertCircle className="w-3 h-3" />
+            Entrez une référence (≥ 4 caractères)
+          </span>
+        )}
+      </div>
+      <button
+        onClick={submitProofInline}
+        disabled={uploading || !canConfirm}
+        title={!canConfirm ? "Ajoutez la référence" : ""}
+        className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
+        style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
+      >
+        {uploading ? 'Envoi…' : 'Confirmer l\'envoi'}
+      </button>
+    </div>
+  </section>
+);
+
 export default function ReservationClientPage() {
-  // 👇 NEW: récupération éventuelle de :id (consultation d'une réservation existante)
   const { slug, id: reservationRouteId } = useParams<{ slug: string; id?: string }>();
   const location = useLocation();
   const navigate = useNavigate();
 
-  // companyId/agencyId sont passés depuis la liste via navigate(state)
+  // Refs pour le scroll automatique
+  const paymentSectionRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+  const referenceInputRef = useRef<HTMLTextAreaElement>(null);
+
   const routeState = (location.state || {}) as { companyId?: string; agencyId?: string };
 
   const search = new URLSearchParams(location.search);
   const departureQ = normalize(search.get('departure') || '');
   const arrivalQ   = normalize(search.get('arrival') || '');
 
-  const [company, setCompany] = useState({ id:'', name:'', couleurPrimaire:'#f43f5e', couleurSecondaire:'#f97316', logoUrl:'', code:'MT' });
-  const theme = useMemo(()=>({
+  const [company, setCompany] = useState({ 
+    id: '', 
+    name: '', 
+    couleurPrimaire: '#f43f5e', 
+    couleurSecondaire: '#f97316', 
+    logoUrl: '', 
+    code: 'MT' 
+  });
+  const theme = useMemo(() => ({
     primary: company.couleurPrimaire,
     secondary: company.couleurSecondaire,
     lightPrimary: `${company.couleurPrimaire}1A`,
     lightSecondary: `${company.couleurSecondaire}1A`,
   }), [company]);
 
-  const [agencyInfo, setAgencyInfo] = useState<{id?:string; nom?:string; telephone?:string; code?:string}>({});
+  const [agencyInfo, setAgencyInfo] = useState<{
+    id?: string; 
+    nom?: string; 
+    telephone?: string; 
+    code?: string;
+  }>({});
   const [paymentMethods, setPaymentMethods] = useState<Record<string, {
     url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string;
   }>>({});
-  const [paymentMethodKey, setPaymentMethodKey] = useState<string|null>(null);
-  const [paymentTriggeredAt, setPaymentTriggeredAt] = useState<number|null>(null);
+  const [paymentMethodKey, setPaymentMethodKey] = useState<string | null>(null);
+  const [paymentTriggeredAt, setPaymentTriggeredAt] = useState<number | null>(null);
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [dates, setDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTime, setSelectedTime] = useState('');
   const [seats, setSeats] = useState(1);
-  const [passenger, setPassenger] = useState({ fullName:'', phone:'' });
+  const [passenger, setPassenger] = useState({ fullName: '', phone: '' });
 
   const [message, setMessage] = useState('');
-  const [file, setFile] = useState<File|null>(null);
-
-  const [reservationId, setReservationId] = useState<string|null>(null);
+  const [reservationId, setReservationId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  // 👇 NEW: stockage de la réservation chargée (consultation)
   const [existing, setExisting] = useState<ExistingReservation | null>(null);
+  const [showPaymentPopup, setShowPaymentPopup] = useState(false);
+  const [currentStep, setCurrentStep] = useState<'personal' | 'payment' | 'proof'>('personal');
 
-  /* ========== Garde-fou au montage ========== */
+  // ========== Effets ==========
   useEffect(() => {
     clearPendingIfNotBlocking();
     const p = readPending();
     if (p && isBlockingStatus(p.status) && p.slug === slug && !reservationRouteId) {
-      navigate(`/${slug}/reservation/${p.id}`, { replace: true, state: { companyId: p.companyId, agencyId: p.agencyId } });
+      navigate(`/${slug}/reservation/${p.id}`, { 
+        replace: true, 
+        state: { companyId: p.companyId, agencyId: p.agencyId } 
+      });
     }
   }, [slug, navigate, reservationRouteId]);
-  /* =========================================== */
 
-  // ========= MODE 1 : CONSULTATION D’UNE RÉSERVATION EXISTANTE =========
+  // Mode consultation
   useEffect(() => {
     const loadExisting = async () => {
-      if (!reservationRouteId) return; // pas en mode consultation
+      if (!reservationRouteId) return;
       setLoading(true);
       try {
         if (!routeState.companyId || !routeState.agencyId) {
@@ -140,7 +297,6 @@ export default function ReservationClientPage() {
         }
         const r = snap.data() as any;
 
-        // Charger infos compagnie + moyens de paiement (pour le cas en_ligne non payé)
         const compSnap = await getDoc(doc(db, 'companies', routeState.companyId));
         const comp = compSnap.exists() ? (compSnap.data() as any) : {};
         setCompany({
@@ -161,11 +317,19 @@ export default function ReservationClientPage() {
           code: (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined
         });
 
-        const pmSnap = await getDocs(query(collection(db, 'paymentMethods'), where('companyId','==', routeState.companyId)));
+        const pmSnap = await getDocs(query(
+          collection(db, 'paymentMethods'), 
+          where('companyId', '==', routeState.companyId)
+        ));
         const pms: any = {};
         pmSnap.forEach(ds => {
           const d = ds.data() as any;
-          if (d.name) pms[d.name] = { url:d.defaultPaymentUrl||'', logoUrl:d.logoUrl||'', ussdPattern:d.ussdPattern||'', merchantNumber:d.merchantNumber||'' };
+          if (d.name) pms[d.name] = { 
+            url: d.defaultPaymentUrl || '', 
+            logoUrl: d.logoUrl || '', 
+            ussdPattern: d.ussdPattern || '', 
+            merchantNumber: d.merchantNumber || '' 
+          };
         });
         setPaymentMethods(pms);
 
@@ -186,10 +350,9 @@ export default function ReservationClientPage() {
           referenceCode: r.referenceCode
         });
 
-        // utile pour l'envoi de preuve
         setReservationId(reservationRouteId);
         setLoading(false);
-      } catch (e:any) {
+      } catch (e: any) {
         console.error(e);
         setError(e?.message || "Erreur de chargement");
         setLoading(false);
@@ -199,17 +362,21 @@ export default function ReservationClientPage() {
     void loadExisting();
   }, [reservationRouteId, routeState.companyId, routeState.agencyId]);
 
-  // ========= MODE 2 : FLUX D’ACHAT EN LIGNE (création) =========
+  // Mode création
   useEffect(() => {
-    if (reservationRouteId) return; // déjà en mode consultation
-    if (!slug || !departureQ || !arrivalQ) { setLoading(false); return; }
+    if (reservationRouteId) return;
+    if (!slug || !departureQ || !arrivalQ) { 
+      setLoading(false); 
+      return; 
+    }
 
     const load = async () => {
       setLoading(true);
       try {
-        const cSnap = await getDocs(query(collection(db, 'companies'), where('slug','==',slug)));
+        const cSnap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)));
         if (cSnap.empty) throw new Error('Compagnie introuvable');
-        const cdoc = cSnap.docs[0]; const cdata = cdoc.data() as any;
+        const cdoc = cSnap.docs[0]; 
+        const cdata = cdoc.data() as any;
 
         setCompany({
           id: cdoc.id,
@@ -221,7 +388,7 @@ export default function ReservationClientPage() {
         });
 
         const agencesSnap = await getDocs(collection(db, 'companies', cdoc.id, 'agences'));
-        const agences = agencesSnap.docs.map(d=>({ id:d.id, ...(d.data() as any) }));
+        const agences = agencesSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
         if (agences[0]) {
           const a = agences[0];
           setAgencyInfo({
@@ -232,126 +399,205 @@ export default function ReservationClientPage() {
           });
         }
 
-        const pmSnap = await getDocs(query(collection(db, 'paymentMethods'), where('companyId','==',cdoc.id)));
+        const pmSnap = await getDocs(query(
+          collection(db, 'paymentMethods'), 
+          where('companyId', '==', cdoc.id)
+        ));
         const pms: any = {};
         pmSnap.forEach(ds => {
           const d = ds.data() as any;
-          if (d.name) pms[d.name] = { url:d.defaultPaymentUrl||'', logoUrl:d.logoUrl||'', ussdPattern:d.ussdPattern||'', merchantNumber:d.merchantNumber||'' };
+          if (d.name) pms[d.name] = { 
+            url: d.defaultPaymentUrl || '', 
+            logoUrl: d.logoUrl || '', 
+            ussdPattern: d.ussdPattern || '', 
+            merchantNumber: d.merchantNumber || '' 
+          };
         });
         setPaymentMethods(pms);
 
-        const next8 = Array.from({length:8},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()+i); return toYMD(d); });
+        const next8 = Array.from({ length: 8 }, (_, i) => { 
+          const d = new Date(); 
+          d.setDate(d.getDate() + i); 
+          return toYMD(d); 
+        });
 
         const allTrips: Trip[] = [];
         for (const a of agences) {
           const [wSnap, rSnap] = await Promise.all([
-            getDocs(query(collection(db,'companies',cdoc.id,'agences',a.id,'weeklyTrips'), where('active','==',true))),
-            getDocs(collection(db,'companies',cdoc.id,'agences',a.id,'reservations'))
+            getDocs(query(
+              collection(db, 'companies', cdoc.id, 'agences', a.id, 'weeklyTrips'), 
+              where('active', '==', true)
+            )),
+            getDocs(collection(db, 'companies', cdoc.id, 'agences', a.id, 'reservations'))
           ]);
-          const weekly = wSnap.docs.map(d=>({ id:d.id, ...(d.data() as any)}))
-            .filter(t => normalize(t.depart||t.departure||'')===departureQ && normalize(t.arrivee||t.arrival||'')===arrivalQ);
-          const reservations = rSnap.docs.map(d=>({ id:d.id, ...(d.data() as any)}));
-          next8.forEach(dateStr=>{
-            const d = new Date(dateStr); const dayName = DAYS[d.getDay()];
-            ((weekly as any[])).forEach((t:any)=>{
-              ((t.horaires?.[dayName] || []) as string[]).forEach((heure) => {
-                if (dateStr===toYMD(new Date())) {
+          const weekly = wSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
+            .filter(t => normalize(t.depart || t.departure || '') === departureQ && 
+                         normalize(t.arrivee || t.arrival || '') === arrivalQ);
+          const reservations = rSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+          
+          next8.forEach(dateStr => {
+            const d = new Date(dateStr); 
+            const dayName = DAYS[d.getDay()];
+            weekly.forEach((t: any) => {
+              (t.horaires?.[dayName] || []).forEach((heure: string) => {
+                if (dateStr === toYMD(new Date())) {
                   const now = new Date();
-                  const nowHHMM = parse(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,'HH:mm',new Date());
-                  if (parse(heure,'HH:mm',new Date()) <= nowHHMM) return;
+                  const nowHHMM = parse(
+                    `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+                    'HH:mm',
+                    new Date()
+                  );
+                  if (parse(heure, 'HH:mm', new Date()) <= nowHHMM) return;
                 }
                 const trajetId = `${t.id}_${dateStr}_${heure}`;
                 const total = t.places || 30;
                 const reserved = reservations
-                  .filter(r=> String((r as any).trajetId)===trajetId && ['payé','preuve_recue'].includes(String((r as any).statut).toLowerCase()))
-                  .reduce((a,r:any)=> a + (r.seatsGo||0), 0);
+                  .filter(r => String((r as any).trajetId) === trajetId && 
+                          ['payé', 'preuve_recue'].includes(String((r as any).statut).toLowerCase()))
+                  .reduce((a, r: any) => a + (r.seatsGo || 0), 0);
                 const remaining = total - reserved;
-                if (remaining>0) {
+                if (remaining > 0) {
                   allTrips.push({
                     id: trajetId,
-                    date: dateStr, time: heure,
+                    date: dateStr, 
+                    time: heure,
                     departure: t.depart || t.departure || '',
                     arrival: t.arrivee || t.arrival || '',
                     price: t.price,
-                    agencyId: a.id as any, companyId: cdoc.id as any,
-                    places: total, remainingSeats: remaining
+                    agencyId: a.id as any, 
+                    companyId: cdoc.id as any,
+                    places: total, 
+                    remainingSeats: remaining
                   } as any);
                 }
               });
             });
           });
         }
-        const sorted = allTrips.sort((a,b)=> a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
-        const uniqDates = [...new Set(sorted.map(t=>t.date))];
+        const sorted = allTrips.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+        const uniqDates = [...new Set(sorted.map(t => t.date))];
 
-        setTrips(sorted); setDates(uniqDates); setSelectedDate(uniqDates[0] || '');
+        setTrips(sorted); 
+        setDates(uniqDates); 
+        setSelectedDate(uniqDates[0] || '');
 
         sessionStorage.setItem(`preload_${slug}_${departureQ}_${arrivalQ}`, JSON.stringify({
           company: {
-            id: cdoc.id, name: cdata.nom || '',
+            id: cdoc.id, 
+            name: cdata.nom || '',
             couleurPrimaire: cdata.couleurPrimaire || '#f43f5e',
             couleurSecondaire: cdata.couleurSecondaire || '#f97316',
-            logoUrl: cdata.logoUrl || '', code: (cdata.code || 'MT').toString().toUpperCase()
-          }, trips: sorted, dates: uniqDates,
-          agencyInfo: { nom: agences[0]?.nomAgence || agences[0]?.nom || '', telephone: agences[0]?.telephone || '', code: agences[0]?.code }
+            logoUrl: cdata.logoUrl || '', 
+            code: (cdata.code || 'MT').toString().toUpperCase()
+          }, 
+          trips: sorted, 
+          dates: uniqDates,
+          agencyInfo: { 
+            nom: agences[0]?.nomAgence || agences[0]?.nom || '', 
+            telephone: agences[0]?.telephone || '', 
+            code: agences[0]?.code 
+          }
         }));
-      } catch (e:any) {
+      } catch (e: any) {
         setError(e?.message || 'Erreur de chargement');
-      } finally { setLoading(false); }
+      } finally { 
+        setLoading(false); 
+      }
     };
 
     load();
   }, [slug, departureQ, arrivalQ, reservationRouteId]);
 
-  const filteredTrips = useMemo(()=>{
+  const filteredTrips = useMemo(() => {
     if (!selectedDate) return [] as any[];
-    const base = trips.filter((t:any)=> t.date===selectedDate);
+    const base = trips.filter((t: any) => t.date === selectedDate);
     if (isToday(parseISO(selectedDate))) {
-      const now=new Date();
-      const nowHHMM=parse(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,'HH:mm',new Date());
-      return base.filter((t:any)=> parse(t.time,'HH:mm',new Date()) > nowHHMM);
+      const now = new Date();
+      const nowHHMM = parse(
+        `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+        'HH:mm',
+        new Date()
+      );
+      return base.filter((t: any) => parse(t.time, 'HH:mm', new Date()) > nowHHMM);
     }
     return base;
   }, [trips, selectedDate]);
 
-  useEffect(()=> {
-    if (!reservationRouteId && filteredTrips.length && !selectedTime) setSelectedTime(filteredTrips[0].time);
+  useEffect(() => {
+    if (!reservationRouteId && filteredTrips.length && !selectedTime) {
+      setSelectedTime(filteredTrips[0].time);
+    }
   }, [filteredTrips, selectedTime, reservationRouteId]);
 
-  const selectedTrip: any = filteredTrips.find((t:any)=> t.time===selectedTime);
+  const selectedTrip: any = filteredTrips.find((t: any) => t.time === selectedTime);
   const topPrice = (selectedTrip?.price ?? (filteredTrips[0] as any)?.price);
-  const priceText = topPrice ? `${topPrice.toLocaleString('fr-FR')} FCFA` : '—';
 
-  const seatColor = (remaining:number, total:number) => {
+  const seatColor = (remaining: number, total: number) => {
     const ratio = remaining / total;
     if (ratio > 0.7) return '#16a34a';
     if (ratio > 0.3) return '#f59e0b';
     return '#dc2626';
   };
 
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    try {
-      const f = e.target.files?.[0]; if (!f) return setFile(null);
-      const valid = ['image/jpeg','image/png','application/pdf']; if (!valid.includes(f.type)) throw new Error('Fichier non supporté');
-      if (f.size > 5*1024*1024) throw new Error('Fichier trop volumineux (5MB max)');
-      setFile(f); setError('');
-    } catch (err:any) { setError(err?.message || 'Erreur fichier'); setFile(null); }
+  // ---------- Validation et scroll ----------
+  const validatePersonalInfo = () => {
+    const errors: Record<string, string> = {};
+    
+    if (!passenger.fullName.trim()) {
+      errors.fullName = 'Le nom complet est requis';
+    }
+    
+    if (!passenger.phone.trim()) {
+      errors.phone = 'Le numéro de téléphone est requis';
+    } else if (!/^(\+223|0)\d{8}$/.test(passenger.phone.replace(/\s/g, ''))) {
+      errors.phone = 'Numéro malien valide requis (ex: 0XX XX XX XX)';
+    }
+    
+    setFieldErrors(errors);
+    
+    if (Object.keys(errors).length > 0) {
+      if (errors.fullName && nameInputRef.current) {
+        nameInputRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        nameInputRef.current.focus();
+      } else if (errors.phone && phoneInputRef.current) {
+        phoneInputRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        phoneInputRef.current.focus();
+      }
+      return false;
+    }
+    
+    return true;
   };
 
-  // ---------- Création draft (mode achat en ligne) ----------
+  // ---------- Création draft ----------
   const createReservationDraft = useCallback(async () => {
     if (reservationRouteId) return;
+    
+    if (!validatePersonalInfo()) {
+      setError('Veuillez corriger les erreurs ci-dessus');
+      return;
+    }
+    
+    if (!selectedTrip) {
+      setError('Veuillez sélectionner un horaire');
+      return;
+    }
+    
     const pending = readPending();
     if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
-      navigate(`/${slug}/reservation/${pending.id}`, { replace: true, state: { companyId: pending.companyId, agencyId: pending.agencyId } });
+      navigate(`/${slug}/reservation/${pending.id}`, { 
+        replace: true, 
+        state: { companyId: pending.companyId, agencyId: pending.agencyId } 
+      });
       return;
     }
 
-    if (!selectedTrip) return;
-    if (!passenger.fullName || !passenger.phone) { setError('Nom et téléphone requis'); return; }
     if (creating) return;
 
-    setCreating(true); setError('');
+    setCreating(true); 
+    setError('');
+    setFieldErrors({});
+    
     try {
       const agSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId));
       const ag = agSnap.exists() ? (agSnap.data() as any) : {};
@@ -373,24 +619,24 @@ export default function ReservationClientPage() {
 
       const now = new Date();
       const reservation = {
-        nomClient: passenger.fullName,
-        telephone: passenger.phone,
+        nomClient: passenger.fullName.trim(),
+        telephone: passenger.phone.trim(),
         depart: selectedTrip.departure,
         arrivee: selectedTrip.arrival,
         date: selectedTrip.date,
         heure: selectedTrip.time,
         montant: selectedTrip.price * seats,
-        seatsGo: seats, seatsReturn: 0, tripType: 'aller_simple',
-        statut: 'en_attente_paiement', canal: 'en_ligne',
-
+        seatsGo: seats, 
+        seatsReturn: 0, 
+        tripType: 'aller_simple',
+        statut: 'en_attente_paiement', 
+        canal: 'en_ligne',
         companyId: selectedTrip.companyId,
         companySlug: slug,
         companyName: company.name,
-
         agencyId: selectedTrip.agencyId,
         agencyNom: agencyName,
         nomAgence: agencyName,
-
         referenceCode,
         trajetId: selectedTrip.id,
         holdUntil: addMin(now, 15),
@@ -399,19 +645,29 @@ export default function ReservationClientPage() {
       };
 
       const refDoc = await addDoc(
-        collection(db,'companies',selectedTrip.companyId,'agences',selectedTrip.agencyId,'reservations'),
+        collection(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations'),
         reservation
       );
 
       const token = randomToken();
       const publicUrl = `${window.location.origin}/${slug}/mon-billet?r=${encodeURIComponent(token)}`;
       await updateDoc(
-        doc(db,'companies',selectedTrip.companyId,'agences',selectedTrip.agencyId,'reservations',refDoc.id),
+        doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations', refDoc.id),
         { publicToken: token, publicUrl }
       );
-      try { await navigator.clipboard.writeText(publicUrl); } catch {}
+      
+      try { 
+        await navigator.clipboard.writeText(publicUrl); 
+      } catch {}
 
       setReservationId(refDoc.id);
+      setCurrentStep('payment');
+      
+      setTimeout(() => {
+        paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+
+      setShowPaymentPopup(true);
 
       rememberPending({
         slug: slug!,
@@ -424,88 +680,113 @@ export default function ReservationClientPage() {
 
       sessionStorage.setItem('reservationDraft', JSON.stringify({ ...reservation, id: refDoc.id, publicUrl }));
       sessionStorage.setItem('companyInfo', JSON.stringify({
-        id: company.id, name: company.name, logoUrl: company.logoUrl,
-        couleurPrimaire: company.couleurPrimaire, couleurSecondaire: company.couleurSecondaire, slug
+        id: company.id, 
+        name: company.name, 
+        logoUrl: company.logoUrl,
+        couleurPrimaire: company.couleurPrimaire, 
+        couleurSecondaire: company.couleurSecondaire, 
+        slug
       }));
-    } catch (e:any) {
+    } catch (e: any) {
       setError(e?.message || 'Impossible de créer la réservation');
+    } finally { 
+      setCreating(false); 
     }
-    finally { setCreating(false); }
   }, [reservationRouteId, selectedTrip, passenger, seats, creating, slug, company, navigate]);
 
   const onChoosePayment = (key: string) => {
-    setPaymentMethodKey(key); setPaymentTriggeredAt(Date.now());
-    const method = paymentMethods[key||'']; if (!method) return;
+    setPaymentMethodKey(key); 
+    setPaymentTriggeredAt(Date.now());
+    setCurrentStep('proof');
+    
+    setTimeout(() => {
+      referenceInputRef.current?.focus();
+    }, 300);
+    
+    const method = paymentMethods[key || '']; 
+    if (!method) return;
+    
     const total = existing
       ? (existing.montant || 0)
-      : selectedTrip ? selectedTrip.price*seats : (topPrice||0);
-    const ussd = method.ussdPattern?.replace('MERCHANT', method.merchantNumber||'').replace('AMOUNT', String(total));
+      : selectedTrip ? selectedTrip.price * seats : (topPrice || 0);
+      
+    const ussd = method.ussdPattern
+      ?.replace('MERCHANT', method.merchantNumber || '')
+      .replace('AMOUNT', String(total));
+    
     if (method.url) {
-      try { new URL(method.url); window.open(method.url, '_blank', 'noopener,noreferrer'); } catch {}
+      try { 
+        new URL(method.url); 
+        window.open(method.url, '_blank', 'noopener,noreferrer'); 
+      } catch {}
     } else if (ussd) {
       window.location.href = `tel:${encodeURIComponent(ussd)}`;
     }
   };
 
-  /* ====== Instructions + validation ====== */
   const paymentHints = useMemo(() => {
     if (!paymentMethodKey) return "Choisissez un moyen de paiement pour voir les instructions.";
     switch (paymentMethodKey) {
       case "orangemoney":
-        return "Après votre paiement Orange Money, copiez le code reçu par SMS ou joignez une capture d’écran du message.";
+        return "Après votre paiement Orange Money, copiez le code reçu par SMS";
       case "moov":
-        return "Après votre paiement Moov Money, indiquez la référence reçue par SMS ou joignez une photo du reçu.";
+        return "Après votre paiement Moov Money, indiquez la référence reçue par SMS";
       case "wave":
-        return "Après votre paiement Wave, copiez le code du reçu ou joignez une capture.";
+        return "Après votre paiement Wave, copiez le code du reçu";
       case "cash":
-        return "Paiement au guichet : entrez le n° du reçu ou joignez sa photo.";
+        return "Paiement au guichet : entrez le n° du reçu";
       default:
-        return "Copiez la référence reçue par SMS après paiement ou joignez une capture d’écran.";
+        return "Copiez la référence reçue par SMS après paiement";
     }
   }, [paymentMethodKey]);
 
   const canConfirm = useMemo(() => {
     if (!reservationId) return false;
     if (!paymentMethodKey) return false;
-    const hasRef  = message.trim().length >= 4;
-    const hasFile = !!file;
-    return hasRef || hasFile;
-  }, [reservationId, paymentMethodKey, message, file]);
-  /* ======================================== */
+    return message.trim().length >= 4;
+  }, [reservationId, paymentMethodKey, message]);
 
   const submitProofInline = async () => {
     const effectiveCompanyId = existing?.companyId || company.id;
     const effectiveAgencyId  = existing?.agencyId || agencyInfo?.id;
-    if (!reservationId || !effectiveCompanyId || !effectiveAgencyId) { setError('Réservation introuvable'); return; }
-    if (!paymentMethodKey) { setError('Sélectionnez un moyen de paiement'); return; }
+    
+    if (!reservationId || !effectiveCompanyId || !effectiveAgencyId) { 
+      setError('Réservation introuvable'); 
+      return; 
+    }
+    
+    if (!paymentMethodKey) { 
+      setError('Sélectionnez un moyen de paiement'); 
+      return; 
+    }
+    
     if (!canConfirm) {
-      setError("Ajoutez la référence du paiement (≥ 4 caractères) ou une capture avant de confirmer.");
+      setError("Ajoutez la référence du paiement (≥ 4 caractères) avant de confirmer.");
       return;
     }
+    
     if (uploading) return;
 
-    setUploading(true); setError('');
+    setUploading(true); 
+    setError('');
     try {
-      let preuveUrl: string|null = null;
-      if (file) {
-        const ext = file.name.split('.').pop(); const filename = `preuves/preuve_${Date.now()}.${ext}`;
-        const fileRef = ref(storage, filename); const snap = await uploadBytes(fileRef, file);
-        preuveUrl = await getDownloadURL(snap.ref);
-      }
+      // ⚠️ NE JAMAIS basculer un billet "guichet" en "en_ligne"
+      const nextCanal = (existing?.canal && existing.canal.toLowerCase() !== 'en_ligne')
+        ? existing.canal
+        : 'en_ligne';
 
-      // ⚠️ NE JAMAIS basculer un billet “guichet” en “en_ligne”
-      const nextCanal =
-        (existing?.canal && existing.canal.toLowerCase() !== 'en_ligne')
-          ? existing.canal
-          : 'en_ligne';
-
-      await updateDoc(doc(db,'companies',effectiveCompanyId,'agences',effectiveAgencyId,'reservations',reservationId), {
-        statut: 'preuve_recue',
-        canal: nextCanal,
-        preuveVia: paymentMethodKey, preuveMessage: message.trim(), preuveUrl: preuveUrl || null,
-        paymentHint: paymentMethodKey, paymentTriggeredAt: paymentTriggeredAt ? new Date(paymentTriggeredAt) : null,
-        updatedAt: new Date(),
-      });
+      await updateDoc(
+        doc(db, 'companies', effectiveCompanyId, 'agences', effectiveAgencyId, 'reservations', reservationId), 
+        {
+          statut: 'preuve_recue',
+          canal: nextCanal,
+          preuveVia: paymentMethodKey, 
+          preuveMessage: message.trim(), 
+          paymentHint: paymentMethodKey, 
+          paymentTriggeredAt: paymentTriggeredAt ? new Date(paymentTriggeredAt) : null,
+          updatedAt: serverTimestamp(),
+        }
+      );
 
       const p = readPending();
       if (p && p.id === reservationId) {
@@ -515,26 +796,39 @@ export default function ReservationClientPage() {
       navigate(`/${slug}/reservation/${reservationId}`, {
         state: { companyId: effectiveCompanyId, agencyId: effectiveAgencyId }
       });
-    } catch (e) { setError("Échec de l'envoi de la preuve"); }
-    finally { setUploading(false); }
+    } catch (e) { 
+      setError("Échec de l'envoi de la preuve"); 
+    } finally { 
+      setUploading(false); 
+    }
   };
 
-  // ---------- UI helpers ----------
+  // ---------- UI components ----------
   const RouteCard = (titleRight?: string) => (
     <section className="bg-white rounded-2xl border border-gray-100 shadow-sm">
       <div className="flex items-center justify-between gap-4 px-4 sm:px-5 py-3">
         <div className="flex items-center gap-3 min-w-0">
-          {company.logoUrl && <img src={company.logoUrl} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-gray-200" />}
+          {company.logoUrl && (
+            <img src={company.logoUrl} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-gray-200" />
+          )}
           <div className="min-w-0">
             <div className="flex items-center text-gray-900 font-semibold">
-              <span className="truncate">{existing?.depart ? formatCity(existing.depart) : formatCity(departureQ)}</span>
-              <svg viewBox="0 0 24 24" className="mx-2 h-5 w-5 shrink-0" style={{color: theme.primary}}>
+              <span className="truncate">
+                {existing?.depart ? formatCity(existing.depart) : formatCity(departureQ)}
+              </span>
+              <svg 
+                viewBox="0 0 24 24" 
+                className="mx-2 h-5 w-5 shrink-0" 
+                style={{ color: theme.primary }}
+              >
                 <path fill="currentColor" d="M5 12h12l-4-4 1.4-1.4L21.8 12l-7.4 5.4L13 16l4-4H5z"/>
               </svg>
-              <span className="truncate">{existing?.arrivee ? formatCity(existing.arrivee) : formatCity(arrivalQ)}</span>
+              <span className="truncate">
+                {existing?.arrivee ? formatCity(existing.arrivee) : formatCity(arrivalQ)}
+              </span>
             </div>
             <p className="text-xs text-gray-500">
-              {existing?.date ? `${existing.date} · ${existing.heure || ''}` : 'Sélectionnez la date et l’heure'}
+              {existing?.date ? `${existing.date} · ${existing.heure || ''}` : 'Sélectionnez la date et l\'heure'}
             </p>
           </div>
         </div>
@@ -547,7 +841,10 @@ export default function ReservationClientPage() {
             <>
               <div className="text-xs text-gray-500">À partir de</div>
               <div className="text-lg sm:text-xl font-extrabold" style={{ color: theme.primary }}>
-                { (existing?.montant || topPrice) ? `${(existing?.montant || topPrice).toLocaleString('fr-FR')} FCFA` : '—' }
+                { (existing?.montant || topPrice) 
+                  ? `${(existing?.montant || topPrice).toLocaleString('fr-FR')} FCFA` 
+                  : '—' 
+                }
               </div>
             </>
           )}
@@ -556,13 +853,104 @@ export default function ReservationClientPage() {
     </section>
   );
 
+  const StepIndicator = () => (
+    <div className="flex items-center justify-center mb-4">
+      <div className="flex items-center">
+        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
+          currentStep === 'personal' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
+        }`}>
+          1
+        </div>
+        <div className={`h-1 w-12 ${currentStep === 'personal' ? 'bg-gray-300' : 'bg-gray-200'}`} />
+        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
+          currentStep === 'payment' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
+        }`}>
+          2
+        </div>
+        <div className={`h-1 w-12 ${currentStep === 'proof' ? 'bg-gray-300' : 'bg-gray-200'}`} />
+        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
+          currentStep === 'proof' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
+        }`}>
+          3
+        </div>
+      </div>
+    </div>
+  );
+
+  const PaymentInstructionsPopup = () => {
+    if (!showPaymentPopup) return null;
+    
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+        <motion.div 
+          initial={{ opacity: 0, y: 50 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full"
+        >
+          <div className="p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">
+              Étape suivante : Paiement
+            </h3>
+            
+            <div className="space-y-3 mb-6">
+              <div className="flex items-start gap-3">
+                <div className="h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">
+                  1
+                </div>
+                <div>
+                  <p className="font-medium text-gray-900">Choisissez un moyen de paiement</p>
+                  <p className="text-sm text-gray-600">Sélectionnez Orange Money, Moov Money, etc.</p>
+                </div>
+              </div>
+              
+              <div className="flex items-start gap-3">
+                <div className="h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">
+                  2
+                </div>
+                <div>
+                  <p className="font-medium text-gray-900">Effectuez le paiement</p>
+                  <p className="text-sm text-gray-600">Sortez de l'app pour payer (USSD ou app externe)</p>
+                </div>
+              </div>
+              
+              <div className="flex items-start gap-3">
+                <div className="h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">
+                  3
+                </div>
+                <div>
+                  <p className="font-medium text-gray-900">Revenez coller la référence</p>
+                  <p className="text-sm text-gray-600">Après paiement, copiez le code reçu par SMS</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowPaymentPopup(false)}
+                className="flex-1 h-11 border border-gray-300 rounded-xl font-medium hover:bg-gray-50 transition"
+              >
+                Compris
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  };
+
   // ---------- Rendu en-tête ----------
   if (loading) {
     return (
       <div className="min-h-screen grid place-items-center bg-gray-50">
-        <motion.div initial={{opacity:0, scale:0.95}} animate={{opacity:1, scale:1}} className="bg-white/70 backdrop-blur rounded-2xl p-6 shadow-sm">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }} 
+          animate={{ opacity: 1, scale: 1 }} 
+          className="bg-white/70 backdrop-blur rounded-2xl p-6 shadow-sm"
+        >
           <div className="flex items-center gap-3">
-            {company.logoUrl && <img src={company.logoUrl} alt="" className="h-10 w-10 rounded-full object-cover ring-1 ring-gray-200" />}
+            {company.logoUrl && (
+              <img src={company.logoUrl} alt="" className="h-10 w-10 rounded-full object-cover ring-1 ring-gray-200" />
+            )}
             <div>
               <div className="h-4 w-40 bg-gray-200 rounded mb-2" />
               <div className="h-3 w-24 bg-gray-200 rounded" />
@@ -576,11 +964,17 @@ export default function ReservationClientPage() {
   const header = (
     <header className="sticky top-0 z-50 shadow-sm" style={{ backgroundColor: theme.primary }}>
       <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-2 flex items-center justify-between text-white">
-        <button onClick={()=> navigate(-1)} className="p-2 rounded-full hover:bg-white/10 transition" aria-label="Retour">
+        <button 
+          onClick={() => navigate(-1)} 
+          className="p-2 rounded-full hover:bg-white/10 transition" 
+          aria-label="Retour"
+        >
           <ChevronLeft className="h-5 w-5" />
         </button>
         <div className="flex items-center gap-2">
-          {company.logoUrl && <img src={company.logoUrl} alt="" className="h-7 w-7 rounded-full object-cover ring-1 ring-white/30" />}
+          {company.logoUrl && (
+            <img src={company.logoUrl} alt="" className="h-7 w-7 rounded-full object-cover ring-1 ring-white/30" />
+          )}
           <span className="font-semibold tracking-wide">{company.name || 'MALI TRANS'}</span>
         </div>
         <div className="w-9" />
@@ -588,7 +982,7 @@ export default function ReservationClientPage() {
     </header>
   );
 
-  // ---------- Décision d’affichage (règle unique) ----------
+  // ---------- Décision d'affichage ----------
   const canal  = String(existing?.canal || '').toLowerCase();
   const statut = String(existing?.statut || '').toLowerCase();
   const isPaidLike = ['pay', 'confirm', 'valid'].some(k => statut.includes(k));
@@ -613,7 +1007,7 @@ export default function ReservationClientPage() {
           <div><span className="text-gray-500">Trajet</span><div className="font-medium">{existing.depart} → {existing.arrivee}</div></div>
           <div><span className="text-gray-500">Date & heure</span><div className="font-medium">{existing.date} · {existing.heure}</div></div>
           <div><span className="text-gray-500">Places</span><div className="font-medium">{existing.seatsGo || 1}</div></div>
-          <div><span className="text-gray-500">Montant</span><div className="font-medium">{(existing.montant||0).toLocaleString('fr-FR')} FCFA</div></div>
+          <div><span className="text-gray-500">Montant</span><div className="font-medium">{(existing.montant || 0).toLocaleString('fr-FR')} FCFA</div></div>
         </div>
       </section>
     </div>
@@ -626,88 +1020,28 @@ export default function ReservationClientPage() {
       {agencyInfo?.nom && (
         <div className="text-xs text-gray-500 px-1">Agence : {agencyInfo.nom} — {agencyInfo.telephone}</div>
       )}
-      {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>}
+      {error && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>
+      )}
 
-      {/* moyens de paiement & preuve */}
-      <section className="bg-white rounded-2xl border border-gray-100 p-4">
-        <h2 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h2>
+      <PaymentProofSection
+        reservationId={reservationId}
+        paymentMethods={paymentMethods}
+        paymentMethodKey={paymentMethodKey}
+        onChoosePayment={onChoosePayment}
+        message={message}
+        setMessage={setMessage}
+        referenceInputRef={referenceInputRef}
+        canConfirm={canConfirm}
+        submitProofInline={submitProofInline}
+        uploading={uploading}
+        paymentHints={paymentHints}
+        existing={existing}
+        selectedTrip={selectedTrip}
+        seats={seats}
+        theme={theme}
+      />
 
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-          {Object.entries(paymentMethods).map(([k,m])=> m && (
-            <button
-              key={k}
-              onClick={()=> onChoosePayment(k)}
-              className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition ${paymentMethodKey===k ? 'bg-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100'}`}
-              style={{ borderColor: paymentMethodKey===k ? theme.primary : '#e5e7eb' }}
-            >
-              {m.logoUrl ? <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" /> : <div className="h-6 w-6 rounded bg-gray-100" />}
-              <div className="text-left min-w-0">
-                <div className="font-medium capitalize truncate">{k.replace(/_/g,' ')}</div>
-                {m.merchantNumber && <div className="text-[11px] text-gray-500 truncate">N° {m.merchantNumber}</div>}
-              </div>
-              {paymentMethodKey===k && (
-                <div className="ml-auto h-5 w-5 rounded-full flex items-center justify-center" style={{ backgroundColor: theme.primary, color:'#fff' }}>
-                  <CheckCircle className="w-3 h-3" />
-                </div>
-              )}
-            </button>
-          ))}
-        </div>
-
-        <p className="text-xs text-gray-600 mt-3 mb-3">{paymentHints}</p>
-
-        {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && (
-          <div className="mt-1 text-xs text-gray-600">
-            Code USSD :
-            <span className="font-mono bg-gray-50 px-2 py-1 rounded ml-2">
-              {paymentMethods[paymentMethodKey]!.ussdPattern!
-                .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
-                .replace('AMOUNT', String(existing?.montant || (selectedTrip ? selectedTrip.price*seats : 0)))}
-            </span>
-          </div>
-        )}
-
-        <div className="mt-3 grid sm:grid-cols-2 gap-3">
-          <textarea
-            rows={3}
-            className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
-            placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
-            value={message}
-            onChange={e=> setMessage(e.target.value)}
-          />
-          <label className="border-2 border-dashed rounded-lg h-[104px] grid place-items-center text-sm text-gray-600 cursor-pointer">
-            <input type="file" className="hidden" onChange={onFile} accept=".png,.jpg,.jpeg,.pdf" />
-            {file ? (
-              <span className="flex items-center gap-2 text-gray-800">
-                <CheckCircle className="w-4 h-4 text-emerald-600" /> {file.name}
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <Upload className="w-4 h-4" /> Capture (PNG, JPG, PDF · 5MB)
-              </span>
-            )}
-          </label>
-        </div>
-
-        <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="text-xs text-amber-600">
-            {!canConfirm && paymentMethodKey && (
-              <span>Entrez une référence (≥ 4 caractères) <em>ou</em> joignez une capture.</span>
-            )}
-          </div>
-          <button
-            onClick={submitProofInline}
-            disabled={uploading || !canConfirm}
-            title={!canConfirm ? "Ajoutez la référence ou une capture" : ""}
-            className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
-            style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
-          >
-            {uploading ? 'Envoi…' : 'Confirmer l’envoi'}
-          </button>
-        </div>
-      </section>
-
-      {/* Info statut */}
       {existing && (
         <div className="text-sm text-gray-600">
           Statut actuel : <b>{existing.statut || '—'}</b> {existing.canal ? `• Canal : ${existing.canal}` : ''}
@@ -720,12 +1054,13 @@ export default function ReservationClientPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-white to-gray-50">
       {header}
+      <PaymentInstructionsPopup />
 
       {/* Mode consultation (id présent) */}
       {existing ? (
         showTicketDirect ? TicketView : OnlineStateView
       ) : (
-        // Mode achat en ligne (logique d’origine)
+        // Mode achat en ligne (logique d'origine)
         <main className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4 sm:space-y-5">
           {RouteCard()}
 
@@ -733,26 +1068,32 @@ export default function ReservationClientPage() {
             <div className="text-xs text-gray-500 px-1">Agence : {agencyInfo.nom} — {agencyInfo.telephone}</div>
           )}
 
-          {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>}
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>
+          )}
 
           {/* dates */}
           <section className="bg-white rounded-2xl border border-gray-100 p-4">
             <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre date de départ</h2>
             <div className="flex gap-2 overflow-x-auto scrollbar-none">
-              {dates.map(d=> (
+              {dates.map(d => (
                 <button
                   key={d}
-                  onClick={()=>{ setSelectedDate(d); setSelectedTime(''); }}
+                  onClick={() => { setSelectedDate(d); setSelectedTime(''); }}
                   className="h-10 px-3 rounded-xl border text-sm whitespace-nowrap transition"
                   style={{
-                    borderColor: selectedDate===d ? theme.primary : '#e5e7eb',
-                    color: selectedDate===d ? '#111827' : '#374151',
-                    backgroundColor: selectedDate===d ? theme.lightPrimary : '#f9fafb'
+                    borderColor: selectedDate === d ? theme.primary : '#e5e7eb',
+                    color: selectedDate === d ? '#111827' : '#374151',
+                    backgroundColor: selectedDate === d ? theme.lightPrimary : '#f9fafb'
                   }}
                 >
                   <span className="font-medium">{format(parseISO(d), 'EEE d', { locale: fr })}</span>
-                  {isToday(parseISO(d)) && <span className="ml-2 text-xs text-gray-500">Aujourd’hui</span>}
-                  {isTomorrow(parseISO(d)) && <span className="ml-2 text-xs text-gray-500">Demain</span>}
+                  {isToday(parseISO(d)) && (
+                    <span className="ml-2 text-xs text-gray-500">Aujourd'hui</span>
+                  )}
+                  {isTomorrow(parseISO(d)) && (
+                    <span className="ml-2 text-xs text-gray-500">Demain</span>
+                  )}
                 </button>
               ))}
             </div>
@@ -763,21 +1104,24 @@ export default function ReservationClientPage() {
             <section className="bg-white rounded-2xl border border-gray-100 p-4">
               <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre heure de départ</h2>
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
-                {filteredTrips.map((t:any)=> (
+                {filteredTrips.map((t: any) => (
                   <button
                     key={t.id}
-                    onClick={()=> setSelectedTime(t.time)}
+                    onClick={() => setSelectedTime(t.time)}
                     className="h-11 px-3 rounded-lg border text-sm text-left transition"
                     style={{
-                      borderColor: selectedTime===t.time ? theme.secondary : '#e5e7eb',
-                      backgroundColor: selectedTime===t.time ? theme.lightSecondary : '#f9fafb'
+                      borderColor: selectedTime === t.time ? theme.secondary : '#e5e7eb',
+                      backgroundColor: selectedTime === t.time ? theme.lightSecondary : '#f9fafb'
                     }}
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold">{t.time}</span>
                       <span
                         className="text-[11px] px-2 h-5 rounded-md grid place-items-center whitespace-nowrap leading-none"
-                        style={{ color: seatColor(t.remainingSeats, t.places), border: `1px solid ${seatColor(t.remainingSeats, t.places)}` }}
+                        style={{ 
+                          color: seatColor(t.remainingSeats, t.places), 
+                          border: `1px solid ${seatColor(t.remainingSeats, t.places)}` 
+                        }}
                       >
                         {t.remainingSeats} pl.
                       </span>
@@ -788,10 +1132,11 @@ export default function ReservationClientPage() {
             </section>
           )}
 
-          {/* infos + paiement */}
+          {/* infos personnelles */}
           {selectedTrip && (
             <>
               <section className="bg-white rounded-2xl border border-gray-100 p-4">
+                <StepIndicator />
                 <h2 className="text-sm font-semibold text-gray-900 mb-2">Informations personnelles</h2>
                 <p className="text-xs text-gray-500 mb-3">
                   Entrez votre <span className="font-medium">nom complet</span> et votre <span className="font-medium">numéro de téléphone</span> utilisés pour voyager.
@@ -803,11 +1148,24 @@ export default function ReservationClientPage() {
                       <User className="h-5 w-5 text-gray-400" />
                     </div>
                     <input
-                      className="h-11 pl-10 pr-3 w-full border border-gray-200 rounded-lg focus:ring-2 focus:outline-none"
+                      ref={nameInputRef}
+                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none ${
+                        fieldErrors.fullName ? 'border-red-300' : 'border-gray-200'
+                      }`}
                       placeholder="Nom complet *"
                       value={passenger.fullName}
-                      onChange={e=> setPassenger(p=>({...p, fullName: e.target.value}))}
+                      onChange={e => {
+                        setPassenger(p => ({ ...p, fullName: e.target.value }));
+                        if (fieldErrors.fullName) {
+                          setFieldErrors(prev => ({ ...prev, fullName: '' }));
+                        }
+                      }}
                     />
+                    {fieldErrors.fullName && (
+                      <div className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" /> {fieldErrors.fullName}
+                      </div>
+                    )}
                   </div>
 
                   {/* Téléphone */}
@@ -816,21 +1174,52 @@ export default function ReservationClientPage() {
                       <Phone className="h-5 w-5 text-gray-400" />
                     </div>
                     <input
-                      className="h-11 pl-10 pr-3 w-full border border-gray-200 rounded-lg focus:ring-2 focus:outline-none"
-                      placeholder="Téléphone *"
+                      ref={phoneInputRef}
+                      inputMode="numeric"
+                      autoComplete="tel"
+                      maxLength={11} // 8 chiffres + 3 espaces
+                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none ${
+                        fieldErrors.phone ? 'border-red-300' : 'border-gray-200'
+                      }`}
+                      placeholder="Téléphone * (ex: 22 22 22 22)"
                       value={passenger.phone}
-                      onChange={e=> setPassenger(p=>({...p, phone: e.target.value}))}
+                      onChange={e => {
+                        const formatted = formatMaliPhone(e.target.value);
+                        setPassenger(p => ({ ...p, phone: formatted }));
+
+                        if (fieldErrors.phone) {
+                        setFieldErrors(prev => ({ ...prev, phone: '' }));
+                        }
+                      }}
                     />
+                    {fieldErrors.phone && (
+                      <div className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" /> {fieldErrors.phone}
+                      </div>
+                    )}
                   </div>
 
                   {/* Places */}
-                  <div className="sm:col-span-2 flex items-center gap-4">
+                  <div className="sm:col-span-2 flex items-center gap-4 mt-2">
                     <span className="text-sm text-gray-600">Places</span>
-                    <button onClick={()=> setSeats(s=> Math.max(1, s-1))} className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" style={{ borderColor: theme.lightPrimary, color: theme.primary }}>
+                    <button 
+                      onClick={() => setSeats(s => Math.max(1, s - 1))} 
+                      className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" 
+                      style={{ borderColor: theme.lightPrimary, color: theme.primary }}
+                    >
                       <Minus className="w-4 h-4" />
                     </button>
-                    <span className="px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ background: theme.lightPrimary, color: theme.primary }}>{seats}</span>
-                    <button onClick={()=> setSeats(s=> Math.min(Math.min(5, selectedTrip.remainingSeats), s+1))} className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" style={{ borderColor: theme.lightPrimary, color: theme.primary }}>
+                    <span 
+                      className="px-3 py-1.5 rounded-lg text-sm font-semibold" 
+                      style={{ background: theme.lightPrimary, color: theme.primary }}
+                    >
+                      {seats}
+                    </span>
+                    <button 
+                      onClick={() => setSeats(s => Math.min(Math.min(5, selectedTrip.remainingSeats), s + 1))} 
+                      className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" 
+                      style={{ borderColor: theme.lightPrimary, color: theme.primary }}
+                    >
                       <Plus className="w-4 h-4" />
                     </button>
                     <span className="text-xs" style={{ color: seatColor(selectedTrip.remainingSeats, selectedTrip.places) }}>
@@ -838,107 +1227,50 @@ export default function ReservationClientPage() {
                     </span>
                   </div>
                 </div>
+                
+                <button
+                  onClick={createReservationDraft}
+                  disabled={creating}
+                  className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
+                  style={{ 
+                    background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, 
+                    color: '#fff' 
+                  }}
+                >
+                  {creating ? 'Traitement…' : (
+                    <>
+                      Passer au paiement
+                      <ArrowRight className="w-4 h-4" />
+                      <span className="font-bold">
+                        {(selectedTrip.price * seats).toLocaleString('fr-FR')} FCFA
+                      </span>
+                    </>
+                  )}
+                </button>
               </section>
 
-              <section className="bg-white rounded-2xl border border-gray-100 p-4">
-                <h2 className="text-sm font-semibold text-gray-900 mb-2">
-                  {reservationId ? 'Choisissez le moyen de paiement' : 'Paiement'}
-                </h2>
-
-                {!reservationId ? (
-                  <div className="space-y-3">
-                    <p className="text-sm text-gray-600">
-                      Cliquez sur <span className="font-semibold">« Passer au paiement »</span> pour bloquer vos places pendant 15 minutes.
-                    </p>
-                    <button
-                      onClick={createReservationDraft}
-                      disabled={creating}
-                      className="w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98]"
-                      style={{ background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, color: '#fff' }}
-                    >
-                      {creating ? 'Traitement…' : `Passer au paiement (${(selectedTrip.price * seats).toLocaleString('fr-FR')} FCFA)`}
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                      {Object.entries(paymentMethods).map(([k,m])=> m && (
-                        <button
-                          key={k}
-                          onClick={()=> onChoosePayment(k)}
-                          className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition ${paymentMethodKey===k ? 'bg-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100'}`}
-                          style={{ borderColor: paymentMethodKey===k ? theme.primary : '#e5e7eb' }}
-                        >
-                          {m.logoUrl ? <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" /> : <div className="h-6 w-6 rounded bg-gray-100" />}
-                          <div className="text-left min-w-0">
-                            <div className="font-medium capitalize truncate">{k.replace(/_/g,' ')}</div>
-                            {m.merchantNumber && <div className="text-[11px] text-gray-500 truncate">N° {m.merchantNumber}</div>}
-                          </div>
-                          {paymentMethodKey===k && (
-                            <div className="ml-auto h-5 w-5 rounded-full flex items-center justify-center" style={{ backgroundColor: theme.primary, color:'#fff' }}>
-                              <CheckCircle className="w-3 h-3" />
-                            </div>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="mt-4">
-                      <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
-                      <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
-                    </div>
-
-                    {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && (
-                      <div className="mt-1 text-xs text-gray-600">
-                        Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
-                          {paymentMethods[paymentMethodKey]!.ussdPattern!
-                            .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
-                            .replace('AMOUNT', String(selectedTrip.price * seats))}
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="mt-3 grid sm:grid-cols-2 gap-3">
-                      <textarea
-                        rows={3}
-                        className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
-                        placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
-                        value={message}
-                        onChange={e=> setMessage(e.target.value)}
-                      />
-                      <label className="border-2 border-dashed rounded-lg h-[104px] grid place-items-center text-sm text-gray-600 cursor-pointer">
-                        <input type="file" className="hidden" onChange={onFile} accept=".png,.jpg,.jpeg,.pdf" />
-                        {file ? (
-                          <span className="flex items-center gap-2 text-gray-800">
-                            <CheckCircle className="w-4 h-4 text-emerald-600" /> {file.name}
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-2">
-                            <Upload className="w-4 h-4" /> Capture (PNG, JPG, PDF · 5MB)
-                          </span>
-                        )}
-                      </label>
-                    </div>
-
-                    <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                      <div className="text-xs text-amber-600">
-                        {!canConfirm && paymentMethodKey && (
-                          <span>Entrez une référence (≥ 4 caractères) <em>ou</em> joignez une capture.</span>
-                        )}
-                      </div>
-                      <button
-                        onClick={submitProofInline}
-                        disabled={uploading || !canConfirm}
-                        title={!canConfirm ? "Ajoutez la référence ou une capture" : ""}
-                        className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
-                        style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
-                      >
-                        {uploading ? 'Envoi…' : 'Confirmer l’envoi'}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </section>
+              {/* Section paiement (seulement après création de réservation) */}
+              {reservationId && (
+                <section ref={paymentSectionRef} className="bg-white rounded-2xl border border-gray-100 p-4">
+                  <PaymentProofSection
+                    reservationId={reservationId}
+                    paymentMethods={paymentMethods}
+                    paymentMethodKey={paymentMethodKey}
+                    onChoosePayment={onChoosePayment}
+                    message={message}
+                    setMessage={setMessage}
+                    referenceInputRef={referenceInputRef}
+                    canConfirm={canConfirm}
+                    submitProofInline={submitProofInline}
+                    uploading={uploading}
+                    paymentHints={paymentHints}
+                    existing={existing}
+                    selectedTrip={selectedTrip}
+                    seats={seats}
+                    theme={theme}
+                  />
+                </section>
+              )}
             </>
           )}
         </main>
