@@ -513,7 +513,9 @@ export default function ReservationClientPage() {
                 const total = t.places || 30;
                 const reserved = reservations
                   .filter(r => String((r as any).trajetId) === trajetId && 
-                          ['payé', 'preuve_recue'].includes(String((r as any).statut).toLowerCase()))
+                          ['confirme', 'payé'].includes(
+                          String((r as any).statut).toLowerCase()
+                          ))
                   .reduce((a, r: any) => a + (r.seatsGo || 0), 0);
                 const remaining = total - reserved;
                 if (remaining > 0) {
