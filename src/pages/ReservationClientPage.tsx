@@ -191,20 +191,33 @@ const PaymentProofSection = ({
         </div>
       )}
 
+      {/* 🔥 AMÉLIORATION UX : Titre incitatif pour guider l'utilisateur */}
+      {!isLocked && (
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-gray-900 mb-1">
+            Choisissez votre moyen de paiement
+          </h3>
+          <p className="text-xs text-gray-600">
+            Cliquez sur un moyen de paiement pour continuer
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
         {Object.entries(paymentMethods).map(([k,m]) => m && (
           <button
             key={k}
             onClick={() => !isLocked && onChoosePayment(k)}
             disabled={isLocked}
-            className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition ${
-              isLocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-            } ${paymentMethodKey === k ? 'bg-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100'}`}
+            className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition-all duration-200 ${
+              isLocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:shadow-md hover:-translate-y-0.5'
+            } ${paymentMethodKey === k ? 'bg-white shadow-sm' : ''}`}
             style={{ 
               borderColor: paymentMethodKey === k ? theme.primary : '#e5e7eb',
+              backgroundColor: !isLocked && !paymentMethodKey ? `${theme.primary}08` : '#f9fafb',
               cursor: isLocked ? 'not-allowed' : 'pointer'
             }}
-            title={isLocked ? "Le paiement a déjà été traité" : ""}
+            title={isLocked ? "Le paiement a déjà été traité" : `Payer avec ${k.replace(/_/g, ' ')}`}
           >
             {m.logoUrl ? (
               <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" />
@@ -345,6 +358,7 @@ export default function ReservationClientPage() {
     secondary: company.couleurSecondaire,
     lightPrimary: `${company.couleurPrimaire}1A`,
     lightSecondary: `${company.couleurSecondaire}1A`,
+    veryLightPrimary: `${company.couleurPrimaire}08`, // 🔥 Pour background subtil
   }), [company]);
 
   const [agencyInfo, setAgencyInfo] = useState<{
@@ -388,6 +402,11 @@ export default function ReservationClientPage() {
     // CORRECTION : Un reservationId seul ne suffit pas pour considérer une réservation active
     return false;
   }, [existing]);
+
+  // 🔥 NOUVEAU : Variable pour savoir si une réservation a été créée dans cette session
+  const hasCreatedReservation = useMemo(() => {
+    return !!reservationId && !existing; // reservationId existe mais pas d'existing = création en cours
+  }, [reservationId, existing]);
 
   // ========== Effets ==========
 
@@ -1515,26 +1534,48 @@ export default function ReservationClientPage() {
                   </div>
                 </div>
                 
-                <button
-                  onClick={createReservationDraft}
-                  disabled={creating || hasActiveReservation}
-                  title={hasActiveReservation ? "Une réservation est déjà en cours" : ""}
-                  className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
-                  style={{ 
-                    background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, 
-                    color: '#fff' 
-                  }}
-                >
-                  {creating ? 'Traitement…' : (
-                    <>
-                      Passer au paiement
-                      <ArrowRight className="w-4 h-4" />
-                      <span className="font-bold">
-                        {(selectedTrip.price * seats).toLocaleString('fr-FR')} FCFA
-                      </span>
-                    </>
-                  )}
-                </button>
+                {/* 🔥 CORRECTION DU BUG : Masquer complètement le bouton après création de réservation */}
+                {!reservationId && (
+                  <button
+                    onClick={createReservationDraft}
+                    disabled={creating || hasActiveReservation}
+                    title={hasActiveReservation ? "Une réservation est déjà en cours" : ""}
+                    className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
+                    style={{ 
+                      background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, 
+                      color: '#fff' 
+                    }}
+                  >
+                    {creating ? 'Traitement…' : (
+                      <>
+                        Passer au paiement
+                        <ArrowRight className="w-4 h-4" />
+                        <span className="font-bold">
+                          {(selectedTrip.price * seats).toLocaleString('fr-FR')} FCFA
+                        </span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                {/* 🔥 AMÉLIORATION UX : Message de succès quand la réservation est créée */}
+                {reservationId && !existing && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg"
+                  >
+                    <div className="flex items-center gap-2 text-emerald-800">
+                      <CheckCircle className="w-4 h-4" />
+                      <div>
+                        <p className="text-sm font-medium">Réservation créée avec succès !</p>
+                        <p className="text-xs text-emerald-700 mt-0.5">
+                          Choisissez maintenant un moyen de paiement ci-dessous pour continuer.
+                        </p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
               </section>
             </>
           )}
