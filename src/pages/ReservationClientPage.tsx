@@ -904,6 +904,15 @@ export default function ReservationClientPage() {
           updatedAt: serverTimestamp(),
         }
       );
+
+      // Mise à jour IMMÉDIATE de l'état local pour feedback instantané
+      setExisting(prev => prev ? { 
+        ...prev, 
+        statut: 'preuve_recue',
+        canal: nextCanal
+      } : prev);
+
+      // Suppression du double navigate - un seul appel
       navigate(`/${slug}/reservation/${reservationId}`, {
         replace: true,
         state: {
@@ -912,14 +921,11 @@ export default function ReservationClientPage() {
         }
       });
 
+      // Mise à jour du pending local
       const p = readPending();
       if (p && p.id === reservationId) {
         rememberPending({ ...p, status: 'preuve_recue' });
       }
-
-      navigate(`/${slug}/reservation/${reservationId}`, {
-        state: { companyId: effectiveCompanyId, agencyId: effectiveAgencyId }
-      });
     } catch (e) { 
       setError("Échec de l'envoi de la preuve"); 
     } finally { 
@@ -1182,6 +1188,13 @@ export default function ReservationClientPage() {
 
       {error && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>
+      )}
+
+      {/* Indicateur contextuel pour guider l'utilisateur */}
+      {paymentTriggeredAt && existing?.statut === 'en_attente_paiement' && !paymentMethodKey && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+          💡 Après votre paiement, choisissez un moyen de paiement ci-dessous, puis collez le code reçu par SMS.
+        </div>
       )}
 
       <PaymentProofSection
