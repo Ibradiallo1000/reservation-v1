@@ -4,7 +4,7 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info } from 'lucide-react';
+import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info, Clock, Check } from 'lucide-react';
 import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, serverTimestamp, getDoc,
 } from 'firebase/firestore';
@@ -30,6 +30,9 @@ const clearPendingIfNotBlocking = () => {
     const p = JSON.parse(raw);
     if (!isBlockingStatus(p?.status)) localStorage.removeItem(PENDING_KEY);
   } catch {}
+};
+const clearPending = () => {
+  try { localStorage.removeItem(PENDING_KEY); } catch {}
 };
 /* ======================================================= */
 
@@ -106,99 +109,138 @@ const PaymentProofSection = ({
   selectedTrip: any;
   seats: number;
   theme: any;
-}) => (
-  <section className="bg-white rounded-2xl border border-gray-100 p-4">
-    <h2 className="text-sm font-semibold text-gray-900 mb-2">
-      {reservationId ? 'Paiement' : 'Preuve de paiement'}
-    </h2>
+}) => {
+  const isLocked = (existing?.statut === 'preuve_recue' || existing?.statut === 'confirme') ?? false;
+  const isProofSent = existing?.statut === 'preuve_recue';
+  const isConfirmed = existing?.statut === 'confirme';
+  
+  return (
+    <section className="bg-white rounded-2xl border border-gray-100 p-4">
+      <h2 className="text-sm font-semibold text-gray-900 mb-2">
+        {reservationId ? 'Paiement' : 'Preuve de paiement'}
+      </h2>
 
-    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-      {Object.entries(paymentMethods).map(([k,m]) => m && (
-        <button
-          key={k}
-          onClick={() => onChoosePayment(k)}
-          className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition ${
-            paymentMethodKey === k ? 'bg-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100'
-          }`}
-          style={{ borderColor: paymentMethodKey === k ? theme.primary : '#e5e7eb' }}
-        >
-          {m.logoUrl ? (
-            <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" />
-          ) : (
-            <div className="h-6 w-6 rounded bg-gray-100" />
-          )}
-          <div className="text-left min-w-0">
-            <div className="font-medium capitalize truncate">{k.replace(/_/g,' ')}</div>
-            {m.merchantNumber && (
-              <div className="text-[11px] text-gray-500 truncate">N° {m.merchantNumber}</div>
-            )}
+      {isProofSent && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center gap-2 text-blue-800">
+            <Clock className="w-4 h-4" />
+            <span className="text-sm font-medium">Preuve envoyée</span>
           </div>
-          {paymentMethodKey === k && (
-            <div 
-              className="ml-auto h-5 w-5 rounded-full flex items-center justify-center" 
-              style={{ backgroundColor: theme.primary, color: '#fff' }}
-            >
-              <CheckCircle className="w-3 h-3" />
-            </div>
-          )}
-        </button>
-      ))}
-    </div>
-
-    <div className="mt-4">
-      <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
-      <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
-    </div>
-
-    {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && (
-      <div className="mt-1 text-xs text-gray-600">
-        Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
-          {paymentMethods[paymentMethodKey]!.ussdPattern!
-            .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
-            .replace('AMOUNT', String(
-              existing?.montant || (selectedTrip ? selectedTrip.price * seats : 0)
-            ))}
-        </span>
-      </div>
-    )}
-
-    <div className="mt-3">
-      <div>
-        <textarea
-          ref={referenceInputRef}
-          rows={3}
-          className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
-          placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
-          value={message}
-          onChange={e => setMessage(e.target.value)}
-        />
-        <div className="text-xs text-gray-500 mt-1">
-          Minimum 4 caractères
+          <p className="text-xs text-blue-700 mt-1">
+            Votre preuve de paiement est en cours de vérification par la compagnie.
+          </p>
         </div>
-      </div>
-    </div>
+      )}
 
-    <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-      <div className="text-xs text-amber-600">
-        {!canConfirm && paymentMethodKey && (
-          <span className="flex items-center gap-1">
-            <AlertCircle className="w-3 h-3" />
-            Entrez une référence (≥ 4 caractères)
-          </span>
-        )}
+      {isConfirmed && (
+        <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+          <div className="flex items-center gap-2 text-emerald-800">
+            <Check className="w-4 h-4" />
+            <span className="text-sm font-medium">Paiement confirmé</span>
+          </div>
+          <p className="text-xs text-emerald-700 mt-1">
+            Votre paiement a été validé. Votre billet est confirmé.
+          </p>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+        {Object.entries(paymentMethods).map(([k,m]) => m && (
+          <button
+            key={k}
+            onClick={() => !isLocked && onChoosePayment(k)}
+            disabled={isLocked}
+            className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition ${
+              isLocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+            } ${paymentMethodKey === k ? 'bg-white shadow-sm' : 'bg-gray-50 hover:bg-gray-100'}`}
+            style={{ 
+              borderColor: paymentMethodKey === k ? theme.primary : '#e5e7eb',
+              cursor: isLocked ? 'not-allowed' : 'pointer'
+            }}
+            title={isLocked ? "Le paiement a déjà été traité" : ""}
+          >
+            {m.logoUrl ? (
+              <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" />
+            ) : (
+              <div className="h-6 w-6 rounded bg-gray-100" />
+            )}
+            <div className="text-left min-w-0">
+              <div className="font-medium capitalize truncate">{k.replace(/_/g,' ')}</div>
+              {m.merchantNumber && (
+                <div className="text-[11px] text-gray-500 truncate">N° {m.merchantNumber}</div>
+              )}
+            </div>
+            {paymentMethodKey === k && !isLocked && (
+              <div 
+                className="ml-auto h-5 w-5 rounded-full flex items-center justify-center" 
+                style={{ backgroundColor: theme.primary, color: '#fff' }}
+              >
+                <CheckCircle className="w-3 h-3" />
+              </div>
+            )}
+          </button>
+        ))}
       </div>
-      <button
-        onClick={submitProofInline}
-        disabled={uploading || !canConfirm}
-        title={!canConfirm ? "Ajoutez la référence" : ""}
-        className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
-        style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
-      >
-        {uploading ? 'Envoi…' : 'Confirmer l\'envoi'}
-      </button>
-    </div>
-  </section>
-);
+
+      <div className="mt-4">
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
+        <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
+      </div>
+
+      {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && !isLocked && (
+        <div className="mt-1 text-xs text-gray-600">
+          Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
+            {paymentMethods[paymentMethodKey]!.ussdPattern!
+              .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
+              .replace('AMOUNT', String(
+                existing?.montant || (selectedTrip ? selectedTrip.price * seats : 0)
+              ))}
+          </span>
+        </div>
+      )}
+
+      {!isLocked && (
+        <>
+          <div className="mt-3">
+            <div>
+              <textarea
+                ref={referenceInputRef}
+                rows={3}
+                className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
+                placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
+                value={message}
+                onChange={e => setMessage(e.target.value)}
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                Minimum 4 caractères
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="text-xs text-amber-600">
+              {!canConfirm && paymentMethodKey && (
+                <span className="flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" />
+                  Entrez une référence (≥ 4 caractères)
+                </span>
+              )}
+            </div>
+            <button
+              onClick={submitProofInline}
+              disabled={uploading || !canConfirm || isLocked}
+              title={!canConfirm ? "Ajoutez la référence" : isLocked ? "Le paiement a déjà été traité" : ""}
+              className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
+              style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
+            >
+              {uploading ? 'Envoi…' : 'Confirmer l\'envoi'}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+};
 
 export default function ReservationClientPage() {
   const { slug, id: reservationRouteId } = useParams<{ slug: string; id?: string }>();
@@ -264,6 +306,17 @@ export default function ReservationClientPage() {
   const [showPaymentPopup, setShowPaymentPopup] = useState(false);
   const [currentStep, setCurrentStep] = useState<'personal' | 'payment' | 'proof'>('personal');
 
+  // ========== Variable centrale de vérité ==========
+  const hasActiveReservation = useMemo(() => {
+    if (existing) {
+      const statut = String(existing.statut || '').toLowerCase();
+      return isBlockingStatus(statut);
+    }
+    if (reservationId) return true;
+    const p = readPending();
+    return Boolean(p && isBlockingStatus(p.status) && p.slug === slug);
+  }, [reservationId, existing, slug]);
+
   // ========== Effets ==========
   useEffect(() => {
     clearPendingIfNotBlocking();
@@ -275,6 +328,13 @@ export default function ReservationClientPage() {
       });
     }
   }, [slug, navigate, reservationRouteId]);
+
+  // Nettoyer le pending si la réservation est confirmée
+  useEffect(() => {
+    if (existing?.statut === 'confirme') {
+      clearPending();
+    }
+  }, [existing?.statut]);
 
   // Mode consultation
   useEffect(() => {
@@ -508,6 +568,19 @@ export default function ReservationClientPage() {
     load();
   }, [slug, departureQ, arrivalQ, reservationRouteId]);
 
+  // Mise à jour automatique des étapes
+  useEffect(() => {
+    if (reservationId && currentStep === 'personal') {
+      setCurrentStep('payment');
+    }
+  }, [reservationId, currentStep]);
+
+  useEffect(() => {
+    if (paymentMethodKey && currentStep === 'payment') {
+      setCurrentStep('proof');
+    }
+  }, [paymentMethodKey, currentStep]);
+
   const filteredTrips = useMemo(() => {
     if (!selectedDate) return [] as any[];
     const base = trips.filter((t: any) => t.date === selectedDate);
@@ -571,7 +644,17 @@ export default function ReservationClientPage() {
 
   // ---------- Création draft ----------
   const createReservationDraft = useCallback(async () => {
-    if (reservationRouteId) return;
+    // DOUBLE SÉCURITÉ : bloquer si réservation active existe
+    if (hasActiveReservation) {
+      const pending = readPending();
+      if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
+        navigate(`/${slug}/reservation/${pending.id}`, { 
+          replace: true, 
+          state: { companyId: pending.companyId, agencyId: pending.agencyId } 
+        });
+      }
+      return;
+    }
     
     if (!validatePersonalInfo()) {
       setError('Veuillez corriger les erreurs ci-dessus');
@@ -692,7 +775,7 @@ export default function ReservationClientPage() {
     } finally { 
       setCreating(false); 
     }
-  }, [reservationRouteId, selectedTrip, passenger, seats, creating, slug, company, navigate]);
+  }, [hasActiveReservation, selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo]);
 
   const onChoosePayment = (key: string) => {
     setPaymentMethodKey(key); 
@@ -1020,6 +1103,42 @@ export default function ReservationClientPage() {
       {agencyInfo?.nom && (
         <div className="text-xs text-gray-500 px-1">Agence : {agencyInfo.nom} — {agencyInfo.telephone}</div>
       )}
+      
+      {/* Affichage clair du statut */}
+      {existing?.statut && (
+        <div className="bg-white rounded-2xl border border-gray-100 p-4">
+          <div className="flex items-center gap-3">
+            {existing.statut === 'en_attente_paiement' && (
+              <>
+                <Clock className="w-5 h-5 text-amber-500" />
+                <div>
+                  <div className="font-medium text-gray-900">En attente de paiement</div>
+                  <div className="text-sm text-gray-600">Veuillez effectuer le paiement et envoyer la preuve</div>
+                </div>
+              </>
+            )}
+            {existing.statut === 'preuve_recue' && (
+              <>
+                <Clock className="w-5 h-5 text-blue-500" />
+                <div>
+                  <div className="font-medium text-gray-900">Preuve reçue – en vérification</div>
+                  <div className="text-sm text-gray-600">Votre preuve de paiement est en cours de vérification par la compagnie</div>
+                </div>
+              </>
+            )}
+            {existing.statut === 'confirme' && (
+              <>
+                <Check className="w-5 h-5 text-emerald-500" />
+                <div>
+                  <div className="font-medium text-gray-900">Paiement confirmé</div>
+                  <div className="text-sm text-gray-600">Votre billet est confirmé et valide pour le voyage</div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>
       )}
@@ -1042,9 +1161,11 @@ export default function ReservationClientPage() {
         theme={theme}
       />
 
-      {existing && (
+      {existing && existing.statut && (
         <div className="text-sm text-gray-600">
-          Statut actuel : <b>{existing.statut || '—'}</b> {existing.canal ? `• Canal : ${existing.canal}` : ''}
+          {existing.canal && (
+            <span className="mr-3">Canal : <b>{existing.canal}</b></span>
+          )}
         </div>
       )}
     </div>
@@ -1070,6 +1191,24 @@ export default function ReservationClientPage() {
 
           {error && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>
+          )}
+
+          {/* Avertissement si réservation en cours */}
+          {hasActiveReservation && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
+                <div className="flex-1">
+                  <h3 className="font-medium text-amber-800 mb-1">
+                    Une réservation est déjà en cours
+                  </h3>
+                  <p className="text-sm text-amber-700">
+                    Vous avez déjà une réservation en attente de paiement.
+                    Veuillez terminer le paiement et envoyer la preuve.
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* dates */}
@@ -1133,7 +1272,7 @@ export default function ReservationClientPage() {
           )}
 
           {/* infos personnelles */}
-          {selectedTrip && (
+          {selectedTrip && !hasActiveReservation && (
             <>
               <section className="bg-white rounded-2xl border border-gray-100 p-4">
                 <StepIndicator />
@@ -1164,7 +1303,7 @@ export default function ReservationClientPage() {
                     {fieldErrors.fullName && (
                       <div className="text-xs text-red-600 mt-1 flex items-center gap-1">
                         <AlertCircle className="w-3 h-3" /> {fieldErrors.fullName}
-                      </div>
+                    </div>
                     )}
                   </div>
 
@@ -1230,7 +1369,8 @@ export default function ReservationClientPage() {
                 
                 <button
                   onClick={createReservationDraft}
-                  disabled={creating}
+                  disabled={creating || hasActiveReservation}
+                  title={hasActiveReservation ? "Une réservation est déjà en cours" : ""}
                   className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
                   style={{ 
                     background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, 
@@ -1248,30 +1388,30 @@ export default function ReservationClientPage() {
                   )}
                 </button>
               </section>
-
-              {/* Section paiement (seulement après création de réservation) */}
-              {reservationId && (
-                <section ref={paymentSectionRef} className="bg-white rounded-2xl border border-gray-100 p-4">
-                  <PaymentProofSection
-                    reservationId={reservationId}
-                    paymentMethods={paymentMethods}
-                    paymentMethodKey={paymentMethodKey}
-                    onChoosePayment={onChoosePayment}
-                    message={message}
-                    setMessage={setMessage}
-                    referenceInputRef={referenceInputRef}
-                    canConfirm={canConfirm}
-                    submitProofInline={submitProofInline}
-                    uploading={uploading}
-                    paymentHints={paymentHints}
-                    existing={existing}
-                    selectedTrip={selectedTrip}
-                    seats={seats}
-                    theme={theme}
-                  />
-                </section>
-              )}
             </>
+          )}
+
+          {/* Section paiement (seulement après création de réservation) */}
+          {reservationId && (
+            <section ref={paymentSectionRef} className="bg-white rounded-2xl border border-gray-100 p-4">
+              <PaymentProofSection
+                reservationId={reservationId}
+                paymentMethods={paymentMethods}
+                paymentMethodKey={paymentMethodKey}
+                onChoosePayment={onChoosePayment}
+                message={message}
+                setMessage={setMessage}
+                referenceInputRef={referenceInputRef}
+                canConfirm={canConfirm}
+                submitProofInline={submitProofInline}
+                uploading={uploading}
+                paymentHints={paymentHints}
+                existing={existing}
+                selectedTrip={selectedTrip}
+                seats={seats}
+                theme={theme}
+              />
+            </section>
           )}
         </main>
       )}
