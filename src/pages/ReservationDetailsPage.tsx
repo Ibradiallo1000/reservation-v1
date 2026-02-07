@@ -18,8 +18,8 @@ import Confetti from 'react-confetti';
 import { useWindowSize } from '@react-hook/window-size';
 import { hexToRgba, safeTextColor } from '@/utils/color';
 
-// === NOUVEAUX STATUTS (ALIGNÉS AVEC LA VISION) ===
-type ReservationStatus = 'en_attente' | 'verification' | 'confirme' | 'annule';
+// === NOUVEAUX STATUTS (ALIGNÉS AVEC L'ADMIN) ===
+type ReservationStatus = 'en_attente' | 'verification' | 'confirme' | 'refuse' | 'annule';
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
 interface Reservation {
@@ -47,6 +47,7 @@ interface Reservation {
   paidAt?: any;
   validatedAt?: any;
   paymentMethodLabel?: string;
+  reason?: string;
 
   companyId: string;
   companySlug: string;
@@ -258,12 +259,13 @@ const ReservationDetailsPage: React.FC = () => {
             updatedAt: data?.updatedAt || new Date().toISOString() 
           };
           
-          // Normalisation des anciens statuts vers les nouveaux
+          // Normalisation des anciens statuts vers les nouveaux (ALIGNÉ AVEC ADMIN)
           const normalizedStatus = (() => {
             const s = data.statut?.toLowerCase() || '';
             if (['preuve_recue', 'verif', 'vérif'].some(k => s.includes(k))) return 'verification';
             if (['pay', 'confirm', 'valid'].some(k => s.includes(k))) return 'confirme';
-            if (['annule', 'cancel'].some(k => s.includes(k))) return 'annule';
+            if (['refuse', 'refusé', 'reject', 'rejeté'].some(k => s.includes(k))) return 'refuse';
+            if (['annule', 'cancel', 'cancelled'].some(k => s.includes(k))) return 'annule';
             return 'en_attente' as ReservationStatus;
           })();
 
@@ -278,7 +280,7 @@ const ReservationDetailsPage: React.FC = () => {
           const pend = readPending();
           
           // Nettoyage si réservation terminée OU si ancien ID différent
-          if (normalizedStatus === 'confirme' || normalizedStatus === 'annule') {
+          if (normalizedStatus === 'confirme' || normalizedStatus === 'annule' || normalizedStatus === 'refuse') {
             if (pend?.id === snap.id) {
               console.log('✅ Réservation terminée, nettoyage du cache');
               clearPending();
@@ -379,6 +381,7 @@ const ReservationDetailsPage: React.FC = () => {
     en_attente: 'Veuillez envoyer votre preuve de paiement.',
     verification: 'Preuve envoyée. En attente de vérification par la compagnie.',
     confirme: 'Paiement confirmé. Votre billet est disponible.',
+    refuse: 'Cette réservation a été refusée par la compagnie.',
     annule: 'Cette réservation a été annulée.'
   };
 
@@ -543,7 +546,7 @@ const ReservationDetailsPage: React.FC = () => {
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
         {/* Étapes – visibles uniquement pour réservations en ligne */}
-        {reservation.canal === 'en_ligne' && (
+        {reservation.canal === 'en_ligne' && reservation.statut !== 'refuse' && reservation.statut !== 'annule' && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -624,8 +627,10 @@ const ReservationDetailsPage: React.FC = () => {
                 ? hexToRgba('#10b981', 0.2)
                 : reservation.statut === 'verification'
                 ? hexToRgba('#7c3aed', 0.2)
-                : reservation.statut === 'annule'
+                : reservation.statut === 'refuse'
                 ? hexToRgba('#ef4444', 0.2)
+                : reservation.statut === 'annule'
+                ? hexToRgba('#9ca3af', 0.2)
                 : 'rgba(0,0,0,0.06)'
           }}
         >
@@ -638,25 +643,33 @@ const ReservationDetailsPage: React.FC = () => {
                   ? '#059669'
                   : reservation.statut === 'verification'
                   ? '#6d28d9'
-                  : reservation.statut === 'annule'
+                  : reservation.statut === 'refuse'
                   ? '#dc2626'
+                  : reservation.statut === 'annule'
+                  ? '#6b7280'
                   : primaryColor
             }}
           >
             {reservation.statut === 'confirme' ? <CheckCircle className="h-4 w-4" /> :
-             reservation.statut === 'annule' ? <XCircle className="h-4 w-4" /> :
+             reservation.statut === 'refuse' || reservation.statut === 'annule' ? <XCircle className="h-4 w-4" /> :
              reservation.statut === 'verification' ? <Upload className="h-4 w-4" /> :
              <Loader2 className="h-4 w-4 animate-spin" />}
           </div>
           <div className="flex-1">
             <p className="font-medium text-sm mb-1">
               {reservation.statut === 'confirme' ? 'Paiement confirmé' :
-               reservation.statut === 'annule' ? 'Annulé' :
+               reservation.statut === 'refuse' ? 'Refusée par la compagnie' :
+               reservation.statut === 'annule' ? 'Annulée' :
                reservation.statut === 'verification' ? 'En vérification' :
                'En attente de preuve'}
             </p>
             <p className="text-xs text-gray-600">
               {stepDescriptions[reservation.statut] || stepDescriptions.en_attente}
+              {reservation.reason && reservation.statut === 'refuse' && (
+                <span className="block mt-1 text-red-600 font-medium">
+                  Raison : {reservation.reason}
+                </span>
+              )}
             </p>
 
             {reservation.referenceCode && (
@@ -777,43 +790,70 @@ const ReservationDetailsPage: React.FC = () => {
         style={{ backgroundColor: '#ffffff', borderColor: 'rgba(0,0,0,0.06)' }}
       >
         <div className="max-w-md mx-auto">
-          <button
-            onClick={() => {
-              const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
-              navigate(`/${slugToUse}/receipt/${reservation.id}`, {
-                state: { 
-                  reservation: { ...reservation, agencyNom: agencyName, canal }, 
-                  companyInfo 
+          {reservation.statut !== 'refuse' && reservation.statut !== 'annule' ? (
+            <>
+              <button
+                onClick={() => {
+                  const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
+                  navigate(`/${slugToUse}/receipt/${reservation.id}`, {
+                    state: { 
+                      reservation: { ...reservation, agencyNom: agencyName, canal }, 
+                      companyInfo 
+                    }
+                  });
+                }}
+                className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${
+                  isTicketAvailable ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'
+                }`}
+                style={{
+                  background: isTicketAvailable
+                    ? `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`
+                    : `linear-gradient(135deg, ${hexToRgba(primaryColor,0.5)}, ${hexToRgba(secondaryColor,0.5)})`,
+                  color: safeTextColor(primaryColor)
+                }}
+                disabled={!isTicketAvailable}
+              >
+                <CheckCircle className="h-4 w-4" />
+                {isTicketAvailable 
+                  ? 'Voir mon billet' 
+                  : reservation.statut === 'verification'
+                    ? 'Billet disponible après confirmation'
+                    : 'En attente de confirmation'
                 }
-              });
-            }}
-            className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${
-              isTicketAvailable ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'
-            }`}
-            style={{
-              background: isTicketAvailable
-                ? `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`
-                : `linear-gradient(135deg, ${hexToRgba(primaryColor,0.5)}, ${hexToRgba(secondaryColor,0.5)})`,
-              color: safeTextColor(primaryColor)
-            }}
-            disabled={!isTicketAvailable}
-          >
-            <CheckCircle className="h-4 w-4" />
-            {isTicketAvailable 
-              ? 'Voir mon billet' 
-              : reservation.statut === 'verification'
-                ? 'Billet disponible après confirmation'
-                : 'En attente de confirmation'
-            }
-          </button>
-          
-          {/* 🔴 CORRECTION : Bouton "Nouvelle réservation" */}
-          <button
-            onClick={handleNewReservation}
-            className="w-full mt-3 py-2.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-          >
-            Créer une nouvelle réservation
-          </button>
+              </button>
+              
+              <button
+                onClick={handleNewReservation}
+                className="w-full mt-3 py-2.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+              >
+                Créer une nouvelle réservation
+              </button>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <div className="text-center py-3 text-gray-600">
+                <p className="font-medium mb-1">
+                  {reservation.statut === 'refuse' ? 'Réservation refusée' : 'Réservation annulée'}
+                </p>
+                <p className="text-sm">
+                  {reservation.statut === 'refuse' 
+                    ? 'Pour toute question, contactez la compagnie.' 
+                    : 'Vous pouvez créer une nouvelle réservation.'}
+                </p>
+              </div>
+              
+              <button
+                onClick={handleNewReservation}
+                className="w-full py-3 rounded-lg text-sm font-medium shadow-sm"
+                style={{ 
+                  backgroundColor: primaryColor, 
+                  color: safeTextColor(primaryColor) 
+                }}
+              >
+                Créer une nouvelle réservation
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

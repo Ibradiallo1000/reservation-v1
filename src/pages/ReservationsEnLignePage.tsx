@@ -1,26 +1,20 @@
 // src/pages/ReservationsEnLignePage.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
-  updateDoc,
-  doc,
-  onSnapshot,
-  Timestamp,
-  getDocs,
+  collection, query, where, orderBy, limit, updateDoc, doc,
+  deleteDoc, onSnapshot, Timestamp, getDocs, getDoc, runTransaction
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import { RotateCw, Frown, Search, Bell, BellOff, CheckCircle, XCircle, Clock, AlertCircle, Eye } from 'lucide-react';
+import { RotateCw, Frown, Search, CheckCircle, XCircle, Clock, AlertCircle, Eye } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { LazyLoadImage } from 'react-lazy-load-image-component';
+import 'react-lazy-load-image-component/src/effects/blur.css';
 import { usePageHeader } from '@/contexts/PageHeaderContext';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 
-/* ================= NOUVEAUX TYPES ================= */
+/* ================= NOMENCLATURE UNIFIÉE ================= */
 export type ReservationStatus =
   | 'en_attente'
   | 'verification'
@@ -49,12 +43,33 @@ export interface Reservation {
   paymentMethodLabel?: string;
   companyId?: string;
   companySlug?: string;
-  createdAt?: Timestamp | Date | null;
+  createdAt: Timestamp | Date | string;
   validatedAt?: Timestamp | Date | null;
   refusedAt?: Timestamp | Date | null;
   updatedAt?: Timestamp | Date | null;
+  reason?: string;
   [key: string]: any;
 }
+
+/* ================= NORMALISATION DES STATUTS (CLÉ POUR AFFICHER TOUT) ================= */
+const normalizeStatut = (raw?: string): ReservationStatus => {
+  if (!raw) return 'en_attente';
+
+  const s = raw.toLowerCase().trim();
+
+  if (s.includes('preuve')) return 'verification';
+  if (s.includes('verif')) return 'verification';
+  if (s.includes('pay')) return 'confirme';
+  if (s.includes('confirm')) return 'confirme';
+  if (s.includes('valid')) return 'confirme';
+  if (s.includes('refus')) return 'refuse';
+  if (s.includes('annul')) return 'annule';
+  if (s.includes('cancel')) return 'annule';
+  if (s.includes('attente')) return 'en_attente';
+  if (s === 'pending') return 'en_attente';
+
+  return 'en_attente';
+};
 
 /* ================= Helpers ================= */
 const norm = (s = '') =>
@@ -62,7 +77,44 @@ const norm = (s = '') =>
 
 const ITEMS_PER_PAGE = 12;
 
-/* ================= Status Colors (NOUVELLE NOMENCLATURE) ================= */
+/* ================= Composants inline ================= */
+const Badge: React.FC<{
+  children: React.ReactNode;
+  className?: string;
+}> = ({ children, className = '' }) => (
+  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${className}`}>
+    {children}
+  </span>
+);
+
+const Button: React.FC<{
+  children: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  className?: string;
+  variant?: 'default' | 'outline';
+  size?: 'sm' | 'md';
+}> = ({ children, onClick, disabled = false, className = '', variant = 'default', size = 'md' }) => {
+  const baseClasses = 'px-3 py-1.5 rounded-lg font-medium text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
+  
+  const sizeClasses = size === 'sm' ? 'text-xs px-2.5 py-1' : '';
+  
+  const variantClasses = variant === 'outline' 
+    ? 'border bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed'
+    : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed';
+  
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${baseClasses} ${variantClasses} ${sizeClasses} ${className}`}
+    >
+      {children}
+    </button>
+  );
+};
+
+/* ================= Status Colors ================= */
 const getStatusConfig = (status?: ReservationStatus) => {
   switch (status) {
     case 'en_attente':
@@ -110,43 +162,6 @@ const getStatusConfig = (status?: ReservationStatus) => {
   }
 };
 
-/* ================= Composants inline ================= */
-const Badge: React.FC<{
-  children: React.ReactNode;
-  className?: string;
-}> = ({ children, className = '' }) => (
-  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border ${className}`}>
-    {children}
-  </span>
-);
-
-const Button: React.FC<{
-  children: React.ReactNode;
-  onClick?: () => void;
-  disabled?: boolean;
-  className?: string;
-  variant?: 'default' | 'outline';
-  size?: 'sm' | 'md';
-}> = ({ children, onClick, disabled = false, className = '', variant = 'default', size = 'md' }) => {
-  const baseClasses = 'px-3 py-1.5 rounded-lg font-medium text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
-  
-  const sizeClasses = size === 'sm' ? 'text-xs px-2.5 py-1' : '';
-  
-  const variantClasses = variant === 'outline' 
-    ? 'border bg-white hover:bg-gray-50 text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed'
-    : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed';
-  
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`${baseClasses} ${variantClasses} ${sizeClasses} ${className}`}
-    >
-      {children}
-    </button>
-  );
-};
-
 /* ================= Component ================= */
 const ReservationsEnLignePage: React.FC = () => {
   const { user } = useAuth();
@@ -157,56 +172,18 @@ const ReservationsEnLignePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState<ReservationStatus | ''>('verification');
-
-  /* 🔔 AUDIO */
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const lastSeenCreatedAtRef = useRef<number>(0);
-  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<ReservationStatus | ''>('');
 
   /* ================= Header ================= */
   useEffect(() => {
     setHeader({
       title: 'Réservations en ligne',
       subtitle: 'Validation des preuves de paiement',
-      actions: (
-        <button
-          onClick={() => {
-            if (!audioRef.current) return;
-            audioRef.current
-              .play()
-              .then(() => {
-                audioRef.current?.pause();
-                audioRef.current!.currentTime = 0;
-                setSoundEnabled(true);
-                localStorage.setItem('sound-enabled', 'true');
-              })
-              .catch((err) => {
-                console.warn('Audio bloqué par le navigateur', err);
-              });
-          }}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-            soundEnabled
-              ? 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200'
-              : 'bg-amber-100 text-amber-700 border-amber-300 hover:bg-amber-200'
-          }`}
-        >
-          {soundEnabled ? <Bell size={14} /> : <BellOff size={14} />}
-          {soundEnabled ? '🔔 Activé' : '🔕 Activer le son'}
-        </button>
-      ),
+      actions: null // Pas de cloche visible
     });
 
     return () => resetHeader();
-  }, [setHeader, resetHeader, soundEnabled]);
-
-  // Restaurer l'état du son au chargement
-  useEffect(() => {
-    const saved = localStorage.getItem('sound-enabled');
-    if (saved === 'true') {
-      setSoundEnabled(true);
-    }
-  }, []);
+  }, [setHeader, resetHeader]);
 
   /* ================= Actions Admin ================= */
   const handleValidate = async (reservation: Reservation) => {
@@ -255,6 +232,8 @@ const ReservationsEnLignePage: React.FC = () => {
     
     setProcessingId(reservation.id);
     try {
+      const reason = window.prompt('Raison du refus ?') || 'Raison non spécifiée';
+      
       await updateDoc(
         doc(
           db,
@@ -269,7 +248,7 @@ const ReservationsEnLignePage: React.FC = () => {
           statut: 'refuse',
           refusedAt: Timestamp.now(),
           updatedAt: Timestamp.now(),
-          reason: 'Raison non spécifiée', // À améliorer avec un modal de saisie
+          reason: reason,
         }
       );
       
@@ -280,6 +259,43 @@ const ReservationsEnLignePage: React.FC = () => {
       console.error('Erreur lors du refus:', error);
       toast.error('Erreur', {
         description: 'Impossible de refuser la réservation',
+      });
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleDelete = async (reservation: Reservation) => {
+    if (!user?.companyId || !reservation.agencyId) {
+      toast.error('Erreur', { description: 'Informations manquantes' });
+      return;
+    }
+    
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette réservation ?')) {
+      return;
+    }
+    
+    setProcessingId(reservation.id);
+    try {
+      await deleteDoc(
+        doc(
+          db,
+          'companies',
+          user.companyId,
+          'agences',
+          reservation.agencyId,
+          'reservations',
+          reservation.id
+        )
+      );
+      
+      toast.success('Réservation supprimée', {
+        description: 'La réservation a été supprimée avec succès',
+      });
+    } catch (error) {
+      console.error('Erreur lors de la suppression:', error);
+      toast.error('Erreur', {
+        description: 'Impossible de supprimer la réservation',
       });
     } finally {
       setProcessingId(null);
@@ -309,7 +325,7 @@ const ReservationsEnLignePage: React.FC = () => {
     }
 
     let unsubs: Array<() => void> = [];
-    let firstPacket = true;
+    let isInitialLoad = true;
 
     (async () => {
       try {
@@ -326,20 +342,11 @@ const ReservationsEnLignePage: React.FC = () => {
         const buffer = new Map<string, Reservation>();
 
         agenceIds.forEach((agencyId) => {
-          // Construire la requête selon le filtre
-          const constraints = [];
-          
-          if (filterStatus) {
-            constraints.push(where('statut', '==', filterStatus));
-          } else {
-            // Si pas de filtre, montrer tout sauf les annulés par défaut
-            constraints.push(
-              where('statut', 'in', ['en_attente', 'verification', 'confirme', 'refuse'])
-            );
-          }
-          
-          constraints.push(orderBy('createdAt', 'desc'));
-          constraints.push(limit(ITEMS_PER_PAGE));
+          // 🔴 ON NE FILTRE PAS DU TOUT POUR RECEVOIR TOUT
+          const constraints = [
+            orderBy('createdAt', 'desc'),
+            limit(ITEMS_PER_PAGE * 2) // Un peu plus pour buffer
+          ];
 
           const qRef = query(
             collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
@@ -347,16 +354,18 @@ const ReservationsEnLignePage: React.FC = () => {
           );
 
           const unsub = onSnapshot(qRef, (snap) => {
-            let newest = lastSeenCreatedAtRef.current;
-            let hasChanges = false;
+            let hasNewReservation = false;
 
             snap.docChanges().forEach((chg) => {
-              hasChanges = true;
               const d = chg.doc.data() as any;
+              
+              // 🔴 CORRECTION CRITIQUE: NORMALISATION DES STATUTS
               const row: Reservation = {
                 id: chg.doc.id,
                 ...d,
+                statut: normalizeStatut(d.statut), // 🔥 NORMALISATION ICI
                 agencyId: d.agencyId || agencyId,
+                createdAt: d.createdAt || Timestamp.now(),
               };
 
               const key = `${row.agencyId}_${row.id}`;
@@ -365,47 +374,35 @@ const ReservationsEnLignePage: React.FC = () => {
                 buffer.delete(key);
               } else {
                 buffer.set(key, row);
-                const ts =
-                  d.createdAt instanceof Timestamp
-                    ? d.createdAt.toMillis()
-                    : 0;
-                if (ts > newest) newest = ts;
+                
+                // 🔔 NOTIFICATION AUTOMATIQUE SANS SON
+                if (!isInitialLoad && chg.type === 'added') {
+                  hasNewReservation = true;
+                  toast('🆕 Nouvelle réservation', {
+                    description: `${row.nomClient || 'Client'} a envoyé une réservation`,
+                    duration: 4000,
+                  });
+                }
               }
             });
 
-            /* 🔔 SON pour nouvelles réservations */
-            if (
-              hasChanges &&
-              soundEnabled &&
-              newest > lastSeenCreatedAtRef.current &&
-              Date.now() - newest < 10_000 &&
-              audioRef.current
-            ) {
-              audioRef.current.play().catch((err) => {
-                console.warn('Erreur audio', err);
-              });
-            }
-
-            lastSeenCreatedAtRef.current = newest;
-
             const merged = Array.from(buffer.values())
               .sort((a, b) => {
-                const ta =
-                  a.createdAt instanceof Timestamp
-                    ? a.createdAt.toMillis()
-                    : new Date(a.createdAt || 0).getTime();
-                const tb =
-                  b.createdAt instanceof Timestamp
-                    ? b.createdAt.toMillis()
-                    : new Date(b.createdAt || 0).getTime();
+                const ta = a.createdAt instanceof Timestamp 
+                  ? a.createdAt.toMillis() 
+                  : new Date(a.createdAt).getTime();
+                const tb = b.createdAt instanceof Timestamp 
+                  ? b.createdAt.toMillis() 
+                  : new Date(b.createdAt).getTime();
                 return tb - ta;
               })
               .slice(0, ITEMS_PER_PAGE * agenceIds.length);
 
             setReservations(merged);
-            if (firstPacket) {
+            
+            if (isInitialLoad) {
               setLoading(false);
-              firstPacket = false;
+              isInitialLoad = false;
             }
           }, (error) => {
             console.error('Erreur Firestore:', error);
@@ -429,14 +426,21 @@ const ReservationsEnLignePage: React.FC = () => {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [user?.companyId, filterStatus, soundEnabled]);
+  }, [user?.companyId]);
 
   /* ================= Recherche ================= */
   const filteredReservations = useMemo(() => {
     const term = norm(searchTerm);
-    if (!term) return reservations;
+    let result = reservations;
     
-    return reservations.filter((r) => {
+    // 🔴 FILTRE PAR STATUT APRÈS RÉCEPTION (pas avant)
+    if (filterStatus) {
+      result = result.filter(r => r.statut === filterStatus);
+    }
+    
+    if (!term) return result;
+    
+    return result.filter((r) => {
       const searchable = [
         r.nomClient || '',
         r.telephone || '',
@@ -448,7 +452,7 @@ const ReservationsEnLignePage: React.FC = () => {
       
       return searchable.includes(term.toLowerCase());
     });
-  }, [reservations, searchTerm]);
+  }, [reservations, searchTerm, filterStatus]);
 
   /* ================= Formatage ================= */
   const formatDate = (date?: string | Date | Timestamp | null) => { 
@@ -471,6 +475,28 @@ const ReservationsEnLignePage: React.FC = () => {
     });
   };
 
+  const formatDateTime = (date?: string | Date | Timestamp | null) => {
+    if (!date) return 'N/A';
+    
+    let jsDate: Date;
+    if (date instanceof Timestamp) {
+      jsDate = date.toDate();
+    } else if (typeof date === 'string') {
+      jsDate = new Date(date);
+    } else if (date instanceof Date) {
+      jsDate = date;
+    } else {
+      return 'N/A';
+    }
+    
+    return jsDate.toLocaleString('fr-FR', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const formatAmount = (amount?: number) => {
     if (!amount) return '0 FCFA';
     return `${amount.toLocaleString('fr-FR')} FCFA`;
@@ -478,17 +504,30 @@ const ReservationsEnLignePage: React.FC = () => {
 
   const formatTime = (time?: string) => {
     if (!time) return '';
-    // Si c'est déjà au format HH:MM
     if (time.includes(':')) return time;
     return time;
+  };
+
+  const getProofUrl = (reservation: Reservation) => {
+    return reservation.paymentProofUrl || 
+           (reservation as any).preuveUrl || 
+           (reservation as any).paiementPreuveUrl || 
+           (reservation as any).proofUrl || 
+           (reservation as any).receiptUrl;
+  };
+
+  /* ================= Statistiques ================= */
+  const stats = {
+    enAttente: reservations.filter(r => r.statut === 'en_attente').length,
+    verification: reservations.filter(r => r.statut === 'verification').length,
+    confirme: reservations.filter(r => r.statut === 'confirme').length,
+    refuse: reservations.filter(r => r.statut === 'refuse').length,
+    total: reservations.length
   };
 
   /* ================= Render ================= */
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
-      {/* 🔔 Audio caché */}
-      <audio ref={audioRef} src="/sounds/new.mp3" preload="auto" />
-
       <div className="flex flex-col md:flex-row justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Réservations en ligne</h1>
@@ -527,36 +566,36 @@ const ReservationsEnLignePage: React.FC = () => {
         </div>
       </div>
 
-      {/* Stats */}
+      {/* Stats - TOUJOURS basées sur reservations (pas filteredReservations) */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6">
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-sm text-gray-500 mb-1">En attente</div>
           <div className="text-2xl font-bold text-blue-600">
-            {reservations.filter(r => r.statut === 'en_attente').length}
+            {stats.enAttente}
           </div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-sm text-gray-500 mb-1">À vérifier</div>
           <div className="text-2xl font-bold text-amber-600">
-            {reservations.filter(r => r.statut === 'verification').length}
+            {stats.verification}
           </div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-sm text-gray-500 mb-1">Confirmés</div>
           <div className="text-2xl font-bold text-emerald-600">
-            {reservations.filter(r => r.statut === 'confirme').length}
+            {stats.confirme}
           </div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-sm text-gray-500 mb-1">Refusés</div>
           <div className="text-2xl font-bold text-red-600">
-            {reservations.filter(r => r.statut === 'refuse').length}
+            {stats.refuse}
           </div>
         </div>
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-sm text-gray-500 mb-1">Total</div>
           <div className="text-2xl font-bold text-gray-900">
-            {reservations.length}
+            {stats.total}
           </div>
         </div>
       </div>
@@ -599,6 +638,7 @@ const ReservationsEnLignePage: React.FC = () => {
           const isProcessing = processingId === reservation.id;
           const canValidate = reservation.statut === 'verification';
           const isConfirmed = reservation.statut === 'confirme';
+          const proofUrl = getProofUrl(reservation);
           
           return (
             <div
@@ -654,26 +694,16 @@ const ReservationsEnLignePage: React.FC = () => {
                   </span>
                 </div>
 
-                {reservation.tripType === 'aller-retour' && (
-                  <div className="text-xs text-gray-600 bg-gray-50 px-3 py-2 rounded">
-                    <span className="font-medium">Aller-retour</span>
-                    <div className="flex justify-between mt-1">
-                      <span>Aller: {reservation.seatsGo || 0} place(s)</span>
-                      <span>Retour: {reservation.seatsReturn || 0} place(s)</span>
-                    </div>
-                  </div>
-                )}
-
-                {reservation.preuveUrl && (
+                {proofUrl && (
                   <a
-                    href={reservation.preuveUrl}
+                    href={proofUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
                   >
-                   Voir la preuve de paiement
+                    📸 Voir la preuve de paiement
                   </a>
-               )}
+                )}
 
                 {/* Canal de paiement */}
                 {reservation.canal && (
@@ -685,7 +715,7 @@ const ReservationsEnLignePage: React.FC = () => {
                 {/* Date de création */}
                 {reservation.createdAt && (
                   <div className="text-xs text-gray-400">
-                    Créé le: {formatDate(reservation.createdAt)}
+                    Créé le: {formatDateTime(reservation.createdAt)}
                   </div>
                 )}
               </div>
@@ -741,17 +771,28 @@ const ReservationsEnLignePage: React.FC = () => {
                     </div>
                   )}
 
+                  {/* Bouton Supprimer pour tous les statuts */}
+                  <Button
+                    onClick={() => handleDelete(reservation)}
+                    disabled={isProcessing}
+                    variant="outline"
+                    size="sm"
+                    className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    Supprimer
+                  </Button>
+
                   {/* Message pour réservations confirmées */}
-                  {isConfirmed && (
+                  {isConfirmed && reservation.validatedAt && (
                     <div className="text-xs text-emerald-600 font-medium text-center py-1">
-                      ✅ Validée le {formatDate(reservation.validatedAt)}
+                      ✅ Confirmé le {formatDate(reservation.validatedAt)}
                     </div>
                   )}
 
                   {/* Message pour réservations refusées */}
-                  {reservation.statut === 'refuse' && (
+                  {reservation.statut === 'refuse' && reservation.refusedAt && (
                     <div className="text-xs text-red-600 font-medium text-center py-1">
-                      ❌ Refusée
+                      ❌ Refusé le {formatDate(reservation.refusedAt)}
                     </div>
                   )}
                 </div>
@@ -766,6 +807,7 @@ const ReservationsEnLignePage: React.FC = () => {
         <div className="mt-6 text-center text-sm text-gray-500">
           {filteredReservations.length} réservation(s) affichée(s)
           {searchTerm && ' (filtrées)'}
+          {filterStatus && ` (statut: ${getStatusConfig(filterStatus as ReservationStatus).label})`}
         </div>
       )}
     </div>
