@@ -15,14 +15,26 @@ import { generateWebReferenceCode } from '@/utils/tickets';
 
 /* ============== Anti-spam: mémoire locale ============== */
 const PENDING_KEY = 'pendingReservation';
+
+// 🔥 CORRECTION : Persistance PAR RÉSERVATION
+const getPaymentMethodKey = (reservationId?: string) =>
+  reservationId ? `lastPaymentMethod_${reservationId}` : null;
+
+const getPaymentTriggeredAtKey = (reservationId?: string) =>
+  reservationId ? `paymentTriggeredAt_${reservationId}` : null;
+
+// CORRECTION : Seuls les statuts APRÈS envoi de preuve sont bloquants
 const isBlockingStatus = (s?: string) =>
-  ['en_attente', 'en_attente_paiement', 'paiement_en_cours', 'preuve_recue'].includes(String(s || '').toLowerCase());
+  ['preuve_recue', 'confirme'].includes(String(s || '').toLowerCase());
+
 const rememberPending = (payload: { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; }) => {
   try { localStorage.setItem(PENDING_KEY, JSON.stringify(payload)); } catch {}
 };
+
 const readPending = (): { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; } | null => {
   try { const r = localStorage.getItem(PENDING_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
 };
+
 const clearPendingIfNotBlocking = () => {
   try {
     const raw = localStorage.getItem(PENDING_KEY);
@@ -31,8 +43,42 @@ const clearPendingIfNotBlocking = () => {
     if (!isBlockingStatus(p?.status)) localStorage.removeItem(PENDING_KEY);
   } catch {}
 };
+
 const clearPending = () => {
   try { localStorage.removeItem(PENDING_KEY); } catch {}
+};
+
+// 🔥 NOUVEAU : fonctions pour persister le moyen de paiement PAR RÉSERVATION
+const saveLastPaymentMethod = (reservationId: string, method: string) => {
+  try { localStorage.setItem(`lastPaymentMethod_${reservationId}`, method); } catch {}
+};
+
+const getLastPaymentMethod = (reservationId?: string): string | null => {
+  if (!reservationId) return null;
+  try { return localStorage.getItem(`lastPaymentMethod_${reservationId}`); } catch { return null; }
+};
+
+const clearLastPaymentMethod = (reservationId?: string) => {
+  if (!reservationId) return;
+  try { localStorage.removeItem(`lastPaymentMethod_${reservationId}`); } catch {}
+};
+
+// 🔥 NOUVEAU : fonctions pour persister paymentTriggeredAt PAR RÉSERVATION
+const savePaymentTriggeredAt = (reservationId: string, ts: number) => {
+  try { localStorage.setItem(`paymentTriggeredAt_${reservationId}`, String(ts)); } catch {}
+};
+
+const getPaymentTriggeredAt = (reservationId?: string): number | null => {
+  if (!reservationId) return null;
+  try { 
+    const v = localStorage.getItem(`paymentTriggeredAt_${reservationId}`);
+    return v ? Number(v) : null;
+  } catch { return null; }
+};
+
+const clearPaymentTriggeredAt = (reservationId?: string) => {
+  if (!reservationId) return;
+  try { localStorage.removeItem(`paymentTriggeredAt_${reservationId}`); } catch {}
 };
 /* ======================================================= */
 
@@ -339,29 +385,61 @@ export default function ReservationClientPage() {
       const statut = String(existing.statut || '').toLowerCase();
       return isBlockingStatus(statut);
     }
-    if (reservationId) return true;
-    const p = readPending();
-    return Boolean(p && isBlockingStatus(p.status) && p.slug === slug);
-  }, [reservationId, existing, slug]);
+    // CORRECTION : Un reservationId seul ne suffit pas pour considérer une réservation active
+    return false;
+  }, [existing]);
 
   // ========== Effets ==========
+
+  // 🔥 CORRECTION N°1 : Restaurer le moyen de paiement choisi au rechargement (PAR RÉSERVATION)
+  useEffect(() => {
+    if (!paymentMethodKey && reservationId) {
+      const saved = getLastPaymentMethod(reservationId);
+      if (saved && paymentMethods[saved]) {
+        setPaymentMethodKey(saved);
+      }
+    }
+  }, [paymentMethodKey, reservationId, paymentMethods]);
+
+  // 🔥 CORRECTION : Restaurer paymentTriggeredAt au rechargement
+  useEffect(() => {
+    if (!paymentTriggeredAt && reservationId) {
+      const saved = getPaymentTriggeredAt(reservationId);
+      if (saved) setPaymentTriggeredAt(saved);
+    }
+  }, [paymentTriggeredAt, reservationId]);
+
+  // 🔥 CORRECTION N°2 : Recalculer le currentStep basé sur existing.statut
+  useEffect(() => {
+    if (!existing) return;
+
+    if (existing.statut === 'en_attente_paiement') {
+      setCurrentStep('payment');
+      // Si on a un moyen de paiement enregistré, on passe directement à proof
+      if (paymentMethodKey) {
+        setCurrentStep('proof');
+      }
+    }
+
+    if (existing.statut === 'preuve_recue' || existing.statut === 'confirme') {
+      setCurrentStep('proof');
+    }
+  }, [existing, paymentMethodKey]);
+
   useEffect(() => {
     clearPendingIfNotBlocking();
-    const p = readPending();
-    if (p && isBlockingStatus(p.status) && p.slug === slug && !reservationRouteId) {
-      navigate(`/${slug}/reservation/${p.id}`, { 
-        replace: true, 
-        state: { companyId: p.companyId, agencyId: p.agencyId } 
-      });
-    }
+    // CORRECTION : Pas de redirection automatique basée uniquement sur le pending
+    // L'utilisateur doit compléter le processus de paiement explicitement
   }, [slug, navigate, reservationRouteId]);
 
   // Nettoyer le pending si la réservation est confirmée
   useEffect(() => {
     if (existing?.statut === 'confirme') {
       clearPending();
+      clearLastPaymentMethod(existing.id); // Nettoyer aussi le moyen de paiement sauvegardé
+      clearPaymentTriggeredAt(existing.id); // Nettoyer aussi paymentTriggeredAt
     }
-  }, [existing?.statut]);
+  }, [existing?.statut, existing?.id]);
 
   // Mode consultation
   useEffect(() => {
@@ -597,7 +675,7 @@ export default function ReservationClientPage() {
     load();
   }, [slug, departureQ, arrivalQ, reservationRouteId]);
 
-  // Mise à jour automatique des étapes
+  // Mise à jour automatique des étapes (pour mode création)
   useEffect(() => {
     if (reservationId && currentStep === 'personal') {
       setCurrentStep('payment');
@@ -807,8 +885,18 @@ export default function ReservationClientPage() {
   }, [hasActiveReservation, selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo]);
 
   const onChoosePayment = useCallback((key: string) => {
+    // 🔥 CORRECTION : Persister le moyen de paiement choisi PAR RÉSERVATION
     setPaymentMethodKey(key); 
-    setPaymentTriggeredAt(Date.now());
+    
+    if (reservationId) {
+      saveLastPaymentMethod(reservationId, key); // Sauvegarder dans localStorage
+      
+      // 🔥 CORRECTION : Sauvegarder aussi paymentTriggeredAt
+      const now = Date.now();
+      setPaymentTriggeredAt(now);
+      savePaymentTriggeredAt(reservationId, now);
+    }
+    
     setCurrentStep('proof');
     
     // Scroll automatique vers le champ de preuve
@@ -839,7 +927,9 @@ export default function ReservationClientPage() {
     } else if (ussd) {
       window.location.href = `tel:${encodeURIComponent(ussd)}`;
     }
-  }, [paymentMethods, existing, selectedTrip, seats, topPrice]);
+    // CORRECTION : PAS de navigation automatique ici
+    // L'utilisateur doit compléter explicitement le formulaire
+  }, [paymentMethods, existing, selectedTrip, seats, topPrice, reservationId]);
 
   const paymentHints = useMemo(() => {
     if (!paymentMethodKey) return "Choisissez un moyen de paiement pour voir les instructions.";
@@ -912,7 +1002,7 @@ export default function ReservationClientPage() {
         canal: nextCanal
       } : prev);
 
-      // Suppression du double navigate - un seul appel
+      // Navigation UNIQUEMENT après envoi réussi de la preuve
       navigate(`/${slug}/reservation/${reservationId}`, {
         replace: true,
         state: {
@@ -1115,8 +1205,12 @@ export default function ReservationClientPage() {
   // ---------- Décision d'affichage ----------
   const canal  = String(existing?.canal || '').toLowerCase();
   const statut = String(existing?.statut || '').toLowerCase();
-  const isPaidLike = ['pay', 'confirm', 'valid'].some(k => statut.includes(k));
-  const showTicketDirect = !!existing && (canal === 'guichet' || isPaidLike);
+  // CORRECTION : Seulement "preuve_recue" ou "confirme" affichent la vue Détails
+  const showTicketDirect = !!existing && (
+    existing.statut === 'preuve_recue' || 
+    existing.statut === 'confirme' || 
+    canal === 'guichet'
+  );
 
   // ---------- Vue BILLET (direct) ----------
   const TicketView = existing && (
