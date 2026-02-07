@@ -870,6 +870,13 @@ export default function ReservationClientPage() {
           updatedAt: serverTimestamp(),
         }
       );
+      navigate(`/${slug}/reservation/${reservationId}`, {
+        replace: true,
+        state: {
+          companyId: effectiveCompanyId,
+          agencyId: effectiveAgencyId
+        }
+      });
 
       const p = readPending();
       if (p && p.id === reservationId) {
