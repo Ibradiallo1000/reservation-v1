@@ -2,19 +2,25 @@
 // ===================================================================
 // Guichet : VENTE EN ESPÈCES UNIQUEMENT (canal=guichet)
 // - Paiement forcé à "espèces"
-// - Gestion de poste : none → (Demander l’activation) → pending → active/paused → closed
+// - Gestion de poste : none → (Demander l'activation) → pending → active/paused → closed
 // - Places restantes (live) : statut = 'payé', somme seatsGo, fallback 30, onSnapshot
 // - Onglets locaux : Guichet / Rapport / Historique
 // - AMÉLIORATIONS (ce fichier) :
 //   • En-tête Rapport minimal (titre + date du jour / plage si chevauchement)
-//   • Suppression bouton Imprimer dans le Rapport (on n’imprime que depuis Historique)
+//   • Suppression bouton Imprimer dans le Rapport (on n'imprime que depuis Historique)
 //   • Boutons/puces modernisés avec dégradé thème
 //   • Édition rapide étendue : nom, téléphone, places (aller/retour), montant (+ motif)
 //   • Annulation soignée
-//   • ⚠️ Changement trajet/date/heure : à traiter par “reporté” + revente (sécurisé).
+//   • ⚠️ Changement trajet/date/heure : à traiter par "reporté" + revente (sécurisé).
 //   • Vente accélérée : caches (company/agency/seller) + écriture unique setDoc
 //   • Header responsive (flex-wrap, truncate, réorganisation sur mobile)
 //   • ✅ Détails utilisateur + rôle en haut à droite + bouton Déconnexion (icône)
+//   • ✅ AMÉLIORATIONS SÉCURITÉ/UX :
+//       1. Validation centralisée du bouton "Valider la réservation"
+//       2. Feedback visuel immédiat après vente (toast)
+//       3. Blocage édition/annulation si passager embarqué
+//       4. Traçabilité comptable renforcée pour annulations
+//       5. États visuels améliorés avec icônes
 // ===================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -35,10 +41,41 @@ import ReceiptModal, {
 
 import {
   Building2, MapPin, CalendarDays, Clock4,
-  Ticket, RefreshCw, Pencil, XCircle, Settings, LogOut, User2
+  Ticket, RefreshCw, Pencil, XCircle, Settings, LogOut, User2,
+  CheckCircle, AlertCircle, PauseCircle, Clock
 } from 'lucide-react';
 
 import Button from '@/ui/Button';
+
+// Constantes pour uniformisation
+const RESERVATION_STATUS = {
+  PAYE: 'payé',
+  ANNULE: 'annulé',
+  EN_ATTENTE: 'en_attente',
+  REPORTE: 'reporté',
+  CONFIRME: 'confirme' // Ajouté pour les réservations en ligne
+} as const;
+
+const EMBARKMENT_STATUS = {
+  EN_ATTENTE: 'en_attente',
+  EMBARQUE: 'embarqué',
+  ANNULE: 'annulé',
+  NO_SHOW: 'no_show'
+} as const;
+
+const PAYMENT_METHODS = {
+  ESPECES: 'espèces',
+  MOBILE_MONEY: 'mobile_money',
+  CARTE: 'carte',
+  VIREMENT: 'virement'
+} as const;
+
+const CANALS = {
+  GUICHET: 'guichet',
+  WEB: 'web',
+  MOBILE: 'mobile',
+  AGENCE: 'agence'
+} as const;
 
 type TripType = 'aller_simple' | 'aller_retour';
 
@@ -80,6 +117,8 @@ type TicketRow = {
   guichetierCode?: string;
   canal?: string;
   statutEmbarquement?: string;
+  statut?: string;
+  trajetId?: string;
 };
 
 type ShiftReport = {
@@ -103,6 +142,26 @@ type ShiftReport = {
 const DAYS_IN_ADVANCE = 8;
 const MAX_SEATS_FALLBACK = 30;
 const DEFAULT_COMPANY_SLUG = 'compagnie-par-defaut';
+
+/* ----------------------- Helper pour calcul des places restantes ----------------------- */
+function computeRemainingSeats({
+  totalSeats,
+  trajetId,
+  reservations,
+}: {
+  totalSeats: number;
+  trajetId: string;
+  reservations: TicketRow[];
+}) {
+  const reserved = reservations
+    .filter(r =>
+      r.trajetId === trajetId &&
+      [RESERVATION_STATUS.PAYE, RESERVATION_STATUS.CONFIRME].includes(String(r.statut).toLowerCase() as any)
+    )
+    .reduce((a, r) => a + (r.seatsGo || 0), 0);
+
+  return Math.max(0, totalSeats - reserved);
+}
 
 /* ----------------------- Utils Firestore ----------------------- */
 async function getSellerCodeFromFirestore(uid?: string | null) {
@@ -156,7 +215,7 @@ function seatBadgeStyle(remaining: number | undefined, total: number) {
   return { bg: 'bg-red-100', text: 'text-red-700', label };
 }
 
-/* ----------------------- Modal d’édition (étendue) ----------------------- */
+/* ----------------------- Modal d'édition (étendue) ----------------------- */
 type EditModalProps = {
   open: boolean;
   onClose: () => void;
@@ -352,8 +411,14 @@ const AgenceGuichetPage: React.FC = () => {
     (activeShift?.status as any) ?? 'none';
   const canSell = status === 'active' && !!user?.companyId && !!user?.agencyId;
 
+  // État pour le feedback après vente
+  const [successMessage, setSuccessMessage] = useState<string>('');
+
   // listener des places restantes
   const remainingUnsubRef = useRef<() => void>();
+  
+  // Stocker toutes les réservations pour calcul des places (tous canaux)
+  const [allReservations, setAllReservations] = useState<TicketRow[]>([]);
 
   // États pour édition/annulation
   const [editOpen, setEditOpen] = useState(false);
@@ -438,6 +503,59 @@ const AgenceGuichetPage: React.FC = () => {
     })();
   }, [user?.uid, user?.companyId, user?.agencyId]);
 
+  /* -------------------- Live reservations (TOUTES les réservations) -------------------- */
+  useEffect(() => {
+    if (!user?.companyId || !user?.agencyId) return;
+
+    const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
+    // ❗ IMPORTANT : NE PAS filtrer par canal ici - on a besoin de TOUTES les réservations
+    const q = query(
+      rRef,
+      orderBy('createdAt', 'asc')
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      const rows: TicketRow[] = snap.docs.map(d => {
+        const r = d.data() as any;
+        return {
+          id: d.id,
+          referenceCode: r.referenceCode,
+          date: r.date,
+          heure: r.heure,
+          depart: r.depart,
+          arrivee: r.arrivee,
+          nomClient: r.nomClient,
+          telephone: r.telephone,
+          seatsGo: r.seatsGo || 1,
+          seatsReturn: r.seatsReturn || 0,
+          montant: r.montant || 0,
+          paiement: r.paiement,
+          createdAt: r.createdAt,
+          guichetierCode: r.guichetierCode || '',
+          canal: r.canal,
+          statutEmbarquement: r.statutEmbarquement,
+          statut: r.statut,
+          trajetId: r.trajetId
+        };
+      });
+      setAllReservations(rows);
+      
+      // Mettre à jour les places restantes
+      setTrips(prev => prev.map(trip => {
+        const remaining = computeRemainingSeats({
+          totalSeats: trip.places || MAX_SEATS_FALLBACK,
+          trajetId: trip.id,
+          reservations: rows
+        });
+        return { ...trip, remainingSeats: remaining };
+      }));
+    }, (err) => {
+      console.error('[GUICHET] allReservations listener error', err);
+    });
+
+    return () => unsub();
+  }, [user?.companyId, user?.agencyId]);
+
   /* -------------------- Live remaining seats -------------------- */
   const loadRemainingForDate = useCallback(async (
     dateISO: string,
@@ -449,65 +567,37 @@ const AgenceGuichetPage: React.FC = () => {
     try {
       if (!user?.companyId || !user?.agencyId) return;
 
-      if (remainingUnsubRef.current) {
-        remainingUnsubRef.current();
-        remainingUnsubRef.current = undefined;
-      }
-
-      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
-      const qy = query(
-        rRef,
-        where('date', '==', dateISO),
-        where('depart', '==', dep),
-        where('arrivee', '==', arr)
-      );
-
-      const unsub = onSnapshot(qy, (snap) => {
-        const usedByTrip: Record<string, number> = {};
-
-        snap.forEach((d) => {
-          const r = d.data() as any;
-          const statut = String(r.statut || '').toLowerCase();
-          if (statut !== 'payé') return; // ne compter que "payé"
-          const tripKey = r.trajetId;
-          const seats = Number(r.seatsGo || 0);
-          usedByTrip[tripKey] = (usedByTrip[tripKey] || 0) + seats;
+      // On utilise maintenant allReservations pour calculer les places
+      const src = baseList ?? trips;
+      const next = src.map((t) => {
+        if (t.date !== dateISO) return t;
+        const remaining = computeRemainingSeats({
+          totalSeats: t.places || MAX_SEATS_FALLBACK,
+          trajetId: t.id,
+          reservations: allReservations
         });
-
-        setTrips((prev) => {
-          const src  = baseList ?? prev;
-          const next = src.map((t) => {
-            if (t.date !== dateISO) return t;
-            const total = t.places || MAX_SEATS_FALLBACK;
-            const used  = usedByTrip[t.id] || 0;
-            return { ...t, remainingSeats: Math.max(0, total - used) };
-          });
-
-          const filtered = next
-            .filter((t) => t.date === dateISO && !isPastTime(t.date, t.time))
-            .sort((a, b) => a.time.localeCompare(b.time));
-
-          setFilteredTrips(filtered);
-
-          if (pickFirst && filtered.length > 0) {
-            const firstWithSeats = filtered.find(f => {
-              const rs = f.remainingSeats;
-              return (rs === undefined) ? true : rs > 0;
-            }) || filtered[0];
-            setSelectedTrip(prevSel => prevSel ?? firstWithSeats);
-          }
-
-          return next;
-        });
-      }, (err) => {
-        console.error('[GUICHET] loadRemainingForDate:snapshot:error', err);
+        return { ...t, remainingSeats: remaining };
       });
 
-      remainingUnsubRef.current = unsub;
+      const filtered = next
+        .filter((t) => t.date === dateISO && !isPastTime(t.date, t.time))
+        .sort((a, b) => a.time.localeCompare(b.time));
+
+      setFilteredTrips(filtered);
+
+      if (pickFirst && filtered.length > 0) {
+        const firstWithSeats = filtered.find(f => {
+          const rs = f.remainingSeats;
+          return (rs === undefined) ? true : rs > 0;
+        }) || filtered[0];
+        setSelectedTrip(prevSel => prevSel ?? firstWithSeats);
+      }
+
+      setTrips(next);
     } catch (e) {
       console.error('[GUICHET] loadRemainingForDate:error', e);
     }
-  }, [isPastTime, user?.companyId, user?.agencyId]);
+  }, [isPastTime, user?.companyId, user?.agencyId, allReservations]);
 
   /* -------------------- Recherche trajets -------------------- */
   const searchTrips = useCallback(async (dep: string, arr: string) => {
@@ -538,7 +628,12 @@ const AgenceGuichetPage: React.FC = () => {
               departure: w.departure,
               arrival: w.arrival,
               price: w.price,
-              places: w.places || MAX_SEATS_FALLBACK
+              places: w.places || MAX_SEATS_FALLBACK,
+              remainingSeats: computeRemainingSeats({
+                totalSeats: w.places || MAX_SEATS_FALLBACK,
+                trajetId: `${w.id}_${dateISO}_${h}`,
+                reservations: allReservations
+              })
             });
           });
         });
@@ -560,7 +655,7 @@ const AgenceGuichetPage: React.FC = () => {
     } catch (e) {
       console.error('[GUICHET] searchTrips:error', e);
     }
-  }, [isPastTime, user?.agencyId, user?.companyId, loadRemainingForDate]);
+  }, [isPastTime, user?.agencyId, user?.companyId, loadRemainingForDate, allReservations]);
 
   useEffect(() => {
     if (!arrival) {
@@ -575,12 +670,6 @@ const AgenceGuichetPage: React.FC = () => {
     await loadRemainingForDate(date, departure, arrival, undefined, true);
   }, [arrival, departure, loadRemainingForDate]);
 
-  useEffect(() => {
-    return () => {
-      if (remainingUnsubRef.current) { remainingUnsubRef.current(); remainingUnsubRef.current = undefined; }
-    };
-  }, []);
-
   /* -------------------- Prix total -------------------- */
   const totalPrice = useMemo(() => {
     if (!selectedTrip) return 0;
@@ -590,6 +679,37 @@ const AgenceGuichetPage: React.FC = () => {
   }, [selectedTrip, tripType, placesAller, placesRetour]);
 
   const validPhone = (v: string) => /\d{7,}/.test((v||'').replace(/\D/g,''));
+
+  /* -------------------- Validation centralisée pour vente -------------------- */
+  const canValidateSale = useMemo(() => {
+    if (!canSell) return false;
+    if (!selectedTrip) return false;
+    
+    // Vérifier places disponibles (si défini)
+    if (selectedTrip.remainingSeats !== undefined && selectedTrip.remainingSeats <= 0) return false;
+    
+    // Vérifier places nécessaires vs disponibles
+    const needed = tripType === 'aller_retour' ? (placesAller + placesRetour) : placesAller;
+    if (needed <= 0) return false;
+    
+    // Si remainingSeats est défini, vérifier disponibilité
+    if (selectedTrip.remainingSeats !== undefined && needed > selectedTrip.remainingSeats) return false;
+    
+    // Vérifier informations client
+    if (!nomClient.trim()) return false;
+    if (!validPhone(telephone)) return false;
+    
+    // Vérifier montant
+    if (totalPrice <= 0) return false;
+    
+    // Vérifier traitement en cours
+    if (isProcessing) return false;
+    
+    return true;
+  }, [
+    canSell, selectedTrip, tripType, placesAller, placesRetour,
+    nomClient, telephone, totalPrice, isProcessing
+  ]);
 
   /* -------------------- Réservation (écriture unique + caches) -------------------- */
   const handleReservation = useCallback(async () => {
@@ -627,12 +747,16 @@ const AgenceGuichetPage: React.FC = () => {
         depart: selectedTrip.departure, arrivee: selectedTrip.arrival,
         nomClient, telephone, email: null,
         seatsGo: placesAller, seatsReturn: tripType === 'aller_retour' ? placesRetour : 0,
-        montant: totalPrice, statut: 'payé', statutEmbarquement: 'en_attente',
+        montant: totalPrice, 
+        statut: RESERVATION_STATUS.PAYE, 
+        statutEmbarquement: EMBARKMENT_STATUS.EN_ATTENTE,
         checkInTime: null, reportInfo: null,
         compagnieId: user!.companyId, agencyId: user!.agencyId,
         companySlug: companyMeta.slug, compagnieNom: companyMeta.name,
         agencyNom: agencyMeta.name, agencyTelephone: agencyMeta.phone,
-        canal: 'guichet', paiement: 'espèces', paiementSource: 'encaisse_guichet',
+        canal: CANALS.GUICHET, 
+        paiement: PAYMENT_METHODS.ESPECES, 
+        paiementSource: 'encaisse_guichet',
         guichetierId: user!.uid, guichetierCode: sellerCodeCached || staffCodeForSale,
         shiftId: activeShift?.id || null,
         referenceCode, qrCode: newId, tripType,
@@ -650,7 +774,7 @@ const AgenceGuichetPage: React.FC = () => {
         statut: data.statut, paiement: data.paiement,
         compagnieId: user!.companyId, compagnieNom: companyMeta.name,
         agencyId: user!.agencyId, agencyNom: agencyMeta.name, nomAgence: agencyMeta.name,
-        agenceTelephone: agencyMeta.phone, canal: 'guichet',
+        agenceTelephone: agencyMeta.phone, canal: CANALS.GUICHET,
         createdAt: new Date(), companySlug: companyMeta.slug, referenceCode,
         qrCode: newId, guichetierId: user!.uid, guichetierCode: sellerCodeCached || staffCodeForSale,
         shiftId: activeShift?.id || null, email: undefined,
@@ -664,11 +788,19 @@ const AgenceGuichetPage: React.FC = () => {
       });
       setShowReceipt(true);
 
+      // FEEDBACK VISUEL APRÈS VENTE
+      setSuccessMessage(
+        `✅ Réservation confirmée pour ${nomClient} • ${placesAller + (placesRetour || 0)} place(s) • ${totalPrice.toLocaleString('fr-FR')} FCFA`
+      );
+
+      // Auto-hide après 4 secondes
+      setTimeout(() => setSuccessMessage(''), 4000);
+
       // Reset UI (le live mettra à jour)
       setNomClient(''); setTelephone('');
       setTripType('aller_simple'); setPlacesAller(1); setPlacesRetour(0);
 
-      await loadRemainingForDate(selectedTrip.date, selectedTrip.departure, selectedTrip.arrival);
+      // Pas besoin d'appeler loadRemainingForDate car le listener onSnapshot va mettre à jour automatiquement
     } catch (e) {
       console.error('[GUICHET] reservation:error', e);
       alert('Erreur lors de la réservation.');
@@ -678,43 +810,92 @@ const AgenceGuichetPage: React.FC = () => {
   }, [
     selectedTrip, nomClient, telephone, canSell, validPhone, tripType,
     placesAller, placesRetour, totalPrice, user, activeShift,
-    companyMeta, agencyMeta, sellerCodeCached, staffCodeForSale, theme,
-    loadRemainingForDate
+    companyMeta, agencyMeta, sellerCodeCached, staffCodeForSale, theme
   ]);
 
   /* -------------------- Annulation / Édition -------------------- */
   const cancelReservation = useCallback(async (row: TicketRow) => {
     if (!user?.companyId || !user?.agencyId) return;
-    // garde-fous
-    if (row.canal && row.canal !== 'guichet') { alert("Annulation autorisée ici uniquement pour les ventes guichet."); return; }
-    if (row.statutEmbarquement === 'embarqué') { alert("Impossible d'annuler : passager déjà embarqué."); return; }
+    
+    // garde-fous renforcés
+    if (row.canal && row.canal !== CANALS.GUICHET) { 
+      alert("Annulation autorisée uniquement pour les ventes guichet."); 
+      return; 
+    }
+    
+    if (row.statutEmbarquement === EMBARKMENT_STATUS.EMBARQUE) { 
+      alert("Impossible d'annuler : passager déjà embarqué."); 
+      return; 
+    }
+    
+    if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) {
+      alert("Cette réservation est déjà annulée.");
+      return;
+    }
 
-    const reason = prompt("Motif d'annulation (optionnel) :") || undefined;
-    if (!window.confirm("Confirmer l'annulation de cette réservation ?")) return;
+    const reason = prompt("Motif d'annulation (obligatoire, min. 5 caractères) :") || '';
+    if (!reason.trim() || reason.length < 5) {
+      alert("Veuillez indiquer un motif d'annulation (min. 5 caractères).");
+      return;
+    }
+    
+    if (!window.confirm(`Confirmer l'annulation pour ${row.nomClient} (${row.montant.toLocaleString('fr-FR')} FCFA) ?`)) return;
 
     try {
       setCancelingId(row.id);
       const ref = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations/${row.id}`);
+      
       await updateDoc(ref, {
-        statut: 'annulé',
+        statut: RESERVATION_STATUS.ANNULE,
+        statutEmbarquement: EMBARKMENT_STATUS.ANNULE,
+        // CONSERVER le montant original pour l'audit
+        montantOriginal: row.montant, // <-- NOUVEAU CHAMP
+        montant: 0, // Mettre à 0 pour les totaux
         updatedAt: serverTimestamp(),
-        cancelReason: reason || null,
+        cancelReason: reason.trim(),
         canceledBy: {
           id: user.uid,
           name: user.displayName || user.email || null,
+          code: sellerCodeCached,
+          timestamp: serverTimestamp()
         }
       });
-      // MAJ UI locale — on ne retire pas la ligne pour garder la trace
-      setTickets((prev) => prev.map(t => t.id === row.id ? { ...t, montant: 0 } : t));
+      
+      // Mettre à jour l'UI
+      setTickets((prev) => prev.map(t => 
+        t.id === row.id 
+          ? { 
+              ...t, 
+              montant: 0,
+              statutEmbarquement: EMBARKMENT_STATUS.ANNULE
+            } 
+          : t
+      ));
+      
+      // Feedback
+      alert(`✅ Annulation enregistrée pour ${row.nomClient}`);
+      
     } catch (e) {
       console.error('[GUICHET] cancelReservation:error', e);
-      alert("Échec de l'annulation.");
+      alert("Échec de l'annulation. Veuillez réessayer.");
     } finally {
       setCancelingId(null);
     }
-  }, [user?.companyId, user?.agencyId]);
+  }, [user?.companyId, user?.agencyId, sellerCodeCached]);
 
   const openEdit = useCallback((row: TicketRow) => {
+    // VÉRIFICATION SÉCURITÉ : bloquer si passager embarqué
+    if (row.statutEmbarquement === EMBARKMENT_STATUS.EMBARQUE) {
+      alert("🚫 Modification impossible : le passager est déjà embarqué.");
+      return;
+    }
+    
+    // Également vérifier si déjà annulé
+    if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) {
+      alert("Cette réservation est déjà annulée.");
+      return;
+    }
+    
     setEditTarget({
       id: row.id,
       nomClient: row.nomClient,
@@ -774,10 +955,11 @@ const AgenceGuichetPage: React.FC = () => {
       setLoadingReport(true);
 
       const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
+      // Ici on filtre par canal guichet uniquement pour afficher les ventes du guichet
       const snap = await getDocs(query(
         rRef,
         where('shiftId', '==', activeShift.id),
-        where('canal', '==', 'guichet'),
+        where('canal', '==', CANALS.GUICHET),
         orderBy('createdAt', 'asc')
       ));
       const rows: TicketRow[] = snap.docs.map(d => {
@@ -801,13 +983,15 @@ const AgenceGuichetPage: React.FC = () => {
   const totals = useMemo(() => {
     const agg = { billets: 0, montant: 0 };
     for (const t of tickets) {
+      // Ne pas compter les réservations annulées
+      if (t.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || t.montant === 0) continue;
       const nb = (t.seatsGo || 0) + (t.seatsReturn || 0);
       agg.billets += nb; agg.montant += t.montant || 0;
     }
     return agg;
   }, [tickets]);
 
-  // Période d’affichage du bloc Rapport (si chevauchement de jours)
+  // Période d'affichage du bloc Rapport (si chevauchement de jours)
   const reportDateLabel = useMemo(() => {
     const start = activeShift?.startAt?.toDate?.() || activeShift?.startTime?.toDate?.();
     const end = activeShift?.endAt?.toDate?.() || new Date();
@@ -924,6 +1108,20 @@ const AgenceGuichetPage: React.FC = () => {
           .no-print { display: none !important; }
         }
         @page { size: auto; margin: 10mm; }
+        @keyframes pulse-once {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.8; }
+        }
+        .animate-pulse-once {
+          animation: pulse-once 2s ease-in-out;
+        }
+        .animate-pulse {
+          animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: .5; }
+        }
       `}</style>
 
       {/* EN-TÊTE GLOBAL — responsive */}
@@ -987,8 +1185,9 @@ const AgenceGuichetPage: React.FC = () => {
 
             {/* État + actions + Détails utilisateur (à droite) */}
             <div className="ml-auto flex items-center gap-3 flex-wrap">
+              {/* ÉTAT AMÉLIORÉ AVEC ICÔNES */}
               <div
-                className="px-3 py-1 rounded-lg text-xs font-medium transition-colors"
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-2"
                 style={{
                   backgroundColor:
                     status==='active' ? '#DCFCE7'
@@ -1001,12 +1200,36 @@ const AgenceGuichetPage: React.FC = () => {
                     : status==='pending' ? '#1D4ED8'
                     : '#374151',
                 }}
-                title={status==='pending' ? 'En attente d’activation par la comptabilité' : undefined}
+                title={status === 'pending' ? "En attente d'activation par la comptabilité" : undefined}
               >
-                {status==='active' ? 'En service'
-                 : status==='paused' ? 'En pause'
-                 : status==='pending' ? 'En attente d’activation'
-                 : 'Hors service'}
+                {/* Ajouter des icônes */}
+                {status==='active' && (
+                  <>
+                    <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></div>
+                    <span>En service</span>
+                  </>
+                )}
+                {status==='paused' && (
+                  <>
+                    <div className="h-2 w-2 rounded-full bg-amber-500"></div>
+                    <span>En pause</span>
+                  </>
+                )}
+                {status==='pending' && (
+                  <>
+                    <svg className="h-3 w-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                    </svg>
+                    <span>En attente d'activation</span>
+                  </>
+                )}
+                {status==='none' && (
+                  <>
+                    <div className="h-2 w-2 rounded-full bg-gray-500"></div>
+                    <span>Hors service</span>
+                  </>
+                )}
               </div>
 
               {status==='active' && (
@@ -1050,7 +1273,7 @@ const AgenceGuichetPage: React.FC = () => {
                 <button className="px-3 py-2 rounded-lg text-white text-sm shadow-sm hover:shadow transition"
                         style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
                         onClick={() => startShift().catch((e:any)=>alert(e?.message||'Erreur'))}>
-                  Demander l’activation
+                  Demander l'activation
                 </button>
               )}
 
@@ -1103,16 +1326,16 @@ const AgenceGuichetPage: React.FC = () => {
             <div className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
-                  <div className="text-sm text-gray-500">Billets</div>
+                  <div className="text-sm text-gray-500">Billets vendus</div>
                   <div className="text-2xl font-bold">{totals.billets}</div>
                 </div>
                 <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
-                  <div className="text-sm text-gray-500">Montant</div>
+                  <div className="text-sm text-gray-500">Montant encaissé</div>
                   <div className="text-2xl font-bold">{totals.montant.toLocaleString('fr-FR')} FCFA</div>
                 </div>
                 <div className="rounded-xl border p-4 bg-white shadow-sm hover:shadow transition">
                   <div className="text-sm text-gray-500">Réservations</div>
-                  <div className="text-2xl font-bold">{tickets.length}</div>
+                  <div className="text-2xl font-bold">{tickets.filter(t => t.montant > 0).length}</div>
                 </div>
               </div>
 
@@ -1135,44 +1358,74 @@ const AgenceGuichetPage: React.FC = () => {
                           <th className="px-3 py-2 text-left">Tél.</th>
                           <th className="px-3 py-2 text-right">Billets</th>
                           <th className="px-3 py-2 text-right">Montant</th>
+                          <th className="px-3 py-2 text-right">Statut</th>
                           <th className="px-3 py-2 text-right">Réf.</th>
                           <th className="px-3 py-2 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {tickets.map(t => (
-                          <tr key={t.id} className="border-t">
-                            <td className="px-3 py-2">{t.date}</td>
-                            <td className="px-3 py-2">{t.heure}</td>
-                            <td className="px-3 py-2">{t.depart} → {t.arrivee}</td>
-                            <td className="px-3 py-2">{t.nomClient}</td>
-                            <td className="px-3 py-2">{t.telephone || ''}</td>
-                            <td className="px-3 py-2 text-right">{(t.seatsGo||0)+(t.seatsReturn||0)}</td>
-                            <td className="px-3 py-2 text-right">{t.montant.toLocaleString('fr-FR')} FCFA</td>
-                            <td className="px-3 py-2 text-right text-xs text-gray-500">{t.referenceCode || t.id}</td>
-                            <td className="px-3 py-2">
-                              <div className="flex items-center justify-end gap-2">
-                                <button
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-white"
-                                  style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
-                                  title="Modifier (nom, tél., places, montant)"
-                                  onClick={() => openEdit(t)}
-                                >
-                                  <Pencil className="h-3.5 w-3.5" /> Modifier
-                                </button>
-                                <button
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md border text-xs hover:bg-red-50"
-                                  style={{ borderColor:'#FCA5A5', color:'#B91C1C' }}
-                                  title="Annuler la réservation"
-                                  onClick={() => cancelReservation(t)}
-                                  disabled={cancelingId === t.id}
-                                >
-                                  <XCircle className="h-3.5 w-3.5" /> {cancelingId === t.id ? 'Annulation…' : 'Annuler'}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                        {tickets.map(t => {
+                          const isCanceled = t.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || t.montant === 0;
+                          const isBoarded = t.statutEmbarquement === EMBARKMENT_STATUS.EMBARQUE;
+                          return (
+                            <tr key={t.id} className={`border-t ${isCanceled ? 'bg-red-50' : isBoarded ? 'bg-green-50' : ''}`}>
+                              <td className="px-3 py-2">{t.date}</td>
+                              <td className="px-3 py-2">{t.heure}</td>
+                              <td className="px-3 py-2">{t.depart} → {t.arrivee}</td>
+                              <td className="px-3 py-2">{t.nomClient}</td>
+                              <td className="px-3 py-2">{t.telephone || ''}</td>
+                              <td className="px-3 py-2 text-right">{(t.seatsGo||0)+(t.seatsReturn||0)}</td>
+                              <td className="px-3 py-2 text-right">
+                                {isCanceled ? (
+                                  <span className="text-gray-400 line-through">{t.montant.toLocaleString('fr-FR')}</span>
+                                ) : (
+                                  t.montant.toLocaleString('fr-FR')
+                                )} FCFA
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <span className={`px-2 py-1 rounded text-xs ${
+                                  isCanceled ? 'bg-red-100 text-red-700' :
+                                  isBoarded ? 'bg-green-100 text-green-700' :
+                                  'bg-blue-100 text-blue-700'
+                                }`}>
+                                  {isCanceled ? 'Annulé' : isBoarded ? 'Embarqué' : 'Actif'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-right text-xs text-gray-500">{t.referenceCode || t.id}</td>
+                              <td className="px-3 py-2">
+                                <div className="flex items-center justify-end gap-2">
+                                  {!isCanceled && !isBoarded && (
+                                    <button
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-white"
+                                      style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                                      title="Modifier (nom, tél., places, montant)"
+                                      onClick={() => openEdit(t)}
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" /> Modifier
+                                    </button>
+                                  )}
+                                  {!isCanceled && !isBoarded && (
+                                    <button
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md border text-xs hover:bg-red-50"
+                                      style={{ borderColor:'#FCA5A5', color:'#B91C1C' }}
+                                      title="Annuler la réservation"
+                                      onClick={() => cancelReservation(t)}
+                                      disabled={cancelingId === t.id}
+                                    >
+                                      <XCircle className="h-3.5 w-3.5" /> {cancelingId === t.id ? 'Annulation…' : 'Annuler'}
+                                    </button>
+                                  )}
+                                  {isBoarded && (
+                                    <span className="text-xs text-gray-500">Embarqué</span>
+                                  )}
+                                  {isCanceled && (
+                                    <span className="text-xs text-gray-500">Annulé</span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1335,14 +1588,24 @@ const AgenceGuichetPage: React.FC = () => {
                 </p>
               </div>
 
+              {/* FEEDBACK APRÈS VENTE */}
+              {successMessage && (
+                <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 animate-pulse-once text-sm">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4" />
+                    <span>{successMessage}</span>
+                  </div>
+                </div>
+              )}
+
               {status==='pending' && (
                 <div className="mb-4 p-3 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-800 text-sm">
-                  Demande envoyée. En attente d’activation par la comptabilité. Cliquez sur <b>Actualiser</b> dans l’entête pour vérifier.
+                  Demande envoyée. En attente d'activation par la comptabilité. Cliquez sur <b>Actualiser</b> dans l'entête pour vérifier.
                 </div>
               )}
               {status==='none' && (
                 <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
-                  Cliquez sur <b>Demander l’activation</b> (en haut) pour créer votre poste.
+                  Cliquez sur <b>Demander l'activation</b> (en haut) pour créer votre poste.
                 </div>
               )}
 
@@ -1446,8 +1709,8 @@ const AgenceGuichetPage: React.FC = () => {
             {!canSell && (
               <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
                 {status==='pending'
-                  ? "Votre poste est en attente d’activation par la comptabilité."
-                  : "Demandez l’activation de votre poste, puis démarrez la vente (espèces uniquement)."}
+                  ? "Votre poste est en attente d'activation par la comptabilité."
+                  : "Demandez l'activation de votre poste, puis démarrez la vente (espèces uniquement)."}
               </div>
             )}
 
@@ -1466,6 +1729,9 @@ const AgenceGuichetPage: React.FC = () => {
                 </div>
                 <div className="mt-2 text-sm">
                   Prix unitaire : <span className="font-semibold">{selectedTrip.price.toLocaleString('fr-FR')} FCFA</span>
+                </div>
+                <div className="mt-2 text-xs text-gray-500">
+                  Places disponibles : <span className="font-medium">{selectedTrip.remainingSeats ?? 'Calcul...'}</span>
                 </div>
               </div>
             ) : (
@@ -1500,8 +1766,18 @@ const AgenceGuichetPage: React.FC = () => {
 
             {/* Infos client */}
             <div className="space-y-3">
-              <input className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-200" placeholder="Nom complet du passager" value={nomClient} onChange={e => setNomClient(e.target.value)} />
-              <input className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-200" placeholder="Téléphone" value={telephone} onChange={e => setTelephone(e.target.value)} />
+              <input 
+                className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-200" 
+                placeholder="Nom complet du passager" 
+                value={nomClient} 
+                onChange={e => setNomClient(e.target.value)} 
+              />
+              <input 
+                className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-200" 
+                placeholder="Téléphone" 
+                value={telephone} 
+                onChange={e => setTelephone(e.target.value)} 
+              />
             </div>
 
             {/* Places */}
@@ -1533,6 +1809,20 @@ const AgenceGuichetPage: React.FC = () => {
                 {totalPrice.toLocaleString('fr-FR')} FCFA
               </div>
             </div>
+
+            {/* Validation info */}
+            {!canValidateSale && selectedTrip && (
+              <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm">
+                {!nomClient.trim() ? "Entrez le nom du passager" :
+                 !telephone ? "Entrez un numéro de téléphone" :
+                 !validPhone(telephone) ? "Téléphone invalide" :
+                 totalPrice <= 0 ? "Montant invalide" :
+                 selectedTrip.remainingSeats === undefined ? "Vérification des places..." :
+                 selectedTrip.remainingSeats <= 0 ? "Plus de places disponibles" :
+                 placesAller > (selectedTrip.remainingSeats || 0) ? "Pas assez de places disponibles" :
+                 "Remplissez tous les champs obligatoires"}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1572,10 +1862,14 @@ const AgenceGuichetPage: React.FC = () => {
                   </div>
                   <button
                     className="px-5 py-3 rounded-xl text-white font-bold disabled:opacity-50 shadow-sm hover:shadow transition"
-                    disabled={!canSell || !selectedTrip || !nomClient || !telephone || !validPhone(telephone) || totalPrice<=0 || isProcessing}
-                    style={{ background:`linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }}
+                    disabled={!canValidateSale}
+                    style={{ 
+                      background: !canValidateSale 
+                        ? '#9CA3AF' 
+                        : `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` 
+                    }}
                     onClick={handleReservation}
-                    title="Valider la réservation"
+                    title={!canValidateSale ? "Vérifiez les informations (trajet, places, client)" : "Valider la réservation"}
                   >
                     {isProcessing ? 'Traitement…' : 'Valider la réservation'}
                   </button>
@@ -1586,7 +1880,7 @@ const AgenceGuichetPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Modale d’édition */}
+      {/* Modale d'édition */}
       <EditReservationModal
         open={editOpen}
         onClose={() => { setEditOpen(false); setEditTarget(null); }}
@@ -1599,8 +1893,8 @@ const AgenceGuichetPage: React.FC = () => {
         <ReceiptModal
           open={showReceipt}
           onClose={() => setShowReceipt(false)}
-          reservation={receiptData}
-          company={receiptCompany}
+          reservation={receiptData as ReceiptReservation}
+          company={receiptCompany as ReceiptCompany}
         />
       )}
     </div>
