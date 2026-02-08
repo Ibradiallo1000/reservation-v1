@@ -1,13 +1,14 @@
 // src/pages/AgenceComptabilitePage.tsx
-// Comptabilité d'agence (contrôle des postes, réceptions, rapports, caisse)
+// Comptabilité d'agence (contrôle des postes, réceptions, rapports, caisse, réconciliation)
 // ============================================================================
 // RESPONSABLE : Comptable d'agence
-// OBJECTIF : Contrôle financier des opérations de vente en guichet
+// OBJECTIF : Contrôle financier des opérations de vente en guichet ET en ligne
 // FONCTIONNALITÉS :
 // 1. Contrôle des postes de vente (activation/pause/clôture)
 // 2. Réception et validation des remises de caisse
-// 3. Consultation des rapports détaillés
+// 3. Consultation des rapports détaillés (guichet + ligne)
 // 4. Gestion de la caisse d'agence (entrées/sorties/soldes)
+// 5. Réconciliation des ventes vs encaissements
 // ============================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,7 +22,8 @@ import useCompanyTheme from '@/hooks/useCompanyTheme';
 import {
   Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4,
   Download, FileText, HandIcon, LogOut, MapPin, Pause, Play, Plus, StopCircle,
-  Ticket, Wallet, Info as InfoIcon, Shield, Receipt, BarChart3
+  Ticket, Wallet, Info as InfoIcon, Shield, Receipt, BarChart3,
+  RefreshCw, TrendingUp, CreditCard, Smartphone
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -74,6 +76,7 @@ type TicketRow = {
   createdAt?: any;
   guichetierCode?: string;
   canal?: string;
+  encaissement?: 'agence' | 'compagnie'; // NOUVEAU : source d'encaissement
 };
 
 type AccountantProfile = {
@@ -85,13 +88,14 @@ type AccountantProfile = {
   code?: string;
 };
 
-// Agrégats compta pour les réceptions
+// Agrégats compta pour les réceptions (étendu)
 type ShiftAgg = {
   reservations: number;
   tickets: number;
   amount: number;
   cashExpected: number;
   mmExpected: number;
+  onlineAmount?: number; // NOUVEAU : montant en ligne
 };
 
 /* ============================================================================
@@ -108,6 +112,31 @@ type NewOutForm = {
   libelle: string;
   banque?: string;
   note?: string;
+};
+
+/* ============================================================================
+   SECTION : TYPES RÉCONCILIATION
+   Description : Structures pour la réconciliation des ventes vs encaissements
+   ============================================================================ */
+
+type ReconciliationData = {
+  // Ventes
+  ventesGuichet: {
+    reservations: number;
+    tickets: number;
+    montant: number;
+  };
+  ventesEnLigne: {
+    reservations: number;
+    tickets: number;
+    montant: number;
+  };
+  // Encaissements
+  encaissementsEspeces: number;
+  encaissementsMobileMoney: number;
+  encaissementsTotal: number;
+  // Écart
+  ecart: number;
 };
 
 /* ============================================================================
@@ -130,7 +159,7 @@ const fmtD  = (dISO?: string) => {
 
 /* ============================================================================
    SECTION : COMPOSANT PRINCIPAL
-   Description : Page principale de comptabilité d'agence
+   Description : Page principale de comptabilité d'agence avec réconciliation
    ============================================================================ */
 
 const AgenceComptabilitePage: React.FC = () => {
@@ -154,7 +183,7 @@ const AgenceComptabilitePage: React.FC = () => {
      Description : Gestion des onglets et profil comptable
      ============================================================================ */
   
-  const [tab, setTab] = useState<'controle' | 'receptions' | 'rapports' | 'caisse'>('controle');
+  const [tab, setTab] = useState<'controle' | 'receptions' | 'rapports' | 'caisse' | 'reconciliation'>('controle');
   const [accountant, setAccountant] = useState<AccountantProfile | null>(null);
   const [accountantCode, setAccountantCode] = useState<string>('ACCOUNT');
 
@@ -179,6 +208,7 @@ const AgenceComptabilitePage: React.FC = () => {
   const [loadingReport, setLoadingReport] = useState(false);
   const [selectedShiftForReport, setSelectedShiftForReport] = useState<string>('');
   const [dedupCollapsed, setDedupCollapsed] = useState<number>(0);
+  const [reportFilter, setReportFilter] = useState<'all' | 'guichet' | 'en_ligne'>('all');
 
   /* ============================================================================
      SECTION : ÉTATS REACT - RÉCEPTIONS
@@ -198,7 +228,7 @@ const AgenceComptabilitePage: React.FC = () => {
   const liveUnsubsRef = useRef<Record<string, () => void>>({});
 
   /* ============================================================================
-     SECTION : ÉTATS REACT - AGRÉGATS COMPTABLES
+     SECTION : ÉTATS REACT - AGRÉGATS COMPTABLES (ÉTENDU)
      Description : Calculs agrégés pour la validation des réceptions
      ============================================================================ */
   
@@ -220,6 +250,18 @@ const AgenceComptabilitePage: React.FC = () => {
   const [totIn, setTotIn] = useState(0);
   const [totOut, setTotOut] = useState(0);
   const [loadingCash, setLoadingCash] = useState(false);
+
+  /* ============================================================================
+     SECTION : ÉTATS REACT - RÉCONCILIATION
+     Description : Données pour la réconciliation des ventes vs encaissements
+     ============================================================================ */
+  
+  const [reconciliationData, setReconciliationData] = useState<ReconciliationData | null>(null);
+  const [loadingReconciliation, setLoadingReconciliation] = useState(false);
+  const [reconciliationDate, setReconciliationDate] = useState<string>(() => {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  });
 
   /* ============================================================================
      SECTION : ÉTATS REACT - MODALES
@@ -378,7 +420,7 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [user?.companyId, user?.agencyId]);
 
   /* ============================================================================
-     SECTION : STATISTIQUES EN TEMPS RÉEL
+     SECTION : STATISTIQUES EN TEMPS RÉEL (ÉTENDU POUR TOUS LES CANAUX)
      Description : Calcul des stats live pour les postes actifs/en pause
      ============================================================================ */
   
@@ -403,7 +445,8 @@ const AgenceComptabilitePage: React.FC = () => {
       if (liveUnsubsRef.current[s.id]) continue;
       
       console.log(`[AgenceCompta] Démarrage de l'écoute pour le poste ${s.id}`);
-      const qLive = query(rRef, where('shiftId', '==', s.id), where('canal', '==', 'guichet'));
+      // Écoute TOUTES les réservations du poste (guichet + ligne)
+      const qLive = query(rRef, where('shiftId', '==', s.id));
       const unsub = onSnapshot(qLive, (snap) => {
         let reservations = 0, tickets = 0, amount = 0;
         snap.forEach(d => {
@@ -425,7 +468,7 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [activeShifts, pausedShifts, user?.companyId, user?.agencyId]);
 
   /* ============================================================================
-     SECTION : AGRÉGATS POUR RÉCEPTIONS
+     SECTION : AGRÉGATS POUR RÉCEPTIONS (ÉTENDU POUR INCLURE EN LIGNE)
      Description : Calcul des montants attendus pour validation comptable
      ============================================================================ */
   
@@ -441,16 +484,37 @@ const AgenceComptabilitePage: React.FC = () => {
       
       for (const s of closedShifts) {
         const snap = await getDocs(query(rRef, where('shiftId', '==', s.id)));
-        let reservations = 0, tickets = 0, amount = 0, cashExpected = 0;
+        let reservations = 0, tickets = 0, amount = 0, cashExpected = 0, mmExpected = 0, onlineAmount = 0;
+        
         snap.forEach(d => {
           const r = d.data() as any;
           reservations += 1;
           tickets += (r.seatsGo || 0) + (r.seatsReturn || 0);
           amount += (r.montant || 0);
+          
           const pay = String(r.paiement || '').toLowerCase();
-          if (pay.includes('esp')) { cashExpected += (r.montant || 0); }
+          const canal = String(r.canal || '').toLowerCase();
+          
+          if (canal === 'guichet' || canal === '') {
+            if (pay.includes('esp')) { 
+              cashExpected += (r.montant || 0); 
+            }
+            if (pay.includes('mobile') || pay.includes('mm')) { 
+              mmExpected += (r.montant || 0); 
+            }
+          } else if (canal === 'en_ligne') {
+            onlineAmount += (r.montant || 0);
+          }
         });
-        map[s.id] = { reservations, tickets, amount, cashExpected, mmExpected: 0 };
+        
+        map[s.id] = { 
+          reservations, 
+          tickets, 
+          amount, 
+          cashExpected, 
+          mmExpected,
+          onlineAmount 
+        };
       }
       
       setAggByShift(map);
@@ -562,7 +626,7 @@ const AgenceComptabilitePage: React.FC = () => {
 
       if (!opts?.forcedByAccountant) return;
 
-      // Rattachement des transactions orphelines
+      // Rattachement des transactions orphelines (guichet uniquement)
       const startRaw = sDoc.startTime?.toDate?.() ?? sDoc.openedAt?.toDate?.() ?? new Date();
       const endRaw   = end.toDate();
       const start = new Date(startRaw.getTime() - 5 * 60 * 1000);
@@ -680,6 +744,7 @@ const AgenceComptabilitePage: React.FC = () => {
           cashReceived: cashRcv,
           mmExpected: computedMmExpected || 0, 
           mmReceived: mmRcv,
+          onlineAmount: agg?.onlineAmount || 0, // NOUVEAU : montant en ligne
           accountantId: accountant.id,
           accountantName: accountant.displayName || accountant.email || '',
           accountantCode,
@@ -719,6 +784,7 @@ const AgenceComptabilitePage: React.FC = () => {
           cashReceived: cashRcv,
           mmExpected: computedMmExpected || 0,
           mmReceived: mmRcv,
+          onlineAmount: agg?.onlineAmount || 0, // NOUVEAU
           accountantStamp: {
             by: { id: accountant.id, code: accountantCode, name: accountant.displayName || accountant.email || '' },
             at: now,
@@ -744,7 +810,7 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [user?.companyId, user?.agencyId, accountant, accountantCode, receptionInputs, aggByShift, navigate, savingShiftIds]);
 
   /* ============================================================================
-     SECTION : RAPPORTS DÉTAILLÉS
+     SECTION : RAPPORTS DÉTAILLÉS (ÉTENDU POUR TOUS LES CANAUX)
      Description : Génération des rapports de vente avec déduplication
      ============================================================================ */
   
@@ -776,11 +842,10 @@ const AgenceComptabilitePage: React.FC = () => {
       const start = startRaw ? new Date(startRaw.getTime() - 5 * 60 * 1000) : null;
       const end   = endRaw   ? new Date(endRaw.getTime()   + 6 * 60 * 60 * 1000) : null;
 
-      // Réservations attachées au shift
+      // Réservations attachées au shift (TOUS les canaux)
       const snap1 = await getDocs(query(
         rRef,
         where('shiftId','==', shiftId),
-        where('canal', '==', 'guichet'),
         orderBy('createdAt','asc')
       ));
 
@@ -796,32 +861,55 @@ const AgenceComptabilitePage: React.FC = () => {
           const r = d.data() as any;
           const dt = r.createdAt?.toDate?.() ?? new Date(0);
           const inRange = dt >= start && dt <= end;
+          
+          // Pour guichet : vérifier le vendeur
           const canal = String(r.canal || '').toLowerCase();
-          const isCounter = canal === 'guichet' ||
-                            (canal === '' && String(r.paiement||'').toLowerCase().includes('esp'));
-          const sameSeller =
-            (!!userId   && r.guichetierId   === userId) ||
-            (!!userCode && r.guichetierCode === userCode);
-          const noShiftId = !r.shiftId || r.shiftId === '';
-          return inRange && isCounter && sameSeller && noShiftId;
+          if (canal === 'guichet' || canal === '') {
+            const sameSeller =
+              (!!userId   && r.guichetierId   === userId) ||
+              (!!userCode && r.guichetierCode === userCode);
+            const noShiftId = !r.shiftId || r.shiftId === '';
+            return inRange && sameSeller && noShiftId;
+          }
+          
+          // Pour en ligne : vérifier l'agence
+          if (canal === 'en_ligne') {
+            const sameAgency = r.agencyId === user.agencyId;
+            const noShiftId = !r.shiftId || r.shiftId === '';
+            return inRange && sameAgency && noShiftId;
+          }
+          
+          return false;
         });
       }
 
       const mk = (d:any) => {
         const r = d.data() as any;
+        const canal = String(r.canal || '').toLowerCase();
+        const encaissement = canal === 'guichet' || canal === '' ? 'agence' : 'compagnie';
+        
         return {
-          id: d.id, referenceCode: r.referenceCode, date: r.date, heure: r.heure,
-          depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone,
-          seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0,
-          paiement: r.paiement, createdAt: r.createdAt, guichetierCode: r.guichetierCode || '', canal: r.canal,
+          id: d.id, 
+          referenceCode: r.referenceCode, 
+          date: r.date, 
+          heure: r.heure,
+          depart: r.depart, 
+          arrivee: r.arrivee, 
+          nomClient: r.nomClient, 
+          telephone: r.telephone,
+          seatsGo: r.seatsGo || 1, 
+          seatsReturn: r.seatsReturn || 0, 
+          montant: r.montant || 0,
+          paiement: r.paiement, 
+          createdAt: r.createdAt, 
+          guichetierCode: r.guichetierCode || '', 
+          canal: r.canal,
+          encaissement, // NOUVEAU : source d'encaissement
         } as TicketRow;
       };
 
       const rawDocs = [...snap1.docs, ...extraDocs];
-      const raw = rawDocs.map(mk).filter(r =>
-        String(r.canal||'').toLowerCase() === 'guichet' ||
-        (String(r.canal||'') === '' && String(r.paiement||'').toLowerCase().includes('esp'))
-      );
+      const raw = rawDocs.map(mk);
 
       // Déduplication basée sur les références uniques
       const norm = (v?: string) => String(v || '').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
@@ -855,16 +943,30 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [user?.companyId, user?.agencyId]);
 
   /* ============================================================================
-     SECTION : CALCULS DES TOTAUX
+     SECTION : CALCULS DES TOTAUX (ÉTENDU POUR FILTRES)
      Description : Agrégation des montants pour les rapports et statistiques
      ============================================================================ */
   
   const totals = useMemo(() => {
-    const agg = { billets: 0, montant: 0 };
+    const agg = { 
+      billets: 0, 
+      montant: 0,
+      guichet: { billets: 0, montant: 0 },
+      en_ligne: { billets: 0, montant: 0 }
+    };
+    
     for (const t of tickets) {
       const nb = (t.seatsGo || 0) + (t.seatsReturn || 0);
       agg.billets += nb; 
       agg.montant += t.montant || 0;
+      
+      if (t.canal === 'guichet' || t.canal === '') {
+        agg.guichet.billets += nb;
+        agg.guichet.montant += t.montant || 0;
+      } else if (t.canal === 'en_ligne') {
+        agg.en_ligne.billets += nb;
+        agg.en_ligne.montant += t.montant || 0;
+      }
     }
     return agg;
   }, [tickets]);
@@ -984,6 +1086,100 @@ const AgenceComptabilitePage: React.FC = () => {
     console.log('[AgenceCompta] Déclenchement du chargement de la caisse');
     void reloadCash(); 
   }, [reloadCash]);
+
+  /* ============================================================================
+     SECTION : RÉCONCILIATION DES VENTES vs ENCAISSEMENTS
+     Description : Calcul de la cohérence entre billets vendus et argent encaissé
+     ============================================================================ */
+  
+  const loadReconciliation = useCallback(async () => {
+    console.log('[AgenceCompta] Chargement des données de réconciliation pour', reconciliationDate);
+    
+    if (!user?.companyId || !user?.agencyId) return;
+    
+    setLoadingReconciliation(true);
+    
+    try {
+      const date = new Date(reconciliationDate);
+      const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+      const end = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+      
+      // 1. Récupérer TOUTES les réservations de l'agence pour la journée
+      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
+      const q = query(
+        rRef,
+        where('date', '==', reconciliationDate),
+        orderBy('createdAt', 'asc')
+      );
+      
+      const snap = await getDocs(q);
+      
+      // 2. Calculer les agrégats
+      let ventesGuichet = { reservations: 0, tickets: 0, montant: 0 };
+      let ventesEnLigne = { reservations: 0, tickets: 0, montant: 0 };
+      let encaissementsEspeces = 0;
+      let encaissementsMobileMoney = 0;
+      
+      snap.forEach(d => {
+        const r = d.data() as any;
+        const canal = String(r.canal || '').toLowerCase();
+        const paiement = String(r.paiement || '').toLowerCase();
+        const montant = r.montant || 0;
+        const tickets = (r.seatsGo || 0) + (r.seatsReturn || 0);
+        
+        if (canal === 'guichet' || canal === '') {
+          ventesGuichet.reservations += 1;
+          ventesGuichet.tickets += tickets;
+          ventesGuichet.montant += montant;
+          
+          if (paiement.includes('esp')) {
+            encaissementsEspeces += montant;
+          }
+          if (paiement.includes('mobile') || paiement.includes('mm')) {
+            encaissementsMobileMoney += montant;
+          }
+        } else if (canal === 'en_ligne') {
+          ventesEnLigne.reservations += 1;
+          ventesEnLigne.tickets += tickets;
+          ventesEnLigne.montant += montant;
+          // En ligne : pas d'encaissement dans la caisse agence
+        }
+      });
+      
+      // 3. Calculer l'écart
+      const encaissementsTotal = encaissementsEspeces + encaissementsMobileMoney;
+      const ecart = ventesGuichet.montant - encaissementsTotal;
+      
+      // 4. Mettre à jour l'état
+      setReconciliationData({
+        ventesGuichet,
+        ventesEnLigne,
+        encaissementsEspeces,
+        encaissementsMobileMoney,
+        encaissementsTotal,
+        ecart
+      });
+      
+      console.log('[AgenceCompta] Réconciliation calculée:', {
+        ventesGuichet,
+        ventesEnLigne,
+        encaissementsTotal,
+        ecart
+      });
+      
+    } catch (error) {
+      console.error('[AgenceCompta] Erreur lors du chargement de la réconciliation:', error);
+      alert('Erreur lors du chargement de la réconciliation');
+    } finally {
+      setLoadingReconciliation(false);
+    }
+  }, [user?.companyId, user?.agencyId, reconciliationDate]);
+  
+  useEffect(() => {
+    if (tab === 'reconciliation') {
+      loadReconciliation();
+    }
+  }, [tab, reconciliationDate, loadReconciliation]);
 
   /* ============================================================================
      SECTION : GESTION DE LA CAISSE - NOUVELLES SORTIES
@@ -1119,6 +1315,13 @@ const AgenceComptabilitePage: React.FC = () => {
                   onClick={()=>setTab('caisse')}     
                   label="Caisse" 
                   icon={<Banknote className="h-4 w-4" />}
+                  theme={theme}
+                />
+                <TabButton 
+                  active={tab==='reconciliation'}     
+                  onClick={()=>setTab('reconciliation')}     
+                  label="Réconciliation" 
+                  icon={<RefreshCw className="h-4 w-4" />}
                   theme={theme}
                 />
               </div>
@@ -1315,6 +1518,7 @@ const AgenceComptabilitePage: React.FC = () => {
                     const amountAgg = agg?.amount ?? s.totalAmount ?? 0;
                     const cashExpectedAgg = agg?.cashExpected ?? (payBy['espèces'] ?? s.cashExpected ?? 0);
                     const mmExpectedAgg = agg?.mmExpected ?? (payBy['mobile_money'] ?? s.mmExpected ?? 0);
+                    const onlineAmountAgg = agg?.onlineAmount ?? 0;
 
                     const cashReceived = Number((inputs.cashReceived || '').replace(/[^\d.]/g,''));
                     const ecart = (Number.isFinite(cashReceived) ? cashReceived : 0) - (cashExpectedAgg || 0);
@@ -1350,6 +1554,8 @@ const AgenceComptabilitePage: React.FC = () => {
                             <InfoCard label="Billets" value={ticketsAgg.toString()} />
                             <InfoCard label="Montant total" value={fmtMoney(amountAgg)} emphasis />
                             <InfoCard label="Espèces attendu" value={fmtMoney(cashExpectedAgg)} emphasis />
+                            <InfoCard label="Mobile Money" value={fmtMoney(mmExpectedAgg)} />
+                            <InfoCard label="En ligne" value={fmtMoney(onlineAmountAgg)} />
                           </div>
 
                           {/* Période */}
@@ -1427,12 +1633,12 @@ const AgenceComptabilitePage: React.FC = () => {
 
         {/* ============================================================================
            ONGLET : RAPPORTS
-           Description : Consultation détaillée des ventes par poste
+           Description : Consultation détaillée des ventes par poste (tous canaux)
            ============================================================================ */}
         
         {tab === 'rapports' && (
           <div className="space-y-6 sm:space-y-8">
-            {/* Sélecteur de poste */}
+            {/* Sélecteur de poste et filtres */}
             <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-3">
                 <div className="flex items-center gap-3">
@@ -1441,7 +1647,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   </div>
                   <div>
                     <div className="text-lg font-bold text-gray-900">Rapports détaillés par poste</div>
-                    <div className="text-sm text-gray-600">Analyse complète des ventes guichet</div>
+                    <div className="text-sm text-gray-600">Analyse complète des ventes (guichet + en ligne)</div>
                   </div>
                 </div>
                 <div className="w-full sm:w-96">
@@ -1477,21 +1683,47 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
               </div>
               
-              {selectedShiftForReport && (() => {
-                const s = findShift(selectedShiftForReport);
-                const start = s?.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime) : null;
-                const end   = s?.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime)   : null;
-                return (
-                  <div className="mt-2 text-sm text-gray-600">
-                    Période analysée : {fmtDT(start)} → {fmtDT(end)}
-                    {dedupCollapsed > 0 && (
-                      <span className="ml-3 px-2 py-1 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 text-xs font-medium">
-                        {dedupCollapsed} doublon{dedupCollapsed>1?'s':''} consolidé{dedupCollapsed>1?'s':''}
-                      </span>
-                    )}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-4">
+                {selectedShiftForReport && (() => {
+                  const s = findShift(selectedShiftForReport);
+                  const start = s?.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime) : null;
+                  const end   = s?.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime)   : null;
+                  return (
+                    <div className="text-sm text-gray-600">
+                      Période analysée : {fmtDT(start)} → {fmtDT(end)}
+                      {dedupCollapsed > 0 && (
+                        <span className="ml-3 px-2 py-1 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 text-xs font-medium">
+                          {dedupCollapsed} doublon{dedupCollapsed>1?'s':''} consolidé{dedupCollapsed>1?'s':''}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+                
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-medium text-gray-700">Filtrer par canal :</div>
+                  <div className="flex rounded-xl border border-gray-300 p-1">
+                    <button
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${reportFilter === 'all' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                      onClick={() => setReportFilter('all')}
+                    >
+                      Tous
+                    </button>
+                    <button
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${reportFilter === 'guichet' ? 'bg-emerald-50 text-emerald-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                      onClick={() => setReportFilter('guichet')}
+                    >
+                      Guichet
+                    </button>
+                    <button
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${reportFilter === 'en_ligne' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                      onClick={() => setReportFilter('en_ligne')}
+                    >
+                      En ligne
+                    </button>
                   </div>
-                );
-              })()}
+                </div>
+              </div>
             </div>
 
             {/* KPI du rapport */}
@@ -1500,6 +1732,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 icon={<Ticket className="h-6 w-6" />} 
                 label="Billets vendus" 
                 value={totals.billets.toString()} 
+                sublabel={`${totals.guichet.billets} guichet + ${totals.en_ligne.billets} ligne`}
                 theme={theme}
                 emphasis={false}
               />
@@ -1507,6 +1740,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 icon={<Wallet className="h-6 w-6" />} 
                 label="Chiffre d'affaires" 
                 value={fmtMoney(totals.montant)} 
+                sublabel={`${fmtMoney(totals.guichet.montant)} guichet + ${fmtMoney(totals.en_ligne.montant)} ligne`}
                 theme={theme}
                 emphasis={true}
               />
@@ -1514,6 +1748,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 icon={<Activity className="h-6 w-6" />} 
                 label="Réservations" 
                 value={tickets.length.toString()} 
+                sublabel={`${tickets.filter(t => t.canal === 'guichet' || t.canal === '').length} guichet + ${tickets.filter(t => t.canal === 'en_ligne').length} ligne`}
                 theme={theme}
                 emphasis={false}
               />
@@ -1548,40 +1783,74 @@ const AgenceComptabilitePage: React.FC = () => {
                       <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
                         <tr>
                           <Th>Date/Heure</Th>
+                          <Th>Canal</Th>
                           <Th>Trajet</Th>
                           <Th>Client</Th>
                           <Th align="right">Billets</Th>
                           <Th align="right">Montant</Th>
+                          <Th align="right">Paiement</Th>
                           <Th align="right">Vendeur</Th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {tickets.map((t, index) => (
-                          <tr key={t.id} className={`hover:bg-gray-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
-                            <Td>
-                              <div className="font-medium">{fmtD(t.date)}</div>
-                              <div className="text-xs text-gray-500">{t.heure}</div>
-                            </Td>
-                            <Td>
-                              <div className="font-medium">{t.depart} → {t.arrivee}</div>
-                            </Td>
-                            <Td>
-                              <div className="font-medium">{t.nomClient}</div>
-                              {t.telephone && <div className="text-xs text-gray-500">{t.telephone}</div>}
-                            </Td>
-                            <Td align="right">
-                              <span className="font-medium">{(t.seatsGo||0)+(t.seatsReturn||0)}</span>
-                            </Td>
-                            <Td align="right">
-                              <span className="font-bold text-gray-900">{fmtMoney(t.montant)}</span>
-                            </Td>
-                            <Td align="right">
-                              <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-                                {t.guichetierCode || '—'}
-                              </span>
-                            </Td>
-                          </tr>
-                        ))}
+                        {tickets
+                          .filter(t => {
+                            if (reportFilter === 'all') return true;
+                            if (reportFilter === 'guichet') return t.canal === 'guichet' || t.canal === '';
+                            if (reportFilter === 'en_ligne') return t.canal === 'en_ligne';
+                            return true;
+                          })
+                          .map((t, index) => {
+                            const canalColor = t.canal === 'en_ligne' 
+                              ? 'bg-indigo-100 text-indigo-700' 
+                              : 'bg-emerald-100 text-emerald-700';
+                              
+                            const encaissementText = t.encaissement === 'agence' ? 'Caisse agence' : 'Compte compagnie';
+                            const encaissementColor = t.encaissement === 'agence' 
+                              ? 'bg-blue-100 text-blue-700' 
+                              : 'bg-purple-100 text-purple-700';
+                              
+                            return (
+                              <tr key={t.id} className={`hover:bg-gray-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                                <Td>
+                                  <div className="font-medium">{fmtD(t.date)}</div>
+                                  <div className="text-xs text-gray-500">{t.heure}</div>
+                                </Td>
+                                <Td>
+                                  <div className="flex flex-col gap-1">
+                                    <span className={`text-xs px-2 py-1 rounded-full ${canalColor} font-medium`}>
+                                      {t.canal === 'en_ligne' ? 'En ligne' : 'Guichet'}
+                                    </span>
+                                    <span className={`text-xs px-2 py-0.5 rounded-full ${encaissementColor}`}>
+                                      {encaissementText}
+                                    </span>
+                                  </div>
+                                </Td>
+                                <Td>
+                                  <div className="font-medium">{t.depart} → {t.arrivee}</div>
+                                </Td>
+                                <Td>
+                                  <div className="font-medium">{t.nomClient}</div>
+                                  {t.telephone && <div className="text-xs text-gray-500">{t.telephone}</div>}
+                                </Td>
+                                <Td align="right">
+                                  <span className="font-medium">{(t.seatsGo||0)+(t.seatsReturn||0)}</span>
+                                </Td>
+                                <Td align="right">
+                                  <span className="font-bold text-gray-900">{fmtMoney(t.montant)}</span>
+                                </Td>
+                                <Td align="right">
+                                  <span className="text-xs text-gray-600">{t.paiement || '—'}</span>
+                                </Td>
+                                <Td align="right">
+                                  <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+                                    {t.guichetierCode || '—'}
+                                  </span>
+                                </Td>
+                              </tr>
+                            );
+                          })
+                        }
                       </tbody>
                     </table>
                   </div>
@@ -1793,6 +2062,295 @@ const AgenceComptabilitePage: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* ============================================================================
+           ONGLET : RÉCONCILIATION
+           Description : Vue cohérente billets vendus vs argent encaissé
+           ============================================================================ */}
+        
+        {tab === 'reconciliation' && (
+          <div className="space-y-6 sm:space-y-8">
+            {/* En-tête et sélecteur de date */}
+            <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
+                    <RefreshCw className="h-6 w-6 text-amber-600" />
+                  </div>
+                  <div>
+                    <div className="text-xl font-bold text-gray-900">Réconciliation des ventes</div>
+                    <div className="text-sm text-gray-600">Cohérence billets vendus vs argent encaissé</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-medium text-gray-700">Date :</div>
+                  <input 
+                    type="date" 
+                    className="border border-gray-300 rounded-xl px-4 py-2.5 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm"
+                    style={{ outlineColor: theme.primary }}
+                    value={reconciliationDate} 
+                    onChange={(e) => setReconciliationDate(e.target.value)} 
+                  />
+                  <SecondaryButton onClick={loadReconciliation} disabled={loadingReconciliation}>
+                    {loadingReconciliation ? 'Chargement...' : 'Actualiser'}
+                  </SecondaryButton>
+                </div>
+              </div>
+              
+              <div className="text-sm text-gray-600">
+                Compare les billets vendus par votre agence avec l'argent réellement encaissé
+              </div>
+            </div>
+
+            {/* Tableau de réconciliation */}
+            {loadingReconciliation ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="text-center">
+                  <div className="h-12 w-12 border-4 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-3"></div>
+                  <div className="text-gray-600">Chargement de la réconciliation...</div>
+                </div>
+              </div>
+            ) : !reconciliationData ? (
+              <EmptyState
+                icon={<RefreshCw className="h-12 w-12" />}
+                title="Aucune donnée disponible"
+                description="Sélectionnez une date pour voir la réconciliation"
+              />
+            ) : (
+              <>
+                {/* KPI de réconciliation */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+                  <KpiCard 
+                    icon={<Ticket className="h-6 w-6" />} 
+                    label="Billets vendus" 
+                    value={(reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets).toString()} 
+                    sublabel={`${reconciliationData.ventesGuichet.tickets} guichet + ${reconciliationData.ventesEnLigne.tickets} ligne`}
+                    theme={theme}
+                    emphasis={false}
+                  />
+                  <KpiCard 
+                    icon={<TrendingUp className="h-6 w-6" />} 
+                    label="Chiffre d'affaires total" 
+                    value={fmtMoney(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)} 
+                    sublabel={`${fmtMoney(reconciliationData.ventesGuichet.montant)} guichet + ${fmtMoney(reconciliationData.ventesEnLigne.montant)} ligne`}
+                    theme={theme}
+                    emphasis={true}
+                  />
+                  <KpiCard 
+                    icon={reconciliationData.ecart === 0 ? <CheckCircle2 className="h-6 w-6" /> : <AlertTriangle className="h-6 w-6" />} 
+                    label="Écart de caisse" 
+                    value={fmtMoney(reconciliationData.ecart)} 
+                    sublabel={reconciliationData.ecart === 0 ? "Caisse OK" : reconciliationData.ecart > 0 ? "Caisse en déficit" : "Excédent"}
+                    theme={theme}
+                    emphasis={true}
+                  />
+                </div>
+
+                {/* Tableau détaillé */}
+                <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                  <div className="text-lg font-bold text-gray-900 mb-5">Réconciliation détaillée</div>
+                  
+                  <div className="overflow-hidden rounded-xl border border-gray-200">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
+                        <tr>
+                          <Th>Catégorie</Th>
+                          <Th align="right">Réservations</Th>
+                          <Th align="right">Billets</Th>
+                          <Th align="right">Montant</Th>
+                          <Th align="right">Commentaire</Th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {/* VENTES */}
+                        <tr className="bg-gradient-to-r from-blue-50/30 to-indigo-50/30">
+                          <Td colSpan={5}>
+                            <div className="text-sm font-bold text-blue-700 uppercase tracking-wider py-2">
+                              VENTES DE L'AGENCE
+                            </div>
+                          </Td>
+                        </tr>
+                        
+                        {/* Guichet */}
+                        <tr className="hover:bg-gray-50/50">
+                          <Td>
+                            <div className="flex items-center gap-2">
+                              <div className="h-6 w-6 rounded-md bg-emerald-100 flex items-center justify-center">
+                                <Wallet className="h-3 w-3 text-emerald-600" />
+                              </div>
+                              <span className="font-medium">Ventes guichet</span>
+                            </div>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-medium">{reconciliationData.ventesGuichet.reservations}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-medium">{reconciliationData.ventesGuichet.tickets}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.ventesGuichet.montant)}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
+                              À encaisser en caisse
+                            </span>
+                          </Td>
+                        </tr>
+                        
+                        {/* En ligne */}
+                        <tr className="hover:bg-gray-50/50">
+                          <Td>
+                            <div className="flex items-center gap-2">
+                              <div className="h-6 w-6 rounded-md bg-indigo-100 flex items-center justify-center">
+                                <CreditCard className="h-3 w-3 text-indigo-600" />
+                              </div>
+                              <span className="font-medium">Ventes en ligne</span>
+                            </div>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-medium">{reconciliationData.ventesEnLigne.reservations}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-medium">{reconciliationData.ventesEnLigne.tickets}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.ventesEnLigne.montant)}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="text-xs px-2 py-1 rounded-full bg-indigo-100 text-indigo-700">
+                              Encaissé en ligne
+                            </span>
+                          </Td>
+                        </tr>
+                        
+                        {/* Total ventes */}
+                        <tr className="border-t-2 border-gray-300">
+                          <Td className="font-bold text-gray-900">TOTAL VENTES AGENCE</Td>
+                          <Td align="right" className="font-bold text-gray-900">
+                            {reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}
+                          </Td>
+                          <Td align="right" className="font-bold text-gray-900">
+                            {reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets}
+                          </Td>
+                          <Td align="right" className="font-bold text-gray-900">
+                            {fmtMoney(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}
+                          </Td>
+                          <Td align="right">
+                            <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                              Billets consommés
+                            </span>
+                          </Td>
+                        </tr>
+                        
+                        {/* ENCAISSEMENTS */}
+                        <tr className="bg-gradient-to-r from-emerald-50/30 to-green-50/30">
+                          <Td colSpan={5}>
+                            <div className="text-sm font-bold text-emerald-700 uppercase tracking-wider py-2">
+                              ENCAISSEMENTS DANS LA CAISSE
+                            </div>
+                          </Td>
+                        </tr>
+                        
+                        {/* Espèces */}
+                        <tr className="hover:bg-gray-50/50">
+                          <Td>
+                            <div className="flex items-center gap-2">
+                              <div className="h-6 w-6 rounded-md bg-amber-100 flex items-center justify-center">
+                                <Banknote className="h-3 w-3 text-amber-600" />
+                              </div>
+                              <span className="font-medium">Espèces reçues</span>
+                            </div>
+                          </Td>
+                          <Td align="right">—</Td>
+                          <Td align="right">—</Td>
+                          <Td align="right">
+                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.encaissementsEspeces)}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                              Caisse agence
+                            </span>
+                          </Td>
+                        </tr>
+                        
+                        {/* Mobile Money */}
+                        <tr className="hover:bg-gray-50/50">
+                          <Td>
+                            <div className="flex items-center gap-2">
+                              <div className="h-6 w-6 rounded-md bg-purple-100 flex items-center justify-center">
+                                <Smartphone className="h-3 w-3 text-purple-600" />
+                              </div>
+                              <span className="font-medium">Mobile Money</span>
+                            </div>
+                          </Td>
+                          <Td align="right">—</Td>
+                          <Td align="right">—</Td>
+                          <Td align="right">
+                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.encaissementsMobileMoney)}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700">
+                              Compte compagnie
+                            </span>
+                          </Td>
+                        </tr>
+                        
+                        {/* Total encaissements */}
+                        <tr className="border-t-2 border-gray-300">
+                          <Td className="font-bold text-gray-900">TOTAL ENCAISSÉS</Td>
+                          <Td align="right">—</Td>
+                          <Td align="right">—</Td>
+                          <Td align="right" className="font-bold text-gray-900">
+                            {fmtMoney(reconciliationData.encaissementsTotal)}
+                          </Td>
+                          <Td align="right">
+                            <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
+                              Argent réellement reçu
+                            </span>
+                          </Td>
+                        </tr>
+                        
+                        {/* ÉCART */}
+                        <tr className={`${reconciliationData.ecart === 0 ? 'bg-gradient-to-r from-emerald-50/30 to-green-50/30' : reconciliationData.ecart > 0 ? 'bg-gradient-to-r from-rose-50/30 to-red-50/30' : 'bg-gradient-to-r from-amber-50/30 to-orange-50/30'}`}>
+                          <Td colSpan={5}>
+                            <div className="flex items-center justify-between py-3">
+                              <div className="text-sm font-bold text-gray-900">
+                                ÉCART (Ventes guichet - Encaissements)
+                              </div>
+                              <div className={`text-xl font-bold ${reconciliationData.ecart === 0 ? 'text-emerald-700' : reconciliationData.ecart > 0 ? 'text-rose-700' : 'text-amber-700'}`}>
+                                {fmtMoney(reconciliationData.ecart)}
+                                {reconciliationData.ecart === 0 && (
+                                  <span className="ml-2 text-sm font-medium text-emerald-600">✓ Équilibre parfait</span>
+                                )}
+                                {reconciliationData.ecart > 0 && (
+                                  <span className="ml-2 text-sm font-medium text-rose-600">⚠️ Manque dans la caisse</span>
+                                )}
+                                {reconciliationData.ecart < 0 && (
+                                  <span className="ml-2 text-sm font-medium text-amber-600">ℹ️ Excédent en caisse</span>
+                                )}
+                              </div>
+                            </div>
+                          </Td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  {/* Résumé */}
+                  <div className="mt-6 p-4 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
+                    <div className="text-sm font-medium text-gray-700 mb-2">Résumé de la journée</div>
+                    <div className="text-sm text-gray-600 space-y-1">
+                      <div>• <span className="font-medium">{reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}</span> réservations effectuées</div>
+                      <div>• <span className="font-medium">{reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets}</span> billets vendus</div>
+                      <div>• <span className="font-medium">{fmtMoney(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}</span> chiffre d'affaires généré</div>
+                      <div>• <span className="font-medium">{fmtMoney(reconciliationData.encaissementsTotal)}</span> réellement encaissés dans la caisse</div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ============================================================================
@@ -1867,7 +2425,7 @@ const AgenceComptabilitePage: React.FC = () => {
                     style={{ outlineColor: theme.primary }}
                     placeholder="Ex: BICIS - Compte principal"
                     value={outForm.banque}
-                    onChange={e => setOutForm(f => ({...f, banque: e.target.value}))}
+                  onChange={e => setOutForm(f => ({...f, banque: e.target.value}))}
                   />
                 </div>
               )}
@@ -2214,8 +2772,10 @@ const Th: React.FC<{
   children: React.ReactNode;
   align?: "left" | "right";
   className?: string;
-}> = ({ children, align = "left", className = "" }) => (
+  colSpan?: number; // AJOUTÉ : support pour colSpan
+}> = ({ children, align = "left", className = "", colSpan }) => (
   <th
+    colSpan={colSpan} // AJOUTÉ
     className={`px-4 py-3 text-xs font-semibold text-gray-700 uppercase tracking-wider
       ${align === 'right' ? 'text-right' : 'text-left'}
       ${className}`}
@@ -2228,8 +2788,10 @@ const Td: React.FC<{
   children: React.ReactNode;
   align?: "left" | "right";
   className?: string;
-}> = ({ children, align = "left", className = "" }) => (
+  colSpan?: number; // AJOUTÉ : support pour colSpan
+}> = ({ children, align = "left", className = "", colSpan }) => (
   <td
+    colSpan={colSpan} // AJOUTÉ
     className={`px-4 py-3
       ${align === 'right' ? 'text-right' : 'text-left'}
       ${className}`}
