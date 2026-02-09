@@ -20,6 +20,15 @@ import useCompanyTheme from "@/hooks/useCompanyTheme";
 /* ✅ Contexte du header (dynamique par page) */
 import { PageHeaderProvider, usePageHeader } from "@/contexts/PageHeaderContext";
 
+const roleLabels: Record<string, string> = {
+  admin_compagnie: "CEO",
+  chefAgence: "Chef d’agence",
+  comptable: "Comptable",
+  superviseur: "Superviseur",
+  guichetier: "Guichetier",
+  compagnie: "Compte Compagnie",
+};
+
 const CompagnieLayout: React.FC = () => {
   const location = useLocation();
   const { user, logout, company } = useAuth();
@@ -172,7 +181,9 @@ const LayoutInner: React.FC<{
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{userName}</p>
-                  <p className="text-xs opacity-80">{userRole}</p>
+                  <p className="text-xs opacity-80">
+                    {roleLabels[userRole ?? ""] ?? userRole}
+                  </p>
                 </div>
               </div>
               <button onClick={onLogout} className="p-2 rounded-md hover:bg-white/20 transition-colors">

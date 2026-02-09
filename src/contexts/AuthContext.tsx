@@ -75,20 +75,64 @@ export const AuthContext = createContext<AuthContextType>(null as any);
    Utils
 ========================= */
 const normalizeRole = (r?: string): Role => {
-  const raw = (r ?? "user").trim();
-  const normalized =
-    raw === "chef_agence" || raw === "chefagence" ? "chefAgence" : raw;
-  return (permissionsByRole[normalized as Role]
-    ? normalized
-    : "user") as Role;
+  if (!r) return "user";
+
+  const raw = r.trim().toLowerCase();
+
+  console.log("🔍 AuthContext normalizeRole - raw input:", raw);
+
+  const map: Record<string, Role> = {
+    // PLATFORME
+    'admin_platforme': "admin_platforme",
+    'admin platforme': "admin_platforme",
+
+    // COMPAGNIE (CEO)
+    'admin_compagnie': "admin_compagnie",
+    'compagnie': "admin_compagnie",
+    'admin compagnie': "admin_compagnie",
+
+    // COMPTABILITÉ COMPAGNIE
+    'company_accountant': "company_accountant",
+    'comptable_compagnie': "company_accountant",
+    'comptable compagnie': "company_accountant",
+    'comptable': "company_accountant",
+    'chef comptable': "company_accountant",
+    
+    // DAF
+    'financial_director': "financial_director",
+    'daf': "financial_director",
+
+    // AGENCE
+    'chefagence': "chefAgence",
+    'chef_agence': "chefAgence",
+    'chef agence': "chefAgence",
+    'superviseur': "chefAgence",
+    'agentcourrier': "chefAgence",
+    'agent_courrier': "chefAgence",
+
+    'agency_accountant': "agency_accountant",
+    'comptable_agence': "agency_accountant",
+    'comptable agence': "agency_accountant",
+
+    'guichetier': "guichetier",
+    'embarquement': "embarquement",
+
+    // DEFAULT
+    'user': "user",
+  };
+
+  const result = map[raw] ?? "user";
+  console.log("🔍 AuthContext normalizeRole - result:", result);
+  
+  return result;
 };
 
 const toDate = (v: any): Date | null => {
   if (!v) return null;
   if (v instanceof Date) return v;
-  if ((v as Timestamp)?.toDate) return (v as Timestamp).toDate();
+  if (v instanceof Timestamp) return v.toDate();
   const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d;
+  return isNaN(d.getTime()) ? null : d;
 };
 
 /* =========================

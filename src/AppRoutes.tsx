@@ -20,6 +20,7 @@ import AdminParametresPlatformPage from "./pages/AdminParametresPlatformPage";
 import ValidationComptablePage from "@/pages/ValidationComptablePage";
 import ValidationChefAgencePage from "@/pages/ValidationChefAgencePage";
 import FinishSignIn from "@/pages/FinishSignIn";
+import ChefComptableCompagnie from "@/pages/ChefComptableCompagnie";
 
 const HomePage = lazy(() => import("./pages/HomePage"));
 const PlatformSearchResultsPage = lazy(() => import("./pages/PlatformSearchResultsPage"));
@@ -39,7 +40,7 @@ const AdminModifierCompagniePage = lazy(() => import("./pages/AdminModifierCompa
 const AdminStatistiquesPage = lazy(() => import("./pages/AdminStatistiquesPage"));
 const AdminReservationsPage = lazy(() => import("./pages/AdminReservationsPage"));
 const AdminFinancesPage = lazy(() => import("./pages/AdminFinancesPage"));
-const AdminCompagnieAjouterPage = lazy(() => import("./pages/AdminCompagnieAjouterPage")); // ✅
+const AdminCompagnieAjouterPage = lazy(() => import("./pages/AdminCompagnieAjouterPage"));
 
 const CompagnieLayout = lazy(() => import("./components/layout/CompagnieLayout"));
 const CompagnieDashboard = lazy(() => import("./pages/CompagnieDashboard"));
@@ -72,8 +73,8 @@ export const routePermissions = {
   compagnieLayout: ["admin_compagnie", "compagnie"] as const,
   agenceShell: ["chefAgence", "superviseur", "agentCourrier", "admin_compagnie"] as const,
   guichet: ["guichetier", "chefAgence", "admin_compagnie"] as const,
-  comptabilite: ["comptable", "admin_compagnie"] as const,
-  validationsCompta: ["comptable", "admin_compagnie"] as const,
+  comptabilite: ["agency_accountant", "admin_compagnie"] as const,
+  validationsCompta: ["company_accountant", "financial_director"] as const,
   validationsAgence: ["chefAgence", "superviseur", "admin_compagnie"] as const,
   receiptGuichet: ["chefAgence", "guichetier", "admin_compagnie"] as const,
   adminLayout: ["admin_platforme"] as const,
@@ -84,11 +85,36 @@ const hasAny = (roles: unknown, allowed: readonly string[]) =>
   asArray(roles).some((r) => allowed.includes(String(r)));
 
 const landingTargetForRoles = (roles: unknown): string => {
-  if (hasAny(roles, routePermissions.guichet)) return "/agence/guichet";
-  if (hasAny(roles, routePermissions.comptabilite)) return "/agence/comptabilite";
-  if (hasAny(roles, routePermissions.compagnieLayout)) return "/compagnie/dashboard";
-  if (hasAny(roles, routePermissions.agenceShell)) return "/agence/dashboard";
-  if (hasAny(roles, routePermissions.adminLayout)) return "/admin/dashboard";
+  const rolesArray = asArray(roles).map(String);
+
+  // ✅ COMPTABILITÉ COMPAGNIE (CHEF COMPTABLE + DAF)
+  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) {
+    return "/comptable";
+  }
+
+  // AGENCE
+  if (hasAny(rolesArray, routePermissions.guichet)) {
+    return "/agence/guichet";
+  }
+
+  if (hasAny(rolesArray, routePermissions.comptabilite)) {
+    return "/agence/comptabilite";
+  }
+
+  if (hasAny(rolesArray, routePermissions.agenceShell)) {
+    return "/agence/dashboard";
+  }
+
+  // COMPAGNIE (CEO)
+  if (hasAny(rolesArray, routePermissions.compagnieLayout)) {
+    return "/compagnie/dashboard";
+  }
+
+  // ADMIN PLATFORME
+  if (hasAny(rolesArray, routePermissions.adminLayout)) {
+    return "/admin/dashboard";
+  }
+
   return "/login";
 };
 
@@ -103,6 +129,152 @@ function LegacyUploadRedirect() {
   return <Navigate to={`/${slug || ""}/reservation/${id || ""}`} replace />;
 }
 
+/* =========================
+   DebugAuthPage Component
+========================= */
+const DebugAuthPage = () => {
+  const { user, loading, company } = useAuth() as any;
+  
+  return (
+    <div className="min-h-screen p-6 bg-gray-50">
+      <h1 className="text-2xl font-bold mb-6 text-gray-800">🔍 Debug Auth - Diagnostics</h1>
+      
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* User Info Card */}
+        <div className="bg-white p-6 rounded-lg shadow-md border">
+          <h2 className="text-lg font-semibold mb-4 text-blue-700">👤 Informations Utilisateur</h2>
+          <div className="space-y-3">
+            <div>
+              <strong className="text-gray-700">État du chargement:</strong> 
+              <span className={`ml-2 px-2 py-1 rounded text-sm ${loading ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                {loading ? "En cours..." : "Terminé"}
+              </span>
+            </div>
+            <div>
+              <strong className="text-gray-700">Utilisateur connecté:</strong> 
+              <span className={`ml-2 px-2 py-1 rounded text-sm ${user ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                {user ? "Oui" : "Non"}
+              </span>
+            </div>
+            {user && (
+              <>
+                <div>
+                  <strong className="text-gray-700">Email:</strong> 
+                  <span className="ml-2 text-gray-900">{user.email}</span>
+                </div>
+                <div>
+                  <strong className="text-gray-700">Nom:</strong> 
+                  <span className="ml-2 text-gray-900">{user.nom || "Non défini"}</span>
+                </div>
+                <div>
+                  <strong className="text-gray-700">Rôle (brut):</strong> 
+                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{user.role || "Non défini"}</code>
+                </div>
+                <div>
+                  <strong className="text-gray-700">ID Compagnie:</strong> 
+                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{user.companyId || "Non défini"}</code>
+                </div>
+                <div>
+                  <strong className="text-gray-700">ID Agence:</strong> 
+                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{user.agencyId || "Non défini"}</code>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Company Info Card */}
+        <div className="bg-white p-6 rounded-lg shadow-md border">
+          <h2 className="text-lg font-semibold mb-4 text-green-700">🏢 Informations Compagnie</h2>
+          <div className="space-y-3">
+            {company ? (
+              <>
+                <div>
+                  <strong className="text-gray-700">Nom Compagnie:</strong> 
+                  <span className="ml-2 text-gray-900">{company.nom || "Non défini"}</span>
+                </div>
+                <div>
+                  <strong className="text-gray-700">ID:</strong> 
+                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{company.id}</code>
+                </div>
+                <div>
+                  <strong className="text-gray-700">Slug:</strong> 
+                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{company.slug || "Non défini"}</code>
+                </div>
+                <div>
+                  <strong className="text-gray-700">Plan:</strong> 
+                  <span className="ml-2 px-2 py-1 bg-purple-100 text-purple-800 rounded text-sm">{company.plan || "Non défini"}</span>
+                </div>
+              </>
+            ) : (
+              <div className="text-gray-500 italic">
+                {user?.companyId ? "Chargement de la compagnie..." : "Aucune compagnie associée"}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Testing Card */}
+        <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md border">
+          <h2 className="text-lg font-semibold mb-4 text-red-700">🧪 Tests de Navigation</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <a href="/comptable" className="block p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition text-center">
+              <div className="font-medium text-blue-800">/comptable</div>
+              <div className="text-sm text-blue-600 mt-1">Espace comptable compagnie</div>
+              <div className="text-xs text-blue-500 mt-2">Rôles: company_accountant, financial_director</div>
+            </a>
+            <a href="/compagnie/dashboard" className="block p-4 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition text-center">
+              <div className="font-medium text-green-800">/compagnie/dashboard</div>
+              <div className="text-sm text-green-600 mt-1">Espace CEO compagnie</div>
+              <div className="text-xs text-green-500 mt-2">Rôle: admin_compagnie</div>
+            </a>
+            <a href="/agence/dashboard" className="block p-4 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition text-center">
+              <div className="font-medium text-purple-800">/agence/dashboard</div>
+              <div className="text-sm text-purple-600 mt-1">Espace chef d'agence</div>
+              <div className="text-xs text-purple-500 mt-2">Rôles: chefAgence, embarquement</div>
+            </a>
+            <a href="/admin/dashboard" className="block p-4 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition text-center">
+              <div className="font-medium text-orange-800">/admin/dashboard</div>
+              <div className="text-sm text-orange-600 mt-1">Espace admin plateforme</div>
+              <div className="text-xs text-orange-500 mt-2">Rôle: admin_platforme</div>
+            </a>
+          </div>
+        </div>
+
+        {/* Raw Data Card */}
+        <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md border">
+          <h2 className="text-lg font-semibold mb-4 text-gray-700">📊 Données Brutes (JSON)</h2>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <h3 className="font-medium mb-2 text-gray-600">Utilisateur:</h3>
+              <pre className="bg-gray-100 p-3 rounded text-xs overflow-auto max-h-60">
+                {JSON.stringify(user, null, 2) || "Aucun utilisateur"}
+              </pre>
+            </div>
+            <div>
+              <h3 className="font-medium mb-2 text-gray-600">Compagnie:</h3>
+              <pre className="bg-gray-100 p-3 rounded text-xs overflow-auto max-h-60">
+                {JSON.stringify(company, null, 2) || "Aucune compagnie"}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Instructions */}
+      <div className="mt-8 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <h3 className="font-semibold text-yellow-800 mb-2">📝 Instructions de débogage:</h3>
+        <ul className="list-disc pl-5 text-yellow-700 space-y-1">
+          <li>Ouvrez la console du navigateur (F12) pour voir les logs détaillés</li>
+          <li>Vérifiez que le rôle de l'utilisateur dans Firestore correspond à ceux autorisés</li>
+          <li>Testez les différents liens de navigation pour voir où vous êtes redirigé</li>
+          <li>Si bloqué, vérifiez les logs de PrivateRoute dans la console</li>
+        </ul>
+      </div>
+    </div>
+  );
+};
+
 const AppRoutes = () => {
   const { loading } = useAuth();
   const { pathname } = useLocation();
@@ -113,6 +285,9 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={isHome ? null : <PageLoader fullScreen />}>
       <Routes key={pathname}>
+        {/* Route de debug - accessible à tous */}
+        <Route path="/debug-auth" element={<DebugAuthPage />} />
+
         <Route
           path="/"
           element={
@@ -141,27 +316,23 @@ const AppRoutes = () => {
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
-        <Route path="/finishSignIn" element={<FinishSignIn />} /> {/* ✅ déplacé ici (racine) */}
+        <Route path="/finishSignIn" element={<FinishSignIn />} />
         <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
         <Route path="/:slug/cookies" element={<CookiesPage />} />
-        {/* PUBLIC */}
-<Route path="/login" element={<LoginPage />} />
-<Route path="/register" element={<Register />} />
-<Route path="/finishSignIn" element={<FinishSignIn />} />
-
-{/* ✅ ACCEPTATION INVITATION */}
-<Route
-  path="/accept-invitation/:invitationId"
-  element={<AcceptInvitationPage />}
-/>
+        
+        {/* ✅ ACCEPTATION INVITATION */}
+        <Route
+          path="/accept-invitation/:invitationId"
+          element={<AcceptInvitationPage />}
+        />
 
         {/* ========= ADMIN ========= */}
         <Route
           path="/admin"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.adminLayout]}>
+            <PrivateRoute allowedRoles={["admin_platforme"] as const}>
               <PageHeaderProvider>
                 <AdminSidebarLayout />
               </PageHeaderProvider>
@@ -170,11 +341,8 @@ const AppRoutes = () => {
         >
           <Route index element={<AdminDashboard />} />
           <Route path="dashboard" element={<AdminDashboard />} />
-          {/* ✅ Liste compagnies */}
           <Route path="compagnies" element={<AdminCompagniesPage />} />
-          {/* ✅ Ajout compagnie */}
           <Route path="compagnies/ajouter" element={<AdminCompagnieAjouterPage />} />
-          {/* Édition / plan / autres */}
           <Route path="compagnies/:id/modifier" element={<AdminModifierCompagniePage />} />
           <Route path="compagnies/:companyId/plan" element={<AdminCompanyPlan />} />
           <Route path="plans" element={<PlansManager />} />
@@ -183,14 +351,13 @@ const AppRoutes = () => {
           <Route path="statistiques" element={<AdminStatistiquesPage />} />
           <Route path="parametres-platforme" element={<AdminParametresPlatformPage />} />
           <Route path="media" element={<MediaPage />} />
-
         </Route>
 
         {/* COMPAGNIE */}
         <Route
           path="/compagnie"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.compagnieLayout]}>
+            <PrivateRoute allowedRoles={["admin_compagnie"] as const}>
               <CompagnieLayout />
             </PrivateRoute>
           }
@@ -209,11 +376,67 @@ const AppRoutes = () => {
           <Route path="compagnies/:companyId" element={<AdminCompanyDetail />} />
         </Route>
 
+        {/* ================= COMPTABILITÉ COMPAGNIE ================= */}
+        <Route
+          path="/comptable"
+          element={
+            <PrivateRoute allowedRoles={["company_accountant", "financial_director"] as const}>
+              <ChefComptableCompagnie />
+            </PrivateRoute>
+          }
+        >
+          {/* Dashboard comptable (à créer après) */}
+          <Route
+            index
+            element={
+              <div className="text-gray-600 text-sm">
+                Tableau de bord comptable (à venir)
+              </div>
+            }
+          />
+
+          {/* Réservations en ligne (VALIDATION / REFUS) */}
+          <Route
+            path="reservations-en-ligne"
+            element={<ReservationsEnLignePage />}
+          />
+
+          {/* Finances compagnie (à brancher plus tard) */}
+          <Route
+            path="finances"
+            element={
+              <div className="text-gray-600 text-sm">
+                Finances compagnie (à venir)
+              </div>
+            }
+          />
+
+          {/* Rapports */}
+          <Route
+            path="rapports"
+            element={
+              <div className="text-gray-600 text-sm">
+                Rapports comptables (à venir)
+              </div>
+            }
+          />
+
+          {/* Paramètres comptables */}
+          <Route
+            path="parametres"
+            element={
+              <div className="text-gray-600 text-sm">
+                Paramètres comptables (à venir)
+              </div>
+            }
+          />
+        </Route>
+
         {/* AGENCE */}
         <Route
           path="/agence"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.agenceShell]}>
+            <PrivateRoute allowedRoles={["chefAgence", "embarquement"] as const}>
               <AgenceShellPage />
             </PrivateRoute>
           }
@@ -230,15 +453,13 @@ const AppRoutes = () => {
           <Route path="shift" element={<AgenceShiftPage />} />
           <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
           <Route path="rapports" element={<AgenceRapportsPage />} />
-
-          {/* ❌ supprimé d’ici : <Route path="/finishSignIn" .../> */}
         </Route>
 
         {/* HORS SHELL */}
         <Route
           path="/agence/guichet"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.guichet]}>
+            <PrivateRoute allowedRoles={["guichetier", "chefAgence", "admin_compagnie"] as const}>
               <AgenceGuichetPage />
             </PrivateRoute>
           }
@@ -246,7 +467,7 @@ const AppRoutes = () => {
         <Route
           path="/agence/comptabilite"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.comptabilite]}>
+            <PrivateRoute allowedRoles={["agency_accountant", "admin_compagnie"] as const}>
               <AgenceComptabilitePage />
             </PrivateRoute>
           }
@@ -256,7 +477,7 @@ const AppRoutes = () => {
         <Route
           path="/compta/validations"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.validationsCompta]}>
+            <PrivateRoute allowedRoles={["company_accountant", "financial_director"] as const}>
               <ValidationComptablePage />
             </PrivateRoute>
           }
@@ -264,7 +485,7 @@ const AppRoutes = () => {
         <Route
           path="/agence/validations"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.validationsAgence]}>
+            <PrivateRoute allowedRoles={["chefAgence", "admin_compagnie"] as const}>
               <ValidationChefAgencePage />
             </PrivateRoute>
           }
@@ -274,7 +495,7 @@ const AppRoutes = () => {
         <Route
           path="/agence/receipt/:id"
           element={
-            <PrivateRoute allowedRoles={[...routePermissions.receiptGuichet]}>
+            <PrivateRoute allowedRoles={["chefAgence", "guichetier", "admin_compagnie"] as const}>
               <ReceiptGuichetPage />
             </PrivateRoute>
           }

@@ -19,17 +19,22 @@ import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 /** Rôles de création ici (niveau compagnie). Tout le personnel de la compagnie est affiché. */
-type CompanyRoleCreate = "admin_compagnie" | "comptable_compagnie";
+type CompanyRoleCreate =
+  | "admin_compagnie"        // CEO (technique)
+  | "financial_director"     // DAF
+  | "company_accountant";    // Comptable compagnie
+
 
 type AnyRole =
   | "admin_plateforme"
   | "admin_compagnie"
-  | "comptable_compagnie"
+  | "financial_director"
+  | "company_accountant"
   | "chef_agence"
   | "comptable_agence"
   | "guichetier"
   | "agent_courrier"
-  | string; // tolérant si d’autres rôles existent
+  | string;
 
 interface UserDoc {
   id: string; // uid
@@ -49,6 +54,16 @@ interface Agence {
   nomAgence: string;
   companyId: string;
 }
+
+const ROLE_LABELS: Record<string, string> = {
+  admin_compagnie: "CEO / Propriétaire",
+  financial_director: "Directeur financier (DAF)",
+  company_accountant: "Comptable (compagnie)",
+  chef_agence: "Chef d’agence",
+  comptable_agence: "Comptable (agence)",
+  guichetier: "Guichetier",
+  agent_courrier: "Agent de courrier",
+};
 
 /* ===================== VALIDATIONS ===================== */
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
@@ -78,13 +93,13 @@ const ParametresPersonnel: React.FC = () => {
   const [email, setEmail] = useState("");
   const [telephone, setTelephone] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<CompanyRoleCreate>("comptable_compagnie");
+  const [role, setRole] = useState<CompanyRoleCreate>("company_accountant");
 
   /* -------- Édition -------- */
   const [editId, setEditId] = useState<string | null>(null);
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editTelephone, setEditTelephone] = useState("");
-  const [editRole, setEditRole] = useState<AnyRole>("comptable_compagnie");
+  const [editRole, setEditRole] = useState<AnyRole>("company_accountant");
 
   /* ===================== LOAD ===================== */
   const loadAgences = async () => {
@@ -130,12 +145,12 @@ const ParametresPersonnel: React.FC = () => {
   }, [user?.companyId]);
 
   const resetForm = () => {
-    setDisplayName("");
-    setEmail("");
-    setTelephone("");
-    setPassword("");
-    setRole("comptable_compagnie");
-  };
+  setDisplayName("");
+  setEmail("");
+  setTelephone("");
+  setPassword("");
+  setRole("company_accountant");
+ };
 
   /* ===================== ACTIONS ===================== */
 
@@ -368,13 +383,12 @@ const ParametresPersonnel: React.FC = () => {
             className="border p-3 rounded focus:ring-2"
           />
           <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as CompanyRoleCreate)}
-            className="border p-3 rounded focus:ring-2"
+           value={role}
+           onChange={(e) => setRole(e.target.value as CompanyRoleCreate)}
+           className="border p-3 rounded focus:ring-2"
           >
-            <option value="comptable_compagnie">Comptable (compagnie)</option>
-            <option value="admin_compagnie">Admin compagnie</option>
-            {/* On ne crée PAS de chef_agence ici : ils sont créés via la page Agences */}
+           <option value="company_accountant">Comptable (compagnie)</option>
+           <option value="financial_director">Directeur financier (DAF)</option>
           </select>
 
           <input
@@ -440,19 +454,18 @@ const ParametresPersonnel: React.FC = () => {
                             className="border p-2 rounded"
                           />
                           <select
-                            value={editRole}
-                            onChange={(e) =>
-                              setEditRole(e.target.value as AnyRole)
-                            }
-                            className="border p-2 rounded"
+                           value={editRole}
+                           onChange={(e) => setEditRole(e.target.value as AnyRole)}
+                           className="border p-2 rounded"
                           >
-                            <option value="admin_compagnie">Admin compagnie</option>
-                            <option value="comptable_compagnie">Comptable (compagnie)</option>
-                            <option value="chef_agence">Chef d’agence</option>
-                            <option value="comptable_agence">Comptable (agence)</option>
-                            <option value="guichetier">Guichetier</option>
-                            <option value="agent_courrier">Agent de courrier</option>
+                           <option value="company_accountant">Comptable (compagnie)</option>
+                           <option value="financial_director">Directeur financier (DAF)</option>
+                           <option value="chef_agence">Chef d’agence</option>
+                           <option value="comptable_agence">Comptable (agence)</option>
+                           <option value="guichetier">Guichetier</option>
+                           <option value="agent_courrier">Agent de courrier</option>
                           </select>
+
                           <div className="text-xs text-gray-500 flex items-center">
                             Statut:&nbsp;
                             <span className={m.active ? "text-green-600" : "text-red-600"}>
@@ -464,7 +477,9 @@ const ParametresPersonnel: React.FC = () => {
                         <>
                           <p className="font-semibold text-gray-900">
                             {m.displayName}{" "}
-                            <span className="text-gray-500 text-sm">• {m.role}</span>
+                            <span className="text-gray-500 text-sm">
+                              • {ROLE_LABELS[m.role] || m.role}
+                            </span>
                           </p>
                           <p className="text-sm text-gray-600">
                             {m.email}

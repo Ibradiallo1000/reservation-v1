@@ -23,24 +23,46 @@ const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 
 const normalizeRole = (r?: string) => {
   const raw = (r || "user").toLowerCase();
+  
+  // Nouveaux rôles
+  if (raw === "company_accountant" || raw === "comptable_compagnie") return "company_accountant";
+  if (raw === "financial_director" || raw === "daf") return "financial_director";
+  
+  // Rôles existants
   if (raw === "admin_platforme") return "admin_platforme";
-  if (raw === "admin_compagnie") return "admin_compagnie";
-  if (raw === "compagnie") return "compagnie";
-  if (raw === "chefagence" || raw === "chef_agence") return "chefAgence";
+  if (raw === "admin_compagnie" || raw === "compagnie") return "admin_compagnie";
+  if (raw === "chefagence" || raw === "chef_agence" || raw === "superviseur" || raw === "agentcourrier") return "chefAgence";
+  if (raw === "agency_accountant" || raw === "comptable_agence") return "agency_accountant";
   if (raw === "guichetier") return "guichetier";
-  if (raw === "comptable") return "comptable";
+  if (raw === "embarquement") return "embarquement";
+  
   return "user";
 };
 
 const routeForRole = (role: string) => {
   switch (role) {
-    case "admin_platforme": return "/admin/dashboard";
-    case "admin_compagnie":
-    case "compagnie": return "/compagnie/dashboard";
-    case "chefAgence": return "/agence/dashboard";
-    case "guichetier": return "/agence/guichet";
-    case "comptable": return "/agence/comptabilite";
-    default: return "/";
+    case "admin_platforme": 
+      return "/admin/dashboard";
+    
+    case "admin_compagnie": 
+      return "/compagnie/dashboard";
+    
+    case "company_accountant":
+    case "financial_director": 
+      return "/comptable"; // ← CORRIGÉ ICI !
+    
+    case "chefAgence":
+    case "embarquement": 
+      return "/agence/dashboard";
+    
+    case "agency_accountant": 
+      return "/agence/comptabilite";
+    
+    case "guichetier": 
+      return "/agence/guichet";
+    
+    default: 
+      return "/";
   }
 };
 
@@ -82,25 +104,43 @@ const LoginPage: React.FC = () => {
         remember ? browserLocalPersistence : browserSessionPersistence
       );
 
+      console.log("🔍 LoginPage - Tentative de connexion avec:", email);
       const cred = await signInWithEmailAndPassword(
         auth,
         normalizeEmail(email),
         password
       );
+      console.log("✅ LoginPage - Firebase Auth réussi, UID:", cred.user.uid);
 
       const snap = await getDoc(doc(db, "users", cred.user.uid));
-      const role = normalizeRole(snap.exists() ? snap.data().role : undefined);
+      console.log("🔍 LoginPage - Document Firestore:", snap.exists() ? snap.data() : "Non trouvé");
+      
+      const userData = snap.exists() ? snap.data() : {};
+      const role = normalizeRole(userData.role);
+      
+      console.log("🔍 LoginPage - Rôle brut:", userData.role);
+      console.log("🔍 LoginPage - Rôle normalisé:", role);
+      console.log("🔍 LoginPage - Redirection vers:", routeForRole(role));
 
       hasNavigated.current = true; // 🔒
       nav(routeForRole(role), { replace: true });
     } catch (err: any) {
+      console.error("❌ LoginPage - Erreur de connexion:", err);
+      console.error("❌ LoginPage - Code d'erreur:", err?.code);
+      console.error("❌ LoginPage - Message:", err?.message);
+      
       hasNavigated.current = false;
+      
       if (err?.code === "auth/wrong-password") {
         setError("Mot de passe incorrect.");
       } else if (err?.code === "auth/user-not-found") {
         setError("Aucun compte associé à cet e-mail.");
+      } else if (err?.code === "auth/invalid-email") {
+        setError("Format d'email invalide.");
+      } else if (err?.code === "auth/too-many-requests") {
+        setError("Trop de tentatives. Réessayez plus tard.");
       } else {
-        setError("Connexion impossible.");
+        setError(`Connexion impossible: ${err?.message || "Erreur inconnue"}`);
       }
     } finally {
       setLoading(false);
@@ -173,18 +213,28 @@ const LoginPage: React.FC = () => {
                 onClick={() => { setStep("email"); setPassword(""); }}
                 className="flex items-center gap-1 text-gray-600"
               >
-                <LogOut className="h-4 w-4" /> Changer d’email
+                <LogOut className="h-4 w-4" /> Changer d'email
               </button>
             </div>
 
             <button
               disabled={loading}
-              className="w-full bg-orange-600 text-white py-3 rounded-xl flex justify-center gap-2"
+              className="w-full bg-orange-600 text-white py-3 rounded-xl flex justify-center gap-2 disabled:opacity-50"
             >
               {loading
-                ? <Loader2 className="animate-spin h-4 w-4" />
+                ? <><Loader2 className="animate-spin h-4 w-4" /> Connexion en cours...</>
                 : <>Connexion <ArrowRight className="h-4 w-4" /></>}
             </button>
+            
+            {/* Lien vers la page de test */}
+            <div className="text-center mt-4">
+              <a 
+                href="/test-firebase" 
+                className="text-sm text-blue-600 underline hover:text-blue-800"
+              >
+                Problèmes de connexion ? Testez Firebase ici
+              </a>
+            </div>
           </form>
         )}
       </div>

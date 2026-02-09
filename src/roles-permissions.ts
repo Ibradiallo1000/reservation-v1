@@ -1,98 +1,122 @@
-// ✅ src/roles-permissions.ts
+// src/roles-permissions.ts
 
+/* ===================== ROLES ===================== */
 export type Role =
-  | 'admin'
+  /** ============ PLATFORME ============ */
   | 'admin_platforme'
-  | 'admin_compagnie'
-  | 'compagnie'
-  | 'chefAgence'
-  | 'guichetier'
-  | 'gestionnaire'
-  | 'agentCourrier'
-  | 'support'
-  | 'superviseur'
-  | 'embarquement'
-  | 'comptable'   // ✅ ajouté
-  | 'user'; // rôle par défaut si rien dans Firestore
 
+  /** ============ COMPAGNIE ============ */
+  | 'admin_compagnie'        // CEO (technique / propriétaire)
+  | 'financial_director'     // DAF (superviseur comptable)
+  | 'company_accountant'     // Comptable compagnie (opérationnel)
+
+  /** ============ AGENCE ============ */
+  | 'chefAgence'
+  | 'agency_accountant'      // Comptable agence
+  | 'guichetier'
+  | 'embarquement'
+
+  /** ============ DEFAULT ============ */
+  | 'user';
+
+
+/* ===================== MODULES ===================== */
 export type ModuleKey =
-  | 'compagnies'
+  /** commun */
   | 'dashboard'
-  | 'trajets'
   | 'reservations'
-  | 'finances'
-  | 'agences'
-  | 'depenses'
   | 'statistiques'
+
+  /** finances */
+  | 'finances'
+  | 'depenses'
+
+  /** structure */
+  | 'agences'
   | 'personnel'
-  | 'messages'
   | 'parametres'
-  | 'parametresVitrine'
+
+  /** agence */
   | 'guichet'
-  | 'courriers'
   | 'embarquement';
 
-export const permissionsByRole: Record<Role, ModuleKey[]> = {
-  // Admin “app” basique
-  admin: ['dashboard', 'parametres'],
 
-  // Admin plateforme
+/* ===================== PERMISSIONS ===================== */
+export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
+
+  /** ============ PLATFORME ============ */
   admin_platforme: [
-    'dashboard', 'compagnies', 'reservations', 'finances',
-    'depenses', 'statistiques', 'personnel', 'messages', 'parametres'
+    'dashboard',
+    'statistiques',
+    'parametres',
   ],
 
-  // Admin d’une compagnie
+  /** ============ COMPAGNIE ============ */
+
+  // CEO → vision globale + structure (PAS d’opérations comptables)
   admin_compagnie: [
-    'dashboard', 'trajets', 'reservations', 'statistiques',
-    'messages', 'parametres', 'parametresVitrine',
-    'guichet', 'courriers', 'finances', 'agences',
-    'personnel', 'embarquement'
+    'dashboard',
+    'statistiques',
+    'agences',
+    'personnel',
+    'parametres',
   ],
 
-  // Compagnie (compte global)
-  compagnie: [
-    'dashboard', 'trajets', 'reservations', 'guichet',
-    'courriers', 'parametres', 'embarquement'
+  // DAF → supervision financière & validation
+  financial_director: [
+    'dashboard',
+    'reservations',
+    'finances',
+    'depenses',
+    'statistiques',
   ],
 
-  // ✅ Chef d’agence : accès quasi total
+  // Comptable compagnie → exécution quotidienne
+  company_accountant: [
+    'dashboard',
+    'reservations',
+    'finances',
+    'depenses',
+    'statistiques',
+  ],
+
+  /** ============ AGENCE ============ */
+
   chefAgence: [
-    'dashboard', 'trajets', 'reservations', 'guichet',
-    'courriers', 'personnel', 'parametres', 'embarquement',
-    'finances', 'statistiques', 'agences', 'messages', 'parametresVitrine'
+    'dashboard',
+    'reservations',
+    'finances',
+    'guichet',
+    'embarquement',
+    'personnel',
   ],
 
-  // Superviseur
-  superviseur: [
-    'dashboard', 'reservations', 'guichet', 'courriers',
-    'trajets', 'finances', 'statistiques', 'embarquement'
+  agency_accountant: [
+    'dashboard',
+    'finances',
+    'depenses',
+    'statistiques',
   ],
 
-  // ✅ Guichetier : ce dont il a besoin
-  guichetier: ['guichet', 'reservations', 'embarquement'],
+  guichetier: [
+    'guichet',
+    'reservations',
+  ],
 
-  // Gestionnaire (compta / opérations)
-  gestionnaire: ['trajets', 'reservations', 'finances', 'depenses', 'statistiques'],
+  embarquement: [
+    'embarquement',
+    'reservations',
+  ],
 
-  // Agent courrier
-  agentCourrier: ['courriers'],
-
-  // Support
-  support: ['messages'],
-
-  // Agent embarquement (contrôle à la gare)
-  embarquement: ['embarquement', 'reservations'],
-
-  // ✅ Comptable : validation des postes, encaissements, rapports
-  comptable: ['dashboard', 'finances', 'reservations', 'depenses', 'statistiques'], // ✅ ajouté
-
-  // Rôle par défaut (aucun accès sensible)
+  /** ============ DEFAULT ============ */
   user: [],
-};
+} as const;
 
-/** Vérifie l’accès d’un rôle à un module. */
-export const hasPermission = (role: Role, module: ModuleKey): boolean => {
-  const list = permissionsByRole[role] ?? permissionsByRole.user;
-  return list.includes(module);
+
+/* ===================== HELPER ===================== */
+export const hasPermission = (
+  role: Role,
+  module: ModuleKey
+): boolean => {
+  return permissionsByRole[role]?.includes(module) ?? false;
 };
