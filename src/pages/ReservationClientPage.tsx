@@ -7,6 +7,7 @@ import { fr } from 'date-fns/locale';
 import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info, Clock, Check } from 'lucide-react';
 import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, serverTimestamp, getDoc,
+  collectionGroup,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/firebaseConfig';
@@ -460,31 +461,48 @@ export default function ReservationClientPage() {
     }
   }, [existing?.statut, existing?.id]);
 
-  // Mode consultation
+  // ===============================
+  // MODE CONSULTATION — PATCH PROD
+  // ===============================
   useEffect(() => {
+    if (!reservationRouteId) return;
+
     const loadExisting = async () => {
-      if (!reservationRouteId) return;
       setLoading(true);
       try {
-        if (!routeState.companyId || !routeState.agencyId) {
-          setError("Information manquante (company/agency). Revenez en arrière et réessayez.");
+        // 🔥 1. Retrouver la réservation via collectionGroup (PROD SAFE)
+        const q = query(
+          collectionGroup(db, 'reservations'),
+          where('__name__', '==', reservationRouteId)
+        );
+
+        const snap = await getDocs(q);
+
+        if (snap.empty) {
+          setError('Réservation introuvable.');
           setLoading(false);
           return;
         }
 
-        const refDoc = doc(db, 'companies', routeState.companyId, 'agences', routeState.agencyId, 'reservations', reservationRouteId);
-        const snap = await getDoc(refDoc);
-        if (!snap.exists()) {
-          setError("Réservation introuvable.");
+        const docSnap = snap.docs[0];
+        const r = docSnap.data() as any;
+
+        // 🔥 2. EXTRACTION SÛRE DES IDS
+        const companyId = r.companyId;
+        const agencyId = r.agencyId;
+
+        if (!companyId || !agencyId) {
+          setError('Données de réservation invalides.');
           setLoading(false);
           return;
         }
-        const r = snap.data() as any;
 
-        const compSnap = await getDoc(doc(db, 'companies', routeState.companyId));
-        const comp = compSnap.exists() ? (compSnap.data() as any) : {};
+        // 🔥 3. Charger la compagnie
+        const compSnap = await getDoc(doc(db, 'companies', companyId));
+        const comp = compSnap.exists() ? compSnap.data() : {};
+
         setCompany({
-          id: routeState.companyId,
+          id: companyId,
           name: comp.nom || comp.name || '',
           code: (comp.code || 'MT').toString().toUpperCase(),
           couleurPrimaire: comp.couleurPrimaire || '#f43f5e',
@@ -492,44 +510,53 @@ export default function ReservationClientPage() {
           logoUrl: comp.logoUrl || ''
         });
 
-        const agSnap = await getDoc(doc(db, 'companies', routeState.companyId, 'agences', routeState.agencyId));
-        const ag = agSnap.exists() ? (agSnap.data() as any) : {};
+        // 🔥 4. Charger l'agence
+        const agSnap = await getDoc(
+          doc(db, 'companies', companyId, 'agences', agencyId)
+        );
+        const ag = agSnap.exists() ? agSnap.data() : {};
+
         setAgencyInfo({
-          id: routeState.agencyId,
-          nom: ag.nomAgence || ag.nom || ag.name || 'Agence',
+          id: agencyId,
+          nom: ag.nomAgence || ag.nom || 'Agence',
           telephone: ag.telephone,
-          code: (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined
+          code: (ag.code || ag.codeAgence || '').toString().toUpperCase()
         });
 
-        const pmSnap = await getDocs(query(
-          collection(db, 'paymentMethods'), 
-          where('companyId', '==', routeState.companyId)
-        ));
+        // 🔥 5. Charger moyens de paiement
+        const pmSnap = await getDocs(
+          query(collection(db, 'paymentMethods'), where('companyId', '==', companyId))
+        );
+
         const pms: any = {};
         pmSnap.forEach(ds => {
-          const d = ds.data() as any;
-          if (d.name) pms[d.name] = { 
-            url: d.defaultPaymentUrl || '', 
-            logoUrl: d.logoUrl || '', 
-            ussdPattern: d.ussdPattern || '', 
-            merchantNumber: d.merchantNumber || '' 
-          };
+          const d = ds.data();
+          if (d.name) {
+            pms[d.name] = {
+              url: d.defaultPaymentUrl || '',
+              logoUrl: d.logoUrl || '',
+              ussdPattern: d.ussdPattern || '',
+              merchantNumber: d.merchantNumber || ''
+            };
+          }
         });
+
         setPaymentMethods(pms);
 
+        // 🔥 6. Charger réservation
         setExisting({
           id: reservationRouteId,
-          companyId: routeState.companyId,
-          agencyId: routeState.agencyId,
+          companyId,
+          agencyId,
           canal: r.canal,
           statut: r.statut,
           nomClient: r.nomClient,
           telephone: r.telephone,
           depart: r.depart,
-          arrivee: r.arrivee || r.arrival,
+          arrivee: r.arrivee,
           date: r.date,
           heure: r.heure,
-          montant: r.montant ?? r.montant_total,
+          montant: r.montant,
           seatsGo: r.seatsGo,
           referenceCode: r.referenceCode
         });
@@ -538,13 +565,13 @@ export default function ReservationClientPage() {
         setLoading(false);
       } catch (e: any) {
         console.error(e);
-        setError(e?.message || "Erreur de chargement");
+        setError('Erreur de chargement de la réservation.');
         setLoading(false);
       }
     };
 
-    void loadExisting();
-  }, [reservationRouteId, routeState.companyId, routeState.agencyId]);
+    loadExisting();
+  }, [reservationRouteId]);
 
   // Mode création
   useEffect(() => {
