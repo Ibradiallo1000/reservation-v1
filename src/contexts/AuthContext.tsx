@@ -1,3 +1,4 @@
+// src/contexts/AuthContext.tsx
 import React, {
   createContext,
   useContext,
@@ -85,22 +86,33 @@ const normalizeRole = (r?: string): Role => {
     // PLATFORME
     'admin_platforme': "admin_platforme",
     'admin platforme': "admin_platforme",
+    'admin': "admin_platforme",
 
     // COMPAGNIE (CEO)
     'admin_compagnie': "admin_compagnie",
     'compagnie': "admin_compagnie",
     'admin compagnie': "admin_compagnie",
+    'ceo': "admin_compagnie",
+    'directeur': "admin_compagnie",
 
-    // COMPTABILITÉ COMPAGNIE
+    // COMPTABILITÉ COMPAGNIE (CHEF COMPTABLE + DAF) - NOUVEAU
     'company_accountant': "company_accountant",
     'comptable_compagnie': "company_accountant",
     'comptable compagnie': "company_accountant",
     'comptable': "company_accountant",
     'chef comptable': "company_accountant",
+    'chef_comptable': "company_accountant",
     
-    // DAF
+    // DAF (DIRECTEUR ADMINISTRATIF ET FINANCIER)
     'financial_director': "financial_director",
     'daf': "financial_director",
+    'directeur_financier': "financial_director",
+    'directeur financier': "financial_director",
+
+    // COMPTABILITÉ AGENCE
+    'agency_accountant': "agency_accountant",
+    'comptable_agence': "agency_accountant",
+    'comptable agence': "agency_accountant",
 
     // AGENCE
     'chefagence': "chefAgence",
@@ -110,10 +122,7 @@ const normalizeRole = (r?: string): Role => {
     'agentcourrier': "chefAgence",
     'agent_courrier': "chefAgence",
 
-    'agency_accountant': "agency_accountant",
-    'comptable_agence': "agency_accountant",
-    'comptable agence': "agency_accountant",
-
+    // GUICHET
     'guichetier': "guichetier",
     'embarquement': "embarquement",
 
@@ -133,6 +142,64 @@ const toDate = (v: any): Date | null => {
   if (v instanceof Timestamp) return v.toDate();
   const d = new Date(v);
   return isNaN(d.getTime()) ? null : d;
+};
+
+/* =========================
+   Fonction de redirection par rôle (EXPORTÉE)
+========================= */
+const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
+const hasAny = (roles: unknown, allowed: readonly string[]) =>
+  asArray(roles).some((r) => allowed.includes(String(r)));
+
+export const landingTargetForRoles = (roles: unknown): string => {
+  const rolesArray = asArray(roles).map(String);
+  
+  console.log("🎯 AuthContext landingTargetForRoles - rôles reçus:", rolesArray);
+
+  // ✅ ESPACE CHEF COMPTABLE COMPAGNIE (NOUVEAU - PRIORITÉ HAUTE)
+  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) {
+    console.log("🎯 Redirection vers: /chef-comptable");
+    return "/chef-comptable";
+  }
+
+  // ✅ ESPACE COMPTABILITÉ AGENCE
+  if (hasAny(rolesArray, ["agency_accountant"])) {
+    console.log("🎯 Redirection vers: /agence/comptabilite");
+    return "/agence/comptabilite";
+  }
+
+  // ✅ GUICHET
+  if (hasAny(rolesArray, ["guichetier"])) {
+    console.log("🎯 Redirection vers: /agence/guichet");
+    return "/agence/guichet";
+  }
+
+  // ✅ CHEF AGENCE & EMBARQUEMENT
+  if (hasAny(rolesArray, ["chefAgence", "embarquement"])) {
+    console.log("🎯 Redirection vers: /agence/dashboard");
+    return "/agence/dashboard";
+  }
+
+  // ✅ CEO COMPAGNIE
+  if (hasAny(rolesArray, ["admin_compagnie"])) {
+    console.log("🎯 Redirection vers: /compagnie/dashboard");
+    return "/compagnie/dashboard";
+  }
+
+  // ✅ ADMIN PLATFORME
+  if (hasAny(rolesArray, ["admin_platforme"])) {
+    console.log("🎯 Redirection vers: /admin/dashboard");
+    return "/admin/dashboard";
+  }
+
+  // ✅ COMPATIBILITÉ - rôles obsolètes mais existants
+  if (hasAny(rolesArray, ["compagnie"])) {
+    console.log("🎯 Redirection (compatibilité) vers: /compagnie/dashboard");
+    return "/compagnie/dashboard";
+  }
+
+  console.log("🎯 Aucun rôle spécifique détecté, redirection vers: /login");
+  return "/login";
 };
 
 /* =========================
@@ -218,6 +285,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       const data: any = snap.data();
       const role = normalizeRole(data.role);
 
+      console.log("📊 AuthContext - Données utilisateur Firestore:", {
+        rawRole: data.role,
+        normalizedRole: role,
+        companyId: data.companyId,
+        agencyId: data.agencyId,
+        email: data.email
+      });
+
       const permissions = Array.from(
         new Set([
           ...(data.permissions || []),
@@ -243,6 +318,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         agencyNom: data.agencyNom,
         agencyLogoUrl: data.agencyLogoUrl,
       };
+
+      console.log("✅ AuthContext - Utilisateur créé:", {
+        role: customUser.role,
+        companyId: customUser.companyId,
+        agencyId: customUser.agencyId,
+        target: landingTargetForRoles(customUser.role)
+      });
 
       setUser(customUser);
 
@@ -308,17 +390,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         setLoading(true);
 
         if (!fbUser) {
+          console.log("🚪 AuthContext - Utilisateur déconnecté");
           setUser(null);
           setCompany(null);
           setLoading(false);
           return;
         }
 
+        console.log("🔐 AuthContext - Nouvel utilisateur détecté:", fbUser.email);
+
         try {
           await fetchUserDoc(fbUser);
         } catch (e: any) {
           if (e?.code !== "permission-denied") {
-            console.error("AuthContext error:", e);
+            console.error("❌ AuthContext error:", e);
           }
         } finally {
           setLoading(false);

@@ -1,3 +1,4 @@
+// src/AppRoutes.tsx (fichier corrigé)
 import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
@@ -20,7 +21,16 @@ import AdminParametresPlatformPage from "./pages/AdminParametresPlatformPage";
 import ValidationComptablePage from "@/pages/ValidationComptablePage";
 import ValidationChefAgencePage from "@/pages/ValidationChefAgencePage";
 import FinishSignIn from "@/pages/FinishSignIn";
-import ChefComptableCompagnie from "@/pages/ChefComptableCompagnie";
+
+// Import des pages Chef Comptable Compagnie depuis l'index
+import ChefComptableCompagniePage from "./pages/ChefComptableCompagniePage";
+import {
+  VueGlobale,
+  ReservationsEnLigne,
+  Finances,
+  Rapports,
+  Parametres
+} from "@/pages/chef-comptable";
 
 const HomePage = lazy(() => import("./pages/HomePage"));
 const PlatformSearchResultsPage = lazy(() => import("./pages/PlatformSearchResultsPage"));
@@ -49,7 +59,6 @@ const CompagnieParametresTabsPage = lazy(() => import("./pages/CompagnieParametr
 const CompagnieReservationsPage = lazy(() => import("./pages/CompagnieReservationsPage"));
 const CompagnieComptabilitePage = lazy(() => import("./pages/CompagnieComptabilitePage"));
 const BibliothequeImagesPage = lazy(() => import("./pages/BibliothequeImagesPage"));
-const ReservationsEnLignePage = lazy(() => import("./pages/ReservationsEnLignePage"));
 const CompanyPaymentSettingsPage = lazy(() => import("./pages/CompanyPaymentSettingsPage"));
 const AvisModerationPage = lazy(() => import("./pages/AvisModerationPage"));
 const ParametresPlan = lazy(() => import("./pages/ParametresPlan"));
@@ -74,10 +83,11 @@ export const routePermissions = {
   agenceShell: ["chefAgence", "superviseur", "agentCourrier", "admin_compagnie"] as const,
   guichet: ["guichetier", "chefAgence", "admin_compagnie"] as const,
   comptabilite: ["agency_accountant", "admin_compagnie"] as const,
-  validationsCompta: ["company_accountant", "financial_director"] as const,
+  validationsCompta: ["company_accountant", "financial_director", "admin_platforme"] as const,
   validationsAgence: ["chefAgence", "superviseur", "admin_compagnie"] as const,
   receiptGuichet: ["chefAgence", "guichetier", "admin_compagnie"] as const,
   adminLayout: ["admin_platforme"] as const,
+  chefComptableCompagnie: ["company_accountant", "financial_director", "admin_platforme"] as const,
 };
 
 const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
@@ -87,18 +97,19 @@ const hasAny = (roles: unknown, allowed: readonly string[]) =>
 const landingTargetForRoles = (roles: unknown): string => {
   const rolesArray = asArray(roles).map(String);
 
-  // ✅ COMPTABILITÉ COMPAGNIE (CHEF COMPTABLE + DAF)
+  // ✅ ESPACE CHEF COMPTABLE COMPAGNIE
   if (hasAny(rolesArray, ["company_accountant", "financial_director"])) {
-    return "/comptable";
+    return "/chef-comptable";
+  }
+
+  // ✅ ESPACE COMPTABILITÉ AGENCE
+  if (hasAny(rolesArray, routePermissions.comptabilite)) {
+    return "/agence/comptabilite";
   }
 
   // AGENCE
   if (hasAny(rolesArray, routePermissions.guichet)) {
     return "/agence/guichet";
-  }
-
-  if (hasAny(rolesArray, routePermissions.comptabilite)) {
-    return "/agence/comptabilite";
   }
 
   if (hasAny(rolesArray, routePermissions.agenceShell)) {
@@ -218,24 +229,24 @@ const DebugAuthPage = () => {
         <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md border">
           <h2 className="text-lg font-semibold mb-4 text-red-700">🧪 Tests de Navigation</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <a href="/comptable" className="block p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition text-center">
-              <div className="font-medium text-blue-800">/comptable</div>
-              <div className="text-sm text-blue-600 mt-1">Espace comptable compagnie</div>
+            <a href="/chef-comptable" className="block p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition text-center">
+              <div className="font-medium text-blue-800">/chef-comptable</div>
+              <div className="text-sm text-blue-600 mt-1">Espace Chef Comptable Compagnie</div>
               <div className="text-xs text-blue-500 mt-2">Rôles: company_accountant, financial_director</div>
             </a>
-            <a href="/compagnie/dashboard" className="block p-4 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition text-center">
-              <div className="font-medium text-green-800">/compagnie/dashboard</div>
-              <div className="text-sm text-green-600 mt-1">Espace CEO compagnie</div>
-              <div className="text-xs text-green-500 mt-2">Rôle: admin_compagnie</div>
+            <a href="/agence/comptabilite" className="block p-4 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition text-center">
+              <div className="font-medium text-green-800">/agence/comptabilite</div>
+              <div className="text-sm text-green-600 mt-1">Espace Comptable Agence</div>
+              <div className="text-xs text-green-500 mt-2">Rôle: agency_accountant</div>
             </a>
-            <a href="/agence/dashboard" className="block p-4 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition text-center">
-              <div className="font-medium text-purple-800">/agence/dashboard</div>
-              <div className="text-sm text-purple-600 mt-1">Espace chef d'agence</div>
-              <div className="text-xs text-purple-500 mt-2">Rôles: chefAgence, embarquement</div>
+            <a href="/compagnie/dashboard" className="block p-4 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition text-center">
+              <div className="font-medium text-purple-800">/compagnie/dashboard</div>
+              <div className="text-sm text-purple-600 mt-1">Espace CEO Compagnie</div>
+              <div className="text-xs text-purple-500 mt-2">Rôle: admin_compagnie</div>
             </a>
             <a href="/admin/dashboard" className="block p-4 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition text-center">
               <div className="font-medium text-orange-800">/admin/dashboard</div>
-              <div className="text-sm text-orange-600 mt-1">Espace admin plateforme</div>
+              <div className="text-sm text-orange-600 mt-1">Espace Admin Plateforme</div>
               <div className="text-xs text-orange-500 mt-2">Rôle: admin_platforme</div>
             </a>
           </div>
@@ -353,7 +364,7 @@ const AppRoutes = () => {
           <Route path="media" element={<MediaPage />} />
         </Route>
 
-        {/* COMPAGNIE */}
+        {/* ========= COMPAGNIE (CEO) ========= */}
         <Route
           path="/compagnie"
           element={
@@ -369,70 +380,43 @@ const AppRoutes = () => {
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="parametres/plan" element={<ParametresPlan />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
-          <Route path="reservations-en-ligne" element={<ReservationsEnLignePage />} />
+          {/* Redirection vers l'espace chef comptable */}
+          <Route 
+            path="reservations-en-ligne" 
+            element={<Navigate to="/chef-comptable/reservations-en-ligne" replace />} 
+          />
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />
           <Route path="compagnies/:companyId" element={<AdminCompanyDetail />} />
         </Route>
 
-        {/* ================= COMPTABILITÉ COMPAGNIE ================= */}
+        {/* ========= CHEF COMPTABLE COMPAGNIE ========= */}
         <Route
-          path="/comptable"
+          path="/chef-comptable"
           element={
-            <PrivateRoute allowedRoles={["company_accountant", "financial_director"] as const}>
-              <ChefComptableCompagnie />
+            <PrivateRoute allowedRoles={routePermissions.chefComptableCompagnie}>
+              <ChefComptableCompagniePage />
             </PrivateRoute>
           }
         >
-          {/* Dashboard comptable (à créer après) */}
-          <Route
-            index
-            element={
-              <div className="text-gray-600 text-sm">
-                Tableau de bord comptable (à venir)
-              </div>
-            }
-          />
-
+          {/* Page d'accueil */}
+          <Route index element={<VueGlobale />} />
+          
           {/* Réservations en ligne (VALIDATION / REFUS) */}
-          <Route
-            path="reservations-en-ligne"
-            element={<ReservationsEnLignePage />}
-          />
-
-          {/* Finances compagnie (à brancher plus tard) */}
-          <Route
-            path="finances"
-            element={
-              <div className="text-gray-600 text-sm">
-                Finances compagnie (à venir)
-              </div>
-            }
-          />
-
+          <Route path="reservations-en-ligne" element={<ReservationsEnLigne />} />
+          
+          {/* Finances compagnie */}
+          <Route path="finances" element={<Finances />} />
+          
           {/* Rapports */}
-          <Route
-            path="rapports"
-            element={
-              <div className="text-gray-600 text-sm">
-                Rapports comptables (à venir)
-              </div>
-            }
-          />
-
+          <Route path="rapports" element={<Rapports />} />
+          
           {/* Paramètres comptables */}
-          <Route
-            path="parametres"
-            element={
-              <div className="text-gray-600 text-sm">
-                Paramètres comptables (à venir)
-              </div>
-            }
-          />
+          <Route path="parametres" element={<Parametres />} />
         </Route>
 
-        {/* AGENCE */}
+        {/* ========= AGENCE ========= */}
         <Route
           path="/agence"
           element={
@@ -455,7 +439,8 @@ const AppRoutes = () => {
           <Route path="rapports" element={<AgenceRapportsPage />} />
         </Route>
 
-        {/* HORS SHELL */}
+        {/* ========= PAGES HORS SHELL AGENCE ========= */}
+        {/* Guichet */}
         <Route
           path="/agence/guichet"
           element={
@@ -464,6 +449,8 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         />
+        
+        {/* Comptabilité Agence */}
         <Route
           path="/agence/comptabilite"
           element={
@@ -473,7 +460,8 @@ const AppRoutes = () => {
           }
         />
 
-        {/* VALIDATIONS */}
+        {/* ========= VALIDATIONS (COMPATIBILITÉ) ========= */}
+        {/* Validations comptables (ancienne route - garder pour compatibilité) */}
         <Route
           path="/compta/validations"
           element={
@@ -482,6 +470,8 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         />
+        
+        {/* Validations chef agence */}
         <Route
           path="/agence/validations"
           element={
@@ -491,7 +481,8 @@ const AppRoutes = () => {
           }
         />
 
-        {/* PAGES ISOLÉES */}
+        {/* ========= PAGES ISOLÉES ========= */}
+        {/* Reçu guichet */}
         <Route
           path="/agence/receipt/:id"
           element={
@@ -500,9 +491,10 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         />
+        
         <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
 
-        {/* DYNAMIQUES PUBLIQUES */}
+        {/* ========= DYNAMIQUES PUBLIQUES ========= */}
         <Route path="/:slug/reserver" element={<ReservationClientPage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
         <Route path="/:slug/mon-billet" element={<ReservationDetailsPage />} />
@@ -510,6 +502,16 @@ const AppRoutes = () => {
         <Route path="/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/:slug/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/:slug/*" element={<RouteResolver />} />
+
+        {/* ========= REDIRECTIONS DE COMPATIBILITÉ ========= */}
+        {/* Rediriger l'ancienne route /comptable vers /chef-comptable */}
+        <Route path="/comptable" element={<Navigate to="/chef-comptable" replace />} />
+        
+        {/* Rediriger l'ancienne route réservations en ligne vers le nouvel espace */}
+        <Route 
+          path="/compagnie/reservations-en-ligne-compta" 
+          element={<Navigate to="/chef-comptable/reservations-en-ligne" replace />} 
+        />
 
         {/* 404 */}
         <Route
