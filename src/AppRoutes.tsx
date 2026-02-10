@@ -23,7 +23,7 @@ import ValidationChefAgencePage from "@/pages/ValidationChefAgencePage";
 import FinishSignIn from "@/pages/FinishSignIn";
 
 // Import des pages Chef Comptable Compagnie depuis l'index
-import ChefComptableCompagniePage from "./pages/ChefComptableCompagniePage";
+import ChefComptableCompagniePage from "./pages/ChefComptableCompagnie";
 import {
   VueGlobale,
   ReservationsEnLigne,
