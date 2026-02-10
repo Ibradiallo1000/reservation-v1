@@ -10,19 +10,17 @@ import {
   Map,
   GaugeCircle,
   Ticket,
-  BellRing,
 } from "lucide-react";
 
 // ✅ Import corrigé (sans accolades)
 import { KpiHeader } from "@/components/CompanyDashboard/KpiHeader";
 import { TimeFilterBar, RangeKey } from "@/components/CompanyDashboard/TimeFilterBar";
 import { RevenueReservationsChart } from "@/components/CompanyDashboard/RevenueReservationsChart";
-import { AgencyPerformanceChart } from "@/components/CompanyDashboard/AgencyPerformanceChart";
 import { ChannelSplitChart } from "@/components/CompanyDashboard/ChannelSplitChart";
-import { StatusBreakdownChart } from "@/components/CompanyDashboard/StatusBreakdownChart";
-import { TopTrajetsTable } from "@/components/CompanyDashboard/TopTrajetsTable";
-import { UnderperformingAgenciesTable } from "@/components/CompanyDashboard/UnderperformingAgenciesTable";
-import { AlertsPanel } from "@/components/CompanyDashboard/AlertsPanel";
+
+// ✅ Nouveaux composants CEO
+import { NetworkHealthSummary } from "@/components/CompanyDashboard/NetworkHealthSummary";
+import { CriticalAlertsPanel, type CriticalAlert } from "@/components/CompanyDashboard/CriticalAlertsPanel";
 
 // id compagnie depuis l'auth
 import { useAuth } from "@/contexts/AuthContext";
@@ -30,6 +28,18 @@ import { usePageHeader } from "@/contexts/PageHeaderContext";
 
 /* ---------- helpers ---------- */
 const DEFAULT_RANGE: RangeKey = "month";
+
+// Type pour les agences (adapté au type réel)
+interface AgencyData {
+  id?: string;
+  nom?: string;
+  name?: string;
+  ville?: string;
+  reservations?: number;
+  revenus?: number;
+  tauxRemplissage?: number;
+  ca?: number;
+}
 
 export default function CompagnieDashboard() {
   const { user } = useAuth();
@@ -51,24 +61,12 @@ export default function CompagnieDashboard() {
     return () => clearInterval(id);
   }, []);
 
-  const { todayFrom, todayTo, todayLabel } = useMemo(() => {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-    const label = new Intl.DateTimeFormat("fr-FR", {
-      weekday: "long",
-      day: "2-digit",
-      month: "long",
-    }).format(start);
-    return { todayFrom: start, todayTo: end, todayLabel: label };
-  }, [now]);
-
   const { dateFrom, dateTo, periodLabel } = useMemo(() => {
     const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
 
     let start = new Date(now.getFullYear(), now.getMonth(), 1);
     let end = endOfToday;
 
-    // ✅ Nouveau filtre "day"
     if (range === "day") {
       start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
       end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
@@ -100,20 +98,11 @@ export default function CompagnieDashboard() {
       <div className="p-6">
         <h1 className="text-xl font-semibold mb-2">Dashboard Compagnie</h1>
         <p className="text-sm text-muted-foreground">
-          Identifiant compagnie introuvable dans l’auth. Vérifie <code>user.companyId</code>.
+          Identifiant compagnie introuvable dans l'auth. Vérifie <code>user.companyId</code>.
         </p>
       </div>
     );
   }
-
-  const {
-    loading: loadingToday,
-    company: companyToday,
-    kpis: kpisToday,
-    alerts: alertsToday,
-  } = useCompanyDashboardData({ companyId, dateFrom: todayFrom, dateTo: todayTo });
-
-  const alertsCountToday = alertsToday?.length ?? 0;
 
   const {
     loading,
@@ -121,9 +110,117 @@ export default function CompagnieDashboard() {
     kpis,
     series,
     perAgency,
-    topTrajets,
     alerts,
   } = useCompanyDashboardData({ companyId, dateFrom, dateTo });
+
+  // Calculer les métriques de santé réseau
+  const calculateNetworkHealth = () => {
+    if (!perAgency || perAgency.length === 0) {
+      return {
+        totalAgencies: kpis.totalAgences || 0,
+        healthyAgencies: 0,
+        atRiskAgencies: 0,
+        trend: "stable" as const
+      };
+    }
+
+    // Type assertion safe
+    const agencies = perAgency as unknown as AgencyData[];
+    
+    // Calcul simple basé sur les revenus ou taux de remplissage
+    const agenciesWithData = agencies.filter(agency => 
+      (agency.revenus !== undefined && agency.revenus !== null) || 
+      (agency.tauxRemplissage !== undefined && agency.tauxRemplissage !== null)
+    );
+
+    if (agenciesWithData.length === 0) {
+      return {
+        totalAgencies: kpis.totalAgences || 0,
+        healthyAgencies: kpis.agencesActives || 0,
+        atRiskAgencies: 0,
+        trend: "stable" as const
+      };
+    }
+
+    // Calculer le revenu moyen
+    const totalRevenue = agenciesWithData.reduce((sum, agency) => {
+      const revenue = agency.revenus || 0;
+      return sum + revenue;
+    }, 0);
+    
+    const avgRevenue = totalRevenue / agenciesWithData.length;
+
+    // Agences performantes : revenu > 70% de la moyenne
+    const healthyAgencies = agenciesWithData.filter(agency => {
+      const revenue = agency.revenus || 0;
+      return revenue > avgRevenue * 0.7;
+    }).length;
+
+    // Agences à risque : revenu < 30% de la moyenne
+    const atRiskAgencies = agenciesWithData.filter(agency => {
+      const revenue = agency.revenus || 0;
+      return revenue < avgRevenue * 0.3;
+    }).length;
+
+    // Déterminer la tendance
+    let trend: "up" | "down" | "stable" = "stable";
+    
+    // Calculer le taux de remplissage moyen
+    const totalTauxRemplissage = agenciesWithData.reduce((sum, agency) => {
+      const taux = agency.tauxRemplissage || 0;
+      return sum + taux;
+    }, 0);
+    
+    const avgTauxRemplissage = totalTauxRemplissage / agenciesWithData.length;
+
+    if (avgTauxRemplissage > 70) trend = "up";
+    else if (avgTauxRemplissage < 40) trend = "down";
+
+    return {
+      totalAgencies: kpis.totalAgences || agenciesWithData.length,
+      healthyAgencies,
+      atRiskAgencies,
+      trend
+    };
+  };
+
+  const networkHealth = calculateNetworkHealth();
+
+  // Convertir les alertes au format attendu
+  const convertAlertsToCriticalAlerts = (): CriticalAlert[] => {
+    if (!alerts || !Array.isArray(alerts)) return [];
+    
+    return alerts.map((alert: any, index: number) => {
+      // Vérifier si l'alerte a déjà un titre
+      if (alert.title && typeof alert.title === 'string') {
+        return {
+          id: alert.id || `alert-${index}`,
+          title: alert.title,
+          description: alert.description || alert.message || alert.details,
+          type: alert.type,
+          severity: alert.severity,
+          level: alert.level || (alert.severity === 'high' ? 'high' : 'medium'),
+          date: alert.date || alert.createdAt
+        };
+      }
+      
+      // Si pas de titre, essayer de créer un titre à partir d'autres propriétés
+      const title = alert.message || alert.description || `Alerte ${index + 1}`;
+      const description = alert.details || alert.description || alert.message;
+      
+      return {
+        id: alert.id || `alert-${index}`,
+        title,
+        description,
+        type: alert.type,
+        severity: alert.severity,
+        level: alert.level || (alert.severity === 'high' ? 'high' : 'medium'),
+        date: alert.date || alert.createdAt
+      };
+    });
+  };
+
+  const criticalAlerts = convertAlertsToCriticalAlerts();
 
   return (
     <div className="space-y-5 p-4 md:p-6">
@@ -191,7 +288,7 @@ export default function CompagnieDashboard() {
         ]}
       />
 
-      {/* ===== Graphiques ===== */}
+      {/* ===== SECTION 1: VUE EXÉCUTIVE ===== */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <Card className="xl:col-span-2">
           <CardHeader>
@@ -211,47 +308,36 @@ export default function CompagnieDashboard() {
         </Card>
       </div>
 
-      {/* ===== Comparatifs ===== */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <Card className="xl:col-span-2">
-          <CardHeader>
-            <CardTitle>Performance par agence</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AgencyPerformanceChart data={perAgency} loading={loading} />
-          </CardContent>
-        </Card>
+      {/* ===== SECTION 2: SANTÉ DU RÉSEAU ===== */}
+      <div className="grid grid-cols-1">
         <Card>
           <CardHeader>
-            <CardTitle>Réservations par statut</CardTitle>
+            <CardTitle>Santé du réseau</CardTitle>
           </CardHeader>
           <CardContent>
-            <StatusBreakdownChart data={kpis.parStatut} loading={loading} />
+            <NetworkHealthSummary
+              totalAgencies={networkHealth.totalAgencies}
+              healthyAgencies={networkHealth.healthyAgencies}
+              atRiskAgencies={networkHealth.atRiskAgencies}
+              trend={networkHealth.trend}
+            />
           </CardContent>
         </Card>
       </div>
 
-      {/* ===== Tables & Alertes ===== */}
-      <div className="grid grid-cols-1 2xl:grid-cols-3 gap-5">
-        <Card className="2xl:col-span-2">
+      {/* ===== SECTION 3: ALERTES CRITIQUES ===== */}
+      <div className="grid grid-cols-1">
+        <Card>
           <CardHeader>
-            <CardTitle>Top trajets</CardTitle>
+            <CardTitle>Alertes critiques nécessitant décision</CardTitle>
           </CardHeader>
           <CardContent>
-            <TopTrajetsTable rows={topTrajets} loading={loading} />
+            <CriticalAlertsPanel 
+              alerts={criticalAlerts} 
+              loading={loading}
+            />
           </CardContent>
         </Card>
-        <div className="space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle>Agences à surveiller</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <UnderperformingAgenciesTable data={perAgency} loading={loading} />
-            </CardContent>
-          </Card>
-          <AlertsPanel alerts={alerts} />
-        </div>
       </div>
     </div>
   );

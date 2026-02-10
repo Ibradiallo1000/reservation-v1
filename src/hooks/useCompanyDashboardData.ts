@@ -1,5 +1,5 @@
 // =============================================
-// src/hooks/useCompanyDashboardData.ts  (PAID-ONLY METRICS)
+// src/hooks/useCompanyDashboardData.ts
 // =============================================
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
@@ -27,7 +27,18 @@ export interface DashboardKpis {
 
 export type DailyPoint = { date: string; reservations: number; revenue: number };
 export type Series = { daily: DailyPoint[] };
-export type AgencyPerf = { id: string; nom: string; ville?: string; reservations: number; revenus: number; variation?: number };
+
+// CORRECTION ICI : Rendre tauxRemplissage optionnel
+export type AgencyPerf = {
+  id: string; 
+  nom: string; 
+  ville?: string; 
+  reservations: number; 
+  revenus: number; 
+  tauxRemplissage?: boolean; // ← Rendre optionnel
+  variation?: number;
+};
+
 export type TopTrajet = { trajet: string; reservations: number; revenus: number; tauxRemplissage?: string };
 export type AlertItem = { level: "error" | "warning" | "info"; message: string };
 
@@ -55,7 +66,6 @@ function normStr(s?: string) {
 }
 function isPaidStatus(s?: string) {
   const n = normStr(s);
-  // "payé" => "paye"; on accepte quelques variantes
   return n === "paye" || n === "paid" || n === "payed";
 }
 function getDateKey(d: Date) {
@@ -127,7 +137,7 @@ export function useCompanyDashboardData({
     return () => unsub();
   }, [companyId]);
 
-  // Réservations par agence (filtre dates – on garde les logs; filtre "payé" en aval pour éviter un index Firestore requis partout)
+  // Réservations par agence
   useEffect(() => {
     if (!companyId) return;
     setLoading(true);
@@ -188,7 +198,6 @@ export function useCompanyDashboardData({
             const filteredOut = all.filter(r => r.agencyId !== aid && r.agenceId !== aid);
             all.splice(0, all.length, ...filteredOut, ...items);
 
-            // sécurité : filtrage client si certains docs n'ont pas createdAt
             const filtered = all.filter(r => {
               const dt = toDateSafe(r.createdAt) ?? (r.date ? new Date(`${r.date}T${r.heure || "00:00"}:00`) : null);
               return dt ? dt >= dateFrom && dt <= dateTo : false;
@@ -216,7 +225,7 @@ export function useCompanyDashboardData({
     };
   }, [companyId, dateFrom.getTime(), dateTo.getTime()]);
 
-  /* ---------- Sélection paid-only pour toutes les métriques ---------- */
+  /* ---------- Sélection paid-only ---------- */
   const paidReservations = useMemo(
     () => reservations.filter(r => isPaidStatus(r.statut)),
     [reservations]
@@ -227,27 +236,55 @@ export function useCompanyDashboardData({
 
   const perAgency = useMemo<AgencyPerf[]>(() => {
     const map = new Map<string, AgencyPerf>();
-    agencies.forEach(a => map.set(a.id, { id: a.id, nom: a.nom, ville: a.ville, reservations: 0, revenus: 0 }));
+    
+    // Initialiser avec toutes les agences
+    agencies.forEach(a => map.set(a.id, {
+      id: a.id, 
+      nom: a.nom, 
+      ville: a.ville, 
+      reservations: 0, 
+      revenus: 0,
+      // tauxRemplissage est optionnel, donc on ne le définit pas ici
+    }));
+    
+    // Mettre à jour avec les réservations payées
     paidReservations.forEach(r => {
       const aId = (r.agencyId || r.agenceId) as string | undefined;
       if (!aId) return;
-      const curr = map.get(aId) || { id: aId, nom: r.agencyNom || aId, ville: r.agencyVille, reservations: 0, revenus: 0 };
+      
+      const curr = map.get(aId) || { 
+        id: aId, 
+        nom: r.agencyNom || aId, 
+        ville: r.agencyVille, 
+        reservations: 0, 
+        revenus: 0 
+      };
+      
       curr.reservations += r.seatsGo || 1;
       curr.revenus += r.montant || 0;
       map.set(aId, curr);
     });
+    
     return Array.from(map.values()).sort((a, b) => b.revenus - a.revenus);
   }, [agencies, paidReservations]);
 
   const clientsUniques = useMemo(() => {
     const s = new Set<string>();
-    paidReservations.forEach(r => { if (r.clientId) s.add("id:" + r.clientId); else if (r.clientPhone) s.add("tel:" + r.clientPhone); });
+    paidReservations.forEach(r => { 
+      if (r.clientId) s.add("id:" + r.clientId); 
+      else if (r.clientPhone) s.add("tel:" + r.clientPhone); 
+    });
     return s.size;
   }, [paidReservations]);
 
   const villesCouvertes = useMemo(() => {
     const s = new Set<string>();
-    paidReservations.forEach(r => { const a = normCity(r.depart || r.departNormalized); const b = normCity(r.arrival || r.arrivee); if (a) s.add(a); if (b) s.add(b); });
+    paidReservations.forEach(r => { 
+      const a = normCity(r.depart || r.departNormalized); 
+      const b = normCity(r.arrival || r.arrivee); 
+      if (a) s.add(a); 
+      if (b) s.add(b); 
+    });
     return s.size;
   }, [paidReservations]);
 
@@ -263,16 +300,18 @@ export function useCompanyDashboardData({
     return Array.from(m).map(([name, value]) => ({ name, value })).sort((a,b)=>b.value-a.value);
   }, [paidReservations]);
 
-  // ⚠️ parStatut reste basé sur TOUTES les réservations (utile pour tes alertes)
   const parStatut = useMemo(() => {
     const m = new Map<string, number>();
-    reservations.forEach(r => { const k = normStr(r.statut) || "—"; m.set(k, (m.get(k) || 0) + 1); });
+    reservations.forEach(r => { 
+      const k = normStr(r.statut) || "—"; 
+      m.set(k, (m.get(k) || 0) + 1); 
+    });
     return Array.from(m).map(([name, value]) => ({ name, value }));
   }, [reservations]);
 
   const kpis = useMemo<DashboardKpis>(() => {
     const ca = paidReservations.reduce((s, r) => s + (r.montant || 0), 0);
-    const caDeltaText = "vs période précédente"; // TODO: calcul réel
+    const caDeltaText = "vs période précédente";
 
     const reservationsCount = paidReservations.length;
 
@@ -310,7 +349,7 @@ export function useCompanyDashboardData({
       villesCouvertes,
       tauxRemplissageText,
       parCanal,
-      parStatut,          // <- toujours tous statuts
+      parStatut,
       partEnLigne,
       partGuichet,
     };
@@ -336,25 +375,35 @@ export function useCompanyDashboardData({
   const topTrajets = useMemo<TopTrajet[]>(() => {
     const m = new Map<string, { reservations: number; revenus: number }>();
     paidReservations.forEach(r => {
-      const a = normCity(r.depart || r.departNormalized); const b = normCity(r.arrival || r.arrivee);
+      const a = normCity(r.depart || r.departNormalized); 
+      const b = normCity(r.arrival || r.arrivee);
       if (!a || !b) return;
       const key = `${a} → ${b}`;
       const curr = m.get(key) || { reservations: 0, revenus: 0 };
-      curr.reservations += r.seatsGo || 1; curr.revenus += r.montant || 0;
+      curr.reservations += r.seatsGo || 1; 
+      curr.revenus += r.montant || 0;
       m.set(key, curr);
     });
-    return Array.from(m).map(([trajet, v]) => ({ trajet, reservations: v.reservations, revenus: v.revenus }))
-      .sort((a,b)=>b.reservations-a.reservations).slice(0,12);
+    return Array.from(m).map(([trajet, v]) => ({ 
+      trajet, 
+      reservations: v.reservations, 
+      revenus: v.revenus 
+    }))
+    .sort((a,b)=>b.reservations-a.reservations)
+    .slice(0,12);
   }, [paidReservations]);
 
   const alerts: AlertItem[] = useMemo(() => {
     const arr: AlertItem[] = [];
     const enAttente = parStatut.find(s => s.name.includes("attente"))?.value || 0;
     if (enAttente > 50) arr.push({ level: "warning", message: `${enAttente} réservations en attente` });
+    
     const preuves = parStatut.find(s => s.name.includes("preuve"))?.value || 0;
     if (preuves > 0) arr.push({ level: "info", message: `${preuves} preuve(s) reçue(s) à valider` });
+    
     const zero = perAgency.filter(a => a.reservations === 0);
     if (zero.length > 0) arr.push({ level: "warning", message: `${zero.length} agence(s) sans vente` });
+    
     return arr;
   }, [perAgency, parStatut]);
 
@@ -368,9 +417,23 @@ export function useCompanyDashboardData({
       ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(","))
     ).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a");
-    a.href = url; a.download = `reservations_${getDateKey(dateFrom)}_${getDateKey(dateTo)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(blob); 
+    const a = document.createElement("a");
+    a.href = url; 
+    a.download = `reservations_${getDateKey(dateFrom)}_${getDateKey(dateTo)}.csv`; 
+    a.click(); 
+    URL.revokeObjectURL(url);
   }
 
-  return { loading, company, kpis, series, perAgency, topTrajets, alerts, rawReservations: reservations, exportCSV } as const;
+  return { 
+    loading, 
+    company, 
+    kpis, 
+    series, 
+    perAgency, 
+    topTrajets, 
+    alerts, 
+    rawReservations: reservations, 
+    exportCSV 
+  } as const;
 }
