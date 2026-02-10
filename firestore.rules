@@ -1,4 +1,5 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -6,12 +7,20 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    /* ========= PUBLIC ========= */
-
+    /* =====================
+       DONNÉES PUBLIQUES
+    ===================== */
     match /villes/{id} {
       allow get, list: if true;
     }
 
+    match /paymentMethods/{id} {
+      allow get, list: if true;
+    }
+
+    /* =====================
+       COMPAGNIES / AGENCES
+    ===================== */
     match /companies/{companyId} {
       allow get, list: if true;
 
@@ -23,22 +32,80 @@ service cloud.firestore {
         }
 
         match /reservations/{reservationId} {
+
+          /* 🔓 Lecture & création publiques */
           allow get, list, create: if true;
+
+          /* =============================
+             UPDATE 1 — APRÈS CRÉATION
+             (publicToken / publicUrl)
+          ============================= */
+          allow update: if (
+            request.auth == null &&
+            resource.data.canal == "en_ligne" &&
+            resource.data.statut == "en_attente_paiement" &&
+            request.resource.data.diff(resource.data).changedKeys()
+              .hasOnly([
+                "publicToken",
+                "publicUrl",
+                "updatedAt"
+              ])
+          );
+
+          /* =============================
+             UPDATE 2 — APRÈS PAIEMENT
+             (preuve de paiement)
+          ============================= */
+          allow update: if (
+            request.auth == null &&
+            resource.data.canal == "en_ligne" &&
+            resource.data.statut == "en_attente_paiement" &&
+            request.resource.data.statut == "preuve_recue" &&
+            request.resource.data.diff(resource.data).changedKeys()
+              .hasOnly([
+                "statut",
+                "preuveVia",
+                "preuveMessage",
+                "paymentHint",
+                "paymentTriggeredAt",
+                "updatedAt"
+              ])
+          );
+
+          /* 🔐 Utilisateurs internes */
           allow update, delete: if isAuth();
         }
       }
     }
 
-    match /paymentMethods/{id} {
+    /* =====================
+       COLLECTION GROUP
+    ===================== */
+    match /{path=**}/weeklyTrips/{tripId} {
       allow get, list: if true;
     }
 
-    /* ========= INTERNE ========= */
+    match /{path=**}/reservations/{reservationId} {
+      allow get, list: if true;
+    }
 
+    /* =====================
+       DONNÉES INTERNES
+    ===================== */
     match /users/{userId} {
       allow get, list, create, update: if isAuth();
     }
 
+    /* =====================
+       COUNTERS (si utilisés)
+    ===================== */
+    match /companies/{companyId}/counters/byTrip/trips/{tripInstanceId} {
+      allow get, create, update: if true;
+    }
+
+    /* =====================
+       FALLBACK SÉCURITÉ
+    ===================== */
     match /{path=**} {
       allow get, list, create, update, delete: if isAuth();
     }

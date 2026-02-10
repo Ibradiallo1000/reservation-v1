@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   collection, query, where, orderBy, limit, updateDoc, doc,
-  deleteDoc, onSnapshot, Timestamp, getDocs, getDoc, runTransaction
+  deleteDoc, onSnapshot, Timestamp, getDocs
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,10 +23,12 @@ import {
   AlertTriangle,
   RefreshCw,
   FileText,
-  Users,
   Smartphone,
-  Wallet,
-  Info
+  Info,
+  ChevronDown,
+  ChevronUp,
+  Bell,
+  Calendar
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -66,6 +68,7 @@ export interface Reservation {
   refusedAt?: Timestamp | Date | null;
   updatedAt?: Timestamp | Date | null;
   reason?: string;
+  preuveMessage?: string;
   [key: string]: any;
 }
 
@@ -89,7 +92,66 @@ const normalizeStatut = (raw?: string): ReservationStatus => {
   return 'en_attente';
 };
 
-const ITEMS_PER_PAGE = 12;
+const ITEMS_PER_PAGE = 20;
+
+/* ================= TYPES POUR LA PAGINATION ET FILTRES ================= */
+interface FilterOptions {
+  period: 'today' | '7days' | '30days';
+  startDate?: Date;
+  endDate?: Date;
+}
+
+/* ================= HOOK POUR LA NOTIFICATION SONORE ================= */
+const useNotificationSound = () => {
+  const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
+  const [playedReservations, setPlayedReservations] = useState<Set<string>>(new Set());
+  const [isAudioReady, setIsAudioReady] = useState(false);
+
+  const initializeAudio = () => {
+    if (audio || typeof window === 'undefined') return;
+
+    const audioElement = new Audio('/notification.mp3');
+    audioElement.preload = 'auto';
+    
+    // Précharger l'audio
+    audioElement.load();
+    
+    audioElement.addEventListener('canplaythrough', () => {
+      setAudio(audioElement);
+      setIsAudioReady(true);
+    });
+
+    audioElement.addEventListener('error', (e) => {
+      console.warn('Erreur chargement audio:', e);
+      setIsAudioReady(false);
+    });
+  };
+
+  const playNotification = (reservationId: string) => {
+    if (!isAudioReady || !audio || playedReservations.has(reservationId)) return;
+
+    audio.currentTime = 0;
+    audio.play().catch((error) => {
+      console.warn('Erreur lecture son notification:', error);
+    });
+    
+    setPlayedReservations(prev => {
+      const next = new Set(prev);
+      next.add(reservationId);
+      return next;
+    });
+  };
+
+  const resetNotification = (reservationId: string) => {
+    setPlayedReservations(prev => {
+      const next = new Set(prev);
+      next.delete(reservationId);
+      return next;
+    });
+  };
+
+  return { initializeAudio, playNotification, resetNotification, isAudioReady };
+};
 
 /* ================= COMPOSANTS UI ================= */
 const Badge: React.FC<{
@@ -109,7 +171,7 @@ const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & {
     className={`
       inline-flex items-center justify-center px-4 py-2.5 rounded-xl text-white font-medium 
       shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200
-      disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none
+      disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none relative
       ${className}
     `}
     style={{ 
@@ -137,43 +199,6 @@ const SecondaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> =
   >
     {children}
   </button>
-);
-
-const KpiCard: React.FC<{
-  icon: React.ReactNode; 
-  label: string; 
-  value: string; 
-  sublabel?: string;
-  theme: { primary: string; secondary: string };
-  emphasis: boolean;
-}> = ({ icon, label, value, sublabel, theme, emphasis }) => (
-  <div
-    className={`relative overflow-hidden rounded-2xl border border-gray-200 p-5 bg-white shadow-sm
-      hover:shadow-md transition-all duration-300
-      ${emphasis ? 'ring-2 ring-offset-2' : ''}`}
-    style={
-      emphasis
-        ? { ['--tw-ring-color' as any]: theme.primary }
-        : undefined
-    }
-  >
-    <div className="absolute top-0 right-0 h-20 w-20 opacity-10">
-      <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full blur-xl"></div>
-    </div>
-    
-    <div className="flex items-start justify-between mb-4">
-      <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">{label}</div>
-      <div className="h-10 w-10 rounded-xl grid place-items-center"
-           style={{background: `linear-gradient(135deg, ${theme.primary}20, ${theme.secondary}20)`}}>
-        <span className="text-gray-700">{icon}</span>
-      </div>
-    </div>
-    
-    <div className="space-y-1">
-      <div className={`font-bold ${emphasis ? 'text-3xl' : 'text-2xl'} text-gray-900`}>{value}</div>
-      {sublabel && <div className="text-xs font-medium text-gray-500">{sublabel}</div>}
-    </div>
-  </div>
 );
 
 const StatCard: React.FC<{
@@ -217,7 +242,7 @@ const getStatusConfig = (status?: ReservationStatus) => {
       };
     case 'verification':
       return {
-        label: 'Preuve reçue',
+        label: 'À vérifier',
         color: 'bg-amber-100 text-amber-800 border-amber-300',
         icon: <AlertCircle className="h-3 w-3" />,
         priority: 1,
@@ -258,20 +283,62 @@ const ReservationsEnLigne: React.FC = () => {
   const { user, company } = useAuth() as any;
   const navigate = useNavigate();
   const theme = useCompanyTheme(company) || { primary: '#2563eb', secondary: '#3b82f6' };
+  const { initializeAudio, playNotification, resetNotification, isAudioReady } = useNotificationSound();
 
-  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [verificationReservations, setVerificationReservations] = useState<Reservation[]>([]);
+  const [otherReservations, setOtherReservations] = useState<Reservation[]>([]);
   const [agencies, setAgencies] = useState<Record<string, {name: string, ville: string}>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<ReservationStatus | ''>('');
-  const [dateRange, setDateRange] = useState<{start: Date, end: Date}>(() => {
-    const end = new Date();
+  const [otherPage, setOtherPage] = useState(1);
+  const [showStats, setShowStats] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [filterPeriod, setFilterPeriod] = useState<FilterOptions['period']>('today');
+
+  /* ================= FONCTIONS UTILITAIRES DATE ================= */
+  const getPeriodDates = (period: FilterOptions['period']) => {
+    const now = new Date();
     const start = new Date();
-    start.setDate(start.getDate() - 30);
-    return { start, end };
-  });
+    
+    switch (period) {
+      case 'today':
+        start.setHours(0, 0, 0, 0);
+        break;
+      case '7days':
+        start.setDate(start.getDate() - 7);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case '30days':
+        start.setDate(start.getDate() - 30);
+        start.setHours(0, 0, 0, 0);
+        break;
+    }
+    
+    return { start, end: now };
+  };
+
+  /* ================= INITIALISATION AUDIO AU PREMIER CLIC ================= */
+  useEffect(() => {
+    const handleFirstInteraction = () => {
+      initializeAudio();
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+      document.removeEventListener('touchstart', handleFirstInteraction);
+    };
+
+    document.addEventListener('click', handleFirstInteraction);
+    document.addEventListener('keydown', handleFirstInteraction);
+    document.addEventListener('touchstart', handleFirstInteraction);
+
+    return () => {
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+      document.removeEventListener('touchstart', handleFirstInteraction);
+    };
+  }, []);
 
   /* ================= CHARGEMENT DES AGENCES ================= */
   useEffect(() => {
@@ -300,7 +367,7 @@ const ReservationsEnLigne: React.FC = () => {
     })();
   }, [user?.companyId]);
 
-  /* ================= CHARGEMENT EN TEMPS RÉEL ================= */
+  /* ================= CHARGEMENT EN TEMPS RÉEL - RÉSERVATIONS À VÉRIFIER ================= */
   useEffect(() => {
     if (!user?.companyId) {
       setLoading(false);
@@ -308,7 +375,6 @@ const ReservationsEnLigne: React.FC = () => {
     }
 
     let unsubs: Array<() => void> = [];
-    let isInitialLoad = true;
 
     (async () => {
       try {
@@ -322,52 +388,74 @@ const ReservationsEnLigne: React.FC = () => {
         }
         
         const agenceIds = agencesSnap.docs.map((d) => d.id);
-        const buffer = new Map<string, Reservation>();
 
+        // Écouter en temps réel uniquement les réservations à vérifier (preuve_recue)
         agenceIds.forEach((agencyId) => {
-          const constraints = [
-            orderBy('createdAt', 'desc'),
-            limit(ITEMS_PER_PAGE * 2)
-          ];
-
           const qRef = query(
             collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
-            ...constraints
+            where('statut', '==', 'preuve_recue'),
+            orderBy('createdAt', 'desc')
           );
 
           const unsub = onSnapshot(qRef, (snap) => {
-            let hasNewReservation = false;
+            // CORRECTION CRITIQUE ICI : Utiliser une Map pour gérer proprement les changements
+            setVerificationReservations(prev => {
+              const map = new Map<string, Reservation>();
 
-            snap.docChanges().forEach((chg) => {
-              const d = chg.doc.data() as any;
-              
-              const row: Reservation = {
-                id: chg.doc.id,
-                ...d,
-                statut: normalizeStatut(d.statut),
-                agencyId: d.agencyId || agencyId,
-                createdAt: d.createdAt || Timestamp.now(),
-              };
+              // Garder l'existant
+              prev.forEach(r => {
+                map.set(`${r.agencyId}_${r.id}`, r);
+              });
 
-              const key = `${row.agencyId}_${row.id}`;
+              // Appliquer les changements
+              snap.docChanges().forEach(chg => {
+                const d = chg.doc.data() as any;
+                const row: Reservation = {
+                  id: chg.doc.id,
+                  ...d,
+                  statut: normalizeStatut(d.statut),
+                  agencyId: d.agencyId || agencyId,
+                  createdAt: d.createdAt || Timestamp.now(),
+                };
 
-              if (chg.type === 'removed') {
-                buffer.delete(key);
-              } else {
-                buffer.set(key, row);
-                
-                if (!isInitialLoad && chg.type === 'added') {
-                  hasNewReservation = true;
-                  toast('🆕 Nouvelle réservation', {
-                    description: `${row.nomClient || 'Client'} a envoyé une réservation`,
-                    duration: 4000,
-                  });
+                const key = `${row.agencyId}_${row.id}`;
+
+                if (chg.type === 'removed') {
+                  map.delete(key);
+                  resetNotification(key);
+                } else {
+                  // Ajout ou modification
+                  if (chg.type === 'added' && row.statut === 'verification') {
+                    // Jouer le son uniquement pour les nouvelles réservations à vérifier
+                    if (isAudioReady) {
+                      playNotification(key);
+                    }
+                    
+                    toast('🆕 Nouvelle preuve reçue', {
+                      description: `${row.nomClient || 'Client'} a envoyé une preuve de paiement`,
+                      duration: 4000,
+                      action: {
+                        label: 'Voir',
+                        onClick: () => {
+                          const element = document.getElementById(`reservation-${row.id}`);
+                          if (element) {
+                            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            element.classList.add('ring-2', 'ring-amber-500');
+                            setTimeout(() => {
+                              element.classList.remove('ring-2', 'ring-amber-500');
+                            }, 2000);
+                          }
+                        }
+                      }
+                    });
+                  }
+                  
+                  map.set(key, row);
                 }
-              }
-            });
+              });
 
-            const merged = Array.from(buffer.values())
-              .sort((a, b) => {
+              // Convertir en tableau et trier par date décroissante
+              return Array.from(map.values()).sort((a, b) => {
                 const ta = a.createdAt instanceof Timestamp 
                   ? a.createdAt.toMillis() 
                   : new Date(a.createdAt).getTime();
@@ -375,25 +463,22 @@ const ReservationsEnLigne: React.FC = () => {
                   ? b.createdAt.toMillis() 
                   : new Date(b.createdAt).getTime();
                 return tb - ta;
-              })
-              .slice(0, ITEMS_PER_PAGE * agenceIds.length);
-
-            setReservations(merged);
-            
-            if (isInitialLoad) {
-              setLoading(false);
-              isInitialLoad = false;
-            }
+              });
+            });
           }, (error) => {
-            console.error('Erreur Firestore:', error);
-            setLoading(false);
+            console.error('Erreur Firestore (verification):', error);
             toast.error('Erreur de connexion', {
-              description: 'Impossible de charger les réservations',
+              description: 'Impossible de charger les réservations à vérifier',
             });
           });
 
           unsubs.push(unsub);
         });
+
+        // Charger les autres réservations (non vérification) une seule fois, paginé
+        loadOtherReservations();
+        
+        setLoading(false);
       } catch (error) {
         console.error('Erreur initiale:', error);
         setLoading(false);
@@ -406,7 +491,187 @@ const ReservationsEnLigne: React.FC = () => {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [user?.companyId]);
+  }, [user?.companyId, isAudioReady]);
+
+  /* ================= CHARGEMENT PAGINÉ DES AUTRES RÉSERVATIONS ================= */
+  const loadOtherReservations = async (page: number = 1) => {
+    if (!user?.companyId) return;
+
+    try {
+      const agencesSnap = await getDocs(
+        collection(db, 'companies', user.companyId, 'agences')
+      );
+      
+      if (agencesSnap.empty) return;
+
+      const agenceIds = agencesSnap.docs.map((d) => d.id);
+      const allOtherReservations: Reservation[] = [];
+
+      for (const agencyId of agenceIds) {
+        // 🔧 CORRECTION : Charger tous les statuts sauf 'preuve_recue' (qui est géré en temps réel)
+        const qRef = query(
+          collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
+          where('statut', 'not-in', ['preuve_recue']),
+          orderBy('createdAt', 'desc'),
+          limit(ITEMS_PER_PAGE * page)
+        );
+
+        const snap = await getDocs(qRef);
+        snap.docs.forEach(doc => {
+          const d = doc.data() as any;
+          const normalizedStatus = normalizeStatut(d.statut);
+          
+          // CORRECTION : S'assurer que les réservations confirmées sont bien incluses
+          allOtherReservations.push({
+            id: doc.id,
+            ...d,
+            statut: normalizedStatus,
+            agencyId: d.agencyId || agencyId,
+            createdAt: d.createdAt || Timestamp.now(),
+          });
+        });
+      }
+
+      // Supprimer les doublons potentiels
+      const uniqueReservations = Array.from(
+        new Map(allOtherReservations.map(r => [`${r.agencyId}_${r.id}`, r])).values()
+      );
+      
+      setOtherReservations(uniqueReservations);
+      setOtherPage(page);
+    } catch (error) {
+      console.error('Erreur chargement autres réservations:', error);
+    }
+  };
+
+  /* ================= CORRECTION CRITIQUE : FUSION DES RÉSERVATIONS POUR LE FILTRAGE ================= */
+  const allReservations = useMemo(() => {
+    // Fusionner les deux listes en évitant les doublons
+    const combinedMap = new Map<string, Reservation>();
+    
+    // Ajouter d'abord les réservations à vérifier
+    verificationReservations.forEach(r => {
+      const key = `${r.agencyId}_${r.id}`;
+      combinedMap.set(key, r);
+    });
+    
+    // Ajouter les autres réservations (elles remplacent celles qui auraient changé de statut)
+    otherReservations.forEach(r => {
+      const key = `${r.agencyId}_${r.id}`;
+      // Ne pas écraser une réservation qui est encore à vérifier
+      if (!combinedMap.has(key) || combinedMap.get(key)?.statut !== 'verification') {
+        combinedMap.set(key, r);
+      }
+    });
+    
+    return Array.from(combinedMap.values()).sort((a, b) => {
+      const ta = a.createdAt instanceof Timestamp 
+        ? a.createdAt.toMillis() 
+        : new Date(a.createdAt).getTime();
+      const tb = b.createdAt instanceof Timestamp 
+        ? b.createdAt.toMillis() 
+        : new Date(b.createdAt).getTime();
+      return tb - ta;
+    });
+  }, [verificationReservations, otherReservations]);
+
+  /* ================= FILTRAGE AVEC PÉRIODE ================= */
+  const filterReservationsByPeriod = (reservations: Reservation[], period: FilterOptions['period']) => {
+    if (period === 'today') {
+      // Pour "aujourd'hui", filtrer les réservations du jour même
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+      
+      return reservations.filter(reservation => {
+        let reservationDate: Date;
+        
+        if (reservation.createdAt instanceof Timestamp) {
+          reservationDate = reservation.createdAt.toDate();
+        } else if (typeof reservation.createdAt === 'string') {
+          reservationDate = new Date(reservation.createdAt);
+        } else if (reservation.createdAt instanceof Date) {
+          reservationDate = reservation.createdAt;
+        } else {
+          return false;
+        }
+        
+        return reservationDate >= todayStart && reservationDate <= todayEnd;
+      });
+    }
+    
+    const { start } = getPeriodDates(period);
+    
+    return reservations.filter(reservation => {
+      let reservationDate: Date;
+      
+      if (reservation.createdAt instanceof Timestamp) {
+        reservationDate = reservation.createdAt.toDate();
+      } else if (typeof reservation.createdAt === 'string') {
+        reservationDate = new Date(reservation.createdAt);
+      } else if (reservation.createdAt instanceof Date) {
+        reservationDate = reservation.createdAt;
+      } else {
+        return false;
+      }
+      
+      return reservationDate >= start;
+    });
+  };
+
+  /* ================= CORRECTION DU BUG DU FILTRE "CONFIRMÉES" ================= */
+  const filteredReservations = useMemo(() => {
+    // Appliquer d'abord le filtre par période
+    const periodFiltered = filterReservationsByPeriod(allReservations, filterPeriod);
+    
+    // Puis appliquer le filtre par statut
+    let result = periodFiltered;
+    
+    if (filterStatus === 'verification') {
+      // Pour le filtre "verification", on utilise uniquement verificationReservations
+      result = filterReservationsByPeriod(verificationReservations, filterPeriod);
+    } else if (filterStatus) {
+      // 🔧 CORRECTION CRITIQUE : Bien filtrer par statut normalisé
+      result = periodFiltered.filter(r => r.statut === filterStatus);
+    }
+    
+    // Enfin appliquer la recherche textuelle
+    if (!searchTerm) return result;
+    
+    const term = searchTerm.toLowerCase();
+    return result.filter((r) => {
+      const searchable = [
+        r.nomClient || '',
+        r.telephone || '',
+        r.referenceCode || '',
+        r.depart || '',
+        r.arrivee || '',
+        r.email || '',
+        r.preuveMessage || '',
+      ].join(' ').toLowerCase();
+      
+      return searchable.includes(term);
+    });
+  }, [allReservations, verificationReservations, searchTerm, filterStatus, filterPeriod]);
+
+  /* ================= STATISTIQUES AVEC FILTRE DE PÉRIODE ================= */
+  const stats = useMemo(() => {
+    const periodFiltered = filterReservationsByPeriod(allReservations, filterPeriod);
+    
+    // 🔧 CORRECTION : Statistiques cohérentes avec les listes affichées
+    const verificationInPeriod = filterReservationsByPeriod(verificationReservations, filterPeriod);
+    
+    return {
+      enAttente: periodFiltered.filter(r => r.statut === 'en_attente').length,
+      verification: verificationInPeriod.length,
+      confirme: periodFiltered.filter(r => r.statut === 'confirme').length,
+      refuse: periodFiltered.filter(r => r.statut === 'refuse').length,
+      annule: periodFiltered.filter(r => r.statut === 'annule').length,
+      total: periodFiltered.length,
+      totalAmount: periodFiltered.reduce((sum, r) => sum + (r.montant || 0), 0)
+    };
+  }, [allReservations, verificationReservations, filterPeriod]);
 
   /* ================= ACTIONS ================= */
   const handleValidate = async (reservation: Reservation) => {
@@ -433,6 +698,20 @@ const ReservationsEnLigne: React.FC = () => {
           updatedAt: Timestamp.now(),
         }
       );
+      
+      // Retirer de la liste des réservations à vérifier
+      setVerificationReservations(prev => 
+        prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
+      );
+      
+      // Réinitialiser la notification pour cette réservation
+      resetNotification(`${reservation.agencyId}_${reservation.id}`);
+      
+      // 🔧 CORRECTION : Recharger les autres réservations pour inclure celle-ci dans la liste confirmée
+      // Forcer le rechargement pour voir immédiatement le changement
+      setTimeout(() => {
+        loadOtherReservations(otherPage);
+      }, 500);
       
       toast.success('Réservation confirmée', {
         description: `Le billet est maintenant disponible pour ${reservation.nomClient}`,
@@ -475,6 +754,19 @@ const ReservationsEnLigne: React.FC = () => {
         }
       );
       
+      // Retirer de la liste des réservations à vérifier
+      setVerificationReservations(prev => 
+        prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
+      );
+      
+      // Réinitialiser la notification pour cette réservation
+      resetNotification(`${reservation.agencyId}_${reservation.id}`);
+      
+      // Recharger les autres réservations pour inclure celle-ci dans la liste refusée
+      setTimeout(() => {
+        loadOtherReservations(otherPage);
+      }, 500);
+      
       toast.info('Réservation refusée', {
         description: `La réservation de ${reservation.nomClient} a été refusée`,
       });
@@ -512,6 +804,18 @@ const ReservationsEnLigne: React.FC = () => {
         )
       );
       
+      // Retirer des listes locales
+      if (reservation.statut === 'verification') {
+        setVerificationReservations(prev => 
+          prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
+        );
+        resetNotification(`${reservation.agencyId}_${reservation.id}`);
+      } else {
+        setOtherReservations(prev => 
+          prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
+        );
+      }
+      
       toast.success('Réservation supprimée', {
         description: 'La réservation a été supprimée avec succès',
       });
@@ -542,49 +846,20 @@ const ReservationsEnLigne: React.FC = () => {
 
   const handleRefresh = () => {
     setRefreshing(true);
-    // Simuler un rechargement
+    loadOtherReservations(otherPage);
     setTimeout(() => setRefreshing(false), 1000);
   };
 
-  /* ================= FILTRES & STATISTIQUES ================= */
-  const filteredReservations = useMemo(() => {
-    const term = searchTerm.toLowerCase();
-    let result = reservations;
-    
-    if (filterStatus) {
-      result = result.filter(r => r.statut === filterStatus);
-    }
-    
-    if (!term) return result;
-    
-    return result.filter((r) => {
-      const searchable = [
-        r.nomClient || '',
-        r.telephone || '',
-        r.referenceCode || '',
-        r.depart || '',
-        r.arrivee || '',
-        r.email || '',
-      ].join(' ').toLowerCase();
-      
-      return searchable.includes(term);
-    });
-  }, [reservations, searchTerm, filterStatus]);
-
-  const stats = {
-    enAttente: reservations.filter(r => r.statut === 'en_attente').length,
-    verification: reservations.filter(r => r.statut === 'verification').length,
-    confirme: reservations.filter(r => r.statut === 'confirme').length,
-    refuse: reservations.filter(r => r.statut === 'refuse').length,
-    annule: reservations.filter(r => r.statut === 'annule').length,
-    total: reservations.length,
-    totalAmount: reservations.reduce((sum, r) => sum + (r.montant || 0), 0)
+  const loadMoreReservations = () => {
+    loadOtherReservations(otherPage + 1);
   };
 
+  /* ================= TOP AGENCES ================= */
   const topAgencies = useMemo(() => {
+    const periodFiltered = filterReservationsByPeriod(allReservations, filterPeriod);
     const agencyStats: Record<string, { count: number, amount: number }> = {};
     
-    reservations.forEach(r => {
+    periodFiltered.forEach(r => {
       if (r.agencyId && agencies[r.agencyId]) {
         if (!agencyStats[r.agencyId]) {
           agencyStats[r.agencyId] = { count: 0, amount: 0 };
@@ -604,7 +879,7 @@ const ReservationsEnLigne: React.FC = () => {
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
-  }, [reservations, agencies]);
+  }, [allReservations, agencies, filterPeriod]);
 
   /* ================= FORMATTERS ================= */
   const fmtMoney = (n: number) => `${(n || 0).toLocaleString('fr-FR')} FCFA`;
@@ -641,346 +916,301 @@ const ReservationsEnLigne: React.FC = () => {
   /* ================= RENDU ================= */
   return (
     <div className="space-y-6 sm:space-y-8">
-      {/* ================= EN-TÊTE ================= */}
+      {/* ================= EN-TÊTE SIMPLIFIÉE ET PROFESSIONNELLE ================= */}
       <div className="rounded-2xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-indigo-50 to-purple-50 flex items-center justify-center">
-              <CreditCard className="h-6 w-6 text-indigo-600" />
-            </div>
-            <div>
-              <div className="text-xl font-bold text-gray-900">Réservations en ligne</div>
-              <div className="text-sm text-gray-600">Validation des preuves de paiement pour toutes les agences</div>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-3">
-            <SecondaryButton onClick={handleRefresh} disabled={refreshing}>
-              <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? 'Actualisation...' : 'Actualiser'}
-            </SecondaryButton>
-            <PrimaryButton theme={theme}>
-              <Download className="h-4 w-4 mr-2" />
-              Exporter CSV
-            </PrimaryButton>
-          </div>
-        </div>
-      </div>
-
-      {/* ================= KPIs CONTEXTUELS ================= */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        <KpiCard 
-          icon={<CreditCard className="h-6 w-6" />} 
-          label="Réservations affichées" 
-          value={stats.total.toString()} 
-          sublabel={`${topAgencies.length} agences visibles`}
-          theme={theme}
-          emphasis={false}
-        />
-        <KpiCard 
-          icon={<TrendingUp className="h-6 w-6" />} 
-          label="Montant affiché" 
-          value={fmtMoney(stats.totalAmount)} 
-          sublabel="Sur les réservations chargées"
-          theme={theme}
-          emphasis={true}
-        />
-        <KpiCard 
-          icon={<AlertTriangle className="h-6 w-6" />} 
-          label="À vérifier (affichées)" 
-          value={stats.verification.toString()} 
-          sublabel="Dans la vue actuelle"
-          theme={theme}
-          emphasis={false}
-        />
-        <KpiCard 
-          icon={<Building2 className="h-6 w-6" />} 
-          label="Agences visibles" 
-          value={topAgencies.length.toString()} 
-          sublabel="Avec réservations chargées"
-          theme={theme}
-          emphasis={false}
-        />
-      </div>
-
-      {/* ================= INFORMATION CONTEXTE ================= */}
-      <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
-        <div className="flex items-center gap-2">
-          <Info className="h-4 w-4 text-blue-600" />
-          <span className="text-sm text-blue-700 font-medium">Information :</span>
-        </div>
-        <p className="text-sm text-blue-600 mt-1">
-          Les chiffres affichés concernent uniquement les {ITEMS_PER_PAGE} dernières réservations par agence.
-          Pour les statistiques financières complètes, consultez la page <strong>Finances</strong>.
-        </p>
-      </div>
-
-      {/* ================= STATISTIQUES DÉTAILLÉES ================= */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-        <StatCard tone="blue" label="En attente" value={stats.enAttente.toString()} icon={<Clock className="h-4 w-4" />} />
-        <StatCard tone="amber" label="À vérifier" value={stats.verification.toString()} icon={<AlertCircle className="h-4 w-4" />} />
-        <StatCard tone="emerald" label="Confirmées" value={stats.confirme.toString()} icon={<CheckCircle className="h-4 w-4" />} />
-        <StatCard tone="red" label="Refusées" value={stats.refuse.toString()} icon={<XCircle className="h-4 w-4" />} />
-        <StatCard tone="gray" label="Annulées" value={stats.annule.toString()} icon={<XCircle className="h-4 w-4" />} />
-      </div>
-
-      {/* ================= FILTRES ================= */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
-              <Filter className="h-5 w-5 text-gray-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Filtres de recherche</div>
-              <div className="text-sm text-gray-600">{filteredReservations.length} résultat(s)</div>
-            </div>
-          </div>
-          
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Période */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-700">Période:</span>
-              <select className="border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white">
-                <option>30 derniers jours</option>
-                <option>7 derniers jours</option>
-                <option>Aujourd'hui</option>
-                <option>Personnalisé</option>
-              </select>
+          <div className="flex-1">
+            <div className="mb-2">
+              <h1 className="text-2xl font-bold text-gray-900">Réservations en ligne</h1>
+              <p className="text-sm text-gray-600 mt-1">Gestion des réservations et paiements</p>
             </div>
             
-            {/* Agence */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-700">Agence:</span>
-              <select className="border border-gray-300 rounded-xl px-3 py-2 text-sm bg-white min-w-[150px]">
-                <option value="">Toutes les agences</option>
-                {Object.entries(agencies).map(([id, agency]) => (
-                  <option key={id} value={id}>{agency.name}</option>
-                ))}
-              </select>
+            {/* Indicateurs discrets */}
+            <div className="flex flex-wrap items-center gap-4 mt-3">
+              <div className="flex items-center gap-2">
+                <div className={`h-3 w-3 rounded-full ${verificationReservations.length > 0 ? 'bg-amber-500 animate-pulse' : 'bg-gray-300'}`}></div>
+                <span className="text-sm text-gray-600">
+                  {verificationReservations.length > 0 
+                    ? `${verificationReservations.length} preuve${verificationReservations.length > 1 ? 's' : ''} à vérifier` 
+                    : 'Tout est à jour'}
+                </span>
+              </div>
+              <div className="text-sm text-gray-400">
+                • Mise à jour en temps réel
+              </div>
             </div>
           </div>
+          
+          {/* Actions discrètes */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRefresh}
+              className="p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors"
+              title="Actualiser manuellement"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
-        
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Recherche */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Recherche</label>
+      </div>
+
+      {/* ================= FILTRES RAPIDES ================= */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="sm:col-span-2">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
                 type="text"
                 className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:border-transparent"
                 style={{ outlineColor: theme.primary }}
-                placeholder="Nom, téléphone, référence..."
+                placeholder="Rechercher par nom, téléphone ou référence..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
           </div>
           
-          {/* Statut */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Statut</label>
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value as ReservationStatus | '')}
               className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
               style={{ outlineColor: theme.primary }}
             >
-              <option value="">Tous les statuts</option>
-              <option value="verification">Preuve reçue</option>
-              <option value="en_attente">En attente</option>
-              <option value="confirme">Confirmées</option>
-              <option value="refuse">Refusées</option>
-              <option value="annule">Annulées</option>
+              <option value="">Toutes les réservations</option>
+              <option value="verification">À vérifier ({stats.verification})</option>
+              <option value="en_attente">En attente ({stats.enAttente})</option>
+              <option value="confirme">Confirmées ({stats.confirme})</option>
+              <option value="refuse">Refusées ({stats.refuse})</option>
+              <option value="annule">Annulées ({stats.annule})</option>
             </select>
           </div>
           
-          {/* Actions */}
-          <div className="flex items-end">
-            <PrimaryButton theme={theme} className="w-full">
-              <Filter className="h-4 w-4 mr-2" />
-              Appliquer les filtres
-            </PrimaryButton>
-          </div>
-        </div>
-      </div>
-
-      {/* ================= TOP AGENCES ================= */}
-      {topAgencies.length > 0 && (
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-5">
-            <div className="text-lg font-bold text-gray-900">Top 5 Agences (affichées)</div>
-            <div className="text-sm text-gray-600">Par nombre de réservations chargées</div>
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            {topAgencies.map((agency, index) => (
-              <div key={agency.id} className="p-4 rounded-xl border border-gray-200 bg-gradient-to-br from-gray-50 to-gray-100/50">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
-                    <div className="text-sm font-bold text-blue-600">#{index + 1}</div>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-medium text-gray-900 truncate">{agency.name}</div>
-                    <div className="text-xs text-gray-500 truncate">{agency.ville}</div>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-500">Réservations</span>
-                    <span className="font-bold text-gray-900">{agency.count}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-500">Montant affiché</span>
-                    <span className="font-bold text-gray-900">{fmtMoney(agency.amount)}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ================= LISTE DES RÉSERVATIONS ================= */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-bold text-gray-900">Liste des réservations</div>
-          <div className="text-sm text-gray-600">
-            {filteredReservations.length} réservation{filteredReservations.length > 1 ? 's' : ''} (affichées)
+          <div>
+            <select
+              value={filterPeriod}
+              onChange={(e) => setFilterPeriod(e.target.value as FilterOptions['period'])}
+              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+              style={{ outlineColor: theme.primary }}
+            >
+              <option value="today">Aujourd'hui</option>
+              <option value="7days">7 derniers jours</option>
+              <option value="30days">30 derniers jours</option>
+            </select>
           </div>
         </div>
         
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="text-center">
-              <div className="h-12 w-12 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin mx-auto mb-3"></div>
-              <div className="text-gray-600">Chargement des réservations...</div>
+        <div className="mt-3 flex gap-2">
+          <button 
+            onClick={() => setShowStats(!showStats)}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border-2 border-gray-200 bg-white text-gray-700 font-medium shadow-sm hover:shadow-md hover:border-gray-300 hover:bg-gray-50 transition-all duration-200"
+          >
+            {showStats ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            {showStats ? 'Masquer les stats' : 'Afficher les stats'}
+          </button>
+          <PrimaryButton theme={theme} className="flex-1">
+            <Download className="h-4 w-4 mr-2" />
+            Exporter
+          </PrimaryButton>
+        </div>
+      </div>
+
+      {/* ================= STATISTIQUES (PLIABLE) ================= */}
+      {showStats && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
+            <StatCard tone="amber" label="À vérifier" value={stats.verification.toString()} icon={<AlertCircle className="h-4 w-4" />} />
+            <StatCard tone="blue" label="En attente" value={stats.enAttente.toString()} icon={<Clock className="h-4 w-4" />} />
+            <StatCard tone="emerald" label="Confirmées" value={stats.confirme.toString()} icon={<CheckCircle className="h-4 w-4" />} />
+            <StatCard tone="red" label="Refusées" value={stats.refuse.toString()} icon={<XCircle className="h-4 w-4" />} />
+            <StatCard tone="gray" label="Annulées" value={stats.annule.toString()} icon={<XCircle className="h-4 w-4" />} />
+          </div>
+
+          {/* ================= PÉRIODE ACTIVE ================= */}
+          <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-gray-500" />
+                <div className="text-lg font-bold text-gray-900">
+                  Période : {filterPeriod === 'today' ? 'Aujourd\'hui' : 
+                             filterPeriod === '7days' ? '7 derniers jours' : '30 derniers jours'}
+                </div>
+              </div>
+              <div className="text-sm text-gray-600">
+                Total : {stats.total} réservations • {fmtMoney(stats.totalAmount)}
+              </div>
             </div>
           </div>
-        ) : filteredReservations.length === 0 ? (
-          <div className="text-center py-12">
-            <AlertTriangle className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-            <div className="text-lg font-medium text-gray-900 mb-2">Aucune réservation trouvée</div>
-            <div className="text-gray-500">
-              {searchTerm 
-                ? "Essayez avec d'autres termes de recherche."
-                : filterStatus
-                  ? `Aucune réservation avec le statut "${getStatusConfig(filterStatus as ReservationStatus).label}".`
-                  : "Aucune réservation en ligne pour le moment."
-              }
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredReservations.map((reservation) => {
-              const statusConfig = getStatusConfig(reservation.statut);
-              const isProcessing = processingId === reservation.id;
-              const canValidate = reservation.statut === 'verification';
-              const proofUrl = getProofUrl(reservation);
-              const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
+
+          {/* ================= TOP AGENCES ================= */}
+          {topAgencies.length > 0 && (
+            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-5">
+                <div className="text-lg font-bold text-gray-900">Top 5 Agences</div>
+                <div className="text-sm text-gray-600">Par nombre de réservations</div>
+              </div>
               
-              return (
-                <div
-                  key={`${reservation.agencyId}_${reservation.id}`}
-                  className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-lg transition-all duration-300"
-                >
-                  {/* Header avec agence */}
-                  <div className="p-4 bg-gradient-to-r from-gray-50 to-gray-100/50 border-b">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <div className="h-6 w-6 rounded-md bg-blue-100 flex items-center justify-center">
-                          <Building2 className="h-3 w-3 text-blue-600" />
-                        </div>
-                        <span className="text-sm font-medium text-gray-900 truncate">
-                          {agencyInfo?.name || 'Agence inconnue'}
-                        </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                {topAgencies.map((agency, index) => (
+                  <div key={agency.id} className="p-4 rounded-xl border border-gray-200 bg-gradient-to-br from-gray-50 to-gray-100/50">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
+                        <div className="text-sm font-bold text-blue-600">#{index + 1}</div>
                       </div>
-                      <Badge className={statusConfig.color}>
-                        {statusConfig.icon}
-                        <span className="ml-1">{statusConfig.label}</span>
-                      </Badge>
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 truncate">{agency.name}</div>
+                        <div className="text-xs text-gray-500 truncate">{agency.ville}</div>
+                      </div>
                     </div>
-                    
-                    {reservation.referenceCode && (
-                      <div className="text-xs font-mono text-gray-600">
-                        #{reservation.referenceCode}
-                      </div>
-                    )}
-                  </div>
-                  
-                  {/* Détails de la réservation */}
-                  <div className="p-4 space-y-3">
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-500">Client</span>
-                        <span className="text-sm font-medium text-gray-900 truncate max-w-[150px] text-right">
-                          {reservation.nomClient || 'Sans nom'}
-                        </span>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-500">Réservations</span>
+                        <span className="font-bold text-gray-900">{agency.count}</span>
                       </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-500">Téléphone</span>
-                        <span className="text-sm font-medium text-gray-900">
-                          {reservation.telephone || 'N/A'}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-500">Trajet</span>
-                        <span className="text-sm font-medium text-gray-900 text-right">
-                          {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-500">Date/Heure</span>
-                        <span className="text-sm font-medium text-gray-900">
-                          {reservation.date} {reservation.heure}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
+                      <div className="flex justify-between">
                         <span className="text-sm text-gray-500">Montant</span>
-                        <span className="text-sm font-bold text-gray-900">
-                          {fmtMoney(reservation.montant || 0)}
-                        </span>
+                        <span className="font-bold text-gray-900">{fmtMoney(agency.amount)}</span>
                       </div>
-                    </div>
-                    
-                    {/* Preuve de paiement */}
-                    {proofUrl && (
-                      <a
-                        href={proofUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 font-medium"
-                      >
-                        <FileText className="h-4 w-4" />
-                        Voir la preuve de paiement
-                      </a>
-                    )}
-                    
-                    {/* Date de création */}
-                    <div className="text-xs text-gray-400">
-                      Créé le: {fmtDate(reservation.createdAt)}
                     </div>
                   </div>
-                  
-                  {/* Actions */}
-                  <div className="p-4 border-t bg-gray-50 space-y-2">
-                    {/* Bouton Voir détails */}
-                    <SecondaryButton 
-                      onClick={() => handleViewDetails(reservation)}
-                      className="w-full flex items-center justify-center gap-2"
-                    >
-                      <Eye className="h-4 w-4" />
-                      Voir détails
-                    </SecondaryButton>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ================= LISTE DES RÉSERVATIONS À VÉRIFIER (PRIORITÉ ABSOLUE) ================= */}
+      {verificationReservations.length > 0 && (!filterStatus || filterStatus === 'verification') && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse"></div>
+                Preuves de paiement à vérifier
+              </div>
+              <div className="text-sm text-gray-600">
+                {verificationReservations.length} preuve{verificationReservations.length > 1 ? 's' : ''} en attente de validation
+              </div>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filterReservationsByPeriod(verificationReservations, filterPeriod)
+              .filter(r => !searchTerm || 
+                [r.nomClient, r.telephone, r.referenceCode, r.preuveMessage]
+                  .join(' ')
+                  .toLowerCase()
+                  .includes(searchTerm.toLowerCase())
+              )
+              .map((reservation) => {
+                const statusConfig = getStatusConfig(reservation.statut);
+                const isProcessing = processingId === reservation.id;
+                const proofUrl = getProofUrl(reservation);
+                const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
+                
+                return (
+                  <div
+                    id={`reservation-${reservation.id}`}
+                    key={`${reservation.agencyId}_${reservation.id}`}
+                    className="border-2 border-amber-200 rounded-xl overflow-hidden hover:shadow-lg transition-all duration-300 bg-gradient-to-b from-amber-50/50 to-white"
+                  >
+                    {/* Header avec agence */}
+                    <div className="p-4 bg-gradient-to-r from-amber-50 to-amber-100/50 border-b border-amber-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="h-6 w-6 rounded-md bg-amber-100 flex items-center justify-center">
+                            <Building2 className="h-3 w-3 text-amber-600" />
+                          </div>
+                          <span className="text-sm font-medium text-gray-900 truncate">
+                            {agencyInfo?.name || 'Agence inconnue'}
+                          </span>
+                        </div>
+                        <Badge className="bg-amber-100 text-amber-800 border-amber-300">
+                          <AlertCircle className="h-3 w-3" />
+                          <span className="ml-1">À vérifier</span>
+                        </Badge>
+                      </div>
+                      
+                      {reservation.referenceCode && (
+                        <div className="text-xs font-mono text-gray-600">
+                          #{reservation.referenceCode}
+                        </div>
+                      )}
+                    </div>
                     
-                    {/* Actions de validation */}
-                    {canValidate && (
+                    {/* Détails de la réservation - INFORMATIONS CRITIQUES VISIBLES */}
+                    <div className="p-4 space-y-3">
+                      {/* 📞 Numéro de téléphone du client - PRIORITÉ ABSOLUE */}
+                      <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Smartphone className="h-4 w-4 text-blue-600" />
+                          <span className="text-sm font-medium text-gray-700">Téléphone client</span>
+                        </div>
+                        <div className="text-lg font-bold text-gray-900">
+                          {reservation.telephone || 'Non renseigné'}
+                        </div>
+                      </div>
+
+                      {/* 🧾 Preuve de paiement - PRIORITÉ ABSOLUE */}
+                      {reservation.preuveMessage && (
+                        <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
+                          <div className="flex items-center gap-2 mb-1">
+                            <FileText className="h-4 w-4 text-amber-600" />
+                            <span className="text-sm font-medium text-gray-700">Message de preuve</span>
+                          </div>
+                          <div className="text-sm text-gray-800">
+                            {reservation.preuveMessage}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Informations supplémentaires */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-500">Client</span>
+                          <span className="text-sm font-medium text-gray-900 truncate max-w-[150px] text-right">
+                            {reservation.nomClient || 'Sans nom'}
+                          </span>
+                        </div>
+                        
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-500">Trajet</span>
+                          <span className="text-sm font-medium text-gray-900 text-right">
+                            {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
+                          </span>
+                        </div>
+                        
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-500">Montant</span>
+                          <span className="text-sm font-bold text-gray-900">
+                            {fmtMoney(reservation.montant || 0)}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {/* Lien vers la preuve de paiement si disponible - PRIORITÉ ABSOLUE */}
+                      {proofUrl && (
+                        <a
+                          href={proofUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 font-medium p-2 rounded-lg hover:bg-blue-50 w-full justify-center border border-blue-200"
+                        >
+                          <FileText className="h-4 w-4" />
+                          Voir la preuve de paiement complète
+                        </a>
+                      )}
+                      
+                      {/* Date de création */}
+                      <div className="text-xs text-gray-400">
+                        Reçu le: {fmtDate(reservation.createdAt)}
+                      </div>
+                    </div>
+                    
+                    {/* Actions */}
+                    <div className="p-4 border-t border-amber-200 bg-amber-50/50 space-y-2">
                       <div className="grid grid-cols-2 gap-2">
                         <PrimaryButton 
                           onClick={() => handleValidate(reservation)}
@@ -1011,23 +1241,165 @@ const ReservationsEnLigne: React.FC = () => {
                           Refuser
                         </SecondaryButton>
                       </div>
-                    )}
-                    
-                    {/* Bouton Supprimer */}
-                    <SecondaryButton 
-                      onClick={() => handleDelete(reservation)}
-                      disabled={isProcessing}
-                      className="w-full"
-                    >
-                      Supprimer
-                    </SecondaryButton>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <SecondaryButton 
+                          onClick={() => handleViewDetails(reservation)}
+                          className="flex items-center justify-center gap-2"
+                        >
+                          <Eye className="h-4 w-4" />
+                          Détails
+                        </SecondaryButton>
+                        <SecondaryButton 
+                          onClick={() => handleDelete(reservation)}
+                          disabled={isProcessing}
+                        >
+                          Supprimer
+                        </SecondaryButton>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* ================= AUTRES RÉSERVATIONS ================= */}
+      {((filterStatus !== 'verification' && filterStatus !== '') || 
+        (filterStatus === '' && otherReservations.length > 0)) && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-lg font-bold text-gray-900">
+                {filterStatus ? `${getStatusConfig(filterStatus as ReservationStatus).label}s` : 'Toutes les réservations'}
+              </div>
+              <div className="text-sm text-gray-600">
+                {filterStatus ? `${filteredReservations.filter(r => r.statut !== 'verification').length} réservation${filteredReservations.filter(r => r.statut !== 'verification').length > 1 ? 's' : ''}` : 'Historique des réservations'}
+              </div>
+            </div>
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className="text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              {showHistory ? (
+                <>
+                  <ChevronUp className="h-4 w-4" />
+                  Réduire
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="h-4 w-4" />
+                  Développer
+                </>
+              )}
+            </button>
+          </div>
+          
+          {showHistory && (
+            <>
+              {filteredReservations.filter(r => r.statut !== 'verification').length === 0 ? (
+                <div className="text-center py-8 border border-gray-200 rounded-xl">
+                  <div className="text-gray-500">Aucune réservation à afficher</div>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {filteredReservations
+                      .filter(r => r.statut !== 'verification')
+                      .map((reservation) => {
+                        const statusConfig = getStatusConfig(reservation.statut);
+                        const isProcessing = processingId === reservation.id;
+                        const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
+                        
+                        return (
+                          <div
+                            key={`${reservation.agencyId}_${reservation.id}`}
+                            className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-all duration-300 bg-white"
+                          >
+                            {/* Header avec agence */}
+                            <div className="p-4 bg-gradient-to-r from-gray-50 to-gray-100/50 border-b">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-6 w-6 rounded-md bg-blue-100 flex items-center justify-center">
+                                    <Building2 className="h-3 w-3 text-blue-600" />
+                                  </div>
+                                  <span className="text-sm font-medium text-gray-900 truncate">
+                                    {agencyInfo?.name || 'Agence inconnue'}
+                                  </span>
+                                </div>
+                                <Badge className={statusConfig.color}>
+                                  {statusConfig.icon}
+                                  <span className="ml-1">{statusConfig.label}</span>
+                                </Badge>
+                              </div>
+                              
+                              {reservation.referenceCode && (
+                                <div className="text-xs font-mono text-gray-600">
+                                  #{reservation.referenceCode}
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* Détails */}
+                            <div className="p-4 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-500">Client</span>
+                                <span className="text-sm font-medium text-gray-900">
+                                  {reservation.nomClient || 'Sans nom'}
+                                </span>
+                              </div>
+                              
+                              {/* 📞 Téléphone toujours visible */}
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-500">Téléphone</span>
+                                <span className="text-sm font-medium text-gray-900">
+                                  {reservation.telephone || 'N/A'}
+                                </span>
+                              </div>
+                              
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-500">Montant</span>
+                                <span className="text-sm font-bold text-gray-900">
+                                  {fmtMoney(reservation.montant || 0)}
+                                </span>
+                              </div>
+                              
+                              <div className="text-xs text-gray-400">
+                                Créé le: {fmtDate(reservation.createdAt)}
+                              </div>
+                            </div>
+                            
+                            {/* Actions */}
+                            <div className="p-4 border-t bg-gray-50 space-y-2">
+                              <SecondaryButton 
+                                onClick={() => handleViewDetails(reservation)}
+                                className="w-full flex items-center justify-center gap-2"
+                              >
+                                <Eye className="h-4 w-4" />
+                                Voir détails
+                              </SecondaryButton>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                  
+                  {/* Bouton Charger plus pour les autres réservations */}
+                  {!filterStatus && otherReservations.length > 0 && otherPage * ITEMS_PER_PAGE <= otherReservations.length && (
+                    <div className="text-center pt-6">
+                      <SecondaryButton onClick={loadMoreReservations}>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Charger plus de réservations
+                      </SecondaryButton>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };
