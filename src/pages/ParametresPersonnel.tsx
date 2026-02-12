@@ -55,6 +55,10 @@ interface Agence {
   companyId: string;
 }
 
+interface Props {
+  companyId: string;
+}
+
 const ROLE_LABELS: Record<string, string> = {
   admin_compagnie: "CEO / Propriétaire",
   financial_director: "Directeur financier (DAF)",
@@ -80,7 +84,7 @@ const toCapitalize = (v: string) =>
 const isEmpty = (s: string) => !s || s.trim() === "";
 
 /* ===================== COMPOSANT ===================== */
-const ParametresPersonnel: React.FC = () => {
+const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
   const { user } = useAuth();
 
   const [allStaff, setAllStaff] = useState<UserDoc[]>([]);

@@ -1,138 +1,218 @@
-// ✅ ParametresReseauxPage.tsx — paramètres séparés pour réseaux sociaux uniquement
+// =============================================
+// src/pages/ParametresReseauxPage.tsx
+// =============================================
 
-import React, { useEffect, useState } from 'react';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
-import { useAuth } from '@/contexts/AuthContext';
-import { SocialPlatform } from '@/types';
-import {
-  CheckCircle, AlertCircle, Save
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useState } from "react";
+import { doc, getDoc, setDoc } from "firebase/firestore";
+import { db } from "../firebaseConfig";
+import { useAuth } from "@/contexts/AuthContext";
+import { useParams } from "react-router-dom";
+import { Save } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+interface Props {
+  companyId: string;
+}
 
-const ParametresReseauxPage: React.FC = () => {
+type SocialPlatform =
+  | "facebook"
+  | "instagram"
+  | "whatsapp"
+  | "tiktok"
+  | "linkedin"
+  | "youtube";
+
+const defaultSocialMedia = {
+  facebook: "",
+  instagram: "",
+  whatsapp: "",
+  tiktok: "",
+  linkedin: "",
+  youtube: "",
+};
+
+const ParametresReseauxPage: React.FC<Props> = ({ companyId }) => {
   const { user } = useAuth();
-  const [companyData, setCompanyData] = useState({
-    socialMedia: {
-      facebook: '', instagram: '', whatsapp: '', tiktok: '', linkedin: '', youtube: ''
-    },
-    footerConfig: {
-      showSocialMedia: true
-    }
-  });
+  const { companyId: routeCompanyId } = useParams();
 
-  const [message, setMessage] = useState({ text: '', type: '' });
+  // 🔥 IMPORTANT : priorité URL → sinon user
+  const effectiveCompanyId =
+    routeCompanyId ?? user?.companyId ?? null;
 
+  const [socialMedia, setSocialMedia] =
+    useState(defaultSocialMedia);
+  const [showSocialMedia, setShowSocialMedia] =
+    useState(true);
+
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{
+    text: string;
+    type: "success" | "error" | "info" | "";
+  }>({ text: "", type: "" });
+
+  /* =========================
+     Chargement
+  ========================= */
   useEffect(() => {
-    if (user?.companyId) {
-      const fetchData = async () => {
-        const ref = doc(db, 'companies', user.companyId);
+    if (!effectiveCompanyId) return;
+
+    const fetchData = async () => {
+      try {
+        const ref = doc(db, "companies", effectiveCompanyId);
         const snap = await getDoc(ref);
+
         if (snap.exists()) {
           const data = snap.data();
-          setCompanyData(prev => ({
-            ...prev,
-            socialMedia: data.socialMedia || prev.socialMedia,
-            footerConfig: data.footerConfig || prev.footerConfig
-          }));
-        }
-      };
-      fetchData();
-    }
-  }, [user]);
 
+          setSocialMedia(
+            data.socialMedia || defaultSocialMedia
+          );
+
+          setShowSocialMedia(
+            data.footerConfig?.showSocialMedia ?? true
+          );
+        }
+      } catch (error) {
+        console.error(
+          "Erreur chargement réseaux:",
+          error
+        );
+      }
+    };
+
+    fetchData();
+  }, [effectiveCompanyId]);
+
+  /* =========================
+     Enregistrement
+  ========================= */
   const handleSave = async () => {
-    if (!user?.companyId) return;
-    setMessage({ text: 'Enregistrement...', type: 'info' });
+    if (!effectiveCompanyId) return;
+
+    setLoading(true);
+    setMessage({ text: "Enregistrement...", type: "info" });
+
     try {
-      const ref = doc(db, 'companies', user.companyId);
-      await updateDoc(ref, {
-        socialMedia: companyData.socialMedia,
-        footerConfig: companyData.footerConfig
+      const ref = doc(db, "companies", effectiveCompanyId);
+
+      await setDoc(
+        ref,
+        {
+          socialMedia,
+          footerConfig: {
+            showSocialMedia,
+          },
+        },
+        { merge: true }
+      );
+
+      setMessage({
+        text: "Modifications enregistrées ✅",
+        type: "success",
       });
-      setMessage({ text: 'Modifications enregistrées', type: 'success' });
-    } catch (e) {
-      console.error(e);
-      setMessage({ text: "Erreur lors de l'enregistrement", type: 'error' });
+    } catch (error) {
+      console.error(
+        "Erreur enregistrement réseaux:",
+        error
+      );
+
+      setMessage({
+        text: "Erreur lors de l'enregistrement ❌",
+        type: "error",
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  return (
-    <div className="max-w-4xl mx-auto p-6 bg-white rounded shadow">
-      <h2 className="text-xl font-bold mb-6">Réseaux sociaux & affichage</h2>
+  if (!effectiveCompanyId) {
+    return (
+      <div className="p-6 text-red-600">
+        Company ID introuvable.
+      </div>
+    );
+  }
 
+  return (
+    <div className="max-w-4xl mx-auto p-6 bg-white rounded-xl shadow border">
+      <h2 className="text-xl font-bold mb-6">
+        Réseaux sociaux & affichage
+      </h2>
+
+      {/* MESSAGE */}
       <AnimatePresence>
         {message.text && (
           <motion.div
-            initial={{ opacity: 0, y: -10 }}
+            initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className={`p-4 rounded mb-4 ${
-              message.type === 'success'
-                ? 'bg-green-100 text-green-800'
-                : message.type === 'error'
-                ? 'bg-red-100 text-red-800'
-                : 'bg-blue-100 text-blue-800'
+            exit={{ opacity: 0, y: -8 }}
+            className={`p-4 rounded mb-4 text-sm ${
+              message.type === "success"
+                ? "bg-green-100 text-green-800"
+                : message.type === "error"
+                ? "bg-red-100 text-red-800"
+                : "bg-blue-100 text-blue-800"
             }`}
           >
-            <div className="flex justify-between items-center">
-              <span>{message.text}</span>
-              {message.type === 'success' && (
-                <button onClick={() => setMessage({ text: '', type: '' })} className="text-sm underline">
-                  OK
-                </button>
-              )}
-            </div>
+            {message.text}
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-lg font-semibold mb-2">Liens des réseaux sociaux</h3>
-          <div className="space-y-3">
-            {(['facebook', 'instagram', 'whatsapp', 'tiktok', 'linkedin', 'youtube'] as SocialPlatform[]).map((platform) => (
-              <input
-                key={platform}
-                type="url"
-                placeholder={`Lien ${platform}`}
-                value={companyData.socialMedia?.[platform] || ''}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setCompanyData((prev) => ({
-                    ...prev,
-                    socialMedia: { ...prev.socialMedia, [platform]: val },
-                  }));
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md"
-              />
-            ))}
-          </div>
-        </div>
+      <div className="space-y-4">
+        {(
+          [
+            "facebook",
+            "instagram",
+            "whatsapp",
+            "tiktok",
+            "linkedin",
+            "youtube",
+          ] as SocialPlatform[]
+        ).map((platform) => (
+          <div key={platform}>
+            <label className="block text-sm font-medium mb-1 capitalize">
+              Lien {platform}
+            </label>
 
-        <div>
-          <h3 className="text-lg font-semibold mb-2">Affichage dans le pied de page</h3>
-          <label className="inline-flex items-center">
             <input
-              type="checkbox"
-              checked={companyData.footerConfig?.showSocialMedia ?? true}
-              onChange={(e) => setCompanyData(prev => ({
-                ...prev,
-                footerConfig: { ...prev.footerConfig, showSocialMedia: e.target.checked }
-              }))}
-              className="mr-2"
-            /> Afficher les icônes de réseaux sociaux
-          </label>
-        </div>
+              type="url"
+              value={socialMedia[platform]}
+              onChange={(e) =>
+                setSocialMedia((prev) => ({
+                  ...prev,
+                  [platform]: e.target.value,
+                }))
+              }
+              placeholder={`https://${platform}.com/...`}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-yellow-500"
+            />
+          </div>
+        ))}
+      </div>
 
-        <div className="flex justify-end">
-          <button
-            onClick={handleSave}
-            className="bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-2 rounded flex items-center gap-2"
-          >
-            <Save size={18} /> Enregistrer
-          </button>
-        </div>
+      <div className="mt-6">
+        <label className="inline-flex items-center text-sm">
+          <input
+            type="checkbox"
+            checked={showSocialMedia}
+            onChange={(e) =>
+              setShowSocialMedia(e.target.checked)
+            }
+            className="mr-2"
+          />
+          Afficher les icônes dans le pied de page
+        </label>
+      </div>
+
+      <div className="flex justify-end mt-6">
+        <button
+          onClick={handleSave}
+          disabled={loading}
+          className="bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 disabled:opacity-60"
+        >
+          <Save size={18} />
+          {loading ? "Enregistrement..." : "Enregistrer"}
+        </button>
       </div>
     </div>
   );

@@ -4,33 +4,29 @@ import { useParams, useNavigate } from "react-router-dom";
 import { collection, getDocs, query, where, limit } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useTranslation } from "react-i18next";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence } from "framer-motion";
 
 import VilleSuggestionBar from "@/components/public/VilleSuggestionBar";
 import LanguageSuggestionPopup from "@/components/public/LanguageSuggestionPopup";
 import HeroSection from "@/components/public/HeroSection";
-import CompanyImageSlider from "@/components/public/CompanyImageSlider";
 import CompanyServices from "@/components/public/CompanyServices";
+import WhyChooseSection from "@/components/public/WhyChooseSection";
 import Footer from "@/components/public/Footer";
 import AgencyList from "@/components/public/AgencyList";
 import AvisListePublic from "@/components/public/AvisListePublic";
 import Header from "@/components/public/Header";
 
 import useCompanyTheme from "@/hooks/useCompanyTheme";
-import { Company, Agence, TripSuggestion } from "@/types/companyTypes";
-import ErrorScreen from "@/components/ui/ErrorScreen";
+import { Company, Agence, TripSuggestion, WhyChooseItem } from "@/types/companyTypes";
 import NotFoundScreen from "@/components/ui/NotFoundScreen";
 import { getCompanyFromCache } from "@/utils/companyCache";
-import ResumeLastReservation from "@/components/ResumeLastReservation";
 
 interface PublicCompanyPageProps {
   company?: Company;
-  isMobile?: boolean;
 }
 
 const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   company: propCompany,
-  isMobile = false,
 }) => {
   const { slug = "" } = useParams<{ slug: string }>();
   const navigate = useNavigate();
@@ -41,11 +37,11 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     propCompany || cached
   );
 
-  const { colors, classes, config } = useCompanyTheme(company);
+  const { colors, config } = useCompanyTheme(company);
+
   const [agences, setAgences] = useState<Agence[]>([]);
   const [suggestedTrips, setSuggestedTrips] = useState<TripSuggestion[]>([]);
   const [showAgences, setShowAgences] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openVilles, setOpenVilles] = useState<Record<string, boolean>>({});
   const [showLangPopup, setShowLangPopup] = useState(false);
@@ -64,11 +60,11 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     [agences]
   );
 
-  /* =========================
-     LOAD COMPANY
-  ========================= */
+  /* ================= LOAD COMPANY ================= */
+
   useEffect(() => {
     if (company || !slug) return;
+
     (async () => {
       try {
         const q = query(
@@ -76,128 +72,170 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           where("slug", "==", slug),
           limit(1)
         );
+
         const snap = await getDocs(q);
-        if (!snap.empty)
-          setCompany({ id: snap.docs[0].id, ...(snap.docs[0].data() as any) });
-        else setError("notFound");
+
+        if (!snap.empty) {
+          setCompany({
+            id: snap.docs[0].id,
+            ...(snap.docs[0].data() as any),
+          });
+        } else {
+          setError("notFound");
+        }
       } catch (e) {
-        console.warn("PublicCompanyPage ► fetch company by slug", e);
+        console.warn("PublicCompanyPage ► fetch company", e);
         setError(t("loadingError"));
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
+
+  /* ================= POPUP LANG ================= */
 
   useEffect(() => {
     const timer = setTimeout(() => setShowLangPopup(true), 4000);
     return () => clearTimeout(timer);
   }, []);
 
-  /* =========================
-     SUGGESTED TRIPS
-  ========================= */
+  /* ================= SUGGESTED TRIPS ================= */
+
   useEffect(() => {
     const fetchSuggestions = async () => {
       if (!company?.id) return;
+
       try {
         const agencesSnap = await getDocs(
           collection(db, "companies", company.id, "agences")
         );
-        const ags = agencesSnap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        })) as any[];
 
         const uniqueMap = new Map<string, TripSuggestion>();
-        for (const agence of ags) {
+
+        for (const ag of agencesSnap.docs) {
           const weekly = await getDocs(
             collection(
               db,
               "companies",
               company.id,
               "agences",
-              agence.id,
+              ag.id,
               "weeklyTrips"
             )
           );
+
           for (const d of weekly.docs) {
             const trip: any = d.data();
             const departure = trip.depart || trip.departure;
             const arrival = trip.arrivee || trip.arrival;
             const price = trip.price ?? trip.prix ?? 0;
+
             if (!departure || !arrival) continue;
-            const key = `${departure}__${arrival}`;
+
+            const key = `${departure}_${arrival}`;
+
             if (!uniqueMap.has(key)) {
               uniqueMap.set(key, {
                 departure,
                 arrival,
                 price,
-                frequency:
-                  trip.days?.length > 0
-                    ? `${trip.days.length} jours / semaine`
-                    : "Départs réguliers",
-                imageUrl: undefined,
               });
             }
           }
         }
+
         setSuggestedTrips(Array.from(uniqueMap.values()).slice(0, 6));
       } catch (e) {
-        console.warn("PublicCompanyPage ► suggestions", e);
+        console.warn("Suggestions error:", e);
       }
     };
+
     fetchSuggestions();
   }, [company]);
 
-  /* =========================
-     AGENCES
-  ========================= */
+  /* ================= AGENCES ================= */
+
   useEffect(() => {
     const fetchAgences = async () => {
       if (!company?.id) return;
-      try {
-        const agSnap = await getDocs(
-          collection(db, "companies", company.id, "agences")
-        );
-        setAgences(
-          agSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Agence))
-        );
-      } catch (e) {
-        console.warn("PublicCompanyPage ► agences", e);
-        setError(t("loadingError"));
-      }
+
+      const agSnap = await getDocs(
+        collection(db, "companies", company.id, "agences")
+      );
+
+      setAgences(
+        agSnap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as Agence[]
+      );
     };
+
     fetchAgences();
-  }, [company, t]);
+  }, [company]);
+
+  /* ================= SECURITE ================= */
 
   const allowPublic = !!company?.publicPageEnabled;
   const allowOnline = allowPublic && !!company?.onlineBookingEnabled;
 
-  /* =========================
-     STATES
-  ========================= */
   if (error === "notFound") {
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
-  if (error && error !== "notFound") {
-    return (
-      <ErrorScreen
-        error={error}
-        colors={colors}
-        classes={classes}
-        t={t}
-        navigate={navigate}
-        slug={slug}
-      />
-    );
-  }
+
   if (!company || !allowPublic) {
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
 
-  /* =========================
-     RENDER
-  ========================= */
+  /* ================= WHY CHOOSE FALLBACK ================= */
+
+  const buildDefaultWhyChoose = (comp: Company): WhyChooseItem[] => {
+    const items: WhyChooseItem[] = [];
+
+    // Années d'expérience
+    if (comp.createdAt?.toDate) {
+      const createdYear = comp.createdAt.toDate().getFullYear();
+      const currentYear = new Date().getFullYear();
+      const diff = currentYear - createdYear;
+
+      if (diff > 0) {
+        items.push({
+          label: `${diff}+ ans d'expérience`,
+          icon: "award",
+        });
+      }
+    }
+
+    // Réservation en ligne
+    if (comp.onlineBookingEnabled) {
+      items.push({
+        label: "Réservation en ligne rapide",
+        icon: "clock",
+      });
+    }
+
+    // Services à bord
+    if (comp.services && comp.services.length > 0) {
+      items.push({
+        label: "Services à bord modernes",
+        icon: "bus",
+      });
+    }
+
+    // Sécurité par défaut
+    items.push({
+      label: "Voyages sécurisés",
+      icon: "shield",
+    });
+
+    return items.slice(0, 4);
+  };
+
+  const whyChooseItems =
+    company?.whyChooseUs?.items && company.whyChooseUs.items.length > 0
+      ? company.whyChooseUs.items
+      : buildDefaultWhyChoose(company);
+
+  /* ================= RENDER ================= */
+
   return (
     <div
       className={`min-h-screen flex flex-col ${config.typography}`}
@@ -209,18 +247,13 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
       <Header
         company={company}
         colors={colors}
-        classes={classes}
-        config={config}
-        menuOpen={menuOpen}
-        setMenuOpen={setMenuOpen}
-        setShowAgences={setShowAgences}
-        isMobile={isMobile}
-        t={t}
         slug={slug}
         navigate={navigate}
+        t={t}
       />
 
       <main className="flex-grow">
+
         {allowOnline && (
           <>
             <HeroSection
@@ -232,16 +265,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
                   )}&arrival=${encodeURIComponent(arrival)}`
                 );
               }}
-              isMobile={isMobile}
             />
-
-            <section className="max-w-5xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6">
-              <ResumeLastReservation
-                onlyForSlug={slug}
-                primaryColor={colors.primary}
-                secondaryColor={colors.secondary}
-              />
-            </section>
 
             <VilleSuggestionBar
               suggestions={suggestedTrips}
@@ -257,23 +281,30 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           </>
         )}
 
-                <CompanyImageSlider
-          images={company.imagesSlider || []}
-          primaryColor={colors.primary}
-        />
-
-        {/* ✅ SERVICES À BORD */}
-        {Array.isArray(company.services) && company.services.length > 0 && (
-          <CompanyServices
-            services={company.services}
+        {/* WHY CHOOSE */}
+        {whyChooseItems.length > 0 && (
+          <WhyChooseSection
+            companyName={company.nom}
+            items={whyChooseItems}
             primaryColor={colors.primary}
           />
         )}
 
+        {/* SERVICES */}
+        {Array.isArray(company.services) &&
+          company.services.length > 0 && (
+            <CompanyServices
+              services={company.services}
+              primaryColor={colors.primary}
+              secondaryColor={colors.secondary}
+            />
+          )}
+
+        {/* AVIS CLIENTS */}
         <AvisListePublic
           companyId={company.id}
           primaryColor={colors.primary}
-          isMobile={isMobile}
+          secondaryColor={colors.secondary}
         />
 
         <AnimatePresence>
@@ -284,16 +315,15 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               toggleVille={toggleVille}
               onClose={() => setShowAgences(false)}
               primaryColor={colors.primary}
-              classes={classes}
               t={t}
-              isMobile={isMobile}
+              classes={undefined}
             />
           )}
         </AnimatePresence>
 
         {showLangPopup && (
           <LanguageSuggestionPopup
-            onSelectLanguage={(lang: string | undefined) => {
+            onSelectLanguage={(lang) => {
               import("@/i18n").then(({ default: i18n }) =>
                 i18n.changeLanguage(lang)
               );
@@ -302,9 +332,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
             delayMs={8000}
           />
         )}
+
       </main>
 
-      <Footer company={company} isMobile={isMobile} />
+      <Footer company={company} />
     </div>
   );
 };

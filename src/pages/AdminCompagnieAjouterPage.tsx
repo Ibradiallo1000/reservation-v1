@@ -61,13 +61,10 @@ const AdminCompagnieAjouterPage: React.FC = () => {
   /* -------- Compagnie -------- */
   const [nom, setNom] = useState("");
   const [slug, setSlug] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("");        // email vitrine / contact
   const [telephone, setTelephone] = useState("");
   const [pays, setPays] = useState("");
   const [status, setStatus] = useState<"actif" | "inactif">("actif");
-
-  /* -------- Admin principal -------- */
-  const [adminEmail, setAdminEmail] = useState("");
 
   /* -------- Plans -------- */
   const [plans, setPlans] = useState<PlanOption[]>([]);
@@ -121,7 +118,6 @@ const AdminCompagnieAjouterPage: React.FC = () => {
       setPays(d.pays ?? "");
       setStatus(d.status ?? "actif");
       setSelectedPlanId(d.planId ?? "");
-      setAdminEmail(d.adminEmail ?? "");
       setLoading(false);
     })();
   }, [id, isEdit, navigate]);
@@ -165,57 +161,35 @@ const AdminCompagnieAjouterPage: React.FC = () => {
 
     try {
       const payload = {
-  nom: nom.trim(),
-  slug: slug.trim(),
-  email: email.trim() || null,
-  telephone: telephone.trim() || null,
-  pays: pays.trim() || null,
-  status,
-  adminEmail: adminEmail.trim() || null,
+        nom: nom.trim(),
+        slug: slug.trim(),
+        email: email.trim() || null,          // contact / vitrine
+        telephone: telephone.trim() || null,
+        pays: pays.trim() || null,
+        status,
 
-  planId: selectedPlanId,
-  plan: selectedPlan.name,
+        planId: selectedPlanId,
+        plan: selectedPlan.name,
 
-  commissionOnline: selectedPlan.commissionOnline ?? 0,
-  feeGuichet: selectedPlan.feeGuichet ?? 0,
-  minimumMonthly: selectedPlan.minimumMonthly ?? 0,
-  maxAgences: selectedPlan.maxAgences ?? 0,
+        commissionOnline: selectedPlan.commissionOnline ?? 0,
+        feeGuichet: selectedPlan.feeGuichet ?? 0,
+        minimumMonthly: selectedPlan.minimumMonthly ?? 0,
+        maxAgences: selectedPlan.maxAgences ?? 0,
 
-  publicPageEnabled: selectedPlan.features?.publicPage ?? false,
-  onlineBookingEnabled: selectedPlan.features?.onlineBooking ?? false,
-  guichetEnabled: selectedPlan.features?.guichet ?? false,
+        publicPageEnabled: selectedPlan.features?.publicPage ?? false,
+        onlineBookingEnabled: selectedPlan.features?.onlineBooking ?? false,
+        guichetEnabled: selectedPlan.features?.guichet ?? false,
 
-  updatedAt: serverTimestamp(),
-};
-
-      let companyId = id;
+        updatedAt: serverTimestamp(),
+      };
 
       if (isEdit) {
         await updateDoc(doc(db, "companies", id!), payload);
       } else {
-        const ref = await addDoc(collection(db, "companies"), {
+        await addDoc(collection(db, "companies"), {
           ...payload,
           createdAt: serverTimestamp(),
         });
-        companyId = ref.id;
-
-        /* =========================
-           INVITATION AUTO (CLÉ DU SYSTÈME)
-        ========================= */
-        if (adminEmail.trim()) {
-          const invitationRef = await addDoc(collection(db, "invitations"), {
-            email: adminEmail.trim().toLowerCase(),
-            role: "admin_compagnie",
-            companyId,
-            status: "pending",
-            createdAt: serverTimestamp(),
-          });
-
-          // 🔗 liaison visible dans la liste
-          await updateDoc(doc(db, "companies", companyId), {
-            invitationId: invitationRef.id,
-          });
-        }
       }
 
       navigate("/admin/compagnies");
@@ -239,17 +213,35 @@ const AdminCompagnieAjouterPage: React.FC = () => {
       </h1>
 
       <form onSubmit={handleSubmit} className="bg-white border rounded-xl p-5 space-y-4">
-        <input className="input" value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Nom *" />
-        <input className="input" value={slug} onChange={(e) => setSlug(slugify(e.target.value))} placeholder="Slug *" />
-        <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email compagnie" />
-        <input className="input" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="Téléphone" />
-        <input className="input" value={pays} onChange={(e) => setPays(e.target.value)} placeholder="Pays" />
-
         <input
           className="input"
-          value={adminEmail}
-          onChange={(e) => setAdminEmail(e.target.value)}
-          placeholder="Email admin principal (invitation)"
+          value={nom}
+          onChange={(e) => setNom(e.target.value)}
+          placeholder="Nom de la compagnie *"
+        />
+        <input
+          className="input"
+          value={slug}
+          onChange={(e) => setSlug(slugify(e.target.value))}
+          placeholder="Slug *"
+        />
+        <input
+          className="input"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email de contact (vitrine)"
+        />
+        <input
+          className="input"
+          value={telephone}
+          onChange={(e) => setTelephone(e.target.value)}
+          placeholder="Téléphone"
+        />
+        <input
+          className="input"
+          value={pays}
+          onChange={(e) => setPays(e.target.value)}
+          placeholder="Pays"
         />
 
         <div>
@@ -269,7 +261,11 @@ const AdminCompagnieAjouterPage: React.FC = () => {
           </select>
         </div>
 
-        <select className="input" value={status} onChange={(e) => setStatus(e.target.value as any)}>
+        <select
+          className="input"
+          value={status}
+          onChange={(e) => setStatus(e.target.value as any)}
+        >
           <option value="actif">Actif</option>
           <option value="inactif">Inactif</option>
         </select>

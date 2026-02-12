@@ -1,10 +1,10 @@
 // =============================================
 // src/pages/ParametresServices.tsx
+// VERSION MULTI-RÔLE (CEO + ADMIN PLATEFORME)
 // =============================================
 import React, { useEffect, useState } from 'react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
-import { useAuth } from '@/contexts/AuthContext';
 import {
   Wifi,
   Wind,
@@ -18,6 +18,17 @@ import {
   Save,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+/* =========================
+   PROPS
+========================= */
+interface Props {
+  companyId: string;
+}
+
+interface Props {
+  companyId: string;
+}
 
 /* =========================
    CONFIG SERVICES
@@ -81,28 +92,30 @@ const SERVICES: {
   },
 ];
 
-const MAX_SERVICES = 5;
+const MAX_SERVICES = 6;
 
 /* =========================
    COMPONENT
 ========================= */
-const ParametresServices: React.FC = () => {
-  const { user } = useAuth();
+const ParametresServices: React.FC<Props> = ({ companyId }) => {
   const [selectedServices, setSelectedServices] = useState<ServiceKey[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | '' }>({
-    text: '',
-    type: '',
-  });
+  const [message, setMessage] = useState<{
+    text: string;
+    type: 'success' | 'error' | '';
+  }>({ text: '', type: '' });
 
-  /* ---------- load company services ---------- */
+  /* =========================
+     LOAD SERVICES
+  ========================= */
   useEffect(() => {
-    if (!user?.companyId) return;
+    if (!companyId) return;
 
-    (async () => {
+    const fetchServices = async () => {
       try {
-        const ref = doc(db, 'companies', user.companyId);
+        const ref = doc(db, 'companies', companyId);
         const snap = await getDoc(ref);
+
         if (snap.exists()) {
           const data = snap.data();
           setSelectedServices((data.services || []) as ServiceKey[]);
@@ -112,10 +125,14 @@ const ParametresServices: React.FC = () => {
       } finally {
         setLoading(false);
       }
-    })();
-  }, [user?.companyId]);
+    };
 
-  /* ---------- toggle ---------- */
+    fetchServices();
+  }, [companyId]);
+
+  /* =========================
+     TOGGLE SERVICE
+  ========================= */
   const toggleService = (key: ServiceKey) => {
     setSelectedServices((prev) => {
       if (prev.includes(key)) {
@@ -126,24 +143,39 @@ const ParametresServices: React.FC = () => {
     });
   };
 
-  /* ---------- save ---------- */
+  /* =========================
+     SAVE
+  ========================= */
   const handleSave = async () => {
-    if (!user?.companyId) return;
+    if (!companyId) return;
 
     try {
-      await updateDoc(doc(db, 'companies', user.companyId), {
+      await updateDoc(doc(db, 'companies', companyId), {
         services: selectedServices,
       });
-      setMessage({ text: 'Services enregistrés avec succès', type: 'success' });
+
+      setMessage({
+        text: 'Services enregistrés avec succès',
+        type: 'success',
+      });
     } catch (e) {
       console.error(e);
-      setMessage({ text: "Erreur lors de l'enregistrement", type: 'error' });
+      setMessage({
+        text: "Erreur lors de l'enregistrement",
+        type: 'error',
+      });
     }
   };
 
+  /* =========================
+     UI
+  ========================= */
   return (
     <div className="bg-white rounded-xl border p-6">
-      <h2 className="text-lg font-semibold mb-2">Services proposés</h2>
+      <h2 className="text-lg font-semibold mb-2">
+        Services proposés
+      </h2>
+
       <p className="text-sm text-gray-500 mb-6">
         Sélectionnez les services réellement disponibles à bord.
         <br />
@@ -177,13 +209,17 @@ const ParametresServices: React.FC = () => {
               >
                 <div
                   className={`p-2 rounded-lg ${
-                    active ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'
+                    active
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-100 text-gray-600'
                   }`}
                 >
                   {service.icon}
                 </div>
                 <div>
-                  <p className="font-medium text-sm">{service.label}</p>
+                  <p className="font-medium text-sm">
+                    {service.label}
+                  </p>
                   <p className="text-xs text-gray-500">
                     {service.description}
                   </p>
@@ -199,6 +235,7 @@ const ParametresServices: React.FC = () => {
         <p className="text-xs text-gray-500">
           {selectedServices.length}/{MAX_SERVICES} sélectionnés
         </p>
+
         <button
           onClick={handleSave}
           className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-white font-medium"

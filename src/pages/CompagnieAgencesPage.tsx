@@ -17,7 +17,7 @@ import useCompanyTheme from "@/hooks/useCompanyTheme";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { httpsCallable } from "firebase/functions";
 
 // Leaflet assets
@@ -284,7 +284,10 @@ const CompagnieAgencesPage: React.FC = () => {
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const couleurPrincipale = theme.colors?.primary || user?.companyColor || "#2563eb";
-  const companyId = user?.companyId;
+  const { companyId: companyIdFromUrl } = useParams();
+
+  // 🔥 priorité URL → sinon auth
+  const companyId = companyIdFromUrl ?? user?.companyId ?? "";
 
   const MapClickHandler = ({ onPositionChange }: { onPositionChange: (lat: number, lng: number) => void }) => {
     useMapEvents({

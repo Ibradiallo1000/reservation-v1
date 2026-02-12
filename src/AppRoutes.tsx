@@ -79,7 +79,7 @@ const AffectationVehiculePage = lazy(() => import("./pages/AffectationVehiculePa
 const AgenceShellPage = lazy(() => import("./pages/AgenceShellPage"));
 
 export const routePermissions = {
-  compagnieLayout: ["admin_compagnie", "compagnie"] as const,
+  compagnieLayout: ["admin_compagnie"] as const,
   agenceShell: ["chefAgence", "superviseur", "agentCourrier", "admin_compagnie"] as const,
   guichet: ["guichetier", "chefAgence", "admin_compagnie"] as const,
   comptabilite: ["agency_accountant", "admin_compagnie"] as const,
@@ -140,6 +140,10 @@ function LegacyUploadRedirect() {
   return <Navigate to={`/${slug || ""}/reservation/${id || ""}`} replace />;
 }
 
+function NavigateToCompagnieDashboard() {
+  const { companyId } = useParams<{ companyId: string }>();
+  return <Navigate to={`/compagnie/${companyId}/dashboard`} replace />;
+}
 /* =========================
    DebugAuthPage Component
 ========================= */
@@ -362,23 +366,27 @@ const AppRoutes = () => {
           <Route path="statistiques" element={<AdminStatistiquesPage />} />
           <Route path="parametres-platforme" element={<AdminParametresPlatformPage />} />
           <Route path="media" element={<MediaPage />} />
+          <Route
+            path="compagnies/:companyId/configurer"
+            element={<NavigateToCompagnieDashboard />}
+          />
         </Route>
 
-        {/* ========= COMPAGNIE (CEO) ========= */}
+        {/* ========= COMPAGNIE (CEO + ADMIN PLATFORME) ========= */}
         <Route
-          path="/compagnie"
+          path="/compagnie/:companyId"
           element={
-            <PrivateRoute allowedRoles={["admin_compagnie"] as const}>
+            <PrivateRoute allowedRoles={["admin_compagnie", "admin_platforme"] as const}>
               <CompagnieLayout />
             </PrivateRoute>
           }
         >
-          <Route index element={<CompagnieDashboard />} />
+          <Route index element={<RoleLanding />} />
           <Route path="dashboard" element={<CompagnieDashboard />} />
           <Route path="comptabilite" element={<CompagnieComptabilitePage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
-          <Route path="parametres/plan" element={<ParametresPlan />} />
+          <Route path="parametres/plan" element={<ParametresPlan companyId={""} />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
           {/* Redirection vers l'espace chef comptable */}
           <Route 
@@ -388,7 +396,6 @@ const AppRoutes = () => {
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />
-          <Route path="compagnies/:companyId" element={<AdminCompanyDetail />} />
         </Route>
 
         {/* ========= CHEF COMPTABLE COMPAGNIE ========= */}

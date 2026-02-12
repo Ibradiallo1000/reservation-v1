@@ -17,6 +17,18 @@ export interface SocialMediaLinks {
   [key: string]: string | undefined;
 }
 
+/* =========================
+   WHY CHOOSE US (DYNAMIQUE)
+========================= */
+export interface WhyChooseItem {
+  label: string;
+  description?: string;
+  icon?: "shield" | "clock" | "award" | "support" | "star" | "bus";
+}
+
+/* =========================
+   FOOTER
+========================= */
 export interface FooterConfig {
   showAbout?: boolean;
   showContact?: boolean;
@@ -55,12 +67,12 @@ export interface Agence {
    TRIPS / SEARCH
 ========================= */
 export interface TripSuggestion {
-  imageUrl?: string;
-  duration?: string;
   departure: string;
   arrival: string;
   price?: number;
-  frequency?: string;
+  days?: string[];
+  imageUrl?: string;
+  duration?: string;
 }
 
 /* =========================
@@ -75,30 +87,6 @@ export interface CityInputProps {
   icon: React.ReactNode;
   placeholder: string;
   classes: any;
-}
-
-export interface HeroSectionProps {
-  company: Company;
-  departure: string;
-  arrival: string;
-  suggestions: {
-    departure: string[];
-    arrival: string[];
-  };
-  setDeparture: (value: string) => void;
-  setArrival: (value: string) => void;
-  setSuggestions: (value: { departure: string[]; arrival: string[] }) => void;
-  handleSubmit: (e: React.FormEvent) => void;
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    tertiary: string;
-    text: string;
-    background: string;
-  };
-  classes: any;
-  t: (key: string) => string;
 }
 
 /* =========================
@@ -122,7 +110,7 @@ export interface PaymentConfig {
 export type PlanType = "free" | "premium" | "pro" | "enterprise";
 
 /* =========================
-   COMPANY (✅ VERSION FINALE)
+   COMPANY (VERSION PROPRE)
 ========================= */
 export interface Company {
   id: string;
@@ -157,11 +145,17 @@ export interface Company {
   /* --- Vitrine --- */
   accroche?: string;
   instructionRecherche?: string;
-  imagesSlider?: string[];
-  sliderImages?: string[];
 
-  /* ✅ SERVICES À BORD (clé Firestore → string[]) */
+  /* ⚠️ On supprime sliderImages si on enlève les sliders */
+  imagesSlider?: string[];
+
+  /* --- SERVICES À BORD --- */
   services?: string[];
+
+  /* --- WHY CHOOSE (NOUVEAU) --- */
+  whyChooseUs?: {
+    items: WhyChooseItem[];
+  };
 
   /* --- Autres --- */
   socialMedia?: SocialMediaLinks;

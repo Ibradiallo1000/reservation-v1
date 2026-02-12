@@ -1,6 +1,6 @@
-// src/components/layout/CompagnieLayout.tsx
+// src/components/layout/CompagnieLayout.tsx (version corrigée complète)
 import React from "react";
-import { Outlet, Link, useLocation } from "react-router-dom";
+import { Outlet, Link, useLocation, useParams } from "react-router-dom";
 import {
   LayoutDashboard,
   Building,
@@ -20,6 +20,8 @@ import {
   where,
   onSnapshot,
   getDocs,
+  doc,
+  getDoc,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import useCompanyTheme from "@/hooks/useCompanyTheme";
@@ -28,10 +30,20 @@ import {
   usePageHeader,
 } from "@/contexts/PageHeaderContext";
 
+// Définir l'interface Company
+interface Company {
+  id: string;
+  nom: string;
+  slug: string;
+  logoUrl?: string;
+  [key: string]: any;
+}
+
 /* ================= RÔLES ================= */
 const roleLabels: Record<string, string> = {
   admin_compagnie: "CEO",
-  chefAgence: "Chef d’agence",
+  admin_platforme: "Admin Plateforme",
+  chefAgence: "Chef d'agence",
   comptable: "Comptable",
   superviseur: "Superviseur",
   guichetier: "Guichetier",
@@ -39,53 +51,120 @@ const roleLabels: Record<string, string> = {
 };
 
 /* ================= NAVIGATION (DONNÉES) ================= */
-const NAV = [
-  {
-    label: "Tableau de bord",
-    path: "/compagnie/dashboard",
-    icon: LayoutDashboard,
-  },
-  {
-    label: "Réservations",
-    path: "/compagnie/reservations",
-    icon: ClipboardList,
-  },
-  {
-    label: "Agences",
-    path: "/compagnie/agences",
-    icon: Building,
-  },
-  {
-    label: "Avis clients",
-    path: "/compagnie/avis-clients",
-    icon: MessageSquare,
-  },
-  {
-    label: "Configuration",
-    path: "/compagnie/parametres",
-    icon: Settings,
-  },
-];
+const getNavItems = (companyId?: string) => {
+  const basePath = companyId ? `/compagnie/${companyId}` : "/compagnie";
+  
+  return [
+    {
+      label: "Tableau de bord",
+      path: `${basePath}/dashboard`,
+      icon: LayoutDashboard,
+    },
+    {
+      label: "Réservations",
+      path: `${basePath}/reservations`,
+      icon: ClipboardList,
+    },
+    {
+      label: "Agences",
+      path: `${basePath}/agences`,
+      icon: Building,
+    },
+    {
+      label: "Avis clients",
+      path: `${basePath}/avis-clients`,
+      icon: MessageSquare,
+    },
+    {
+      label: "Configuration",
+      path: `${basePath}/parametres`,
+      icon: Settings,
+    },
+  ];
+};
 
-const NAV_ANALYTICS = [
-  {
-    label: "Médias",
-    path: "/compagnie/images",
-    icon: ImageIcon,
-  },
-  {
-    label: "Comptabilité",
-    path: "/compagnie/comptabilite",
-    icon: BarChart2,
-  },
-];
+const getNavAnalytics = (companyId?: string) => {
+  const basePath = companyId ? `/compagnie/${companyId}` : "/compagnie";
+  
+  return [
+    {
+      label: "Médias",
+      path: `${basePath}/images`,
+      icon: ImageIcon,
+    },
+    {
+      label: "Comptabilité",
+      path: `${basePath}/comptabilite`,
+      icon: BarChart2,
+    },
+  ];
+};
+
+/* ================= COMPONENT: MODE BADGE ================= */
+const ModeBadge: React.FC<{ isImpersonationMode: boolean }> = ({ isImpersonationMode }) => {
+  if (!isImpersonationMode) return null;
+  
+  return (
+    <div className="absolute -top-1 -right-1">
+      <span className="relative flex h-3 w-3">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
+        <span className="relative inline-flex rounded-full h-3 w-3 bg-yellow-500"></span>
+      </span>
+    </div>
+  );
+};
 
 /* ================= LAYOUT PRINCIPAL ================= */
 const CompagnieLayout: React.FC = () => {
   const location = useLocation();
-  const { user, logout, company } = useAuth();
-  const theme = useCompanyTheme(company);
+  const params = useParams();
+  const { user, logout, company, loading } = useAuth();
+  
+  // Récupérer le companyId depuis l'URL ou depuis l'utilisateur
+  const urlCompanyId = params.companyId;
+  const userCompanyId = user?.companyId;
+  const currentCompanyId = urlCompanyId || userCompanyId;
+  
+  // Mode impersonation : admin plateforme regardant une autre compagnie
+  const isImpersonationMode = Boolean(user?.role === "admin_platforme" && urlCompanyId);
+  
+  const [currentCompany, setCurrentCompany] = React.useState<Company | null>(company);
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+  
+  // Charger la compagnie depuis l'URL si en mode impersonation
+  React.useEffect(() => {
+    if (!urlCompanyId || urlCompanyId === userCompanyId) {
+      setCurrentCompany(company);
+      return;
+    }
+    
+    // Charger la compagnie depuis Firestore
+    const loadCompanyFromUrl = async () => {
+      try {
+        const companyDoc = await getDoc(doc(db, "companies", urlCompanyId));
+        if (companyDoc.exists()) {
+          const data = companyDoc.data();
+          setCurrentCompany({ 
+            id: companyDoc.id, 
+            nom: data.nom || "",
+            slug: data.slug || "",
+            logoUrl: data.logoUrl,
+            ...data 
+          });
+        }
+      } catch (error) {
+        console.error("Erreur lors du chargement de la compagnie:", error);
+      }
+    };
+    
+    loadCompanyFromUrl();
+  }, [urlCompanyId, userCompanyId, company]);
+
+  const theme = useCompanyTheme(currentCompany);
+  
+  // Navigation dynamique basée sur le companyId
+  const NAV = getNavItems(urlCompanyId);
+  const NAV_ANALYTICS = getNavAnalytics(urlCompanyId);
 
   const isActive = (path: string) =>
     location.pathname === path ||
@@ -97,13 +176,13 @@ const CompagnieLayout: React.FC = () => {
 
   /* ===== RÉSERVATIONS EN ATTENTE (PREUVES) ===== */
   React.useEffect(() => {
-    if (!user?.companyId) return;
+    if (!currentCompanyId) return;
     let unsubs: Array<() => void> = [];
     const countsByAgence = new Map<string, number>();
 
     (async () => {
       const agencesSnap = await getDocs(
-        collection(db, "companies", user.companyId, "agences")
+        collection(db, "companies", currentCompanyId, "agences")
       );
       const agenceIds = agencesSnap.docs.map((d) => d.id);
 
@@ -112,7 +191,7 @@ const CompagnieLayout: React.FC = () => {
           collection(
             db,
             "companies",
-            user.companyId,
+            currentCompanyId,
             "agences",
             agenceId,
             "reservations"
@@ -132,21 +211,32 @@ const CompagnieLayout: React.FC = () => {
     })();
 
     return () => unsubs.forEach((u) => u());
-  }, [user?.companyId]);
+  }, [currentCompanyId]);
 
   /* ===== AVIS CLIENTS EN ATTENTE ===== */
   React.useEffect(() => {
-    if (!user?.companyId) return;
+    if (!currentCompanyId) return;
     const qAvis = query(
-      collection(db, "avis"),
-      where("companyId", "==", user.companyId),
+      collection(db, "companies", currentCompanyId, "avis"),
       where("visible", "==", false)
     );
+
     const unsub = onSnapshot(qAvis, (snap) =>
       setPendingReviewsCount(snap.size)
     );
     return () => unsub();
-  }, [user?.companyId]);
+  }, [currentCompanyId]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement de l'espace compagnie...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <PageHeaderProvider>
@@ -162,9 +252,13 @@ const CompagnieLayout: React.FC = () => {
         }
         userName={user?.displayName || user?.email || ""}
         userRole={(user as any)?.role}
-        companyName={company?.nom || "Compagnie"}
-        logoUrl={company?.logoUrl}
+        companyName={currentCompany?.nom || "Compagnie"}
+        logoUrl={currentCompany?.logoUrl}
+        isImpersonationMode={isImpersonationMode}
+        navItems={NAV}
+        navAnalytics={NAV_ANALYTICS}
         onLogout={logout}
+        onExitImpersonation={() => window.location.href = "/admin/compagnies"}
         onOpenMobileMenu={() => setMobileMenuOpen(true)}
       />
     </PageHeaderProvider>
@@ -172,7 +266,7 @@ const CompagnieLayout: React.FC = () => {
 };
 
 /* ================= LAYOUT INTERNE ================= */
-const LayoutInner: React.FC<{
+interface LayoutInnerProps {
   theme: any;
   isActive: (p: string) => boolean;
   onlineProofsCount: number;
@@ -182,9 +276,15 @@ const LayoutInner: React.FC<{
   userRole?: string;
   companyName: string;
   logoUrl?: string;
+  isImpersonationMode: boolean;
+  navItems: any[];
+  navAnalytics: any[];
   onLogout: () => void;
+  onExitImpersonation: () => void;
   onOpenMobileMenu: () => void;
-}> = ({
+}
+
+const LayoutInner: React.FC<LayoutInnerProps> = ({
   theme,
   isActive,
   onlineProofsCount,
@@ -194,7 +294,11 @@ const LayoutInner: React.FC<{
   userRole,
   companyName,
   logoUrl,
+  isImpersonationMode,
+  navItems,
+  navAnalytics,
   onLogout,
+  onExitImpersonation,
   onOpenMobileMenu,
 }) => {
   const { header } = usePageHeader();
@@ -207,23 +311,33 @@ const LayoutInner: React.FC<{
         style={{ backgroundColor: theme.colors.primary }}
       >
         <div className="flex-1 flex flex-col">
-          {/* LOGO */}
-          <div className="p-6 border-b border-white/20 flex items-center gap-3">
-            {logoUrl && (
-              <img
-                src={logoUrl}
-                alt="logo"
-                className="h-10 w-10 rounded-full"
-              />
-            )}
-            <h1 className="text-lg font-bold truncate">
-              {companyName}
-            </h1>
+          {/* LOGO avec badge mode impersonation */}
+          <div className="p-6 border-b border-white/20 flex items-center gap-3 relative">
+            <div className="relative">
+              {logoUrl && (
+                <img
+                  src={logoUrl}
+                  alt="logo"
+                  className="h-10 w-10 rounded-full"
+                />
+              )}
+              <ModeBadge isImpersonationMode={isImpersonationMode} />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold truncate">
+                {companyName}
+              </h1>
+              {isImpersonationMode && (
+                <p className="text-xs opacity-80 text-yellow-200">
+                  Mode inspection
+                </p>
+              )}
+            </div>
           </div>
 
           {/* NAVIGATION */}
           <nav className="flex-1 p-4 space-y-1">
-            {NAV.map((item) => (
+            {navItems.map((item) => (
               <NavItem
                 key={item.path}
                 to={item.path}
@@ -232,9 +346,9 @@ const LayoutInner: React.FC<{
                 active={isActive(item.path)}
                 theme={theme}
                 badge={
-                  item.path === "/compagnie/reservations"
+                  item.path.includes("/reservations")
                     ? onlineProofsCount
-                    : item.path === "/compagnie/avis-clients"
+                    : item.path.includes("/avis-clients")
                     ? pendingReviewsCount
                     : undefined
                 }
@@ -245,7 +359,7 @@ const LayoutInner: React.FC<{
               <p className="text-xs uppercase opacity-80 px-3 mb-2">
                 Analytique
               </p>
-              {NAV_ANALYTICS.map((item) => (
+              {navAnalytics.map((item) => (
                 <NavItem
                   key={item.path}
                   to={item.path}
@@ -262,11 +376,14 @@ const LayoutInner: React.FC<{
           <div className="p-4 border-t border-white/20">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div
-                  className="w-8 h-8 rounded-full flex items-center justify-center font-medium"
-                  style={{ backgroundColor: theme.colors.secondary }}
-                >
-                  {userInitial}
+                <div className="relative">
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center font-medium"
+                    style={{ backgroundColor: theme.colors.secondary }}
+                  >
+                    {userInitial}
+                  </div>
+                  <ModeBadge isImpersonationMode={isImpersonationMode} />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">
@@ -277,12 +394,24 @@ const LayoutInner: React.FC<{
                   </p>
                 </div>
               </div>
-              <button
-                onClick={onLogout}
-                className="p-2 rounded-md hover:bg-white/20"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                {isImpersonationMode && (
+                  <button
+                    onClick={onExitImpersonation}
+                    className="p-2 rounded-md hover:bg-white/20 text-yellow-300"
+                    title="Quitter le mode inspection"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  onClick={onLogout}
+                  className="p-2 rounded-md hover:bg-white/20"
+                  title="Se déconnecter"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -292,13 +421,39 @@ const LayoutInner: React.FC<{
       <main className="md:ml-64">
         <div className="h-screen flex flex-col">
           {/* HEADER MOBILE */}
-          <header className="bg-white shadow-sm p-4 md:hidden flex justify-between">
+          <header className="bg-white shadow-sm p-4 md:hidden flex justify-between items-center">
             <button onClick={onOpenMobileMenu}>
               <Menu className="w-5 h-5" />
             </button>
-            <h1 className="font-semibold">{companyName}</h1>
-            <div />
+            <div className="text-center">
+              <h1 className="font-semibold">{companyName}</h1>
+              {isImpersonationMode && (
+                <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full">
+                  Mode inspection
+                </span>
+              )}
+            </div>
+            <div className="w-5" /> {/* Spacer pour centrer */}
           </header>
+
+          {/* BANNER MODE IMPERSONATION */}
+          {isImpersonationMode && (
+            <div className="bg-yellow-50 border-b border-yellow-200 px-6 py-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-yellow-800">
+                    🔍 Vous êtes en mode inspection de <strong>{companyName}</strong>
+                  </span>
+                </div>
+                <button
+                  onClick={onExitImpersonation}
+                  className="text-sm bg-yellow-600 text-white px-3 py-1 rounded hover:bg-yellow-700"
+                >
+                  Retour à l'admin
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* HEADER DYNAMIQUE */}
           <div

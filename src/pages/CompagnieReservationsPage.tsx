@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { useParams } from "react-router-dom";
 import {
   FaChevronLeft,
   FaChevronRight,
@@ -103,7 +104,10 @@ function getPeriodRange(
 /* ------------------------------ Page ----------------------------------- */
 const CompagnieReservationsPage: React.FC = () => {
   const { user, company } = useAuth();
-  const companyId = user?.companyId;
+  const { companyId: companyIdFromUrl } = useParams();
+
+  // 🔥 LOGIQUE UNIFIÉE
+  const companyId = companyIdFromUrl ?? user?.companyId ?? "";
   const theme = useCompanyTheme(company);
   const { setHeader, resetHeader } = usePageHeader();
 

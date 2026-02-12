@@ -6,8 +6,11 @@ import { db } from '../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Save, CheckCircle, AlertCircle } from 'lucide-react';
+interface Props {
+  companyId: string;
+}
 
-const ParametresLegauxPage: React.FC = () => {
+const ParametresLegauxPage: React.FC<Props> = ({ companyId }) => {
   const { user } = useAuth();
   const [mentionsLegales, setMentionsLegales] = useState({ fr: '', en: '' });
   const [politiqueConfidentialite, setPolitiqueConfidentialite] = useState({ fr: '', en: '' });
