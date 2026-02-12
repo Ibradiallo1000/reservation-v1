@@ -23,6 +23,7 @@ import { getCompanyFromCache } from "@/utils/companyCache";
 
 interface PublicCompanyPageProps {
   company?: Company;
+  isMobile?: boolean;
 }
 
 const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({

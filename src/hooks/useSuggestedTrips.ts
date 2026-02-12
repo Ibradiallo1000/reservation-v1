@@ -31,7 +31,6 @@ const useSuggestedTrips = ({ companyId, max = 5 }: UseSuggestedTripsParams) => {
               departure: trip.depart,
               arrival: trip.arrivee,
               price: trip.prix,
-              frequency: trip.days?.length > 0 ? `${trip.days.length} jours / sem.` : undefined,
             });
           }
         }
