@@ -1,5 +1,3 @@
-// src/components/public/CompanyServices.tsx
-
 import React from "react";
 import {
   Wifi,
@@ -46,7 +44,7 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
 
   return (
     <section
-      className="py-5 px-4"
+      className="py-6 px-4"
       style={{
         backgroundColor: `${secondaryColor}08`,
       }}
@@ -63,15 +61,20 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
 
         {/* Carte harmonisée */}
         <div
-          className="rounded-2xl border overflow-hidden"
+          className="rounded-2xl overflow-hidden"
           style={{
-            borderColor: `${primaryColor}30`,
-            boxShadow: `0 4px 15px ${primaryColor}10`,
+            border: `1px solid ${primaryColor}20`,
+            boxShadow: `0 6px 18px ${primaryColor}12`,
             backgroundColor: "#ffffff",
           }}
         >
-          <div className="grid grid-cols-2 sm:grid-cols-3 divide-x divide-y">
-
+          <div
+            className="grid grid-cols-2 sm:grid-cols-3"
+            style={{
+              borderTop: `1px solid ${primaryColor}10`,
+              borderLeft: `1px solid ${primaryColor}10`,
+            }}
+          >
             {validServices.map((key) => {
               const { icon: Icon, label } = SERVICES_MAP[key];
 
@@ -79,9 +82,14 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
                 <div
                   key={key}
                   className="p-4 flex items-center gap-3"
+                  style={{
+                    borderRight: `1px solid ${primaryColor}10`,
+                    borderBottom: `1px solid ${primaryColor}10`,
+                  }}
                 >
+                  {/* Icône */}
                   <div
-                    className="w-8 h-8 rounded-full flex items-center justify-center"
+                    className="w-9 h-9 rounded-full flex items-center justify-center"
                     style={{
                       backgroundColor: `${secondaryColor}15`,
                     }}
@@ -92,15 +100,16 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
                     />
                   </div>
 
+                  {/* Texte */}
                   <span className="text-sm font-medium text-gray-800">
                     {label}
                   </span>
                 </div>
               );
             })}
-
           </div>
         </div>
+
       </div>
     </section>
   );

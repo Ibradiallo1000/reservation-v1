@@ -351,7 +351,7 @@ export default function ReservationClientPage() {
     couleurPrimaire: '#f43f5e', 
     couleurSecondaire: '#f97316', 
     logoUrl: '', 
-    code: 'MT' 
+    code: '' 
   });
   const theme = useMemo(() => ({
     primary: company.couleurPrimaire,
@@ -486,7 +486,7 @@ export default function ReservationClientPage() {
         setCompany({
           id: routeState.companyId,
           name: comp.nom || comp.name || '',
-          code: (comp.code || 'MT').toString().toUpperCase(),
+          code: (comp.code || '').toString().toUpperCase(),
           couleurPrimaire: comp.couleurPrimaire || '#f43f5e',
           couleurSecondaire: comp.couleurSecondaire || '#f97316',
           logoUrl: comp.logoUrl || ''
@@ -565,7 +565,7 @@ export default function ReservationClientPage() {
         setCompany({
           id: cdoc.id,
           name: cdata.nom || cdata.name || '',
-          code: (cdata.code || 'MT').toString().toUpperCase(),
+          code: (cdata.code || '').toString().toUpperCase(),
           couleurPrimaire: cdata.couleurPrimaire || '#f43f5e',
           couleurSecondaire: cdata.couleurSecondaire || '#f97316',
           logoUrl: cdata.logoUrl || ''
@@ -815,8 +815,24 @@ export default function ReservationClientPage() {
 
       const compSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId));
       const comp = compSnap.exists() ? (compSnap.data() as any) : {};
-      const companyCode = (comp.code || company.code || 'MT').toString().toUpperCase();
+      function inferCompanyCode(name?: string) {
+        if (!name) return '';
+        const initials = name
+          .trim()
+          .split(/\s+/)
+          .map(w => w[0])
+          .join('')
+          .toUpperCase();
+        return initials.slice(0, 3);
+      }
 
+      const rawCompanyCode = (comp.code || company.code || '').toString().trim();
+
+      const companyCode =
+        rawCompanyCode
+          ? rawCompanyCode.toUpperCase()
+          : inferCompanyCode(comp.nom || comp.name);
+      console.log('Company Code utilisé :', companyCode);
       const referenceCode = await generateWebReferenceCode({
         companyId: selectedTrip.companyId,
         companyCode,

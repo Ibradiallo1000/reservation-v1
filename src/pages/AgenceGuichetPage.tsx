@@ -33,6 +33,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useActiveShift } from '@/hooks/useActiveShift';
 import useCompanyTheme from '@/hooks/useCompanyTheme';
 import { makeShortCode } from '@/utils/brand';
+import { generateAntiFraudCode } from '@/utils/security';
 
 import ReceiptModal, {
   type ReservationData as ReceiptReservation,
@@ -735,7 +736,7 @@ const AgenceGuichetPage: React.FC = () => {
         tripInstanceId: selectedTrip.id,
         sellerCode: sellerCodeCached || staffCodeForSale
       });
-
+       
       // 2) Pré-créer l'ID du doc pour écrire EN UNE FOIS
       const colRef = collection(db, `companies/${user!.companyId}/agences/${user!.agencyId}/reservations`);
       const newRef = doc(colRef);
@@ -768,16 +769,22 @@ const AgenceGuichetPage: React.FC = () => {
 
       // Reçu (aucune relecture nécessaire)
       setReceiptData({
-        id: newId, nomClient, telephone,
-        date: data.date, heure: data.heure, depart: data.depart, arrivee: data.arrivee,
-        seatsGo: data.seatsGo, seatsReturn: data.seatsReturn, montant: data.montant,
-        statut: data.statut, paiement: data.paiement,
-        compagnieId: user!.companyId, compagnieNom: companyMeta.name,
-        agencyId: user!.agencyId, agencyNom: agencyMeta.name, nomAgence: agencyMeta.name,
-        agenceTelephone: agencyMeta.phone, canal: CANALS.GUICHET,
-        createdAt: new Date(), companySlug: companyMeta.slug, referenceCode,
-        qrCode: newId, guichetierId: user!.uid, guichetierCode: sellerCodeCached || staffCodeForSale,
-        shiftId: activeShift?.id || null, email: undefined,
+        id: newId,
+        nomClient,
+        telephone,
+        date: data.date,
+        heure: data.heure,
+        depart: data.depart,
+        arrivee: data.arrivee,
+        seatsGo: data.seatsGo,
+        seatsReturn: data.seatsReturn,
+        montant: data.montant,
+        statut: data.statut,
+        paiement: data.paiement,
+        agencyNom: agencyMeta.name,
+        agenceTelephone: agencyMeta.phone,
+        createdAt: new Date(),
+        referenceCode
       });
 
       setReceiptCompany({

@@ -1,5 +1,3 @@
-// src/components/public/WhyChooseSection.tsx
-
 import React from "react";
 import { WhyChooseItem } from "@/types/companyTypes";
 import { Clock, ShieldCheck, Bus, Star } from "lucide-react";
@@ -28,14 +26,14 @@ const WhyChooseSection: React.FC<Props> = ({
 
   return (
     <section
-      className="py-5 px-4"
+      className="py-6 px-4"
       style={{
         backgroundColor: `${secondaryColor}08`,
       }}
     >
       <div className="max-w-5xl mx-auto">
 
-        {/* Titre cohérent */}
+        {/* Titre */}
         <div className="flex items-center justify-center gap-2 mb-4">
           <Bus size={18} style={{ color: primaryColor }} />
           <h2 className="text-lg font-semibold text-gray-900 text-center">
@@ -43,17 +41,22 @@ const WhyChooseSection: React.FC<Props> = ({
           </h2>
         </div>
 
-        {/* Carte compacte */}
+        {/* Carte principale */}
         <div
-          className="rounded-2xl border overflow-hidden"
+          className="rounded-2xl overflow-hidden"
           style={{
-            borderColor: `${primaryColor}30`,
-            boxShadow: `0 4px 15px ${primaryColor}10`,
+            border: `1px solid ${primaryColor}20`,
+            boxShadow: `0 6px 18px ${primaryColor}12`,
             backgroundColor: "#ffffff",
           }}
         >
-          <div className="grid grid-cols-2 divide-x divide-y">
-
+          <div
+            className="grid grid-cols-2"
+            style={{
+              borderTop: `1px solid ${primaryColor}10`,
+              borderLeft: `1px solid ${primaryColor}10`,
+            }}
+          >
             {items.slice(0, 4).map((item, index) => {
               const IconComponent =
                 iconMap[item.icon || ""] || ShieldCheck;
@@ -62,9 +65,14 @@ const WhyChooseSection: React.FC<Props> = ({
                 <div
                   key={index}
                   className="p-3 flex items-center gap-3"
+                  style={{
+                    borderRight: `1px solid ${primaryColor}10`,
+                    borderBottom: `1px solid ${primaryColor}10`,
+                  }}
                 >
+                  {/* Icône */}
                   <div
-                    className="w-8 h-8 rounded-full flex items-center justify-center"
+                    className="w-9 h-9 rounded-full flex items-center justify-center"
                     style={{
                       backgroundColor: `${secondaryColor}15`,
                     }}
@@ -75,13 +83,14 @@ const WhyChooseSection: React.FC<Props> = ({
                     />
                   </div>
 
+                  {/* Texte */}
                   <div>
                     <p className="text-sm font-medium text-gray-800 leading-tight">
                       {item.label}
                     </p>
 
                     {item.description && (
-                      <p className="text-xs text-gray-500 leading-tight mt-1">
+                      <p className="text-xs text-gray-500 mt-1 leading-tight">
                         {item.description}
                       </p>
                     )}
@@ -89,7 +98,6 @@ const WhyChooseSection: React.FC<Props> = ({
                 </div>
               );
             })}
-
           </div>
         </div>
 

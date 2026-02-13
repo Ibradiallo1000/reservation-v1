@@ -49,16 +49,6 @@ const VilleSuggestionBar: React.FC<Props> = ({
                 boxShadow: `0 4px 15px ${primary}12`,
               }}
             >
-              {/* Badge */}
-              <div
-                className="inline-block text-[10px] px-2 py-1 rounded-full mb-3 font-semibold"
-                style={{
-                  backgroundColor: `${primary}15`,
-                  color: primary,
-                }}
-              >
-                Populaire
-              </div>
 
               {/* Trajet */}
               <div className="font-semibold text-sm leading-snug">
