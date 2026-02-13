@@ -11,7 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import UploadImageCloudinary from "@/pages/UploadImageCloudinary";
+import UploadImageCloudinary from "@/shared/components/UploadImageCloudinary";
 import { Image as ImageIcon, Trash2 } from "lucide-react";
 
 /* =========================
