@@ -6,13 +6,13 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from "react-router-dom";
 
-import ParametresVitrine from './ParametresVitrine';
-import ParametresPersonnel from './ParametresPersonnel';
-import ParametresSecurite from './ParametresSecurite';
-import ParametresReseauxPage from './ParametresReseauxPage';
-import ParametresLegauxPage from './ParametresLegauxPage';
-import ParametresPlan from './ParametresPlan';
-import ParametresServices from './ParametresServices';
+import ParametresVitrine from '@/modules/compagnie/components/parametres/ParametresVitrine';
+import ParametresPersonnel from '@/modules/compagnie/components/parametres/ParametresPersonnel';
+import ParametresSecurite from '@/modules/compagnie/components/parametres/ParametresSecurite';
+import ParametresReseauxPage from '@/modules/compagnie/components/parametres/ParametresReseauxPage';
+import ParametresLegauxPage from '@/modules/compagnie/components/parametres/ParametresLegauxPage';
+import ParametresPlan from '@/modules/compagnie/components/parametres/ParametresPlan';
+import ParametresServices from '@/modules/compagnie/components/parametres/ParametresServices';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { usePageHeader } from '@/contexts/PageHeaderContext';

@@ -30,7 +30,7 @@ import {
   Finances,
   Rapports,
   Parametres
-} from "@/pages/chef-comptable";
+} from "@/modules/chef-comptable/pages";
 
 const HomePage = lazy(() => import("./pages/HomePage"));
 const PlatformSearchResultsPage = lazy(() => import("./pages/PlatformSearchResultsPage"));
@@ -53,15 +53,15 @@ const AdminFinancesPage = lazy(() => import("./modules/plateforme//pages/AdminFi
 const AdminCompagnieAjouterPage = lazy(() => import("./modules/plateforme/pages/AdminCompagnieAjouterPage"));
 
 const CompagnieLayout = lazy(() => import("./components/layout/CompagnieLayout"));
-const CompagnieDashboard = lazy(() => import("./pages/CompagnieDashboard"));
-const CompagnieAgencesPage = lazy(() => import("./pages/CompagnieAgencesPage"));
-const CompagnieParametresTabsPage = lazy(() => import("./pages/CompagnieParametresTabsPage"));
-const CompagnieReservationsPage = lazy(() => import("./pages/CompagnieReservationsPage"));
-const CompagnieComptabilitePage = lazy(() => import("./pages/CompagnieComptabilitePage"));
-const BibliothequeImagesPage = lazy(() => import("./pages/BibliothequeImagesPage"));
-const CompanyPaymentSettingsPage = lazy(() => import("./pages/CompanyPaymentSettingsPage"));
-const AvisModerationPage = lazy(() => import("./pages/AvisModerationPage"));
-const ParametresPlan = lazy(() => import("./pages/ParametresPlan"));
+const CompagnieDashboard = lazy(() => import("./modules/compagnie/pages/CompagnieDashboard"));
+const CompagnieAgencesPage = lazy(() => import("./modules/compagnie/pages/CompagnieAgencesPage"));
+const CompagnieParametresTabsPage = lazy(() => import("./modules/compagnie/pages/CompagnieParametresTabsPage"));
+const CompagnieReservationsPage = lazy(() => import("./modules/compagnie/pages/CompagnieReservationsPage"));
+const CompagnieComptabilitePage = lazy(() => import("./modules/compagnie/pages/CompagnieComptabilitePage"));
+const BibliothequeImagesPage = lazy(() => import("./modules/compagnie/pages/BibliothequeImagesPage"));
+const CompanyPaymentSettingsPage = lazy(() => import("./modules/compagnie/pages/CompanyPaymentSettingsPage"));
+const AvisModerationPage = lazy(() => import("./modules/compagnie/pages/AvisModerationPage"));
+const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 
 const DashboardAgencePage = lazy(() => import("./pages/DashboardAgencePage"));
 const AgenceReservationsPage = lazy(() => import("./pages/AgenceReservationsPage"));

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Teliya</title>
+    <base href="/" />
+
+    <!-- Préconnect pour Firestore/Storage -->
+    <link rel="preconnect" href="https://firebasestorage.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://www.googleapis.com" crossorigin />
+
+    <!-- Préchargement images critiques -->
+    <link rel="preload" as="image" href="/images/teliya-logo.svg" />
+    <link rel="preload" as="image" href="/images/hero-fallback.jpg" />
+    <link rel="preload" as="image" href="/images/partner-placeholder.png" />
+
+    <style>
+      /* évite les sauts visuels */
+      .img-fixed {
+        width: 100%;
+        height: 100%;
+        -o-object-fit: cover;
+           object-fit: cover;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #fff;
+      }
+    </style>
+
+    <script>
+      // Injection immédiate des derniers settings/partenaires (avant React)
+      (function () {
+        try {
+          window.__BOOT__ = JSON.parse(localStorage.getItem("platform:settings") || "null");
+          window.__PARTNERS__ = JSON.parse(localStorage.getItem("platform:partners") || "null");
+        } catch {
+          window.__BOOT__ = null;
+          window.__PARTNERS__ = null;
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-CBC3XRHi.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/js/react-KXT1Riez.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/firebase-DYTOaTLw.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-B27hBV_J.js">
+    <link rel="stylesheet" crossorigin href="/assets/css/react-DOfe2hmq.css">
+    <link rel="stylesheet" crossorigin href="/assets/css/index-Bqn1kmil.css">
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

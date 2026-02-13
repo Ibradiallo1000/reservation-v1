@@ -12,7 +12,7 @@ import {
   deleteDoc,
   doc,
 } from "firebase/firestore";
-import { db } from "../firebaseConfig";
+import { db } from "../../../firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import useCompanyTheme from "@/hooks/useCompanyTheme";
