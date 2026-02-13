@@ -11,7 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import UploadImageCloudinary from "@/shared/components/UploadImageCloudinary";
 
 type ImageKind = "logo" | "banniere" | "favicon" | "slider" | "autre";

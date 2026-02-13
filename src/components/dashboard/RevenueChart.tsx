@@ -10,7 +10,7 @@ import {
   ResponsiveContainer
 } from "recharts";
 import { useAuth } from "@/contexts/AuthContext";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 
 interface DailyStat {
   date: string;

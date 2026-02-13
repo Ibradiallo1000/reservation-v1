@@ -1,6 +1,6 @@
 // src/components/layout/GuichetSessionCard.tsx
 import React from 'react';
-import { useActiveShift } from '@/hooks/useActiveShift';
+import { useActiveShift } from '@/modules/agence/hooks/useActiveShift';
 import { useAuth } from '@/contexts/AuthContext';
 
 const GuichetSessionCard: React.FC = () => {

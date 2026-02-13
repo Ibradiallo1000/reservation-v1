@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { validateShiftWithDeposit } from '@/services/validateShiftWithDeposit';
+import { validateShiftWithDeposit } from '@/modules/agence/services/validateShiftWithDeposit';
 
 export default function ValidateShiftModal({ open, onClose, ctx }:{
   open:boolean; onClose:()=>void;

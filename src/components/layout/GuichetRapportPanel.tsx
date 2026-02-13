@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { collection, getDocs, orderBy, query, where } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import { useActiveShift } from '@/hooks/useActiveShift';
+import { useActiveShift } from '@/modules/agence/hooks/useActiveShift';
 
 const GuichetRapportPanel: React.FC = () => {
   const { user } = useAuth();

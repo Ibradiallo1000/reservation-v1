@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TruckIcon } from "@heroicons/react/24/outline";
 import { useAuth } from "@/contexts/AuthContext";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { chefApproveShift } from '@/services/chefApproveShift';
+import { chefApproveShift } from '@/modules/agence/services/chefApproveShift';
 
 export default function ChefApprovalModal({ open, onClose, ctx }:{
   open:boolean; onClose:()=>void;

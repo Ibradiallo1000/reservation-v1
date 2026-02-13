@@ -1,7 +1,7 @@
 // src/pages/chef-comptable/Parametres.tsx
 import React, { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import useCompanyTheme from '@/hooks/useCompanyTheme';
+import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import {
   Settings,
   Save,

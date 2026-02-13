@@ -24,7 +24,7 @@ import {
   getDoc,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import {
   PageHeaderProvider,
   usePageHeader,

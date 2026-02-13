@@ -13,7 +13,7 @@ import {
 import { db, functions, dbReady } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";

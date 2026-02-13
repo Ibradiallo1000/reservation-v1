@@ -4,7 +4,7 @@
 import React from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ResponsiveContainer } from "recharts";
-import { AgencyPerf } from "@/hooks/useCompanyDashboardData";
+import { AgencyPerf } from "@/modules/compagnie/hooks/useCompanyDashboardData";
 
 export function AgencyPerformanceChart({ data, loading }: { data: AgencyPerf[]; loading: boolean }) {
   if (loading) return <Skeleton className="h-72 w-full rounded-2xl" />;

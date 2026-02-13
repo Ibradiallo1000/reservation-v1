@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Building2, Cog, User as UserIcon, LogOut } from 'lucide-react';
 import { theme as baseTheme } from '@/theme';
 import { useAuth } from '@/contexts/AuthContext';
-import useCompanyTheme from '@/hooks/useCompanyTheme';
+import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 
 /**
  * Header réutilisable avec :

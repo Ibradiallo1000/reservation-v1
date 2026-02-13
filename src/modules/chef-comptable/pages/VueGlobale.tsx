@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import useCompanyTheme from '@/hooks/useCompanyTheme';
+import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import {
   Globe,
   TrendingUp,

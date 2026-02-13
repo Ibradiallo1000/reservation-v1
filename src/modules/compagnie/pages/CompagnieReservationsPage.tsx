@@ -22,7 +22,7 @@ import {
   FaPrint,
 } from "react-icons/fa";
 import { saveAs } from "file-saver";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 
 /* ----------------------------- Types ----------------------------------- */

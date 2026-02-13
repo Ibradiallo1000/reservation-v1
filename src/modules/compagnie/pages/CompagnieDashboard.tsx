@@ -3,7 +3,7 @@
 // =============================================
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useCompanyDashboardData } from "@/hooks/useCompanyDashboardData";
+import { useCompanyDashboardData } from "@/modules/compagnie/hooks/useCompanyDashboardData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   TrendingUp,

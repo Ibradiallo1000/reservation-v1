@@ -1,6 +1,6 @@
 // ✅ src/components/messages/MessagesList.tsx
 import React from 'react';
-import { MessageClient } from '@/pages/MessagesCompagniePage';
+import { MessageClient } from '@/modules/compagnie/pages/MessagesCompagniePage';
 import MessageItem from './MessageItem';
 
 interface MessagesListProps {

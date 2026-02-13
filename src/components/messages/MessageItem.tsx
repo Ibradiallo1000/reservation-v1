@@ -1,6 +1,6 @@
 // src/components/messages/MessageItem.tsx
 import React from 'react';
-import type { MessageClient } from '@/pages/MessagesCompagniePage';
+import type { MessageClient } from '@/modules/compagnie/pages/MessagesCompagniePage';
 
 interface MessageItemProps {
   message: MessageClient;

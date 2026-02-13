@@ -20,7 +20,7 @@ import { usePageHeader } from '@/contexts/PageHeaderContext';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 
-import useCompanyTheme from '@/hooks/useCompanyTheme';
+import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { Company } from '@/types/companyTypes';
 
 type TabKey =

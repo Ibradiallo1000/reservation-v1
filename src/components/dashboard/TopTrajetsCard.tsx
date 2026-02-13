@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/AuthContext";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 
 interface TopTrajet {
   id: string;     // peut être redondant si la même liaison revient — on ne s'en sert plus pour l'agrégation

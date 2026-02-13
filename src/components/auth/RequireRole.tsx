@@ -1,7 +1,7 @@
 // src/components/auth/RequireRole.tsx
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { useUserRole } from '@/hooks/useUserRole';
+import { useUserRole } from '@/shared/hooks/useUserRole';
 import { permissionsByRole } from '@/roles-permissions';
 
 type AnyRole = keyof typeof permissionsByRole | string;

@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { motion } from "framer-motion";
 import Skeleton from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/AuthContext";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 
 interface MetricCardProps {
   title: string;

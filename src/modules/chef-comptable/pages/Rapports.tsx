@@ -1,7 +1,7 @@
 // src/pages/chef-comptable/Rapports.tsx
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import useCompanyTheme from '@/hooks/useCompanyTheme';
+import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import {
   FileText,
   Download,

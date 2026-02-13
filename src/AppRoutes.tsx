@@ -2,28 +2,28 @@
 import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
-import PrivateRoute from "./pages/PrivateRoute";
+import PrivateRoute from "./modules/auth/components/PrivateRoute";
 import PageLoader from "./components/PageLoaderComponent";
-import RouteResolver from "./pages/RouteResolver";
+import RouteResolver from "./modules/public/router/RouteResolver";
 import SplashScreen from "@/components/SplashScreen";
 import AdminCompanyPlan from "@/modules/plateforme/pages/AdminCompanyPlan";
 import PlansManager from "@/modules/plateforme/pages/PlansManager";
 import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
-import MentionsPage from "@/pages/MentionsPage";
-import ConfidentialitePage from "@/pages/ConfidentialitePage";
-import ConditionsPage from "@/pages/ConditionsPage";
-import CookiesPage from "@/pages/CookiesPage";
+import MentionsPage from "./modules/public/pages/MentionsPage";
+import ConfidentialitePage from "./modules/public/pages/ConfidentialitePage";
+import ConditionsPage from "@/modules/public/pages/ConditionsPage";
+import CookiesPage from "@/modules/public/pages/CookiesPage";
 import AdminCompanyDetail from "@/modules/plateforme/pages/AdminCompanyDetail";
-import AgenceEmbarquementPage from "@/pages/AgenceEmbarquementPage";
-import ReservationPrintPage from "@/pages/ReservationPrintPage";
-import ReservationDetailsPage from "@/pages/ReservationDetailsPage";
+import AgenceEmbarquementPage from "@/modules/agence/embarquement/pages/AgenceEmbarquementPage";
+import ReservationPrintPage from "@/modules/agence/guichet/pages/ReservationPrintPage";
+import ReservationDetailsPage from "@/modules/public/pages/ReservationDetailsPage";
 import AdminParametresPlatformPage from "./modules/plateforme/pages/AdminParametresPlatformPage";
-import ValidationComptablePage from "@/pages/ValidationComptablePage";
-import ValidationChefAgencePage from "@/pages/ValidationChefAgencePage";
-import FinishSignIn from "@/pages/FinishSignIn";
+import ValidationComptablePage from "@/modules/workflows/pages/ValidationComptablePage";
+import ValidationChefAgencePage from "@/modules/workflows/pages/ValidationChefAgencePage";
+import FinishSignIn from "@/modules/auth/pages/FinishSignIn";
 
 // Import des pages Chef Comptable Compagnie depuis l'index
-import ChefComptableCompagniePage from "./pages/ChefComptableCompagnie";
+import ChefComptableCompagniePage from "./modules/chef-comptable/pages/ChefComptableCompagnie";
 import {
   VueGlobale,
   ReservationsEnLigne,
@@ -32,18 +32,18 @@ import {
   Parametres
 } from "@/modules/chef-comptable/pages";
 
-const HomePage = lazy(() => import("./pages/HomePage"));
-const PlatformSearchResultsPage = lazy(() => import("./pages/PlatformSearchResultsPage"));
-const LoginPage = lazy(() => import("./pages/LoginPage"));
-const Register = lazy(() => import("./pages/Register"));
-const ListeVillesPage = lazy(() => import("./pages/ListeVillesPage"));
-const AcceptInvitationPage = lazy(() => import("./pages/AcceptInvitationPage"));
-const AgenceRapportsPage = lazy(() => import("./pages/AgenceRapportsPage"));
+const HomePage = lazy(() => import("./modules/public/pages/HomePage"));
+const PlatformSearchResultsPage = lazy(() => import("./modules/plateforme/pages/PlatformSearchResultsPage"));
+const LoginPage = lazy(() => import("./modules/auth/pages/LoginPage"));
+const Register = lazy(() => import("./modules/auth/pages/Register"));
+const ListeVillesPage = lazy(() => import("./modules/plateforme/pages/ListeVillesPage"));
+const AcceptInvitationPage = lazy(() => import("./modules/auth/pages/AcceptInvitationPage"));
+const AgenceRapportsPage = lazy(() => import("./modules/agence/pages/AgenceRapportsPage"));
 
-const ReservationClientPage = lazy(() => import("./pages/ReservationClientPage"));
-const ClientMesReservationsPage = lazy(() => import("./pages/ClientMesReservationsPage"));
+const ReservationClientPage = lazy(() => import("./modules/public/pages/ReservationClientPage"));
+const ClientMesReservationsPage = lazy(() => import("./modules/public/pages/ClientMesReservationsPage"));
 
-const AdminSidebarLayout = lazy(() => import("./pages/AdminSidebarLayout"));
+const AdminSidebarLayout = lazy(() => import("./modules/plateforme/pages/AdminSidebarLayout"));
 const AdminDashboard = lazy(() => import("./modules/plateforme/pages/AdminDashboard"));
 const AdminCompagniesPage = lazy(() => import("./modules/plateforme/pages/AdminCompagniesPage"));
 const AdminModifierCompagniePage = lazy(() => import("./modules/plateforme/pages/AdminModifierCompagniePage"));
@@ -63,20 +63,20 @@ const CompanyPaymentSettingsPage = lazy(() => import("./modules/compagnie/pages/
 const AvisModerationPage = lazy(() => import("./modules/compagnie/pages/AvisModerationPage"));
 const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 
-const DashboardAgencePage = lazy(() => import("./pages/DashboardAgencePage"));
-const AgenceReservationsPage = lazy(() => import("./pages/AgenceReservationsPage"));
-const AgenceGuichetPage = lazy(() => import("./pages/AgenceGuichetPage"));
-const AgenceTrajetsPage = lazy(() => import("./pages/AgenceTrajetsPage"));
-const AgenceFinancesPage = lazy(() => import("./pages/AgenceFinancesPage"));
-const AgenceRecettesPage = lazy(() => import("./pages/AgenceRecettesPage"));
-const AgencePersonnelPage = lazy(() => import("./pages/AgencePersonnelPage"));
-const ReceiptGuichetPage = lazy(() => import("./pages/ReceiptGuichetPage"));
+const DashboardAgencePage = lazy(() => import("./modules/agence/pages/DashboardAgencePage"));
+const AgenceReservationsPage = lazy(() => import("./modules/agence/pages/AgenceReservationsPage"));
+const AgenceGuichetPage = lazy(() => import("./modules/agence/guichet/pages/AgenceGuichetPage"));
+const AgenceTrajetsPage = lazy(() => import("./modules/agence/pages/AgenceTrajetsPage"));
+const AgenceFinancesPage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceFinancesPage"));
+const AgenceRecettesPage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceRecettesPage"));
+const AgencePersonnelPage = lazy(() => import("./modules/agence/pages/AgencePersonnelPage"));
+const ReceiptGuichetPage = lazy(() => import("./modules/agence/guichet/pages/ReceiptGuichetPage"));
 const MediaPage = lazy(() => import("./modules/plateforme//pages/MediaPage"));
-const AgenceShiftHistoryPage = lazy(() => import("./pages/AgenceShiftHistoryPage"));
-const AgenceComptabilitePage = lazy(() => import("./pages/AgenceComptabilitePage"));
-const AgenceShiftPage = lazy(() => import("./pages/AgenceShiftPage"));
-const AffectationVehiculePage = lazy(() => import("./pages/AffectationVehiculePage"));
-const AgenceShellPage = lazy(() => import("./pages/AgenceShellPage"));
+const AgenceShiftHistoryPage = lazy(() => import("./modules/agence/pages/AgenceShiftHistoryPage"));
+const AgenceComptabilitePage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceComptabilitePage"));
+const AgenceShiftPage = lazy(() => import("./modules/agence/pages/AgenceShiftPage"));
+const AffectationVehiculePage = lazy(() => import("./modules/agence/garage/pages/AffectationVehiculePage"));
+const AgenceShellPage = lazy(() => import("./modules/agence/pages/AgenceShellPage"));
 
 export const routePermissions = {
   compagnieLayout: ["admin_compagnie"] as const,

@@ -1,6 +1,6 @@
 import { createBrowserRouter } from 'react-router-dom';
 import CompagnieLayout from '@/components/layout/CompagnieLayout';
-import MessagesCompagniePage from '@/pages/MessagesCompagniePage';
+import MessagesCompagniePage from '@/modules/compagnie/pages/MessagesCompagniePage';
 
 export const router = createBrowserRouter([
   {

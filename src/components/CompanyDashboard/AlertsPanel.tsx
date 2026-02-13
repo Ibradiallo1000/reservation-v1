@@ -4,7 +4,7 @@
 import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, Info } from "lucide-react";
-import { AlertItem } from "@/hooks/useCompanyDashboardData";
+import { AlertItem } from "@/modules/compagnie/hooks/useCompanyDashboardData";
 
 export function AlertsPanel({ alerts }: { alerts: AlertItem[] }) {
   if (!alerts || alerts.length === 0) return (

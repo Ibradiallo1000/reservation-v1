@@ -5,7 +5,7 @@ import { Company } from '@/types/companyTypes';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import VilleCombobox from '@/components/public/VilleCombobox';
-import { useVilleOptions } from '@/hooks/useVilleOptions';
+import { useVilleOptions } from '@/modules/public/hooks/useVilleOptions';
 
 interface HeroSectionProps {
   company: Company;

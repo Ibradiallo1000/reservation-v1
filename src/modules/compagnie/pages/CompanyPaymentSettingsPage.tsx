@@ -16,7 +16,7 @@ import {
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePageHeader } from '@/contexts/PageHeaderContext';
-import useCompanyTheme from '@/hooks/useCompanyTheme';
+import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 
 interface PaymentMethod {
   id?: string;

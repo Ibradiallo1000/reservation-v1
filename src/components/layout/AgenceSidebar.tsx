@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Link, Outlet, useLocation, matchPath } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import useCompanyTheme from "@/hooks/useCompanyTheme";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import {
   LayoutDashboard,
   MapPinned,
