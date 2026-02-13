@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, collectionGroup, getDocs } from "firebase/firestore";
-import { db } from "../firebaseConfig";
+import { db } from "../../../firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import {
   TrendingUp, TrendingDown, Building2, Users, AlertTriangle, DollarSign, BarChart2, Download

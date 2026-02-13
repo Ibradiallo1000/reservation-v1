@@ -12,7 +12,7 @@ import {
 import { db } from "@/firebaseConfig";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import useCompanyTheme from "@/hooks/useCompanyTheme";
-import UploadImageCloudinary from "./UploadImageCloudinary";
+import UploadImageCloudinary from "@/modules/plateforme/components/UploadImageCloudinary";
 
 type ImageKind = "logo" | "banniere" | "favicon" | "slider" | "autre";
 

@@ -243,7 +243,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
 
        <p>
          {DEFAULT_TICKET_MESSAGES.validity}
-  ,,,,,</p>
+       </p>
 
        <p>
          Merci d’avoir choisi {companyName}

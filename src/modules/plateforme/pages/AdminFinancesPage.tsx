@@ -1,7 +1,7 @@
 import { CSVLink } from 'react-csv';
 import React, { useEffect, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { db } from '@/firebaseConfig';
 import { format } from 'date-fns';
 import {
   BarChart,

@@ -5,7 +5,7 @@ import {
   getDocs,
   Timestamp,
 } from "firebase/firestore";
-import { db } from "../firebaseConfig";
+import { db } from "@/firebaseConfig";
 import {
   BarChart,
   Bar,
