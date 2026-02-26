@@ -169,6 +169,7 @@ const AgenceFleetOperationsPage: React.FC = () => {
           driverPhone: assignForm.driverPhone.trim() || undefined,
           convoyeurName: assignForm.convoyeurName.trim() || undefined,
           convoyeurPhone: assignForm.convoyeurPhone.trim() || undefined,
+          assignedBy: userId,
         },
         userId,
         role

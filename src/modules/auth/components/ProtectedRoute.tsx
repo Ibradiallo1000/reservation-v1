@@ -1,8 +1,9 @@
 import React from "react";
 import PrivateRoute from "./PrivateRoute";
 import { AuthCurrencyProvider } from "@/shared/currency/CurrencyContext";
+import type { Role } from "@/roles-permissions";
 
-type AllowedRoles = readonly string[];
+type AllowedRoles = readonly (Role | string)[];
 
 interface ProtectedRouteProps {
   allowedRoles: AllowedRoles;
@@ -16,7 +17,7 @@ interface ProtectedRouteProps {
  */
 export default function ProtectedRoute({ allowedRoles, withCurrency, children }: ProtectedRouteProps) {
   return (
-    <PrivateRoute allowedRoles={allowedRoles}>
+    <PrivateRoute allowedRoles={allowedRoles as readonly Role[]}>
       {withCurrency ? <AuthCurrencyProvider>{children}</AuthCurrencyProvider> : children}
     </PrivateRoute>
   );

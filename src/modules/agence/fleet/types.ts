@@ -1,7 +1,7 @@
 // src/modules/agence/fleet/types.ts
 // Phase 3: Fleet vehicle and assignment types.
 // State machine: garage | assigned | in_transit | arrived | maintenance
-import type { Timestamp } from "firebase/firestore";
+import type { Timestamp, FieldValue } from "firebase/firestore";
 
 export type FleetVehicleStatus =
   | "garage"
@@ -47,12 +47,15 @@ export interface FleetVehicleDoc {
   departureTime: Timestamp | string | null;
   /** ISO date-time or Firestore Timestamp for ETA */
   estimatedArrivalTime: Timestamp | string | null;
-  lastMovementAt: Timestamp | null;
+  /** When writing, can be serverTimestamp() (FieldValue). */
+  lastMovementAt: Timestamp | FieldValue | null;
   lastMovementBy: string | null;
   chauffeurName: string;
   convoyeurName: string;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
+  /** When writing, can be serverTimestamp() (FieldValue). */
+  createdAt: Timestamp | FieldValue;
+  /** When writing, can be serverTimestamp() (FieldValue). */
+  updatedAt: Timestamp | FieldValue;
   migratedFromAffectation?: boolean;
 }
 

@@ -9,12 +9,13 @@ import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import { markShipmentArrived } from "@/modules/logistics/services/markShipmentArrived";
 import { markReadyForPickup } from "@/modules/logistics/services/markReadyForPickup";
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
+import type { Company } from "@/types/companyTypes";
 import { Inbox, Loader2, CheckCircle, Truck } from "lucide-react";
 import CourierPageHeader from "../components/CourierPageHeader";
 
 export default function CourierReceptionPage() {
   const { user, company } = useAuth() as { user: { uid: string; companyId?: string; agencyId?: string }; company: unknown };
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const primaryColor = theme?.colors?.primary ?? "#ea580c";
   const secondaryColor = theme?.colors?.secondary ?? "#f97316";
   const companyId = user?.companyId ?? "";

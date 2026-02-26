@@ -20,7 +20,10 @@ export const permissionsByRole: Record<Role, ModuleKey[]> = {
   guichetier: ['guichet', 'reservations'],
   gestionnaire: ['trajets', 'reservations', 'finances'],
   agentCourrier: ['courriers'],
-  support: ['parametres']
+  support: ['parametres'],
+  chef_garage: ['dashboard', 'trajets'],
+  chefEmbarquement: ['trajets', 'reservations'],
+  agency_fleet_controller: ['trajets'],
 };
 
 export const hasPermission = (role: Role, module: ModuleKey): boolean => {

@@ -9,6 +9,7 @@ import { lightenForDarkMode } from "@/utils/color";
 import { Package, LayoutDashboard, PlusCircle, Inbox, Truck, FileText, Layers } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
+import type { Company } from "@/types/companyTypes";
 import { useOnlineStatus, useAgencyKeyboardShortcuts } from "@/modules/agence/shared";
 
 const COURRIER_SECTIONS: NavSection[] = [
@@ -29,7 +30,7 @@ const CourierLayout: React.FC = () => {
     logout: () => Promise<void>;
   };
   const navigate = useNavigate();
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const isOnline = useOnlineStatus();
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() =>
     (localStorage.getItem("theme") as "light" | "dark") || "light"

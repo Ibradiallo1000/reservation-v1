@@ -9,13 +9,14 @@ import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPat
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import type { CourierSession } from "@/modules/logistics/domain/courierSession.types";
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
+import type { Company } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { FileText, Package, Banknote, Truck, Wallet } from "lucide-react";
 import CourierPageHeader from "../components/CourierPageHeader";
 
 export default function CourierReportsPage() {
   const { user, company } = useAuth() as { user: { uid: string; companyId?: string; agencyId?: string }; company: unknown };
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const primaryColor = theme?.colors?.primary ?? "#ea580c";
   const secondaryColor = theme?.colors?.secondary ?? "#f97316";
   const companyId = user?.companyId ?? "";

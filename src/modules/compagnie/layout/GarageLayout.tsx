@@ -11,15 +11,9 @@ import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import type { Company } from "@/types/companyTypes";
 import { useAgencyDarkMode } from "@/modules/agence/shared";
 import { GarageThemeProvider } from "./GarageThemeContext";
-
-interface Company {
-  id: string;
-  nom: string;
-  logoUrl?: string;
-  [key: string]: any;
-}
 
 const GarageLayout: React.FC = () => {
   const params = useParams();
@@ -29,7 +23,7 @@ const GarageLayout: React.FC = () => {
   const currentCompanyId = urlCompanyId || userCompanyId;
 
   const [currentCompany, setCurrentCompany] = React.useState<Company | null>(
-    company as Company | null
+    (company ?? null) as Company | null
   );
 
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
@@ -40,7 +34,7 @@ const GarageLayout: React.FC = () => {
     return () => document.documentElement.classList.remove("dark");
   }, [darkMode]);
 
-  const theme = useCompanyTheme(currentCompany ?? undefined);
+  const theme = useCompanyTheme(currentCompany);
   const garageTheme = React.useMemo(
     () => ({
       primary: theme?.primary ?? "#475569",
@@ -61,13 +55,14 @@ const GarageLayout: React.FC = () => {
       try {
         const companyDoc = await getDoc(doc(db, "companies", urlCompanyId));
         if (companyDoc.exists()) {
-          const data = companyDoc.data();
+          const data = companyDoc.data() as Record<string, unknown>;
           setCurrentCompany({
             id: companyDoc.id,
-            nom: data.nom || "",
-            logoUrl: data.logoUrl,
+            nom: (data.nom as string) || "",
+            slug: (data.slug as string) ?? "",
+            logoUrl: data.logoUrl as string | undefined,
             ...data,
-          });
+          } as Company);
         }
       } catch (error) {
         console.error("Error loading company:", error);

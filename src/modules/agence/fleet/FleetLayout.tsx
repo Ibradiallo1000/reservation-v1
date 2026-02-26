@@ -7,6 +7,7 @@ import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { LayoutDashboard, Truck, ClipboardList, History, MapPin } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
+import type { Company } from "@/types/companyTypes";
 import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts, AgencyHeaderExtras } from "@/modules/agence/shared";
 
 const FLEET_SECTIONS: NavSection[] = [
@@ -26,7 +27,7 @@ const FleetLayout: React.FC = () => {
     logout: () => Promise<void>;
   };
   const navigate = useNavigate();
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
   useAgencyKeyboardShortcuts(FLEET_SECTIONS);

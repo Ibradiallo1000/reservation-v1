@@ -14,6 +14,7 @@ import type { CourierSession } from "@/modules/logistics/domain/courierSession.t
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import type { Company } from "@/types/companyTypes";
 import { Package, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 import CourierReceipt from "../components/CourierReceipt";
@@ -39,7 +40,7 @@ export default function CourierCreateShipmentPage() {
   const agencyName = user?.agencyNom ?? "Agence";
   const companyName = company?.nom ?? "Compagnie";
   const companyLogoUrl = company?.logoUrl ?? undefined;
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const primaryColor = theme?.colors?.primary ?? "#ea580c";
   const secondaryColor = theme?.colors?.secondary ?? "#f97316";
   const agentCode = (user as { staffCode?: string; codeCourt?: string; code?: string })?.staffCode

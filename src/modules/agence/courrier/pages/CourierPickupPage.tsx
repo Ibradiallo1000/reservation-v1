@@ -8,13 +8,14 @@ import { getDoc, getDocs, onSnapshot, query, where } from "firebase/firestore";
 import { shipmentRef, shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import { confirmPickup } from "@/modules/logistics/services/confirmPickup";
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
+import type { Company } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { Package, Truck, Search, Loader2, CheckCircle } from "lucide-react";
 import CourierPageHeader from "../components/CourierPageHeader";
 
 export default function CourierPickupPage() {
   const { user, company } = useAuth() as { user: { uid: string; companyId?: string; agencyId?: string }; company: unknown };
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const primaryColor = theme?.colors?.primary ?? "#ea580c";
   const secondaryColor = theme?.colors?.secondary ?? "#f97316";
   const companyId = user?.companyId ?? "";

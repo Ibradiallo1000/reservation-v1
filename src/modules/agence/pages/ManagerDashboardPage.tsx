@@ -219,7 +219,7 @@ const ManagerDashboardPage: React.FC = () => {
     return list;
   }, [closedShifts, fleetVehicles]);
 
-  const topCashier = useMemo(() => {
+  const topCashier = useMemo((): { shiftId: string; userName?: string; revenue: number } | null => {
     let best: { shiftId: string; userName?: string; revenue: number } | null = null;
     shifts.forEach((s) => {
       const rev = revenueByShift[s.id] ?? 0;

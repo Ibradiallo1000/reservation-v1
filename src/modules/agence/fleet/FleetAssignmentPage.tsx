@@ -134,7 +134,7 @@ const FleetAssignmentRow: React.FC<{
 
       const fleetRef = collection(db, `companies/${companyId}/fleetVehicles`);
       const now = serverTimestamp();
-      const fleetPayload: Omit<FleetVehicleDoc, "createdAt" | "updatedAt"> & { createdAt: ReturnType<typeof serverTimestamp>; updatedAt: ReturnType<typeof serverTimestamp> } = {
+      const fleetPayload: FleetVehicleDoc = {
         plateNumber: busNumber || immat || "—",
         internalCode: busNumber || immat || key,
         capacity,

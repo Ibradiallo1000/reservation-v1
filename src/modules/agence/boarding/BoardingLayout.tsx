@@ -7,6 +7,7 @@ import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { LayoutDashboard, ClipboardCheck } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
+import type { Company } from "@/types/companyTypes";
 import { useOnlineStatus, useAgencyKeyboardShortcuts } from "@/modules/agence/shared";
 
 const BOARDING_SECTIONS: NavSection[] = [
@@ -19,7 +20,7 @@ const ALLOWED_BOARDING_ROLES = ["chefEmbarquement", "chefAgence", "admin_compagn
 const BoardingLayout: React.FC = () => {
   const { user, company, logout } = useAuth() as { user: { role?: string | string[]; displayName?: string; nom?: string; email?: string }; company: unknown; logout: () => Promise<void> };
   const navigate = useNavigate();
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const isOnline = useOnlineStatus();
   const [themeMode, setThemeMode] = useState<"light" | "dark">(() => {
     return (localStorage.getItem("theme") as "light" | "dark") || "light";

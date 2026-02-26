@@ -107,7 +107,20 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
   const [sortBy, setSortBy] = useState<"plate" | "status" | "updatedAt">("plate");
   const sortToOrderBy = (s: "plate" | "status" | "updatedAt"): ListVehiclesOrderBy =>
     s === "status" ? "technicalStatus" : s === "updatedAt" ? "updatedAt" : "plate";
-  const [addForm, setAddForm] = useState({
+  const [addForm, setAddForm] = useState<{
+    country: string;
+    platePart1: string;
+    platePart2: string;
+    platePart3: string;
+    model: string;
+    year: number;
+    currentCity: string;
+    status: VehicleStatus;
+    insuranceExpiryDate: string;
+    inspectionExpiryDate: string;
+    vignetteExpiryDate: string;
+    notes: string;
+  }>({
     country: "ML",
     platePart1: "",
     platePart2: "",

@@ -23,6 +23,7 @@ import {
 import { Layers, Plus, Loader2, CheckCircle, Truck, MapPin, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import CourierPageHeader from "../components/CourierPageHeader";
+import type { Company } from "@/types/companyTypes";
 
 type BatchWithId = CourierBatch & { id: string };
 
@@ -38,12 +39,13 @@ export default function CourierBatchesPage() {
     user: { uid: string; companyId?: string; agencyId?: string; role?: string | string[] };
     company: unknown;
   };
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const primaryColor = theme?.colors?.primary ?? "#ea580c";
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
-  const isChefAgence = [].concat(user?.role ?? []).includes("chefAgence") || [].concat(user?.role ?? []).includes("admin_compagnie");
-  const userRole = (Array.isArray(user?.role) ? user.role[0] : user?.role) ?? "";
+  const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
+  const isChefAgence = rolesArr.includes("chefAgence") || rolesArr.includes("admin_compagnie");
+  const userRole = rolesArr[0] ?? "";
 
   const [batches, setBatches] = useState<BatchWithId[]>([]);
   const [shipmentsCreated, setShipmentsCreated] = useState<Shipment[]>([]);
@@ -344,7 +346,7 @@ export default function CourierBatchesPage() {
                     className={`w-full text-left rounded-lg border px-3 py-2 text-sm transition ${
                       selectedBatchId === b.id ? "ring-2" : "border-gray-200 hover:border-gray-300"
                     }`}
-                    style={selectedBatchId === b.id ? { borderColor: primaryColor, ringColor: primaryColor } : {}}
+                    style={selectedBatchId === b.id ? { borderColor: primaryColor, boxShadow: `0 0 0 2px ${primaryColor}` } : {}}
                   >
                     <span className="font-mono text-xs">{b.tripKey.slice(0, 20)}…</span>
                     <span className="block text-gray-600">{b.shipmentIds.length} envoi(s)</span>

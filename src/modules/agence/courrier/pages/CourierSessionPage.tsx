@@ -11,6 +11,7 @@ import { courierSessionsRef, courierSessionRef } from "@/modules/logistics/domai
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import type { CourierSession } from "@/modules/logistics/domain/courierSession.types";
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
+import type { Company } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import CourierSessionLivePanel from "../components/CourierSessionLivePanel";
 import CourierPageHeader from "../components/CourierPageHeader";
@@ -32,7 +33,7 @@ export default function CourierSessionPage() {
   const agencyName = user?.agencyNom ?? "Agence";
   const companyName = company?.nom ?? "Compagnie";
   const companyLogoUrl = company?.logoUrl ?? undefined;
-  const theme = useCompanyTheme(company);
+  const theme = useCompanyTheme(company as Company | null);
   const primaryColor = theme?.colors?.primary ?? "#ea580c";
   const secondaryColor = theme?.colors?.secondary ?? "#f97316";
 
@@ -212,7 +213,7 @@ export default function CourierSessionPage() {
             </p>
           </div>
         ) : null}
-        {session && (session.status === "PENDING" || session.status === "ACTIVE") ? (
+        {session ? (
           <div className="space-y-2">
             <p className="text-gray-700">
               <span className="font-medium">Statut :</span>{" "}

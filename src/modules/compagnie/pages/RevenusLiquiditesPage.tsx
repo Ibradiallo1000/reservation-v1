@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { DollarSign, Wallet } from "lucide-react";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import type { Company } from "@/types/companyTypes";
 import { useAuth } from "@/contexts/AuthContext";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -34,7 +35,7 @@ export default function RevenusLiquiditesPage() {
     }).catch(() => {});
   }, [companyId]);
 
-  const theme = useCompanyTheme(companyInfo ?? company ?? undefined);
+  const theme = useCompanyTheme((companyInfo ?? company ?? null) as Company | null);
   const { setHeader, resetHeader } = usePageHeader();
 
   React.useEffect(() => {
@@ -49,9 +50,9 @@ export default function RevenusLiquiditesPage() {
 
   const tabs = useMemo(
     () => [
-      { key: TAB_REVENUS as const, label: "Revenus", icon: DollarSign, description: "CA, ventes, évolution (sessions validées)" },
-      { key: TAB_LIQUIDITES as const, label: "Liquidités", icon: Wallet, description: "Cash réel, validé, en attente, trésorerie nette" },
-    ],
+      { key: TAB_REVENUS, label: "Revenus", icon: DollarSign, description: "CA, ventes, évolution (sessions validées)" },
+      { key: TAB_LIQUIDITES, label: "Liquidités", icon: Wallet, description: "Cash réel, validé, en attente, trésorerie nette" },
+    ] as const,
     []
   );
 
