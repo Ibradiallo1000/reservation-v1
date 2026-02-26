@@ -36,7 +36,7 @@ const AgenceFinancesPage: React.FC = () => {
     const q = query(
       collection(db, 'companies', user.companyId, 'agences', user.agencyId, 'reservations'),
       where('createdAt', '>=', start),
-      where('statut', '==', 'payé')
+      where('statut', 'in', ['paye', 'payé'])
     );
     const snap = await getDocs(q);
     const total = snap.docs.reduce((sum, doc) => sum + (doc.data().montant || 0), 0);

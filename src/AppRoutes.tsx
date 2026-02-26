@@ -39,6 +39,7 @@ const AcceptInvitationPage = lazy(() => import("./modules/auth/pages/AcceptInvit
 
 const ReservationClientPage = lazy(() => import("./modules/compagnie/public/pages/ReservationClientPage"));
 const ClientMesReservationsPage = lazy(() => import("./modules/compagnie/public/pages/ClientMesReservationsPage"));
+const ClientMesBilletsPage = lazy(() => import("./modules/compagnie/public/pages/ClientMesBilletsPage"));
 
 const AdminSidebarLayout = lazy(() => import("./modules/plateforme/pages/AdminSidebarLayout"));
 const AdminDashboard = lazy(() => import("./modules/plateforme/pages/AdminDashboard"));
@@ -487,7 +488,8 @@ const AppRoutes = () => {
         <Route path="/:slug/mon-billet" element={<ReservationDetailsPage />} />
         <Route path="/:slug/upload-preuve/:id" element={<LegacyUploadRedirect />} />
         <Route path="/mes-reservations" element={<ClientMesReservationsPage />} />
-        <Route path="/:slug/mes-reservations" element={<ClientMesReservationsPage />} />
+        <Route path="/mes-billets" element={<ClientMesBilletsPage />} />
+        {/* /:slug/mes-reservations et /:slug/mes-billets passent par RouteResolver (bottom nav) */}
         <Route path="/:slug/*" element={<RouteResolver />} />
 
         {/* ========= REDIRECTIONS DE COMPATIBILITÉ ========= */}

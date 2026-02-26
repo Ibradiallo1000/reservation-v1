@@ -19,6 +19,7 @@ import { useWindowSize } from '@react-hook/window-size';
 import { hexToRgba, safeTextColor } from '@/utils/color';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import type { ReservationStatus } from '@/types/reservation';
+import { showTicketDirect as showTicketDirectUtil, canViewReceiptPage } from '@/utils/reservationStatusUtils';
 
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
@@ -158,14 +159,6 @@ async function resolveByToken(slug: string, token: string) {
   const d = snap.docs[0];
   const parts = d.ref.path.split('/');
   return { ref: d.ref, companyId: parts[1], agencyId: parts[3], hardId: d.id };
-}
-
-/* ====== Logique billet direct (SIMPLIFIÉE) ====== */
-function showTicketDirect(reservation: Reservation): boolean {
-  // Billet disponible uniquement si:
-  // 1. Réservation payée au guichet
-  // 2. OU réservation en ligne confirmée par l'admin
-  return reservation.canal === 'guichet' || reservation.statut === 'confirme';
 }
 
 /* ====== Configuration des étapes ====== */
@@ -369,8 +362,9 @@ const ReservationDetailsPage: React.FC = () => {
     }
   }, [reservation?.statut, reservation?.id]);
 
-  /* ===== Décision d'affichage ===== */
-  const isTicketAvailable = reservation ? showTicketDirect(reservation) : false;
+  /* ===== Décision d'affichage (utilitaire partagé) ===== */
+  const isTicketAvailable = showTicketDirectUtil(reservation);
+  const canViewReceipt = canViewReceiptPage(reservation);
   const canal = String(reservation?.canal || '').toLowerCase();
 
   /* ===== Configuration de la timeline ===== */
@@ -804,21 +798,21 @@ const ReservationDetailsPage: React.FC = () => {
                   });
                 }}
                 className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${
-                  isTicketAvailable ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'
+                  canViewReceipt ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'
                 }`}
                 style={{
-                  background: isTicketAvailable
+                  background: canViewReceipt
                     ? `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`
                     : `linear-gradient(135deg, ${hexToRgba(primaryColor,0.5)}, ${hexToRgba(secondaryColor,0.5)})`,
                   color: safeTextColor(primaryColor)
                 }}
-                disabled={!isTicketAvailable}
+                disabled={!canViewReceipt}
               >
                 <CheckCircle className="h-4 w-4" />
-                {isTicketAvailable 
-                  ? 'Voir mon billet' 
-                  : reservation.statut === 'verification'
-                    ? 'Billet disponible après confirmation'
+                {isTicketAvailable
+                  ? 'Voir mon billet'
+                  : canViewReceipt
+                    ? 'Voir mon reçu (QR après confirmation)'
                     : 'En attente de confirmation'
                 }
               </button>

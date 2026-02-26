@@ -3,6 +3,7 @@ import {
   collection, doc, query, where, onSnapshot, getDocs, limit, Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { format } from "date-fns";
@@ -78,7 +79,7 @@ export default function ManagerCockpitPage() {
       (s) => setShifts(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))));
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
-        where("date", "==", today), where("statut", "in", ["payé", "validé", "embarqué"])),
+        where("date", "==", today), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])),
       (s) => setReservationsToday(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))));
     unsubs.push(onSnapshot(collection(db, `companies/${companyId}/agences/${agencyId}/boardingClosures`),
       (s) => setBoardingClosures(new Set(s.docs.map((d) => d.id)))));
@@ -105,7 +106,7 @@ export default function ManagerCockpitPage() {
     }
     const resRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
     getDocs(query(resRef, where("createdAt", ">=", Timestamp.fromDate(dateFilter.range.start)),
-      where("createdAt", "<=", Timestamp.fromDate(dateFilter.range.end)), where("statut", "==", "payé")))
+      where("createdAt", "<=", Timestamp.fromDate(dateFilter.range.end)), where("statut", "in", ["paye", "payé"])))
       .then((s) => {
         setFilteredRevenue(s.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0));
         setFilteredTickets(s.size);

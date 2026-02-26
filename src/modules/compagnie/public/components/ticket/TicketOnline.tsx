@@ -13,6 +13,7 @@ import {
 import { safeTextColor } from '@/utils/color';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { DEFAULT_TICKET_MESSAGES } from '@/constants/ticketMessages';
+import { isTicketValidForQR } from '@/utils/reservationStatusUtils';
 
 interface TicketOnlineProps {
   companyName: string;
@@ -75,6 +76,8 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   };
 
   const formattedName = formatName(nomClient);
+
+  const isTicketValid = isTicketValidForQR(statut);
 
   return (
     <div className="ticket-force-light w-full max-w-md mx-auto bg-white rounded-2xl shadow-lg overflow-hidden text-sm">
@@ -209,30 +212,36 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
 
       </div>
 
-      {/* ================= QR ================= */}
+      {/* ================= QR (affiché seulement si statut confirme ou payé) ================= */}
       <div className="px-4 py-4 text-center">
+        {isTicketValid ? (
+          <>
+            <p
+              className="text-[10px] uppercase mb-2 font-semibold"
+              style={{ color: accent }}
+            >
+              Code d’embarquement
+            </p>
 
-        <p
-          className="text-[10px] uppercase mb-2 font-semibold"
-          style={{ color: accent }}
-        >
-          Code d’embarquement
-        </p>
+            <div className="inline-block bg-white p-2 rounded-xl shadow">
+              <QRCode
+                value={qrValue}
+                size={95}
+                fgColor="#000000"
+                bgColor="#ffffff"
+                level="H"
+              />
+            </div>
 
-        <div className="inline-block bg-white p-2 rounded-xl shadow">
-          <QRCode
-            value={qrValue}
-            size={95}
-            fgColor="#000000"
-            bgColor="#ffffff"
-            level="H"
-          />
-        </div>
-
-        <p className="text-[10px] font-mono mt-2 font-semibold">
-          {receiptNumber}
-        </p>
-
+            <p className="text-[10px] font-mono mt-2 font-semibold">
+              {receiptNumber}
+            </p>
+          </>
+        ) : (
+          <p className="text-[10px] text-gray-500 italic">
+            Code d’embarquement disponible après confirmation du paiement.
+          </p>
+        )}
       </div>
 
       {/* ================= MESSAGES OFFICIELS ================= */}

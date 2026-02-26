@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { collection, doc, query, where, onSnapshot, getDocs, limit } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import type { DailyStatsDoc } from "../aggregates/types";
@@ -98,7 +99,7 @@ const ManagerDashboardPage: React.FC = () => {
     const qRes = query(
       collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
       where("date", "==", today),
-      where("statut", "in", ["payé", "validé", "embarqué"])
+      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])
     );
     const unsubRes = onSnapshot(qRes, (snap) =>
       setReservationsToday(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ReservationDoc, "id">) })))

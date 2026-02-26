@@ -24,11 +24,15 @@ const PublicCompanyPage = lazy(() => import("../pages/PublicCompanyPage"));
 const ResultatsAgencePage = lazy(() => import("../pages/ResultatsAgencePage"));
 const ReservationClientPage = lazy(() => import("../pages/ReservationClientPage"));
 const ClientMesReservationsPage = lazy(() => import("../pages/ClientMesReservationsPage"));
+const ClientMesBilletsPage = lazy(() => import("../pages/ClientMesBilletsPage"));
 const MentionsPage = lazy(() => import("../pages/MentionsPage"));
 const ConfidentialitePage = lazy(() => import("../pages/ConfidentialitePage"));
 const ReceiptEnLignePage = lazy(() => import("../pages/ReceiptEnLignePage"));
 const UploadPreuvePage = lazy(() => import("../pages/UploadPreuvePage"));
 const ReservationDetailsPage = lazy(() => import("../pages/ReservationDetailsPage"));
+const AidePage = lazy(() => import("../pages/AidePage"));
+
+import PublicBottomNav from "../components/PublicBottomNav";
 
 /** chemins qui ne doivent jamais être traités comme “slug compagnie” */
 const RESERVED = new Set([
@@ -232,6 +236,9 @@ export default function RouteResolver() {
     case "mes-reservations":
       content = <ClientMesReservationsPage />;
       break;
+    case "mes-billets":
+      content = <ClientMesBilletsPage />;
+      break;
     case "mentions":
       content = <MentionsPage />;
       break;
@@ -249,6 +256,9 @@ export default function RouteResolver() {
     case "reservation":
       content = <ReservationDetailsPage />;
       break;
+    case "aide":
+      content = <AidePage company={company} />;
+      break;
     case null:
       content = <PublicCompanyPage {...common} isMobile={isMobile} />;
       break;
@@ -259,7 +269,15 @@ export default function RouteResolver() {
   return (
     <CurrencyProvider currency={company?.devise}>
       <ErrorBoundary fallback={<MobileErrorScreen />}>
-        <Suspense fallback={<PageLoader fullScreen />}>{content}</Suspense>
+        <Suspense fallback={<PageLoader fullScreen />}>
+          <div className="min-h-screen pb-20 md:pb-0">
+            {content}
+          </div>
+          <PublicBottomNav
+            slug={slug}
+            primaryColor={company?.couleurPrimaire ?? undefined}
+          />
+        </Suspense>
       </ErrorBoundary>
     </CurrencyProvider>
   );

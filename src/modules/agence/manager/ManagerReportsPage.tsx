@@ -47,7 +47,7 @@ export default function ManagerReportsPage() {
         getDocs(query(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
           where("createdAt", ">=", Timestamp.fromDate(start)),
           where("createdAt", "<=", Timestamp.fromDate(end)),
-          where("statut", "==", "payé"))),
+          where("statut", "in", ["paye", "payé"]))),
       ]);
 
       setShifts(shiftSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));

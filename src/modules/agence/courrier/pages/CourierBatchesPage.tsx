@@ -27,11 +27,46 @@ import type { Company } from "@/types/companyTypes";
 
 type BatchWithId = CourierBatch & { id: string };
 
+/** Phase 3 UX: human-readable labels (underlying status unchanged). */
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: "Brouillon",
-  READY: "Prêt",
-  DEPARTED: "Parti",
+  READY: "Prêt au départ",
+  DEPARTED: "En route",
   CLOSED: "Clôturé",
+};
+
+const BATCH_STATUS_BADGE_CLASS: Record<string, string> = {
+  DRAFT: "bg-amber-100 text-amber-800 border-amber-200",
+  READY: "bg-blue-100 text-blue-800 border-blue-200",
+  DEPARTED: "bg-violet-100 text-violet-800 border-violet-200",
+  CLOSED: "bg-emerald-100 text-emerald-800 border-emerald-200",
+};
+
+function BatchStatusBadge({ status }: { status: string }) {
+  const label = STATUS_LABELS[status] ?? status;
+  const cls = BATCH_STATUS_BADGE_CLASS[status] ?? "bg-gray-100 text-gray-800 border-gray-200";
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+/** Filter options for batch shipment list (frontend only). */
+const SHIPMENT_STATUS_FILTER_OPTIONS = [
+  { value: "all", label: "Tous" },
+  { value: "IN_TRANSIT", label: "En transit" },
+  { value: "ARRIVED", label: "Arrivé" },
+  { value: "DELIVERED", label: "Livré" },
+] as const;
+
+/** Human-readable shipment status in batch table (no backend change). */
+const SHIPMENT_STATUS_LABELS: Record<string, string> = {
+  CREATED: "Créé",
+  IN_TRANSIT: "En transit",
+  ARRIVED: "Arrivé",
+  READY_FOR_PICKUP: "Prêt à retirer",
+  DELIVERED: "Livré",
 };
 
 export default function CourierBatchesPage() {
@@ -60,6 +95,11 @@ export default function CourierBatchesPage() {
   const [createVehicleId, setCreateVehicleId] = useState("");
   const [assignShipmentId, setAssignShipmentId] = useState("");
   const [escaleShipmentIds, setEscaleShipmentIds] = useState<Set<string>>(new Set());
+  /** Phase 3 UX: confirmation modal for irreversible actions */
+  const [confirmAction, setConfirmAction] = useState<"ready" | "depart" | "close" | null>(null);
+  /** Phase 3 UX: search and filter inside batch detail (frontend only) */
+  const [batchSearchQuery, setBatchSearchQuery] = useState("");
+  const [batchStatusFilter, setBatchStatusFilter] = useState<string>("all");
 
   useEffect(() => {
     if (!companyId || !agencyId) return;
@@ -94,6 +134,11 @@ export default function CourierBatchesPage() {
       setFleetVehicles(snap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string; plateNumber?: string })));
     });
   }, [companyId]);
+
+  useEffect(() => {
+    setBatchSearchQuery("");
+    setBatchStatusFilter("all");
+  }, [selectedBatchId]);
 
   useEffect(() => {
     if (!companyId || !agencyId || !selectedBatchId) {
@@ -263,6 +308,39 @@ export default function CourierBatchesPage() {
     [batchShipments, agencyId]
   );
 
+  /** Phase 3 UX: filtered shipments for batch detail (search + status filter, frontend only) */
+  const filteredBatchShipments = useMemo(() => {
+    let list = batchShipments;
+    const q = batchSearchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((s) => (s.shipmentNumber ?? s.shipmentId).toLowerCase().includes(q));
+    }
+    if (batchStatusFilter !== "all") {
+      list = list.filter((s) => s.currentStatus === batchStatusFilter);
+    }
+    return list;
+  }, [batchShipments, batchSearchQuery, batchStatusFilter]);
+
+  /** Phase 3 UX: summary counts from shipment list (no extra backend) */
+  const batchSummary = useMemo(() => {
+    const total = batchShipments.length;
+    const delivered = batchShipments.filter((s) => s.currentStatus === "DELIVERED").length;
+    const inTransit = batchShipments.filter((s) => s.currentStatus === "IN_TRANSIT").length;
+    const arrived = batchShipments.filter((s) => s.currentStatus === "ARRIVED" || s.currentStatus === "READY_FOR_PICKUP").length;
+    return { total, delivered, inTransit, arrived };
+  }, [batchShipments]);
+
+  const vehicleDisplay = batchDetail
+    ? (fleetVehicles.find((v) => v.id === batchDetail.vehicleId)?.plateNumber ?? batchDetail.vehicleId)
+    : "";
+
+  const runConfirmAction = async () => {
+    if (confirmAction === "ready") await handleMarkReady();
+    else if (confirmAction === "depart") await handleConfirmDeparture();
+    else if (confirmAction === "close") await handleCloseBatch();
+    setConfirmAction(null);
+  };
+
   return (
     <div className="p-4 max-w-5xl mx-auto space-y-6">
       <CourierPageHeader
@@ -320,7 +398,7 @@ export default function CourierBatchesPage() {
           <button
             type="submit"
             disabled={loading.create}
-            className="rounded-lg px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 min-h-[44px] flex items-center gap-2"
+            className="w-full sm:w-auto min-h-[48px] rounded-lg px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
             style={{ backgroundColor: primaryColor }}
           >
             {loading.create ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
@@ -333,8 +411,8 @@ export default function CourierBatchesPage() {
         {(["DRAFT", "READY", "DEPARTED", "CLOSED"] as const).map((status) => (
           <section key={status} className="rounded-xl border bg-white p-4 shadow-sm">
             <h3 className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
-              <Layers className="w-4 h-4" style={{ color: primaryColor }} />
-              {STATUS_LABELS[status]}
+              <Layers className="w-4 h-4 shrink-0" style={{ color: primaryColor }} />
+              <BatchStatusBadge status={status} />
             </h3>
             <ul className="space-y-2">
               {byStatus[status].length === 0 && <li className="text-sm text-gray-500">Aucun</li>}
@@ -343,13 +421,16 @@ export default function CourierBatchesPage() {
                   <button
                     type="button"
                     onClick={() => setSelectedBatchId(b.id)}
-                    className={`w-full text-left rounded-lg border px-3 py-2 text-sm transition ${
+                    className={`w-full text-left rounded-lg border px-3 py-2 text-sm transition min-h-[44px] ${
                       selectedBatchId === b.id ? "ring-2" : "border-gray-200 hover:border-gray-300"
                     }`}
                     style={selectedBatchId === b.id ? { borderColor: primaryColor, boxShadow: `0 0 0 2px ${primaryColor}` } : {}}
                   >
-                    <span className="font-mono text-xs">{b.tripKey.slice(0, 20)}…</span>
-                    <span className="block text-gray-600">{b.shipmentIds.length} envoi(s)</span>
+                    <span className="font-mono text-xs block truncate">{b.tripKey.slice(0, 20)}…</span>
+                    <span className="flex items-center justify-between gap-2 mt-1">
+                      <span className="text-gray-600">{b.shipmentIds.length} envoi(s)</span>
+                      <BatchStatusBadge status={b.status} />
+                    </span>
                   </button>
                 </li>
               ))}
@@ -359,30 +440,76 @@ export default function CourierBatchesPage() {
       </div>
 
       {batchDetail && (
-        <section className="rounded-xl border bg-white p-4 shadow-sm">
-          <h3 className="font-semibold text-gray-800 mb-3 flex items-center justify-between flex-wrap gap-2">
-            <span>Lot : {batchDetail.tripKey}</span>
-            <span className="text-sm font-normal text-gray-500">{STATUS_LABELS[batchDetail.status]}</span>
-          </h3>
+        <section className="rounded-xl border bg-white p-4 shadow-sm space-y-4">
+          {/* Phase 3 UX: summary panel — visible without scrolling */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500 block">Véhicule</span>
+              <span className="font-medium text-gray-900">{vehicleDisplay || "—"}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="text-gray-500 block">Clé trajet</span>
+              <span className="font-mono text-gray-900 break-all">{batchDetail.tripKey}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 block">Total envois</span>
+              <span className="font-medium text-gray-900">{batchSummary.total}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 block">En transit</span>
+              <span className="font-medium text-gray-900">{batchSummary.inTransit}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 block">Arrivés</span>
+              <span className="font-medium text-gray-900">{batchSummary.arrived}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 block">Livrés</span>
+              <span className="font-medium text-gray-900">{batchSummary.delivered}</span>
+            </div>
+            <div className="col-span-2 sm:col-span-4 lg:col-span-1 flex items-end">
+              <BatchStatusBadge status={batchDetail.status} />
+            </div>
+          </div>
+
+          {/* Phase 3 UX: search and filter (frontend only) */}
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="search"
+              placeholder="Rechercher par N° envoi..."
+              value={batchSearchQuery}
+              onChange={(e) => setBatchSearchQuery(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm w-full sm:max-w-xs"
+            />
+            <select
+              value={batchStatusFilter}
+              onChange={(e) => setBatchStatusFilter(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm w-full sm:w-auto"
+            >
+              {SHIPMENT_STATUS_FILTER_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[600px]">
               <thead>
                 <tr className="border-b text-left text-gray-600">
                   <th className="p-2">N° Envoi</th>
                   <th className="p-2">Destination</th>
                   <th className="p-2">Statut</th>
-                  <th className="p-2">Emplacement</th>
+                  <th className="p-2">Position actuelle</th>
                   {batchDetail.status === "DRAFT" && <th className="p-2"></th>}
                   {batchDetail.status === "DEPARTED" && forEscale.length > 0 && <th className="p-2">Arrivée escale</th>}
                 </tr>
               </thead>
               <tbody>
-                {batchShipments.map((s) => (
+                {filteredBatchShipments.map((s) => (
                   <tr key={s.shipmentId} className="border-b">
                     <td className="p-2 font-mono">{s.shipmentNumber ?? s.shipmentId}</td>
                     <td className="p-2">{agencyName(s.destinationAgencyId)}</td>
-                    <td className="p-2">{s.currentStatus}</td>
+                    <td className="p-2">{SHIPMENT_STATUS_LABELS[s.currentStatus] ?? s.currentStatus}</td>
                     <td className="p-2">{s.currentLocationAgencyId ? agencyName(s.currentLocationAgencyId) : "—"}</td>
                     {batchDetail.status === "DRAFT" && (
                       <td className="p-2">
@@ -424,11 +551,11 @@ export default function CourierBatchesPage() {
           </div>
 
           {batchDetail.status === "DRAFT" && (
-            <div className="mt-4 flex flex-wrap gap-2 items-end">
+            <div className="mt-4 flex flex-col sm:flex-row flex-wrap gap-2 items-stretch sm:items-end">
               <select
                 value={assignShipmentId}
                 onChange={(e) => setAssignShipmentId(e.target.value)}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm min-w-[180px]"
+                className="rounded-lg border border-gray-300 px-3 py-2.5 text-sm min-h-[48px] w-full sm:min-w-[180px] sm:w-auto"
               >
                 <option value="">— Ajouter un envoi —</option>
                 {availableForAssign.map((s) => (
@@ -441,10 +568,10 @@ export default function CourierBatchesPage() {
                 type="button"
                 onClick={handleAddShipment}
                 disabled={!assignShipmentId.trim() || loading.add}
-                className="rounded-lg px-4 py-2 text-white text-sm disabled:opacity-50"
+                className="w-full sm:w-auto min-h-[48px] rounded-lg px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
                 style={{ backgroundColor: primaryColor }}
               >
-                {loading.add ? <Loader2 className="w-4 h-4 animate-spin inline" /> : "Ajouter"}
+                {loading.add ? <Loader2 className="w-4 h-4 animate-spin" /> : "Ajouter"}
               </button>
             </div>
           )}
@@ -453,9 +580,9 @@ export default function CourierBatchesPage() {
             <div className="mt-3">
               <button
                 type="button"
-                onClick={handleMarkReady}
+                onClick={() => setConfirmAction("ready")}
                 disabled={loading.ready}
-                className="rounded-lg px-4 py-2 text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                className="w-full sm:w-auto min-h-[48px] rounded-lg px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
                 style={{ backgroundColor: primaryColor }}
               >
                 {loading.ready ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
@@ -468,9 +595,9 @@ export default function CourierBatchesPage() {
             <div className="mt-3">
               <button
                 type="button"
-                onClick={handleConfirmDeparture}
+                onClick={() => setConfirmAction("depart")}
                 disabled={loading.depart}
-                className="rounded-lg px-4 py-2 text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                className="w-full sm:w-auto min-h-[48px] rounded-lg px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
                 style={{ backgroundColor: primaryColor }}
               >
                 {loading.depart ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
@@ -485,7 +612,7 @@ export default function CourierBatchesPage() {
                 type="button"
                 onClick={handleEscaleArrival}
                 disabled={escaleShipmentIds.size === 0 || loading.escale}
-                className="rounded-lg px-4 py-2 text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                className="w-full sm:w-auto min-h-[48px] rounded-lg px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
                 style={{ backgroundColor: primaryColor }}
               >
                 {loading.escale ? <Loader2 className="w-4 h-4 animate-spin" /> : <MapPin className="w-4 h-4" />}
@@ -498,15 +625,44 @@ export default function CourierBatchesPage() {
             <div className="mt-3">
               <button
                 type="button"
-                onClick={handleCloseBatch}
+                onClick={() => setConfirmAction("close")}
                 disabled={loading.close}
-                className="rounded-lg px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium disabled:opacity-50"
+                className="w-full sm:w-auto min-h-[48px] rounded-lg px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {loading.close ? <Loader2 className="w-4 h-4 animate-spin inline" /> : "Clôturer le lot"}
+                {loading.close ? <Loader2 className="w-4 h-4 animate-spin" /> : "Clôturer le lot"}
               </button>
             </div>
           )}
         </section>
+      )}
+
+      {/* Phase 3 UX: confirmation modal for irreversible actions */}
+      {confirmAction !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4">
+            <h2 id="confirm-title" className="text-lg font-semibold text-gray-900">Confirmer l&apos;action</h2>
+            <p className="text-sm text-gray-600">Cette action est irréversible. Voulez-vous continuer ?</p>
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setConfirmAction(null)}
+                className="min-h-[48px] w-full sm:w-auto rounded-lg px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => runConfirmAction()}
+                disabled={loading.ready || loading.depart || loading.close}
+                className="min-h-[48px] w-full sm:w-auto rounded-lg px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                style={{ backgroundColor: primaryColor }}
+              >
+                {(loading.ready || loading.depart || loading.close) ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                Confirmer
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

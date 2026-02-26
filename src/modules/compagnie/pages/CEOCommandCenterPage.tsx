@@ -18,6 +18,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import { format } from "date-fns";
 import { formatDateLongFr } from "@/utils/dateFmt";
+import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { getDateRangeForPeriod, type PeriodKind } from "@/shared/date/periodUtils";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
 import { Truck, AlertTriangle, Wallet } from "lucide-react";
@@ -198,7 +199,7 @@ export default function CEOCommandCenterPage() {
         snap.docs.forEach((d) => {
           const r = d.data() as { statut?: string; shiftId?: string; createdInSessionId?: string; montant?: number };
           const shiftId = r.shiftId ?? r.createdInSessionId;
-          if (r.statut === "payé" && shiftId && nonValidatedShiftIds.has(shiftId)) {
+          if (canonicalStatut(r.statut) === "paye" && shiftId && nonValidatedShiftIds.has(shiftId)) {
             total += Number(r.montant) || 0;
           }
         });

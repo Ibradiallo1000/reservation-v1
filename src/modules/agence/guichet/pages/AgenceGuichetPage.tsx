@@ -56,9 +56,13 @@ import {
   CalendarDays, Clock4, Receipt, History, Pencil, XCircle, Loader2,
   Search, Moon, Sun, Printer as PrinterIcon,
 } from "lucide-react";
+import { canonicalStatut } from "@/utils/reservationStatusUtils";
+import { updateReservationStatut } from "@/modules/agence/services/reservationStatutService";
 
 // ─── Constants ───
-const RESERVATION_STATUS = { PAYE: "payé", ANNULE: "annulé", CONFIRME: "confirme" } as const;
+/** Statuts réservation : convention canonique sans accent (Phase B). */
+const RESERVATION_STATUS = { PAYE: "paye", ANNULE: "annule", CONFIRME: "confirme" } as const;
+/** Statut embarquement (affichage UI, distinct de reservation.statut). */
 const EMBARKMENT_STATUS = { EMBARQUE: "embarqué", ANNULE: "annulé" } as const;
 const CANALS = { GUICHET: "guichet" } as const;
 const DAYS_IN_ADVANCE = 8;
@@ -84,7 +88,7 @@ type ShiftReport = {
 // ─── Helpers ───
 function computeRemainingSeats(totalSeats: number, trajetId: string, reservations: TicketRow[]) {
   const reserved = reservations
-    .filter((r) => r.trajetId === trajetId && [RESERVATION_STATUS.PAYE, RESERVATION_STATUS.CONFIRME].includes(r.statut as any))
+    .filter((r) => r.trajetId === trajetId && (canonicalStatut(r.statut) === "paye" || canonicalStatut(r.statut) === "confirme"))
     .reduce((a, r) => a + (r.seatsGo || 0), 0);
   return Math.max(0, totalSeats - reserved);
 }
@@ -525,13 +529,21 @@ const AgenceGuichetPage: React.FC = () => {
     if (!window.confirm(`Annuler la réservation de ${row.nomClient} (${money(row.montant)}) ?`)) return;
     setCancelingId(row.id);
     try {
-      await updateDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations/${row.id}`), {
-        statut: RESERVATION_STATUS.ANNULE, statutEmbarquement: EMBARKMENT_STATUS.ANNULE,
-        montantOriginal: row.montant, montant: 0, updatedAt: serverTimestamp(),
-        cancelReason: reason.trim(),
-        canceledBy: { id: user.uid, name: user.displayName || user.email || null, code: sellerCodeCached, timestamp: serverTimestamp() },
-      });
-      setTickets((prev) => prev.map((t) => t.id === row.id ? { ...t, montant: 0, statutEmbarquement: EMBARKMENT_STATUS.ANNULE } : t));
+      const resRef = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations/${row.id}`);
+      await updateReservationStatut(
+        resRef,
+        "annulation_en_attente",
+        { userId: user.uid, userRole: (user as { role?: string })?.role ?? "guichetier" },
+        {
+          statutEmbarquement: EMBARKMENT_STATUS.ANNULE,
+          montantOriginal: row.montant,
+          montant: 0,
+          cancelReason: reason.trim(),
+          canceledBy: { id: user.uid, name: user.displayName || user.email || null, code: sellerCodeCached, timestamp: serverTimestamp() },
+          annulation: { demandePar: user.uid, demandeLe: serverTimestamp(), motif: reason.trim(), canal: "guichet" },
+        }
+      );
+      setTickets((prev) => prev.map((t) => t.id === row.id ? { ...t, montant: 0, statut: "annulation_en_attente", statutEmbarquement: EMBARKMENT_STATUS.ANNULE } : t));
       if (soundEnabled) playSound("error");
     } catch {
       alert("Échec de l'annulation.");

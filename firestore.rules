@@ -26,6 +26,21 @@ service cloud.firestore {
     function isAgencyManager() {
       return isAuth() && (getUserRole() == 'chefAgence' || getUserRole() == 'admin_compagnie');
     }
+    /* Phase B — transition de statut réservation (guichetier, chef_agence, comptable, embarquement). Valeurs canoniques uniquement. */
+    function validReservationStatutTransition() {
+      let oldS = resource.data.get('statut', '');
+      let newS = request.resource.data.get('statut', '');
+      return (isGuichetier() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'annulation_en_attente')
+        || (isAgencyManager() && oldS == 'annulation_en_attente' && newS == 'annule')
+        || (isComptable() && oldS == 'annule' && newS == 'rembourse')
+        || (isBoardingOfficer() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'embarque');
+    }
+    /* Phase B — contrôleur embarquement : ne peut modifier que statut, statutEmbarquement, controleurId, checkInTime, auditLog, updatedAt */
+    function boardingOfficerAllowedKeysOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        "statut", "statutEmbarquement", "controleurId", "checkInTime", "auditLog", "updatedAt"
+      ]);
+    }
     function getUserAgencyId() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('agencyId', '');
     }
@@ -63,6 +78,12 @@ service cloud.firestore {
     ===================== */
     match /companies/{companyId} {
       allow get, list: if true;
+
+      /* Avis clients (vitrine publique) : lecture publique, écriture authentifiée */
+      match /avis/{avisId} {
+        allow get, list: if true;
+        allow create, update, delete: if isAuth();
+      }
 
       match /agences/{agencyId} {
         allow get, list: if true;
@@ -128,11 +149,18 @@ service cloud.firestore {
               ])
           );
 
-          /* 🔐 Utilisateurs internes — interdire modification si session validée */
+          /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ; contrôleur embarquement : champs restreints */
           allow update, delete: if isAuth() && (
-            resource.data.get('shiftId', '') == '' ||
+            (resource.data.get('shiftId', '') == '' ||
             !exists(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)) ||
-            get(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)).data.get('status', '') != 'validated'
+            get(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)).data.get('status', '') != 'validated')
+            && (
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny(['statut'])
+              || (validReservationStatutTransition() && (
+                !isBoardingOfficer()
+                || boardingOfficerAllowedKeysOnly()
+              ))
+            )
           );
         }
 

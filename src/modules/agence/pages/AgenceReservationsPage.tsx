@@ -256,7 +256,7 @@ const AgenceReservationsPage: React.FC = () => {
       const qy = query(
         rRef,
         where('shiftId','==',s.id),
-        where('statut','==','payé'),
+        where('statut', 'in', ['paye', 'payé']),
         where('canal','==','guichet')
       );
       liveUnsubsRef.current[s.id] = onSnapshot(qy, ss => {
@@ -283,7 +283,7 @@ const AgenceReservationsPage: React.FC = () => {
       rRef,
       where('createdAt','>=', Timestamp.fromDate(range[0])),
       where('createdAt','<=', Timestamp.fromDate(range[1])),
-      where('statut','==','payé'),
+      where('statut', 'in', ['paye', 'payé']),
       orderBy('createdAt','asc')
     );
     const unsub = onSnapshot(qy, snap => {

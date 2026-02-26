@@ -17,7 +17,7 @@ export const expireHolds = functions.pubsub.schedule('every 5 minutes').onRun(as
         .where('holdUntil','<', now)
         .get();
       const batch = db.batch();
-      snap.forEach(d => batch.update(d.ref, { statut: 'annulé', updatedAt: now }));
+      snap.forEach(d => batch.update(d.ref, { statut: 'annule', updatedAt: now }));
       if (!snap.empty) await batch.commit();
     }
   }

@@ -80,7 +80,7 @@ export async function createGuichetReservation(
     seatsGo: params.seatsGo,
     seatsReturn: params.seatsReturn,
     montant: params.montant,
-    statut: 'payé',
+    statut: 'paye',
     statutEmbarquement: 'en_attente',
     checkInTime: null,
     reportInfo: null,

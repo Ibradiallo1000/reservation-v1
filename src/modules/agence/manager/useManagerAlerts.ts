@@ -3,6 +3,7 @@ import {
   collection, query, where, onSnapshot, getDocs, limit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
 import { listAccounts, ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import { listExpenses } from "@/modules/compagnie/treasury/expenses";
@@ -99,7 +100,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
 
     /* Listener 3: today's reservations */
     unsubs.push(onSnapshot(
-      query(resRef, where("date", "==", today), where("statut", "in", ["payé", "validé", "embarqué"])),
+      query(resRef, where("date", "==", today), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])),
       (snap) => {
         const reservations = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
         setTodayRevenue(reservations.reduce((a: number, r: any) => a + (r.montant ?? 0), 0));

@@ -3,6 +3,7 @@ import {
   collection, doc, query, where, onSnapshot, getDocs, getDoc, limit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
 import { format, addDays } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -84,7 +85,7 @@ export default function ManagerOperationsPage() {
 
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
-        where("date", "==", selectedDate), where("statut", "in", ["payé", "validé", "embarqué"])),
+        where("date", "==", selectedDate), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])),
       (s) => setReservations(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))),
     ));
     unsubs.push(onSnapshot(

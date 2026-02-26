@@ -76,7 +76,7 @@ export default function ManagerFinancesPage() {
     const resRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
 
     getDocs(query(resRef, where("createdAt", ">=", Timestamp.fromDate(start)),
-      where("createdAt", "<=", Timestamp.fromDate(end)), where("statut", "==", "payé")))
+      where("createdAt", "<=", Timestamp.fromDate(end)), where("statut", "in", ["paye", "payé"])))
       .then((s) => {
         setRevenue(s.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0));
         setTickets(s.size);
@@ -100,7 +100,7 @@ export default function ManagerFinancesPage() {
     const resRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
 
     getDocs(query(resRef, where("createdAt", ">=", Timestamp.fromDate(todayStart)),
-      where("createdAt", "<=", Timestamp.fromDate(todayEnd)), where("statut", "==", "payé")))
+      where("createdAt", "<=", Timestamp.fromDate(todayEnd)), where("statut", "in", ["paye", "payé"])))
       .then((s) => setTodayRevenue(s.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0)));
 
     listExpenses(companyId, { agencyId, status: "pending", limitCount: 200 }).then((list) => {

@@ -7,6 +7,7 @@ import {
   collection, query, where, onSnapshot, Timestamp, getDocs, doc, getDoc, limit, CollectionReference,
 } from "firebase/firestore";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { canonicalStatut } from "@/utils/reservationStatusUtils";
 
 /* ---------- Types exportés (identiques à ta version) ---------- */
 
@@ -66,8 +67,8 @@ function normStr(s?: string) {
   return (s || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
 function isPaidStatus(s?: string) {
-  const n = normStr(s);
-  return n === "paye" || n === "paid" || n === "payed";
+  const c = canonicalStatut(s) || normStr(s);
+  return c === "paye" || c === "paid" || c === "payed";
 }
 function getDateKey(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), da = String(d.getDate()).padStart(2, "0");

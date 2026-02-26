@@ -12,6 +12,7 @@ import {
   serverTimestamp,
   writeBatch,
   updateDoc,
+  arrayUnion,
   limit as fsLimit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -35,6 +36,8 @@ import {
   updateAgencyLiveStateOnVehicleInTransit,
 } from "@/modules/agence/aggregates/agencyLiveState";
 import { getAffectationForBoarding } from "@/modules/compagnie/fleet/affectationService";
+import { getEffectiveStatut, canEmbarkWithScan, RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
+import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
 
 /* ===================== Types ===================== */
 type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
@@ -431,7 +434,7 @@ useEffect(() => {
       where("depart", "==", selectedTrip.departure),
       where("arrivee", "==", selectedTrip.arrival),
       where("heure", "==", selectedTrip.heure),
-      where("statut", "in", ["payé", "validé", "embarqué"] as any)
+      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any)
     );
     unsubs.push(onSnapshot(qAll, (snap) => {
       snap.docs.forEach((d) => bag.set(d.id, { id: d.id, ...(d.data() as any) }));
@@ -444,7 +447,7 @@ useEffect(() => {
         where("date", "==", selectedDate),
         where("trajetId", "==", selectedTrip.id),
         where("heure", "==", selectedTrip.heure),
-        where("statut", "in", ["payé", "validé", "embarqué"] as any)
+        where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any)
       );
       unsubs.push(onSnapshot(qById, (snap) => {
         snap.docs.forEach((d) => bag.set(d.id, { id: d.id, ...(d.data() as any) }));
@@ -509,6 +512,19 @@ useEffect(() => {
           const snap = await tx.get(resRef);
           if (!snap.exists()) throw new Error("Réservation introuvable");
           const data = snap.data() as Record<string, unknown>;
+
+          // Phase B : refuser embarquement si billet annulé, remboursé, expiré ou déjà embarqué (on utilise le statut effectif, pas le brut)
+          if (statut === "embarqué") {
+            const effectiveStatut = getEffectiveStatut({
+              statut: data.statut as string,
+              date: data.date as string | { seconds: number; nanoseconds: number } | undefined,
+            });
+            if (!canEmbarkWithScan(effectiveStatut)) {
+              const es = effectiveStatut ?? "";
+              if (es === "embarque") throw new Error("Déjà embarqué");
+              throw new Error("Billet non valide (annulé, remboursé ou expiré).");
+            }
+          }
 
           // normaliser pour comparer
           const dataDep = normCity(data.depart as string | undefined);
@@ -627,7 +643,15 @@ useEffect(() => {
             controleurId: uid,
             checkInTime: statut === "embarqué" ? serverTimestamp() : null,
           };
-          if (statut === "embarqué") patch.statut = "embarqué";
+          if (statut === "embarqué") {
+            patch.statut = "embarque";
+            patch.auditLog = arrayUnion(
+              buildStatutTransitionPayload(String(data.statut ?? ""), "embarque", {
+                userId: uid,
+                userRole: (user as { role?: string })?.role ?? "controleur_embarquement",
+              })
+            );
+          }
           tx.update(resRef, patch);
 
           const logsRef = collection(
@@ -749,7 +773,7 @@ useEffect(() => {
         nomClient: data.nomClient, telephone: data.telephone,
         seatsGo: (data as any).seatsGo || 1,
         canal: "report",
-        statut: "validé",
+        statut: "confirme",
         statutEmbarquement: "en_attente",
         sourceReservationId: reservationId,
         createdBy: uid,
@@ -955,7 +979,7 @@ useEffect(() => {
             nomClient: r.nomClient, telephone: r.telephone,
             seatsGo: (r as any).seatsGo || 1,
             canal: "report",
-            statut: "validé",
+            statut: "confirme",
             statutEmbarquement: "en_attente",
             sourceReservationId: r.id,
             createdBy: uid,

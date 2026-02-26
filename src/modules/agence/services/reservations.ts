@@ -1,7 +1,9 @@
 import {
-  doc, getDoc, runTransaction, serverTimestamp, collection
+  doc, getDoc, runTransaction, serverTimestamp, collection, arrayUnion,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { canonicalStatut, isValidTransition } from "@/utils/reservationStatusUtils";
+import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
 
 /** Champs éditables par le guichet */
 export type ReservationEditable = Partial<{
@@ -21,6 +23,7 @@ export type CancelOptions = {
   reason?: string;
   requestedByUid: string;
   requestedByName?: string | null;
+  requestedByRole?: string;
 };
 
 export type ModifyOptions = {
@@ -41,12 +44,12 @@ async function writeAuditLog(basePath: string, payload: any) {
   });
 }
 
-/** Annuler un billet (statut → "annulé"). */
+/** Annuler un billet (statut → "annule", canonique). Phase B : transition + auditLog obligatoire. */
 export async function cancelReservation(
   companyId: string,
   agencyId: string,
   reservationId: string,
-  { reason, requestedByUid, requestedByName }: CancelOptions
+  { reason, requestedByUid, requestedByName, requestedByRole }: CancelOptions
 ) {
   const base = `companies/${companyId}/agences/${agencyId}`;
   const ref = doc(db, `${base}/reservations/${reservationId}`);
@@ -55,36 +58,37 @@ export async function cancelReservation(
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Réservation introuvable.");
     const data = snap.data() as any;
+    const oldStatut = String(data.statut ?? "");
 
-    // Garde-fous : on n’annule que les billets non annulés
-    if (String(data.statut).toLowerCase() === "annulé") {
-      return; // idempotent
+    if (canonicalStatut(oldStatut) === "annule") return; // idempotent
+
+    if (!isValidTransition(oldStatut, "annule")) {
+      throw new Error(`Transition non autorisée vers annule depuis: ${oldStatut}`);
     }
 
-    // Exemple de restriction : n’annule que si "payé" (adapte à ton process)
-    const allowed = ["payé", "en_attente", "paiement_en_cours", "preuve_recue"];
-    if (!allowed.includes(String(data.statut))) {
-      throw new Error(`Statut non annulable: ${data.statut}`);
-    }
+    const auditEntry = buildStatutTransitionPayload(oldStatut, "annule", {
+      userId: requestedByUid,
+      userRole: requestedByRole ?? "chefAgence",
+    });
 
     tx.update(ref, {
-      statut: "annulé",
+      statut: "annule",
       updatedAt: serverTimestamp(),
       cancelledAt: serverTimestamp(),
       cancelledBy: requestedByUid,
       cancelledByName: requestedByName || null,
       cancelReason: reason || "",
-      // Optionnel: pour embarquement, on remet à en_attente
       statutEmbarquement: "en_attente",
       reportInfo: null,
       checkInTime: null,
+      auditLog: arrayUnion(auditEntry),
     });
 
     await writeAuditLog(base, {
       type: "CANCEL",
       reservationId,
       prev: { statut: data.statut },
-      next: { statut: "annulé" },
+      next: { statut: "annule" },
       reason: reason || "",
       by: { uid: requestedByUid, name: requestedByName || null },
     });
@@ -127,12 +131,12 @@ export async function modifyReservation(
     const prev = snap.data() as any;
 
     // Exemple de restrictions : interdire de modifier un billet annulé
-    if (String(prev.statut).toLowerCase() === "annulé") {
+    if (canonicalStatut(prev.statut) === "annule") {
       throw new Error("Billet déjà annulé.");
     }
 
     // Si tu veux interdire changement de trajet si déjà embarqué
-    if (prev.statutEmbarquement === "embarqué") {
+    if (prev.statutEmbarquement === "embarqué" || prev.statutEmbarquement === "embarque") {
       const fieldsThatChangeTrip = ["date","heure","depart","arrivee","seatsGo","seatsReturn"];
       if (fieldsThatChangeTrip.some(f => safePatch[f] !== undefined)) {
         throw new Error("Impossible de modifier le trajet après embarquement.");

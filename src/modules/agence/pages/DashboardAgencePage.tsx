@@ -99,7 +99,7 @@ const DashboardAgencePage: React.FC = () => {
       collection(db, 'companies', companyId, 'agences', agencyId, 'reservations'),
       where('createdAt','>=', Timestamp.fromDate(startDate)),
       where('createdAt','<=', Timestamp.fromDate(endDate)),
-      where('statut','==','payé'),
+      where('statut', 'in', ['paye', 'payé']),
       orderBy('createdAt','asc')
     );
 
