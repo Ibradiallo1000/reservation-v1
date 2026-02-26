@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { collection, getDocs, addDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
+import { Button } from "@/shared/ui/button";
 
 interface AgentEntry {
   id: string;
@@ -52,7 +53,7 @@ const AdminAgentsPage: React.FC = () => {
   };
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <h1 className="text-2xl font-bold mb-4">Gestion des agents</h1>
 
       <form onSubmit={handleSubmit} className="space-y-3 mb-6">
@@ -85,9 +86,9 @@ const AdminAgentsPage: React.FC = () => {
           onChange={e => setFormData({ ...formData, ville: e.target.value })}
           className="block w-full border px-3 py-2 rounded"
         />
-        <button type="submit" className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+        <Button type="submit" variant="primary">
           Ajouter Agent
-        </button>
+        </Button>
       </form>
 
       {message && <p className="text-blue-600 mb-4">{message}</p>}
@@ -102,12 +103,13 @@ const AdminAgentsPage: React.FC = () => {
                 {agent.email} — {agent.telephone} — {agent.ville}
               </p>
             </div>
-            <button
+            <Button
               onClick={() => handleDelete(agent.id)}
-              className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
+              variant="danger"
+              size="sm"
             >
               Supprimer
-            </button>
+            </Button>
           </li>
         ))}
       </ul>

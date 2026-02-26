@@ -26,17 +26,11 @@ import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, Download, Home, Printer } from 'lucide-react';
 import { safeTextColor } from '@/utils/color';
-import LoadingSpinner from '@/components/LoadingSpinner';
-import ErrorMessage from '@/components/ErrorMessage';
+import LoadingSpinner from '@/shared/ui/LoadingSpinner';
+import ErrorMessage from '@/shared/ui/ErrorMessage';
 
-import ReceiptModal from '@/components/ReceiptModal';
-
-type ReservationStatus =
-  | 'confirmé'
-  | 'annulé'
-  | 'en attente'
-  | 'payé'
-  | string;
+import ReceiptModal from '@/modules/agence/guichet/components/ReceiptModal';
+import type { ReservationStatus } from '@/types/reservation';
 
 interface ReservationData {
   id: string;

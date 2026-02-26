@@ -13,6 +13,10 @@ import ParametresReseauxPage from '@/modules/compagnie/components/parametres/Par
 import ParametresLegauxPage from '@/modules/compagnie/components/parametres/ParametresLegauxPage';
 import ParametresPlan from '@/modules/compagnie/components/parametres/ParametresPlan';
 import ParametresServices from '@/modules/compagnie/components/parametres/ParametresServices';
+import BibliothequeImagesPage from '@/modules/compagnie/pages/BibliothequeImagesPage';
+import CompanyPaymentSettingsPage from '@/modules/compagnie/pages/CompanyPaymentSettingsPage';
+import ParametresBanques from '@/modules/compagnie/components/parametres/ParametresBanques';
+import CompagnieAgencesPage from '@/modules/compagnie/pages/CompagnieAgencesPage';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { usePageHeader } from '@/contexts/PageHeaderContext';
@@ -24,22 +28,30 @@ import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { Company } from '@/types/companyTypes';
 
 type TabKey =
+  | 'agences'
   | 'plan'
   | 'vitrine'
   | 'personnel'
   | 'securite'
   | 'reseaux'
   | 'legaux'
-  | 'services';
+  | 'services'
+  | 'medias'
+  | 'moyens-paiement'
+  | 'banques';
 
 const TABS: { key: TabKey; label: string }[] = [
+  { key: 'agences', label: 'Agences' },
   { key: 'plan', label: 'Plan & abonnement' },
   { key: 'vitrine', label: 'Vitrine publique' },
-  { key: 'services', label: 'Services proposés' },
   { key: 'personnel', label: 'Personnel' },
   { key: 'securite', label: 'Sécurité' },
   { key: 'reseaux', label: 'Réseaux sociaux' },
   { key: 'legaux', label: 'Mentions & politique' },
+  { key: 'services', label: 'Services proposés' },
+  { key: 'medias', label: 'Médias' },
+  { key: 'moyens-paiement', label: 'Moyens de paiement' },
+  { key: 'banques', label: 'Banques' },
 ];
 
 const CompagnieParametresTabsPage: React.FC = () => {
@@ -114,6 +126,9 @@ const CompagnieParametresTabsPage: React.FC = () => {
   ========================= */
   const renderTab = () => {
     switch (selectedTab) {
+      case 'agences':
+        return <CompagnieAgencesPage />;
+
       case 'plan':
         return <ParametresPlan companyId={companyId} />;
 
@@ -135,13 +150,22 @@ const CompagnieParametresTabsPage: React.FC = () => {
       case 'legaux':
         return <ParametresLegauxPage companyId={companyId} />;
 
+      case 'medias':
+        return <BibliothequeImagesPage />;
+
+      case 'moyens-paiement':
+        return <CompanyPaymentSettingsPage companyId={companyId} />;
+
+      case 'banques':
+        return <ParametresBanques companyId={companyId} />;
+
       default:
         return null;
     }
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-4 md:p-6">
+    <div className="max-w-7xl mx-auto p-4 md:p-6">
 
       <div className="flex flex-wrap gap-2 md:gap-3 mb-6">
         {TABS.map(tab => {

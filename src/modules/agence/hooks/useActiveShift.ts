@@ -1,23 +1,39 @@
-// src/hooks/useActiveShift.ts
-import { useEffect, useState, useCallback } from 'react';
+/**
+ * Hook poste guichet (Phase 1 — Stabilisation).
+ * Délègue au sessionService. Un seul poste ouvert par guichetier.
+ * Verrouillage appareil : claim au passage en ACTIVE.
+ */
+
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  addDoc, collection, doc, getDoc, getDocs, limit, onSnapshot,
-  orderBy, query, runTransaction, serverTimestamp, setDoc,
-  Timestamp, updateDoc, where
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  query,
+  where,
+  orderBy,
+  limit,
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
+import { Timestamp } from 'firebase/firestore';
+import {
+  createSession,
+  closeSession,
+  pauseSession,
+  continueSession,
+  claimSession,
+  isCurrentDeviceClaimed,
+  getOpenShiftId,
+  SHIFT_STATUS,
+  SHIFT_REPORTS_COLLECTION,
+} from '@/modules/agence/services/sessionService';
+import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
+import { OPEN_SHIFT_STATUSES, type ShiftStatusValue } from '../constants/sessionLifecycle';
 
-/**
- * États d'un poste
- */
-export type ShiftStatus = 'none' | 'pending' | 'active' | 'paused' | 'closed';
+export type ShiftStatus = 'none' | ShiftStatusValue;
 
-/**
- * Modèle local d'un document shift
- * NB: startAt/endAt = nouveaux champs "alignés".
- *     startTime/endTime = anciens champs (compatibilité UI compta).
- */
 export type ShiftDoc = {
   id: string;
   companyId: string;
@@ -26,358 +42,212 @@ export type ShiftDoc = {
   userName?: string | null;
   userCode?: string | null;
   status: Exclude<ShiftStatus, 'none'>;
-
-  // New canonical fields
   startAt?: Timestamp | null;
   endAt?: Timestamp | null;
-
-  // Legacy compatibility (compta ancienne page)
   startTime?: Timestamp | null;
   endTime?: Timestamp | null;
-
-  dayKey?: string; // YYYYMMDD – pour regrouper dans les rapports
-
+  dayKey?: string | null;
   tickets?: number;
   amount?: number;
-
+  totalRevenue?: number;
+  totalReservations?: number;
+  totalCash?: number;
+  totalDigital?: number;
   accountantValidated?: boolean;
   managerValidated?: boolean;
   accountantValidatedAt?: Timestamp | null;
   managerValidatedAt?: Timestamp | null;
-
-  createdAt: any;
-  updatedAt: any;
+  deviceFingerprint?: string | null;
+  deviceClaimedAt?: unknown;
+  sessionOwnerUid?: string | null;
+  createdAt: unknown;
+  updatedAt: unknown;
 };
 
-/* --------------------------------- Utils --------------------------------- */
-
-function stripUndefined<T extends Record<string, any>>(obj: T): T {
-  const out: any = {};
-  Object.keys(obj || {}).forEach((k) => {
-    const v = (obj as any)[k];
-    if (v === undefined) return;
-    if (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Timestamp)) {
-      out[k] = stripUndefined(v);
-    } else {
-      out[k] = v;
-    }
-  });
-  return out as T;
-}
-
-function yyyymmdd(d = new Date()) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}${m}${dd}`;
-}
-
-/** Normalise un document Firestore → modèle local */
-function normalizeShift(id: string, data: any): ShiftDoc {
-  const startAt = data.startAt ?? data.startTime ?? null;
-  const endAt   = data.endAt   ?? data.endTime   ?? null;
+function normalizeShift(id: string, data: Record<string, unknown>): ShiftDoc {
   return {
     id,
-    companyId: data.companyId,
-    agencyId: data.agencyId,
-    userId: data.userId,
-    userName: data.userName ?? null,
-    userCode: data.userCode ?? null,
-    status: data.status,
-    startAt,
-    endAt,
-    startTime: data.startTime ?? null,
-    endTime: data.endTime ?? null,
-    dayKey: data.dayKey ?? null,
-    tickets: data.tickets ?? 0,
-    amount: data.amount ?? 0,
-    accountantValidated: !!data.accountantValidated,
-    managerValidated: !!data.managerValidated,
-    accountantValidatedAt: data.accountantValidatedAt ?? null,
-    managerValidatedAt: data.managerValidatedAt ?? null,
+    companyId: data.companyId as string,
+    agencyId: data.agencyId as string,
+    userId: data.userId as string,
+    userName: (data.userName ?? null) as string | null,
+    userCode: (data.userCode ?? null) as string | null,
+    status: (data.status as Exclude<ShiftStatus, 'none'>) || 'pending',
+    startAt: (data.startAt ?? null) as Timestamp | null,
+    endAt: (data.endAt ?? null) as Timestamp | null,
+    startTime: (data.startTime ?? null) as Timestamp | null,
+    endTime: (data.endTime ?? null) as Timestamp | null,
+    dayKey: (data.dayKey ?? null) as string | null,
+    tickets: (data.tickets ?? 0) as number,
+    amount: (data.amount ?? 0) as number,
+    totalRevenue: (data.totalRevenue ?? 0) as number,
+    totalReservations: (data.totalReservations ?? 0) as number,
+    totalCash: (data.totalCash ?? 0) as number,
+    totalDigital: (data.totalDigital ?? 0) as number,
+    accountantValidated: !!(data.accountantValidated ?? false),
+    managerValidated: !!(data.managerValidated ?? false),
+    accountantValidatedAt: (data.accountantValidatedAt ?? null) as Timestamp | null,
+    managerValidatedAt: (data.managerValidatedAt ?? null) as Timestamp | null,
+    deviceFingerprint: (data.deviceFingerprint ?? null) as string | null,
+    deviceClaimedAt: data.deviceClaimedAt ?? null,
+    sessionOwnerUid: (data.sessionOwnerUid ?? null) as string | null,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
 }
 
-/* --------------------------------- Hook ---------------------------------- */
-
 type Api = {
-  activeShift?: ShiftDoc | null;
+  activeShift: ShiftDoc | null;
   status: ShiftStatus;
-  loading: boolean;                 // ✅ ajouté pour compat avec les composants
-  startShift: () => Promise<void>;  // crée une demande (pending) — ID auto
+  loading: boolean;
+  sessionLockedByOtherDevice: boolean;
+  startShift: () => Promise<void>;
   pauseShift: () => Promise<void>;
   continueShift: () => Promise<void>;
-  closeShift: () => Promise<void>;  // clôture + rapport
-  validateByAccountant: (shiftId: string) => Promise<void>;
-  validateByManager: (shiftId: string) => Promise<void>;
+  closeShift: () => Promise<void>;
   refresh: () => Promise<void>;
 };
 
-/**
- * Gestion du poste guichet (ID AUTO + dayKey + compat startTime/endTime)
- * - startShift(): crée un shift PENDING sans startAt (l'heure de début est
- *   posée au moment de l'activation par la comptabilité).
- * - closeShift(): pose endAt (et endTime pour compat), remplit shiftReports.
- */
 export function useActiveShift(): Api {
-  const { user } = useAuth() as any;
+  const { user } = useAuth() as { user?: { uid: string; companyId?: string; agencyId?: string; displayName?: string; email?: string; staffCode?: string; codeCourt?: string; code?: string } | null };
   const [activeShift, setActiveShift] = useState<ShiftDoc | null>(null);
-  const [loading, setLoading] = useState<boolean>(true); // ✅
+  const [loading, setLoading] = useState(true);
+  const [sessionLockedByOtherDevice, setSessionLockedByOtherDevice] = useState(false);
+  const claimAttemptedRef = useRef<Set<string>>(new Set());
+  const claimRejectedByServerRef = useRef<Set<string>>(new Set());
+
   const status: ShiftStatus = activeShift?.status ?? 'none';
 
-  /* --------- Abonnement au shift ouvert (pending/active/paused) --------- */
   useEffect(() => {
     if (!user?.companyId || !user?.agencyId || !user?.uid) {
       setActiveShift(null);
+      setSessionLockedByOtherDevice(false);
       setLoading(false);
       return;
     }
     setLoading(true);
     const shiftsRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
-    const qy = query(
+    const q = query(
       shiftsRef,
       where('userId', '==', user.uid),
-      where('status', 'in', ['pending', 'active', 'paused'] as any),
+      where('status', 'in', OPEN_SHIFT_STATUSES),
       orderBy('createdAt', 'desc'),
       limit(1)
     );
     const unsub = onSnapshot(
-      qy,
+      q,
       (snap) => {
-        if (snap.empty) setActiveShift(null);
-        else setActiveShift(normalizeShift(snap.docs[0].id, snap.docs[0].data()));
+        if (snap.empty) {
+          setActiveShift(null);
+          setSessionLockedByOtherDevice(false);
+          claimAttemptedRef.current.clear();
+          claimRejectedByServerRef.current.clear();
+        } else {
+          const doc = snap.docs[0];
+          const data = doc.data() as Record<string, unknown>;
+          const normalized = normalizeShift(doc.id, data);
+          setActiveShift(normalized);
+          if (normalized.status === SHIFT_STATUS.ACTIVE || normalized.status === SHIFT_STATUS.PAUSED) {
+            const claimedHere = isCurrentDeviceClaimed(normalized);
+            const alreadyTriedClaim = claimAttemptedRef.current.has(normalized.id);
+            const serverSaidOtherDevice = claimRejectedByServerRef.current.has(normalized.id);
+
+            if (claimedHere) {
+              claimRejectedByServerRef.current.delete(normalized.id);
+              setSessionLockedByOtherDevice(false);
+            } else if (serverSaidOtherDevice) {
+              setSessionLockedByOtherDevice(true);
+            } else if (!alreadyTriedClaim) {
+              claimAttemptedRef.current.add(normalized.id);
+              claimSession({
+                companyId: user.companyId!,
+                agencyId: user.agencyId!,
+                shiftId: normalized.id,
+              }).then((r) => {
+                if (r.error === 'SESSION_LOCKED_OTHER_DEVICE') {
+                  claimRejectedByServerRef.current.add(normalized.id);
+                  setSessionLockedByOtherDevice(true);
+                } else {
+                  claimRejectedByServerRef.current.delete(normalized.id);
+                  setSessionLockedByOtherDevice(false);
+                }
+              }).catch(() => {
+                claimRejectedByServerRef.current.delete(normalized.id);
+                setSessionLockedByOtherDevice(false);
+              });
+              setSessionLockedByOtherDevice(false);
+            } else {
+              setSessionLockedByOtherDevice(false);
+            }
+          } else {
+            setSessionLockedByOtherDevice(false);
+          }
+        }
         setLoading(false);
       },
       (err) => {
         console.error('[useActiveShift] onSnapshot error:', err);
         setActiveShift(null);
+        setSessionLockedByOtherDevice(false);
         setLoading(false);
       }
     );
     return () => unsub();
   }, [user?.uid, user?.companyId, user?.agencyId]);
 
-  /* --------- Vérifie s'il existe déjà un shift ouvert --------- */
-  const findOpenedShiftId = useCallback(async (): Promise<string | null> => {
-    if (!user?.companyId || !user?.agencyId || !user?.uid) return null;
-    const shiftsRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
-    const qy = query(
-      shiftsRef,
-      where('userId', '==', user.uid),
-      where('status', 'in', ['pending', 'active', 'paused'] as any),
-      orderBy('createdAt', 'desc'),
-      limit(1)
-    );
-    const snap = await getDocs(qy);
-    return snap.empty ? null : snap.docs[0].id;
-  }, [user?.uid, user?.companyId, user?.agencyId]);
-
-  /* --------------------- Demande d'ouverture (pending) -------------------- */
   const startShift = useCallback(async () => {
-    if (!user?.companyId || !user?.agencyId || !user?.uid) {
-      throw new Error('Utilisateur invalide.');
-    }
-
-    // Si un shift est déjà ouvert (pending/active/paused) → ne rien créer
-    const existing = await findOpenedShiftId();
+    if (!user?.companyId || !user?.agencyId || !user?.uid) throw new Error('Utilisateur invalide.');
+    const existing = await getOpenShiftId(user.companyId, user.agencyId, user.uid);
     if (existing) return;
-
-    const payload = stripUndefined({
+    const id = await createSession({
       companyId: user.companyId,
       agencyId: user.agencyId,
       userId: user.uid,
       userName: user.displayName || user.email || null,
       userCode: (user.staffCode || user.codeCourt || user.code || 'GUEST') ?? null,
-
-      status: 'pending' as const,
-
-      // Important: pas de startAt ici → elle sera posée à l'activation
-      startAt: null,
-      endAt: null,
-
-      // compat pour anciennes pages (aucune heure au début)
-      startTime: null,
-      endTime: null,
-
-      dayKey: yyyymmdd(),
-
-      tickets: 0,
-      amount: 0,
-
-      accountantValidated: false,
-      managerValidated: false,
-      accountantValidatedAt: null,
-      managerValidatedAt: null,
-
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
     });
-
-    const ref = await addDoc(
-      collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`),
-      payload
-    );
-
-    // Met à jour le local immédiatement (l’onSnapshot prendra le relai)
+    const ref = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`);
     const snap = await getDoc(ref);
-    if (snap.exists()) setActiveShift(normalizeShift(ref.id, snap.data()));
-  }, [user?.companyId, user?.agencyId, user?.uid, findOpenedShiftId]);
+    if (snap.exists()) setActiveShift(normalizeShift(id, snap.data() as Record<string, unknown>));
+  }, [user?.companyId, user?.agencyId, user?.uid, user?.displayName, user?.email, user?.staffCode, user?.codeCourt, user?.code]);
 
-  /* ----------------------------- Pause / reprise ----------------------------- */
   const pauseShift = useCallback(async () => {
     if (!activeShift) throw new Error('Aucun poste en cours.');
-    if (activeShift.status !== 'active') throw new Error('Le poste doit être en service.');
-    await updateDoc(
-      doc(db, `companies/${activeShift.companyId}/agences/${activeShift.agencyId}/shifts/${activeShift.id}`),
-      stripUndefined({ status: 'paused', updatedAt: serverTimestamp() })
-    );
+    await pauseSession(activeShift.companyId, activeShift.agencyId, activeShift.id);
   }, [activeShift]);
 
   const continueShift = useCallback(async () => {
     if (!activeShift) throw new Error('Aucun poste en cours.');
-    if (activeShift.status !== 'paused') throw new Error('Le poste doit être en pause.');
-    await updateDoc(
-      doc(db, `companies/${activeShift.companyId}/agences/${activeShift.agencyId}/shifts/${activeShift.id}`),
-      stripUndefined({ status: 'active', updatedAt: serverTimestamp() })
-    );
+    await continueSession(activeShift.companyId, activeShift.agencyId, activeShift.id);
   }, [activeShift]);
 
-  /* --------------------------------- Clôture -------------------------------- */
-  /**
-   * Clôture:
-   *  - agrège billets/montant (reservations du shift, canal=guichet)
-   *  - écrit `shiftReports/{shiftId}`
-   *  - passe le shift à `closed` + pose endAt (et endTime pour compat)
-   */
   const closeShift = useCallback(async () => {
     if (!activeShift) throw new Error('Aucun poste en cours.');
-    if (!['active', 'paused', 'pending'].includes(activeShift.status)) {
-      throw new Error('État non clôturable.');
-    }
-    const base = `companies/${activeShift.companyId}/agences/${activeShift.agencyId}`;
-
-    await runTransaction(db, async (tx) => {
-      const shiftRef = doc(db, `${base}/shifts/${activeShift.id}`);
-      const shiftSnap = await tx.get(shiftRef);
-      if (!shiftSnap.exists()) throw new Error('Poste introuvable.');
-
-      // Agrégation des ventes du poste (guichet uniquement)
-      const rCol = collection(db, `${base}/reservations`);
-      const qy = query(rCol, where('shiftId', '==', activeShift.id), where('canal', '==', 'guichet'));
-      const resSnap = await getDocs(qy);
-
-      let billets = 0, montant = 0;
-      const byRoute: Record<string, { billets: number; montant: number; heures: Set<string> }> = {};
-      resSnap.forEach((d) => {
-        const r = d.data() as any;
-        const n = Number(r.seatsGo || 0) + Number(r.seatsReturn || 0);
-        const m = Number(r.montant || 0);
-        billets += n; montant += m;
-        const key = `${r.depart || ''}→${r.arrivee || ''}`;
-        if (!byRoute[key]) byRoute[key] = { billets: 0, montant: 0, heures: new Set<string>() };
-        byRoute[key].billets += n;
-        byRoute[key].montant += m;
-        if (r.heure) byRoute[key].heures.add(String(r.heure));
-      });
-
-      const details = Object.entries(byRoute).map(([trajet, v]) => ({
-        trajet,
-        billets: v.billets,
-        montant: v.montant,
-        heures: Array.from(v.heures).sort(),
-      }));
-
-      const now = Timestamp.now();
-
-      // Rapport 1-pour-1 avec le shift
-      const reportRef = doc(db, `${base}/shiftReports/${activeShift.id}`);
-      tx.set(reportRef, stripUndefined({
-        shiftId: activeShift.id,
-        companyId: activeShift.companyId,
-        agencyId: activeShift.agencyId,
-        userId: activeShift.userId,
-        userName: activeShift.userName || null,
-        userCode: activeShift.userCode || null,
-        startAt: activeShift.startAt ?? activeShift.startTime ?? null,
-        endAt: now,
-        billets: billets || 0,
-        montant: montant || 0,
-        details: details || [],
-        accountantValidated: false,
-        managerValidated: false,
-        accountantValidatedAt: null,
-        managerValidatedAt: null,
-        status: 'pending_validation',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }), { merge: true });
-
-      // Clôture du shift (pose endAt + endTime pour compat)
-      tx.update(shiftRef, stripUndefined({
-        status: 'closed',
-        endAt: now,
-        endTime: now,
-        tickets: billets || 0,
-        amount: montant || 0,
-        updatedAt: serverTimestamp(),
-      }));
+    const fingerprint = getDeviceFingerprint();
+    await closeSession({
+      companyId: activeShift.companyId,
+      agencyId: activeShift.agencyId,
+      shiftId: activeShift.id,
+      userId: activeShift.userId,
+      deviceFingerprint: fingerprint,
     });
+    setActiveShift(null);
   }, [activeShift]);
 
-  /* --------------------------- Tampons de validation --------------------------- */
-  const validateByAccountant = useCallback(async (shiftId: string) => {
-    if (!user?.companyId || !user?.agencyId) throw new Error('Contexte invalide.');
-    const base = `companies/${user.companyId}/agences/${user.agencyId}`;
-    const reportRef = doc(db, `${base}/shiftReports/${shiftId}`);
-    await updateDoc(reportRef, stripUndefined({
-      accountantValidated: true,
-      accountantValidatedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    }));
-    const shiftRef = doc(db, `${base}/shifts/${shiftId}`);
-    await updateDoc(shiftRef, stripUndefined({
-      accountantValidated: true,
-      accountantValidatedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    }));
-  }, [user?.companyId, user?.agencyId]);
-
-  const validateByManager = useCallback(async (shiftId: string) => {
-    if (!user?.companyId || !user?.agencyId) throw new Error('Contexte invalide.');
-    const base = `companies/${user.companyId}/agences/${user.agencyId}`;
-    const reportRef = doc(db, `${base}/shiftReports/${shiftId}`);
-    await updateDoc(reportRef, stripUndefined({
-      managerValidated: true,
-      managerValidatedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    }));
-    const shiftRef = doc(db, `${base}/shifts/${shiftId}`);
-    await updateDoc(shiftRef, stripUndefined({
-      managerValidated: true,
-      managerValidatedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    }));
-  }, [user?.companyId, user?.agencyId]);
-
-  const refresh = useCallback(async () => {
-    // tout est piloté par onSnapshot ; présence d'un bouton "Actualiser" côté UI
-    return;
-  }, []);
+  const refresh = useCallback(async () => {}, []);
 
   return {
-    activeShift,
+    activeShift: activeShift ?? null,
     status,
-    loading, // ✅ exposé
+    loading,
+    sessionLockedByOtherDevice,
     startShift,
     pauseShift,
     continueShift,
     closeShift,
-    validateByAccountant,
-    validateByManager,
     refresh,
   };
 }
 
+export { SHIFT_REPORTS_COLLECTION };
 export default useActiveShift;

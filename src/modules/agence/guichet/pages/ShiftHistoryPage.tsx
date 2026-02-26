@@ -16,6 +16,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Download, Printer, Eye, X, ShieldCheck, Stamp } from 'lucide-react';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 /* ----------------------- Types ----------------------- */
 type ValidStamp = {
@@ -82,12 +83,12 @@ function badge(text: string, bg: string, fg: string) {
   );
 }
 
-function fmtMoney(n:number|undefined|null){ return `${Number(n||0).toLocaleString('fr-FR')} FCFA`; }
 
 /* ===================================================== */
 const ShiftHistoryPage: React.FC = () => {
   const { user, company } = useAuth() as any;
   const theme = useCompanyTheme(company) || { primary: '#e85d04', secondary: '#ffb703' };
+  const money = useFormatCurrency();
 
   const companyId = user?.companyId;
   const agencyId = user?.agencyId;
@@ -274,7 +275,7 @@ const ShiftHistoryPage: React.FC = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
-        <div className="bg-white rounded-2xl shadow border overflow-hidden">
+        <div className="bg-white rounded-xl shadow border overflow-hidden">
           {/* Entête tableau */}
           <div className="px-4 py-3 flex items-center justify-between border-b">
             <div className="font-semibold">Mes sessions de guichet</div>
@@ -322,7 +323,7 @@ const ShiftHistoryPage: React.FC = () => {
                   rows.map(r => {
                     const hasDiff = typeof r.difference === 'number' && !Number.isNaN(r.difference);
                     const diffStr =
-                      hasDiff ? (r.difference || 0).toLocaleString('fr-FR') + ' FCFA' : '0 FCFA';
+                      hasDiff ? money(r.difference || 0) : money(0);
                     return (
                       <tr key={r.id} className="border-t hover:bg-gray-50">
                         <td className="px-3 py-2">
@@ -341,8 +342,8 @@ const ShiftHistoryPage: React.FC = () => {
                             : badge('Clôturé', '#F3F4F6', '#374151')}
                         </td>
                         <td className="px-3 py-2 text-right">{r.tickets ?? '—'}</td>
-                        <td className="px-3 py-2 text-right">{r.amount != null ? fmtMoney(r.amount) : '—'}</td>
-                        <td className="px-3 py-2 text-right">{r.declaredDeposit != null ? fmtMoney(r.declaredDeposit) : '—'}</td>
+                        <td className="px-3 py-2 text-right">{r.amount != null ? money(r.amount) : '—'}</td>
+                        <td className="px-3 py-2 text-right">{r.declaredDeposit != null ? money(r.declaredDeposit) : '—'}</td>
                         <td className="px-3 py-2 text-right">
                           {hasDiff ? (
                             r.discrepancyType === 'manquant'
@@ -390,7 +391,7 @@ const ShiftHistoryPage: React.FC = () => {
           {/* Overlay */}
           <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
           {/* Card */}
-          <div className="absolute inset-0 md:inset-6 bg-white rounded-none md:rounded-2xl shadow-xl flex flex-col">
+          <div className="absolute inset-0 md:inset-6 bg-white rounded-none md:rounded-xl shadow-xl flex flex-col">
             {/* Header */}
             <div
               className="px-4 md:px-6 py-4 flex items-center justify-between text-white rounded-t-2xl"
@@ -440,21 +441,21 @@ const ShiftHistoryPage: React.FC = () => {
                 </div>
                 <div className="rounded-xl border p-3 md:col-span-1">
                   <div className="text-xs text-gray-500">Montant attendu</div>
-                  <div className="text-xl font-bold">{fmtMoney(selected.amount ?? totals.montant)}</div>
+                  <div className="text-xl font-bold">{money(selected.amount ?? totals.montant)}</div>
                 </div>
                 <div className="rounded-xl border p-3 md:col-span-1">
                   <div className="text-xs text-gray-500">Montant déposé</div>
-                  <div className="text-xl font-bold">{fmtMoney(selected.declaredDeposit ?? 0)}</div>
+                  <div className="text-xl font-bold">{money(selected.declaredDeposit ?? 0)}</div>
                 </div>
                 <div className="rounded-xl border p-3 md:col-span-1">
                   <div className="text-xs text-gray-500">Écart</div>
                   <div className="text-sm font-semibold">
                     {typeof selected.difference === 'number'
                       ? (selected.discrepancyType === 'manquant'
-                          ? badge(`Manquant ${fmtMoney(selected.difference)}`, '#FEE2E2', '#B91C1C')
+                          ? badge(`Manquant ${money(selected.difference)}`, '#FEE2E2', '#B91C1C')
                           : selected.difference === 0
                             ? badge('OK', '#DCFCE7', '#15803D')
-                            : badge(`Surplus ${fmtMoney(selected.difference)}`, '#E0E7FF', '#3730A3'))
+                            : badge(`Surplus ${money(selected.difference)}`, '#E0E7FF', '#3730A3'))
                       : '—'}
                   </div>
                 </div>
@@ -495,7 +496,7 @@ const ShiftHistoryPage: React.FC = () => {
                       >
                         <div>{g.trajet}</div>
                         <div className="text-xs text-gray-700">
-                          Billets: <b>{g.billets}</b> &nbsp;|&nbsp; Montant: <b>{fmtMoney(g.montant)}</b>
+                          Billets: <b>{g.billets}</b> &nbsp;|&nbsp; Montant: <b>{money(g.montant)}</b>
                         </div>
                       </div>
                       <div className="overflow-x-auto">
@@ -518,7 +519,7 @@ const ShiftHistoryPage: React.FC = () => {
                                 <td className="px-3 py-2">{r.nomClient || ''}</td>
                                 <td className="px-3 py-2">{r.telephone || ''}</td>
                                 <td className="px-3 py-2 text-right">{(r.seatsGo || 0) + (r.seatsReturn || 0)}</td>
-                                <td className="px-3 py-2 text-right">{fmtMoney(r.montant || 0)}</td>
+                                <td className="px-3 py-2 text-right">{money(r.montant || 0)}</td>
                                 <td className="px-3 py-2">{r.paiement || ''}</td>
                                 <td className="px-3 py-2">{r.referenceCode || r.id}</td>
                               </tr>

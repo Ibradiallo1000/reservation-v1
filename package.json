@@ -12,7 +12,9 @@
     "generate-pwa-icons": "node scripts/generate-pwa-icons.js",
     "generate-splash": "node scripts/generate-splash.js",
     "generate-splash-screens": "node scripts/generate-splash-screens.js",
-    "migrate:companies": "node scripts/migrate_companies.cjs"
+    "migrate:companies": "node scripts/migrate_companies.cjs",
+    "backfill:reservation-company-id": "npx ts-node scripts/backfillReservationCompanyId.ts",
+    "backfill:reservation-company-id-once": "npx ts-node scripts/oneTimeBackfillReservationCompanyId.ts"
   },
   "dependencies": {
     "@emotion/babel-plugin": "^11.13.5",

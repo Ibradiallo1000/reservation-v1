@@ -19,11 +19,3 @@ export const createAgencyCallable = async (payload: {
   return res.data;
 };
 
-/**
- * claimInviteCallable (exemple, déjà présent côté functions)
- */
-export const claimInviteCallable = async (payload: { inviteId: string }) => {
-  const fn = httpsCallable(functions, "claimInvite");
-  const res = await fn(payload);
-  return res.data;
-};

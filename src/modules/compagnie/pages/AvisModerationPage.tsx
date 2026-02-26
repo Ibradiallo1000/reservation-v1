@@ -2,7 +2,7 @@
 // src/pages/AvisModerationPage.tsx
 // =============================================
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   collection,
   query,
@@ -11,6 +11,7 @@ import {
   updateDoc,
   deleteDoc,
   doc,
+  getDocs,
 } from "firebase/firestore";
 import { db } from "../../../firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -24,6 +25,7 @@ interface Avis {
   note: number;
   commentaire: string;
   visible: boolean;
+  agencyId?: string;
 }
 
 const AvisModerationPage: React.FC = () => {
@@ -37,6 +39,8 @@ const AvisModerationPage: React.FC = () => {
   const { setHeader, resetHeader } = usePageHeader();
 
   const [avisList, setAvisList] = useState<Avis[]>([]);
+  const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
+  const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   /* =========================
@@ -71,6 +75,26 @@ const AvisModerationPage: React.FC = () => {
 
     return () => unsubscribe();
   }, [effectiveCompanyId]);
+
+  useEffect(() => {
+    if (!effectiveCompanyId) return;
+    getDocs(collection(db, "companies", effectiveCompanyId, "agences")).then((snap) => {
+      setAgencies(
+        snap.docs.map((d) => ({ id: d.id, nom: (d.data() as { nom?: string }).nom ?? d.id }))
+      );
+    });
+  }, [effectiveCompanyId]);
+
+  const filteredAvis = useMemo(() => {
+    if (!agencyFilter) return avisList;
+    return avisList.filter((a) => (a as Avis & { agencyId?: string }).agencyId === agencyFilter);
+  }, [avisList, agencyFilter]);
+
+  const aggregatedRating = useMemo(() => {
+    if (filteredAvis.length === 0) return null;
+    const sum = filteredAvis.reduce((s, a) => s + a.note, 0);
+    return (sum / filteredAvis.length).toFixed(1);
+  }, [filteredAvis]);
 
   /* =========================
      HEADER DYNAMIQUE
@@ -123,21 +147,41 @@ const AvisModerationPage: React.FC = () => {
      UI
   ========================= */
   return (
-    <div className="max-w-4xl mx-auto p-6">
+    <div className="max-w-7xl mx-auto p-6">
+      {agencies.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <label className="text-sm font-medium text-gray-700">Agence :</label>
+          <select
+            className="border rounded px-3 py-1.5 text-sm"
+            value={agencyFilter}
+            onChange={(e) => setAgencyFilter(e.target.value)}
+          >
+            <option value="">Toutes les agences</option>
+            {agencies.map((a) => (
+              <option key={a.id} value={a.id}>{a.nom}</option>
+            ))}
+          </select>
+          {aggregatedRating != null && (
+            <span className="text-sm text-gray-600">
+              Note moyenne : <strong>{aggregatedRating}</strong> / 5 ({filteredAvis.length} avis)
+            </span>
+          )}
+        </div>
+      )}
 
       {loading && avisList.length === 0 && (
         <p>Chargement des avis...</p>
       )}
 
-      {!loading && avisList.length === 0 && (
+      {!loading && filteredAvis.length === 0 && (
         <p>Aucun avis en attente pour l’instant ✅</p>
       )}
 
       <ul className="space-y-4">
-        {avisList.map((avis) => (
+        {filteredAvis.map((avis) => (
           <li
             key={avis.id}
-            className="border p-4 rounded shadow-sm bg-white flex flex-col gap-2"
+            className="border p-4 rounded-xl shadow-sm bg-white flex flex-col gap-2"
           >
             <div className="flex justify-between items-center">
               <h4 className="font-semibold">

@@ -1,4 +1,10 @@
+/**
+ * @deprecated Phase 1 – Cette page mélange métriques SaaS et opérationnelles par compagnie.
+ * Utiliser le tableau de bord admin pour les indicateurs plateforme.
+ * Page conservée pour compatibilité.
+ */
 import React, { useEffect, useMemo, useState } from "react";
+import { AlertTriangle } from "lucide-react";
 import {
   collection,
   collectionGroup,
@@ -19,6 +25,7 @@ import {
   Line,
 } from "recharts";
 import { format } from "date-fns";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 /* =======================
    Types
@@ -130,6 +137,16 @@ const AdminStatistiquesPage: React.FC = () => {
   ======================= */
   return (
     <div className="p-6">
+      <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
+        <AlertTriangle className="h-6 w-6 text-amber-600 shrink-0 mt-0.5" />
+        <div>
+          <p className="font-semibold text-amber-800">Page dépréciée</p>
+          <p className="text-sm text-amber-700 mt-1">
+            Cette page mélange métriques SaaS et opérationnelles par compagnie. Les indicateurs
+            plateforme (anonymisés) sont disponibles sur le tableau de bord admin.
+          </p>
+        </div>
+      </div>
       <h1 className="text-2xl font-bold mb-6">
         Statistiques générales
       </h1>
@@ -139,7 +156,7 @@ const AdminStatistiquesPage: React.FC = () => {
         <StatBox label="Réservations" value={totalReservations} color="text-blue-600" />
         <StatBox
           label="Revenus totaux"
-          value={`${totalRevenue.toLocaleString()} FCFA`}
+          value={formatCurrency(totalRevenue)}
           color="text-green-600"
         />
         <StatBox
@@ -156,7 +173,7 @@ const AdminStatistiquesPage: React.FC = () => {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="month" />
             <YAxis />
-            <Tooltip />
+            <Tooltip formatter={(value: number) => [formatCurrency(value), "Revenus"]} />
             <Legend />
             <Line
               type="monotone"
@@ -175,7 +192,7 @@ const AdminStatistiquesPage: React.FC = () => {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="name" />
             <YAxis />
-            <Tooltip />
+            <Tooltip formatter={(value: number) => [formatCurrency(value), "CA total"]} />
             <Legend />
             <Bar dataKey="total" fill="#6366F1" name="CA total" />
           </BarChart>
@@ -189,9 +206,9 @@ const AdminStatistiquesPage: React.FC = () => {
    UI helpers
 ======================= */
 const StatBox = ({ label, value, color }: any) => (
-  <div className="bg-white rounded shadow p-4 text-center">
+  <div className="bg-white rounded-xl border shadow-sm p-4 text-center">
     <h2 className="text-lg font-semibold">{label}</h2>
-    <p className={`text-3xl font-bold ${color}`}>{value}</p>
+    <p className={`text-2xl font-bold ${color}`}>{value}</p>
   </div>
 );
 

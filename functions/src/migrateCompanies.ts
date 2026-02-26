@@ -4,20 +4,30 @@ import * as admin from "firebase-admin";
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
-const DEFAULTS = {
-  plan: "free",               // "free" | "starter" | "pro" | "enterprise" | "manual"
+const DEFAULTS: Record<string, unknown> = {
+  plan: "free",
   maxAgences: 1,
   maxUsers: 3,
 
-  // fonctionnalités
+  // All features always enabled
   guichetEnabled: true,
-  onlineBookingEnabled: false,
-  publicPageEnabled: false,
+  onlineBookingEnabled: true,
+  publicPageEnabled: true,
 
-  // tarification
-  commissionOnline: 0.02,     // 2%
-  feeGuichet: 100,            // FCFA / réservation guichet
-  minimumMonthly: 25000,      // FCFA
+  // Dual-revenue model
+  digitalFeePercent: 2,
+  feeGuichet: 100,
+  minimumMonthly: 25000,
+
+  // Subscription lifecycle
+  subscriptionStatus: "active",
+  supportLevel: "basic",
+  planType: "paid",
+
+  // Revenue tracking
+  totalDigitalRevenueGenerated: 0,
+  totalDigitalFeesCollected: 0,
+  totalPaymentsReceived: 0,
 
   status: "actif",
 };
@@ -25,17 +35,16 @@ const DEFAULTS = {
 export const migrateCompanies = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB" })
   .https.onCall(async (data, context) => {
-    // --- Sécurité : admin plateforme uniquement ---
     if (!context.auth) {
-      throw new functions.https.HttpsError("unauthenticated", "Authentification nécessaire.");
+      throw new functions.https.HttpsError("unauthenticated", "Authentification necessaire.");
     }
-    const claims = context.auth.token as any;
+    const claims = context.auth.token as Record<string, unknown>;
     const role = (claims?.role || "").toString().toLowerCase();
     if (!(role === "admin_platforme" || role === "admin plateforme")) {
-      throw new functions.https.HttpsError("permission-denied", "Rôle admin_platforme requis.");
+      throw new functions.https.HttpsError("permission-denied", "Role admin_platforme requis.");
     }
 
-    const DRY = !!data?.dryRun; // dry-run: log/compte sans écrire
+    const DRY = !!(data as Record<string, unknown>)?.dryRun;
     const pageSize = 300;
     let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
 
@@ -56,18 +65,29 @@ export const migrateCompanies = functions
         scanned++;
         const d = docSnap.data() || {};
 
-        // patch idempotent: on n’écrase pas ce qui existe déjà
-        const patch: Record<string, any> = {
+        const patch: Record<string, unknown> = {
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
+
+        // Apply defaults for missing fields
         for (const [k, v] of Object.entries(DEFAULTS)) {
           if (d[k] === undefined) patch[k] = v;
         }
 
-        // si ancien champ publicVisible + slug => activer la page publique
-        if (d.publicVisible === true && d.slug) {
-          patch.publicPageEnabled = true;
+        // Migrate commissionOnline -> digitalFeePercent
+        if (d.commissionOnline !== undefined && d.digitalFeePercent === undefined) {
+          patch.digitalFeePercent = (Number(d.commissionOnline) || 0) * 100;
         }
+
+        // Remove legacy commissionOnline
+        if (d.commissionOnline !== undefined) {
+          patch.commissionOnline = admin.firestore.FieldValue.delete();
+        }
+
+        // Ensure all features are enabled
+        patch.publicPageEnabled = true;
+        patch.onlineBookingEnabled = true;
+        patch.guichetEnabled = true;
 
         const keys = Object.keys(patch).filter(k => k !== "updatedAt");
         if (keys.length) {

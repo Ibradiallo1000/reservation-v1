@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../../../firebaseConfig';
 import toast from 'react-hot-toast';
+import { Button } from '@/shared/ui/button';
 
 interface Props {
   reservation: any;
@@ -18,8 +19,7 @@ const ModifierReservationForm: React.FC<Props> = ({ reservation, onClose, onUpda
     date: reservation.date || '',
     heure: reservation.heure || '',
     seatsGo: reservation.seatsGo || 1,
-    seatsReturn: reservation.seatsReturn || 0,
-    typeVoyage: reservation.seatsReturn > 0 ? 'aller-retour' : 'aller-simple',
+    seatsReturn: 0,
   });
 
   const [loading, setLoading] = useState(false);
@@ -38,12 +38,7 @@ const ModifierReservationForm: React.FC<Props> = ({ reservation, onClose, onUpda
     }
 
     if (form.seatsGo <= 0) {
-      toast.error('Le nombre de places aller doit être supérieur à zéro.');
-      return;
-    }
-
-    if (form.typeVoyage === 'aller-retour' && form.seatsReturn <= 0) {
-      toast.error('Le nombre de places retour doit être supérieur à zéro.');
+      toast.error('Le nombre de places doit être supérieur à zéro.');
       return;
     }
 
@@ -59,7 +54,7 @@ const ModifierReservationForm: React.FC<Props> = ({ reservation, onClose, onUpda
         date: form.date,
         heure: form.heure,
         seatsGo: form.seatsGo,
-        seatsReturn: form.typeVoyage === 'aller-retour' ? form.seatsReturn : 0,
+        seatsReturn: 0,
         updatedAt: new Date().toISOString(),
       });
 
@@ -88,39 +83,15 @@ const ModifierReservationForm: React.FC<Props> = ({ reservation, onClose, onUpda
           <input name="heure" type="time" value={form.heure} onChange={handleChange} className="border p-2 rounded" required />
         </div>
 
-        <div className="flex gap-4 items-center">
-          <label>
-            <input
-              type="radio"
-              name="typeVoyage"
-              value="aller-simple"
-              checked={form.typeVoyage === 'aller-simple'}
-              onChange={handleChange}
-            /> Aller simple
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="typeVoyage"
-              value="aller-retour"
-              checked={form.typeVoyage === 'aller-retour'}
-              onChange={handleChange}
-            /> Aller-retour
-          </label>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <input name="seatsGo" type="number" value={form.seatsGo} onChange={handleChange} placeholder="Places aller" className="border p-2 rounded" min={1} required />
-          {form.typeVoyage === 'aller-retour' && (
-            <input name="seatsReturn" type="number" value={form.seatsReturn} onChange={handleChange} placeholder="Places retour" className="border p-2 rounded" min={1} required />
-          )}
+        <div>
+          <input name="seatsGo" type="number" value={form.seatsGo} onChange={handleChange} placeholder="Places" className="border p-2 rounded w-full" min={1} required />
         </div>
 
         <div className="flex justify-end gap-4">
-          <button type="button" onClick={onClose} disabled={loading} className="text-gray-500">Annuler</button>
-          <button type="submit" disabled={loading} className={`px-4 py-2 rounded text-white ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+          <Button type="button" onClick={onClose} disabled={loading} variant="ghost">Annuler</Button>
+          <Button type="submit" disabled={loading} variant="primary">
             {loading ? 'Enregistrement...' : 'Enregistrer'}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

@@ -1,4 +1,5 @@
-// src/pages/PlansManager.tsx
+// src/modules/plateforme/pages/PlansManager.tsx
+// Dual-revenue plan model: monthly subscription + digital channel fee
 import React, { useEffect, useMemo, useState } from "react";
 import { db, dbReady } from "@/firebaseConfig";
 import {
@@ -12,43 +13,85 @@ import {
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
+import { Button } from "@/shared/ui/button";
+import { CheckCircle2, Shield, Star, Zap, Crown, Building2 } from "lucide-react";
+import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
+
+/* ====================================================================
+   TYPES
+==================================================================== */
+type SupportLevel = "basic" | "standard" | "priority" | "premium" | "enterprise";
 
 type Plan = {
   id?: string;
   name: string;
-  priceMonthly: number;           // FCFA / mois
-  quotaReservations: number;      // résas / mois incluses (global)
-  overagePerReservation: number;  // FCFA / résa au-delà du quota
-  commissionOnline: number;       // 0.01 = 1% (si onlineBooking=true)
-  feeGuichet: number;             // FCFA / billet (si guichet=true)
-  minimumMonthly: number;         // FCFA (0 = none)
-  maxAgences: number;             // nb d'agences autorisées
+  priceMonthly: number;
+  quotaReservations: number;
+  digitalFeePercent: number;
+  feeGuichet: number;
+  minimumMonthly: number;
+  maxAgences: number;
+  supportLevel: SupportLevel;
+  isTrial?: boolean;
+  trialDurationDays?: number;
+  brandingLocked?: boolean;
+  // All plans include all features – no conditional toggles
   features: {
-    publicPage: boolean;
-    onlineBooking: boolean;
-    guichet: boolean;
+    publicPage: true;
+    onlineBooking: true;
+    guichet: true;
   };
-  createdAt?: any;
-  updatedAt?: any;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 };
 
-const empty: Plan = {
+const EMPTY: Plan = {
   name: "",
   priceMonthly: 0,
   quotaReservations: 0,
-  overagePerReservation: 0,
-  commissionOnline: 0,
+  digitalFeePercent: 0,
   feeGuichet: 0,
   minimumMonthly: 0,
   maxAgences: 1,
-  features: { publicPage: true, onlineBooking: false, guichet: true },
+  supportLevel: "basic",
+  isTrial: false,
+  trialDurationDays: 0,
+  brandingLocked: false,
+  features: { publicPage: true, onlineBooking: true, guichet: true },
 };
 
+/* ====================================================================
+   CONSTANTS
+==================================================================== */
 const nf = new Intl.NumberFormat("fr-FR");
 
+const SUPPORT_LABELS: Record<SupportLevel, { label: string; color: string }> = {
+  basic: { label: "Basic", color: "bg-gray-100 text-gray-700" },
+  standard: { label: "Standard", color: "bg-blue-100 text-blue-700" },
+  priority: { label: "Prioritaire", color: "bg-amber-100 text-amber-700" },
+  premium: { label: "Premium", color: "bg-purple-100 text-purple-700" },
+  enterprise: { label: "Enterprise", color: "bg-indigo-100 text-indigo-700" },
+};
+
+const SUPPORT_ICONS: Record<SupportLevel, React.ReactNode> = {
+  basic: <Shield className="h-3.5 w-3.5" />,
+  standard: <Shield className="h-3.5 w-3.5" />,
+  priority: <Star className="h-3.5 w-3.5" />,
+  premium: <Zap className="h-3.5 w-3.5" />,
+  enterprise: <Crown className="h-3.5 w-3.5" />,
+};
+
+const inputClass =
+  "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20 disabled:opacity-50";
+
+const selectClass = `${inputClass} appearance-none`;
+
+/* ====================================================================
+   COMPONENT
+==================================================================== */
 export default function PlansManager() {
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [editing, setEditing] = useState<Plan>(empty);
+  const [editing, setEditing] = useState<Plan>(EMPTY);
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
@@ -56,29 +99,29 @@ export default function PlansManager() {
       const q = query(collection(db, "plans"), orderBy("priceMonthly", "asc"));
       const snap = await getDocs(q);
 
-      console.log(
-        "Plans.size =",
-        snap.size,
-        "projectId =",
-        (db.app.options as any).projectId,
-        "useEmulators =",
-        import.meta?.env?.VITE_USE_EMULATORS
-      );
-
       const rows = snap.docs.map((d) => {
-        const x = d.data() as any;
-        // Normalisations robustes (vieux champs / variantes)
+        const x = d.data() as Record<string, unknown>;
+
         return {
           id: d.id,
-          ...x,
-          name: x.name ?? x.nom ?? "",
-          maxAgences: x.maxAgences ?? x.maxAgencies ?? 1,
+          name: (x.name as string) ?? (x.nom as string) ?? "",
+          priceMonthly: Number(x.priceMonthly) || 0,
+          quotaReservations: Number(x.quotaReservations) || 0,
+          digitalFeePercent: Number(x.digitalFeePercent) || 0,
+          feeGuichet: Number(x.feeGuichet) || 0,
+          minimumMonthly: Number(x.minimumMonthly) || 0,
+          maxAgences: Number(x.maxAgences ?? x.maxAgencies) || 1,
+          supportLevel: (x.supportLevel as SupportLevel) || "basic",
+          isTrial: Boolean(x.isTrial),
+          trialDurationDays: Number(x.trialDurationDays) || 0,
+          brandingLocked: Boolean(x.brandingLocked),
+          // All features always true in new model
           features: {
-            publicPage: x.features?.publicPage ?? x.publicPage ?? false,
-            onlineBooking: x.features?.onlineBooking ?? x.onlineBooking ?? false,
-            guichet: x.features?.guichet ?? x.guichet ?? false,
+            publicPage: true as const,
+            onlineBooking: true as const,
+            guichet: true as const,
           },
-        } as Plan;
+        } satisfies Plan;
       });
 
       setPlans(rows);
@@ -91,7 +134,6 @@ export default function PlansManager() {
 
   useEffect(() => {
     (async () => {
-      // Garantit la bonne cible (prod vs émulateur) avant la requête
       await dbReady;
       await load();
     })();
@@ -101,9 +143,7 @@ export default function PlansManager() {
 
   const validate = (p: Plan) => {
     if (!p.name.trim()) return "Le nom du plan est requis.";
-    if (p.features.onlineBooking && !p.features.publicPage) {
-      return "Incohérence : la réservation en ligne nécessite une page publique.";
-    }
+    if (p.digitalFeePercent < 0 || p.digitalFeePercent > 100) return "Le frais digital doit être entre 0 et 100%.";
     return "";
   };
 
@@ -111,21 +151,24 @@ export default function PlansManager() {
     e.preventDefault();
     setLoading(true);
     try {
-      const payload: Plan = {
-        ...editing,
+      const payload: Record<string, unknown> = {
         name: editing.name.trim(),
         priceMonthly: Number(editing.priceMonthly) || 0,
         quotaReservations: Number(editing.quotaReservations) || 0,
-        overagePerReservation: Number(editing.overagePerReservation) || 0,
-        commissionOnline: Number(editing.commissionOnline) || 0,
+        digitalFeePercent: Number(editing.digitalFeePercent) || 0,
         feeGuichet: Number(editing.feeGuichet) || 0,
         minimumMonthly: Number(editing.minimumMonthly) || 0,
         maxAgences: Number(editing.maxAgences) || 0,
-        features: { ...editing.features },
+        supportLevel: editing.supportLevel || "basic",
+        isTrial: Boolean(editing.isTrial),
+        trialDurationDays: editing.isTrial ? (Number(editing.trialDurationDays) || 30) : 0,
+        brandingLocked: Boolean(editing.brandingLocked),
+        // All features always true
+        features: { publicPage: true, onlineBooking: true, guichet: true },
         updatedAt: serverTimestamp(),
       };
 
-      const err = validate(payload);
+      const err = validate(editing);
       if (err) {
         alert(err);
         return;
@@ -139,7 +182,7 @@ export default function PlansManager() {
           createdAt: serverTimestamp(),
         });
       }
-      setEditing(empty);
+      setEditing(EMPTY);
       await load();
     } finally {
       setLoading(false);
@@ -152,280 +195,302 @@ export default function PlansManager() {
     await load();
   };
 
-  const handleToggleFeature = (key: keyof Plan["features"], checked: boolean) => {
-    if (key === "onlineBooking" && checked) {
-      // onlineBooking impose publicPage
-      setEditing((e) => ({
-        ...e,
-        features: { ...e.features, onlineBooking: true, publicPage: true },
-      }));
-    } else {
-      setEditing((e) => ({
-        ...e,
-        features: { ...e.features, [key]: checked } as any,
-      }));
-    }
-  };
-
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Plans & tarifs</h1>
-        <button
-          className="px-3 py-2 rounded bg-orange-600 text-white"
-          onClick={() => setEditing(empty)}
-        >
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Plans & Tarifs</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Modèle dual : abonnement mensuel + frais canal digital (% sur réservations en ligne)
+          </p>
+        </div>
+        <Button variant="primary" onClick={() => setEditing(EMPTY)}>
           + Nouveau plan
-        </button>
+        </Button>
       </div>
 
-      {/* Cartes des plans */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {plans.map((p) => (
-          <div
-            key={p.id}
-            className="rounded-2xl border shadow-sm p-5 bg-white flex flex-col"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-semibold text-lg">{p.name}</h3>
-              <span className="text-sm font-bold">
-                {nf.format(p.priceMonthly)} FCFA
-                <span className="text-gray-500 text-xs font-normal"> /mois</span>
-              </span>
-            </div>
+      {/* ── Plan Cards ── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {plans.map((p) => {
+          const support = SUPPORT_LABELS[p.supportLevel] ?? SUPPORT_LABELS.basic;
+          return (
+            <div
+              key={p.id}
+              className="rounded-xl border border-gray-200 shadow-sm p-5 bg-white flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-semibold text-lg text-gray-900">{p.name}</h3>
+                    {p.isTrial && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                        Essai
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-2xl font-bold mt-1">
+                    {p.priceMonthly === 0 ? (
+                      <span className="text-green-600">Gratuit</span>
+                    ) : (
+                      <>
+                        {formatCurrency(p.priceMonthly)}
+                        <span className="text-sm font-normal text-gray-500">/mois</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${support.color}`}>
+                  {SUPPORT_ICONS[p.supportLevel]}
+                  {support.label}
+                </span>
+              </div>
 
-            <ul className="text-sm text-gray-700 space-y-1 mb-4">
-              {p.quotaReservations > 0 && (
-                <li>
-                  Quota mensuel inclus : <b>{nf.format(p.quotaReservations)}</b>
-                </li>
-              )}
-              {p.overagePerReservation > 0 && (
-                <li>
-                  Dépassement : <b>{nf.format(p.overagePerReservation)} FCFA</b>{" "}
-                  / réservation
-                </li>
-              )}
-              {p.features.guichet && (
-                <li>
-                  Frais guichet : <b>{nf.format(p.feeGuichet)} FCFA</b> / billet
-                </li>
-              )}
-              {p.features.onlineBooking && (
-                <li>
-                  Commission online :{" "}
-                  <b>{Math.round((p.commissionOnline || 0) * 100)}%</b>
-                </li>
-              )}
-              {p.minimumMonthly > 0 && (
-                <li>
-                  Minimum mensuel : <b>{nf.format(p.minimumMonthly)} FCFA</b>
-                </li>
-              )}
-              <li>
-                Agences max : <b>{p.maxAgences}</b>
-              </li>
-              <li className="flex flex-wrap gap-2 pt-1">
-                {p.features.publicPage && (
-                  <span className="px-2 py-0.5 rounded-full text-xs bg-orange-100 text-orange-700">
-                    Page publique
-                  </span>
+              {/* Key metrics */}
+              <div className="space-y-2 text-sm text-gray-700 flex-1">
+                <div className="flex justify-between">
+                  <span>Agences max</span>
+                  <strong>{p.maxAgences === 0 ? "Illimité" : p.maxAgences}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span>Quota réservations / mois</span>
+                  <strong>{p.quotaReservations === 0 ? "Illimité" : nf.format(p.quotaReservations)}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[var(--btn-primary,#FF6600)] font-medium">Frais canal digital</span>
+                  <strong className="text-[var(--btn-primary,#FF6600)]">{p.digitalFeePercent}%</strong>
+                </div>
+                {p.feeGuichet > 0 && (
+                  <div className="flex justify-between">
+                    <span>Frais guichet</span>
+                    <strong>{formatCurrency(p.feeGuichet)}/billet</strong>
+                  </div>
                 )}
-                {p.features.onlineBooking && (
-                  <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">
-                    Réservation en ligne
-                  </span>
+                {p.isTrial && p.trialDurationDays && p.trialDurationDays > 0 && (
+                  <div className="flex justify-between">
+                    <span>Durée essai</span>
+                    <strong>{p.trialDurationDays} jours</strong>
+                  </div>
                 )}
-                {p.features.guichet && (
-                  <span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700">
-                    Guichet
-                  </span>
+                {p.brandingLocked && (
+                  <div className="text-xs text-amber-600 font-medium mt-1">
+                    Branding Teliya verrouillé
+                  </div>
                 )}
-              </li>
-            </ul>
+              </div>
 
-            <div className="mt-auto flex gap-3">
-              <button
-                className="px-3 py-1.5 rounded border"
-                onClick={() => setEditing(p)}
-              >
-                Éditer
-              </button>
-              <button
-                className="px-3 py-1.5 rounded border border-red-300 text-red-600"
-                onClick={() => p.id && onDelete(p.id)}
-              >
-                Supprimer
-              </button>
+              {/* Included features */}
+              <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100">
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                  <CheckCircle2 className="h-3 w-3" /> Gestion interne
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                  <CheckCircle2 className="h-3 w-3" /> Page publique
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                  <CheckCircle2 className="h-3 w-3" /> Réservation en ligne
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                  <CheckCircle2 className="h-3 w-3" /> Guichet
+                </span>
+              </div>
+
+              {/* Actions */}
+              <div className="mt-4 flex gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setEditing(p)}>
+                  Éditer
+                </Button>
+                <Button variant="danger" size="sm" onClick={() => p.id && onDelete(p.id)}>
+                  Supprimer
+                </Button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {plans.length === 0 && (
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-gray-500 col-span-full">
             Aucun plan créé pour le moment.
           </div>
         )}
       </div>
 
-      {/* Formulaire Plan */}
+      {/* ── Plan Form ── */}
       <form
         onSubmit={onSave}
-        className="bg-white rounded-2xl border shadow-sm p-5 grid grid-cols-1 md:grid-cols-3 gap-4"
+        className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-6"
       >
-        <h2 className="md:col-span-3 font-semibold text-lg">
+        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <Building2 className="h-5 w-5 text-gray-600" />
           {isEdit ? "Modifier le plan" : "Créer un plan"}
         </h2>
 
-        <label className="text-sm">
-          Nom du plan
-          <input
-            className="border rounded p-2 mt-1 w-full"
-            placeholder="Starter, Pro, Enterprise…"
-            value={editing.name}
-            onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-          />
-        </label>
-
-        <label className="text-sm">
-          Prix mensuel (FCFA)
-          <input
-            className="border rounded p-2 mt-1 w-full"
-            type="number"
-            value={editing.priceMonthly}
-            onChange={(e) =>
-              setEditing({ ...editing, priceMonthly: Number(e.target.value) })
-            }
-          />
-        </label>
-
-        <label className="text-sm">
-          Agences maximum
-          <input
-            className="border rounded p-2 mt-1 w-full"
-            type="number"
-            value={editing.maxAgences}
-            onChange={(e) =>
-              setEditing({ ...editing, maxAgences: Number(e.target.value) })
-            }
-          />
-        </label>
-
-        <label className="text-sm">
-          Quota de réservations / mois (global)
-          <input
-            className="border rounded p-2 mt-1 w-full"
-            type="number"
-            value={editing.quotaReservations}
-            onChange={(e) =>
-              setEditing({
-                ...editing,
-                quotaReservations: Number(e.target.value),
-              })
-            }
-          />
-        </label>
-
-        <label className="text-sm">
-          Dépassement (FCFA) / réservation
-          <input
-            className="border rounded p-2 mt-1 w-full"
-            type="number"
-            value={editing.overagePerReservation}
-            onChange={(e) =>
-              setEditing({
-                ...editing,
-                overagePerReservation: Number(e.target.value),
-              })
-            }
-          />
-        </label>
-
-        <label className="text-sm">
-          Minimum mensuel (FCFA) — optionnel
-          <input
-            className="border rounded p-2 mt-1 w-full"
-            type="number"
-            value={editing.minimumMonthly}
-            onChange={(e) =>
-              setEditing({ ...editing, minimumMonthly: Number(e.target.value) })
-            }
-          />
-        </label>
-
-        <label className="text-sm">
-          Commission en ligne (%) {editing.features.onlineBooking ? "" : "(désactivé)"}
-          <input
-            className="border rounded p-2 mt-1 w-full disabled:opacity-50"
-            type="number"
-            step="0.1"
-            disabled={!editing.features.onlineBooking}
-            value={editing.features.onlineBooking ? (editing.commissionOnline || 0) * 100 : 0}
-            onChange={(e) =>
-              setEditing({
-                ...editing,
-                commissionOnline: Number(e.target.value) / 100,
-              })
-            }
-          />
-        </label>
-
-        <label className="text-sm">
-          Frais guichet (FCFA / billet) {editing.features.guichet ? "" : "(désactivé)"}
-          <input
-            className="border rounded p-2 mt-1 w-full disabled:opacity-50"
-            type="number"
-            disabled={!editing.features.guichet}
-            value={editing.features.guichet ? editing.feeGuichet : 0}
-            onChange={(e) =>
-              setEditing({ ...editing, feeGuichet: Number(e.target.value) })
-            }
-          />
-        </label>
-
-        <div className="md:col-span-3 flex items-center gap-6">
-          <label className="flex items-center gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Name */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">Nom du plan</label>
             <input
-              type="checkbox"
-              checked={editing.features.publicPage}
-              onChange={(e) => handleToggleFeature("publicPage", e.target.checked)}
+              className={inputClass}
+              placeholder="Trial, Starter, Growth, Pro…"
+              value={editing.name}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
             />
-            Page publique (site vitrine)
-          </label>
-          <label className="flex items-center gap-2">
+          </div>
+
+          {/* Price */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">Prix mensuel ({getCurrencySymbol()})</label>
             <input
-              type="checkbox"
-              checked={editing.features.onlineBooking}
-              onChange={(e) =>
-                handleToggleFeature("onlineBooking", e.target.checked)
-              }
+              className={inputClass}
+              type="number"
+              min="0"
+              value={editing.priceMonthly}
+              onChange={(e) => setEditing({ ...editing, priceMonthly: Number(e.target.value) })}
             />
-            Réservation en ligne
-          </label>
-          <label className="flex items-center gap-2">
+          </div>
+
+          {/* Max agencies */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">
+              Agences maximum <span className="text-xs text-gray-400">(0 = illimité)</span>
+            </label>
             <input
-              type="checkbox"
-              checked={editing.features.guichet}
-              onChange={(e) => handleToggleFeature("guichet", e.target.checked)}
+              className={inputClass}
+              type="number"
+              min="0"
+              value={editing.maxAgences}
+              onChange={(e) => setEditing({ ...editing, maxAgences: Number(e.target.value) })}
             />
-            Guichet (vente au comptoir)
-          </label>
+          </div>
+
+          {/* Quota */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">
+              Quota réservations / mois <span className="text-xs text-gray-400">(0 = illimité)</span>
+            </label>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              value={editing.quotaReservations}
+              onChange={(e) => setEditing({ ...editing, quotaReservations: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Digital fee */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">
+              Frais canal digital (%)
+            </label>
+            <input
+              className={inputClass}
+              type="number"
+              step="0.1"
+              min="0"
+              max="100"
+              value={editing.digitalFeePercent}
+              onChange={(e) => setEditing({ ...editing, digitalFeePercent: Number(e.target.value) })}
+            />
+            <p className="text-xs text-gray-400 mt-1">Pourcentage prélevé sur chaque réservation en ligne</p>
+          </div>
+
+          {/* Guichet fee */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">Frais guichet ({getCurrencySymbol()} / billet)</label>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              value={editing.feeGuichet}
+              onChange={(e) => setEditing({ ...editing, feeGuichet: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Minimum monthly */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">
+              Minimum mensuel ({getCurrencySymbol()}) <span className="text-xs text-gray-400">(0 = aucun)</span>
+            </label>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              value={editing.minimumMonthly}
+              onChange={(e) => setEditing({ ...editing, minimumMonthly: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Support level */}
+          <div>
+            <label className="text-sm font-medium text-gray-700">Niveau de support</label>
+            <select
+              className={selectClass}
+              value={editing.supportLevel}
+              onChange={(e) => setEditing({ ...editing, supportLevel: e.target.value as SupportLevel })}
+            >
+              <option value="basic">Basic</option>
+              <option value="standard">Standard</option>
+              <option value="priority">Prioritaire</option>
+              <option value="premium">Premium</option>
+              <option value="enterprise">Enterprise</option>
+            </select>
+          </div>
+
+          {/* Trial toggle + duration */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+              <input
+                type="checkbox"
+                className="rounded"
+                checked={editing.isTrial ?? false}
+                onChange={(e) => setEditing({
+                  ...editing,
+                  isTrial: e.target.checked,
+                  trialDurationDays: e.target.checked ? 30 : 0,
+                })}
+              />
+              Plan d'essai (trial)
+            </label>
+            {editing.isTrial && (
+              <div>
+                <label className="text-xs text-gray-500">Durée (jours)</label>
+                <input
+                  className={inputClass}
+                  type="number"
+                  min="1"
+                  value={editing.trialDurationDays || 30}
+                  onChange={(e) => setEditing({ ...editing, trialDurationDays: Number(e.target.value) })}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="md:col-span-3 flex gap-2">
-          <button
-            className="px-3 py-2 rounded bg-orange-600 text-white disabled:opacity-50"
-            disabled={loading}
-          >
-            {loading ? "Enregistrement..." : isEdit ? "Enregistrer" : "Créer"}
-          </button>
+        {/* Branding locked */}
+        <label className="flex items-center gap-2 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            className="rounded"
+            checked={editing.brandingLocked ?? false}
+            onChange={(e) => setEditing({ ...editing, brandingLocked: e.target.checked })}
+          />
+          Branding Teliya verrouillé (le CEO ne peut pas personnaliser le thème)
+        </label>
+
+        {/* All features included notice */}
+        <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700">
+          <strong>Note :</strong> Tous les plans incluent désormais : gestion interne, page publique, réservation en ligne, guichet et tableau de bord.
+          Les plans se différencient par le prix, les quotas et le frais canal digital.
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2">
+          <Button type="submit" variant="primary" disabled={loading}>
+            {loading ? "Enregistrement…" : isEdit ? "Enregistrer" : "Créer le plan"}
+          </Button>
           {isEdit && (
-            <button
-              type="button"
-              className="px-3 py-2 rounded border"
-              onClick={() => setEditing(empty)}
-            >
+            <Button type="button" variant="secondary" onClick={() => setEditing(EMPTY)}>
               Annuler
-            </button>
+            </Button>
           )}
         </div>
       </form>

@@ -61,7 +61,11 @@ export interface Agence {
   adresse?: string;
   telephone?: string;
   companyId: string;
+  statut?: "active" | "inactive";
 }
+
+/** Alias pour compatibilité avec le code utilisant le nom anglais */
+export type Agency = Agence;
 
 /* =========================
    TRIPS / SEARCH
@@ -134,6 +138,10 @@ export interface Company {
   couleurAccent?: string;
   couleurTertiaire?: string;
   themeStyle?: string;
+
+  /* --- Devise --- */
+  devise?: string;
+  deviseSymbol?: string;
 
   /* --- Contact --- */
   email?: string;

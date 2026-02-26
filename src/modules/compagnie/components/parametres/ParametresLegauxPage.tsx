@@ -6,6 +6,7 @@ import { db } from '../../../../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Save, CheckCircle, AlertCircle } from 'lucide-react';
+import { Button } from '@/shared/ui/button';
 interface Props {
   companyId: string;
 }
@@ -64,7 +65,7 @@ const ParametresLegauxPage: React.FC<Props> = ({ companyId }) => {
   );
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-white rounded shadow">
+    <div className="max-w-7xl mx-auto p-6 bg-white rounded shadow">
       <h2 className="text-xl font-bold mb-6">Mentions légales & politiques multilingues</h2>
 
       <AnimatePresence>
@@ -99,18 +100,18 @@ const ParametresLegauxPage: React.FC<Props> = ({ companyId }) => {
         )}
       </AnimatePresence>
 
-      <div className="space-y-8">
+      <div className="space-y-6">
         {renderTextarea('Mentions légales', mentionsLegales, setMentionsLegales)}
         {renderTextarea('Politique de confidentialité', politiqueConfidentialite, setPolitiqueConfidentialite)}
         {renderTextarea("Conditions d'utilisation", conditionsUtilisation, setConditionsUtilisation)}
         {renderTextarea("Politique de cookies", politiqueCookies, setPolitiqueCookies)}
         <div className="flex justify-end">
-          <button
+          <Button
             onClick={handleSave}
-            className="bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-2 rounded flex items-center gap-2"
+            variant="primary"
           >
             <Save size={18} /> Enregistrer
-          </button>
+          </Button>
         </div>
       </div>
     </div>

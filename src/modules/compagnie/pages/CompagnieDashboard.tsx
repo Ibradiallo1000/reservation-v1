@@ -4,25 +4,24 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useCompanyDashboardData } from "@/modules/compagnie/hooks/useCompanyDashboardData";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import {
   TrendingUp,
   Building2,
-  Map,
-  GaugeCircle,
   Ticket,
 } from "lucide-react";
 
-import { KpiHeader } from "@/components/CompanyDashboard/KpiHeader";
-import { TimeFilterBar, RangeKey } from "@/components/CompanyDashboard/TimeFilterBar";
-import { RevenueReservationsChart } from "@/components/CompanyDashboard/RevenueReservationsChart";
-import { ChannelSplitChart } from "@/components/CompanyDashboard/ChannelSplitChart";
+import { KpiHeader } from "@/modules/compagnie/admin/components/CompanyDashboard/KpiHeader";
+import { TimeFilterBar, RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
+import { RevenueReservationsChart } from "@/modules/compagnie/admin/components/CompanyDashboard/RevenueReservationsChart";
+import { ChannelSplitChart } from "@/modules/compagnie/admin/components/CompanyDashboard/ChannelSplitChart";
 
-import { NetworkHealthSummary } from "@/components/CompanyDashboard/NetworkHealthSummary";
-import { CriticalAlertsPanel, type CriticalAlert } from "@/components/CompanyDashboard/CriticalAlertsPanel";
+import { NetworkHealthSummary } from "@/modules/compagnie/admin/components/CompanyDashboard/NetworkHealthSummary";
+import { CriticalAlertsPanel, type CriticalAlert } from "@/modules/compagnie/admin/components/CompanyDashboard/CriticalAlertsPanel";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 /* ---------- helpers ---------- */
 const DEFAULT_RANGE: RangeKey = "month";
@@ -40,10 +39,11 @@ export default function CompagnieDashboard() {
 
   // 🔥 CLÉ PRINCIPALE
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
+  const money = useFormatCurrency();
 
   const { setHeader, resetHeader } = usePageHeader();
   useEffect(() => {
-    setHeader({ title: "Dashboard Compagnie" });
+    setHeader({ title: "Performance Réseau" });
     return () => resetHeader();
   }, [setHeader, resetHeader]);
 
@@ -97,9 +97,24 @@ export default function CompagnieDashboard() {
   } = useCompanyDashboardData({ companyId, dateFrom, dateTo });
 
   const agencies = (perAgency ?? []) as AgencyData[];
+  const agencyDataWithVariation = agencies as (AgencyData & { variation?: number })[];
 
-  const healthyAgencies = agencies.filter(a => (a.revenus ?? 0) > 0).length;
-  const atRiskAgencies = agencies.filter(a => (a.revenus ?? 0) === 0).length;
+  // Santé du réseau : à risque si baisse de CA > 15 % vs période précédente OU aucun revenu sur la période
+  const REVENUE_DROP_RISK_THRESHOLD = 15;
+  const healthyAgencies = agencyDataWithVariation.filter(
+    a => (a.revenus ?? 0) > 0 && (a.variation === undefined || a.variation >= -REVENUE_DROP_RISK_THRESHOLD)
+  ).length;
+  const atRiskAgencies = agencyDataWithVariation.filter(
+    a => (a.revenus ?? 0) === 0 || (a.variation !== undefined && a.variation < -REVENUE_DROP_RISK_THRESHOLD)
+  ).length;
+
+  const trend = useMemo(() => {
+    const pct = kpis.caDeltaPercent;
+    if (pct == null) return "stable" as const;
+    if (pct > 0) return "up" as const;
+    if (pct < 0) return "down" as const;
+    return "stable" as const;
+  }, [kpis.caDeltaPercent]);
 
   const criticalAlerts: CriticalAlert[] =
     alerts?.map((alert: any, i: number) => ({
@@ -109,13 +124,18 @@ export default function CompagnieDashboard() {
       level: alert.level ?? "medium",
     })) ?? [];
 
+  const rankingByCa = useMemo(() => {
+    const withCa = agencies.map((a) => ({ ...a, ca: a.revenus ?? 0 }));
+    return [...withCa].sort((a, b) => b.ca - a.ca);
+  }, [agencies]);
+
   return (
-    <div className="space-y-5 p-4 md:p-6">
+    <div className="space-y-6 p-4 md:p-6">
 
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold">Réservations</h2>
-          <p className="text-sm text-muted-foreground">Période : {periodLabel}</p>
+          <h2 className="text-2xl font-bold">Performance Réseau</h2>
+          <p className="text-sm text-muted-foreground">CA par agence, classement et alertes — Période : {periodLabel}</p>
         </div>
         <TimeFilterBar
           range={range}
@@ -136,7 +156,7 @@ export default function CompagnieDashboard() {
             icon: TrendingUp,
             label: "CA",
             value: kpis.caPeriodeFormatted,
-            sub: kpis.caDeltaText,
+            sub: kpis.caDeltaPercent != null ? `Variation : ${kpis.caDeltaPercent >= 0 ? "+" : ""}${kpis.caDeltaPercent}%` : kpis.caDeltaText,
             to: `/compagnie/${companyId}/reservations`,
           },
           {
@@ -151,17 +171,67 @@ export default function CompagnieDashboard() {
             label: "Agences actives",
             value: String(kpis.agencesActives),
             sub: `${kpis.totalAgences} au total`,
-            to: `/compagnie/${companyId}/agences`,
+            to: `/compagnie/${companyId}/parametres`,
           },
         ]}
       />
+
+      {kpis.caDeltaPercent != null && (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-gray-600">Variation vs période précédente :</span>
+          <span
+            className={`font-semibold ${kpis.caDeltaPercent >= 0 ? "text-emerald-600" : "text-red-600"}`}
+          >
+            {kpis.caDeltaPercent >= 0 ? "+" : ""}{kpis.caDeltaPercent}%
+          </span>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
           <CardTitle>Évolution</CardTitle>
         </CardHeader>
         <CardContent>
-          <RevenueReservationsChart data={series.daily} loading={loading} />
+          <RevenueReservationsChart
+            data={series.daily}
+            loading={loading}
+            primaryColor={company?.couleurPrimaire}
+            secondaryColor={company?.couleurSecondaire}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Classement agences (CA période)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-gray-500">Chargement…</p>
+          ) : rankingByCa.length === 0 ? (
+            <p className="text-sm text-gray-500">Aucune donnée pour la période.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-2">Rang</th>
+                    <th className="text-left py-2">Agence</th>
+                    <th className="text-right py-2">CA</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rankingByCa.map((a, i) => (
+                    <tr key={a.id ?? i} className="border-b">
+                      <td className="py-2 font-medium">{i + 1}</td>
+                      <td className="py-2">{a.nom || "Agence inconnue"}</td>
+                      <td className="py-2 text-right">{money((a.revenus ?? 0) as number)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -174,14 +244,14 @@ export default function CompagnieDashboard() {
             totalAgencies={kpis.totalAgences}
             healthyAgencies={healthyAgencies}
             atRiskAgencies={atRiskAgencies}
-            trend="stable"
+            trend={trend}
           />
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Alertes critiques</CardTitle>
+          <CardTitle>Alertes par agence</CardTitle>
         </CardHeader>
         <CardContent>
           <CriticalAlertsPanel alerts={criticalAlerts} loading={loading} />

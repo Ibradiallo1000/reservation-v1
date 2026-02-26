@@ -15,6 +15,7 @@ import {
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 type Row = {
   id: string;
@@ -27,8 +28,6 @@ type Row = {
   montant: number;
 };
 
-const FCFA = (n: number) => `${(n || 0).toLocaleString('fr-FR')} FCFA`;
-
 const tag = (s: Row['status']) =>
   s === 'active'
     ? { bg: '#DCFCE7', txt: '#166534', label: 'En service' }
@@ -40,6 +39,7 @@ const AgenceShiftHistoryPage: React.FC = () => {
   const { user, company } = useAuth();
   const theme = useCompanyTheme(company) || { primary: '#2563eb', secondary: '#7c3aed' };
   const navigate = useNavigate();
+  const money = useFormatCurrency();
 
   // ---- Filtres ----
   const [dateFrom, setDateFrom] = useState<string>('');
@@ -172,7 +172,7 @@ const AgenceShiftHistoryPage: React.FC = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
       {/* En-tête */}
-      <div className="rounded-2xl overflow-hidden border shadow-sm bg-white mb-4">
+      <div className="rounded-xl overflow-hidden border shadow-sm bg-white mb-4">
         <div className="p-4 text-white" style={gradient}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -257,7 +257,7 @@ const AgenceShiftHistoryPage: React.FC = () => {
                         <td className="px-3 py-2">{r.endTime ? new Date(r.endTime).toLocaleString('fr-FR') : '—'}</td>
                         <td className="px-3 py-2 text-right">{r.reservations}</td>
                         <td className="px-3 py-2 text-right">{r.billets}</td>
-                        <td className="px-3 py-2 text-right font-medium">{FCFA(r.montant)}</td>
+                        <td className="px-3 py-2 text-right font-medium">{money(r.montant)}</td>
                         <td className="px-3 py-2 text-right">
                           <div className="flex justify-end gap-2">
                             <button onClick={() => openReport(r.id)} className="px-3 py-1.5 rounded-lg text-sm text-white" style={gradient}>Voir rapport</button>

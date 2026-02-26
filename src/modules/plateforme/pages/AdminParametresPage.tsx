@@ -1,6 +1,7 @@
 // src/pages/AdminParametresPage.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../../../firebaseConfig';
 
@@ -14,9 +15,9 @@ type Features = {
 type PlatformSettings = {
   email?: string;               // email de contact/support
   logoUrl?: string;             // URL du logo (storage)
-  commissionOnline?: number;    // en %
-  fraisFixe?: number;           // FCFA
-  minimumMensuel?: number;      // FCFA
+  digitalFeeDefault?: number;   // en %
+  fraisFixe?: number;           // platform default currency (XOF)
+  minimumMensuel?: number;      // platform default currency (XOF)
   features?: Features;
 };
 
@@ -27,7 +28,7 @@ const AdminParametresPage: React.FC = () => {
 
   // champs
   const [email, setEmail] = useState('');
-  const [commissionOnline, setCommissionOnline] = useState<number>(3);
+  const [digitalFeeDefault, setDigitalFeeDefault] = useState<number>(3);
   const [fraisFixe, setFraisFixe] = useState<number>(100);
   const [minimumMensuel, setMinimumMensuel] = useState<number>(0);
 
@@ -51,7 +52,7 @@ const AdminParametresPage: React.FC = () => {
           const d = snap.data() as PlatformSettings;
           setEmail(d.email ?? '');
           setLogoUrl(d.logoUrl);
-          setCommissionOnline(typeof d.commissionOnline === 'number' ? d.commissionOnline : 3);
+          setDigitalFeeDefault(typeof d.digitalFeeDefault === 'number' ? d.digitalFeeDefault : 3);
           setFraisFixe(typeof d.fraisFixe === 'number' ? d.fraisFixe : 100);
           setMinimumMensuel(typeof d.minimumMensuel === 'number' ? d.minimumMensuel : 0);
           setFeatures({
@@ -96,7 +97,7 @@ const AdminParametresPage: React.FC = () => {
       const payload: PlatformSettings = {
         email: email.trim(),
         logoUrl: uploadedLogoUrl,
-        commissionOnline: Math.max(0, Number(commissionOnline) || 0),
+        digitalFeeDefault: Math.max(0, Number(digitalFeeDefault) || 0),
         fraisFixe: Math.max(0, Number(fraisFixe) || 0),
         minimumMensuel: Math.max(0, Number(minimumMensuel) || 0),
         features: {
@@ -120,11 +121,6 @@ const AdminParametresPage: React.FC = () => {
     }
   };
 
-  const currency = useMemo(
-    () => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XOF', maximumFractionDigits: 0 }),
-    []
-  );
-
   if (loading) {
     return (
       <div className="p-6">
@@ -135,7 +131,7 @@ const AdminParametresPage: React.FC = () => {
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Paramètres plateforme</h1>
         {logoUrl ? (
@@ -154,7 +150,7 @@ const AdminParametresPage: React.FC = () => {
 
       <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Bloc identité/branding */}
-        <div className="space-y-4 rounded-2xl border p-4 bg-white">
+        <div className="space-y-4 rounded-xl border p-4 bg-white">
           <h2 className="font-semibold">Identité & branding</h2>
           <label className="block text-sm">
             <span className="text-gray-600">Email de contact</span>
@@ -175,21 +171,22 @@ const AdminParametresPage: React.FC = () => {
         </div>
 
         {/* Bloc tarification */}
-        <div className="space-y-4 rounded-2xl border p-4 bg-white">
-          <h2 className="font-semibold">Tarification en ligne</h2>
+        <div className="space-y-4 rounded-xl border p-4 bg-white">
+          <h2 className="font-semibold">Tarification canal digital</h2>
           <label className="block text-sm">
-            <span className="text-gray-600">Commission (%)</span>
+            <span className="text-gray-600">Frais canal digital (%)</span>
             <input
               type="number"
               step="0.1"
               className="mt-1 block w-full border rounded px-3 py-2"
-              value={commissionOnline}
-              onChange={(e) => setCommissionOnline(Number(e.target.value))}
+              value={digitalFeeDefault}
+              onChange={(e) => setDigitalFeeDefault(Number(e.target.value))}
             />
+            <span className="text-xs text-gray-400">Pourcentage par défaut prélevé sur les réservations en ligne</span>
           </label>
 
           <label className="block text-sm">
-            <span className="text-gray-600">Frais fixe (FCFA)</span>
+            <span className="text-gray-600">Frais fixe ({getCurrencySymbol()})</span>
             <input
               type="number"
               className="mt-1 block w-full border rounded px-3 py-2"
@@ -199,7 +196,7 @@ const AdminParametresPage: React.FC = () => {
           </label>
 
           <label className="block text-sm">
-            <span className="text-gray-600">Minimum mensuel (FCFA)</span>
+            <span className="text-gray-600">Minimum mensuel ({getCurrencySymbol()})</span>
             <input
               type="number"
               className="mt-1 block w-full border rounded px-3 py-2"
@@ -209,12 +206,12 @@ const AdminParametresPage: React.FC = () => {
           </label>
 
           <div className="text-xs text-gray-500">
-            Aperçu : {commissionOnline}% + {currency.format(fraisFixe)} — minimum {currency.format(minimumMensuel)} / mois
+            Aperçu : {digitalFeeDefault}% frais digital + {formatCurrency(fraisFixe)} fixe — minimum {formatCurrency(minimumMensuel)} / mois
           </div>
         </div>
 
         {/* Bloc Features */}
-        <div className="md:col-span-2 rounded-2xl border p-4 bg-white">
+        <div className="md:col-span-2 rounded-xl border p-4 bg-white">
           <h2 className="font-semibold mb-3">Fonctionnalités contrôlées par la plateforme</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <label className="flex items-center gap-2 border rounded px-3 py-2">

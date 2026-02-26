@@ -1,17 +1,16 @@
 import React, { useEffect, useState } from "react";
 import {
-  addDoc,
   collection,
   deleteDoc,
   doc,
   getDocs,
   orderBy,
   query,
-  serverTimestamp,
   where,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 
@@ -127,15 +126,20 @@ const CompagnieInvitationsPage: React.FC = () => {
       return;
     }
 
-    await addDoc(collection(db, "invitations"), {
-      email: email.trim().toLowerCase(),
-      fullName: fullName.trim(),
-      role: "chefAgence",
-      companyId,
-      agencyId,
-      status: "pending",
-      createdAt: serverTimestamp(),
-    });
+    try {
+      const result = await createInvitationDoc({
+        email: email.trim().toLowerCase(),
+        fullName: fullName.trim(),
+        role: "chefAgence",
+        companyId,
+        agencyId,
+      });
+
+      alert(`Invitation envoyée.\n\nLien d'activation :\n${result.activationUrl}`);
+    } catch (err: any) {
+      alert(err?.message || "Erreur lors de l'envoi de l'invitation.");
+      return;
+    }
 
     setEmail("");
     setFullName("");
@@ -156,11 +160,11 @@ const CompagnieInvitationsPage: React.FC = () => {
      Render
   ========================= */
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-8">
+    <div className="max-w-7xl mx-auto p-6 space-y-6">
       {/* Formulaire */}
       <form
         onSubmit={handleInvite}
-        className="bg-white rounded-lg shadow p-6 space-y-4 border"
+        className="bg-white rounded-xl shadow-sm p-6 space-y-4 border"
       >
         <h3 className="text-lg font-semibold">Nouvelle invitation</h3>
 
@@ -214,7 +218,7 @@ const CompagnieInvitationsPage: React.FC = () => {
       </form>
 
       {/* Liste */}
-      <div className="bg-white rounded-lg shadow border">
+      <div className="bg-white rounded-xl shadow-sm border">
         <div className="px-6 py-4 border-b font-semibold">
           Invitations
         </div>

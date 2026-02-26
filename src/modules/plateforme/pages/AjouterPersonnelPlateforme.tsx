@@ -1,14 +1,13 @@
 // ✅ src/pages/AjouterPersonnelPlateforme.tsx
 
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, Timestamp } from 'firebase/firestore';
-import { auth, db } from '../../../firebaseConfig';
+import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
+import { Button } from "@/shared/ui/button";
 
 const AjouterPersonnelPlateforme: React.FC = () => {
   const [email, setEmail] = useState('');
-  const [motDePasse, setMotDePasse] = useState('');
   const [nom, setNom] = useState('');
+  const [telephone, setTelephone] = useState('');
   const [role, setRole] = useState('support');
   const [message, setMessage] = useState('');
 
@@ -16,39 +15,41 @@ const AjouterPersonnelPlateforme: React.FC = () => {
     e.preventDefault();
     setMessage('');
 
-    if (!email || !motDePasse || !nom || !role) {
-      setMessage("❌ Tous les champs sont obligatoires.");
+    if (!email || !nom || !role) {
+      setMessage("❌ Nom, email et rôle sont obligatoires.");
       return;
     }
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, motDePasse);
-      const uid = userCredential.user.uid;
-
-      await setDoc(doc(db, 'users', uid), {
-        uid,
-        email,
-        nom,
+      const result = await createInvitationDoc({
+        email: email.trim().toLowerCase(),
         role,
-        createdAt: Timestamp.now(),
-        isPlatformStaff: true // 👈 utile si tu veux filtrer par type plus tard
+        fullName: nom.trim(),
+        ...(telephone.trim() ? { phone: telephone.trim() } : {}),
       });
 
-      setMessage("✅ Utilisateur ajouté avec succès.");
+      setMessage(
+        `✅ Invitation créée avec succès. Lien d'activation (à copier et envoyer) : ${result.activationUrl}`
+      );
       setEmail('');
-      setMotDePasse('');
       setNom('');
+      setTelephone('');
       setRole('support');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erreur :", error);
-      setMessage("❌ Une erreur s'est produite : " + error.message);
+      const err = error as { code?: string; message?: string };
+      const msg =
+        err?.code === "already-exists"
+          ? "Une invitation en attente existe déjà pour cet email."
+          : err?.message ?? "Une erreur s'est produite.";
+      setMessage("❌ " + (typeof msg === "string" ? msg : "Une erreur s'est produite."));
     }
   };
 
   return (
-    <div className="p-6 max-w-xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Ajouter un membre de l’équipe plateforme</h1>
-      <form onSubmit={handleSubmit} className="bg-white p-4 rounded shadow space-y-4">
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-2xl font-bold mb-4">Ajouter un membre de l'équipe plateforme</h1>
+      <form onSubmit={handleSubmit} className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
         <div>
           <label className="block mb-1 font-semibold">Nom complet</label>
           <input type="text" value={nom} onChange={(e) => setNom(e.target.value)} className="w-full border p-2 rounded" required />
@@ -58,8 +59,8 @@ const AjouterPersonnelPlateforme: React.FC = () => {
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full border p-2 rounded" required />
         </div>
         <div>
-          <label className="block mb-1 font-semibold">Mot de passe</label>
-          <input type="password" value={motDePasse} onChange={(e) => setMotDePasse(e.target.value)} className="w-full border p-2 rounded" required />
+          <label className="block mb-1 font-semibold">Téléphone (optionnel)</label>
+          <input type="tel" value={telephone} onChange={(e) => setTelephone(e.target.value)} className="w-full border p-2 rounded" placeholder="ex. 70123456" />
         </div>
         <div>
           <label className="block mb-1 font-semibold">Rôle</label>
@@ -69,9 +70,9 @@ const AjouterPersonnelPlateforme: React.FC = () => {
             <option value="admin_plateforme">Administrateur Plateforme</option>
           </select>
         </div>
-        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-          Ajouter l’utilisateur
-        </button>
+        <Button type="submit" variant="primary">
+          Envoyer l'invitation
+        </Button>
         {message && <div className="mt-2 text-center text-sm text-gray-700">{message}</div>}
       </form>
     </div>

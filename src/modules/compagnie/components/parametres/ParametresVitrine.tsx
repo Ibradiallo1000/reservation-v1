@@ -7,9 +7,10 @@ import React, { useEffect, useState } from "react";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import ImageSelectorModal from "@/components/ui/ImageSelectorModal";
+import ImageSelectorModal from "@/shared/ui/ImageSelectorModal";
 import { HexColorPicker } from "react-colorful";
 import { DocumentData } from "firebase/firestore";
+import { Button } from "@/shared/ui/button";
 
 import {
   CheckCircle,
@@ -150,11 +151,11 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
 
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-6">
-      <div className="max-w-5xl mx-auto space-y-8">
+      <div className="max-w-7xl mx-auto space-y-6">
 
         {/* HEADER */}
         <div
-          className="bg-white rounded-xl shadow-md p-6 border-l-4 flex items-center gap-4"
+          className="bg-white rounded-xl shadow-sm p-6 border-l-4 flex items-center gap-4"
           style={{ borderLeftColor: companyData.couleurPrimaire }}
         >
           <Settings className="h-8 w-8 text-gray-700" />
@@ -273,14 +274,13 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
 
         {/* SAVE */}
         <div className="flex justify-end">
-          <button
+          <Button
             onClick={handleSave}
-            className="px-6 py-3 rounded text-white"
-            style={{ backgroundColor: companyData.couleurPrimaire }}
+            variant="primary"
           >
             <Save size={18} className="inline mr-2" />
             Enregistrer
-          </button>
+          </Button>
         </div>
 
         {modalType && effectiveCompanyId && (

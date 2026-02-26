@@ -9,6 +9,8 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
+import { Button } from "@/shared/ui/button";
 
 // =====================
 // Fix icône Leaflet
@@ -71,12 +73,14 @@ const AjouterAgenceForm: React.FC<AjouterAgenceFormProps> = ({ onAdd }) => {
       });
 
       // 2️⃣ Création AUTOMATIQUE de l’invitation
+      const token = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
       await addDoc(collection(db, "invitations"), {
-        email: null, // sera renseigné plus tard
+        email: null,
         role: "chefAgence",
         companyId: user.companyId,
         agencyId: agenceDoc.id,
         status: "pending",
+        token,
         createdAt: serverTimestamp(),
       });
 
@@ -181,13 +185,13 @@ const AjouterAgenceForm: React.FC<AjouterAgenceFormProps> = ({ onAdd }) => {
         )}
       </div>
 
-      <button
+      <Button
         type="submit"
         disabled={loading}
-        className="bg-green-600 text-white px-4 py-2 rounded disabled:opacity-50"
+        variant="primary"
       >
         {loading ? "Création…" : "Ajouter l’agence"}
-      </button>
+      </Button>
     </form>
   );
 };

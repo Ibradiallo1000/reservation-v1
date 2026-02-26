@@ -138,7 +138,7 @@ const MediaPage: React.FC = () => {
 
   /* ---------- UI ---------- */
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+    <div className="p-4 md:p-6 max-w-7xl mx-auto">
       <div className="bg-white p-4 rounded-xl shadow-sm border mb-6">
         <UploadImageCloudinary
           label="Ajouter une image à la bibliothèque plateforme"

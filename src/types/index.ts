@@ -1,16 +1,25 @@
 // src/types/index.ts
+
+export type {
+  Company,
+  Agence,
+  Agency,
+  TripSuggestion,
+  WhyChooseItem,
+  SocialMediaLinks,
+  FooterConfig,
+  PaymentConfig,
+  PlanType,
+  PaymentMethod
+} from "./companyTypes";
+
+import type { Agency } from "./companyTypes";
 import type { Timestamp } from "firebase/firestore";
+import type { ReservationStatus } from "./reservation";
+
+export type { ReservationStatus } from "./reservation";
 
 /** ————— Enums normalisés ————— */
-export type ReservationStatus =
-  | "en_attente"
-  | "paiement_en_cours"
-  | "preuve_recue"
-  | "payé"
-  | "embarqué"
-  | "refusé"
-  | "annulé";
-
 export type Canal = "en_ligne" | "guichet" | "telephone";
 
 /** ✅ Alias pour compatibilité avec l’existant (anglais) */
@@ -76,6 +85,38 @@ export interface Reservation {
   updatedAt?: Timestamp;
 }
 
+/** ————— Fleet (Phase 3: inter-agency fleet tracking) ————— */
+export type FleetVehicleStatus =
+  | "garage"
+  | "assigned"
+  | "in_transit"
+  | "arrived"
+  | "maintenance";
+
+export interface FleetVehicle {
+  id: string;
+  plateNumber: string;
+  internalCode: string;
+  capacity: number;
+  status: FleetVehicleStatus;
+  currentAgencyId: string | null;
+  destinationAgencyId?: string | null;
+  currentTripId: string | null;
+  currentDeparture: string | null;
+  currentArrival: string | null;
+  currentDate: string | null;
+  currentHeure: string | null;
+  departureTime?: Timestamp | string | null;
+  estimatedArrivalTime?: Timestamp | string | null;
+  lastMovementAt: Timestamp | null;
+  lastMovementBy?: string | null;
+  chauffeurName: string;
+  convoyeurName: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  migratedFromAffectation?: boolean;
+}
+
 /** ————— Flotte & opérations ————— */
 export interface Bus {
   id: string;
@@ -119,22 +160,6 @@ export interface WeeklyTrip {
 }
 
 /** ————— Vitrine & divers ————— */
-export interface TripSuggestion {
-  id: string;
-  title: string;
-  departure: string;
-  arrival: string;
-  price: number;
-  imageUrl?: string;
-}
-
-export interface Agency {
-  id: string;
-  nom: string;
-  ville: string;
-  companyId: string;
-  statut?: "active" | "inactive";
-}
 
 export interface AgencyStats extends Agency {
   reservations: number;

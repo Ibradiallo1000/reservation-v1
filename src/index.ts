@@ -14,7 +14,8 @@ type Role =
   | "admin_compagnie"
   | "chefAgence"
   | "guichetier"
-  | "comptable"
+  | "agency_accountant"
+  | "company_accountant"
   | "superviseur"
   | "agentCourrier"
   | "user";

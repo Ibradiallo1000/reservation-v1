@@ -13,6 +13,7 @@ import {
   CartesianGrid, ResponsiveContainer
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 interface Recette {
   id?: string;
@@ -33,6 +34,7 @@ interface Agent {
 
 const AgenceRecettesPage: React.FC = () => {
   const { user, company } = useAuth();
+  const money = useFormatCurrency();
   const [libelle, setLibelle] = useState('');
   const [montant, setMontant] = useState<number>(0);
   const [type, setType] = useState('dépôt');
@@ -143,7 +145,7 @@ const AgenceRecettesPage: React.FC = () => {
         r.date,
         r.libelle,
         r.type,
-        `${r.montant.toLocaleString()} FCFA`,
+        money(r.montant),
         r.guichetierNom,
         r.commentaire || '-',
       ]),
@@ -226,7 +228,7 @@ const AgenceRecettesPage: React.FC = () => {
         <input type="date" value={filtreDate} onChange={e => setFiltreDate(e.target.value)} className="border p-2 rounded bg-white shadow" />
         <input type="month" value={filtreMois} onChange={e => setFiltreMois(e.target.value)} className="border p-2 rounded bg-white shadow" />
         <p className="text-lg font-bold" style={{ color: theme.secondary }}>
-          Total : {totalFiltre.toLocaleString()} FCFA
+          Total : {money(totalFiltre)}
         </p>
       </div>
 
@@ -297,7 +299,7 @@ const AgenceRecettesPage: React.FC = () => {
                   <td className="border px-4 py-2">{r.date}</td>
                   <td className="border px-4 py-2">{r.libelle}</td>
                   <td className="border px-4 py-2 capitalize">{r.type}</td>
-                  <td className="border px-4 py-2 text-right">{r.montant.toLocaleString()} FCFA</td>
+                  <td className="border px-4 py-2 text-right">{money(r.montant)}</td>
                   <td className="border px-4 py-2">{r.guichetierNom}</td>
                   <td className="border px-4 py-2">{r.commentaire || '-'}</td>
                 </tr>

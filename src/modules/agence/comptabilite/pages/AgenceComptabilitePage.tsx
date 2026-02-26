@@ -18,14 +18,27 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
+import { activateSession, pauseSession, continueSession, validateSessionByAccountant } from '@/modules/agence/services/sessionService';
+import { activateCourierSession, validateCourierSession } from '@/modules/logistics/services/courierSessionService';
+import type { CourierSession } from '@/modules/logistics/domain/courierSession.types';
+import { courierSessionsRef } from '@/modules/logistics/domain/courierSessionPaths';
+import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import {
   Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4,
-  Download, FileText, HandIcon, LogOut, MapPin, Pause, Play, Plus, StopCircle,
+  Download, FileText, HandIcon, LogOut, MapPin, Package, Pause, Play, Plus, StopCircle,
   Ticket, Wallet, Info as InfoIcon, Shield, Receipt, BarChart3,
   RefreshCw, TrendingUp, CreditCard, Smartphone
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
+import { Button } from '@/shared/ui/button';
+import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
+import { useOnlineStatus, useAgencyDarkMode, AgencyHeaderExtras } from '@/modules/agence/shared';
+import { listCompanyBanks } from '@/modules/compagnie/treasury/companyBanks';
+import { recordMovement } from '@/modules/compagnie/treasury/financialMovements';
+import { agencyCashAccountId, companyBankAccountId } from '@/modules/compagnie/treasury/types';
+import { ensureDefaultAgencyAccounts } from '@/modules/compagnie/treasury/financialAccounts';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -48,6 +61,8 @@ type ShiftDoc = {
   totalTickets?: number;
   totalReservations?: number;
   totalAmount?: number;
+  totalCash?: number;
+  totalDigital?: number;
   payBy?: Record<string, number>;
   accountantId?: string;
   accountantCode?: string;
@@ -111,6 +126,7 @@ type NewOutForm = {
   montant: string;
   libelle: string;
   banque?: string;
+  companyBankId?: string;
   note?: string;
 };
 
@@ -144,7 +160,6 @@ type ReconciliationData = {
    Description : Fonctions utilitaires pour le formatage et les calculs
    ============================================================================ */
 
-const fmtMoney = (n: number) => `${(n || 0).toLocaleString('fr-FR')} FCFA`;
 const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
 const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 1, 0, 0, 0, 0);
 
@@ -168,6 +183,10 @@ const AgenceComptabilitePage: React.FC = () => {
   const navigate = useNavigate();
   const { user, company, logout } = useAuth() as any;
   const theme = useCompanyTheme(company) || { primary: '#EA580C', secondary: '#F97316' };
+  const money = useFormatCurrency();
+  const currencySymbol = useCurrencySymbol();
+  const isOnline = useOnlineStatus();
+  const [darkMode, toggleDarkMode] = useAgencyDarkMode();
 
   /* ============================================================================
      SECTION : ÉTATS REACT - HEADER ET BRANDING
@@ -176,16 +195,32 @@ const AgenceComptabilitePage: React.FC = () => {
   
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState<string>('Compagnie');
+  const [companyCurrency, setCompanyCurrency] = useState<string>('XOF');
   const [agencyName, setAgencyName] = useState<string>('Agence');
+  const [companyBanks, setCompanyBanks] = useState<{ id: string; name: string; iban?: string | null }[]>([]);
 
   /* ============================================================================
      SECTION : ÉTATS REACT - NAVIGATION ET UTILISATEUR
      Description : Gestion des onglets et profil comptable
      ============================================================================ */
   
-  const [tab, setTab] = useState<'controle' | 'receptions' | 'rapports' | 'caisse' | 'reconciliation'>('controle');
+  const [tab, setTab] = useState<'controle' | 'receptions' | 'rapports' | 'caisse' | 'reconciliation' | 'courrier'>('controle');
   const [accountant, setAccountant] = useState<AccountantProfile | null>(null);
   const [accountantCode, setAccountantCode] = useState<string>('ACCOUNT');
+  const [userRole, setUserRole] = useState<string>('');
+  const prevCourierPendingCountRef = useRef(0);
+
+  /* ============================================================================
+     SECTION : ÉTATS REACT - SESSIONS COURRIER (séparé du Guichet)
+     Description : Listes et saisies pour l'onglet Courrier uniquement
+     ============================================================================ */
+  type CourierSessionDoc = CourierSession & { id: string };
+  const [pendingCourierSessions, setPendingCourierSessions] = useState<CourierSessionDoc[]>([]);
+  const [activeCourierSessions, setActiveCourierSessions] = useState<CourierSessionDoc[]>([]);
+  const [closedCourierSessions, setClosedCourierSessions] = useState<CourierSessionDoc[]>([]);
+  const [validatedCourierSessions, setValidatedCourierSessions] = useState<CourierSessionDoc[]>([]);
+  const [receptionInputsCourier, setReceptionInputsCourier] = useState<Record<string, { countedAmount: string }>>({});
+  const [savingCourierSessionIds, setSavingCourierSessionIds] = useState<Record<string, boolean>>({});
 
   /* ============================================================================
      SECTION : ÉTATS REACT - POSTES DE VENTE
@@ -269,7 +304,7 @@ const AgenceComptabilitePage: React.FC = () => {
      ============================================================================ */
   
   const [showOutModal, setShowOutModal] = useState(false);
-  const [outForm, setOutForm] = useState<NewOutForm>({ kind: 'depense', montant: '', libelle: '', banque: '', note: '' });
+  const [outForm, setOutForm] = useState<NewOutForm>({ kind: 'depense', montant: '', libelle: '', banque: '', companyBankId: '', note: '' });
 
   /* ============================================================================
      SECTION : INITIALISATION DU HEADER ET PROFIL COMPTABLE
@@ -292,6 +327,7 @@ const AgenceComptabilitePage: React.FC = () => {
           const c = compSnap.data() as any;
           setCompanyLogo(c.logoUrl || c.logo || null);
           setCompanyName(c.nom || c.name || 'Compagnie');
+          setCompanyCurrency(c.devise || 'XOF');
           console.log(`[AgenceCompta] Compagnie chargée: ${c.nom || c.name}`);
         }
 
@@ -304,10 +340,15 @@ const AgenceComptabilitePage: React.FC = () => {
           console.log(`[AgenceCompta] Agence chargée: ${a?.nomAgence || a?.nom || ville}`);
         }
 
-        // Chargement du profil comptable
+        // Banques de la compagnie (pour transferts caisse → banque)
+        const banks = await listCompanyBanks(user.companyId);
+        setCompanyBanks(banks);
+
+        // Chargement du profil comptable et du rôle (pour alertes Courrier)
         const uSnap = await getDoc(doc(db, 'users', user.uid));
         if (uSnap.exists()) {
           const u = uSnap.data() as any;
+          setUserRole(u.role || '');
           const prof: AccountantProfile = {
             id: user.uid,
             displayName: u.displayName || user.displayName || '',
@@ -420,6 +461,38 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [user?.companyId, user?.agencyId]);
 
   /* ============================================================================
+     SECTION : ABONNEMENT SESSIONS COURRIER (temps réel, séparé du Guichet)
+     Description : Écoute courierSessions pour l'onglet Courrier uniquement
+     ============================================================================ */
+  useEffect(() => {
+    if (!user?.companyId || !user?.agencyId) return;
+    const col = courierSessionsRef(db, user.companyId, user.agencyId);
+    const unsub = onSnapshot(col, (snap) => {
+      const all = snap.docs.map(d => ({ ...d.data(), id: d.id } as CourierSessionDoc));
+      const byTime = (s: CourierSessionDoc) =>
+        (s.validatedAt as { toMillis?: () => number })?.toMillis?.() ??
+        (s.closedAt as { toMillis?: () => number })?.toMillis?.() ??
+        (s.openedAt as { toMillis?: () => number })?.toMillis?.() ??
+        (s.createdAt as { toMillis?: () => number })?.toMillis?.() ??
+        0;
+      setPendingCourierSessions(all.filter(s => s.status === 'PENDING').sort((a, b) => byTime(b) - byTime(a)));
+      setActiveCourierSessions(all.filter(s => s.status === 'ACTIVE').sort((a, b) => byTime(b) - byTime(a)));
+      setClosedCourierSessions(all.filter(s => s.status === 'CLOSED').sort((a, b) => byTime(b) - byTime(a)));
+      setValidatedCourierSessions(all.filter(s => s.status === 'VALIDATED').sort((a, b) => byTime(b) - byTime(a)));
+    });
+    return () => unsub();
+  }, [user?.companyId, user?.agencyId]);
+
+  // Toast "Nouvelle demande d'activation Courrier" quand PENDING passe de 0 à > 0 (comptable uniquement)
+  useEffect(() => {
+    const count = pendingCourierSessions.length;
+    if (userRole === 'agency_accountant' && count > 0 && prevCourierPendingCountRef.current === 0) {
+      toast.info('Nouvelle demande d\'activation Courrier');
+    }
+    prevCourierPendingCountRef.current = count;
+  }, [pendingCourierSessions.length, userRole]);
+
+  /* ============================================================================
      SECTION : STATISTIQUES EN TEMPS RÉEL (ÉTENDU POUR TOUS LES CANAUX)
      Description : Calcul des stats live pour les postes actifs/en pause
      ============================================================================ */
@@ -528,145 +601,37 @@ const AgenceComptabilitePage: React.FC = () => {
      ============================================================================ */
   
   const activateShift = useCallback(async (id:string) => {
-    console.log(`[AgenceCompta] Activation du poste ${id}`);
-    
-    if(!user?.companyId||!user?.agencyId||!accountant) {
-      console.warn('[AgenceCompta] Données manquantes pour l\'activation');
-      return;
-    }
-    
-    const base = `companies/${user.companyId}/agences/${user.agencyId}`;
-    const sRef = doc(db,`${base}/shifts/${id}`);
-    const repRef = doc(db,`${base}/shiftReports/${id}`);
-
+    if(!user?.companyId||!user?.agencyId||!accountant) return;
     try {
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(sRef);
-        if (!snap.exists()) throw new Error('Poste introuvable');
-        const cur = snap.data() as any;
-        const now = Timestamp.now();
-        const start = cur.startTime || cur.openedAt || now;
-
-        tx.update(sRef, {
-          status: 'active',
-          startTime: cur.startTime ?? now,
-        });
-
-        tx.set(repRef, {
-          companyId: user.companyId,
-          agencyId: user.agencyId,
-          userId: cur.userId || cur.openedById || '',
-          userName: cur.userName || cur.userEmail || '',
-          userCode: cur.userCode || cur.openedByCode || '',
-          startAt: start,
-          updatedAt: now,
-        }, { merge: true });
+      await activateSession({
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        shiftId: id,
+        activatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
       });
-      
-      console.log(`[AgenceCompta] Poste ${id} activé avec succès`);
-    } catch (error) {
-      console.error(`[AgenceCompta] Erreur lors de l'activation du poste ${id}:`, error);
-      alert('Erreur lors de l\'activation du poste');
+    } catch (error: unknown) {
+      console.error(`[AgenceCompta] Erreur activation poste ${id}:`, error);
+      alert((error instanceof Error ? error.message : 'Erreur lors de l\'activation du poste'));
     }
-  },[user?.companyId,user?.agencyId,accountant]);
+  },[user?.companyId, user?.agencyId, accountant]);
 
   const pauseShift = useCallback(async (id:string) => {
-    console.log(`[AgenceCompta] Mise en pause du poste ${id}`);
-    
     if(!user?.companyId||!user?.agencyId) return;
-    
     try {
-      await updateDoc(doc(db,`companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`),{status:'paused'});
-      console.log(`[AgenceCompta] Poste ${id} mis en pause`);
-    } catch (error) {
-      console.error(`[AgenceCompta] Erreur lors de la pause du poste ${id}:`, error);
+      await pauseSession(user.companyId, user.agencyId, id);
+    } catch (error: unknown) {
+      console.error(`[AgenceCompta] Erreur pause poste ${id}:`, error);
     }
-  },[user?.companyId,user?.agencyId]);
+  },[user?.companyId, user?.agencyId]);
 
   const continueShift = useCallback(async (id:string) => {
-    console.log(`[AgenceCompta] Reprise du poste ${id}`);
-    
     if(!user?.companyId||!user?.agencyId) return;
-    
     try {
-      await updateDoc(doc(db,`companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`),{status:'active'});
-      console.log(`[AgenceCompta] Poste ${id} repris`);
-    } catch (error) {
-      console.error(`[AgenceCompta] Erreur lors de la reprise du poste ${id}:`, error);
+      await continueSession(user.companyId, user.agencyId, id);
+    } catch (error: unknown) {
+      console.error(`[AgenceCompta] Erreur reprise poste ${id}:`, error);
     }
-  },[user?.companyId,user?.agencyId]);
-
-  /* ============================================================================
-     SECTION : CLÔTURE FORCÉE PAR LE COMPTABLE
-     Description : Clôture administrative d'un poste avec rattachement des transactions
-     ============================================================================ */
-  
-  const closeShift = useCallback(async (id: string, opts?: { forcedByAccountant?: boolean }) => {
-    console.log(`[AgenceCompta] Clôture du poste ${id}`, opts);
-    
-    if (!user?.companyId || !user?.agencyId) return;
-
-    const base = `companies/${user.companyId}/agences/${user.agencyId}`;
-    const shiftRef = doc(db, `${base}/shifts/${id}`);
-    const rRef = collection(db, `${base}/reservations`);
-
-    try {
-      const sSnap = await getDoc(shiftRef);
-      if (!sSnap.exists()) { 
-        console.warn(`[AgenceCompta] Poste ${id} introuvable`);
-        alert('Poste introuvable'); 
-        return; 
-      }
-      
-      const sDoc = sSnap.data() as any;
-      const end = Timestamp.now();
-      
-      console.log(`[AgenceCompta] Mise à jour du statut du poste ${id} en 'closed'`);
-      await updateDoc(shiftRef, { status: 'closed', endTime: end });
-
-      if (!opts?.forcedByAccountant) return;
-
-      // Rattachement des transactions orphelines (guichet uniquement)
-      const startRaw = sDoc.startTime?.toDate?.() ?? sDoc.openedAt?.toDate?.() ?? new Date();
-      const endRaw   = end.toDate();
-      const start = new Date(startRaw.getTime() - 5 * 60 * 1000);
-      const endW  = new Date(endRaw.getTime() + 6 * 60 * 60 * 1000);
-
-      const userId   = sDoc.userId || sDoc.openedById || '';
-      const userCode = sDoc.userCode || sDoc.openedByCode || '';
-
-      const q1 = query(
-        rRef,
-        where('createdAt', '>=', Timestamp.fromDate(start)),
-        where('createdAt', '<=', Timestamp.fromDate(endW)),
-        orderBy('createdAt','asc')
-      );
-      const snap = await getDocs(q1);
-
-      const toPatch = snap.docs.filter(d => {
-        const r = d.data() as any;
-        if (r.shiftId) return false;
-        const canal = String(r.canal || '').toLowerCase();
-        const isCounter = canal === 'guichet' || (canal === '' && String(r.paiement||'').toLowerCase().includes('esp'));
-        const sameSeller =
-          (!!userId   && r.guichetierId   === userId) ||
-          (!!userCode && r.guichetierCode === userCode);
-        return isCounter && sameSeller;
-      });
-
-      if (toPatch.length) {
-        console.log(`[AgenceCompta] Rattachement de ${toPatch.length} transaction(s) au poste ${id}`);
-        const batch = writeBatch(db);
-        toPatch.forEach(d => batch.update(d.ref, { shiftId: id }));
-        await batch.commit();
-      }
-
-      console.log(`[AgenceCompta] Poste ${id} clôturé avec succès`);
-    } catch (error) {
-      console.error(`[AgenceCompta] Erreur lors de la clôture du poste ${id}:`, error);
-      alert('Erreur lors de la clôture du poste');
-    }
-  }, [user?.companyId, user?.agencyId]);
+  },[user?.companyId, user?.agencyId]);
 
   /* ============================================================================
      SECTION : RÉCEPTION ET VALIDATION COMPTABLE
@@ -697,117 +662,91 @@ const AgenceComptabilitePage: React.FC = () => {
       const n = Number(clean);
       return Number.isFinite(n) && n >= 0 ? n : NaN;
     };
-    
+
     const cashRcv = toAmount(inputs.cashReceived || '');
-    if (!Number.isFinite(cashRcv)) { 
-      console.warn(`[AgenceCompta] Montant invalide: ${inputs.cashReceived}`);
-      alert('Montant espèces reçu invalide.'); 
-      setSavingShiftIds(p=>({...p, [shift.id]:false})); 
-      return; 
+    if (!Number.isFinite(cashRcv)) {
+      alert('Montant espèces reçu invalide.');
+      setSavingShiftIds(p => ({ ...p, [shift.id]: false }));
+      return;
     }
-    
-    const mmRcv = 0;
-
-    const shiftRef = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts/${shift.id}`);
-    const receiptsRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashReceipts`);
-    const reportRef = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/shiftReports/${shift.id}`);
-
-    const agg = aggByShift[shift.id];
-    const computedCashExpected = agg?.cashExpected ?? shift.cashExpected ?? (shift.payBy?.['espèces'] ?? 0);
-    const computedMmExpected = agg?.mmExpected ?? shift.mmExpected ?? (shift.payBy?.['mobile_money'] ?? 0);
-
-    const newRef = doc(receiptsRef);
-    const newReceiptId = newRef.id;
 
     try {
-      await runTransaction(db, async (tx) => {
-        const s = await tx.get(shiftRef);
-        if (!s.exists()) throw new Error('Poste introuvable.');
-        const cur = s.data() as any;
-        
-        if (cur.status !== 'closed' && cur.status !== 'validated') {
-          throw new Error('Seuls les postes clôturés peuvent être validés.');
-        }
-
-        const now = Timestamp.now();
-        const startAt = cur.startTime || cur.openedAt || now;
-        const endAt = cur.endTime || now;
-
-        const rcpt = {
-          shiftId: shift.id, 
-          userId: shift.userId, 
-          userCode: shift.userCode || '',
-          companyId: user.companyId, 
-          agencyId: user.agencyId,
-          totalAmount: agg?.amount ?? (cur.totalAmount || 0),
-          cashExpected: computedCashExpected || 0, 
-          cashReceived: cashRcv,
-          mmExpected: computedMmExpected || 0, 
-          mmReceived: mmRcv,
-          onlineAmount: agg?.onlineAmount || 0, // NOUVEAU : montant en ligne
-          accountantId: accountant.id,
-          accountantName: accountant.displayName || accountant.email || '',
-          accountantCode,
-          createdAt: now,
-          type: 'reception_caisse',
-          note: 'Réception espèces validée.',
-        };
-
-        tx.set(newRef, rcpt);
-
-        tx.update(shiftRef, {
-          status: 'closed',
-          endTime: endAt,
-          accountantId: accountant.id,
-          accountantName: accountant.displayName || accountant.email || '',
-          accountantCode,
-          validatedAt: now,
-          cashReceived: cashRcv,
-          mmReceived: mmRcv,
-          cashExpected: computedCashExpected || 0,
-          mmExpected: computedMmExpected || 0,
-          comptable: {
-            ...(cur.comptable || {}),
-            validated: true,
-            at: now,
-            by: { id: accountant.id, name: accountant.displayName || accountant.email || '' },
-            note: 'Réception espèces validée (comptabilité)',
-          },
-        });
-
-        tx.set(reportRef, {
-          startAt,
-          endAt,
-          accountantValidated: true,
-          accountantValidatedAt: now,
-          cashExpected: computedCashExpected || 0,
-          cashReceived: cashRcv,
-          mmExpected: computedMmExpected || 0,
-          mmReceived: mmRcv,
-          onlineAmount: agg?.onlineAmount || 0, // NOUVEAU
-          accountantStamp: {
-            by: { id: accountant.id, code: accountantCode, name: accountant.displayName || accountant.email || '' },
-            at: now,
-            note: 'Réception espèces validée (comptabilité)',
-          },
-          updatedAt: now,
-        }, { merge: true });
+      const { computedDifference } = await validateSessionByAccountant({
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        shiftId: shift.id,
+        receivedCashAmount: cashRcv,
+        validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
+        accountantDeviceFingerprint: getDeviceFingerprint(),
       });
 
       setReceptionInputs(prev => ({ ...prev, [shift.id]: { cashReceived: '' } }));
-      console.log(`[AgenceCompta] Réception validée pour le poste ${shift.id}, reçu ${newReceiptId}`);
-      alert('Réception enregistrée ✓');
-      
-      if (newReceiptId) {
-        navigate(`/agence/receipt/${newReceiptId}`);
+      if (computedDifference !== 0) {
+        alert(`Validation enregistrée. Écart (reçu - attendu) : ${computedDifference >= 0 ? '+' : ''}${computedDifference.toFixed(0)} ${currencySymbol}`);
+      } else {
+        alert('Validation enregistrée ✓');
       }
-    } catch (e: any) {
-      console.error(`[AgenceCompta] Erreur lors de la validation du poste ${shift.id}:`, e);
-      alert(e?.message || 'Erreur lors de la validation.');
+    } catch (e: unknown) {
+      console.error(`[AgenceCompta] Erreur validation poste ${shift.id}:`, e);
+      alert(e instanceof Error ? e.message : 'Erreur lors de la validation.');
     } finally {
       setSavingShiftIds(p => ({ ...p, [shift.id]: false }));
     }
-  }, [user?.companyId, user?.agencyId, accountant, accountantCode, receptionInputs, aggByShift, navigate, savingShiftIds]);
+  }, [user?.companyId, user?.agencyId, accountant, receptionInputs, currencySymbol, savingShiftIds]);
+
+  /* ============================================================================
+     SECTION : ACTIONS COURRIER (activation et validation, séparé du Guichet)
+     Description : Activer une session PENDING ; valider une session CLOSED avec montant compté
+     ============================================================================ */
+  const setReceptionInputCourier = (sessionId: string, value: string) =>
+    setReceptionInputsCourier(prev => ({ ...prev, [sessionId]: { countedAmount: value } }));
+
+  const activateCourierSessionAction = useCallback(async (sessionId: string) => {
+    if (!user?.companyId || !user?.agencyId || !accountant) return;
+    try {
+      await activateCourierSession({
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        sessionId,
+        activatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
+      });
+    } catch (e: unknown) {
+      console.error('[AgenceCompta] Erreur activation session courrier:', e);
+      alert(e instanceof Error ? e.message : 'Erreur lors de l\'activation.');
+    }
+  }, [user?.companyId, user?.agencyId, accountant]);
+
+  const validateCourierSessionAction = useCallback(async (session: CourierSessionDoc) => {
+    if (!user?.companyId || !user?.agencyId || !accountant) return;
+    const raw = (receptionInputsCourier[session.id] || { countedAmount: '' }).countedAmount || '0';
+    const counted = Number(String(raw).replace(/[^\d.,]/g, '').replace(',', '.'));
+    if (!Number.isFinite(counted) || counted < 0) {
+      alert('Montant compté invalide.');
+      return;
+    }
+    if (savingCourierSessionIds[session.id]) return;
+    setSavingCourierSessionIds(p => ({ ...p, [session.id]: true }));
+    try {
+      const { difference } = await validateCourierSession({
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        sessionId: session.id,
+        validatedAmount: counted,
+        validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
+      });
+      setReceptionInputsCourier(prev => ({ ...prev, [session.id]: { countedAmount: '' } }));
+      if (difference !== 0) {
+        alert(`Validation enregistrée. Écart (compté - attendu) : ${difference >= 0 ? '+' : ''}${difference.toFixed(0)} ${currencySymbol}`);
+      } else {
+        alert('Validation enregistrée ✓');
+      }
+    } catch (e: unknown) {
+      console.error('[AgenceCompta] Erreur validation session courrier:', e);
+      alert(e instanceof Error ? e.message : 'Erreur lors de la validation.');
+    } finally {
+      setSavingCourierSessionIds(p => ({ ...p, [session.id]: false }));
+    }
+  }, [user?.companyId, user?.agencyId, accountant, receptionInputsCourier, currencySymbol, savingCourierSessionIds]);
 
   /* ============================================================================
      SECTION : RAPPORTS DÉTAILLÉS (ÉTENDU POUR TOUS LES CANAUX)
@@ -984,6 +923,19 @@ const AgenceComptabilitePage: React.FC = () => {
     console.log('[AgenceCompta] Totaux globaux live:', { reservations, tickets, amount });
     return { reservations, tickets, amount };
   }, [activeShifts, pausedShifts, liveStats]);
+
+  /* ============================================================================
+     SECTION : KPI COURRIER (séparé du Guichet, pour onglet Courrier uniquement)
+     ============================================================================ */
+  const courierKpis = useMemo(() => {
+    const totalCAValidated = validatedCourierSessions.reduce((sum, s) => sum + (Number(s.expectedAmount) || 0), 0);
+    return {
+      pendingCount: pendingCourierSessions.length,
+      activeCount: activeCourierSessions.length,
+      closedCount: closedCourierSessions.length,
+      totalCAValidated,
+    };
+  }, [pendingCourierSessions.length, activeCourierSessions.length, closedCourierSessions.length, validatedCourierSessions]);
 
   /* ============================================================================
      SECTION : GESTION DE LA CAISSE - CONFIGURATION
@@ -1197,13 +1149,23 @@ const AgenceComptabilitePage: React.FC = () => {
       alert('Montant invalide'); 
       return; 
     }
+
+    const bankLabel = outForm.kind === 'transfert_banque'
+      ? (outForm.companyBankId ? companyBanks.find(b => b.id === outForm.companyBankId)?.name : null) || outForm.banque || ''
+      : '';
+
+    if (outForm.kind === 'transfert_banque' && !bankLabel) {
+      alert('Veuillez sélectionner une banque de la compagnie ou indiquer le nom du compte.');
+      return;
+    }
     
     try {
       const payload = {
         kind: outForm.kind,
         amount,
         label: outForm.libelle || (outForm.kind === 'transfert_banque' ? 'Transfert vers banque' : 'Dépense'),
-        bankName: outForm.kind === 'transfert_banque' ? (outForm.banque || '') : '',
+        bankName: bankLabel,
+        companyBankId: outForm.kind === 'transfert_banque' ? (outForm.companyBankId || null) : null,
         note: outForm.note || '',
         companyId: user.companyId,
         agencyId: user.agencyId,
@@ -1212,11 +1174,29 @@ const AgenceComptabilitePage: React.FC = () => {
         createdAt: Timestamp.now(),
       };
       
-      await addDoc(collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`), payload);
+      const movRef = await addDoc(collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`), payload);
+      const movementId = movRef.id;
+
+      if (outForm.kind === 'transfert_banque' && outForm.companyBankId) {
+        await ensureDefaultAgencyAccounts(user.companyId, user.agencyId, companyCurrency, agencyName);
+        await recordMovement({
+          companyId: user.companyId,
+          fromAccountId: agencyCashAccountId(user.agencyId),
+          toAccountId: companyBankAccountId(outForm.companyBankId),
+          amount,
+          currency: companyCurrency,
+          movementType: 'deposit_to_bank',
+          referenceType: 'transfer',
+          referenceId: movementId,
+          agencyId: user.agencyId,
+          performedBy: user.uid,
+          notes: `Transfert caisse → ${bankLabel}`,
+        });
+      }
       
       console.log('[AgenceCompta] Mouvement de sortie enregistré avec succès');
       setShowOutModal(false);
-      setOutForm({ kind: 'depense', montant: '', libelle: '', banque: '', note: '' });
+      setOutForm({ kind: 'depense', montant: '', libelle: '', banque: '', companyBankId: '', note: '' });
       await reloadCash();
     } catch (error) {
       console.error('[AgenceCompta] Erreur lors de l\'enregistrement du mouvement:', error);
@@ -1240,7 +1220,7 @@ const AgenceComptabilitePage: React.FC = () => {
      ============================================================================ */
   
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+    <div className={`min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 ${darkMode ? 'agency-dark' : ''}`}>
       {/* ============================================================================
          HEADER : EN-TÊTE AVEC BRANDING ET NAVIGATION
          Description : Logo, nom d'entreprise, onglets et informations comptable
@@ -1257,14 +1237,14 @@ const AgenceComptabilitePage: React.FC = () => {
                     <img 
                       src={companyLogo} 
                       alt="Logo compagnie" 
-                      className="h-12 w-12 rounded-xl object-contain border-2 border-white shadow-md"
+                      className="h-12 w-12 rounded-xl object-contain border-2 border-white shadow-sm"
                     />
                     <div className="absolute -bottom-1 -right-1 h-5 w-5 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-full border border-white flex items-center justify-center">
                       <Shield className="h-3 w-3 text-white" />
                     </div>
                   </div>
                 ) : (
-                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 border-2 border-white shadow-md grid place-items-center">
+                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 border-2 border-white shadow-sm grid place-items-center">
                     <Building2 className="h-6 w-6 text-gray-600"/>
                   </div>
                 )}
@@ -1288,7 +1268,7 @@ const AgenceComptabilitePage: React.FC = () => {
 
             {/* Onglets */}
             <div className="w-full sm:w-auto">
-              <div className="inline-flex rounded-2xl p-1.5 bg-gradient-to-r from-slate-100 to-slate-50 shadow-inner w-full sm:w-auto">
+              <div className="inline-flex rounded-xl p-1.5 bg-gradient-to-r from-slate-100 to-slate-50 shadow-inner w-full sm:w-auto">
                 <TabButton 
                   active={tab==='controle'}   
                   onClick={()=>setTab('controle')}   
@@ -1324,11 +1304,20 @@ const AgenceComptabilitePage: React.FC = () => {
                   icon={<RefreshCw className="h-4 w-4" />}
                   theme={theme}
                 />
+                <TabButton 
+                  active={tab==='courrier'} 
+                  onClick={()=>setTab('courrier')} 
+                  label="Courrier" 
+                  icon={<Package className="h-4 w-4" />}
+                  theme={theme}
+                  badgeCount={userRole === 'agency_accountant' ? pendingCourierSessions.length : 0}
+                />
               </div>
             </div>
 
-            {/* Actions et profil */}
+            {/* Actions et profil — aligné guichet : réseau + mode sombre */}
             <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+              <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
               {accountant && (
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 shadow-sm">
                   <div className="h-7 w-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
@@ -1366,14 +1355,14 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Contenu des différents onglets
          ============================================================================ */}
       
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6 sm:space-y-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
         {/* ============================================================================
            ONGLET : CONTRÔLE DES POSTES
            Description : Gestion des postes de vente en temps réel
            ============================================================================ */}
         
         {tab === 'controle' && (
-          <div className="space-y-6 sm:space-y-8">
+          <div className="space-y-6">
             {/* KPI Globaux */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
               <KpiCard 
@@ -1387,7 +1376,7 @@ const AgenceComptabilitePage: React.FC = () => {
               <KpiCard 
                 icon={<Wallet className="h-6 w-6" />} 
                 label="Chiffre d'affaires" 
-                value={fmtMoney(liveTotalsGlobal.amount)} 
+                value={money(liveTotalsGlobal.amount)} 
                 sublabel="en direct"
                 theme={theme}
                 emphasis={true}
@@ -1421,10 +1410,10 @@ const AgenceComptabilitePage: React.FC = () => {
               liveStats={{}}
               theme={theme}
               actions={(s) => (
-                <PrimaryButton onClick={() => activateShift(s.id)} theme={theme}>
+                <Button variant="primary" onClick={() => activateShift(s.id)}>
                   <Play className="h-4 w-4 mr-2" />
                   Activer le poste
-                </PrimaryButton>
+                </Button>
               )}
             />
 
@@ -1439,19 +1428,11 @@ const AgenceComptabilitePage: React.FC = () => {
               theme={theme}
               actions={(s) => (
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <SecondaryButton onClick={() => pauseShift(s.id)}>
+                  <Button variant="secondary" onClick={() => pauseShift(s.id)}>
                     <Pause className="h-4 w-4 mr-2" /> 
                     Pause
-                  </SecondaryButton>
-                  <PrimaryButton
-                    onClick={() => {
-                      if (confirm('Clôturer ce poste maintenant ?')) closeShift(s.id, { forcedByAccountant: true });
-                    }}
-                    theme={theme}
-                  >
-                    <StopCircle className="h-4 w-4 mr-2" /> 
-                    Clôturer
-                  </PrimaryButton>
+                  </Button>
+                  <span className="text-xs text-gray-500 self-center">Clôture par le guichetier uniquement.</span>
                 </div>
               )}
             />
@@ -1467,13 +1448,11 @@ const AgenceComptabilitePage: React.FC = () => {
               theme={theme}
               actions={(s) => (
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <PrimaryButton onClick={() => continueShift(s.id)} theme={theme}>
+                  <Button variant="primary" onClick={() => continueShift(s.id)}>
                     <Play className="h-4 w-4 mr-2" />
                     Continuer
-                  </PrimaryButton>
-                  <SecondaryButton onClick={() => { if (confirm('Clôturer ce poste ?')) closeShift(s.id, { forcedByAccountant: true }); }}>
-                    Clôturer
-                  </SecondaryButton>
+                  </Button>
+                  <span className="text-xs text-gray-500 self-center">Clôture par le guichetier uniquement.</span>
                 </div>
               )}
             />
@@ -1486,7 +1465,7 @@ const AgenceComptabilitePage: React.FC = () => {
            ============================================================================ */}
         
         {tab === 'receptions' && (
-          <div className="space-y-6 sm:space-y-8">
+          <div className="space-y-6">
             <SectionHeader
               icon={<Receipt className="h-6 w-6" />}
               title="Réceptions de caisse à valider"
@@ -1494,7 +1473,7 @@ const AgenceComptabilitePage: React.FC = () => {
             />
 
             {(() => {
-              const toReceive = closedShifts.filter(s => !s.comptable?.validated);
+              const toReceive = closedShifts.filter(s => s.status === 'closed');
               
               if (toReceive.length === 0) {
                 return (
@@ -1516,13 +1495,15 @@ const AgenceComptabilitePage: React.FC = () => {
                     const reservationsAgg = agg?.reservations ?? s.totalReservations ?? 0;
                     const ticketsAgg = agg?.tickets ?? s.totalTickets ?? 0;
                     const amountAgg = agg?.amount ?? s.totalAmount ?? 0;
-                    const cashExpectedAgg = agg?.cashExpected ?? (payBy['espèces'] ?? s.cashExpected ?? 0);
+                    const expectedCash = s.totalCash ?? agg?.cashExpected ?? (payBy['espèces'] ?? s.cashExpected ?? 0);
+                    const cashExpectedAgg = expectedCash;
                     const mmExpectedAgg = agg?.mmExpected ?? (payBy['mobile_money'] ?? s.mmExpected ?? 0);
                     const onlineAmountAgg = agg?.onlineAmount ?? 0;
 
                     const cashReceived = Number((inputs.cashReceived || '').replace(/[^\d.]/g,''));
                     const ecart = (Number.isFinite(cashReceived) ? cashReceived : 0) - (cashExpectedAgg || 0);
                     const disableValidate = !Number.isFinite(cashReceived) || cashReceived < 0;
+                    const hasDifference = Number.isFinite(cashReceived) && ecart !== 0;
 
                     const ui = usersCache[s.userId] || {};
                     const name = ui.name || s.userName || s.userEmail || s.userId;
@@ -1530,8 +1511,8 @@ const AgenceComptabilitePage: React.FC = () => {
 
                     return (
                       <div key={s.id} className="group relative">
-                        <div className="absolute inset-0 bg-gradient-to-br from-white to-gray-50 rounded-2xl transform group-hover:scale-[1.02] transition-all duration-300"></div>
-                        <div className="relative rounded-2xl border border-gray-200 bg-white/80 p-5 shadow-sm hover:shadow-lg transition-all duration-300">
+                        <div className="absolute inset-0 bg-gradient-to-br from-white to-gray-50 rounded-xl transform group-hover:scale-[1.02] transition-all duration-300"></div>
+                        <div className="relative rounded-xl border border-gray-200 bg-white/80 p-5 shadow-sm hover:shadow-md transition-all duration-300">
                           {/* En-tête du poste */}
                           <div className="flex items-start justify-between gap-3 mb-4">
                             <div className="min-w-0">
@@ -1552,10 +1533,10 @@ const AgenceComptabilitePage: React.FC = () => {
                           <div className="grid grid-cols-2 gap-4 mb-4">
                             <InfoCard label="Réservations" value={reservationsAgg.toString()} />
                             <InfoCard label="Billets" value={ticketsAgg.toString()} />
-                            <InfoCard label="Montant total" value={fmtMoney(amountAgg)} emphasis />
-                            <InfoCard label="Espèces attendu" value={fmtMoney(cashExpectedAgg)} emphasis />
-                            <InfoCard label="Mobile Money" value={fmtMoney(mmExpectedAgg)} />
-                            <InfoCard label="En ligne" value={fmtMoney(onlineAmountAgg)} />
+                            <InfoCard label="Montant total" value={money(amountAgg)} emphasis />
+                            <InfoCard label="Espèces attendu" value={money(cashExpectedAgg)} emphasis />
+                            <InfoCard label="Mobile Money" value={money(mmExpectedAgg)} />
+                            <InfoCard label="En ligne" value={money(onlineAmountAgg)} />
                           </div>
 
                           {/* Période */}
@@ -1586,40 +1567,44 @@ const AgenceComptabilitePage: React.FC = () => {
                                   onChange={e => setReceptionInput(s.id, e.target.value)}
                                 />
                                 <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">
-                                  FCFA
+                                  {currencySymbol}
                                 </div>
                               </div>
                             </div>
 
-                            <div className="p-3 rounded-xl border" style={{ 
+                            <div className={`p-3 rounded-xl border ${hasDifference ? 'ring-2 ring-red-400' : ''}`} style={{ 
                               borderColor: ecart === 0 ? '#d1fae5' : ecart > 0 ? '#bbf7d0' : '#fecaca',
                               backgroundColor: ecart === 0 ? '#f0fdf4' : ecart > 0 ? '#dcfce7' : '#fef2f2'
                             }}>
                               <div className="text-xs font-medium text-gray-700 mb-1">Écart (reçu - attendu)</div>
                               <div className={`text-lg font-bold ${ecart === 0 ? 'text-emerald-700' : ecart > 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                {Number.isFinite(ecart) ? fmtMoney(ecart) : '—'}
+                                {Number.isFinite(ecart) ? money(ecart) : '—'}
                               </div>
+                              {hasDifference && (
+                                <div className="mt-2 text-xs font-medium text-red-700">Écart à justifier avant validation.</div>
+                              )}
                             </div>
                           </div>
 
                           {/* Actions */}
                           <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                            <SecondaryButton 
+                            <Button 
+                              variant="secondary"
                               onClick={() => { setTab('rapports'); loadReportForShift(s.id); }}
                               className="w-full sm:w-auto"
                             >
                               <FileText className="h-4 w-4 mr-2" /> 
                               Voir le détail
-                            </SecondaryButton>
-                            <PrimaryButton 
+                            </Button>
+                            <Button 
+                              variant="primary"
                               disabled={disableValidate || !!savingShiftIds[s.id]} 
                               onClick={() => validateReception(s)} 
-                              theme={theme}
                               className="w-full sm:w-auto"
                             >
                               <CheckCircle2 className="h-4 w-4 mr-2" /> 
                               {savingShiftIds[s.id] ? 'Validation...' : 'Valider la réception'}
-                            </PrimaryButton>
+                            </Button>
                           </div>
                         </div>
                       </div>
@@ -1637,9 +1622,9 @@ const AgenceComptabilitePage: React.FC = () => {
            ============================================================================ */}
         
         {tab === 'rapports' && (
-          <div className="space-y-6 sm:space-y-8">
+          <div className="space-y-6">
             {/* Sélecteur de poste et filtres */}
-            <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-3">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
@@ -1739,8 +1724,8 @@ const AgenceComptabilitePage: React.FC = () => {
               <KpiCard 
                 icon={<Wallet className="h-6 w-6" />} 
                 label="Chiffre d'affaires" 
-                value={fmtMoney(totals.montant)} 
-                sublabel={`${fmtMoney(totals.guichet.montant)} guichet + ${fmtMoney(totals.en_ligne.montant)} ligne`}
+                value={money(totals.montant)} 
+                sublabel={`${money(totals.guichet.montant)} guichet + ${money(totals.en_ligne.montant)} ligne`}
                 theme={theme}
                 emphasis={true}
               />
@@ -1755,7 +1740,7 @@ const AgenceComptabilitePage: React.FC = () => {
             </div>
 
             {/* Tableau détaillé */}
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between mb-5">
                 <div className="text-lg font-bold text-gray-900">Détail des réservations</div>
                 <div className="text-sm text-gray-600">
@@ -1837,7 +1822,7 @@ const AgenceComptabilitePage: React.FC = () => {
                                   <span className="font-medium">{(t.seatsGo||0)+(t.seatsReturn||0)}</span>
                                 </Td>
                                 <Td align="right">
-                                  <span className="font-bold text-gray-900">{fmtMoney(t.montant)}</span>
+                                  <span className="font-bold text-gray-900">{money(t.montant)}</span>
                                 </Td>
                                 <Td align="right">
                                   <span className="text-xs text-gray-600">{t.paiement || '—'}</span>
@@ -1866,9 +1851,9 @@ const AgenceComptabilitePage: React.FC = () => {
            ============================================================================ */}
         
         {tab === 'caisse' && (
-          <div className="space-y-6 sm:space-y-8">
+          <div className="space-y-6">
             {/* En-tête et filtres */}
-            <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
                 <div className="flex items-center gap-3">
                   <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-emerald-50 to-green-50 flex items-center justify-center">
@@ -1880,22 +1865,23 @@ const AgenceComptabilitePage: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <PrimaryButton 
+                  <Button 
+                    variant="primary"
                     onClick={() => setShowOutModal(true)} 
-                    theme={theme}
                     className="whitespace-nowrap"
                   >
                     <Plus className="h-4 w-4 mr-2" /> 
                     Nouveau mouvement
-                  </PrimaryButton>
-                  <SecondaryButton
-                    onClick={() => exportCsv(days)}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => exportCsv(days, currencySymbol)}
                     disabled={days.length === 0}
                     className="whitespace-nowrap"
                   >
                     <Download className="h-4 w-4 mr-2" /> 
                     Export CSV
-                  </SecondaryButton>
+                  </Button>
                 </div>
               </div>
 
@@ -1952,9 +1938,9 @@ const AgenceComptabilitePage: React.FC = () => {
                     </>
                   )}
                   
-                  <SecondaryButton onClick={reloadCash} disabled={loadingCash}>
+                  <Button variant="secondary" onClick={reloadCash} disabled={loadingCash}>
                     {loadingCash ? 'Actualisation...' : 'Actualiser'}
-                  </SecondaryButton>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -1964,21 +1950,21 @@ const AgenceComptabilitePage: React.FC = () => {
               <KpiCard 
                 icon={<Wallet className="h-6 w-6" />} 
                 label="Entrées totales" 
-                value={fmtMoney(totIn)} 
+                value={money(totIn)} 
                 theme={theme}
                 emphasis={false}
               />
               <KpiCard 
                 icon={<AlertTriangle className="h-6 w-6" />} 
                 label="Sorties totales" 
-                value={fmtMoney(totOut)} 
+                value={money(totOut)} 
                 theme={theme}
                 emphasis={false}
               />
               <KpiCard 
                 icon={<Banknote className="h-6 w-6" />} 
                 label="Solde de période" 
-                value={fmtMoney(totIn - totOut)} 
+                value={money(totIn - totOut)} 
                 sublabel={totIn - totOut >= 0 ? "Positif" : "Déficitaire"}
                 theme={theme}
                 emphasis={true}
@@ -1986,7 +1972,7 @@ const AgenceComptabilitePage: React.FC = () => {
             </div>
 
             {/* Journal de caisse */}
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between mb-5">
                 <div className="text-lg font-bold text-gray-900">Journal des mouvements</div>
                 <div className="text-sm text-gray-600">
@@ -2033,14 +2019,14 @@ const AgenceComptabilitePage: React.FC = () => {
                               </div>
                             </Td>
                             <Td align="right">
-                              <span className="font-medium text-emerald-700">{fmtMoney(d.entrees)}</span>
+                              <span className="font-medium text-emerald-700">{money(d.entrees)}</span>
                             </Td>
                             <Td align="right">
-                              <span className="font-medium text-rose-700">{fmtMoney(d.sorties)}</span>
+                              <span className="font-medium text-rose-700">{money(d.sorties)}</span>
                             </Td>
                             <Td align="right">
                               <span className={`font-bold ${d.solde >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                {fmtMoney(d.solde)}
+                                {money(d.solde)}
                               </span>
                             </Td>
                           </tr>
@@ -2050,9 +2036,9 @@ const AgenceComptabilitePage: React.FC = () => {
                       <tfoot className="bg-gradient-to-r from-gray-50 to-gray-100/80 border-t-2 border-gray-300">
                         <tr>
                           <Td className="font-bold text-gray-900">TOTAUX</Td>
-                          <Td align="right" className="font-bold text-emerald-700">{fmtMoney(totIn)}</Td>
-                          <Td align="right" className="font-bold text-rose-700">{fmtMoney(totOut)}</Td>
-                          <Td align="right" className="font-bold text-gray-900">{fmtMoney(totIn - totOut)}</Td>
+                          <Td align="right" className="font-bold text-emerald-700">{money(totIn)}</Td>
+                          <Td align="right" className="font-bold text-rose-700">{money(totOut)}</Td>
+                          <Td align="right" className="font-bold text-gray-900">{money(totIn - totOut)}</Td>
                         </tr>
                       </tfoot>
                     </table>
@@ -2069,9 +2055,9 @@ const AgenceComptabilitePage: React.FC = () => {
            ============================================================================ */}
         
         {tab === 'reconciliation' && (
-          <div className="space-y-6 sm:space-y-8">
+          <div className="space-y-6">
             {/* En-tête et sélecteur de date */}
-            <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
                 <div className="flex items-center gap-3">
                   <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
@@ -2091,9 +2077,9 @@ const AgenceComptabilitePage: React.FC = () => {
                     value={reconciliationDate} 
                     onChange={(e) => setReconciliationDate(e.target.value)} 
                   />
-                  <SecondaryButton onClick={loadReconciliation} disabled={loadingReconciliation}>
+                  <Button variant="secondary" onClick={loadReconciliation} disabled={loadingReconciliation}>
                     {loadingReconciliation ? 'Chargement...' : 'Actualiser'}
-                  </SecondaryButton>
+                  </Button>
                 </div>
               </div>
               
@@ -2131,15 +2117,15 @@ const AgenceComptabilitePage: React.FC = () => {
                   <KpiCard 
                     icon={<TrendingUp className="h-6 w-6" />} 
                     label="Chiffre d'affaires total" 
-                    value={fmtMoney(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)} 
-                    sublabel={`${fmtMoney(reconciliationData.ventesGuichet.montant)} guichet + ${fmtMoney(reconciliationData.ventesEnLigne.montant)} ligne`}
+                    value={money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)} 
+                    sublabel={`${money(reconciliationData.ventesGuichet.montant)} guichet + ${money(reconciliationData.ventesEnLigne.montant)} ligne`}
                     theme={theme}
                     emphasis={true}
                   />
                   <KpiCard 
                     icon={reconciliationData.ecart === 0 ? <CheckCircle2 className="h-6 w-6" /> : <AlertTriangle className="h-6 w-6" />} 
                     label="Écart de caisse" 
-                    value={fmtMoney(reconciliationData.ecart)} 
+                    value={money(reconciliationData.ecart)} 
                     sublabel={reconciliationData.ecart === 0 ? "Caisse OK" : reconciliationData.ecart > 0 ? "Caisse en déficit" : "Excédent"}
                     theme={theme}
                     emphasis={true}
@@ -2147,7 +2133,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
 
                 {/* Tableau détaillé */}
-                <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
                   <div className="text-lg font-bold text-gray-900 mb-5">Réconciliation détaillée</div>
                   
                   <div className="overflow-hidden rounded-xl border border-gray-200">
@@ -2188,7 +2174,7 @@ const AgenceComptabilitePage: React.FC = () => {
                             <span className="font-medium">{reconciliationData.ventesGuichet.tickets}</span>
                           </Td>
                           <Td align="right">
-                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.ventesGuichet.montant)}</span>
+                            <span className="font-bold text-gray-900">{money(reconciliationData.ventesGuichet.montant)}</span>
                           </Td>
                           <Td align="right">
                             <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
@@ -2214,7 +2200,7 @@ const AgenceComptabilitePage: React.FC = () => {
                             <span className="font-medium">{reconciliationData.ventesEnLigne.tickets}</span>
                           </Td>
                           <Td align="right">
-                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.ventesEnLigne.montant)}</span>
+                            <span className="font-bold text-gray-900">{money(reconciliationData.ventesEnLigne.montant)}</span>
                           </Td>
                           <Td align="right">
                             <span className="text-xs px-2 py-1 rounded-full bg-indigo-100 text-indigo-700">
@@ -2233,7 +2219,7 @@ const AgenceComptabilitePage: React.FC = () => {
                             {reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets}
                           </Td>
                           <Td align="right" className="font-bold text-gray-900">
-                            {fmtMoney(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}
+                            {money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}
                           </Td>
                           <Td align="right">
                             <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700">
@@ -2264,7 +2250,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           <Td align="right">—</Td>
                           <Td align="right">—</Td>
                           <Td align="right">
-                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.encaissementsEspeces)}</span>
+                            <span className="font-bold text-gray-900">{money(reconciliationData.encaissementsEspeces)}</span>
                           </Td>
                           <Td align="right">
                             <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-700">
@@ -2286,7 +2272,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           <Td align="right">—</Td>
                           <Td align="right">—</Td>
                           <Td align="right">
-                            <span className="font-bold text-gray-900">{fmtMoney(reconciliationData.encaissementsMobileMoney)}</span>
+                            <span className="font-bold text-gray-900">{money(reconciliationData.encaissementsMobileMoney)}</span>
                           </Td>
                           <Td align="right">
                             <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700">
@@ -2301,7 +2287,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           <Td align="right">—</Td>
                           <Td align="right">—</Td>
                           <Td align="right" className="font-bold text-gray-900">
-                            {fmtMoney(reconciliationData.encaissementsTotal)}
+                            {money(reconciliationData.encaissementsTotal)}
                           </Td>
                           <Td align="right">
                             <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
@@ -2318,7 +2304,7 @@ const AgenceComptabilitePage: React.FC = () => {
                                 ÉCART (Ventes guichet - Encaissements)
                               </div>
                               <div className={`text-xl font-bold ${reconciliationData.ecart === 0 ? 'text-emerald-700' : reconciliationData.ecart > 0 ? 'text-rose-700' : 'text-amber-700'}`}>
-                                {fmtMoney(reconciliationData.ecart)}
+                                {money(reconciliationData.ecart)}
                                 {reconciliationData.ecart === 0 && (
                                   <span className="ml-2 text-sm font-medium text-emerald-600">✓ Équilibre parfait</span>
                                 )}
@@ -2342,13 +2328,199 @@ const AgenceComptabilitePage: React.FC = () => {
                     <div className="text-sm text-gray-600 space-y-1">
                       <div>• <span className="font-medium">{reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}</span> réservations effectuées</div>
                       <div>• <span className="font-medium">{reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets}</span> billets vendus</div>
-                      <div>• <span className="font-medium">{fmtMoney(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}</span> chiffre d'affaires généré</div>
-                      <div>• <span className="font-medium">{fmtMoney(reconciliationData.encaissementsTotal)}</span> réellement encaissés dans la caisse</div>
+                      <div>• <span className="font-medium">{money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}</span> chiffre d'affaires généré</div>
+                      <div>• <span className="font-medium">{money(reconciliationData.encaissementsTotal)}</span> réellement encaissés dans la caisse</div>
                     </div>
                   </div>
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* ============================================================================
+           ONGLET : COURRIER (sessions courrier, séparé du Guichet)
+           Description : Activation PENDING → ACTIVE ; validation CLOSED → VALIDATED
+           ============================================================================ */}
+        {tab === 'courrier' && (
+          <div className="space-y-6">
+            <SectionHeader
+              icon={<Package className="h-6 w-6" />}
+              title="Sessions courrier"
+              subtitle="Activation des sessions en attente et validation des sessions clôturées."
+            />
+
+            {/* KPI Courrier */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <StatCard tone="indigo" label="En attente" value={courierKpis.pendingCount} icon={<Clock4 className="h-4 w-4" />} />
+              <StatCard tone="emerald" label="Actives" value={courierKpis.activeCount} icon={<Play className="h-4 w-4" />} />
+              <StatCard tone="rose" label="Clôturées" value={courierKpis.closedCount} icon={<StopCircle className="h-4 w-4" />} />
+              <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-gray-600 mb-1">
+                  <Wallet className="h-4 w-4" />
+                  <span className="text-sm font-medium">Total CA Courrier (validées)</span>
+                </div>
+                <div className="text-xl font-bold" style={{ color: theme.primary }}>
+                  {money(courierKpis.totalCAValidated)}
+                </div>
+              </div>
+            </div>
+
+            {/* Sessions PENDING */}
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-indigo-50 flex items-center justify-center">
+                    <Clock4 className="h-5 w-5 text-indigo-600" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-gray-900">Sessions en attente d&apos;activation</div>
+                    <div className="text-sm text-gray-600">L&apos;agent a créé une session ; activez-la pour qu&apos;il puisse enregistrer des envois.</div>
+                  </div>
+                </div>
+                <span className="text-sm font-medium px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">
+                  {pendingCourierSessions.length} session{pendingCourierSessions.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              {pendingCourierSessions.length === 0 ? (
+                <EmptyState
+                  icon={<Clock4 className="h-12 w-12" />}
+                  title="Aucune session en attente"
+                  description="Aucune session courrier en attente d'activation."
+                />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {pendingCourierSessions.map(s => (
+                    <div key={s.id} className="rounded-xl border border-gray-200 bg-white p-5">
+                      <div className="flex items-start justify-between gap-3 mb-4">
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wider">Agent</div>
+                          <div className="font-semibold text-gray-900">{s.agentCode || s.agentId}</div>
+                        </div>
+                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">En attente</span>
+                      </div>
+                      <div className="text-xs text-gray-500 mb-3">
+                        Créée le {s.createdAt ? fmtDT((s.createdAt as { toDate: () => Date }).toDate?.()) : '—'}
+                      </div>
+                      <Button variant="primary" onClick={() => activateCourierSessionAction(s.id)}>
+                        <Play className="h-4 w-4 mr-2" />
+                        Activer
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Sessions ACTIVE */}
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                    <Play className="h-5 w-5 text-emerald-600" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-gray-900">Sessions actives</div>
+                    <div className="text-sm text-gray-600">L&apos;agent peut enregistrer des envois. Clôture par l&apos;agent uniquement.</div>
+                  </div>
+                </div>
+                <span className="text-sm font-medium px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">
+                  {activeCourierSessions.length} session{activeCourierSessions.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              {activeCourierSessions.length === 0 ? (
+                <EmptyState
+                  icon={<Play className="h-12 w-12" />}
+                  title="Aucune session active"
+                  description="Aucune session courrier en cours."
+                />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {activeCourierSessions.map(s => (
+                    <div key={s.id} className="rounded-xl border border-gray-200 bg-white p-5">
+                      <div className="flex items-start justify-between gap-3 mb-4">
+                        <div>
+                          <div className="text-xs text-gray-500 uppercase tracking-wider">Agent</div>
+                          <div className="font-semibold text-gray-900">{s.agentCode || s.agentId}</div>
+                        </div>
+                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        Ouverte le {s.openedAt ? fmtDT((s.openedAt as { toDate: () => Date }).toDate?.()) : '—'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Sessions CLOSED — validation avec montant compté */}
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-rose-50 flex items-center justify-center">
+                    <StopCircle className="h-5 w-5 text-rose-600" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-gray-900">Sessions clôturées à valider</div>
+                    <div className="text-sm text-gray-600">Saisissez le montant compté et validez la réception.</div>
+                  </div>
+                </div>
+                <span className="text-sm font-medium px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">
+                  {closedCourierSessions.length} session{closedCourierSessions.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              {closedCourierSessions.length === 0 ? (
+                <EmptyState
+                  icon={<CheckCircle2 className="h-12 w-12" />}
+                  title="Aucune réception en attente"
+                  description="Toutes les sessions clôturées ont été validées."
+                />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {closedCourierSessions.map(s => {
+                    const input = receptionInputsCourier[s.id] || { countedAmount: '' };
+                    const counted = Number(String(input.countedAmount).replace(/[^\d.,]/g, '').replace(',', '.'));
+                    const expected = Number(s.expectedAmount) || 0;
+                    const ecart = Number.isFinite(counted) ? counted - expected : 0;
+                    return (
+                      <div key={s.id} className="rounded-xl border border-gray-200 bg-white p-5">
+                        <div className="flex items-start justify-between gap-3 mb-4">
+                          <div>
+                            <div className="text-xs text-gray-500 uppercase tracking-wider">Agent</div>
+                            <div className="font-semibold text-gray-900">{s.agentCode || s.agentId}</div>
+                          </div>
+                          <span className="px-3 py-1 rounded-full text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200">Clôturée</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 mb-4">
+                          <InfoCard label="Montant attendu" value={money(expected)} emphasis />
+                          <InfoCard label="Écart" value={Number.isFinite(counted) ? money(ecart) : '—'} />
+                        </div>
+                        <div className="mb-4">
+                          <label className="block text-xs font-medium text-gray-700 mb-2">Montant compté</label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                            placeholder="0"
+                            value={input.countedAmount}
+                            onChange={e => setReceptionInputCourier(s.id, e.target.value)}
+                          />
+                        </div>
+                        <Button
+                          variant="primary"
+                          disabled={!Number.isFinite(counted) || counted < 0 || !!savingCourierSessionIds[s.id]}
+                          onClick={() => validateCourierSessionAction(s)}
+                        >
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          {savingCourierSessionIds[s.id] ? 'Validation...' : 'Valider'}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -2360,7 +2532,7 @@ const AgenceComptabilitePage: React.FC = () => {
       
       {showOutModal && (
         <div className="fixed inset-0 bg-black/50 grid place-items-center z-50 p-4">
-          <div className="w-full max-w-md bg-white rounded-2xl p-6 shadow-2xl">
+          <div className="w-full max-w-md bg-white rounded-xl p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <div className="text-xl font-bold text-gray-900">Nouveau mouvement de sortie</div>
               <button
@@ -2371,7 +2543,7 @@ const AgenceComptabilitePage: React.FC = () => {
               </button>
             </div>
             
-            <div className="space-y-5">
+            <div className="space-y-6">
               {/* Type de mouvement */}
               <div>
                 <div className="text-sm font-medium text-gray-700 mb-3">Type de mouvement</div>
@@ -2417,22 +2589,40 @@ const AgenceComptabilitePage: React.FC = () => {
               {outForm.kind === 'transfert_banque' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Banque / Compte
+                    Banque de la compagnie <span className="text-red-500">*</span>
                   </label>
-                  <input
-                    type="text"
-                    className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                    style={{ outlineColor: theme.primary }}
-                    placeholder="Ex: BICIS - Compte principal"
-                    value={outForm.banque}
-                  onChange={e => setOutForm(f => ({...f, banque: e.target.value}))}
-                  />
+                  {companyBanks.length > 0 ? (
+                    <select
+                      className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                      style={{ outlineColor: theme.primary }}
+                      value={outForm.companyBankId || ''}
+                      onChange={e => setOutForm(f => ({ ...f, companyBankId: e.target.value, banque: '' }))}
+                      required
+                    >
+                      <option value="">— Choisir une banque —</option>
+                      {companyBanks.map(b => (
+                        <option key={b.id} value={b.id}>{b.name}{b.iban ? ` (${b.iban})` : ''}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <>
+                      <p className="text-xs text-amber-700 mb-2">Aucune banque configurée par la compagnie. Indiquez le compte manuellement (la traçabilité trésorerie ne sera pas mise à jour).</p>
+                      <input
+                        type="text"
+                        className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                        style={{ outlineColor: theme.primary }}
+                        placeholder="Ex: BICIS - Compte principal"
+                        value={outForm.banque}
+                        onChange={e => setOutForm(f => ({ ...f, banque: e.target.value, companyBankId: '' }))}
+                      />
+                    </>
+                  )}
                 </div>
               )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant (FCFA) <span className="text-red-500">*</span>
+                  Montant ({currencySymbol}) <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <input
@@ -2446,7 +2636,7 @@ const AgenceComptabilitePage: React.FC = () => {
                     onChange={e => setOutForm(f => ({...f, montant: e.target.value}))}
                   />
                   <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-medium">
-                    FCFA
+                    {currencySymbol}
                   </div>
                 </div>
               </div>
@@ -2468,13 +2658,13 @@ const AgenceComptabilitePage: React.FC = () => {
 
             {/* Actions de la modale */}
             <div className="mt-8 flex justify-end gap-3">
-              <SecondaryButton onClick={() => setShowOutModal(false)}>
+              <Button variant="secondary" onClick={() => setShowOutModal(false)}>
                 Annuler
-              </SecondaryButton>
-              <PrimaryButton onClick={createOutMovement} theme={theme}>
+              </Button>
+              <Button variant="primary" onClick={createOutMovement}>
                 <Plus className="h-4 w-4 mr-2" />
                 Enregistrer le mouvement
-              </PrimaryButton>
+              </Button>
             </div>
           </div>
         </div>
@@ -2494,12 +2684,13 @@ const TabButton: React.FC<{
   label: string;
   icon: React.ReactNode;
   theme: { primary: string; secondary: string };
-}> = ({ active, onClick, label, icon, theme }) => (
+  badgeCount?: number;
+}> = ({ active, onClick, label, icon, theme, badgeCount = 0 }) => (
   <button
     className={`
-      flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium transition-all
+      flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all relative
       ${active 
-        ? 'text-white shadow-lg transform scale-105' 
+        ? 'text-white shadow-sm transform scale-105' 
         : 'text-gray-600 hover:text-gray-900 hover:bg-white/80'
       }
     `}
@@ -2511,46 +2702,14 @@ const TabButton: React.FC<{
   >
     {icon}
     <span className="whitespace-nowrap">{label}</span>
+    {badgeCount > 0 && (
+      <span className="absolute -top-1 -right-1 min-w-[1.25rem] h-5 px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-xs font-bold">
+        {badgeCount > 99 ? '99+' : badgeCount}
+      </span>
+    )}
   </button>
 );
 
-const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  theme: { primary: string; secondary: string };
-}> = ({ theme, className = '', children, ...props }) => (
-  <button
-    {...props}
-    className={`
-      inline-flex items-center justify-center px-5 py-3 rounded-xl text-white font-medium 
-      shadow-md hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200
-      disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none
-      ${className}
-    `}
-    style={{ 
-      background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
-      boxShadow: `0 4px 12px ${theme.primary}40`
-    }}
-  >
-    {children}
-  </button>
-);
-
-const SecondaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ 
-  className = '', 
-  children, 
-  ...props 
-}) => (
-  <button
-    {...props}
-    className={`
-      inline-flex items-center justify-center px-5 py-3 rounded-xl border-2 border-gray-200 
-      bg-white text-gray-700 font-medium shadow-sm hover:shadow-md hover:border-gray-300 
-      hover:bg-gray-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
-      ${className}
-    `}
-  >
-    {children}
-  </button>
-);
 
 const KpiCard: React.FC<{
   icon: React.ReactNode; 
@@ -2561,8 +2720,8 @@ const KpiCard: React.FC<{
   emphasis: boolean;
 }> = ({ icon, label, value, sublabel, theme, emphasis }) => (
   <div
-  className={`relative overflow-hidden rounded-2xl border border-gray-200 p-5 bg-white shadow-sm
-    hover:shadow-md transition-all duration-300
+  className={`relative overflow-hidden rounded-xl border border-gray-200 p-5 bg-white shadow-sm
+    hover:shadow-sm transition-all duration-300
     ${emphasis ? 'ring-2 ring-offset-2' : ''}`}
   style={
     emphasis
@@ -2604,7 +2763,7 @@ const StatCard: React.FC<{
   }[tone];
 
   return (
-    <div className={`rounded-2xl border ${styles.border} p-4 bg-white shadow-sm hover:shadow-md transition-shadow`}>
+    <div className={`rounded-xl border ${styles.border} p-4 bg-white shadow-sm hover:shadow-sm transition-shadow`}>
       <div className="flex items-center justify-between mb-2">
         <div className={`px-2.5 py-1 rounded-lg text-xs font-medium ${styles.bg} ${styles.text}`}>
           {label}
@@ -2623,7 +2782,7 @@ const SectionHeader: React.FC<{
   title: string; 
   subtitle?: string;
 }> = ({ icon, title, subtitle }) => (
-  <div className="rounded-2xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
+  <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
     <div className="flex items-center gap-4">
       <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
         {icon}
@@ -2645,8 +2804,10 @@ const SectionShifts: React.FC<{
   liveStats: Record<string, { reservations: number; tickets: number; amount: number }>;
   actions: (s: ShiftDoc) => React.ReactNode;
   theme: { primary: string; secondary: string };
-}> = ({ title, hint, icon, list, usersCache, liveStats, actions, theme }) => (
-  <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+}> = ({ title, hint, icon, list, usersCache, liveStats, actions, theme }) => {
+  const money = useFormatCurrency();
+  return (
+  <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
     <div className="flex items-center justify-between mb-4">
       <div className="flex items-center gap-3">
         <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
@@ -2690,12 +2851,12 @@ const SectionShifts: React.FC<{
           return (
             <div
               key={s.id}
-              className="group relative rounded-2xl border border-gray-200 bg-white p-5 
-                         hover:border-gray-300 hover:shadow-lg transition-all duration-300"
+              className="group relative rounded-xl border border-gray-200 bg-white p-5 
+                         hover:border-gray-300 hover:shadow-md transition-all duration-300"
             >
               {/* Effet de survol */}
               <div
-                className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                className="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
                 style={{background: `linear-gradient(135deg, ${theme.primary}08, ${theme.secondary}08)`}}
               />
 
@@ -2726,7 +2887,7 @@ const SectionShifts: React.FC<{
                 <div className="mb-5 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
                   <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Montant total</div>
                   <div className="text-xl font-bold" style={{ color: theme.primary }}>
-                    {fmtMoney(amount)}
+                    {money(amount)}
                   </div>
                 </div>
 
@@ -2741,7 +2902,8 @@ const SectionShifts: React.FC<{
       </div>
     )}
   </div>
-);
+  );
+};
 
 const InfoCard: React.FC<{ label: string; value: string; emphasis?: boolean }> = ({ 
   label, 
@@ -2759,8 +2921,8 @@ const EmptyState: React.FC<{
   title: string;
   description: string;
 }> = ({ icon, title, description }) => (
-  <div className="text-center py-12 px-4 rounded-2xl border-2 border-dashed border-gray-300 bg-gradient-to-b from-white to-gray-50/50">
-    <div className="inline-flex h-16 w-16 rounded-2xl bg-gradient-to-br from-gray-100 to-gray-200 items-center justify-center mb-4">
+  <div className="text-center py-12 px-4 rounded-xl border-2 border-dashed border-gray-300 bg-gradient-to-b from-white to-gray-50/50">
+    <div className="inline-flex h-16 w-16 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 items-center justify-center mb-4">
       {icon}
     </div>
     <div className="text-lg font-medium text-gray-900 mb-2">{title}</div>
@@ -2805,7 +2967,7 @@ const Td: React.FC<{
    Description : Export des données de caisse au format CSV
    ============================================================================ */
 
-function exportCsv(rows: CashDay[]) {
+function exportCsv(rows: CashDay[], currencySymbol: string) {
   console.log('[AgenceCompta] Export CSV des données de caisse');
   
   if (!rows.length) { 
@@ -2815,7 +2977,7 @@ function exportCsv(rows: CashDay[]) {
   }
   
   try {
-    const header = ['Date', 'Entrées (FCFA)', 'Sorties (FCFA)', 'Solde (FCFA)'];
+    const header = ['Date', `Entrées (${currencySymbol})`, `Sorties (${currencySymbol})`, `Solde (${currencySymbol})`];
     const body = rows.map(r => [
       new Date(r.dateISO).toLocaleDateString('fr-FR'),
       r.entrees.toLocaleString('fr-FR'),

@@ -3,10 +3,13 @@
 import React, { useEffect, useState } from 'react';
 import { Timestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/shared/ui/button';
 
 const AgenceFinancesPage: React.FC = () => {
   const { user } = useAuth();
+  const money = useFormatCurrency();
   const [periode, setPeriode] = useState<'jour' | 'semaine' | 'mois'>('jour');
   const [revenu, setRevenu] = useState(0);
   const [nombre, setNombre] = useState(0);
@@ -47,31 +50,31 @@ const AgenceFinancesPage: React.FC = () => {
 
   return (
     <div className="p-6">
-      <h2 className="text-xl font-bold mb-4">État financier de l’agence</h2>
+      <h2 className="text-xl font-bold mb-4">État financier de l'agence</h2>
 
       <div className="flex gap-4 mb-4">
-        <button
-          className={`px-4 py-2 rounded ${periode === 'jour' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+        <Button
+          variant={periode === 'jour' ? 'primary' : 'secondary'}
           onClick={() => setPeriode('jour')}
         >
-          Aujourd’hui
-        </button>
-        <button
-          className={`px-4 py-2 rounded ${periode === 'semaine' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+          Aujourd'hui
+        </Button>
+        <Button
+          variant={periode === 'semaine' ? 'primary' : 'secondary'}
           onClick={() => setPeriode('semaine')}
         >
           7 derniers jours
-        </button>
-        <button
-          className={`px-4 py-2 rounded ${periode === 'mois' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+        </Button>
+        <Button
+          variant={periode === 'mois' ? 'primary' : 'secondary'}
           onClick={() => setPeriode('mois')}
         >
           Ce mois-ci
-        </button>
+        </Button>
       </div>
 
       <div className="bg-white p-6 rounded shadow border">
-        <p className="text-lg">Revenu total : <span className="font-bold text-green-700">{revenu.toLocaleString()} FCFA</span></p>
+        <p className="text-lg">Revenu total : <span className="font-bold text-green-700">{money(revenu)}</span></p>
         <p className="text-lg">Nombre de réservations : <span className="font-bold text-blue-700">{nombre}</span></p>
       </div>
 

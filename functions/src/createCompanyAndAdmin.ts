@@ -57,9 +57,6 @@ export const createCompanyAndAdmin = functions
       throw new functions.https.HttpsError("failed-precondition", "Plan introuvable.");
     }
     const p = planSnap.data() as any;
-    const f = p?.features ?? {};
-    const publicPageEnabled = !!f.publicPage || !!f.onlineBooking;
-
     // 4) Préparer refs
     const companyRef = db.collection("companies").doc();
     const now = admin.firestore.FieldValue.serverTimestamp();
@@ -72,17 +69,20 @@ export const createCompanyAndAdmin = functions
       pays: data.company.pays?.trim() || null,
       status: "actif" as const,
 
-      // Dénormalisation du plan
+      // Plan fields (dual-revenue model)
       planId: data.company.planId,
       plan: String(p?.name ?? data.company.planId),
-      publicPageEnabled,
-      onlineBookingEnabled: !!f.onlineBooking,
-      guichetEnabled: !!f.guichet,
+      publicPageEnabled: true,
+      onlineBookingEnabled: true,
+      guichetEnabled: true,
 
-      commissionOnline: f.onlineBooking ? Number(p?.commissionOnline ?? 0) : 0,
-      feeGuichet: f.guichet ? Number(p?.feeGuichet ?? 0) : 0,
+      digitalFeePercent: Number(p?.digitalFeePercent ?? 0),
+      feeGuichet: Number(p?.feeGuichet ?? 0),
       minimumMonthly: Number(p?.minimumMonthly ?? 0),
       maxAgences: Number(p?.maxAgences ?? 0),
+      supportLevel: String(p?.supportLevel ?? "basic"),
+      planType: p?.isTrial ? "trial" : "paid",
+      subscriptionStatus: p?.isTrial ? "trial" : "active",
 
       createdAt: now,
       updatedAt: now,

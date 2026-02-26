@@ -58,3 +58,13 @@ export const adjustBrightness = (hex: string, percent: number): string => {
       .slice(1)
   );
 };
+
+/** Couleur lisible sur fond sombre (mode nuit). Mélange avec blanc pour garder la teinte. */
+export const lightenForDarkMode = (hex: string, mixWithWhite = 0.55): string => {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.replace('#', ''));
+  if (!result) return '#fdba74';
+  const r = Math.round(parseInt(result[1], 16) * (1 - mixWithWhite) + 255 * mixWithWhite);
+  const g = Math.round(parseInt(result[2], 16) * (1 - mixWithWhite) + 255 * mixWithWhite);
+  const b = Math.round(parseInt(result[3], 16) * (1 - mixWithWhite) + 255 * mixWithWhite);
+  return '#' + [r, g, b].map((x) => Math.min(255, Math.max(0, x)).toString(16).padStart(2, '0')).join('');
+};

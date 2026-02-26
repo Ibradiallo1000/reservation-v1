@@ -166,10 +166,13 @@ img.hero, img.logo {
 /* =========================
    4) Cartes / encarts
    ========================= */
+/* Card styles are now managed by src/shared/ui/card.tsx.
+   Use the <Card> component or the dsCard class from design-system.ts.
+   Legacy .card class kept for non-React contexts only. */
 .card {
-  @apply bg-white rounded-2xl shadow-sm border;
+  @apply bg-white rounded-xl shadow-sm border border-gray-200;
 }
-.card:hover { box-shadow: 0 8px 24px rgba(0,0,0,.07); }
+.card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.06); }
 
 /* =========================
    5) Animations douces (préférence utilisateur respectée)
@@ -202,3 +205,172 @@ img.hero, img.logo {
 }
 .animate-float { animation: float 1.8s ease-in-out infinite }
 .animate-fadein { animation: fadein .6s ease forwards }
+
+/* =========================
+   7) Espaces agence / CEO — mode sombre + transition (aligné guichet)
+   Titres, sous-titres et texte doivent rester lisibles en mode nuit.
+   ========================= */
+.agency-dark { color-scheme: dark; color: #e5e7eb; }
+
+/* Teliya global: monetary values — Light: text-black, Dark: text-white. NEVER primary/secondary. */
+.teliya-monetary { color: #111827 !important; }
+.agency-dark .teliya-monetary { color: #ffffff !important; }
+
+/* Cards: Light = bg-white border-gray-200; Dark = bg-neutral-900 border-neutral-700 (Teliya standard) */
+.agency-dark .bg-white { background-color: #171717 !important; }
+.agency-dark .bg-white.rounded-xl { border-color: #404040 !important; }
+.agency-dark .bg-slate-800,
+.agency-dark .boarding-card { background-color: #171717 !important; border-color: #404040 !important; }
+.agency-dark .bg-gray-50 { background-color: #171717 !important; }
+.agency-dark .border-gray-200,
+.agency-dark .border-slate-600,
+.agency-dark .rounded-xl.border { border-color: #404040 !important; }
+.agency-dark .text-gray-900 { color: #f3f4f6 !important; }
+.agency-dark .text-gray-800 { color: #e5e7eb !important; }
+.agency-dark .text-gray-700 { color: #d1d5db !important; }
+/* Règle stricte : jamais text-gray-400/500 sur fond sombre. Titres → white, secondaire → gray-200, muted → gray-300 */
+.agency-dark .text-gray-600 { color: #e2e8f0 !important; }
+.agency-dark .text-gray-500 { color: #d1d5db !important; }
+.agency-dark .text-gray-400 { color: #d1d5db !important; }
+.agency-dark .text-black { color: #f3f4f6 !important; }
+.agency-dark .border-gray-200 { border-color: #404040 !important; }
+.agency-dark .border-gray-100 { border-color: #262626 !important; }
+.agency-dark .border-gray-300 { border-color: #525252 !important; }
+.agency-dark .bg-gray-100 { background-color: #262626 !important; }
+.agency-dark .hover\:bg-gray-50:hover { background-color: #374151 !important; }
+.agency-dark .hover\:bg-gray-100:hover { background-color: #4b5563 !important; }
+.agency-dark .hover\:text-gray-900:hover { color: #f3f4f6 !important; }
+/* Inputs dark : bg-slate-900, text-white, border-slate-600 */
+.agency-dark input, .agency-dark select { background-color: #0f172a !important; color: #ffffff !important; border-color: #475569 !important; }
+/* Lignes tableau : hover bg-slate-700, bordures claires */
+.agency-dark table tbody tr:hover { background-color: #334155 !important; }
+.agency-dark .hover\:bg-gray-50:hover { background-color: #334155 !important; }
+.agency-dark .hover\:bg-gray-100:hover { background-color: #334155 !important; }
+
+/* En-tête tableau Boarding : fond slate-800, texte blanc, bordure slate-600 */
+.agency-dark table thead { background-color: #1e293b !important; color: #ffffff !important; border-color: #475569 !important; }
+.agency-dark table thead th { color: #ffffff !important; border-color: #475569 !important; }
+/* Lignes passagers : alternance slate-900 / slate-800, texte blanc */
+.agency-dark table tbody tr { color: #ffffff !important; }
+.agency-dark table tbody tr:nth-child(odd) { background-color: #0f172a !important; }
+.agency-dark table tbody tr:nth-child(even) { background-color: #1e293b !important; }
+.agency-dark table tbody td { color: #ffffff !important; border-color: #334155 !important; }
+/* Checkboxes visibles en mode sombre */
+.agency-dark .case { border-color: #94a3b8 !important; background-color: #1e293b !important; }
+.agency-dark .case[data-checked="true"]::after { color: #ffffff !important; }
+
+/* Ligne passager "embarqué" en mode sombre : fond légèrement plus clair, texte blanc */
+.agency-dark tr.embarked { background-color: #334155 !important; color: #ffffff !important; }
+.agency-dark tr.embarked td { color: #ffffff !important; }
+
+/* Titre / sous-titre liste d'embarquement (écran, mode sombre) */
+.agency-dark #print-area .title { color: #ffffff !important; }
+.agency-dark #print-area .subtitle { color: #e2e8f0 !important; }
+.agency-dark #print-area .meta-card { color: #e2e8f0 !important; }
+.agency-dark #print-area .meta-card .font-medium { color: #ffffff !important; }
+
+/* Titres / sous-titres sans classe de couleur explicite (héritent du parent) */
+.agency-dark h1, .agency-dark h2, .agency-dark h3, .agency-dark h4 { color: #f3f4f6 !important; }
+.agency-dark main, .agency-dark [role="main"] { color: #e5e7eb; }
+
+/* Couleurs d'accent (KPI, chiffres) — versions claires pour fond sombre */
+.agency-dark .text-indigo-700 { color: #a5b4fc !important; }
+.agency-dark .text-indigo-800 { color: #c7d2fe !important; }
+.agency-dark .text-emerald-700 { color: #6ee7b7 !important; }
+.agency-dark .text-emerald-800 { color: #a7f3d0 !important; }
+.agency-dark .text-purple-700 { color: #c4b5fd !important; }
+.agency-dark .text-teal-700 { color: #5eead4 !important; }
+.agency-dark .text-amber-700 { color: #fcd34d !important; }
+.agency-dark .text-blue-700 { color: #93c5fd !important; }
+.agency-dark .text-blue-800 { color: #bfdbfe !important; }
+.agency-dark .text-slate-700 { color: #cbd5e1 !important; }
+.agency-dark .text-rose-700 { color: #fda4af !important; }
+.agency-dark .text-red-700 { color: #fca5a5 !important; }
+.agency-dark .text-red-600 { color: #fca5a5 !important; }
+.agency-dark .text-red-800 { color: #fecaca !important; }
+.agency-dark .text-blue-600 { color: #93c5fd !important; }
+.agency-dark .text-orange-700 { color: #fdba74 !important; }
+.agency-dark .text-amber-600 { color: #fcd34d !important; }
+.agency-dark .text-amber-700 { color: #fcd34d !important; }
+.agency-dark .text-amber-800 { color: #fde68a !important; }
+.agency-dark .text-emerald-600 { color: #6ee7b7 !important; }
+.agency-dark .text-purple-800 { color: #ddd6fe !important; }
+.agency-dark .text-indigo-600 { color: #a5b4fc !important; }
+
+/* Badges / messages (alertes, statuts) — fonds assombris, texte lisible */
+.agency-dark .bg-emerald-50 { background-color: rgba(6, 95, 70, 0.4) !important; }
+.agency-dark .bg-amber-50 { background-color: rgba(180, 83, 9, 0.35) !important; }
+.agency-dark .bg-red-50 { background-color: rgba(185, 28, 28, 0.35) !important; }
+.agency-dark .bg-blue-50 { background-color: rgba(29, 78, 216, 0.3) !important; }
+.agency-dark .bg-purple-50 { background-color: rgba(88, 28, 135, 0.35) !important; }
+.agency-dark .bg-emerald-100 { background-color: rgba(6, 95, 70, 0.5) !important; }
+.agency-dark .bg-amber-100 { background-color: rgba(180, 83, 9, 0.45) !important; }
+.agency-dark .bg-red-100 { background-color: rgba(185, 28, 28, 0.45) !important; }
+.agency-dark .bg-blue-100 { background-color: rgba(29, 78, 216, 0.4) !important; }
+.agency-dark .bg-purple-100 { background-color: rgba(88, 28, 135, 0.45) !important; }
+
+/* Module Courrier : variables --courier-primary / --courier-secondary sont définies par le layout (éclaircies en mode nuit) */
+.agency-dark .courier-text-primary { color: var(--courier-primary, #fdba74) !important; }
+.agency-dark .courier-text-secondary { color: var(--courier-secondary, #fdba74) !important; }
+
+/* Ticket / reçu : toujours noir sur blanc (mode nuit ou .agency-dark) */
+.ticket-force-light { color-scheme: light !important; }
+.ticket-force-light,
+.dark .ticket-force-light,
+.agency-dark .ticket-force-light {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+.ticket-force-light .bg-white,
+.dark .ticket-force-light .bg-white,
+.agency-dark .ticket-force-light .bg-white {
+  background-color: #ffffff !important;
+}
+.ticket-force-light .bg-gray-50,
+.dark .ticket-force-light .bg-gray-50,
+.agency-dark .ticket-force-light .bg-gray-50 {
+  background-color: #f9fafb !important;
+  color: #111827 !important;
+}
+.ticket-force-light .text-gray-600,
+.ticket-force-light .text-gray-500,
+.dark .ticket-force-light .text-gray-600,
+.dark .ticket-force-light .text-gray-500,
+.agency-dark .ticket-force-light .text-gray-600,
+.agency-dark .ticket-force-light .text-gray-500 {
+  color: #4b5563 !important;
+}
+.ticket-force-light .border-gray-200,
+.ticket-force-light .border-b,
+.ticket-force-light .border-t,
+.dark .ticket-force-light .border-gray-200,
+.agency-dark .ticket-force-light .border-gray-200 {
+  border-color: #e5e7eb !important;
+}
+
+@keyframes agencyFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.agency-content-transition { animation: agencyFadeIn 180ms ease-out; }
+
+/* =========================
+   8) Impression — fond blanc, texte noir, masquer UI non essentielle
+   ========================= */
+@media print {
+  body, html {
+    background: white !important;
+    color: #111827 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  /* Forcer lisibilité à l'impression */
+  .ticket-force-light,
+  #print-area,
+  #print-area * {
+    background: transparent !important;
+    color: #111827 !important;
+  }
+  #print-area .meta-card {
+    border: 1px solid #e5e7eb !important;
+    background: #f9fafb !important;
+  }
+}

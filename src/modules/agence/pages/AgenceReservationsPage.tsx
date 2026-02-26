@@ -1,11 +1,12 @@
 // src/pages/AgenceReservationsPage.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  collection, doc, getDoc, onSnapshot, orderBy, query, Timestamp, where, runTransaction
+  collection, doc, getDoc, onSnapshot, orderBy, query, Timestamp, where
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 /* ===================== Types ===================== */
 type ModePeriode = 'day'|'range';
@@ -60,7 +61,6 @@ type GroupRow = {
 /* ===================== Helpers ===================== */
 const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
 const endOfDay   = (d: Date) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
-const fmtMoney   = (n: number) => `${(n||0).toLocaleString('fr-FR')} FCFA`;
 const fmtDate    = (d: Date) => d.toLocaleDateString('fr-FR', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
 const isOnline   = (raw?: string) => {
   const v = (raw||'').toString().toLowerCase().trim().replace(/\s|_|-/g,'');
@@ -87,7 +87,7 @@ const Badge = ({ color, children }: { color: BadgeColor; children?: React.ReactN
 const FancyKpi: React.FC<{label:string; value:string; icon?:React.ReactNode; primary:string; secondary:string}> =
 ({label,value,icon,primary,secondary}) => (
   <div
-    className="rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow border"
+    className="rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow border"
     style={{borderColor:`${primary}22`, background: `linear-gradient(180deg, #ffffff, ${secondary}0f)`}}
   >
     <div className="flex items-center justify-between">
@@ -100,7 +100,7 @@ const FancyKpi: React.FC<{label:string; value:string; icon?:React.ReactNode; pri
       </div>
     </div>
     <div
-      className="text-2xl font-extrabold mt-1"
+      className="text-2xl font-bold mt-1"
       style={{background:`linear-gradient(90deg, ${primary}, ${secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
     >
       {value}
@@ -110,12 +110,14 @@ const FancyKpi: React.FC<{label:string; value:string; icon?:React.ReactNode; pri
 
 const OnlineKioskCard: React.FC<{
   tickets:number; amount:number; primary:string; secondary:string;
-}> = ({tickets, amount, primary, secondary}) => (
+}> = ({tickets, amount, primary, secondary}) => {
+  const money = useFormatCurrency();
+  return (
   <div
-    className="relative rounded-2xl border bg-white p-4 shadow-sm hover:shadow-md transition-shadow"
+    className="relative rounded-xl border bg-white p-4 shadow-sm hover:shadow-md transition-shadow"
     style={{ borderColor: `${primary}22` }}
   >
-    <div className="absolute inset-x-0 -top-px h-1 rounded-t-2xl"
+    <div className="absolute inset-x-0 -top-px h-1 rounded-t-xl"
          style={{ background: `linear-gradient(90deg, ${primary}, ${secondary})` }} />
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -147,17 +149,19 @@ const OnlineKioskCard: React.FC<{
       </div>
       <div className="text-right">
         <div className="text-xs text-gray-500">Montant</div>
-        <div className="font-medium">{fmtMoney(amount)}</div>
+        <div className="font-medium">{money(amount)}</div>
       </div>
     </div>
   </div>
-);
+  );
+};
 
 /* ===================== Page ===================== */
 const AgenceReservationsPage: React.FC = () => {
   const { user, company } = useAuth() as any;
   const { id: agencyIdFromURL } = useParams();
   const navigate = useNavigate();
+  const money = useFormatCurrency();
 
   const companyId = user?.companyId;
   const agencyId  = agencyIdFromURL || user?.agencyId;
@@ -223,7 +227,7 @@ const AgenceReservationsPage: React.FC = () => {
       }
 
       // Garde les shifts non encore double-validés
-      const list = all.filter(s => !(s.status === 'validated' && s.chef?.validated));
+      const list = all.filter(s => s.status !== 'validated');
       setShifts(list);
     });
 
@@ -336,7 +340,7 @@ const AgenceReservationsPage: React.FC = () => {
     const ref = collection(db, `companies/${companyId}/agences/${agencyId}/shifts`);
     return onSnapshot(ref, snap => {
       const all = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) })) as any[];
-      const list = all.filter(s => s.status==='validated' && s?.comptable?.validated && s?.chef?.validated) as ShiftDoc[];
+      const list = all.filter(s => s.status === 'validated') as ShiftDoc[];
       setValidatedShifts(list);
     });
   }, [companyId, agencyId]);
@@ -349,68 +353,13 @@ const AgenceReservationsPage: React.FC = () => {
     return showAllValidated ? arr : arr.slice(0, 5);
   }, [validatedShifts, showAllValidated, filterCode]);
 
-  /* --------- Validation Chef d’agence --------- */
-  const [busyShift, setBusyShift] = useState<string | null>(null);
-  const validateByManager = useCallback(async (shiftId: string) => {
-    if (!companyId || !agencyId || !user?.uid) return;
-    setBusyShift(shiftId);
-    const base = `companies/${companyId}/agences/${agencyId}`;
-    const reportRef = doc(db, `${base}/shiftReports/${shiftId}`);
-    const shiftRef  = doc(db, `${base}/shifts/${shiftId}`);
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const [repSnap, sSnap] = await Promise.all([tx.get(reportRef), tx.get(shiftRef)]);
-        if (!sSnap.exists()) throw new Error('Poste introuvable.');
-
-        const cur = sSnap.data() as any;
-        const comptableOk = !!cur?.comptable?.validated;
-
-        if (!repSnap.exists()) {
-          tx.set(reportRef, {
-            managerValidated: true,
-            managerStamp: {
-              by: { id: user.uid, name: user.displayName || user.email || '' },
-              at: Timestamp.now(),
-              note: 'Validé par le chef d’agence',
-            },
-            updatedAt: Timestamp.now(),
-          });
-        } else {
-          tx.update(reportRef, {
-            managerValidated: true,
-            managerStamp: {
-              by: { id: user.uid, name: user.displayName || user.email || '' },
-              at: Timestamp.now(),
-              note: 'Validé par le chef d’agence',
-            },
-            updatedAt: Timestamp.now(),
-          });
-        }
-
-        tx.update(shiftRef, {
-          status: comptableOk ? 'validated' : (cur.status || 'closed'),
-          chef: {
-            ...(cur.chef || {}),
-            validated: true,
-            at: Timestamp.now(),
-            by: { id: user.uid, name: user.displayName || user.email || '' },
-            note: 'Validation chef d’agence',
-          },
-        });
-      });
-    } finally {
-      setBusyShift(null);
-    }
-  }, [companyId, agencyId, user?.uid, user?.displayName, user?.email]);
-
   /* ===================== UI ===================== */
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100" style={{background:theme.background}}>
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
 
         {/* ===== KPIs de période (EN HAUT) ===== */}
-        <div className="rounded-2xl bg-white border shadow-sm p-4 space-y-4">
+        <div className="rounded-xl bg-white border shadow-sm p-4 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="font-semibold">
               Période : <span className="text-gray-600">{fmtDate(range[0])} → {fmtDate(range[1])}</span>
@@ -444,14 +393,14 @@ const AgenceReservationsPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <FancyKpi label="Billets (Guichet)" value={String(kpis.gTickets)} primary={theme.primary} secondary={theme.secondary}/>
-            <FancyKpi label="Montant (Guichet)" value={fmtMoney(kpis.gMontant)} primary={theme.primary} secondary={theme.secondary}/>
+            <FancyKpi label="Montant (Guichet)" value={money(kpis.gMontant)} primary={theme.primary} secondary={theme.secondary}/>
             <FancyKpi label="Billets (En ligne)" value={String(kpis.oTickets)} primary={theme.primary} secondary={theme.secondary}/>
-            <FancyKpi label="Montant (En ligne)" value={fmtMoney(kpis.oMontant)} primary={theme.primary} secondary={theme.secondary}/>
+            <FancyKpi label="Montant (En ligne)" value={money(kpis.oMontant)} primary={theme.primary} secondary={theme.secondary}/>
           </div>
         </div>
 
         {/* ===== Guichets en activité (y compris EN LIGNE) ===== */}
-        <div className="rounded-2xl bg-white border shadow-sm p-4">
+        <div className="rounded-xl bg-white border shadow-sm p-4">
           <div className="text-lg font-bold mb-3 flex items-center gap-2">🧾 Guichets en activité</div>
 
           {shifts.length===0 && kpis.oTickets===0 ? (
@@ -481,10 +430,10 @@ const AgenceReservationsPage: React.FC = () => {
 
                 return (
                   <div key={s.id}
-                    className="relative rounded-2xl border bg-white p-4 shadow-sm hover:shadow-md transition-shadow"
+                    className="relative rounded-xl border bg-white p-4 shadow-sm hover:shadow-md transition-shadow"
                     style={{ borderColor: `${theme.primary}22` }}
                   >
-                    <div className="absolute inset-x-0 -top-px h-1 rounded-t-2xl"
+                    <div className="absolute inset-x-0 -top-px h-1 rounded-t-xl"
                           style={{ background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})` }} />
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -498,12 +447,11 @@ const AgenceReservationsPage: React.FC = () => {
                             <span className="inline-block w-2 h-2 rounded-full mr-1" style={{backgroundColor:st.dot}}/>
                             {st.label}
                           </span>
-                          {s.comptable?.validated ? (
-                            <Badge color="emerald">✅ Comptable OK{s.comptable?.by?.name ? ` • ${s.comptable.by.name}` : ''}</Badge>
-                          ) : (<Badge color="amber">Comptabilité en attente</Badge>)}
-                          {s.chef?.validated ? (
-                            <Badge color="emerald">🗞️ Chef OK{s.chef?.by?.name ? ` • ${s.chef.by.name}` : ''}</Badge>
-                          ) : (<Badge color="amber">Chef en attente</Badge>)}
+                          {s.status === 'validated' ? (
+                            <Badge color="emerald">Validé (définitif)</Badge>
+                          ) : s.status === 'closed' ? (
+                            <Badge color="amber">En attente validation comptable</Badge>
+                          ) : null}
                         </div>
                       </div>
                       <div
@@ -532,22 +480,9 @@ const AgenceReservationsPage: React.FC = () => {
 
                     <div className="mt-3 rounded-xl border bg-gray-50 px-3 py-2 text-sm flex items-center justify-between">
                       <div>Billets : <b>{live ? live.tickets : 0}</b></div>
-                      <div>Montant : <b>{fmtMoney(live ? live.amount : 0)}</b></div>
+                      <div>Montant : <b>{money(live ? live.amount : 0)}</b></div>
                     </div>
 
-                    {(s.comptable?.validated && !s.chef?.validated && (['closed','paused','active','validated'] as ShiftStatus[]).includes(s.status)) && (
-                      <div className="mt-3">
-                        <button
-                          onClick={() => validateByManager(s.id).catch(e => alert(e?.message || 'Erreur'))}
-                          disabled={busyShift === s.id}
-                          className="w-full px-3 py-2 rounded-lg text-white shadow-sm disabled:opacity-50 focus:outline-none focus:ring-2"
-                          style={{ background: `linear-gradient(90deg, ${theme.primary}, ${theme.secondary})`, outlineColor: theme.primary }}
-                          title="Valider ce poste (Chef d’agence)"
-                        >
-                          {busyShift === s.id ? 'Validation…' : 'Valider (Chef d’agence)'}
-                        </button>
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -559,7 +494,7 @@ const AgenceReservationsPage: React.FC = () => {
         </div>
 
         {/* ===== Départs groupés ===== */}
-        <div className="rounded-2xl bg-white border shadow-sm">
+        <div className="rounded-xl bg-white border shadow-sm">
           <div className="px-4 py-3 font-semibold">Départs (regroupés par trajet / date / heure)</div>
           <div className="overflow-x-auto">
             {grouped.length===0 ? (
@@ -589,9 +524,9 @@ const AgenceReservationsPage: React.FC = () => {
                       <td className="px-3 py-2 text-right">{g.billetsGuichet}</td>
                       <td className="px-3 py-2 text-right">{g.billetsOnline}</td>
                       <td className="px-3 py-2 text-right font-semibold">{g.billetsTotal}</td>
-                      <td className="px-3 py-2 text-right">{fmtMoney(g.montantGuichet)}</td>
-                      <td className="px-3 py-2 text-right">{fmtMoney(g.montantOnline)}</td>
-                      <td className="px-3 py-2 text-right font-semibold">{fmtMoney(g.montantTotal)}</td>
+                      <td className="px-3 py-2 text-right">{money(g.montantGuichet)}</td>
+                      <td className="px-3 py-2 text-right">{money(g.montantOnline)}</td>
+                      <td className="px-3 py-2 text-right font-semibold">{money(g.montantTotal)}</td>
                       <td className="px-3 py-2 text-right">
                         <button
                           onClick={()=>navigate('/agence/embarquement', {state:{trajet:g.trajet, date:g.date, heure:g.heure}})}
@@ -611,7 +546,7 @@ const AgenceReservationsPage: React.FC = () => {
         </div>
 
         {/* ===== Rapports validés (limités + filtre) ===== */}
-        <div className="rounded-2xl bg-white border shadow-sm">
+        <div className="rounded-xl bg-white border shadow-sm">
           <div className="px-4 py-3 flex items-center justify-between gap-3">
             <div className="font-semibold">Rapports de poste (validés)</div>
             <div className="flex items-center gap-2">
@@ -662,8 +597,7 @@ const AgenceReservationsPage: React.FC = () => {
                         <td className="px-3 py-2">{s.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime).toLocaleString('fr-FR')   : '—'}</td>
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-2 text-xs">
-                            {s.comptable?.validated ? <Badge color="green">Comptable OK</Badge> : <Badge color="amber">Comptable en attente</Badge>}
-                            {s.chef?.validated ? <Badge color="green">Chef OK</Badge> : <Badge color="amber">Chef en attente</Badge>}
+                            {s.status === 'validated' ? <Badge color="green">Validé</Badge> : <Badge color="amber">—</Badge>}
                           </div>
                         </td>
                         <td className="px-3 py-2 text-right">
@@ -692,7 +626,7 @@ const AgenceReservationsPage: React.FC = () => {
             </div>
           )}
           <div className="text-xs text-gray-500 px-4 py-3 border-t">
-            Un poste n’apparaît ici qu’après <b>double validation</b> (Comptable + Chef).
+            Un poste n’apparaît ici qu’après <b>validation comptable</b> (définitif).
           </div>
         </div>
 

@@ -9,6 +9,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useParams } from "react-router-dom";
 import { Save } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Button } from "@/shared/ui/button";
 interface Props {
   companyId: string;
 }
@@ -133,7 +134,7 @@ const ParametresReseauxPage: React.FC<Props> = ({ companyId }) => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-white rounded-xl shadow border">
+    <div className="max-w-7xl mx-auto p-6 bg-white rounded-xl shadow-sm border">
       <h2 className="text-xl font-bold mb-6">
         Réseaux sociaux & affichage
       </h2>
@@ -205,14 +206,14 @@ const ParametresReseauxPage: React.FC<Props> = ({ companyId }) => {
       </div>
 
       <div className="flex justify-end mt-6">
-        <button
+        <Button
           onClick={handleSave}
           disabled={loading}
-          className="bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 disabled:opacity-60"
+          variant="primary"
         >
           <Save size={18} />
           {loading ? "Enregistrement..." : "Enregistrer"}
-        </button>
+        </Button>
       </div>
     </div>
   );

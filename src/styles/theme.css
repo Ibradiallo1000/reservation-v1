@@ -1,18 +1,16 @@
-/* Thème compagnie – variables dynamiques */
+/* Company theme – dynamic CSS variables */
 :root {
-  --brand-primary: #8B1E1E;   /* fallback */
-  --brand-secondary: #F3A712; /* fallback */
+  --brand-primary: #FF6600;   /* default Teliya orange */
+  --brand-secondary: #FFFFFF;
   --surface: #ffffff;
   --surface-muted: #f8fafc;
   --text-strong: #111827;
   --text-muted: #6b7280;
   --ring: 0 0% 100%;
+  --btn-primary: var(--brand-primary);
 }
 
-/* Card & élévations */
-.card {
-  @apply bg-white rounded-2xl shadow-sm border border-black/[0.06];
-}
+/* Card & elevations — unified with design-system.ts */
 .card-hover {
   @apply transition-shadow hover:shadow-md;
 }

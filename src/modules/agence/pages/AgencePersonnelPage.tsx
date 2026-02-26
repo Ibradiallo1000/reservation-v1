@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
-  addDoc,
   getDocs,
   deleteDoc,
   doc,
@@ -13,12 +12,13 @@ import {
   getDoc,
   limit,
 } from "firebase/firestore";
-import { db, auth } from "@/firebaseConfig";
+import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
+import { Button } from "@/shared/ui/button";
 
-type Role = "guichetier" | "controleur" | "comptable" | "chefAgence";
+type Role = "guichetier" | "controleur" | "agency_accountant" | "chefAgence" | "chefEmbarquement" | "agency_fleet_controller";
 
 interface Agent {
   id?: string;          // id du doc dans subcollection agence
@@ -108,7 +108,7 @@ async function allocateStaffCode(params: {
 }): Promise<string | undefined> {
   const { companyId, agencyId, role } = params;
 
-  if (!["guichetier", "comptable"].includes(role)) {
+  if (!["guichetier", "agency_accountant"].includes(role)) {
     return undefined;
   }
 
@@ -140,7 +140,7 @@ async function allocateStaffCode(params: {
     // 3. Générer le code
     if (role === "guichetier") {
       return "G" + String(currentValue).padStart(3, "0");
-    } else if (role === "comptable") {
+    } else if (role === "agency_accountant") {
       return "ACC" + String(currentValue).padStart(3, "0");
     }
     
@@ -153,7 +153,7 @@ async function allocateStaffCode(params: {
     
     if (role === "guichetier") {
       return "G" + fallbackCode.slice(0, 3);
-    } else if (role === "comptable") {
+    } else if (role === "agency_accountant") {
       return "ACC" + fallbackCode.slice(0, 3);
     }
   }
@@ -161,8 +161,8 @@ async function allocateStaffCode(params: {
   return undefined;
 }
 
-/** Vérifie s'il existe déjà un comptable pour l'agence. */
-async function hasComptableAlready(companyId: string, agencyId: string) {
+/** Vérifie s'il existe déjà un comptable agence pour l'agence. */
+async function hasAgencyAccountantAlready(companyId: string, agencyId: string) {
   try {
     const ref = collection(db, "users");
     const snap = await getDocs(
@@ -170,7 +170,7 @@ async function hasComptableAlready(companyId: string, agencyId: string) {
         ref,
         where("companyId", "==", companyId),
         where("agencyId", "==", agencyId),
-        where("role", "==", "comptable"),
+        where("role", "==", "agency_accountant"),
         limit(1)
       )
     );
@@ -181,10 +181,10 @@ async function hasComptableAlready(companyId: string, agencyId: string) {
   }
 }
 
-/** Backfill : si un agent guichetier/comptable n'a pas de code, on en génère un. */
+/** Backfill : si un agent guichetier/agency_accountant n'a pas de code, on en génère un. */
 async function ensureAgentHasCode(agentDocRef: any, rootUserRef: any, agent: Agent) {
   if (!agent || !agent.companyId || !agent.agencyId) return;
-  if (!["guichetier", "comptable"].includes(agent.role)) return;
+  if (!["guichetier", "agency_accountant"].includes(agent.role)) return;
   if (agent.staffCode) return;
 
   try {
@@ -213,7 +213,6 @@ const AgencePersonnelPage: React.FC = () => {
   const [displayName, setDisplayName] = useState("");
   const [telephone, setTelephone] = useState("");
   const [role, setRole] = useState<Role>("guichetier");
-  const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [hasSynced, setHasSynced] = useState(false);
@@ -269,7 +268,7 @@ const AgencePersonnelPage: React.FC = () => {
         .filter(agent => agent.uid && agent.displayName); // Filtrer les agents valides
 
       // Backfill local: si guichetier/comptable sans code => en attribuer un
-      const toFix = list.filter(a => (a.role === "guichetier" || a.role === "comptable") && !a.staffCode);
+      const toFix = list.filter(a => (a.role === "guichetier" || a.role === "agency_accountant") && !a.staffCode);
       
       if (toFix.length > 0) {
         console.log(`🔄 Backfill pour ${toFix.length} agents sans code`);
@@ -357,7 +356,6 @@ const AgencePersonnelPage: React.FC = () => {
     setEmail("");
     setDisplayName("");
     setTelephone("");
-    setPassword("");
     setRole("guichetier");
   };
 
@@ -367,12 +365,8 @@ const AgencePersonnelPage: React.FC = () => {
       setMessage("⚠️ Contexte agence/compagnie manquant.");
       return;
     }
-    if (!email || !password || !displayName) {
-      setMessage("⚠️ Nom, email et mot de passe sont obligatoires.");
-      return;
-    }
-    if (password.length < 6) {
-      setMessage("⚠️ Mot de passe: minimum 6 caractères.");
+    if (!email || !displayName) {
+      setMessage("⚠️ Nom et email sont obligatoires.");
       return;
     }
 
@@ -380,9 +374,8 @@ const AgencePersonnelPage: React.FC = () => {
     setMessage("");
 
     try {
-      // Règle: un seul comptable par agence
-      if (role === "comptable") {
-        const exists = await hasComptableAlready(user.companyId, user.agencyId);
+      if (role === "agency_accountant") {
+        const exists = await hasAgencyAccountantAlready(user.companyId, user.agencyId);
         if (exists) {
           setBusy(false);
           setMessage("⚠️ Il existe déjà un comptable pour cette agence.");
@@ -390,76 +383,26 @@ const AgencePersonnelPage: React.FC = () => {
         }
       }
 
-      // 1) Créer l'utilisateur dans Auth
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
-      await updateProfile(cred.user, { displayName });
-      const uid = cred.user.uid;
+      const result = await createInvitationDoc({
+        email: email.trim().toLowerCase(),
+        role,
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        fullName: displayName.trim(),
+        ...(telephone.trim() ? { phone: telephone.trim() } : {}),
+        createdBy: user?.uid,
+      });
 
-      // 2) Code auto pour guichetier ET comptable
-      let staffCode: string | undefined = undefined;
-      if (role === "guichetier" || role === "comptable") {
-        staffCode = await allocateStaffCode({
-          companyId: user.companyId,
-          agencyId: user.agencyId,
-          role,
-        });
-      }
-
-      // 3) Doc racine /users
-      const rootRef = doc(db, "users", uid);
-      await setDoc(
-        rootRef,
-        {
-          uid,
-          email,
-          displayName,
-          telephone: telephone || "",
-          role,
-          active: true,
-          companyId: user.companyId,
-          agencyId: user.agencyId,
-          agencyName: (user as any)?.agencyName || "",
-          createdAt: Timestamp.now(),
-          ...(staffCode ? { staffCode, codeCourt: staffCode } : {}),
-        },
-        { merge: true }
-      );
-
-      // 4) Doc local agence
-      await addDoc(
-        collection(
-          db,
-          "companies",
-          user.companyId,
-          "agences",
-          user.agencyId,
-          "users"
-        ),
-        {
-          uid,
-          email,
-          displayName,
-          telephone: telephone || "",
-          role,
-          active: true,
-          companyId: user.companyId,
-          agencyId: user.agencyId,
-          agencyName: (user as any)?.agencyName || "",
-          createdAt: Timestamp.now(),
-          ...(staffCode ? { staffCode, codeCourt: staffCode } : {}),
-        } as Agent
-      );
-
-      setMessage("✅ Agent ajouté avec succès.");
+      setMessage("✅ Invitation créée. Lien : " + result.activationUrl);
       resetForm();
-      await loadAgents();
     } catch (error: any) {
       console.error("handleAdd err:", error);
-      if (error?.code === "auth/email-already-in-use") {
-        setMessage("⚠️ Cet email est déjà utilisé.");
-      } else {
-        setMessage("❌ Ajout impossible. Voir la console.");
-      }
+      const code = error?.code ?? error?.details?.code;
+      setMessage(
+        code === "already-exists"
+          ? "⚠️ Une invitation en attente existe déjà pour cet email."
+          : "❌ " + (error?.message ?? "Envoi impossible. Voir la console.")
+      );
     } finally {
       setBusy(false);
     }
@@ -528,9 +471,9 @@ const AgencePersonnelPage: React.FC = () => {
       const before = beforeSnap.exists() ? (beforeSnap.data() as Agent) : null;
       if (!before) throw new Error("Agent introuvable.");
 
-      // Si on veut passer quelqu'un en comptable, vérifier la règle
-      if (editRole === "comptable" && before.role !== "comptable") {
-        const exists = await hasComptableAlready(user.companyId, user.agencyId);
+      // Si on veut passer quelqu'un en comptable agence, vérifier la règle
+      if (editRole === "agency_accountant" && before.role !== "agency_accountant") {
+        const exists = await hasAgencyAccountantAlready(user.companyId, user.agencyId);
         if (exists) {
           setBusy(false);
           setMessage("⚠️ Il existe déjà un comptable pour cette agence.");
@@ -555,8 +498,8 @@ const AgencePersonnelPage: React.FC = () => {
           role: editRole,
         });
 
-        // Si guichetier/comptable et pas encore de code
-        if ((editRole === "guichetier" || editRole === "comptable") && !before.staffCode) {
+        // Si guichetier/agency_accountant et pas encore de code
+        if ((editRole === "guichetier" || editRole === "agency_accountant") && !before.staffCode) {
           const code = await allocateStaffCode({
             companyId: user.companyId,
             agencyId: user.agencyId,
@@ -625,18 +568,26 @@ const AgencePersonnelPage: React.FC = () => {
       }
 
       // 3) Appeler Cloud Function pour supprimer dans AUTH (si configurée)
+      // Note: adminDeleteUser requires Firebase Blaze plan (Cloud Functions)
+      let authDeleteFailed = false;
       if (agent.uid) {
         try {
           const functions = getFunctions();
           const fn = httpsCallable(functions, "adminDeleteUser");
           await fn({ uid: agent.uid });
-        } catch (fnError) {
+        } catch (fnError: unknown) {
           console.warn("Cloud Function non disponible:", fnError);
+          authDeleteFailed = true;
+          setMessage(
+            "✅ Agent supprimé des données. La suppression du compte d'authentification nécessite les Cloud Functions (plan Blaze). Le compte Auth reste actif."
+          );
         }
       }
 
       setAgents((prev) => prev.filter((a) => a.id !== agent.id));
-      setMessage("✅ Agent supprimé.");
+      if (!authDeleteFailed) {
+        setMessage("✅ Agent supprimé.");
+      }
     } catch (err) {
       console.error("delete err:", err);
       setMessage("❌ Erreur lors de la suppression.");
@@ -647,15 +598,15 @@ const AgencePersonnelPage: React.FC = () => {
 
   /* ===================== UI ===================== */
   return (
-    <div className="p-6 max-w-5xl mx-auto min-h-screen"
+    <div className="p-6 max-w-7xl mx-auto min-h-screen"
          style={{ background: "#f7f7fb" }}>
-      <h1 className="text-3xl font-extrabold mb-6"
+      <h1 className="text-2xl font-bold text-gray-900 mb-6"
           style={{ color: theme.primary }}>
         Gestion du personnel (Agence)
       </h1>
 
       {/* Formulaire d'ajout */}
-      <div className="mb-8 bg-white p-6 rounded-xl shadow-md border"
+      <div className="mb-8 bg-white p-6 rounded-xl shadow-sm border"
            style={{ borderColor: theme.secondary }}>
         <h2 className="text-lg font-semibold mb-4"
             style={{ color: theme.secondary }}>
@@ -689,16 +640,10 @@ const AgencePersonnelPage: React.FC = () => {
           >
             <option value="guichetier">Guichetier</option>
             <option value="controleur">Contrôleur</option>
-            <option value="comptable">Comptable</option>
+            <option value="agency_accountant">Comptable</option>
             <option value="chefAgence">Chef d'agence</option>
+            <option value="chefEmbarquement">Chef embarquement</option>
           </select>
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Mot de passe"
-            type="password"
-            className="border p-3 rounded focus:ring-2 md:col-span-2"
-          />
         </div>
 
         <button
@@ -709,7 +654,7 @@ const AgencePersonnelPage: React.FC = () => {
             background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})`,
           }}
         >
-          {busy ? "⏳ Traitement..." : "Ajouter l'agent"}
+          {busy ? "⏳ Traitement..." : "Envoyer l'invitation"}
         </button>
         {message && (
           <p className="mt-3 text-center text-sm text-gray-700">{message}</p>
@@ -717,7 +662,7 @@ const AgencePersonnelPage: React.FC = () => {
       </div>
 
       {/* Liste des agents */}
-      <div className="bg-white rounded-xl shadow-md border"
+      <div className="bg-white rounded-xl shadow-sm border"
            style={{ borderColor: theme.secondary }}>
         <div className="p-4 border-b" style={{ borderColor: theme.secondary }}>
           <h2 className="text-lg font-semibold"
@@ -756,8 +701,9 @@ const AgencePersonnelPage: React.FC = () => {
                       >
                         <option value="guichetier">Guichetier</option>
                         <option value="controleur">Contrôleur</option>
-                        <option value="comptable">Comptable</option>
+                        <option value="agency_accountant">Comptable</option>
                         <option value="chefAgence">Chef d'agence</option>
+                        <option value="chefEmbarquement">Chef embarquement</option>
                       </select>
                       <div className="text-sm text-gray-500 flex items-center">
                         Code: <span className="font-mono ml-1">{agent.staffCode || "—"}</span>
@@ -774,7 +720,7 @@ const AgencePersonnelPage: React.FC = () => {
                       <p className="font-semibold text-gray-900">
                         {agent.displayName}{" "}
                         <span className="text-gray-500 text-sm">• {agent.role}</span>
-                        {(agent.role === "guichetier" || agent.role === "comptable") && (
+                        {(agent.role === "guichetier" || agent.role === "agency_accountant") && (
                           <span className="ml-2 px-2 py-0.5 rounded bg-gray-100 font-mono text-xs">
                             {agent.staffCode || "—"}
                           </span>

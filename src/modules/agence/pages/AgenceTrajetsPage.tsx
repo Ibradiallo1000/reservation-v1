@@ -16,6 +16,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import VilleInput from '@/modules/agence/components/form/VilleInput';
 import { ajouterVillesDepuisTrajet } from '@/modules/agence/utils/updateVilles';
+import { Button } from '@/shared/ui/button';
+import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 
 const joursDeLaSemaine = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 
@@ -32,6 +34,8 @@ interface WeeklyTrip {
 
 const AgenceTrajetsPage: React.FC = () => {
   const { user, company } = useAuth();
+  const money = useFormatCurrency();
+  const currencySymbol = useCurrencySymbol();
   const [departure, setDeparture] = useState('');
   const [arrival, setArrival] = useState('');
   const [price, setPrice] = useState('');
@@ -146,7 +150,7 @@ const AgenceTrajetsPage: React.FC = () => {
     doc.text('Liste des trajets', 14, 14);
     autoTable(doc, {
       head: [['Départ', 'Arrivée', 'Prix', 'Places']],
-      body: trajets.map(t => [t.departure, t.arrival, `${t.price} FCFA`, t.places || '']),
+      body: trajets.map(t => [t.departure, t.arrival, money(t.price), t.places || '']),
     });
     doc.save('trajets_agence.pdf');
   };
@@ -266,7 +270,7 @@ const AgenceTrajetsPage: React.FC = () => {
           <VilleInput label="Ville d'arrivée" value={arrival} onChange={setArrival} />
           <input 
             type="number" 
-            placeholder="Prix (FCFA)" 
+            placeholder={`Prix (${currencySymbol})`} 
             value={price} 
             onChange={e => setPrice(e.target.value)}
             className="border p-2 w-full rounded mb-3" 
@@ -301,27 +305,26 @@ const AgenceTrajetsPage: React.FC = () => {
                   </button>
                 </div>
               ))}
-              <button 
+              <Button 
                 type="button" 
                 onClick={() => addHoraire(jour)} 
-                className="bg-blue-500 hover:bg-blue-700 text-white px-3 py-1 rounded mt-1 text-sm"
+                variant="primary"
+                size="sm"
+                className="mt-1"
               >
                 + Ajouter un horaire
-              </button>
+              </Button>
             </div>
           ))}
 
-          <button 
+          <Button 
             onClick={handleSubmit} 
             disabled={loading}
-            className={`mt-4 px-4 py-2 rounded text-white w-full font-semibold transition-colors ${
-              modifierId 
-                ? 'bg-yellow-600 hover:bg-yellow-700 disabled:bg-yellow-400' 
-                : 'bg-green-600 hover:bg-green-700 disabled:bg-green-400'
-            }`}
+            variant="primary"
+            className="mt-4 w-full"
           >
             {loading ? '⏳ En cours...' : modifierId ? 'Mettre à jour' : 'Enregistrer le trajet'}
-          </button>
+          </Button>
 
           {message && (
             <p className={`mt-2 p-3 rounded ${message.includes('❌') ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
@@ -393,7 +396,7 @@ const AgenceTrajetsPage: React.FC = () => {
                   className={`cursor-pointer font-semibold flex justify-between items-center ${t.active ? 'text-green-700' : 'text-red-500'}`}
                   onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
                 >
-                  <span>{t.departure} → {t.arrival} • {t.price} FCFA</span>
+                  <span>{t.departure} → {t.arrival} • {money(t.price)}</span>
                   <span className="text-xs bg-gray-100 px-2 py-1 rounded">
                     {t.active ? '🟢 Actif' : '🔴 Inactif'}
                   </span>
@@ -435,7 +438,7 @@ const AgenceTrajetsPage: React.FC = () => {
                       >
                         Modifier
                       </button>
-                      <button
+                      <Button
                         onClick={async () => {
                           if (!user?.companyId || !user?.agencyId) {
                             alert("Votre session a expiré. Merci de vous reconnecter.");
@@ -460,12 +463,11 @@ const AgenceTrajetsPage: React.FC = () => {
                           }
                         }}
                         disabled={loading}
-                        className={`px-3 py-1 rounded text-white text-sm ${
-                          t.active ? 'bg-gray-600 hover:bg-gray-800' : 'bg-green-600 hover:bg-green-800'
-                        }`}
+                        variant={t.active ? "secondary" : "primary"}
+                        size="sm"
                       >
                         {t.active ? 'Désactiver' : 'Activer'}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 )}

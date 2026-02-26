@@ -1,59 +1,73 @@
-// src/AppRoutes.tsx (fichier corrigé)
+// src/AppRoutes.tsx — Routes centralisées, permissions et helpers partagés
 import { Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
 import PrivateRoute from "./modules/auth/components/PrivateRoute";
-import PageLoader from "./components/PageLoaderComponent";
-import RouteResolver from "./modules/public/router/RouteResolver";
-import SplashScreen from "@/components/SplashScreen";
+import ProtectedRoute from "./modules/auth/components/ProtectedRoute";
+import PageLoader from "@/shared/ui/PageLoader";
+import RouteResolver from "./modules/compagnie/public/router/RouteResolver";
+import SplashScreen from "@/shared/ui/SplashScreen";
+import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
+import { AuthCurrencyProvider } from "@/shared/currency/CurrencyContext";
+import { routePermissions } from "@/constants/routePermissions";
 import AdminCompanyPlan from "@/modules/plateforme/pages/AdminCompanyPlan";
 import PlansManager from "@/modules/plateforme/pages/PlansManager";
-import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
-import MentionsPage from "./modules/public/pages/MentionsPage";
-import ConfidentialitePage from "./modules/public/pages/ConfidentialitePage";
-import ConditionsPage from "@/modules/public/pages/ConditionsPage";
-import CookiesPage from "@/modules/public/pages/CookiesPage";
-import AdminCompanyDetail from "@/modules/plateforme/pages/AdminCompanyDetail";
-import AgenceEmbarquementPage from "@/modules/agence/embarquement/pages/AgenceEmbarquementPage";
-import ReservationPrintPage from "@/modules/agence/guichet/pages/ReservationPrintPage";
-import ReservationDetailsPage from "@/modules/public/pages/ReservationDetailsPage";
+import MentionsPage from "./modules/compagnie/public/pages/MentionsPage";
+import ConfidentialitePage from "./modules/compagnie/public/pages/ConfidentialitePage";
+import ConditionsPage from "@/modules/compagnie/public/pages/ConditionsPage";
+import CookiesPage from "@/modules/compagnie/public/pages/CookiesPage";
+import ReservationDetailsPage from "@/modules/compagnie/public/pages/ReservationDetailsPage";
 import AdminParametresPlatformPage from "./modules/plateforme/pages/AdminParametresPlatformPage";
-import ValidationComptablePage from "@/modules/workflows/pages/ValidationComptablePage";
-import ValidationChefAgencePage from "@/modules/workflows/pages/ValidationChefAgencePage";
-import FinishSignIn from "@/modules/auth/pages/FinishSignIn";
-
-// Import des pages Chef Comptable Compagnie depuis l'index
-import ChefComptableCompagniePage from "./modules/chef-comptable/pages/ChefComptableCompagnie";
+import ValidationComptablePage from "@/shared/workflows/pages/ValidationComptablePage";
+import ValidationChefAgencePage from "@/shared/workflows/pages/ValidationChefAgencePage";
+import ChefComptableCompagniePage from "./modules/compagnie/finances/pages/ChefComptableCompagnie";
 import {
   VueGlobale,
   ReservationsEnLigne,
   Finances,
   Rapports,
-  Parametres
-} from "@/modules/chef-comptable/pages";
+  Parametres,
+} from "@/modules/compagnie/finances/pages";
+import ReservationPrintPage from "@/modules/agence/guichet/pages/ReservationPrintPage";
 
-const HomePage = lazy(() => import("./modules/public/pages/HomePage"));
+const HomePage = lazy(() => import("./modules/plateforme/pages/HomePage"));
 const PlatformSearchResultsPage = lazy(() => import("./modules/plateforme/pages/PlatformSearchResultsPage"));
 const LoginPage = lazy(() => import("./modules/auth/pages/LoginPage"));
 const Register = lazy(() => import("./modules/auth/pages/Register"));
 const ListeVillesPage = lazy(() => import("./modules/plateforme/pages/ListeVillesPage"));
 const AcceptInvitationPage = lazy(() => import("./modules/auth/pages/AcceptInvitationPage"));
-const AgenceRapportsPage = lazy(() => import("./modules/agence/pages/AgenceRapportsPage"));
 
-const ReservationClientPage = lazy(() => import("./modules/public/pages/ReservationClientPage"));
-const ClientMesReservationsPage = lazy(() => import("./modules/public/pages/ClientMesReservationsPage"));
+const ReservationClientPage = lazy(() => import("./modules/compagnie/public/pages/ReservationClientPage"));
+const ClientMesReservationsPage = lazy(() => import("./modules/compagnie/public/pages/ClientMesReservationsPage"));
 
 const AdminSidebarLayout = lazy(() => import("./modules/plateforme/pages/AdminSidebarLayout"));
 const AdminDashboard = lazy(() => import("./modules/plateforme/pages/AdminDashboard"));
 const AdminCompagniesPage = lazy(() => import("./modules/plateforme/pages/AdminCompagniesPage"));
 const AdminModifierCompagniePage = lazy(() => import("./modules/plateforme/pages/AdminModifierCompagniePage"));
-const AdminStatistiquesPage = lazy(() => import("./modules/plateforme//pages/AdminStatistiquesPage"));
+const AdminStatistiquesPage = lazy(() => import("./modules/plateforme/pages/AdminStatistiquesPage"));
 const AdminReservationsPage = lazy(() => import("./modules/plateforme/pages/AdminReservationsPage"));
-const AdminFinancesPage = lazy(() => import("./modules/plateforme//pages/AdminFinancesPage"));
+const AdminFinancesPage = lazy(() => import("./modules/plateforme/pages/AdminFinancesPage"));
 const AdminCompagnieAjouterPage = lazy(() => import("./modules/plateforme/pages/AdminCompagnieAjouterPage"));
+const AdminSubscriptionsManager = lazy(() => import("./modules/plateforme/pages/AdminSubscriptionsManager"));
+const AdminRevenueDashboard = lazy(() => import("./modules/plateforme/pages/AdminRevenueDashboard"));
 
-const CompagnieLayout = lazy(() => import("./components/layout/CompagnieLayout"));
+const CompagnieLayout = lazy(() => import("@/modules/compagnie/admin/layout/CompagnieLayout"));
+const GarageLayout = lazy(() => import("@/modules/compagnie/layout/GarageLayout"));
+const CompanyAccountantLayout = lazy(() => import("@/modules/compagnie/accounting/layout/CompanyAccountantLayout"));
 const CompagnieDashboard = lazy(() => import("./modules/compagnie/pages/CompagnieDashboard"));
+const CEOCommandCenterPage = lazy(() => import("@/modules/compagnie/pages/CEOCommandCenterPage"));
+const CEOPaymentApprovalsPage = lazy(() =>
+  import("./modules/compagnie/pages/CEOPaymentApprovalsPage")
+);
+const CompanyFinancesPage = lazy(() => import("@/modules/compagnie/pages/CompanyFinancesPage"));
+const GarageDashboardPage = lazy(() => import("@/modules/compagnie/pages/GarageDashboardPage"));
+const GarageDashboardHomePage = lazy(() => import("@/modules/compagnie/pages/GarageDashboardHomePage"));
+const CEOTreasuryPage = lazy(() =>
+  import("@/modules/compagnie/pages/CEOTreasuryPage").catch((err) => {
+    console.warn("CEOTreasuryPage lazy load failed, retrying:", err);
+    return import("@/modules/compagnie/pages/CEOTreasuryPage");
+  })
+);
 const CompagnieAgencesPage = lazy(() => import("./modules/compagnie/pages/CompagnieAgencesPage"));
 const CompagnieParametresTabsPage = lazy(() => import("./modules/compagnie/pages/CompagnieParametresTabsPage"));
 const CompagnieReservationsPage = lazy(() => import("./modules/compagnie/pages/CompagnieReservationsPage"));
@@ -61,34 +75,44 @@ const CompagnieComptabilitePage = lazy(() => import("./modules/compagnie/pages/C
 const BibliothequeImagesPage = lazy(() => import("./modules/compagnie/pages/BibliothequeImagesPage"));
 const CompanyPaymentSettingsPage = lazy(() => import("./modules/compagnie/pages/CompanyPaymentSettingsPage"));
 const AvisModerationPage = lazy(() => import("./modules/compagnie/pages/AvisModerationPage"));
+const RevenusLiquiditesPage = lazy(() => import("./modules/compagnie/pages/RevenusLiquiditesPage"));
+const OperationsFlotteLandingPage = lazy(() => import("./modules/compagnie/pages/OperationsFlotteLandingPage"));
+const TripCostsPage = lazy(() => import("./modules/compagnie/pages/TripCostsPage"));
 const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 
-const DashboardAgencePage = lazy(() => import("./modules/agence/pages/DashboardAgencePage"));
-const AgenceReservationsPage = lazy(() => import("./modules/agence/pages/AgenceReservationsPage"));
-const AgenceGuichetPage = lazy(() => import("./modules/agence/guichet/pages/AgenceGuichetPage"));
+// ── Agency Manager (refactored) ──
+const ManagerShellPage = lazy(() => import("./modules/agence/manager/ManagerShellPage"));
+const ManagerCockpitPage = lazy(() => import("./modules/agence/manager/ManagerCockpitPage"));
+const ManagerOperationsPage = lazy(() => import("./modules/agence/manager/ManagerOperationsPage"));
+const ManagerFinancesPage = lazy(() => import("./modules/agence/manager/ManagerFinancesPage"));
+const ManagerTeamPage = lazy(() => import("./modules/agence/manager/ManagerTeamPage"));
+const ManagerReportsPage = lazy(() => import("./modules/agence/manager/ManagerReportsPage"));
 const AgenceTrajetsPage = lazy(() => import("./modules/agence/pages/AgenceTrajetsPage"));
-const AgenceFinancesPage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceFinancesPage"));
-const AgenceRecettesPage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceRecettesPage"));
-const AgencePersonnelPage = lazy(() => import("./modules/agence/pages/AgencePersonnelPage"));
-const ReceiptGuichetPage = lazy(() => import("./modules/agence/guichet/pages/ReceiptGuichetPage"));
-const MediaPage = lazy(() => import("./modules/plateforme//pages/MediaPage"));
-const AgenceShiftHistoryPage = lazy(() => import("./modules/agence/pages/AgenceShiftHistoryPage"));
-const AgenceComptabilitePage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceComptabilitePage"));
-const AgenceShiftPage = lazy(() => import("./modules/agence/pages/AgenceShiftPage"));
-const AffectationVehiculePage = lazy(() => import("./modules/agence/garage/pages/AffectationVehiculePage"));
-const AgenceShellPage = lazy(() => import("./modules/agence/pages/AgenceShellPage"));
+const AgencyTreasuryPage = lazy(() => import("./modules/agence/pages/AgencyTreasuryPage"));
 
-export const routePermissions = {
-  compagnieLayout: ["admin_compagnie"] as const,
-  agenceShell: ["chefAgence", "superviseur", "agentCourrier", "admin_compagnie"] as const,
-  guichet: ["guichetier", "chefAgence", "admin_compagnie"] as const,
-  comptabilite: ["agency_accountant", "admin_compagnie"] as const,
-  validationsCompta: ["company_accountant", "financial_director", "admin_platforme"] as const,
-  validationsAgence: ["chefAgence", "superviseur", "admin_compagnie"] as const,
-  receiptGuichet: ["chefAgence", "guichetier", "admin_compagnie"] as const,
-  adminLayout: ["admin_platforme"] as const,
-  chefComptableCompagnie: ["company_accountant", "financial_director", "admin_platforme"] as const,
-};
+// ── Agency standalone (non-manager roles) ──
+const AgenceGuichetPage = lazy(() => import("./modules/agence/guichet/pages/AgenceGuichetPage"));
+const ReceiptGuichetPage = lazy(() => import("./modules/agence/guichet/pages/ReceiptGuichetPage"));
+const AgenceComptabilitePage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceComptabilitePage"));
+const BoardingLayout = lazy(() => import("./modules/agence/boarding/BoardingLayout"));
+const BoardingDashboardPage = lazy(() => import("./modules/agence/boarding/BoardingDashboardPage"));
+const BoardingScanPage = lazy(() => import("./modules/agence/boarding/BoardingScanPage"));
+const FleetLayout = lazy(() => import("./modules/agence/fleet/FleetLayout"));
+const FleetDashboardPage = lazy(() => import("./modules/agence/fleet/FleetDashboardPage"));
+const FleetAssignmentPage = lazy(() => import("./modules/agence/fleet/FleetAssignmentPage"));
+const FleetVehiclesPage = lazy(() => import("./modules/agence/fleet/FleetVehiclesPage"));
+const FleetMovementLogPage = lazy(() => import("./modules/agence/fleet/FleetMovementLogPage"));
+const AgenceFleetOperationsPage = lazy(() => import("./modules/agence/fleet/AgenceFleetOperationsPage"));
+const CourierLayout = lazy(() => import("./modules/agence/courrier/layout/CourierLayout"));
+const CourierDashboardPage = lazy(() => import("./modules/agence/courrier/pages/CourierDashboardPage"));
+const CourierSessionPage = lazy(() => import("./modules/agence/courrier/pages/CourierSessionPage"));
+const CourierCreateShipmentPage = lazy(() => import("./modules/agence/courrier/pages/CourierCreateShipmentPage"));
+const CourierReceptionPage = lazy(() => import("./modules/agence/courrier/pages/CourierReceptionPage"));
+const CourierPickupPage = lazy(() => import("./modules/agence/courrier/pages/CourierPickupPage"));
+const CourierReportsPage = lazy(() => import("./modules/agence/courrier/pages/CourierReportsPage"));
+const CourierBatchesPage = lazy(() => import("@/modules/agence/courrier/pages/CourierBatchesPage"));
+const MediaPage = lazy(() => import("./modules/plateforme/pages/MediaPage"));
+const DebugAuthPage = lazy(() => import("@/shared/pages/DebugAuthPage"));
 
 const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
 const hasAny = (roles: unknown, allowed: readonly string[]) =>
@@ -96,11 +120,6 @@ const hasAny = (roles: unknown, allowed: readonly string[]) =>
 
 const landingTargetForRoles = (roles: unknown): string => {
   const rolesArray = asArray(roles).map(String);
-
-  // ✅ ESPACE CHEF COMPTABLE COMPAGNIE
-  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) {
-    return "/chef-comptable";
-  }
 
   // ✅ ESPACE COMPTABILITÉ AGENCE
   if (hasAny(rolesArray, routePermissions.comptabilite)) {
@@ -112,13 +131,17 @@ const landingTargetForRoles = (roles: unknown): string => {
     return "/agence/guichet";
   }
 
+  if (hasAny(rolesArray, routePermissions.courrier)) {
+    return "/agence/courrier";
+  }
+
   if (hasAny(rolesArray, routePermissions.agenceShell)) {
     return "/agence/dashboard";
   }
 
-  // COMPAGNIE (CEO)
-  if (hasAny(rolesArray, routePermissions.compagnieLayout)) {
-    return "/compagnie/dashboard";
+  // COMPAGNIE (CEO) — only with companyId; without it avoid /compagnie/command-center (parsed as companyId="command-center")
+  if (hasAny(rolesArray, ["admin_compagnie", "company_ceo"])) {
+    return "/login";
   }
 
   // ADMIN PLATFORME
@@ -129,10 +152,42 @@ const landingTargetForRoles = (roles: unknown): string => {
   return "/login";
 };
 
+/** Redirection après login selon le rôle (et companyId si besoin). */
+const ROLE_LANDING: Record<string, string> = {
+  admin_platforme: "/admin/dashboard",
+  agency_accountant: "/agence/comptabilite",
+  chefAgence: "/agence/dashboard",
+  chefEmbarquement: "/agence/boarding",
+  agency_fleet_controller: "/agence/fleet",
+  guichetier: "/agence/guichet",
+  agentCourrier: "/agence/courrier",
+};
+
 function RoleLanding() {
   const { user } = useAuth() as any;
   if (!user) return <Navigate to="/login" replace />;
-  return <Navigate to={landingTargetForRoles(user.role)} replace />;
+
+  const role = String(user?.role ?? "").trim();
+  const companyId = (user.companyId ?? "") && String(user.companyId).trim() ? String(user.companyId) : "";
+
+  // CEO → Command Center
+  if ((role === "admin_compagnie" || role === "company_ceo") && companyId) {
+    return <Navigate to={`/compagnie/${companyId}/command-center`} replace />;
+  }
+  if ((role === "admin_compagnie" || role === "company_ceo") && !companyId) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // Company accountant → dedicated accounting space
+  if ((role === "company_accountant" || role === "financial_director") && companyId) {
+    return <Navigate to={`/compagnie/${companyId}/accounting`} replace />;
+  }
+  if ((role === "company_accountant" || role === "financial_director") && !companyId) {
+    return <Navigate to="/login" replace />;
+  }
+
+  const target = ROLE_LANDING[role] ?? landingTargetForRoles(role);
+  return <Navigate to={target} replace />;
 }
 
 function LegacyUploadRedirect() {
@@ -144,151 +199,16 @@ function NavigateToCompagnieDashboard() {
   const { companyId } = useParams<{ companyId: string }>();
   return <Navigate to={`/compagnie/${companyId}/dashboard`} replace />;
 }
-/* =========================
-   DebugAuthPage Component
-========================= */
-const DebugAuthPage = () => {
-  const { user, loading, company } = useAuth() as any;
-  
-  return (
-    <div className="min-h-screen p-6 bg-gray-50">
-      <h1 className="text-2xl font-bold mb-6 text-gray-800">🔍 Debug Auth - Diagnostics</h1>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* User Info Card */}
-        <div className="bg-white p-6 rounded-lg shadow-md border">
-          <h2 className="text-lg font-semibold mb-4 text-blue-700">👤 Informations Utilisateur</h2>
-          <div className="space-y-3">
-            <div>
-              <strong className="text-gray-700">État du chargement:</strong> 
-              <span className={`ml-2 px-2 py-1 rounded text-sm ${loading ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
-                {loading ? "En cours..." : "Terminé"}
-              </span>
-            </div>
-            <div>
-              <strong className="text-gray-700">Utilisateur connecté:</strong> 
-              <span className={`ml-2 px-2 py-1 rounded text-sm ${user ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                {user ? "Oui" : "Non"}
-              </span>
-            </div>
-            {user && (
-              <>
-                <div>
-                  <strong className="text-gray-700">Email:</strong> 
-                  <span className="ml-2 text-gray-900">{user.email}</span>
-                </div>
-                <div>
-                  <strong className="text-gray-700">Nom:</strong> 
-                  <span className="ml-2 text-gray-900">{user.nom || "Non défini"}</span>
-                </div>
-                <div>
-                  <strong className="text-gray-700">Rôle (brut):</strong> 
-                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{user.role || "Non défini"}</code>
-                </div>
-                <div>
-                  <strong className="text-gray-700">ID Compagnie:</strong> 
-                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{user.companyId || "Non défini"}</code>
-                </div>
-                <div>
-                  <strong className="text-gray-700">ID Agence:</strong> 
-                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{user.agencyId || "Non défini"}</code>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
 
-        {/* Company Info Card */}
-        <div className="bg-white p-6 rounded-lg shadow-md border">
-          <h2 className="text-lg font-semibold mb-4 text-green-700">🏢 Informations Compagnie</h2>
-          <div className="space-y-3">
-            {company ? (
-              <>
-                <div>
-                  <strong className="text-gray-700">Nom Compagnie:</strong> 
-                  <span className="ml-2 text-gray-900">{company.nom || "Non défini"}</span>
-                </div>
-                <div>
-                  <strong className="text-gray-700">ID:</strong> 
-                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{company.id}</code>
-                </div>
-                <div>
-                  <strong className="text-gray-700">Slug:</strong> 
-                  <code className="ml-2 px-2 py-1 bg-gray-100 rounded text-sm font-mono">{company.slug || "Non défini"}</code>
-                </div>
-                <div>
-                  <strong className="text-gray-700">Plan:</strong> 
-                  <span className="ml-2 px-2 py-1 bg-purple-100 text-purple-800 rounded text-sm">{company.plan || "Non défini"}</span>
-                </div>
-              </>
-            ) : (
-              <div className="text-gray-500 italic">
-                {user?.companyId ? "Chargement de la compagnie..." : "Aucune compagnie associée"}
-              </div>
-            )}
-          </div>
-        </div>
+function RedirectFinancesToRevenus() {
+  const { companyId } = useParams<{ companyId: string }>();
+  return <Navigate to={`/compagnie/${companyId}/revenus-liquidites?tab=revenus`} replace />;
+}
 
-        {/* Testing Card */}
-        <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md border">
-          <h2 className="text-lg font-semibold mb-4 text-red-700">🧪 Tests de Navigation</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <a href="/chef-comptable" className="block p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition text-center">
-              <div className="font-medium text-blue-800">/chef-comptable</div>
-              <div className="text-sm text-blue-600 mt-1">Espace Chef Comptable Compagnie</div>
-              <div className="text-xs text-blue-500 mt-2">Rôles: company_accountant, financial_director</div>
-            </a>
-            <a href="/agence/comptabilite" className="block p-4 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition text-center">
-              <div className="font-medium text-green-800">/agence/comptabilite</div>
-              <div className="text-sm text-green-600 mt-1">Espace Comptable Agence</div>
-              <div className="text-xs text-green-500 mt-2">Rôle: agency_accountant</div>
-            </a>
-            <a href="/compagnie/dashboard" className="block p-4 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition text-center">
-              <div className="font-medium text-purple-800">/compagnie/dashboard</div>
-              <div className="text-sm text-purple-600 mt-1">Espace CEO Compagnie</div>
-              <div className="text-xs text-purple-500 mt-2">Rôle: admin_compagnie</div>
-            </a>
-            <a href="/admin/dashboard" className="block p-4 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition text-center">
-              <div className="font-medium text-orange-800">/admin/dashboard</div>
-              <div className="text-sm text-orange-600 mt-1">Espace Admin Plateforme</div>
-              <div className="text-xs text-orange-500 mt-2">Rôle: admin_platforme</div>
-            </a>
-          </div>
-        </div>
-
-        {/* Raw Data Card */}
-        <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md border">
-          <h2 className="text-lg font-semibold mb-4 text-gray-700">📊 Données Brutes (JSON)</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div>
-              <h3 className="font-medium mb-2 text-gray-600">Utilisateur:</h3>
-              <pre className="bg-gray-100 p-3 rounded text-xs overflow-auto max-h-60">
-                {JSON.stringify(user, null, 2) || "Aucun utilisateur"}
-              </pre>
-            </div>
-            <div>
-              <h3 className="font-medium mb-2 text-gray-600">Compagnie:</h3>
-              <pre className="bg-gray-100 p-3 rounded text-xs overflow-auto max-h-60">
-                {JSON.stringify(company, null, 2) || "Aucune compagnie"}
-              </pre>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Instructions */}
-      <div className="mt-8 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-        <h3 className="font-semibold text-yellow-800 mb-2">📝 Instructions de débogage:</h3>
-        <ul className="list-disc pl-5 text-yellow-700 space-y-1">
-          <li>Ouvrez la console du navigateur (F12) pour voir les logs détaillés</li>
-          <li>Vérifiez que le rôle de l'utilisateur dans Firestore correspond à ceux autorisés</li>
-          <li>Testez les différents liens de navigation pour voir où vous êtes redirigé</li>
-          <li>Si bloqué, vérifiez les logs de PrivateRoute dans la console</li>
-        </ul>
-      </div>
-    </div>
-  );
-};
+function RedirectTreasuryToRevenus() {
+  const { companyId } = useParams<{ companyId: string }>();
+  return <Navigate to={`/compagnie/${companyId}/revenus-liquidites?tab=liquidites`} replace />;
+}
 
 const AppRoutes = () => {
   const { loading } = useAuth();
@@ -326,12 +246,14 @@ const AppRoutes = () => {
           }
         />
 
+        {/* Role-based landing (used by PrivateRoute redirects) */}
+        <Route path="/role-landing" element={<RoleLanding />} />
+
         {/* PUBLIC */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
-        <Route path="/finishSignIn" element={<FinishSignIn />} />
         <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />
         <Route path="/:slug/conditions" element={<ConditionsPage />} />
@@ -347,7 +269,7 @@ const AppRoutes = () => {
         <Route
           path="/admin"
           element={
-            <PrivateRoute allowedRoles={["admin_platforme"] as const}>
+            <PrivateRoute allowedRoles={routePermissions.adminLayout}>
               <PageHeaderProvider>
                 <AdminSidebarLayout />
               </PageHeaderProvider>
@@ -361,6 +283,8 @@ const AppRoutes = () => {
           <Route path="compagnies/:id/modifier" element={<AdminModifierCompagniePage />} />
           <Route path="compagnies/:companyId/plan" element={<AdminCompanyPlan />} />
           <Route path="plans" element={<PlansManager />} />
+          <Route path="subscriptions" element={<AdminSubscriptionsManager />} />
+          <Route path="revenus" element={<AdminRevenueDashboard />} />
           <Route path="reservations" element={<AdminReservationsPage />} />
           <Route path="finances" element={<AdminFinancesPage />} />
           <Route path="statistiques" element={<AdminStatistiquesPage />} />
@@ -372,33 +296,79 @@ const AppRoutes = () => {
           />
         </Route>
 
-        {/* ========= COMPAGNIE (CEO + ADMIN PLATFORME) ========= */}
+        {/* ========= TRIP COSTS (agency_manager, company_accountant, admin_compagnie) ========= */}
+        <Route
+          path="/compagnie/:companyId/trip-costs"
+          element={
+            <PrivateRoute allowedRoles={routePermissions.tripCosts}>
+              <TripCostsPage />
+            </PrivateRoute>
+          }
+        />
+
+        {/* ========= COMPAGNIE CEO (admin_compagnie + admin_platforme ONLY) ========= */}
         <Route
           path="/compagnie/:companyId"
           element={
-            <PrivateRoute allowedRoles={["admin_compagnie", "admin_platforme"] as const}>
+            <PrivateRoute allowedRoles={routePermissions.compagnieLayout}>
               <CompagnieLayout />
             </PrivateRoute>
           }
         >
           <Route index element={<RoleLanding />} />
+          <Route path="command-center" element={<CEOCommandCenterPage />} />
+          <Route path="payment-approvals" element={<CEOPaymentApprovalsPage />} />
+          <Route path="revenus-liquidites" element={<RevenusLiquiditesPage />} />
+          <Route path="finances" element={<RedirectFinancesToRevenus />} />
+          <Route path="treasury" element={<RedirectTreasuryToRevenus />} />
+          <Route path="operations-reseau" element={<OperationsFlotteLandingPage />} />
+          <Route path="fleet" element={<GarageDashboardPage />} />
           <Route path="dashboard" element={<CompagnieDashboard />} />
           <Route path="comptabilite" element={<CompagnieComptabilitePage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="parametres/plan" element={<ParametresPlan companyId={""} />} />
           <Route path="reservations" element={<CompagnieReservationsPage />} />
-          {/* Redirection vers l'espace chef comptable */}
-          <Route 
-            path="reservations-en-ligne" 
-            element={<Navigate to="/chef-comptable/reservations-en-ligne" replace />} 
-          />
           <Route path="images" element={<BibliothequeImagesPage />} />
           <Route path="payment-settings" element={<CompanyPaymentSettingsPage />} />
           <Route path="avis-clients" element={<AvisModerationPage />} />
         </Route>
 
-        {/* ========= CHEF COMPTABLE COMPAGNIE ========= */}
+        {/* ========= GARAGE (Chef Garage only — Flotte, Maintenance, Transit, Incidents ; pas de Configuration) ========= */}
+        <Route
+          path="/compagnie/:companyId/garage"
+          element={
+            <PrivateRoute allowedRoles={routePermissions.garageLayout}>
+              <GarageLayout />
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<Navigate to="dashboard" replace />} />
+          <Route path="dashboard" element={<GarageDashboardHomePage />} />
+          <Route path="fleet" element={<GarageDashboardPage />} />
+          <Route path="maintenance" element={<GarageDashboardPage view="maintenance" />} />
+          <Route path="transit" element={<GarageDashboardPage view="transit" />} />
+          <Route path="incidents" element={<GarageDashboardPage view="incidents" />} />
+        </Route>
+
+        {/* ========= COMPANY ACCOUNTANT (dedicated layout, separate from CEO) ========= */}
+        <Route
+          path="/compagnie/:companyId/accounting"
+          element={
+            <PrivateRoute allowedRoles={routePermissions.companyAccountantLayout}>
+              <CompanyAccountantLayout />
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<VueGlobale />} />
+          <Route path="reservations-en-ligne" element={<ReservationsEnLigne />} />
+          <Route path="finances" element={<Finances />} />
+          <Route path="treasury" element={<CEOTreasuryPage />} />
+          <Route path="rapports" element={<Rapports />} />
+          <Route path="parametres" element={<Parametres />} />
+        </Route>
+
+        {/* ========= CHEF COMPTABLE COMPAGNIE (legacy path — backward compat) ========= */}
         <Route
           path="/chef-comptable"
           element={
@@ -407,64 +377,87 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         >
-          {/* Page d'accueil */}
           <Route index element={<VueGlobale />} />
-          
-          {/* Réservations en ligne (VALIDATION / REFUS) */}
           <Route path="reservations-en-ligne" element={<ReservationsEnLigne />} />
-          
-          {/* Finances compagnie */}
           <Route path="finances" element={<Finances />} />
-          
-          {/* Rapports */}
+          <Route path="treasury" element={<CEOTreasuryPage />} />
           <Route path="rapports" element={<Rapports />} />
-          
-          {/* Paramètres comptables */}
           <Route path="parametres" element={<Parametres />} />
         </Route>
 
-        {/* ========= AGENCE ========= */}
+        {/* ========= AGENCY MANAGER (refactored cockpit) ========= */}
         <Route
           path="/agence"
           element={
-            <PrivateRoute allowedRoles={["chefAgence", "embarquement"] as const}>
-              <AgenceShellPage />
+            <PrivateRoute allowedRoles={routePermissions.agenceShell}>
+              <ManagerShellPage />
             </PrivateRoute>
           }
         >
-          <Route index element={<RoleLanding />} />
-          <Route path="dashboard" element={<DashboardAgencePage />} />
-          <Route path="reservations" element={<AgenceReservationsPage />} />
-          <Route path="embarquement" element={<AgenceEmbarquementPage />} />
-          <Route path="trajets" element={<AgenceTrajetsPage />} />
-          <Route path="garage" element={<AffectationVehiculePage />} />
-          <Route path="recettes" element={<AgenceRecettesPage />} />
-          <Route path="finances" element={<AgenceFinancesPage />} />
-          <Route path="personnel" element={<AgencePersonnelPage />} />
-          <Route path="shift" element={<AgenceShiftPage />} />
-          <Route path="shift-history" element={<AgenceShiftHistoryPage />} />
-          <Route path="rapports" element={<AgenceRapportsPage />} />
+          <Route index element={<Navigate to="dashboard" replace />} />
+          <Route path="dashboard" element={<ManagerCockpitPage />} />
+          <Route path="operations" element={<ManagerOperationsPage />} />
+          <Route path="trajets" element={<ProtectedRoute allowedRoles={routePermissions.agenceShell} withCurrency><AgenceTrajetsPage /></ProtectedRoute>} />
+          <Route path="finances" element={<ManagerFinancesPage />} />
+          <Route path="treasury" element={<AgencyTreasuryPage />} />
+          <Route path="team" element={<ManagerTeamPage />} />
+          <Route path="reports" element={<ManagerReportsPage />} />
+        </Route>
+
+        {/* ========= BOARDING (Phase 3 - separate from Agency Manager) ========= */}
+        <Route
+          path="/agence/boarding"
+          element={
+            <PrivateRoute allowedRoles={routePermissions.boarding}>
+              <BoardingLayout />
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<BoardingDashboardPage />} />
+          <Route path="scan" element={<BoardingScanPage />} />
+        </Route>
+
+        {/* ========= FLEET (Phase 3 - separate from Agency Manager) ========= */}
+        <Route
+          path="/agence/fleet"
+          element={
+            <PrivateRoute allowedRoles={routePermissions.fleet}>
+              <FleetLayout />
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<FleetDashboardPage />} />
+          <Route path="operations" element={<AgenceFleetOperationsPage />} />
+          <Route path="assignment" element={<FleetAssignmentPage />} />
+          <Route path="vehicles" element={<FleetVehiclesPage />} />
+          <Route path="movements" element={<FleetMovementLogPage />} />
+        </Route>
+
+        {/* ========= COURRIER (Phase 1 - Agence sub-domain) ========= */}
+        <Route
+          path="/agence/courrier"
+          element={
+            <ProtectedRoute allowedRoles={routePermissions.courrier} withCurrency>
+              <CourierLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<CourierSessionPage />} />
+          <Route path="nouveau" element={<CourierCreateShipmentPage />} />
+          <Route path="lots" element={<CourierBatchesPage />} />
+          <Route path="reception" element={<CourierReceptionPage />} />
+          <Route path="remise" element={<CourierPickupPage />} />
+          <Route path="rapport" element={<CourierReportsPage />} />
         </Route>
 
         {/* ========= PAGES HORS SHELL AGENCE ========= */}
-        {/* Guichet */}
         <Route
           path="/agence/guichet"
-          element={
-            <PrivateRoute allowedRoles={["guichetier", "chefAgence", "admin_compagnie"] as const}>
-              <AgenceGuichetPage />
-            </PrivateRoute>
-          }
+          element={<ProtectedRoute allowedRoles={routePermissions.guichet} withCurrency><AgenceGuichetPage /></ProtectedRoute>}
         />
-        
-        {/* Comptabilité Agence */}
         <Route
           path="/agence/comptabilite"
-          element={
-            <PrivateRoute allowedRoles={["agency_accountant", "admin_compagnie"] as const}>
-              <AgenceComptabilitePage />
-            </PrivateRoute>
-          }
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} withCurrency><AgenceComptabilitePage /></ProtectedRoute>}
         />
 
         {/* ========= VALIDATIONS (COMPATIBILITÉ) ========= */}
@@ -478,28 +471,15 @@ const AppRoutes = () => {
           }
         />
         
-        {/* Validations chef agence */}
         <Route
           path="/agence/validations"
-          element={
-            <PrivateRoute allowedRoles={["chefAgence", "admin_compagnie"] as const}>
-              <ValidationChefAgencePage />
-            </PrivateRoute>
-          }
+          element={<PrivateRoute allowedRoles={routePermissions.validationsAgence}><ValidationChefAgencePage /></PrivateRoute>}
         />
-
-        {/* ========= PAGES ISOLÉES ========= */}
-        {/* Reçu guichet */}
         <Route
           path="/agence/receipt/:id"
-          element={
-            <PrivateRoute allowedRoles={["chefAgence", "guichetier", "admin_compagnie"] as const}>
-              <ReceiptGuichetPage />
-            </PrivateRoute>
-          }
+          element={<ProtectedRoute allowedRoles={routePermissions.receiptGuichet} withCurrency><ReceiptGuichetPage /></ProtectedRoute>}
         />
-        
-        <Route path="/agence/reservations/print" element={<ReservationPrintPage />} />
+        <Route path="/agence/reservations/print" element={<ProtectedRoute allowedRoles={routePermissions.receiptGuichet} withCurrency><ReservationPrintPage /></ProtectedRoute>} />
 
         {/* ========= DYNAMIQUES PUBLIQUES ========= */}
         <Route path="/:slug/reserver" element={<ReservationClientPage />} />
@@ -511,10 +491,7 @@ const AppRoutes = () => {
         <Route path="/:slug/*" element={<RouteResolver />} />
 
         {/* ========= REDIRECTIONS DE COMPATIBILITÉ ========= */}
-        {/* Rediriger l'ancienne route /comptable vers /chef-comptable */}
         <Route path="/comptable" element={<Navigate to="/chef-comptable" replace />} />
-        
-        {/* Rediriger l'ancienne route réservations en ligne vers le nouvel espace */}
         <Route 
           path="/compagnie/reservations-en-ligne-compta" 
           element={<Navigate to="/chef-comptable/reservations-en-ligne" replace />} 
@@ -539,3 +516,4 @@ const AppRoutes = () => {
 };
 
 export default AppRoutes;
+export { routePermissions } from "@/constants/routePermissions";

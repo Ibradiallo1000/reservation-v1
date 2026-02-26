@@ -1,5 +1,5 @@
 import { createBrowserRouter } from 'react-router-dom';
-import CompagnieLayout from '@/components/layout/CompagnieLayout';
+import CompagnieLayout from '@/modules/compagnie/admin/layout/CompagnieLayout';
 import MessagesCompagniePage from '@/modules/compagnie/pages/MessagesCompagniePage';
 
 export const router = createBrowserRouter([

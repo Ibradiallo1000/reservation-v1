@@ -24,6 +24,9 @@ import {
 import { saveAs } from "file-saver";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { formatDateLongFr } from "@/utils/dateFmt";
+import { getDateRangeForPeriod, getPeriodLabel, type PeriodKind } from "@/shared/date/periodUtils";
+import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
 
 /* ----------------------------- Types ----------------------------------- */
 interface Reservation {
@@ -57,50 +60,6 @@ const fmtXOF = (n: number) =>
 const cx = (...xs: (string | false | null | undefined)[]) =>
   xs.filter(Boolean).join(" ");
 
-type PeriodKey = "day" | "week" | "month" | "custom";
-
-/** bornes de période */
-function getPeriodRange(
-  key: PeriodKey,
-  customStart?: string,
-  customEnd?: string
-): { start: Date; end: Date; label: string } {
-  const now = new Date();
-  const endOfToday = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    23, 59, 59, 999
-  );
-
-  if (key === "day") {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    return { start, end: endOfToday, label: "Aujourd’hui" };
-  }
-  if (key === "week") {
-    // Lundi → Dimanche
-    const d = new Date(now);
-    const day = (d.getDay() + 6) % 7; // 0 = lundi
-    const start = new Date(d);
-    start.setDate(d.getDate() - day);
-    start.setHours(0, 0, 0, 0);
-    return { start, end: endOfToday, label: "Cette semaine" };
-  }
-  if (key === "month") {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const label = new Intl.DateTimeFormat("fr-FR", {
-      month: "long",
-      year: "numeric",
-    }).format(start);
-    return { start, end: endOfToday, label };
-  }
-  // custom
-  const start = new Date(`${customStart}T00:00:00`);
-  const end = new Date(`${customEnd}T23:59:59`);
-  const label = `${start.toLocaleDateString("fr-FR")} → ${end.toLocaleDateString("fr-FR")}`;
-  return { start, end, label };
-}
-
 /* ------------------------------ Page ----------------------------------- */
 const CompagnieReservationsPage: React.FC = () => {
   const { user, company } = useAuth();
@@ -111,16 +70,19 @@ const CompagnieReservationsPage: React.FC = () => {
   const theme = useCompanyTheme(company);
   const { setHeader, resetHeader } = usePageHeader();
 
-  // Période (par défaut: semaine)
-  const defaultPeriod: PeriodKey = "week";
-  const [period, setPeriod] = useState<PeriodKey>(defaultPeriod);
+  // Période (partagée : Semaine | Mois | Année | Personnalisé)
+  const [period, setPeriod] = useState<PeriodKind>("month");
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
 
-  const { start, end, label } = useMemo(
-    () => getPeriodRange(period, customStart, customEnd),
-    [period, customStart, customEnd]
-  );
+  const { start, end, label } = useMemo(() => {
+    const range = getDateRangeForPeriod(period, new Date(), customStart || undefined, customEnd || undefined);
+    return {
+      start: range.start,
+      end: range.end,
+      label: getPeriodLabel(period, range, customStart || undefined, customEnd || undefined),
+    };
+  }, [period, customStart, customEnd]);
 
   const [agences, setAgences] = useState<Agence[]>([]);
   const [groupedData, setGroupedData] = useState<
@@ -335,21 +297,6 @@ const CompagnieReservationsPage: React.FC = () => {
   useEffect(() => {
     const actions = (
       <>
-        {(["day","week","month"] as const).map((p) => (
-          <button
-            key={p}
-            onClick={() => { setPeriod(p); setCurrentPage(1); setSelectedAgencyId(null); }}
-            className={cx(
-              "px-3 py-1 rounded-full text-sm border transition",
-              period === p
-                ? "bg-white text-gray-900"
-                : "bg-white/10 backdrop-blur text-white border-white/30 hover:bg-white/20"
-            )}
-          >
-            {p === "day" ? "Aujourd'hui" : p === "week" ? "Semaine" : "Mois"}
-          </button>
-        ))}
-
         <button
           onClick={() => setShowFilters((s) => !s)}
           className="ml-2 flex items-center px-3 py-1 rounded-full text-sm border bg-white/10 text-white hover:bg-white/20 border-white/30"
@@ -412,10 +359,27 @@ const CompagnieReservationsPage: React.FC = () => {
       }}
     >
       <div className="max-w-7xl mx-auto">
-        {/* Filtres haut (custom dates + filtres "détails") */}
-        {showFilters && (
+        {/* Date + filtre de période (Semaine | Mois | Année | Personnalisé) */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <p className="text-sm text-gray-600">{formatDateLongFr(new Date())}</p>
+          <PeriodFilterBar
+            period={period}
+            customStart={customStart || undefined}
+            customEnd={customEnd || undefined}
+            onPeriodChange={(kind, start, end) => {
+              setPeriod(kind);
+              setCustomStart(start ?? "");
+              setCustomEnd(end ?? "");
+              setCurrentPage(1);
+              setSelectedAgencyId(null);
+            }}
+          />
+        </div>
+
+        {/* Filtres détails (départ, arrivée, canal) — affichés quand une agence est sélectionnée */}
+        {showFilters && selectedAgencyId && (
           <div
-            className="rounded-2xl p-4 mb-6 border shadow-sm"
+            className="rounded-xl p-4 mb-6 border shadow-sm"
             style={{
               background: "rgba(255,255,255,0.55)",
               backdropFilter: "blur(10px)",
@@ -423,83 +387,38 @@ const CompagnieReservationsPage: React.FC = () => {
               borderColor: "rgba(0,0,0,0.08)",
             }}
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium mb-1">Période perso — Début</label>
+                <label className="block text-sm font-medium mb-1">Départ</label>
                 <input
-                  type="date"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
+                  placeholder="ex: Bamako"
+                  value={filterDepart}
+                  onChange={(e) => { setFilterDepart(e.target.value); setCurrentPage(1); }}
                   className="w-full p-2 border rounded-md bg-white/70"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Période perso — Fin</label>
+                <label className="block text-sm font-medium mb-1">Arrivée</label>
                 <input
-                  type="date"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
+                  placeholder="ex: Ségou"
+                  value={filterArrivee}
+                  onChange={(e) => { setFilterArrivee(e.target.value); setCurrentPage(1); }}
                   className="w-full p-2 border rounded-md bg-white/70"
                 />
               </div>
-              <div className="lg:col-span-2 flex items-end gap-2">
-                <button
-                  className="px-3 py-2 rounded-md border bg-white hover:bg-gray-50"
-                  onClick={() => setPeriod("custom")}
-                  disabled={!customStart || !customEnd}
+              <div>
+                <label className="block text-sm font-medium mb-1">Canal</label>
+                <select
+                  value={filterCanal}
+                  onChange={(e) => { setFilterCanal(e.target.value as any); setCurrentPage(1); }}
+                  className="w-full p-2 border rounded-md bg-white/70"
                 >
-                  Appliquer
-                </button>
-                <button
-                  className="px-3 py-2 rounded-md border bg-white hover:bg-gray-50"
-                  onClick={() => {
-                    setCustomStart("");
-                    setCustomEnd("");
-                    setPeriod(defaultPeriod);
-                  }}
-                >
-                  Réinitialiser
-                </button>
+                  <option value="tous">Tous</option>
+                  <option value="guichet">Guichet</option>
+                  <option value="en ligne">En ligne</option>
+                </select>
               </div>
             </div>
-
-            {selectedAgencyId && (
-              <>
-                <hr className="my-4" />
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Départ</label>
-                    <input
-                      placeholder="ex: Bamako"
-                      value={filterDepart}
-                      onChange={(e) => { setFilterDepart(e.target.value); setCurrentPage(1); }}
-                      className="w-full p-2 border rounded-md bg-white/70"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Arrivée</label>
-                    <input
-                      placeholder="ex: Ségou"
-                      value={filterArrivee}
-                      onChange={(e) => { setFilterArrivee(e.target.value); setCurrentPage(1); }}
-                      className="w-full p-2 border rounded-md bg-white/70"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Canal</label>
-                    <select
-                      value={filterCanal}
-                      onChange={(e) => { setFilterCanal(e.target.value as any); setCurrentPage(1); }}
-                      className="w-full p-2 border rounded-md bg-white/70"
-                    >
-                      <option value="tous">Tous</option>
-                      <option value="guichet">Guichet</option>
-                      <option value="en ligne">En ligne</option>
-                    </select>
-                  </div>
-                </div>
-              </>
-            )}
           </div>
         )}
 
@@ -527,8 +446,8 @@ const CompagnieReservationsPage: React.FC = () => {
                       setCurrentPage(1);
                     }}
                     className={cx(
-                      "relative p-6 rounded-2xl cursor-pointer transition-all",
-                      "border shadow-sm hover:shadow-lg"
+                      "relative p-6 rounded-xl cursor-pointer transition-all",
+                      "border shadow-sm hover:shadow-md"
                     )}
                     style={{
                       background: "rgba(255,255,255,0.58)",
@@ -600,7 +519,7 @@ const CompagnieReservationsPage: React.FC = () => {
             {/* Détails agence (agrégés par trajet) */}
             {selectedAgencyId && (
               <div
-                className="rounded-2xl border shadow-sm overflow-hidden"
+                className="rounded-xl border shadow-sm overflow-hidden"
                 style={{
                   background: "rgba(255,255,255,0.58)",
                   backdropFilter: "blur(12px)",

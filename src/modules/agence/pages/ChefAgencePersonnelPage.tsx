@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/shared/ui/button';
 
 interface Utilisateur {
   id: string;
@@ -103,12 +104,13 @@ const ChefAgencePersonnelPage: React.FC = () => {
           </select>
         </div>
 
-        <button
+        <Button
           type="submit"
-          className="mt-4 bg-blue-600 text-white px-4 py-2 rounded md:col-span-2"
+          variant="primary"
+          className="mt-4 md:col-span-2"
         >
           Ajouter l'utilisateur
-        </button>
+        </Button>
       </form>
 
       <h3 className="text-lg font-semibold mb-2">Liste actuelle</h3>

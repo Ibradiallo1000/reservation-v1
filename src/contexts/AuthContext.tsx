@@ -30,34 +30,11 @@ import {
 import { auth, db } from "@/firebaseConfig";
 import { Role, permissionsByRole } from "@/roles-permissions";
 import { Company } from "@/types/companyTypes";
+import { CustomUser } from "@/types/auth";
 
 /* =========================
    Types
 ========================= */
-export interface CustomUser {
-  uid: string;
-  email: string;
-  displayName?: string;
-
-  companyId: string;
-  role: Role;
-  nom: string;
-  ville?: string;
-
-  agencyId?: string;
-  agencyName?: string;
-
-  lastLogin?: Date | null;
-  permissions?: string[];
-
-  companyLogo?: string;
-  companyColor?: string;
-
-  agencyTelephone?: string;
-  agencyNom?: string;
-  agencyLogoUrl?: string;
-}
-
 interface AuthContextType {
   user: CustomUser | null;
   loading: boolean;
@@ -75,65 +52,41 @@ export const AuthContext = createContext<AuthContextType>(null as any);
 /* =========================
    Utils
 ========================= */
+/** Canonical roles only. Unknown → unauthenticated. agency_boarding_officer / embarquement → chefEmbarquement. */
+const CANONICAL_ROLES: ReadonlySet<string> = new Set([
+  "admin_platforme",
+  "admin_compagnie",
+  "company_accountant",
+  "agency_accountant",
+  "chef_garage",
+  "chefagence",
+  "chefembarquement",
+  "guichetier",
+  "agency_fleet_controller",
+  "financial_director",
+  "agentcourrier",
+]);
+
 const normalizeRole = (r?: string): Role => {
-  if (!r) return "user";
-
-  const raw = r.trim().toLowerCase();
-
-  console.log("🔍 AuthContext normalizeRole - raw input:", raw);
-
-  const map: Record<string, Role> = {
-    // PLATFORME
-    'admin_platforme': "admin_platforme",
-    'admin platforme': "admin_platforme",
-    'admin': "admin_platforme",
-
-    // COMPAGNIE (CEO)
-    'admin_compagnie': "admin_compagnie",
-    'compagnie': "admin_compagnie",
-    'admin compagnie': "admin_compagnie",
-    'ceo': "admin_compagnie",
-    'directeur': "admin_compagnie",
-
-    // COMPTABILITÉ COMPAGNIE (CHEF COMPTABLE + DAF) - NOUVEAU
-    'company_accountant': "company_accountant",
-    'comptable_compagnie': "company_accountant",
-    'comptable compagnie': "company_accountant",
-    'comptable': "company_accountant",
-    'chef comptable': "company_accountant",
-    'chef_comptable': "company_accountant",
-    
-    // DAF (DIRECTEUR ADMINISTRATIF ET FINANCIER)
-    'financial_director': "financial_director",
-    'daf': "financial_director",
-    'directeur_financier': "financial_director",
-    'directeur financier': "financial_director",
-
-    // COMPTABILITÉ AGENCE
-    'agency_accountant': "agency_accountant",
-    'comptable_agence': "agency_accountant",
-    'comptable agence': "agency_accountant",
-
-    // AGENCE
-    'chefagence': "chefAgence",
-    'chef_agence': "chefAgence",
-    'chef agence': "chefAgence",
-    'superviseur': "chefAgence",
-    'agentcourrier': "chefAgence",
-    'agent_courrier': "chefAgence",
-
-    // GUICHET
-    'guichetier': "guichetier",
-    'embarquement': "embarquement",
-
-    // DEFAULT
-    'user': "user",
-  };
-
-  const result = map[raw] ?? "user";
-  console.log("🔍 AuthContext normalizeRole - result:", result);
-  
-  return result;
+  if (!r || typeof r !== "string") return "unauthenticated";
+  const role = r.trim().toLowerCase();
+  switch (role) {
+    case "chefagence":
+      return "chefAgence";
+    case "chefgarage":
+      return "chef_garage";
+    case "chefembarquement":
+      return "chefEmbarquement";
+    case "company_ceo":
+      return "admin_compagnie";
+    case "agentcourrier":
+      return "agentCourrier";
+    default:
+      if (CANONICAL_ROLES.has(role)) return role as Role;
+      if (role === "agency_boarding_officer" || role === "embarquement") return "chefEmbarquement";
+      console.error("Unknown role in AuthContext:", r);
+      return "unauthenticated";
+  }
 };
 
 const toDate = (v: any): Date | null => {
@@ -153,52 +106,32 @@ const hasAny = (roles: unknown, allowed: readonly string[]) =>
 
 export const landingTargetForRoles = (roles: unknown): string => {
   const rolesArray = asArray(roles).map(String);
-  
-  console.log("🎯 AuthContext landingTargetForRoles - rôles reçus:", rolesArray);
 
-  // ✅ ESPACE CHEF COMPTABLE COMPAGNIE (NOUVEAU - PRIORITÉ HAUTE)
-  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) {
-    console.log("🎯 Redirection vers: /chef-comptable");
-    return "/chef-comptable";
-  }
+  // admin_platforme → /admin/dashboard
+  if (hasAny(rolesArray, ["admin_platforme"])) return "/admin/dashboard";
 
-  // ✅ ESPACE COMPTABILITÉ AGENCE
-  if (hasAny(rolesArray, ["agency_accountant"])) {
-    console.log("🎯 Redirection vers: /agence/comptabilite");
-    return "/agence/comptabilite";
-  }
+  // company_ceo / admin_compagnie → /compagnie/command-center (Phase 5)
+  if (hasAny(rolesArray, ["admin_compagnie", "company_ceo"])) return "/compagnie/command-center";
+  // chef_garage → garage layout (Flotte uniquement) ; redirect avec companyId dans LoginPage/RoleLanding
+  if (hasAny(rolesArray, ["chef_garage"])) return "/compagnie/garage/dashboard";
 
-  // ✅ GUICHET
-  if (hasAny(rolesArray, ["guichetier"])) {
-    console.log("🎯 Redirection vers: /agence/guichet");
-    return "/agence/guichet";
-  }
+  // company_accountant / financial_director → /chef-comptable
+  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) return "/chef-comptable";
 
-  // ✅ CHEF AGENCE & EMBARQUEMENT
-  if (hasAny(rolesArray, ["chefAgence", "embarquement"])) {
-    console.log("🎯 Redirection vers: /agence/dashboard");
-    return "/agence/dashboard";
-  }
+  // agency_accountant → /agence/comptabilite
+  if (hasAny(rolesArray, ["agency_accountant"])) return "/agence/comptabilite";
 
-  // ✅ CEO COMPAGNIE
-  if (hasAny(rolesArray, ["admin_compagnie"])) {
-    console.log("🎯 Redirection vers: /compagnie/dashboard");
-    return "/compagnie/dashboard";
-  }
+  // chefEmbarquement → /agence/boarding (embarquement)
+  if (hasAny(rolesArray, ["chefEmbarquement"])) return "/agence/boarding";
+  // chefAgence → /agence/dashboard (rolesArray may be from context: chefAgence or chefagence)
+  if (hasAny(rolesArray, ["chefAgence", "chefagence"])) return "/agence/dashboard";
+  // agency_fleet_controller → /agence/fleet
+  if (hasAny(rolesArray, ["agency_fleet_controller"])) return "/agence/fleet";
 
-  // ✅ ADMIN PLATFORME
-  if (hasAny(rolesArray, ["admin_platforme"])) {
-    console.log("🎯 Redirection vers: /admin/dashboard");
-    return "/admin/dashboard";
-  }
+  // guichetier → /agence/guichet
+  if (hasAny(rolesArray, ["guichetier"])) return "/agence/guichet";
 
-  // ✅ COMPATIBILITÉ - rôles obsolètes mais existants
-  if (hasAny(rolesArray, ["compagnie"])) {
-    console.log("🎯 Redirection (compatibilité) vers: /compagnie/dashboard");
-    return "/compagnie/dashboard";
-  }
-
-  console.log("🎯 Aucun rôle spécifique détecté, redirection vers: /login");
+  // unauthenticated / user / unknown → /login
   return "/login";
 };
 
@@ -238,10 +171,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       const invite = snap.docs[0];
       const data: any = invite.data();
 
+      const invRole = data.role ?? "chefAgence";
+      const canonicalRole =
+        invRole === "comptable" && data.agencyId
+          ? "agency_accountant"
+          : invRole === "comptable"
+            ? "company_accountant"
+            : invRole === "company_ceo"
+              ? "admin_compagnie"
+              : invRole;
+
       await setDoc(userRef, {
         uid: firebaseUser.uid,
         email: firebaseUser.email,
-        role: data.role ?? "chefAgence",
+        role: canonicalRole,
         companyId: data.companyId,
         agencyId: data.agencyId ?? "",
         nom: data.fullName ?? "",
@@ -254,6 +197,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         uid: firebaseUser.uid,
         acceptedAt: serverTimestamp(),
       });
+
+      if (data.companyId && data.agencyId) {
+        const agencyUserRef = doc(
+          db,
+          "companies",
+          data.companyId,
+          "agences",
+          data.agencyId,
+          "users",
+          invite.ref.id
+        );
+        try {
+          await updateDoc(agencyUserRef, {
+            invitationPending: false,
+            uid: firebaseUser.uid,
+          });
+        } catch {
+          /* Doc may not exist; ignore */
+        }
+      }
     },
     [isLoggingOut]
   );
@@ -274,7 +237,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         setUser({
           uid: firebaseUser.uid,
           email: firebaseUser.email || "",
-          role: "user",
+          role: "unauthenticated",
           companyId: "",
           nom: "",
         } as CustomUser);
@@ -283,15 +246,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       const data: any = snap.data();
-      const role = normalizeRole(data.role);
-
-      console.log("📊 AuthContext - Données utilisateur Firestore:", {
-        rawRole: data.role,
-        normalizedRole: role,
-        companyId: data.companyId,
-        agencyId: data.agencyId,
-        email: data.email
-      });
+      // Legacy: resolve "comptable" from Firestore before normalization (until migration runs)
+      const rawRole = data.role;
+      const resolvedRole =
+        rawRole === "comptable" && data.agencyId
+          ? "agency_accountant"
+          : rawRole === "comptable"
+            ? "company_accountant"
+            : rawRole;
+      const role = normalizeRole(resolvedRole);
 
       const permissions = Array.from(
         new Set([
@@ -318,13 +281,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         agencyNom: data.agencyNom,
         agencyLogoUrl: data.agencyLogoUrl,
       };
-
-      console.log("✅ AuthContext - Utilisateur créé:", {
-        role: customUser.role,
-        companyId: customUser.companyId,
-        agencyId: customUser.agencyId,
-        target: landingTargetForRoles(customUser.role)
-      });
 
       setUser(customUser);
 
@@ -370,7 +326,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const hasPermission = useCallback(
     (permission: string) => {
       if (!user) return false;
-      if (normalizeRole(user.role) === "admin_platforme") return true;
+      const role = normalizeRole(user.role);
+      if (role === "unauthenticated") return false;
+      if (role === "admin_platforme") return true;
       return !!user.permissions?.includes(permission);
     },
     [user]
@@ -390,14 +348,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         setLoading(true);
 
         if (!fbUser) {
-          console.log("🚪 AuthContext - Utilisateur déconnecté");
           setUser(null);
           setCompany(null);
           setLoading(false);
           return;
         }
-
-        console.log("🔐 AuthContext - Nouvel utilisateur détecté:", fbUser.email);
 
         try {
           await fetchUserDoc(fbUser);

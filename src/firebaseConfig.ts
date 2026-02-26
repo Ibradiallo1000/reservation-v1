@@ -17,7 +17,11 @@ import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
 /* =====================================================================
    1) CONFIG FIREBASE
-   Remplace par tes valeurs si besoin (actuellement inchangées)
+   Remplace par tes valeurs si besoin (actuellement inchangées).
+   Pour auth/network-request-failed: vérifier Firebase Console >
+   Authentication > Paramètres > Autoriser les domaines (inclure localhost).
+   Les requêtes Auth passent par identitytoolkit.googleapis.com et
+   securetoken.googleapis.com — ne pas bloquer (proxy/pare-feu).
 ===================================================================== */
 const firebaseConfig = {
   apiKey: "AIzaSyB9sGzgvdzhxxhIshtPprPix7oBfCB2OuM",
@@ -144,6 +148,54 @@ export const dbReady: Promise<void> = (async () => {
   // pour garder le contrôle (HMR / tests / SSR).
   return;
 })();
+
+/* =====================================================================
+   AUTH NETWORK DIAGNOSTICS (auth/network-request-failed)
+===================================================================== */
+const FIREBASE_AUTH_ENDPOINTS = [
+  "https://identitytoolkit.googleapis.com",
+  "https://securetoken.googleapis.com",
+] as const;
+
+/**
+ * Log Firebase Auth config state (no secrets). Run in console to verify setup.
+ */
+export function logAuthConfigCheck(): void {
+  if (typeof window === "undefined") return;
+  const ok = Boolean(
+    firebaseConfig.apiKey &&
+      firebaseConfig.authDomain &&
+      firebaseConfig.projectId
+  );
+  console.info("[Firebase Auth] config check:", {
+    hasApiKey: Boolean(firebaseConfig.apiKey),
+    authDomain: firebaseConfig.authDomain,
+    projectId: firebaseConfig.projectId,
+    configOk: ok,
+  });
+}
+
+/**
+ * Check connectivity to Firebase Auth endpoints. Resolves to true if at least one
+ * endpoint is reachable (HEAD request). Use to confirm no proxy/firewall block.
+ */
+export async function checkFirebaseAuthConnectivity(): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  for (const base of FIREBASE_AUTH_ENDPOINTS) {
+    try {
+      const r = await fetch(base, { method: "HEAD", mode: "no-cors" });
+      console.info("[Firebase Auth] connectivity:", base, "ok");
+      return true;
+    } catch (e) {
+      console.warn("[Firebase Auth] connectivity failed:", base, e);
+    }
+  }
+  console.warn(
+    "[Firebase Auth] All endpoints unreachable. Check proxy/firewall for:",
+    FIREBASE_AUTH_ENDPOINTS
+  );
+  return false;
+}
 
 /* =====================================================================
    EXPORTS

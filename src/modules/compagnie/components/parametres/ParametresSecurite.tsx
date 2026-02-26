@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { updatePassword } from 'firebase/auth';
 import { auth } from '@/firebaseConfig';
+import { Button } from '@/shared/ui/button';
 
 interface ParametresSecuriteProps {
   companyId: string; // 🔥 nécessaire pour compatibilité Tabs
@@ -70,7 +71,7 @@ const ParametresSecurite: React.FC<ParametresSecuriteProps> = ({ companyId }) =>
   };
 
   return (
-    <div className="bg-white rounded-xl border p-6 max-w-xl">
+    <div className="bg-white rounded-xl border p-6 max-w-7xl mx-auto">
       <h2 className="text-xl font-bold mb-6">Sécurité</h2>
 
       <div className="space-y-4">
@@ -90,13 +91,13 @@ const ParametresSecurite: React.FC<ParametresSecuriteProps> = ({ companyId }) =>
           className="w-full border rounded-lg px-4 py-2"
         />
 
-        <button
+        <Button
           onClick={handleChangePassword}
           disabled={loading}
-          className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2 rounded-lg disabled:opacity-60"
+          variant="primary"
         >
           {loading ? 'Modification...' : 'Modifier le mot de passe'}
-        </button>
+        </Button>
 
         {message.text && (
           <p

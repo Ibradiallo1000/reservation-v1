@@ -4,25 +4,25 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
   getDocs,
-  setDoc,
   updateDoc,
   deleteDoc,
   doc,
-  Timestamp,
   query,
   where,
   getDoc,
 } from "firebase/firestore";
-import { db, auth } from "@/firebaseConfig";
+import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { getFunctions, httpsCallable } from "firebase/functions";
+import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
+import { Button } from "@/shared/ui/button";
 
 /** Rôles de création ici (niveau compagnie). Tout le personnel de la compagnie est affiché. */
 type CompanyRoleCreate =
   | "admin_compagnie"        // CEO (technique)
   | "financial_director"     // DAF
-  | "company_accountant";    // Comptable compagnie
+  | "company_accountant"     // Comptable compagnie
+  | "chef_garage";          // Chef garage (flotte compagnie)
 
 
 type AnyRole =
@@ -30,8 +30,9 @@ type AnyRole =
   | "admin_compagnie"
   | "financial_director"
   | "company_accountant"
+  | "chef_garage"
   | "chef_agence"
-  | "comptable_agence"
+  | "agency_accountant"
   | "guichetier"
   | "agent_courrier"
   | string;
@@ -63,8 +64,9 @@ const ROLE_LABELS: Record<string, string> = {
   admin_compagnie: "CEO / Propriétaire",
   financial_director: "Directeur financier (DAF)",
   company_accountant: "Comptable (compagnie)",
+  chef_garage: "Chef garage (flotte)",
   chef_agence: "Chef d’agence",
-  comptable_agence: "Comptable (agence)",
+  agency_accountant: "Comptable (agence)",
   guichetier: "Guichetier",
   agent_courrier: "Agent de courrier",
 };
@@ -72,7 +74,6 @@ const ROLE_LABELS: Record<string, string> = {
 /* ===================== VALIDATIONS ===================== */
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
 const phoneRegex = /^\d{8,15}$/;          // 8 à 15 chiffres
-const pass6DigitsRegex = /^\d{6}$/;       // mot de passe = 6 chiffres
 
 const toCapitalize = (v: string) =>
   v
@@ -96,7 +97,6 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [telephone, setTelephone] = useState("");
-  const [password, setPassword] = useState("");
   const [role, setRole] = useState<CompanyRoleCreate>("company_accountant");
 
   /* -------- Édition -------- */
@@ -149,12 +149,11 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
   }, [user?.companyId]);
 
   const resetForm = () => {
-  setDisplayName("");
-  setEmail("");
-  setTelephone("");
-  setPassword("");
-  setRole("company_accountant");
- };
+    setDisplayName("");
+    setEmail("");
+    setTelephone("");
+    setRole("company_accountant");
+  };
 
   /* ===================== ACTIONS ===================== */
 
@@ -162,10 +161,8 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
     const errors: string[] = [];
     if (isEmpty(displayName)) errors.push("le nom complet");
     if (isEmpty(email) || !emailRegex.test(email)) errors.push("un email valide");
-    if (isEmpty(telephone) || !phoneRegex.test(telephone))
-      errors.push("un téléphone composé de 8 à 15 chiffres");
-    if (!pass6DigitsRegex.test(password))
-      errors.push("un mot de passe de 6 chiffres");
+    if (!isEmpty(telephone) && !phoneRegex.test(telephone))
+      errors.push("un téléphone valide (8 à 15 chiffres) ou vide");
 
     if (errors.length) {
       setMessage("⚠️ Merci de renseigner " + errors.join(", ") + ".");
@@ -186,43 +183,26 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
 
     try {
       const niceName = toCapitalize(displayName);
+      const result = await createInvitationDoc({
+        email: email.trim().toLowerCase(),
+        role,
+        companyId: user.companyId,
+        fullName: niceName,
+        ...(telephone.trim() ? { phone: telephone.trim() } : {}),
+        createdBy: user?.uid,
+      });
 
-      // 1) Création Auth (mdp = 6 chiffres)
-      const cred = await createUserWithEmailAndPassword(
-        auth,
-        email.trim().toLowerCase(),
-        password
+      setMessage(
+        `Invitation créée avec succès. Partagez ce lien avec l'invité : ${result.activationUrl}`
       );
-      await updateProfile(cred.user, { displayName: niceName });
-      const uid = cred.user.uid;
-
-      // 2) Document Firestore /users/{uid} (niveau compagnie)
-      const ref = doc(db, "users", uid);
-      await setDoc(
-        ref,
-        {
-          uid,
-          email: email.trim().toLowerCase(),
-          displayName: niceName,
-          telephone: telephone.trim(),
-          role, // admin_compagnie | comptable_compagnie
-          active: true,
-          companyId: user.companyId,
-          agencyId: null,
-          createdAt: Timestamp.now(),
-        },
-        { merge: true }
-      );
-
-      setMessage("✅ Personnel ajouté avec succès.");
       resetForm();
-      await loadStaff();
     } catch (err: any) {
       console.error("handleAdd err:", err);
+      const code = err?.code ?? err?.details?.code;
       setMessage(
-        err?.code === "auth/email-already-in-use"
-          ? "⚠️ Cet email est déjà utilisé."
-          : "❌ Ajout impossible. Voir la console."
+        code === "already-exists"
+          ? "⚠️ Une invitation en attente existe déjà pour cet email."
+          : "❌ " + (err?.message ?? "Envoi impossible. Voir la console.")
       );
     } finally {
       setBusy(false);
@@ -354,13 +334,13 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
   /* ===================== UI ===================== */
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-3xl font-extrabold mb-6">
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-2xl font-bold text-gray-900 mb-6">
         Paramètres de la compagnie — Personnel
       </h1>
 
       {/* Carte d’ajout (niveau compagnie) */}
-      <div className="mb-8 bg-white p-6 rounded-xl shadow-md border">
+      <div className="mb-8 bg-white p-6 rounded-xl shadow-sm border">
         <h2 className="text-lg font-semibold mb-4">
           Ajouter un membre (niveau compagnie)
         </h2>
@@ -393,24 +373,17 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
           >
            <option value="company_accountant">Comptable (compagnie)</option>
            <option value="financial_director">Directeur financier (DAF)</option>
+           <option value="chef_garage">Chef garage (flotte)</option>
           </select>
-
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            placeholder="Mot de passe (6 chiffres)"
-            type="password"
-            className="border p-3 rounded focus:ring-2 md:col-span-2"
-          />
         </div>
 
-        <button
+        <Button
           onClick={handleAdd}
           disabled={busy}
-          className="w-full py-3 rounded font-semibold text-white transition disabled:opacity-60 bg-orange-600"
+          className="w-full"
         >
-          {busy ? "⏳ Traitement..." : "Ajouter l’utilisateur"}
-        </button>
+          {busy ? "⏳ Traitement..." : "Envoyer l’invitation"}
+        </Button>
         {message && (
           <p className="mt-3 text-center text-sm text-gray-700">{message}</p>
         )}
@@ -423,7 +396,7 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
           key === "__company__" ? "Niveau compagnie" : `Agence : ${agencesMap.get(key) || key}`;
 
         return (
-          <div key={key} className="bg-white rounded-xl shadow-md border mb-6">
+          <div key={key} className="bg-white rounded-xl shadow-sm border mb-6">
             <div className="p-4 border-b">
               <h2 className="text-lg font-semibold">{titre}</h2>
             </div>
@@ -465,7 +438,8 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
                            <option value="company_accountant">Comptable (compagnie)</option>
                            <option value="financial_director">Directeur financier (DAF)</option>
                            <option value="chef_agence">Chef d’agence</option>
-                           <option value="comptable_agence">Comptable (agence)</option>
+                           <option value="chef_garage">Chef garage (flotte)</option>
+                           <option value="agency_accountant">Comptable (agence)</option>
                            <option value="guichetier">Guichetier</option>
                            <option value="agent_courrier">Agent de courrier</option>
                           </select>
@@ -503,13 +477,14 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
                     <div className="flex flex-wrap gap-2">
                       {editId === m.uid ? (
                         <>
-                          <button
+                          <Button
                             onClick={handleEditSave}
                             disabled={busy}
-                            className="px-3 py-1 rounded text-white bg-green-600"
+                            variant="primary"
+                            size="sm"
                           >
                             Enregistrer
-                          </button>
+                          </Button>
                           <button
                             onClick={() => setEditId(null)}
                             className="px-3 py-1 rounded border"

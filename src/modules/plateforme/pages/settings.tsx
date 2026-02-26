@@ -1,7 +1,7 @@
 // ✅ src/pages/admin/settings.tsx
 
 import React, { useState } from 'react';
-import FooterConfig from '../../../components/admin/FooterConfig'; // vérifie que FooterConfig a bien `export default`
+import FooterConfig from '@/modules/plateforme/admin/components/FooterConfig';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 
@@ -42,7 +42,7 @@ const CompanySettings = () => {
   };
 
   return (
-    <div className="space-y-8 p-6">
+    <div className="space-y-6 p-6">
       <h2 className="text-xl font-semibold">Configuration de la vitrine</h2>
       <FooterConfig company={company} onUpdate={updateFooterConfig} />
     </div>

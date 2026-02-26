@@ -19,6 +19,10 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useNavigate, useParams } from "react-router-dom";
 import { httpsCallable } from "firebase/functions";
+import { Button } from "@/shared/ui/button";
+import { canCompanyPerformAction } from "@/shared/subscription/restrictions";
+import type { SubscriptionStatus } from "@/shared/subscription/types";
+import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 
 // Leaflet assets
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -232,15 +236,13 @@ const DeleteAgencyModal: React.FC<{
           >
             Annuler
           </button>
-          <button
+          <Button
             onClick={() => onConfirm(action, action === "transfer" ? target || null : null)}
             disabled={!canConfirm || loading}
-            className={`px-4 py-2 rounded-md text-white ${loading ? "opacity-70" : ""} ${
-              action === "delete" ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"
-            }`}
+            variant={action === "delete" ? "danger" : "primary"}
           >
             {loading ? "Traitement..." : "Confirmer"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -420,6 +422,19 @@ const CompagnieAgencesPage: React.FC = () => {
     return;
   }
 
+  // Subscription restriction check
+  const companyData = company as Record<string, unknown> | null;
+  const subStatus = (companyData?.subscriptionStatus as SubscriptionStatus) ?? "active";
+  const actionCheck = canCompanyPerformAction(subStatus, "CREATE_AGENCY");
+  if (!actionCheck.allowed) {
+    alert(actionCheck.reason || "Action non autorisée par votre abonnement.");
+    return;
+  }
+  if (actionCheck.warning) {
+    const proceed = confirm(actionCheck.warning + "\n\nSouhaitez-vous continuer ?");
+    if (!proceed) return;
+  }
+
   if (!formData.nomAgence.trim()) {
     alert("Nom de l'agence requis");
     return;
@@ -462,22 +477,23 @@ const CompagnieAgencesPage: React.FC = () => {
     );
 
     // 2️⃣ créer l’invitation
-    const invitationRef = await addDoc(collection(db, "invitations"), {
+    const inviteResult = await createInvitationDoc({
       email: normalizeEmail(formData.emailGerant),
       role: "chefAgence",
       companyId,
       agencyId: agenceRef.id,
-      status: "pending",
-      createdAt: serverTimestamp(),
+      fullName: formatNom(formData.nomGerant || ""),
+      phone: onlyDigits(formData.telephone),
     });
 
     // 3️⃣ lier invitation → agence
     await updateDoc(agenceRef, {
-      invitationId: invitationRef.id,
+      invitationId: inviteResult.inviteId,
+      invitationToken: inviteResult.token,
     });
 
     alert(
-      `✅ Agence créée.\n\nLien d’activation :\n${window.location.origin}/accept-invitation/${invitationRef.id}`
+      `✅ Agence créée.\n\nLien d’activation :\n${inviteResult.activationUrl}`
     );
 
     resetForm();
@@ -619,25 +635,24 @@ const CompagnieAgencesPage: React.FC = () => {
 
   // Render
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <div />
-        <button
+        <Button
           onClick={() => setShowForm(!showForm)}
-          className="flex items-center px-4 py-2 rounded-md shadow-sm text-white font-medium"
-          style={{ backgroundColor: couleurPrincipale }}
+          variant="primary"
         >
           <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
           {showForm ? "Masquer le formulaire" : "Ajouter une nouvelle agence"}
-        </button>
+        </Button>
       </div>
 
       {showForm && (
         <form
           onSubmit={handleSubmit}
-          className="bg-white p-6 rounded-lg shadow-md mb-8 border border-gray-200"
+          className="bg-white p-6 rounded-lg shadow-sm mb-8 border border-gray-200"
         >
           <fieldset disabled={creating} className={creating ? "opacity-60" : ""}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: couleurPrincipale }}>
@@ -787,14 +802,13 @@ const CompagnieAgencesPage: React.FC = () => {
               >
                 Annuler
               </button>
-              <button
+              <Button
                 type="submit"
                 disabled={creating}
-                className="px-4 py-2 rounded-md shadow-sm text-sm font-medium text-white hover:bg-opacity-90"
-                style={{ backgroundColor: couleurPrincipale }}
+                variant="primary"
               >
                 {editingId ? "Mettre à jour l'agence" : creating ? "Création…" : "Ajouter l'agence"}
-              </button>
+              </Button>
             </div>
           </fieldset>
         </form>
@@ -822,7 +836,7 @@ const CompagnieAgencesPage: React.FC = () => {
       </div>
 
       {agences.length === 0 && !loading ? (
-        <div className="bg-white p-8 rounded-lg shadow-sm border border-gray-200 text-center">
+        <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 text-center">
           <svg
             className="mx-auto h-12 w-12 text-gray-400"
             fill="none"
@@ -839,16 +853,15 @@ const CompagnieAgencesPage: React.FC = () => {
           <h3 className="mt-2 text-lg font-medium text-gray-900">Aucune agence enregistrée</h3>
           <p className="mt-1 text-sm text-gray-500">Commencez par ajouter votre première agence.</p>
           <div className="mt-6">
-            <button
+            <Button
               onClick={() => setShowForm(true)}
-              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white"
-              style={{ backgroundColor: couleurPrincipale }}
+              variant="primary"
             >
               <svg className="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
               Ajouter une agence
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
@@ -857,7 +870,7 @@ const CompagnieAgencesPage: React.FC = () => {
             {currentAgences.map((ag) => (
               <div
                 key={ag.id}
-                className="bg-white rounded-lg shadow-sm overflow-hidden border border-gray-200 hover:shadow-md transition-shadow"
+                className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200 hover:shadow-sm transition-shadow"
               >
                 <div className="p-5">
                   <div className="flex justify-between items-start">
@@ -893,10 +906,10 @@ const CompagnieAgencesPage: React.FC = () => {
                       </svg>
                       {ag.emailGerant}
                     </div>
-                    {ag.invitationId && (
+                    {((ag as any).invitationToken || ag.invitationId) && (
                       <div className="mb-2">
                         <a
-                          href={`/accept-invitation/${(ag as any).invitationId}`}
+                          href={`/accept-invitation/${(ag as any).invitationToken || (ag as any).invitationId}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-sm text-blue-600 underline hover:text-blue-800"
@@ -944,13 +957,13 @@ const CompagnieAgencesPage: React.FC = () => {
                       </svg>
                       Dashboard
                     </button>
-                    <button
+                    <Button
                       onClick={() => {
                         setShowForm(true);
                         handleEdit(ag);
                       }}
-                      className="inline-flex justify-center items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white"
-                      style={{ backgroundColor: couleurPrincipale }}
+                      variant="primary"
+                      size="sm"
                     >
                       <svg className="-ml-1 mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path
@@ -961,7 +974,7 @@ const CompagnieAgencesPage: React.FC = () => {
                         />
                       </svg>
                       Modifier
-                    </button>
+                    </Button>
                   </div>
 
                   <div className="mt-3 flex space-x-2">

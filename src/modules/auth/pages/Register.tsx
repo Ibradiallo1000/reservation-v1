@@ -1,10 +1,6 @@
 // src/pages/Register.tsx
 import React, { useEffect, useState } from "react";
-import { getAuth, isSignInWithEmailLink, signInWithEmailLink } from "firebase/auth";
-import { app } from "@/firebaseConfig";
-import { useNavigate, useLocation } from "react-router-dom";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+import { useLocation } from "react-router-dom";
 
 function useQuery() {
   const { search } = useLocation();
@@ -12,108 +8,14 @@ function useQuery() {
 }
 
 export default function Register() {
-  const auth = getAuth(app);
-  const navigate = useNavigate();
   const q = useQuery();
-
-  const companyId = q.companyId || "";
   const [email, setEmail] = useState(localStorage.getItem("invitedEmail") || "");
   const [message, setMessage] = useState("");
   const [processing, setProcessing] = useState(true);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const href = window.location.href;
-        const withLink = isSignInWithEmailLink(auth, href);
-        setProcessing(true);
-
-        // si on arrive sans l'email (ex: sur mobile), on affiche le champ
-        if (withLink && !email) {
-          setProcessing(false);
-          return;
-        }
-
-        if (withLink && email) {
-          const result = await signInWithEmailLink(auth, email, href);
-          localStorage.removeItem("invitedEmail");
-
-          const user = result.user;
-          // Si on a une invitation, appliquer le rôle + companyId
-          if (companyId) {
-            const inviteRef = doc(db, `companies/${companyId}/invites/${email.toLowerCase()}`);
-            const inviteSnap = await getDoc(inviteRef);
-            if (inviteSnap.exists()) {
-              const inv = inviteSnap.data() as any;
-
-              // users/{uid}
-              await setDoc(
-                doc(db, "users", user.uid),
-                {
-                  uid: user.uid,
-                  email: user.email,
-                  fullName: inv?.fullName || user.displayName || "",
-                  phone: inv?.phone || null,
-                  role: "admin_compagnie",
-                  companyId,
-                  status: "actif",
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp(),
-                },
-                { merge: true }
-              );
-
-              // companies/{companyId}/personnel/{uid}
-              await setDoc(
-                doc(db, `companies/${companyId}/personnel/${user.uid}`),
-                {
-                  uid: user.uid,
-                  email: user.email,
-                  fullName: inv?.fullName || user.displayName || "",
-                  phone: inv?.phone || null,
-                  role: "admin_compagnie",
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp(),
-                },
-                { merge: true }
-              );
-
-              // (optionnel) supprimer l'invite
-              // await deleteDoc(inviteRef);
-
-              setMessage("✅ Inscription réussie. Rôle admin compagnie appliqué.");
-              navigate("/compagnie/dashboard", { replace: true });
-              return;
-            }
-          }
-
-          // Aucun contexte d'invite → simple utilisateur
-          await setDoc(
-            doc(db, "users", user.uid),
-            {
-              uid: user.uid,
-              email: user.email,
-              fullName: user.displayName || "",
-              phone: user.phoneNumber || null,
-              role: "user",
-              status: "actif",
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-
-          setMessage("✅ Inscription réussie.");
-          navigate("/", { replace: true });
-        } else {
-          setProcessing(false);
-        }
-      } catch (e: any) {
-        console.error(e);
-        setMessage(`❌ Erreur d'inscription: ${e?.message || e?.code || "inconnue"}`);
-        setProcessing(false);
-      }
-    })();
-  }, [auth, email, companyId, navigate]);
+    setProcessing(false);
+  }, []);
 
   if (processing) {
     return <div className="p-6">Traitement…</div>;

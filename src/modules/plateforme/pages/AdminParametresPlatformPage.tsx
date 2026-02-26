@@ -1,8 +1,9 @@
 // src/pages/AdminParametresPlatformPage.tsx
 import React, { useEffect, useState } from "react";
+import { Button } from "@/shared/ui/button";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import ImageSelectorModal from "@/components/ui/ImageSelectorModal";
+import ImageSelectorModal from "@/shared/ui/ImageSelectorModal";
 import { HexColorPicker } from "react-colorful";
 import {
   Save,
@@ -189,7 +190,7 @@ const AdminParametresPlatformPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="max-w-5xl mx-auto">
+      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="max-w-7xl mx-auto">
         <h1 className="text-2xl font-bold mb-6 text-gray-800">Paramètres de la plateforme</h1>
 
         <AnimatePresence>
@@ -576,12 +577,9 @@ const AdminParametresPlatformPage: React.FC = () => {
           </div>
         </div>
 
-        <button
-          onClick={save}
-          className="bg-orange-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-orange-700 flex items-center gap-2"
-        >
+        <Button variant="primary" onClick={save}>
           <Save size={20} /> Sauvegarder
-        </button>
+        </Button>
 
         {/* Modal image */}
         {pickerFor && (

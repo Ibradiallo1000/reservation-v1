@@ -10,6 +10,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useNavigate } from "react-router-dom";
+import { Button } from "@/shared/ui/button";
 
 type Company = {
   id: string;
@@ -56,13 +57,13 @@ const AdminCompagniesPage: React.FC = () => {
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-orange-700">Compagnies</h1>
-        <button
+        <h1 className="text-2xl font-bold text-gray-900">Compagnies</h1>
+        <Button
           onClick={() => navigate("/admin/compagnies/ajouter")}
-          className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg"
+          variant="primary"
         >
           + Ajouter une compagnie
-        </button>
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -92,23 +93,25 @@ const AdminCompagniesPage: React.FC = () => {
 
             {/* Actions */}
             <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
+              <Button
                 onClick={() =>
                   navigate(`/admin/compagnies/${c.id}/configurer`)
                 }
-                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded"
+                variant="primary"
+                size="sm"
               >
                 Configurer
-              </button>
+              </Button>
 
-              <button
+              <Button
                 onClick={() =>
                   navigate(`/admin/compagnies/${c.id}/modifier`)
                 }
-                className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 rounded"
+                variant="primary"
+                size="sm"
               >
                 Modifier
-              </button>
+              </Button>
 
               {c.slug && (
                 <a
@@ -121,12 +124,13 @@ const AdminCompagniesPage: React.FC = () => {
                 </a>
               )}
 
-              <button
+              <Button
                 onClick={() => toggleStatus(c)}
-                className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded"
+                variant="danger"
+                size="sm"
               >
                 {c.status === "actif" ? "Désactiver" : "Activer"}
-              </button>
+              </Button>
             </div>
           </div>
         ))}

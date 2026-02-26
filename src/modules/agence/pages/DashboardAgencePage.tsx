@@ -15,7 +15,7 @@ import {
   DestinationsChart,
   TopTrajetsCard,
   NextDepartureCard
-} from '@/components/dashboard';
+} from '@/modules/agence/dashboard/components';
 
 import {
   TicketIcon,
@@ -305,24 +305,24 @@ const DashboardAgencePage: React.FC = () => {
 
         {/* Graph + canaux */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 p-4 rounded-lg shadow-md bg-white">
+          <div className="lg:col-span-2 p-4 rounded-lg shadow-sm bg-white">
             <RevenueChart data={stats.dailyStats} isLoading={isLoading} />
           </div>
-          <div className="p-4 rounded-lg shadow-md bg-white">
+          <div className="p-4 rounded-lg shadow-sm bg-white">
             <ChannelsChart data={stats.channels} isLoading={isLoading} />
           </div>
         </div>
 
         {/* Destinations / Top trajets (pagination) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="p-4 rounded-lg shadow-md bg-white">
+          <div className="p-4 rounded-lg shadow-sm bg-white">
             <NextDepartureCard isLoading={isLoading} />
           </div>
-          <div className="p-4 rounded-lg shadow-md bg-white">
+          <div className="p-4 rounded-lg shadow-sm bg-white">
             <DestinationsChart destinations={stats.destinations} isLoading={isLoading} />
           </div>
 
-          <div className="p-4 rounded-lg shadow-md bg-white space-y-3">
+          <div className="p-4 rounded-lg shadow-sm bg-white space-y-3">
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Top trajets</div>
               <div className="text-sm text-gray-600">

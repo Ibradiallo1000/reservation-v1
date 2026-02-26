@@ -11,6 +11,7 @@ import {
   runTransaction,
   serverTimestamp,
   writeBatch,
+  updateDoc,
   limit as fsLimit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -18,6 +19,22 @@ import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { useLocation } from "react-router-dom";
 import { BrowserMultiFormatReader } from "@zxing/browser";
+import { createFleetMovementPayload, buildVehicleTransitionToInTransit } from "@/modules/agence/fleet/fleetStateMachine";
+import { canTransition } from "@/modules/agence/fleet/types";
+import {
+  boardingStatsKey,
+  getBoardingStatsRef,
+  createBoardingStats,
+  incrementBoardingStatsEmbarked,
+  setBoardingStatsClosed,
+} from "@/modules/agence/aggregates/boardingStats";
+import { updateDailyStatsOnBoardingClosed } from "@/modules/agence/aggregates/dailyStats";
+import {
+  updateAgencyLiveStateOnBoardingOpened,
+  updateAgencyLiveStateOnBoardingClosed,
+  updateAgencyLiveStateOnVehicleInTransit,
+} from "@/modules/agence/aggregates/agencyLiveState";
+import { getAffectationForBoarding } from "@/modules/compagnie/fleet/affectationService";
 
 /* ===================== Types ===================== */
 type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
@@ -218,10 +235,14 @@ async function findReservationByCode(
 }
 
 /* ===================== Page ===================== */
-const AgenceEmbarquementPage: React.FC = () => {
+interface AgenceEmbarquementPageProps {
+  /** Phase 3: when set, boarding is blocked when embarked count exceeds this */
+  vehicleCapacity?: number | null;
+}
+const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicleCapacity = null }) => {
   const { user, company } = useAuth() as any;
   const location = useLocation() as {
-    state?: { trajet?: string; date?: string; heure?: string };
+    state?: { trajet?: string; date?: string; heure?: string; agencyId?: string; tripId?: string; departure?: string; arrival?: string };
   };
 
   const theme = {
@@ -256,8 +277,15 @@ const AgenceEmbarquementPage: React.FC = () => {
   const lastScanRef = useRef<number>(0);
   const lastAlertRef = useRef<number>(0);
 
-  // Affectation (optionnelle)
-  const [assign, setAssign] = useState<{bus?: string; immat?: string; chauffeur?: string; chef?: string}>({});
+  // Affectation (optionnelle) — véhicule / chauffeur / convoyeur depuis document affectation Phase 1
+  const [assign, setAssign] = useState<{
+    bus?: string;
+    immat?: string;
+    chauffeur?: string;
+    chauffeurPhone?: string;
+    chef?: string;
+    chefPhone?: string;
+  }>({});
 
   /* ---------- Charger les agences ---------- */
   useEffect(() => {
@@ -297,37 +325,46 @@ useEffect(() => {
   });
 }, [companyId, selectedAgencyId]);
 
-  /* ---------- Affectation liée au trajet ---------- */
-  useEffect(()=>{
+  /* ---------- Affectation liée au trajet (Phase 1: document affectation par trajet) ---------- */
+  useEffect(() => {
     setAssign({});
     if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate) return;
-
-    const key = `${(selectedTrip.departure||'').trim()}_${(selectedTrip.arrival||'').trim()}_${(selectedTrip.heure||'').trim()}_${selectedDate}`.replace(/\s+/g,'-');
-    const ref = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/affectations/${key}`);
-    getDoc(ref).then(s=>{
-      if (s.exists()) {
-        const d = s.data() as any;
-        setAssign({
-          bus: d?.busNumber || d?.bus || "",
-          immat: d?.immatriculation || d?.immat || "",
-          chauffeur: d?.chauffeur || "",
-          chef: d?.chefEmbarquement || d?.chef || "",
-        });
-      }
-    }).catch(()=>{});
+    const dep = (selectedTrip.departure ?? "").trim();
+    const arr = (selectedTrip.arrival ?? "").trim();
+    const heure = (selectedTrip.heure ?? "").trim();
+    if (!dep || !arr) return;
+    getAffectationForBoarding(companyId, selectedAgencyId, dep, arr, selectedDate, heure)
+      .then((a) => {
+        if (a) {
+          setAssign({
+            bus: (a as any).vehicleModel ?? "",
+            immat: (a as any).vehiclePlate ?? "",
+            chauffeur: (a as any).driverName ?? "",
+            chauffeurPhone: (a as any).driverPhone ?? "",
+            chef: (a as any).convoyeurName ?? "",
+            chefPhone: (a as any).convoyeurPhone ?? "",
+          });
+        }
+      })
+      .catch(() => {});
   }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
 
   /* ---------- Pré-remplissage navigation ---------- */
   useEffect(() => {
     const st = location.state;
-    if (!st?.trajet || !st?.heure) return;
-    const [dep, arr] = st.trajet.split("→").map((s) => s.trim());
+    if (st?.agencyId) setSelectedAgencyId(st.agencyId);
+    if (!st?.trajet && !st?.departure) return;
+    const dep = st?.departure ?? (st?.trajet ? st.trajet.split("→").map((s: string) => s.trim())[0] : "") ?? "";
+    const arr = st?.arrival ?? (st?.trajet ? st.trajet.split("→").map((s: string) => s.trim())[1] : "") ?? "";
+    const heure = st?.heure ?? "";
+    if (!heure) return;
     setSelectedTrip({
-      departure: dep || "",
-      arrival: arr || "",
-      heure: st.heure,
+      id: st?.tripId,
+      departure: dep,
+      arrival: arr,
+      heure,
     });
-    if (st.date) setSelectedDate(st.date);
+    if (st?.date) setSelectedDate(st.date);
   }, [location.state]);
 
   /* ---------- WeeklyTrips du jour ---------- */
@@ -442,16 +479,41 @@ useEffect(() => {
         `companies/${companyId}/agences/${agencyIdToUse}/reservations/${reservationId}`
       );
 
+      // Phase 3: capacity check before transaction (tx.get() does not support queries)
+      if (statut === "embarqué" && vehicleCapacity != null && vehicleCapacity > 0) {
+        const qEmb = query(
+          collection(db, `companies/${companyId}/agences/${agencyIdToUse}/reservations`),
+          where("date", "==", selectedDate),
+          where("heure", "==", selectedTrip!.heure),
+          where("statutEmbarquement", "==", "embarqué")
+        );
+        const snapEmb = await getDocs(qEmb);
+        let seatsEmbarques = 0;
+        snapEmb.docs.forEach((d) => {
+          const docData = d.data() as { trajetId?: string; depart?: string; arrivee?: string; arrival?: string; seatsGo?: number };
+          if (docData.trajetId === selectedTrip?.id || (normCity(docData.depart) === normCity(selectedTrip!.departure) && normCity(docData.arrivee || docData.arrival) === normCity(selectedTrip!.arrival))) {
+            seatsEmbarques += docData.seatsGo ?? 1;
+          }
+        });
+        const resSnap = await getDoc(resRef);
+        const dataPre = resSnap.exists() ? (resSnap.data() as { statutEmbarquement?: string; seatsGo?: number }) : null;
+        const alreadyEmbarked = dataPre?.statutEmbarquement === "embarqué";
+        const addSeats = alreadyEmbarked ? 0 : (dataPre?.seatsGo ?? 1);
+        if (seatsEmbarques + addSeats > vehicleCapacity) {
+          throw new Error("Capacité véhicule atteinte");
+        }
+      }
+
       try {
         await runTransaction(db, async (tx) => {
           const snap = await tx.get(resRef);
           if (!snap.exists()) throw new Error("Réservation introuvable");
-          const data = snap.data() as any;
+          const data = snap.data() as Record<string, unknown>;
 
           // normaliser pour comparer
-          const dataDep = normCity(data.depart);
-          const dataArr = normCity(data.arrivee || data.arrival);
-          const dataHr  = normTime(data.heure || "");
+          const dataDep = normCity(data.depart as string | undefined);
+          const dataArr = normCity((data.arrivee ?? data.arrival) as string | undefined);
+          const dataHr  = normTime((data.heure as string) ?? "");
           const dataDt  = normDate(data.date);
 
           const selDep  = normCity(selectedTrip!.departure);
@@ -465,8 +527,8 @@ useEffect(() => {
 
           // lecture weeklyTrips si nécessaire
           let weeklyTripMatch = false;
-          const selTripId = selectedTrip?.id ?? data.trajetId ?? null;
-          const resTripId = data.trajetId ?? null;
+          const selTripId = selectedTrip?.id ?? (data.trajetId as string | null) ?? null;
+          const resTripId = (data.trajetId as string | null) ?? null;
           if (!idMatch && (selTripId || resTripId)) {
             try {
               let selTripMeta: { departure?: string; arrival?: string } | null = null;
@@ -476,14 +538,14 @@ useEffect(() => {
                 const tSelRef = doc(db, `companies/${companyId}/agences/${agencyIdToUse}/weeklyTrips/${selectedTrip.id}`);
                 const tSelSnap = await tx.get(tSelRef);
                 if (tSelSnap.exists()) {
-                  const d = tSelSnap.data() as any;
+                  const d = tSelSnap.data() as { departure?: string; arrival?: string };
                   selTripMeta = { departure: d?.departure, arrival: d?.arrival };
                 }
               } else if (selTripId) {
                 const tSelRef = doc(db, `companies/${companyId}/agences/${agencyIdToUse}/weeklyTrips/${selTripId}`);
                 const tSelSnap = await tx.get(tSelRef);
                 if (tSelSnap.exists()) {
-                  const d = tSelSnap.data() as any;
+                  const d = tSelSnap.data() as { departure?: string; arrival?: string };
                   selTripMeta = { departure: d?.departure, arrival: d?.arrival };
                 }
               }
@@ -492,7 +554,7 @@ useEffect(() => {
                 const tResRef = doc(db, `companies/${companyId}/agences/${agencyIdToUse}/weeklyTrips/${resTripId}`);
                 const tResSnap = await tx.get(tResRef);
                 if (tResSnap.exists()) {
-                  const d = tResSnap.data() as any;
+                  const d = tResSnap.data() as { departure?: string; arrival?: string };
                   resTripMeta = { departure: d?.departure, arrival: d?.arrival };
                 }
               }
@@ -509,6 +571,32 @@ useEffect(() => {
 
           if (!(idMatch || fieldsMatch || softMatch || weeklyTripMatch)) {
             throw new Error("Billet pour un autre départ (date/heure/trajet non concordants).");
+          }
+
+          // Phase 4.5: boardingStats + capacity check inside transaction (embarqué only)
+          if (statut === "embarqué") {
+            const tripKey = boardingStatsKey(selDep ?? "", selArr ?? "", selHr ?? "", selectedDate);
+            const statsRef = getBoardingStatsRef(companyId, agencyIdToUse, tripKey);
+            const statsSnap = await tx.get(statsRef);
+            if (!statsSnap.exists()) {
+              createBoardingStats(tx, companyId, agencyIdToUse, tripKey, {
+                tripId: selectedTrip?.id ?? (data.trajetId as string | null) ?? null,
+                date: selectedDate,
+                heure: (selectedTrip?.heure ?? data.heure ?? "") as string,
+                vehicleCapacity: vehicleCapacity ?? 0,
+              });
+              updateAgencyLiveStateOnBoardingOpened(tx, companyId, agencyIdToUse);
+            }
+            const currentEmbarked = statsSnap.exists()
+              ? ((statsSnap.data() as { embarkedSeats?: number }).embarkedSeats ?? 0)
+              : 0;
+            const addSeats = (data.statutEmbarquement === "embarqué")
+              ? 0
+              : (Number(data.seatsGo) || 1);
+            if (vehicleCapacity != null && vehicleCapacity > 0 && currentEmbarked + addSeats > vehicleCapacity) {
+              throw new Error("Capacité véhicule atteinte");
+            }
+            incrementBoardingStatsEmbarked(tx, companyId, agencyIdToUse, tripKey, addSeats);
           }
 
           // verrou uniquement pour EMBARQUÉ (évite double-scan)
@@ -564,6 +652,8 @@ useEffect(() => {
         const msg = String(e?.message || e || "");
         if (msg.includes("Déjà embarqué")) {
           alert("Billet déjà embarqué.");
+        } else if (msg.includes("Capacité véhicule atteinte")) {
+          alert("Capacité véhicule atteinte. Impossible d'embarquer davantage.");
         } else if (msg.includes("non concordants")) {
           alert("Billet pour un autre départ (date/heure/trajet non concordants).");
         } else {
@@ -572,7 +662,7 @@ useEffect(() => {
         console.error("[EMBARK][ERROR]", e);
       }
     },
-    [companyId, selectedAgencyId, uid, selectedTrip?.id, selectedTrip?.departure, selectedTrip?.arrival, selectedTrip?.heure, selectedDate]
+    [companyId, selectedAgencyId, uid, selectedTrip?.id, selectedTrip?.departure, selectedTrip?.arrival, selectedTrip?.heure, selectedDate, vehicleCapacity]
   );
 
   /* ---------- Utilitaire : prochain départ ---------- */
@@ -719,9 +809,29 @@ useEffect(() => {
     }
 
     const lockRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingClosures/${tripKey}`);
+    const tripId = selectedTrip.id ?? null;
+
+    // Pre-query fleet vehicles for this departure (for atomic transaction)
+    let vehicleIds: Array<{ id: string }> = [];
+    try {
+      const fleetRef = collection(db, `companies/${companyId}/fleetVehicles`);
+      const qFleet = query(
+        fleetRef,
+        where("currentAgencyId", "==", selectedAgencyId),
+        where("currentDate", "==", selectedDate),
+        where("currentHeure", "==", selectedTrip.heure),
+        where("status", "==", "assigned")
+      );
+      const fleetSnap = await getDocs(qFleet);
+      vehicleIds = fleetSnap.docs
+        .filter((d) => (d.data() as { currentTripId?: string | null }).currentTripId === tripId)
+        .map((d) => ({ id: d.id }));
+    } catch {
+      // non-blocking; transaction will proceed without fleet update
+    }
 
     try {
-      // 1) Transaction de verrou + marquage des absents
+      // Single transaction: lock + absents + closure + boardingLog CLOSURE + vehicle(s) → in_transit + fleetMovements
       await runTransaction(db, async (tx) => {
         const lockSnap = await tx.get(lockRef);
         if (lockSnap.exists()) {
@@ -741,7 +851,7 @@ useEffect(() => {
           }
         }
 
-        // Écrire le verrou de clôture
+        // Verrou de clôture
         tx.set(lockRef, {
           closedAt: serverTimestamp(),
           closedBy: uid,
@@ -750,9 +860,63 @@ useEffect(() => {
           departure: selectedTrip.departure,
           arrival: selectedTrip.arrival,
         });
+
+        // Boarding log entry for CLOSURE (audit)
+        const boardingLogRef = doc(collection(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingLogs`));
+        tx.set(boardingLogRef, {
+          result: "CLOSURE",
+          date: selectedDate,
+          heure: selectedTrip.heure,
+          departure: selectedTrip.departure,
+          arrival: selectedTrip.arrival,
+          trajetId: tripId,
+          closedBy: uid,
+          scannedAt: serverTimestamp(),
+        });
+
+        // Phase 4.5: dailyStats, boardingStats, agencyLiveState
+        updateDailyStatsOnBoardingClosed(tx, companyId, selectedAgencyId, selectedDate);
+        const tripKey = boardingStatsKey(selectedTrip.departure, selectedTrip.arrival, selectedTrip.heure, selectedDate);
+        const absentSeats = reservations
+          .filter((r) => r.statutEmbarquement !== "embarqué")
+          .reduce((sum, r) => sum + ((r as { seatsGo?: number }).seatsGo ?? 1), 0);
+        setBoardingStatsClosed(tx, companyId, selectedAgencyId, tripKey, absentSeats);
+        updateAgencyLiveStateOnBoardingClosed(tx, companyId, selectedAgencyId);
+
+        // Fleet: assigned → in_transit + fleetMovement per vehicle
+        const fleetMovementsRef = collection(db, `companies/${companyId}/fleetMovements`);
+        const vehicleUpdatePayload = buildVehicleTransitionToInTransit(selectedAgencyId, null, uid);
+        let vehiclesTransitioned = 0;
+
+        for (const { id: vehicleId } of vehicleIds) {
+          const vehicleRef = doc(db, `companies/${companyId}/fleetVehicles/${vehicleId}`);
+          const vehicleSnap = await tx.get(vehicleRef);
+          if (!vehicleSnap.exists()) continue;
+          const vData = vehicleSnap.data() as { status: string; currentTripId?: string | null };
+          if (vData.status !== "assigned" || vData.currentTripId !== tripId) continue;
+          if (!canTransition("assigned", "in_transit")) continue;
+
+          tx.update(vehicleRef, vehicleUpdatePayload);
+          const movementRef = doc(fleetMovementsRef);
+          tx.set(movementRef, createFleetMovementPayload(
+            vehicleId,
+            selectedAgencyId,
+            null,
+            tripId,
+            selectedDate,
+            selectedTrip.heure,
+            uid,
+            "assigned",
+            "in_transit"
+          ));
+          vehiclesTransitioned += 1;
+        }
+        if (vehiclesTransitioned > 0) {
+          updateAgencyLiveStateOnVehicleInTransit(tx, companyId, selectedAgencyId, vehiclesTransitioned);
+        }
       });
 
-      // 2) Reprogrammer les absents (sans doublons)
+      // Reprogrammer les absents (hors transaction, batch)
       const batch = writeBatch(db);
 
       for (const r of reservations) {
@@ -821,6 +985,7 @@ useEffect(() => {
       }
 
       await batch.commit();
+
       alert("Clôture effectuée. Absents marqués et reprogrammés (si possible).");
     } catch (e: any) {
       if (String(e?.message || e) === "DEJA_CLOTURE") {
@@ -1062,10 +1227,8 @@ useEffect(() => {
     <div className="min-h-screen" style={{ background: theme.bg }}>
       <style>{`
         .brand-logo{height:40px;width:auto;object-fit:contain}
-        .case{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid #0f172a;border-radius:6px;background:#fff;cursor:pointer;user-select:none}
-        .case[data-checked="true"]::after{content:"✓";font-weight:700}
-
-        tr.embarked { background:#f8fafc; color:#334155; }
+        .case{display:inline-flex;align-items:center;justify-content:center;min-width:20px;min-height:20px;width:20px;height:20px;border:2px solid #0f172a;border-radius:6px;background:#fff;cursor:pointer;user-select:none}
+        .case[data-checked="true"]::after{content:"✓";font-weight:700;font-size:12px}
 
         .thin-table { table-layout: fixed; }
         .thin-table th, .thin-table td { padding: 6px 8px; }
@@ -1086,14 +1249,7 @@ useEffect(() => {
 
         /* Header imprimable centré */
         #print-area .title{ text-align:center; font-weight:800; font-size:18px; }
-        #print-area .subtitle{ text-align:center; color:#334155; font-size:14px; margin-top:2px; }
-
-        #print-area .meta-card {
-          border: 1px solid #e5e7eb;
-          background: #f9fafb;
-          border-radius: 0.5rem;
-          padding: 0.5rem 0.75rem;
-        }
+        #print-area .subtitle{ text-align:center; font-size:14px; margin-top:2px; }
 
         /* zones signatures épurées */
         #print-area .sig-box {
@@ -1114,9 +1270,9 @@ useEffect(() => {
         }
       `}</style>
 
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
         {/* Filtre Agence + Date */}
-        <div className="bg-white rounded-xl border p-4 shadow-sm space-y-3">
+        <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 p-4 shadow-md space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <span className="font-semibold" style={{ color: theme.secondary }}>
@@ -1174,9 +1330,9 @@ useEffect(() => {
           <div className="font-semibold">Sélectionner un trajet</div>
           <div className="flex flex-wrap gap-2">
             {!selectedAgencyId ? (
-              <div className="text-gray-500">Choisissez d’abord une agence.</div>
+              <div className="text-gray-500 dark:text-gray-200">Choisissez d’abord une agence.</div>
             ) : trajetsDuJour.length === 0 ? (
-              <div className="text-gray-500">Aucun trajet planifié pour cette date</div>
+              <div className="text-gray-500 dark:text-gray-200">Aucun trajet planifié pour cette date</div>
             ) : (
               trajetButtons
             )}
@@ -1184,10 +1340,10 @@ useEffect(() => {
         </div>
 
         {/* Infos départ + actions */}
-        <div className="bg-white rounded-xl border shadow-sm">
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 shadow-md">
           <div className="px-4 pt-4 flex flex-wrap items-center gap-3">
-            <div className="text-sm text-gray-500">Trajet</div>
-            <div className="font-semibold">
+            <div className="text-sm text-gray-500 dark:text-gray-200">Trajet</div>
+            <div className="font-semibold text-gray-900 dark:text-white">
               {selectedTrip ? (
                 <>
                   {selectedTrip.departure} — {selectedTrip.arrival} • {humanDate} à {selectedTrip.heure}
@@ -1196,53 +1352,72 @@ useEffect(() => {
                 "Aucun trajet sélectionné"
               )}
             </div>
-            <div className="ml-auto flex items-center gap-2 text-xs">
-              <div className="px-2 py-1 rounded bg-gray-100 border">
-                <span className="text-gray-500">Réservations:</span> <b>{totals.totalRes}</b>
+            <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
+              <div className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white font-medium">
+                <span className="opacity-90">Réservations:</span> <b>{totals.totalRes}</b>
               </div>
-              <div className="px-2 py-1 rounded bg-gray-100 border">
-                <span className="text-gray-500">Places:</span> <b>{totals.totalSeats}</b>
+              <div className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white font-medium">
+                <span className="opacity-90">Places:</span> <b>{totals.totalSeats}</b>
               </div>
-              <div className="px-2 py-1 rounded bg-gray-100 border">
-                <span className="text-gray-500">Embarquées:</span> <b>{totals.seatsEmbarques}</b>
+              <div className="px-2.5 py-1.5 rounded-lg bg-green-600 text-white font-medium">
+                <span className="opacity-90">Embarqués:</span> <b>{totals.seatsEmbarques}</b>
               </div>
-              <div className="px-2 py-1 rounded bg-gray-100 border">
-                <span className="text-gray-500">Absentes:</span> <b>{totals.seatsAbsents}</b>
+              <div className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white font-medium">
+                <span className="opacity-90">Absent:</span> <b>{totals.seatsAbsents}</b>
               </div>
+              {vehicleCapacity != null && (
+                <div className="px-2 py-1 rounded bg-blue-50 dark:bg-slate-700 border border-blue-200 dark:border-slate-600">
+                  <span className="text-gray-500 dark:text-gray-200">Capacité véhicule:</span> <b className="text-gray-900 dark:text-white">{vehicleCapacity}</b> places
+                  {vehicleCapacity > 0 && (
+                    <span className="ml-1 text-sm"> — Remplissage: {Math.round((totals.seatsEmbarques / vehicleCapacity) * 100)}%</span>
+                  )}
+                </div>
+              )}
+              {vehicleCapacity != null && vehicleCapacity > 0 && totals.seatsEmbarques >= vehicleCapacity && (
+                <div className="px-2 py-1 rounded bg-amber-100 border border-amber-300 text-amber-800 text-sm font-medium">
+                  Capacité atteinte
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Cartes info bus / chauffeur / contrôleur */}
+          {/* Cartes info bus / chauffeur / convoyeur (depuis affectation Phase 1) */}
           <div className="px-4 pb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="border rounded-lg p-3 bg-gray-50">
-              <div className="text-xs text-gray-500 mb-1">Bus / Immat</div>
-              <div className="font-medium">
+            <div className="border border-gray-200 dark:border-slate-600 rounded-xl p-3 bg-gray-50 dark:bg-slate-800 shadow-md">
+              <div className="text-xs text-gray-500 dark:text-gray-200 mb-1">Véhicule / Plaque</div>
+              <div className="font-medium text-gray-900 dark:text-white">
                 {assign.bus || assign.immat ? `${assign.bus || "—"} / ${assign.immat || "—"}` : "— / —"}
               </div>
             </div>
-            <div className="border rounded-lg p-3 bg-gray-50">
-              <div className="text-xs text-gray-500 mb-1">Chauffeur</div>
-              <div className="font-medium">{assign.chauffeur || "—"}</div>
+            <div className="border border-gray-200 dark:border-slate-600 rounded-xl p-3 bg-gray-50 dark:bg-slate-800 shadow-md">
+              <div className="text-xs text-gray-500 dark:text-gray-200 mb-1">Chauffeur</div>
+              <div className="font-medium text-gray-900 dark:text-white">{assign.chauffeur || "—"}</div>
+              {assign.chauffeurPhone && (
+                <div className="text-xs text-gray-600 dark:text-gray-200 mt-0.5">Tél. {assign.chauffeurPhone}</div>
+              )}
             </div>
-            <div className="border rounded-lg p-3 bg-gray-50">
-              <div className="text-xs text-gray-500 mb-1">Contrôleur</div>
-              <div className="font-medium">{assign.chef || "—"}</div>
+            <div className="border border-gray-200 dark:border-slate-600 rounded-xl p-3 bg-gray-50 dark:bg-slate-800 shadow-md">
+              <div className="text-xs text-gray-500 dark:text-gray-200 mb-1">Convoyeur</div>
+              <div className="font-medium text-gray-900 dark:text-white">{assign.chef || "—"}</div>
+              {assign.chefPhone && (
+                <div className="text-xs text-gray-600 dark:text-gray-200 mt-0.5">Tél. {assign.chefPhone}</div>
+              )}
             </div>
           </div>
 
-          <div className="px-4 pb-3 flex flex-wrap items-center gap-3">
+          <div className="no-print px-4 pb-3 flex flex-wrap items-center gap-3">
             <input
               type="text"
               placeholder="Rechercher nom / téléphone…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="px-3 py-2 border rounded-lg text-sm"
+              className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
             />
             <button
               type="button"
               onClick={() => setScanOn((v) => !v)}
-              className={`px-3 py-2 rounded-lg text-sm ${
-                scanOn ? "bg-emerald-600 text-white" : "bg-gray-200 text-gray-700"
+              className={`w-full sm:w-auto px-3 py-2 rounded-lg text-sm min-h-[40px] ${
+                scanOn ? "bg-emerald-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-slate-700 dark:text-gray-200"
               }`}
               title="Activer le scanner (QR / code-barres)"
               disabled={!selectedTrip || !selectedAgencyId}
@@ -1252,7 +1427,7 @@ useEffect(() => {
             <button
               type="button"
               onClick={() => window.print()}
-              className="px-3 py-2 rounded-lg text-sm border"
+              className="w-full sm:w-auto px-3 py-2 rounded-lg text-sm border border-gray-300 dark:border-slate-600 min-h-[40px]"
               title="Imprimer la liste"
             >
               🖨️ Imprimer
@@ -1260,7 +1435,7 @@ useEffect(() => {
             <button
               type="button"
               onClick={cloturerEmbarquement}
-              className={`px-3 py-2 rounded-lg text-sm ${isClosed ? "bg-gray-300 text-gray-600" : "bg-red-600 text-white"}`}
+              className={`w-full sm:w-auto px-3 py-2 rounded-lg text-sm min-h-[40px] ${isClosed ? "bg-gray-300 text-gray-600" : "bg-red-600 text-white"}`}
               title={isClosed ? "Déjà clôturé" : "Clôturer l’embarquement"}
               disabled={!selectedTrip || !selectedAgencyId || isClosed}
             >
@@ -1269,10 +1444,10 @@ useEffect(() => {
           </div>
 
           {scanOn && (
-            <div className="px-4 pb-4">
+            <div className="no-print px-4 pb-4 w-full">
               <video
                 ref={videoRef}
-                className="w-full max-w-md aspect-video bg-black rounded-lg overflow-hidden"
+                className="w-full sm:max-w-md aspect-video bg-black rounded-xl overflow-hidden"
                 muted
                 playsInline
                 autoPlay
@@ -1282,7 +1457,7 @@ useEffect(() => {
         </div>
 
         {/* Saisie manuelle */}
-        <div className="bg-white rounded-xl border shadow-sm p-4">
+        <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 shadow-md p-4">
           <div className="text-sm font-semibold mb-2" style={{ color: theme.secondary }}>
             Saisir une référence
           </div>
@@ -1291,7 +1466,7 @@ useEffect(() => {
               value={scanCode}
               onChange={(e) => setScanCode(e.target.value)}
               placeholder="ID Firestore ou référence (REF-… / MT-…)"
-              className="flex-1 px-3 py-2 border rounded-lg text-sm"
+              className="flex-1 px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
             />
             <button
               type="submit"
@@ -1321,7 +1496,7 @@ useEffect(() => {
                   <div className="font-extrabold text-lg">
                   {company?.nom ?? "—"}
                 </div>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-gray-500 dark:text-gray-200">
                   {agencyInfo?.nomAgence || "Agence"} • Tel. {agencyInfo?.telephone || "—"}
                  </div>
                 </div>
@@ -1332,30 +1507,32 @@ useEffect(() => {
             <div className="mt-2">
               <div className="title">Liste d’embarquement</div>
               {selectedTrip && (
-                <div className="subtitle">
+                <div className="subtitle text-gray-700 dark:text-gray-200">
                   {selectedTrip.departure} → {selectedTrip.arrival} • {humanDate} • {selectedTrip.heure}
                 </div>
               )}
             </div>
 
-            {/* Méta + totaux */}
+            {/* Méta + totaux (plaque, modèle, chauffeur, convoyeur depuis affectation) */}
             <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
-              <div className="meta-card">
-                <div className="text-xs text-gray-500">Bus / Immat</div>
+              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
+                <div className="text-xs text-gray-500 dark:text-gray-200">Véhicule / Plaque</div>
                 <div className="font-medium">
                   {(assign.bus || "—") + " / " + (assign.immat || "—")}
                 </div>
               </div>
-              <div className="meta-card">
-                <div className="text-xs text-gray-500">Chauffeur</div>
+              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
+                <div className="text-xs text-gray-500 dark:text-gray-200">Chauffeur</div>
                 <div className="font-medium">{assign.chauffeur || "—"}</div>
+                {assign.chauffeurPhone && <div className="text-xs text-gray-600 dark:text-gray-200">Tél. {assign.chauffeurPhone}</div>}
               </div>
-              <div className="meta-card">
-                <div className="text-xs text-gray-500">Contrôleur</div>
+              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
+                <div className="text-xs text-gray-500 dark:text-gray-200">Convoyeur</div>
                 <div className="font-medium">{assign.chef || "—"}</div>
+                {assign.chefPhone && <div className="text-xs text-gray-600 dark:text-gray-200">Tél. {assign.chefPhone}</div>}
               </div>
-              <div className="meta-card">
-                <div className="text-xs text-gray-500">Totaux</div>
+              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
+                <div className="text-xs text-gray-500 dark:text-gray-200">Totaux</div>
                 <div className="font-medium">
                   R: {totals.totalRes} • P: {totals.totalSeats} • E: {totals.seatsEmbarques} • A: {totals.seatsAbsents}
                 </div>
@@ -1363,8 +1540,8 @@ useEffect(() => {
             </div>
           </div>
 
-          <div className="overflow-x-auto mt-3">
-            <table className="w-full text-sm thin-table">
+          <div className="overflow-x-auto mt-3" style={{ minWidth: 0 }}>
+            <table className="w-full text-sm thin-table min-w-[600px]" style={{ fontSize: "14px" }}>
               <colgroup>
                 <col className="col-idx" />
                 <col className="col-client" />
@@ -1375,28 +1552,28 @@ useEffect(() => {
                 <col className="col-emb" />
                 <col className="col-abs" />
               </colgroup>
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-50 dark:bg-slate-800 dark:border-slate-600">
                 <tr>
-                  <th className="text-left">#</th>
-                  <th className="text-left">Client</th>
-                  <th className="text-left">Téléphone</th>
-                  <th className="text-left">Canal</th>
-                  <th className="text-left">Référence</th>
-                  <th className="text-center">Places</th>
-                  <th className="text-center">Embarqué</th>
-                  <th className="text-center">Absent</th>
+                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">#</th>
+                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Client</th>
+                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Téléphone</th>
+                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Canal</th>
+                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Référence</th>
+                  <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Places</th>
+                  <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Embarqué</th>
+                  <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Absent</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
                   <tr>
-                    <td className="py-4 text-gray-500" colSpan={8}>
+                    <td className="py-4 text-gray-500 dark:text-gray-200" colSpan={8}>
                       Chargement…
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td className="py-4 text-gray-400" colSpan={8}>
+                    <td className="py-4 text-gray-400 dark:text-gray-200" colSpan={8}>
                       Aucun passager trouvé
                     </td>
                   </tr>
@@ -1406,13 +1583,16 @@ useEffect(() => {
                     const absent   = r.statutEmbarquement === "absent";
                     const seats = r.seatsGo ?? 1;
                     return (
-                      <tr key={r.id} className={`border-t ${embarked ? "embarked" : ""}`}>
-                        <td>{idx + 1}</td>
-                        <td className="truncate">{r.nomClient || "—"}</td>
-                        <td className="truncate">{r.telephone || "—"}</td>
-                        <td className="capitalize truncate">{r.canal || "—"}</td>
-                        <td className="truncate">{r.referenceCode || r.id}</td>
-                        <td className="text-center font-semibold">{seats}</td>
+                      <tr
+                        key={r.id}
+                        className={`border-t border-gray-200 dark:border-slate-600 ${embarked ? "embarked bg-gray-50 dark:bg-slate-700 text-slate-700 dark:text-white" : `bg-white ${idx % 2 === 0 ? "dark:bg-slate-900" : "dark:bg-slate-800"} text-gray-900 dark:text-white`}`}
+                      >
+                        <td className={embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}>{idx + 1}</td>
+                        <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.nomClient || "—"}</td>
+                        <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.telephone || "—"}</td>
+                        <td className={`capitalize truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.canal || "—"}</td>
+                        <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.referenceCode || r.id}</td>
+                        <td className={`text-center font-semibold ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{seats}</td>
                         <td className="text-center">
                           <button
                             className="case"

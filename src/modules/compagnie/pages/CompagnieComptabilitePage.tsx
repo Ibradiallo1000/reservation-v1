@@ -13,6 +13,8 @@ import {
   Users, CreditCard, Smartphone, Banknote, FileText, Shield,
   PieChart, Calendar, Eye, EyeOff, Lock, Unlock, Receipt
 } from 'lucide-react';
+import { Button } from '@/shared/ui/button';
+import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -112,13 +114,6 @@ type ReconciliationData = {
 // HELPER FUNCTIONS
 // ============================================================================
 
-const formatXOF = (n: number) => 
-  new Intl.NumberFormat('fr-FR', { 
-    style: 'currency', 
-    currency: 'XOF', 
-    maximumFractionDigits: 0 
-  }).format(n || 0);
-
 const formatNumber = (n: number) => 
   new Intl.NumberFormat('fr-FR').format(n || 0);
 
@@ -152,6 +147,7 @@ const formatDate = (d: Date | null) =>
 const CompagnieComptabilitePage: React.FC = () => {
   const { user } = useAuth() as any;
   const navigate = useNavigate();
+  const money = useFormatCurrency();
   
   // ==========================================================================
   // ÉTATS & CONFIGURATION
@@ -446,7 +442,7 @@ const CompagnieComptabilitePage: React.FC = () => {
           type: 'caisse',
           severity: 'high',
           title: 'Écart espèces élevé',
-          message: `Écart de ${formatXOF(agency.ecartEspeces)} entre ventes et caisse`,
+          message: `Écart de ${money(agency.ecartEspeces)} entre ventes et caisse`,
           agencyId: agency.agenceId,
           agencyName: agency.agenceNom,
           createdAt: now
@@ -460,7 +456,7 @@ const CompagnieComptabilitePage: React.FC = () => {
           type: 'caisse',
           severity: 'high',
           title: 'Solde caisse négatif',
-          message: `Caisse en négatif de ${formatXOF(Math.abs(agency.soldeCaisse))}`,
+          message: `Caisse en négatif de ${money(Math.abs(agency.soldeCaisse))}`,
           agencyId: agency.agenceId,
           agencyName: agency.agenceNom,
           createdAt: now
@@ -578,7 +574,7 @@ const CompagnieComptabilitePage: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b">
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -586,8 +582,8 @@ const CompagnieComptabilitePage: React.FC = () => {
                 <Building2 className="h-5 w-5 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">Comptabilité Compagnie</h1>
-                <p className="text-sm text-gray-600">{label}</p>
+                <h1 className="text-xl font-bold text-gray-900">Contrôle & Audit</h1>
+                <p className="text-sm text-gray-600">Sessions · Réconciliations · Validations CEO · Anomalies — {label}</p>
               </div>
               <div className="ml-4 px-3 py-1 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100">
                 <span className="text-xs font-medium text-blue-700 capitalize">
@@ -801,35 +797,37 @@ const DashboardTab: React.FC<{
   loading: boolean;
   userRole: CompanyRole;
   onSelectAgency: (agencyId: string) => void;
-}> = ({ totals, performanceData, alerts, loading, userRole, onSelectAgency }) => (
+}> = ({ totals, performanceData, alerts, loading, userRole, onSelectAgency }) => {
+  const money = useFormatCurrency();
+  return (
   <div className="space-y-6">
     {/* KPI Principaux */}
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <KpiCard
         icon={<TrendingUp className="h-5 w-5" />}
         label="Chiffre d'affaires"
-        value={formatXOF(totals.ventesTotal)}
-        sublabel={`${formatXOF(totals.ventesGuichet)} guichet + ${formatXOF(totals.ventesEnLigne)} ligne`}
+        value={money(totals.ventesTotal)}
+        sublabel={`${money(totals.ventesGuichet)} guichet + ${money(totals.ventesEnLigne)} ligne`}
         trend="up"
       />
       <KpiCard
         icon={<Wallet className="h-5 w-5" />}
         label="Argent en caisse"
-        value={formatXOF(totals.especesRecues)}
-        sublabel={`Solde total: ${formatXOF(totals.soldeTotalCaisse)}`}
+        value={money(totals.especesRecues)}
+        sublabel={`Solde total: ${money(totals.soldeTotalCaisse)}`}
         trend={totals.soldeTotalCaisse >= 0 ? "up" : "down"}
       />
       <KpiCard
         icon={<CreditCard className="h-5 w-5" />}
         label="Argent compagnie"
-        value={formatXOF(totals.mobileMoneyRecu + totals.onlineRecu)}
-        sublabel={`${formatXOF(totals.mobileMoneyRecu)} MM + ${formatXOF(totals.onlineRecu)} ligne`}
+        value={money(totals.mobileMoneyRecu + totals.onlineRecu)}
+        sublabel={`${money(totals.mobileMoneyRecu)} MM + ${money(totals.onlineRecu)} ligne`}
         trend="up"
       />
       <KpiCard
         icon={<AlertTriangle className="h-5 w-5" />}
         label="Écart total"
-        value={formatXOF(totals.ecartTotalEspeces)}
+        value={money(totals.ecartTotalEspeces)}
         sublabel={Math.abs(totals.ecartTotalEspeces) < 1000 ? "OK" : "À vérifier"}
         trend={Math.abs(totals.ecartTotalEspeces) < 1000 ? "up" : "down"}
       />
@@ -922,22 +920,22 @@ const DashboardTab: React.FC<{
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-semibold text-gray-900">{formatXOF(agency.ventesTotal)}</div>
+                    <div className="font-semibold text-gray-900">{money(agency.ventesTotal)}</div>
                     <div className="text-sm text-gray-500">
                       {agency.nbReservations} réservations
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-medium">{formatXOF(agency.ventesGuichet)}</div>
+                    <div className="font-medium">{money(agency.ventesGuichet)}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="font-medium">{formatXOF(agency.ventesEnLigne)}</div>
+                    <div className="font-medium">{money(agency.ventesEnLigne)}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className={`font-semibold ${
                       agency.soldeCaisse >= 0 ? 'text-green-700' : 'text-red-700'
                     }`}>
-                      {formatXOF(agency.soldeCaisse)}
+                      {money(agency.soldeCaisse)}
                     </div>
                   </td>
                   <td className="px-6 py-4">
@@ -945,7 +943,7 @@ const DashboardTab: React.FC<{
                       Math.abs(agency.ecartEspeces) < 1000 ? 'text-gray-700' :
                       agency.ecartEspeces > 0 ? 'text-orange-700' : 'text-red-700'
                     }`}>
-                      {formatXOF(agency.ecartEspeces)}
+                      {money(agency.ecartEspeces)}
                     </div>
                   </td>
                   <td className="px-6 py-4">
@@ -982,11 +980,11 @@ const DashboardTab: React.FC<{
             <tfoot className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left font-semibold text-gray-900">TOTAL</th>
-                <th className="px-6 py-3 text-left font-semibold text-gray-900">{formatXOF(totals.ventesTotal)}</th>
-                <th className="px-6 py-3 text-left font-semibold text-gray-900">{formatXOF(totals.ventesGuichet)}</th>
-                <th className="px-6 py-3 text-left font-semibold text-gray-900">{formatXOF(totals.ventesEnLigne)}</th>
-                <th className="px-6 py-3 text-left font-semibold text-gray-900">{formatXOF(totals.soldeTotalCaisse)}</th>
-                <th className="px-6 py-3 text-left font-semibold text-gray-900">{formatXOF(totals.ecartTotalEspeces)}</th>
+                <th className="px-6 py-3 text-left font-semibold text-gray-900">{money(totals.ventesTotal)}</th>
+                <th className="px-6 py-3 text-left font-semibold text-gray-900">{money(totals.ventesGuichet)}</th>
+                <th className="px-6 py-3 text-left font-semibold text-gray-900">{money(totals.ventesEnLigne)}</th>
+                <th className="px-6 py-3 text-left font-semibold text-gray-900">{money(totals.soldeTotalCaisse)}</th>
+                <th className="px-6 py-3 text-left font-semibold text-gray-900">{money(totals.ecartTotalEspeces)}</th>
                 <th colSpan={2} className="px-6 py-3 text-left font-semibold text-gray-900">
                   {performanceData.filter(a => a.statutCaisse === 'ok').length} / {performanceData.length} OK
                 </th>
@@ -997,13 +995,15 @@ const DashboardTab: React.FC<{
       )}
     </div>
   </div>
-);
+  );
+};
 
 const ReconciliationTab: React.FC<{
   performanceData: AgencyPerformance[];
   loading: boolean;
   userRole: CompanyRole;
 }> = ({ performanceData, loading, userRole }) => {
+  const money = useFormatCurrency();
   const [validating, setValidating] = useState<string | null>(null);
   
   const handleValidate = async (agencyId: string) => {
@@ -1032,14 +1032,14 @@ const ReconciliationTab: React.FC<{
           <div className="bg-white p-4 rounded-lg border">
             <div className="text-sm text-gray-500 mb-1">Ventes totales agences</div>
             <div className="text-2xl font-bold text-gray-900">
-              {formatXOF(performanceData.reduce((sum, a) => sum + a.ventesTotal, 0))}
+              {money(performanceData.reduce((sum, a) => sum + a.ventesTotal, 0))}
             </div>
           </div>
           
           <div className="bg-white p-4 rounded-lg border">
             <div className="text-sm text-gray-500 mb-1">Argent en caisse</div>
             <div className="text-2xl font-bold text-gray-900">
-              {formatXOF(performanceData.reduce((sum, a) => sum + a.especesRecues, 0))}
+              {money(performanceData.reduce((sum, a) => sum + a.especesRecues, 0))}
             </div>
           </div>
           
@@ -1054,7 +1054,7 @@ const ReconciliationTab: React.FC<{
                 ? 'text-green-700'
                 : 'text-red-700'
             }`}>
-              {formatXOF(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0))}
+              {money(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0))}
             </div>
             <div className="text-sm mt-1">
               {Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) < 1000
@@ -1070,9 +1070,9 @@ const ReconciliationTab: React.FC<{
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900">Réconciliation par agence</h3>
             {['ceo', 'financial_director'].includes(userRole) && (
-              <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+              <Button variant="primary" className="text-sm">
                 Valider toute la période
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -1102,20 +1102,20 @@ const ReconciliationTab: React.FC<{
                       <div className="font-medium text-gray-900">{agency.agenceNom}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-medium">{formatXOF(agency.ventesGuichet)}</div>
+                      <div className="font-medium">{money(agency.ventesGuichet)}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-medium">{formatXOF(agency.ventesGuichet)}</div>
+                      <div className="font-medium">{money(agency.ventesGuichet)}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-medium">{formatXOF(agency.especesRecues)}</div>
+                      <div className="font-medium">{money(agency.especesRecues)}</div>
                     </td>
                     <td className="px-6 py-4">
                       <div className={`font-semibold ${
                         Math.abs(agency.ecartEspeces) < 1000 ? 'text-gray-700' :
                         agency.ecartEspeces > 0 ? 'text-orange-700' : 'text-red-700'
                       }`}>
-                        {formatXOF(agency.ecartEspeces)}
+                        {money(agency.ecartEspeces)}
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -1161,7 +1161,9 @@ const AgenciesTab: React.FC<{
   performanceData: AgencyPerformance[];
   loading: boolean;
   onSelectAgency: (agencyId: string) => void;
-}> = ({ agencies, performanceData, loading, onSelectAgency }) => (
+}> = ({ agencies, performanceData, loading, onSelectAgency }) => {
+  const money = useFormatCurrency();
+  return (
   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
     {agencies.map(agency => {
       const perf = performanceData.find(p => p.agenceId === agency.id);
@@ -1192,14 +1194,14 @@ const AgenciesTab: React.FC<{
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <div className="text-sm text-gray-500">Chiffre d'affaires</div>
-                    <div className="font-semibold text-gray-900">{formatXOF(perf.ventesTotal)}</div>
+                    <div className="font-semibold text-gray-900">{money(perf.ventesTotal)}</div>
                   </div>
                   <div>
                     <div className="text-sm text-gray-500">Solde caisse</div>
                     <div className={`font-semibold ${
                       perf.soldeCaisse >= 0 ? 'text-green-700' : 'text-red-700'
                     }`}>
-                      {formatXOF(perf.soldeCaisse)}
+                      {money(perf.soldeCaisse)}
                     </div>
                   </div>
                 </div>
@@ -1210,7 +1212,7 @@ const AgenciesTab: React.FC<{
                     Math.abs(perf.ecartEspeces) < 1000 ? 'text-gray-700' :
                     perf.ecartEspeces > 0 ? 'text-orange-700' : 'text-red-700'
                   }`}>
-                    {formatXOF(perf.ecartEspeces)}
+                    {money(perf.ecartEspeces)}
                   </div>
                 </div>
                 
@@ -1248,12 +1250,15 @@ const AgenciesTab: React.FC<{
       );
     })}
   </div>
-);
+  );
+};
 
 const MovementsTab: React.FC<{
   movements: CompanyMovement[];
   userRole: CompanyRole;
 }> = ({ movements, userRole }) => {
+  const money = useFormatCurrency();
+  const currencySymbol = useCurrencySymbol();
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
     type: 'depense' as 'depense' | 'entree',
@@ -1272,12 +1277,13 @@ const MovementsTab: React.FC<{
         <div className="bg-white rounded-xl border shadow-sm p-6">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-semibold text-gray-900">Nouveau mouvement</h3>
-            <button
+            <Button
+              variant="primary"
               onClick={() => setShowForm(!showForm)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+              className="text-sm"
             >
               {showForm ? 'Annuler' : 'Ajouter un mouvement'}
-            </button>
+            </Button>
           </div>
           
           {showForm && (
@@ -1322,7 +1328,7 @@ const MovementsTab: React.FC<{
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Montant (FCFA)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Montant ({currencySymbol})</label>
                 <input
                   type="number"
                   className="w-full border rounded-lg px-3 py-2"
@@ -1350,7 +1356,8 @@ const MovementsTab: React.FC<{
                 >
                   Annuler
                 </button>
-                <button
+                <Button
+                  variant="primary"
                   onClick={() => {
                     // TODO: Sauvegarder le mouvement
                     setShowForm(false);
@@ -1363,10 +1370,9 @@ const MovementsTab: React.FC<{
                       note: ''
                     });
                   }}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
                 >
                   Enregistrer
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -1430,7 +1436,7 @@ const MovementsTab: React.FC<{
                       <div className={`font-semibold ${
                         movement.type === 'entree' ? 'text-green-700' : 'text-red-700'
                       }`}>
-                        {formatXOF(movement.amount)}
+                        {money(movement.amount)}
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -1466,6 +1472,7 @@ const ReportsTab: React.FC<{
   to: Date;
   label: string;
 }> = ({ performanceData, totals, range, from, to, label }) => {
+  const money = useFormatCurrency();
   const exportPDF = () => {
     // TODO: Implémenter l'export PDF
     alert('Export PDF à implémenter');
@@ -1497,20 +1504,22 @@ const ReportsTab: React.FC<{
             <p className="text-sm text-gray-600">Générez des rapports détaillés pour la période</p>
           </div>
           <div className="flex items-center gap-3">
-            <button
+            <Button
+              variant="primary"
               onClick={exportExcel}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"
+              className="text-sm"
             >
               <Download className="h-4 w-4 inline mr-2" />
               Export Excel
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="danger"
               onClick={exportPDF}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm font-medium"
+              className="text-sm"
             >
               <FileText className="h-4 w-4 inline mr-2" />
               Export PDF
-            </button>
+            </Button>
           </div>
         </div>
         
@@ -1569,15 +1578,15 @@ const ReportsTab: React.FC<{
                 <div className="space-y-2">
                   <div className="flex justify-between">
                     <span className="text-gray-600">Chiffre d'affaires total:</span>
-                    <span className="font-medium">{formatXOF(totals.ventesTotal)}</span>
+                    <span className="font-medium">{money(totals.ventesTotal)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Argent en caisse agences:</span>
-                    <span className="font-medium">{formatXOF(totals.especesRecues)}</span>
+                    <span className="font-medium">{money(totals.especesRecues)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Argent compagnie (MM + ligne):</span>
-                    <span className="font-medium">{formatXOF(totals.mobileMoneyRecu + totals.onlineRecu)}</span>
+                    <span className="font-medium">{money(totals.mobileMoneyRecu + totals.onlineRecu)}</span>
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -1586,7 +1595,7 @@ const ReportsTab: React.FC<{
                     <span className={`font-medium ${
                       totals.soldeTotalCaisse >= 0 ? 'text-green-700' : 'text-red-700'
                     }`}>
-                      {formatXOF(totals.soldeTotalCaisse)}
+                      {money(totals.soldeTotalCaisse)}
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -1594,7 +1603,7 @@ const ReportsTab: React.FC<{
                     <span className={`font-medium ${
                       Math.abs(totals.ecartTotalEspeces) < 1000 ? 'text-gray-700' : 'text-orange-700'
                     }`}>
-                      {formatXOF(totals.ecartTotalEspeces)}
+                      {money(totals.ecartTotalEspeces)}
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -1754,7 +1763,9 @@ const ReportCard: React.FC<{
 const AgencyDetailsModal: React.FC<{
   agency: any;
   onClose: () => void;
-}> = ({ agency, onClose }) => (
+}> = ({ agency, onClose }) => {
+  const money = useFormatCurrency();
+  return (
   <div className="fixed inset-0 z-50">
     <div className="absolute inset-0 bg-black/50" onClick={onClose} />
     <div className="absolute right-0 top-0 h-full w-full max-w-2xl bg-white shadow-xl">
@@ -1781,7 +1792,7 @@ const AgencyDetailsModal: React.FC<{
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <div className="text-sm text-gray-500">Chiffre d'affaires</div>
                   <div className="text-2xl font-bold text-gray-900">
-                    {formatXOF(agency.performance.ventesTotal)}
+                    {money(agency.performance.ventesTotal)}
                   </div>
                 </div>
                 <div className="bg-gray-50 p-4 rounded-lg">
@@ -1789,7 +1800,7 @@ const AgencyDetailsModal: React.FC<{
                   <div className={`text-2xl font-bold ${
                     agency.performance.soldeCaisse >= 0 ? 'text-green-700' : 'text-red-700'
                   }`}>
-                    {formatXOF(agency.performance.soldeCaisse)}
+                    {money(agency.performance.soldeCaisse)}
                   </div>
                 </div>
               </div>
@@ -1799,22 +1810,22 @@ const AgencyDetailsModal: React.FC<{
                 <div className="space-y-2">
                   <div className="flex justify-between">
                     <span className="text-gray-600">Ventes guichet:</span>
-                    <span className="font-medium">{formatXOF(agency.performance.ventesGuichet)}</span>
+                    <span className="font-medium">{money(agency.performance.ventesGuichet)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Ventes en ligne:</span>
-                    <span className="font-medium">{formatXOF(agency.performance.ventesEnLigne)}</span>
+                    <span className="font-medium">{money(agency.performance.ventesEnLigne)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Espèces reçues:</span>
-                    <span className="font-medium">{formatXOF(agency.performance.especesRecues)}</span>
+                    <span className="font-medium">{money(agency.performance.especesRecues)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Écart espèces:</span>
                     <span className={`font-medium ${
                       Math.abs(agency.performance.ecartEspeces) < 1000 ? 'text-gray-700' : 'text-orange-700'
                     }`}>
-                      {formatXOF(agency.performance.ecartEspeces)}
+                      {money(agency.performance.ecartEspeces)}
                     </span>
                   </div>
                 </div>
@@ -1853,14 +1864,15 @@ const AgencyDetailsModal: React.FC<{
             >
               Fermer
             </button>
-            <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+            <Button variant="primary">
               Exporter rapport
-            </button>
+            </Button>
           </div>
         </div>
       </div>
     </div>
   </div>
-);
+  );
+};
 
 export default CompagnieComptabilitePage;

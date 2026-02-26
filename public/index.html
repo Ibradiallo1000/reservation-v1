@@ -61,6 +61,18 @@
     </style>
   </head>
   <body>
+    <!-- Appliquer le thème (mode nuit/jour) avant le 1er rendu pour l'espace embarquement et autres layouts -->
+    <script>
+      (function(){
+        try {
+          if (localStorage.getItem('theme') === 'dark') {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
     <div id="splash" role="status" aria-live="polite">
       <img src="/images/teliya-logo.jpg" alt="Teliya" />
       <div class="caption">Chargement…</div>

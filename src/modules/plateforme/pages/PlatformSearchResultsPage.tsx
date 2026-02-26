@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 import { collection, collectionGroup, getDocs } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { Bus, Search, ArrowLeft, ArrowRight, Wind, Wifi, Zap, Coffee, Sofa, Tv, WifiOff, Smartphone, Utensils, Droplet } from 'lucide-react';
+import { Button } from "@/shared/ui/button";
 
 /* =========================
    TYPES
@@ -226,7 +228,7 @@ const PlatformSearchResultsPage: React.FC = () => {
     <div className="min-h-screen bg-gray-50">
       {/* HEADER */}
       <header className="bg-white shadow sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
+        <div className="max-w-7xl mx-auto flex items-center justify-between px-4 py-3">
           <button
             onClick={() => navigate('/')}
             className="flex items-center text-orange-600 hover:text-orange-700 transition-colors"
@@ -240,7 +242,7 @@ const PlatformSearchResultsPage: React.FC = () => {
       </header>
 
       {/* ROUTE */}
-      <div className="max-w-6xl mx-auto px-4 mt-4">
+      <div className="max-w-7xl mx-auto px-4 mt-4">
         <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
           <span className="px-3 py-1.5 rounded-xl bg-orange-50 border border-orange-100 font-semibold truncate">
             {capitalize(criteres.departure)}
@@ -263,7 +265,7 @@ const PlatformSearchResultsPage: React.FC = () => {
       </div>
 
       {/* RESULTS */}
-      <div className="max-w-6xl mx-auto p-4 pb-6">
+      <div className="max-w-7xl mx-auto p-4 pb-6">
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="h-10 w-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
@@ -273,12 +275,9 @@ const PlatformSearchResultsPage: React.FC = () => {
             <p className="text-gray-600 mb-4">
               Aucune compagnie disponible pour ce trajet
             </p>
-            <button
-              onClick={() => navigate('/')}
-              className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg transition-colors"
-            >
+            <Button variant="primary" onClick={() => navigate('/')}>
               Nouvelle recherche
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -349,10 +348,9 @@ const PlatformSearchResultsPage: React.FC = () => {
                     
                     <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                       <div className="text-emerald-600 font-bold text-base">
-                        {prixMin.toLocaleString()} FCFA
+                        {formatCurrency(prixMin)}
                       </div>
-                      <button
-                        onClick={() =>
+                      <Button variant="primary" size="sm" onClick={() =>
                           navigate(
                             `/${company.slug}/booking?departure=${encodeURIComponent(
                               criteres.departure
@@ -360,11 +358,9 @@ const PlatformSearchResultsPage: React.FC = () => {
                               criteres.arrival
                             )}`
                           )
-                        }
-                        className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                      >
+                        }>
                         Réserver
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
@@ -428,12 +424,11 @@ const PlatformSearchResultsPage: React.FC = () => {
                     <div className="flex items-center gap-6">
                       <div className="text-right">
                         <div className="text-emerald-600 font-bold text-xl">
-                          {prixMin.toLocaleString()} FCFA
+                          {formatCurrency(prixMin)}
                         </div>
                         <div className="text-xs text-gray-500 mt-0.5">À partir de</div>
                       </div>
-                      <button
-                        onClick={() =>
+                      <Button variant="primary" onClick={() =>
                           navigate(
                             `/${company.slug}/booking?departure=${encodeURIComponent(
                               criteres.departure
@@ -441,11 +436,9 @@ const PlatformSearchResultsPage: React.FC = () => {
                               criteres.arrival
                             )}`
                           )
-                        }
-                        className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap text-sm"
-                      >
+                        }>
                         Réserver
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>

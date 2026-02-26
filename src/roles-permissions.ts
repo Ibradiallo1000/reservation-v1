@@ -9,13 +9,19 @@ export type Role =
   | 'admin_compagnie'        // CEO (technique / propriétaire)
   | 'financial_director'     // DAF (superviseur comptable)
   | 'company_accountant'     // Comptable compagnie (opérationnel)
+  | 'chef_garage'            // Chef garage (flotte compagnie)
 
   /** ============ AGENCE ============ */
   | 'chefAgence'
+  | 'superviseur'            // Superviseur agence (accès shell / validations)
+  | 'agentCourrier'         // Courrier (accès shell agence)
   | 'agency_accountant'      // Comptable agence
   | 'guichetier'
-  | 'embarquement'
+  | 'chefEmbarquement'       // Chef embarquement (ex agency_boarding_officer)
+  | 'agency_fleet_controller'
 
+  /** ============ SENTINEL (unknown role → redirect to login) ============ */
+  | 'unauthenticated'
   /** ============ DEFAULT ============ */
   | 'user';
 
@@ -38,7 +44,9 @@ export type ModuleKey =
 
   /** agence */
   | 'guichet'
-  | 'embarquement';
+  | 'embarquement'
+  | 'boarding'
+  | 'fleet';
 
 
 /* ===================== PERMISSIONS ===================== */
@@ -80,6 +88,12 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'statistiques',
   ],
 
+  // Chef garage → flotte compagnie
+  chef_garage: [
+    'dashboard',
+    'fleet',
+  ],
+
   /** ============ AGENCE ============ */
 
   chefAgence: [
@@ -88,7 +102,23 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'finances',
     'guichet',
     'embarquement',
+    'fleet',
     'personnel',
+  ],
+
+  superviseur: [
+    'dashboard',
+    'reservations',
+    'finances',
+    'guichet',
+    'embarquement',
+    'fleet',
+    'personnel',
+  ],
+
+  agentCourrier: [
+    'dashboard',
+    'reservations',
   ],
 
   agency_accountant: [
@@ -103,10 +133,18 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'reservations',
   ],
 
-  embarquement: [
+  chefEmbarquement: [
+    'boarding',
     'embarquement',
     'reservations',
   ],
+
+  agency_fleet_controller: [
+    'fleet',
+  ],
+
+  /** ============ SENTINEL ============ */
+  unauthenticated: [],
 
   /** ============ DEFAULT ============ */
   user: [],

@@ -1,15 +1,5 @@
-// src/types/reservation.ts
-export type ReservationStatus = 
-  | 'en_attente' 
-  | 'preuve_recue' 
-  | 'verification' 
-  | 'confirme' 
-  | 'payé'
-  | 'refuse' 
-  | 'refusé'
-  | 'annule' 
-  | 'annulé'
-  | string;
+// src/types/reservations.ts
+import type { ReservationStatus } from "@/types/reservation";
 
 export interface Reservation {
   id: string;

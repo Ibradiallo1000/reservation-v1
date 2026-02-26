@@ -13,6 +13,7 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { Button } from "@/shared/ui/button";
 
 // Secondary app (pour envoyer le reset sans toucher la session courante)
 import { getApp, initializeApp, deleteApp, FirebaseApp } from "firebase/app";
@@ -188,7 +189,7 @@ const AdminModifierCompagniePage: React.FC = () => {
   if (loading) return <p className="p-6">Chargement…</p>;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-orange-700">Modifier la compagnie</h1>
         <button
@@ -203,7 +204,7 @@ const AdminModifierCompagniePage: React.FC = () => {
 
       <form onSubmit={handleSave} className="grid md:grid-cols-2 gap-5">
         {/* Bloc compagnie */}
-        <section className="bg-white border rounded-2xl p-5 shadow-sm">
+        <section className="bg-white border rounded-xl p-5 shadow-sm">
           <h2 className="text-lg font-semibold text-orange-700 mb-3">Infos compagnie</h2>
 
           <label className="block mb-3">
@@ -268,7 +269,7 @@ const AdminModifierCompagniePage: React.FC = () => {
         </section>
 
         {/* Bloc admin principal */}
-        <section className="bg-white border rounded-2xl p-5 shadow-sm">
+        <section className="bg-white border rounded-xl p-5 shadow-sm">
           <h2 className="text-lg font-semibold text-orange-700 mb-3">Admin principal</h2>
 
           {admin ? (
@@ -303,16 +304,14 @@ const AdminModifierCompagniePage: React.FC = () => {
                 </p>
               </label>
 
-              <button
+              <Button
                 type="button"
                 onClick={handleSendAdminReset}
                 disabled={resetSending}
-                className={`px-3 py-2 rounded text-white ${
-                  resetSending ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"
-                }`}
+                variant="primary"
               >
                 {resetSending ? "Envoi en cours…" : "Envoyer le lien de réinitialisation"}
-              </button>
+              </Button>
             </>
           ) : (
             <p className="text-sm text-gray-600">
@@ -329,15 +328,13 @@ const AdminModifierCompagniePage: React.FC = () => {
           >
             Annuler
           </button>
-          <button
+          <Button
             type="submit"
             disabled={!canSave}
-            className={`px-5 py-2 rounded text-white ${
-              canSave ? "bg-green-600 hover:bg-green-700" : "bg-gray-400"
-            }`}
+            variant="primary"
           >
             {saving ? "Enregistrement…" : "Sauvegarder"}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

@@ -1,220 +1,415 @@
+// src/modules/plateforme/pages/AdminDashboard.tsx
+// Phase 1 – Teliya SaaS: métriques plateforme uniquement + macro agrégées anonymisées
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, collectionGroup, getDocs } from "firebase/firestore";
-import { db } from "../../../firebaseConfig";
+import { db } from "@/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import {
-  TrendingUp, TrendingDown, Building2, Users, AlertTriangle, DollarSign, BarChart2, Download
+  TrendingUp,
+  Building2,
+  Users,
+  DollarSign,
+  BarChart2,
+  CreditCard,
+  Globe,
+  Download,
 } from "lucide-react";
+import { Button } from "@/shared/ui/button";
+import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
 import {
-  ResponsiveContainer, AreaChart, Area, YAxis, XAxis, Tooltip, Legend, CartesianGrid
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  YAxis,
+  XAxis,
+  Tooltip,
+  Legend,
+  CartesianGrid,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
 
-/* ==== Types & utils (identiques) ==== */
-interface Company { id: string; nom: string; slug: string; plan: string; status: string; createdAt?: { seconds: number }; }
-interface Reservation {
-  montant?: number; total?: number; commission?: number; statut?: string;
-  createdAt?: { seconds: number }; companyId?: string; companyName?: string;
-  depart?: string; arrivee?: string; from?: string; to?: string; origin?: string; destination?: string; routeName?: string;
+/* ==== Types ==== */
+interface Company {
+  id: string;
+  nom?: string;
+  slug?: string;
+  plan?: string;
+  planId?: string;
+  status?: string;
+  pays?: string;
+  createdAt?: { seconds: number };
 }
+
+interface PlanDoc {
+  id: string;
+  name: string;
+  priceMonthly: number;
+}
+
+interface Reservation {
+  montant?: number;
+  total?: number;
+  commission?: number;
+  companyId?: string;
+  createdAt?: { seconds: number };
+}
+
+/* ==== Utils ==== */
 const nf = new Intl.NumberFormat("fr-FR");
-const fmtFCFA = (n: number) => `${nf.format(n || 0)} FCFA`;
-const toNum = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-const addDays = (d: Date, n: number) => { const t = new Date(d); t.setDate(t.getDate()+n); return t; };
-const buildEmptyDailyRange = (start: Date, end: Date) => { const arr: {date:string;gmv:number;reservations:number}[]=[]; let cur=new Date(start); while(cur<=end){arr.push({date:dayKey(cur),gmv:0,reservations:0}); cur=addDays(cur,1);} return arr; };
-const extractRouteLabel = (d: Reservation) => { const dep=d.depart||d.from||d.origin||""; const arr=d.arrivee||d.to||d.destination||""; if(dep&&arr) return `${dep} → ${arr}`; if(d.routeName) return d.routeName; return "Trajet inconnu"; };
+const toNum = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const dayKey = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (d: Date, n: number) => {
+  const t = new Date(d);
+  t.setDate(t.getDate() + n);
+  return t;
+};
 
 const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
 
-  const [periode, setPeriode] = useState<"7j"|"30j"|"tout">("30j");
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("__all__");
-  const [stats, setStats] = useState({ total:0, commission:0, reservations:0, annulations:0, compagnies:0, nouvellesCompagnies:0 });
-  const [series, setSeries] = useState<{date:string;gmv:number;reservations:number}[]>([]);
-  const [topCompanies, setTopCompanies] = useState<{id:string;name:string;gmv:number;reservations:number}[]>([]);
-  const [topDestinations, setTopDestinations] = useState<{route:string;gmv:number;reservations:number}[]>([]);
+  const [periode, setPeriode] = useState<"7j" | "30j">("30j");
+  const [loading, setLoading] = useState(true);
+
+  // SaaS metrics
+  const [totalActiveCompanies, setTotalActiveCompanies] = useState(0);
+  const [newCompanies30d, setNewCompanies30d] = useState(0);
+  const [activeSubscriptions, setActiveSubscriptions] = useState(0);
+  const [mrr, setMrr] = useState(0);
+  const [totalCommission, setTotalCommission] = useState(0);
+
+  // Macro aggregated (anonymized)
+  const [globalGmv, setGlobalGmv] = useState(0);
+  const [totalReservations, setTotalReservations] = useState(0);
+  const [monthlyGrowthRate, setMonthlyGrowthRate] = useState<number | null>(null);
+  const [countryDistribution, setCountryDistribution] = useState<
+    { name: string; value: number }[]
+  >([]);
+  const [series, setSeries] = useState<
+    { date: string; gmv: number; reservations: number }[]
+  >([]);
 
   useEffect(() => {
     const run = async () => {
-      const companiesSnap = await getDocs(collection(db, "companies"));
-      const comps: Company[] = companiesSnap.docs.map(doc => ({
-        id: doc.id,
-        nom: doc.data().nom || "Compagnie",
-        slug: doc.data().slug || "—",
-        plan: doc.data().plan || "free",
-        status: doc.data().status || "actif",
-        createdAt: doc.data().createdAt,
-      }));
-      setCompanies(comps);
+      setLoading(true);
 
-      const resSnap = await getDocs(collectionGroup(db, "reservations"));
       const now = new Date();
-      let start: Date | null = null;
-      if (periode === "7j") start = addDays(new Date(now), -6);
-      else if (periode === "30j") start = addDays(new Date(now), -29);
+      const start30d = addDays(now, -29);
+      const startPrevMonth = addDays(now, -59);
 
-      const empty = start ? buildEmptyDailyRange(start, now) : [];
-      const daily = new Map<string, {gmv:number; reservations:number}>();
-      empty.forEach(r => daily.set(r.date, { gmv:0, reservations:0 }));
+      // Companies
+      const companiesSnap = await getDocs(collection(db, "companies"));
+      const comps: Company[] = companiesSnap.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: docSnap.id,
+          nom: d.nom || "",
+          plan: d.plan || "free",
+          planId: d.planId,
+          status: d.status || "actif",
+          pays: d.pays || "Non défini",
+          createdAt: d.createdAt,
+        };
+      });
 
-      let total=0, commission=0, reservations=0, annulations=0;
-      const companyAgg: Record<string,{id:string;name:string;gmv:number;reservations:number}> = {};
-      const routeAgg: Record<string,{route:string;gmv:number;reservations:number}> = {};
+      const active = comps.filter((c) => c.status === "actif");
+      const newIn30d = comps.filter((c) => {
+        const sec = c.createdAt?.seconds;
+        if (!sec) return false;
+        const created = new Date(sec * 1000);
+        return created >= start30d;
+      });
 
-      for (const doc of resSnap.docs) {
-        const d = doc.data() as Reservation;
+      // Plans for MRR and active subscriptions
+      const plansSnap = await getDocs(collection(db, "plans"));
+      const plansById: Record<string, PlanDoc> = {};
+      plansSnap.docs.forEach((d) => {
+        const x = d.data();
+        plansById[d.id] = {
+          id: d.id,
+          name: x.name ?? x.nom ?? "",
+          priceMonthly: Number(x.priceMonthly) || 0,
+        };
+      });
+
+      const paidPlans = new Set(
+        Object.entries(plansById)
+          .filter(([, p]) => p.priceMonthly > 0)
+          .map(([id]) => id)
+      );
+
+      let mrrSum = 0;
+      let activeSubs = 0;
+      active.forEach((c) => {
+        const planId = c.planId || "";
+        const plan = plansById[planId];
+        if (plan && paidPlans.has(planId)) {
+          activeSubs++;
+          mrrSum += plan.priceMonthly;
+        }
+      });
+
+      setTotalActiveCompanies(active.length);
+      setNewCompanies30d(newIn30d.length);
+      setActiveSubscriptions(activeSubs);
+      setMrr(mrrSum);
+
+      // Reservations (collectionGroup) – global only, no per-company
+      const resSnap = await getDocs(collectionGroup(db, "reservations"));
+      let gmv = 0;
+      let commission = 0;
+      let reservations = 0;
+
+      const dailyCurr = new Map<string, { gmv: number; reservations: number }>();
+      const dailyPrev = new Map<string, { gmv: number; reservations: number }>();
+      const countryAgg: Record<string, number> = {};
+
+      const companyIdToCountry: Record<string, string> = {};
+      comps.forEach((c) => {
+        companyIdToCountry[c.id] = c.pays || "Non défini";
+      });
+
+      for (const docSnap of resSnap.docs) {
+        const d = docSnap.data() as Reservation;
         const montant = toNum(d.total ?? d.montant);
         const comm = toNum(d.commission);
+        const companyId = d.companyId || "";
+        const country = companyIdToCountry[companyId] || "Non défini";
         const createdMs = d.createdAt?.seconds ? d.createdAt.seconds * 1000 : null;
 
-        if (start && createdMs) {
-          const created = new Date(createdMs);
-          if (created < start || created > now) continue;
+        if (!createdMs) continue;
+
+        const created = new Date(createdMs);
+        const inRange = created >= start30d && created <= now;
+        const inPrevRange =
+          created >= startPrevMonth && created < start30d;
+
+        if (inRange) {
+          gmv += montant;
+          commission += comm;
+          reservations++;
+
+          const k = dayKey(created);
+          const cur = dailyCurr.get(k) ?? { gmv: 0, reservations: 0 };
+          cur.gmv += montant;
+          cur.reservations += 1;
+          dailyCurr.set(k, cur);
+
+          countryAgg[country] = (countryAgg[country] || 0) + montant;
         }
-        if (selectedCompanyId !== "__all__" && (d.companyId ?? "") !== selectedCompanyId) continue;
 
-        reservations++; total += montant; commission += comm;
-        if (d.statut === "annulé") annulations++;
-
-        if (createdMs) {
-          const k = dayKey(new Date(createdMs));
-          const cur = daily.get(k) ?? { gmv:0, reservations:0 };
-          cur.gmv += montant; cur.reservations += 1; daily.set(k, cur);
+        if (inPrevRange) {
+          const k = dayKey(created);
+          const cur = dailyPrev.get(k) ?? { gmv: 0, reservations: 0 };
+          cur.gmv += montant;
+          cur.reservations += 1;
+          dailyPrev.set(k, cur);
         }
-        const cId = d.companyId || "inconnu";
-        if (!companyAgg[cId]) companyAgg[cId] = { id:cId, name:d.companyName || "Compagnie", gmv:0, reservations:0 };
-        companyAgg[cId].gmv += montant;
-        companyAgg[cId].reservations += 1;
-
-        const label = extractRouteLabel(d);
-        if (!routeAgg[label]) routeAgg[label] = { route:label, gmv:0, reservations:0 };
-        routeAgg[label].gmv += montant;
-        routeAgg[label].reservations += 1;
       }
 
-      const finalSeries = Array.from(daily.entries()).sort((a,b)=>a[0]<b[0]? -1:1).map(([date,v])=>({date,...v}));
-      const top = selectedCompanyId !== "__all__"
-        ? Object.values(companyAgg).filter(c => c.id === selectedCompanyId).slice(0,1)
-        : Object.values(companyAgg).sort((a,b)=>b.gmv-a.gmv).slice(0,5);
-      const topRoutes = Object.values(routeAgg).sort((a,b)=>b.gmv-a.gmv || b.reservations-a.reservations).slice(0,5);
+      setTotalCommission(commission);
+      setGlobalGmv(gmv);
+      setTotalReservations(reservations);
 
-      setSeries(finalSeries);
-      setTopCompanies(top);
-      setTopDestinations(topRoutes);
-      setStats({
-        total, commission, reservations, annulations,
-        compagnies: selectedCompanyId === "__all__" ? comps.length : 1,
-        nouvellesCompagnies: 0,
-      });
+      // Monthly growth: compare last 30d vs previous 30d
+      const currTotal = gmv;
+      let prevTotal = 0;
+      dailyPrev.forEach((v) => (prevTotal += v.gmv));
+      const growth =
+        prevTotal > 0 ? ((currTotal - prevTotal) / prevTotal) * 100 : null;
+      setMonthlyGrowthRate(growth);
+
+      // Series for trends (last N days)
+      const start = periode === "7j" ? addDays(now, -6) : start30d;
+      const range: { date: string; gmv: number; reservations: number }[] = [];
+      let cur = new Date(start);
+      while (cur <= now) {
+        const k = dayKey(cur);
+        const v = dailyCurr.get(k) ?? { gmv: 0, reservations: 0 };
+        range.push({ date: k, ...v });
+        cur = addDays(cur, 1);
+      }
+      setSeries(range);
+
+      // Country distribution (anonymized, aggregated)
+      const dist = Object.entries(countryAgg).map(([name, value]) => ({
+        name,
+        value,
+      }));
+      setCountryDistribution(dist);
+
+      setLoading(false);
     };
     run();
-  }, [periode, selectedCompanyId]);
+  }, [periode]);
 
-  const kpis = useMemo(() => ([
-    { label: "Montant encaissé", value: fmtFCFA(stats.total), icon: DollarSign, color: "text-green-600", to: "/admin/finances" },
-    { label: "Commission générée", value: fmtFCFA(stats.commission), icon: BarChart2, color: "text-orange-600", to: "/admin/finances" },
-    { label: "Réservations", value: nf.format(stats.reservations), icon: Users, color: "text-blue-600", to: "/admin/reservations" },
-    { label: "Annulations", value: nf.format(stats.annulations), icon: TrendingDown, color: "text-red-600", to: "/admin/reservations" },
-    { label: "Compagnies actives", value: nf.format(stats.compagnies), icon: Building2, color: "text-purple-600", to: "/admin/compagnies" },
-    { label: "Nouvelles compagnies", value: nf.format(stats.nouvellesCompagnies), icon: TrendingUp, color: "text-emerald-600", to: "/admin/compagnies" },
-  ]), [stats, navigate]);
+  const kpis = useMemo(
+    () => [
+      {
+        label: "Compagnies actives",
+        value: nf.format(totalActiveCompanies),
+        icon: Building2,
+        color: "text-purple-600",
+        to: "/admin/compagnies",
+      },
+      {
+        label: "Nouvelles (30j)",
+        value: nf.format(newCompanies30d),
+        icon: TrendingUp,
+        color: "text-emerald-600",
+        to: "/admin/compagnies",
+      },
+      {
+        label: "Abonnements actifs",
+        value: nf.format(activeSubscriptions),
+        icon: CreditCard,
+        color: "text-blue-600",
+        to: "/admin/plans",
+      },
+      {
+        label: "MRR",
+        value: formatCurrency(mrr),
+        icon: DollarSign,
+        color: "text-green-600",
+        to: "/admin/finances",
+      },
+      {
+        label: "Commission totale",
+        value: formatCurrency(totalCommission),
+        icon: BarChart2,
+        color: "text-orange-600",
+        to: "/admin/finances",
+      },
+      {
+        label: "GMV global",
+        value: formatCurrency(globalGmv),
+        icon: DollarSign,
+        color: "text-slate-600",
+        to: undefined,
+      },
+      {
+        label: "Réservations totales",
+        value: nf.format(totalReservations),
+        icon: Users,
+        color: "text-indigo-600",
+        to: undefined,
+      },
+      {
+        label: "Croissance mensuelle",
+        value:
+          monthlyGrowthRate !== null
+            ? `${monthlyGrowthRate >= 0 ? "+" : ""}${monthlyGrowthRate.toFixed(1)}%`
+            : "—",
+        icon: TrendingUp,
+        color:
+          monthlyGrowthRate !== null && monthlyGrowthRate >= 0
+            ? "text-green-600"
+            : "text-red-600",
+        to: undefined,
+      },
+    ],
+    [
+      totalActiveCompanies,
+      newCompanies30d,
+      activeSubscriptions,
+      mrr,
+      totalCommission,
+      globalGmv,
+      totalReservations,
+      monthlyGrowthRate,
+    ]
+  );
 
   const handleExportCSV = () => {
     const rows: string[] = [];
-    rows.push("=== KPIs ===");
-    rows.push(`Total;${stats.total}`); rows.push(`Commission;${stats.commission}`);
-    rows.push(`Réservations;${stats.reservations}`); rows.push(`Annulations;${stats.annulations}`);
-    rows.push(`Compagnies;${stats.compagnies}`); rows.push("");
-    rows.push("=== Séries ==="); rows.push("Date;GMV;Réservations");
-    series.forEach(s => rows.push(`${s.date};${s.gmv};${s.reservations}`));
-    rows.push(""); rows.push("=== Top compagnies ==="); rows.push("Compagnie;GMV;Réservations");
-    topCompanies.forEach(c => rows.push(`${c.name};${c.gmv};${c.reservations}`));
-    rows.push(""); rows.push("=== Top destinations ==="); rows.push("Trajet;GMV;Réservations");
-    topDestinations.forEach(r => rows.push(`${r.route};${r.gmv};${r.reservations}`));
-    const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a");
-    a.href = url; a.download = "dashboard_export.csv"; a.click(); URL.revokeObjectURL(url);
+    rows.push("=== Métriques SaaS (Teliya) ===");
+    rows.push(`Compagnies actives;${totalActiveCompanies}`);
+    rows.push(`Nouvelles (30j);${newCompanies30d}`);
+    rows.push(`Abonnements actifs;${activeSubscriptions}`);
+    rows.push(`MRR (${getCurrencySymbol()});${mrr}`);
+    rows.push(`Commission totale (${getCurrencySymbol()});${totalCommission}`);
+    rows.push("");
+    rows.push("=== Métriques macro (anonymisées) ===");
+    rows.push(`GMV global (${getCurrencySymbol()});${globalGmv}`);
+    rows.push(`Réservations totales;${totalReservations}`);
+    rows.push(`Croissance mensuelle (%);${monthlyGrowthRate ?? "N/A"}`);
+    rows.push("");
+    rows.push("=== Répartition par pays (anonymisée) ===");
+    rows.push("Pays;GMV");
+    countryDistribution.forEach((c) => rows.push(`${c.name};${c.value}`));
+    rows.push("");
+    rows.push("=== Tendances ===");
+    rows.push("Date;GMV;Réservations");
+    series.forEach((s) => rows.push(`${s.date};${s.gmv};${s.reservations}`));
+    const blob = new Blob([rows.join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "teliya_dashboard_export.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const handleExportXLSX = async () => {
-    const XLSX = await import("xlsx");
-    const kpiRows = [
-      ["Période", (periode==="tout"?"Tout": periode==="7j"?"7 jours":"30 jours")],
-      [], ["Indicateur","Valeur brute"],
-      ["Total (GMV)", stats.total], ["Commission", stats.commission],
-      ["Réservations", stats.reservations], ["Annulations", stats.annulations],
-      ["Compagnies", stats.compagnies],
-    ];
-    const seriesRows = [["Date","GMV","Réservations"], ...series.map(s=>[s.date,s.gmv,s.reservations])];
-    const topsCompRows = [["Compagnie","GMV","Réservations"], ...topCompanies.map(c=>[c.name,c.gmv,c.reservations])];
-    const topsDestRows = [["Trajet","GMV","Réservations"], ...topDestinations.map(r=>[r.route,r.gmv,r.reservations])];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(kpiRows), "KPIs");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(seriesRows), "Series");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(topsCompRows), "Top_Companies");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(topsDestRows), "Top_Destinations");
-    XLSX.writeFile(wb, "dashboard_export.xlsx");
-  };
+  const COLORS = ["#ea580c", "#2563eb", "#16a34a", "#9333ea", "#0d9488"];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="text-gray-500">Chargement des indicateurs…</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-8">
-      {/* Header local + filtres */}
+    <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold">Vue d’ensemble</h2>
-          <p className="text-gray-600">Performance globale de la plateforme.</p>
+          <h2 className="text-2xl font-bold text-gray-900">Vue d’ensemble plateforme</h2>
+          <p className="text-gray-600">
+            Métriques SaaS Teliya et indicateurs macro agrégés (anonymisés).
+          </p>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-          {/* Compagnie */}
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-600">Compagnie :</label>
-            <select
-              className="rounded-lg border border-gray-300 bg-white px-3 py-1 text-sm"
-              value={selectedCompanyId}
-              onChange={(e) => setSelectedCompanyId(e.target.value)}
-            >
-              <option value="__all__">Toutes</option>
-              {companies.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}
-            </select>
-          </div>
-          {/* Période */}
           <div className="flex gap-2">
-            {(["7j","30j","tout"] as const).map(p => (
+            {(["7j", "30j"] as const).map((p) => (
               <button
                 key={p}
                 onClick={() => setPeriode(p)}
                 className={`px-3 py-1 rounded-full text-sm font-medium transition ${
-                  periode===p ? "bg-orange-600 text-white shadow"
-                               : "bg-gray-100 text-gray-700 hover:bg-gray-200"}`
-                }
+                  periode === p
+                    ? "bg-[var(--btn-primary,#FF6600)] text-white shadow-sm"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
               >
-                {p==="7j"?"7 jours": p==="30j"?"30 jours":"Tout"}
+                {p === "7j" ? "7 jours" : "30 jours"}
               </button>
             ))}
           </div>
-          {/* Exports */}
-          <div className="flex gap-2">
-            <button onClick={handleExportCSV}
-              className="flex items-center gap-2 px-3 py-1 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700">
-              <Download className="h-4 w-4" /> Export CSV
-            </button>
-            <button onClick={handleExportXLSX}
-              className="flex items-center gap-2 px-3 py-1 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">
-              <Download className="h-4 w-4" /> Export Excel
-            </button>
-          </div>
+          <Button
+            onClick={handleExportCSV}
+            variant="primary"
+            size="sm"
+          >
+            <Download className="h-4 w-4" /> Export CSV
+          </Button>
         </div>
       </div>
 
-      {/* KPI cliquables */}
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      {/* KPI cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {kpis.map(({ label, value, icon: Icon, color, to }) => (
           <button
             key={label}
-            onClick={() => navigate(to)}
-            className="text-left bg-white p-4 rounded-xl border shadow-sm hover:shadow-md hover:translate-y-[-1px] transition focus:outline-none focus:ring-2 focus:ring-orange-200"
+            onClick={() => to && navigate(to)}
+            disabled={!to}
+            className={`text-left bg-white p-4 rounded-xl border shadow-sm hover:shadow-md transition focus:outline-none focus:ring-2 focus:ring-orange-200 ${
+              to ? "cursor-pointer hover:translate-y-[-1px]" : "cursor-default"
+            }`}
           >
             <Icon className={`h-6 w-6 mb-2 ${color}`} />
             <p className="text-sm text-gray-500">{label}</p>
@@ -223,11 +418,11 @@ const AdminDashboard: React.FC = () => {
         ))}
       </div>
 
-      {/* Trends */}
+      {/* Tendances (macro) */}
       <section className="bg-white p-6 rounded-xl shadow-sm border">
-        <h3 className="text-lg font-semibold mb-4">Tendances</h3>
-        {series.length===0 ? (
-          <p className="text-gray-500 text-sm">Pas assez de données temporelles.</p>
+        <h3 className="text-lg font-semibold mb-4">Tendances (macro agrégé)</h3>
+        {series.length === 0 ? (
+          <p className="text-gray-500 text-sm">Pas assez de données.</p>
         ) : (
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -247,82 +442,62 @@ const AdminDashboard: React.FC = () => {
                 <YAxis />
                 <Tooltip />
                 <Legend />
-                <Area type="monotone" dataKey="gmv" name="GMV (FCFA)" stroke="#16a34a" fill="url(#gmv)" />
-                <Area type="monotone" dataKey="reservations" name="Réservations" stroke="#2563eb" fill="url(#bookings)" />
+                <Area
+                  type="monotone"
+                  dataKey="gmv"
+                  name={`GMV (${getCurrencySymbol()})`}
+                  stroke="#16a34a"
+                  fill="url(#gmv)"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="reservations"
+                  name="Réservations"
+                  stroke="#2563eb"
+                  fill="url(#bookings)"
+                />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         )}
       </section>
 
-      {/* Top compagnies */}
-      <section className="bg-white p-6 rounded-xl shadow-sm border">
-        <h3 className="text-lg font-semibold mb-4">Top compagnies</h3>
-        {topCompanies.length === 0 ? (
-          <p className="text-gray-500 text-sm">Pas de données.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left border">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-2">Compagnie</th>
-                  <th className="px-4 py-2">Réservations</th>
-                  <th className="px-4 py-2">GMV</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topCompanies.map(c => (
-                  <tr key={c.id} className="border-t">
-                    <td className="px-4 py-2 font-medium">{c.name}</td>
-                    <td className="px-4 py-2">{nf.format(c.reservations)}</td>
-                    <td className="px-4 py-2">{fmtFCFA(c.gmv)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Top destinations */}
-      <section className="bg-white p-6 rounded-xl shadow-sm border">
-        <h3 className="text-lg font-semibold mb-4">Top destinations</h3>
-        {topDestinations.length === 0 ? (
-          <p className="text-gray-500 text-sm">Pas de données.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left border">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-2">Trajet</th>
-                  <th className="px-4 py-2">Réservations</th>
-                  <th className="px-4 py-2">GMV</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topDestinations.map(r => (
-                  <tr key={r.route} className="border-t">
-                    <td className="px-4 py-2 font-medium">{r.route}</td>
-                    <td className="px-4 py-2">{nf.format(r.reservations)}</td>
-                    <td className="px-4 py-2">{fmtFCFA(r.gmv)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Alertes */}
+      {/* Répartition par pays (anonymisée) */}
       <section className="bg-white p-6 rounded-xl shadow-sm border">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <AlertTriangle className="h-5 w-5 text-red-500" /> Alertes
+          <Globe className="h-5 w-5 text-gray-600" /> Répartition par pays (GMV agrégé)
         </h3>
-        <ul className="text-sm text-gray-700 list-disc pl-5 space-y-1">
-          <li>Compagnies sans réservation depuis 30 jours</li>
-          <li>Factures impayées détectées</li>
-          <li>Taux d’annulation supérieur à 20%</li>
-        </ul>
+        {countryDistribution.length === 0 ? (
+          <p className="text-gray-500 text-sm">Aucune donnée par pays.</p>
+        ) : (
+          <div className="h-64 w-full max-w-md">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={countryDistribution}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={80}
+                  label={({ name, percent }) =>
+                    `${name} ${(percent * 100).toFixed(0)}%`
+                  }
+                >
+                  {countryDistribution.map((_, index) => (
+                    <Cell
+                      key={index}
+                      fill={COLORS[index % COLORS.length]}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value: number) => [formatCurrency(value), "GMV"]}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </section>
     </div>
   );

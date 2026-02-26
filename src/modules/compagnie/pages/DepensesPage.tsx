@@ -4,9 +4,11 @@ import React, { useEffect, useState } from 'react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 const DepensesPage: React.FC = () => {
   const { user } = useAuth();
+  const money = useFormatCurrency();
   const [depenses, setDepenses] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
 
@@ -26,7 +28,7 @@ const DepensesPage: React.FC = () => {
   return (
     <div>
       <h2 className="text-lg font-semibold mb-2">📤 Dépenses</h2>
-      <p className="text-sm text-gray-600 mb-4">Total des dépenses : <span className="font-bold text-red-600">{total.toLocaleString()} FCFA</span></p>
+      <p className="text-sm text-gray-600 mb-4">Total des dépenses : <span className="font-bold text-red-600">{money(total)}</span></p>
       <table className="w-full text-sm border-collapse">
         <thead className="bg-gray-100">
           <tr>
@@ -40,7 +42,7 @@ const DepensesPage: React.FC = () => {
             <tr key={i}>
               <td className="border p-2">{d.date}</td>
               <td className="border p-2">{d.description}</td>
-              <td className="border p-2">{d.montant?.toLocaleString()} FCFA</td>
+              <td className="border p-2">{money(d.montant)}</td>
             </tr>
           ))}
         </tbody>

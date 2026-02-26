@@ -4,8 +4,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
 import {
-  collection, query, where, onSnapshot, Timestamp, getDocs, doc, getDoc, CollectionReference,
+  collection, query, where, onSnapshot, Timestamp, getDocs, doc, getDoc, limit, CollectionReference,
 } from "firebase/firestore";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 /* ---------- Types exportés (identiques à ta version) ---------- */
 
@@ -13,6 +14,8 @@ export interface DashboardKpis {
   caPeriode: number;
   caPeriodeFormatted: string;
   caDeltaText: string;
+  /** Variation du CA vs période précédente (%), null si pas de période précédente ou CA précédent = 0 */
+  caDeltaPercent: number | null;
   reservationsCount: number;
   clientsUniques: number;
   agencesActives: number;
@@ -30,12 +33,13 @@ export type Series = { daily: DailyPoint[] };
 
 // CORRECTION ICI : Rendre tauxRemplissage optionnel
 export type AgencyPerf = {
-  id: string; 
-  nom: string; 
-  ville?: string; 
-  reservations: number; 
-  revenus: number; 
-  tauxRemplissage?: boolean; // ← Rendre optionnel
+  id: string;
+  nom: string;
+  ville?: string;
+  reservations: number;
+  revenus: number;
+  tauxRemplissage?: boolean;
+  /** Variation des revenus vs période précédente (%), undefined si pas de CA précédent */
   variation?: number;
 };
 
@@ -55,9 +59,6 @@ export interface ReservationDoc {
 }
 
 /* ---------- Utils ---------- */
-function formatFCFA(n: number) {
-  return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(n || 0);
-}
 function normCity(s?: string) {
   return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/-/g, " ").trim();
 }
@@ -109,10 +110,12 @@ async function getReservationsCollectionRef(
 export function useCompanyDashboardData({
   companyId, dateFrom, dateTo,
 }: { companyId: string; dateFrom: Date; dateTo: Date }) {
+  const money = useFormatCurrency();
   const [loading, setLoading] = useState(true);
   const [company, setCompany] = useState<any | null>(null);
   const [agencies, setAgencies] = useState<{ id: string; nom: string; ville?: string }[]>([]);
   const [reservations, setReservations] = useState<ReservationDoc[]>([]);
+  const [previousPeriodReservations, setPreviousPeriodReservations] = useState<ReservationDoc[]>([]);
 
   // Meta compagnie
   useEffect(() => {
@@ -130,8 +133,11 @@ export function useCompanyDashboardData({
     const qAg = query(collection(db, `companies/${companyId}/agences`));
     console.log("📡 Listen agences:", `companies/${companyId}/agences`);
     const unsub = onSnapshot(qAg, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, nom: (d.data() as any).nom || d.id, ville: (d.data() as any).ville }));
-      console.log("✅ Agencies size:", list.length, list.map(a => a.id));
+      const list = snap.docs.map(d => {
+        const data = d.data() as { nomAgence?: string; nom?: string; ville?: string };
+        const nom = data.nomAgence ?? data.nom ?? "";
+        return { id: d.id, nom, ville: data.ville };
+      });
       setAgencies(list);
     }, (err) => console.error("✖ onSnapshot agences:", err));
     return () => unsub();
@@ -225,48 +231,111 @@ export function useCompanyDashboardData({
     };
   }, [companyId, dateFrom.getTime(), dateTo.getTime()]);
 
+  // Période précédente (même durée) pour variation CA et par agence
+  useEffect(() => {
+    if (!companyId) return;
+    const periodMs = dateTo.getTime() - dateFrom.getTime();
+    const prevDateTo = new Date(dateFrom.getTime() - 86400000);
+    const prevDateFrom = new Date(prevDateTo.getTime() - periodMs);
+    const startTsPrev = Timestamp.fromDate(prevDateFrom);
+    const endTsPrev = Timestamp.fromDate(prevDateTo);
+
+    (async () => {
+      try {
+        const agSnap = await getDocs(collection(db, `companies/${companyId}/agences`));
+        const agencyIds = agSnap.docs.map(d => d.id);
+        const all: ReservationDoc[] = [];
+        for (const aid of agencyIds) {
+          const { ref } = await getReservationsCollectionRef(companyId, aid);
+          if (!ref) continue;
+          const q = query(ref, where("createdAt", ">=", startTsPrev), where("createdAt", "<=", endTsPrev), limit(500));
+          const snap = await getDocs(q);
+          snap.docs.forEach(d => {
+            const data = d.data() as any;
+            all.push({
+              id: d.id,
+              agencyId: aid,
+              agenceId: aid,
+              agencyNom: data.agencyNom,
+              agencyVille: data.agencyVille,
+              statut: data.statut,
+              montant: data.montant || 0,
+              seatsGo: data.seatsGo || 1,
+              createdAt: data.createdAt,
+              date: data.date,
+              heure: data.heure,
+            } as ReservationDoc);
+          });
+        }
+        setPreviousPeriodReservations(all);
+      } catch (e) {
+        console.error("✖ Previous period reservations:", e);
+        setPreviousPeriodReservations([]);
+      }
+    })();
+  }, [companyId, dateFrom.getTime(), dateTo.getTime()]);
+
   /* ---------- Sélection paid-only ---------- */
   const paidReservations = useMemo(
     () => reservations.filter(r => isPaidStatus(r.statut)),
     [reservations]
   );
 
+  const previousPaidReservations = useMemo(
+    () => previousPeriodReservations.filter(r => isPaidStatus(r.statut)),
+    [previousPeriodReservations]
+  );
+
+  const previousRevenueByAgency = useMemo(() => {
+    const m = new Map<string, number>();
+    previousPaidReservations.forEach(r => {
+      const aId = (r.agencyId || r.agenceId) as string | undefined;
+      if (!aId) return;
+      m.set(aId, (m.get(aId) ?? 0) + (r.montant || 0));
+    });
+    return m;
+  }, [previousPaidReservations]);
+
   /* ---------- Agrégations ---------- */
   const totalAgences = agencies.length;
 
   const perAgency = useMemo<AgencyPerf[]>(() => {
     const map = new Map<string, AgencyPerf>();
-    
-    // Initialiser avec toutes les agences
+
     agencies.forEach(a => map.set(a.id, {
-      id: a.id, 
-      nom: a.nom, 
-      ville: a.ville, 
-      reservations: 0, 
+      id: a.id,
+      nom: a.nom,
+      ville: a.ville,
+      reservations: 0,
       revenus: 0,
-      // tauxRemplissage est optionnel, donc on ne le définit pas ici
     }));
-    
-    // Mettre à jour avec les réservations payées
+
     paidReservations.forEach(r => {
       const aId = (r.agencyId || r.agenceId) as string | undefined;
       if (!aId) return;
-      
-      const curr = map.get(aId) || { 
-        id: aId, 
-        nom: r.agencyNom || aId, 
-        ville: r.agencyVille, 
-        reservations: 0, 
-        revenus: 0 
+
+      const curr = map.get(aId) || {
+        id: aId,
+        nom: r.agencyNom || "Agence inconnue",
+        ville: r.agencyVille,
+        reservations: 0,
+        revenus: 0,
       };
-      
+
       curr.reservations += r.seatsGo || 1;
       curr.revenus += r.montant || 0;
       map.set(aId, curr);
     });
-    
-    return Array.from(map.values()).sort((a, b) => b.revenus - a.revenus);
-  }, [agencies, paidReservations]);
+
+    return Array.from(map.values()).map(a => {
+      const prevRev = previousRevenueByAgency.get(a.id) ?? 0;
+      const variation =
+        prevRev > 0
+          ? Math.round((((a.revenus - prevRev) / prevRev) * 100) * 10) / 10
+          : undefined;
+      return { ...a, variation };
+    }).sort((a, b) => b.revenus - a.revenus);
+  }, [agencies, paidReservations, previousRevenueByAgency]);
 
   const clientsUniques = useMemo(() => {
     const s = new Set<string>();
@@ -311,6 +380,11 @@ export function useCompanyDashboardData({
 
   const kpis = useMemo<DashboardKpis>(() => {
     const ca = paidReservations.reduce((s, r) => s + (r.montant || 0), 0);
+    const previousCa = previousPaidReservations.reduce((s, r) => s + (r.montant || 0), 0);
+    const caDeltaPercent =
+      previousCa > 0
+        ? Math.round(((ca - previousCa) / previousCa) * 1000) / 10
+        : null;
     const caDeltaText = "vs période précédente";
 
     const reservationsCount = paidReservations.length;
@@ -340,8 +414,9 @@ export function useCompanyDashboardData({
 
     return {
       caPeriode: ca,
-      caPeriodeFormatted: formatFCFA(ca),
+      caPeriodeFormatted: money(ca),
       caDeltaText,
+      caDeltaPercent,
       reservationsCount,
       clientsUniques,
       agencesActives: actives.size,
@@ -353,7 +428,7 @@ export function useCompanyDashboardData({
       partEnLigne,
       partGuichet,
     };
-  }, [paidReservations, totalAgences, villesCouvertes, parCanal, parStatut]);
+  }, [paidReservations, previousPaidReservations, totalAgences, villesCouvertes, parCanal, parStatut]);
 
   const series = useMemo<Series>(() => {
     const m = new Map<string, { reservations: number; revenue: number }>();

@@ -14,76 +14,47 @@ interface PrivateRouteProps {
 /* =========================
    Utils
 ========================= */
+const CANONICAL_ROLES: ReadonlySet<string> = new Set([
+  "admin_platforme",
+  "admin_compagnie",
+  "company_accountant",
+  "agency_accountant",
+  "chef_garage",
+  "chefagence",
+  "chefembarquement",
+  "superviseur",
+  "agentcourrier",
+  "guichetier",
+  "agency_fleet_controller",
+  "financial_director",
+]);
+
 const normalizeRole = (r?: unknown): Role => {
-  if (!r) return "user";
-
+  if (!r) return "unauthenticated";
   const raw = String(r).trim().toLowerCase();
-
-  console.log("🔍 PrivateRoute normalizeRole - raw input:", raw);
-
-  const map: Record<string, Role> = {
-    // PLATFORME
-    'admin_platforme': "admin_platforme",
-    'admin platforme': "admin_platforme",
-
-    // COMPAGNIE (CEO)
-    'admin_compagnie': "admin_compagnie",
-    'compagnie': "admin_compagnie",
-    'admin compagnie': "admin_compagnie",
-
-    // COMPTABILITÉ COMPAGNIE
-    'company_accountant': "company_accountant",
-    'comptable_compagnie': "company_accountant",
-    'comptable compagnie': "company_accountant",
-    'comptable': "company_accountant",
-    'chef comptable': "company_accountant",
-    
-    // DAF
-    'financial_director': "financial_director",
-    'daf': "financial_director",
-
-    // AGENCE
-    'chefagence': "chefAgence",
-    'chef_agence': "chefAgence",
-    'chef agence': "chefAgence",
-    'superviseur': "chefAgence",
-    'agentcourrier': "chefAgence",
-    'agent_courrier': "chefAgence",
-
-    'agency_accountant': "agency_accountant",
-    'comptable_agence': "agency_accountant",
-    'comptable agence': "agency_accountant",
-
-    'guichetier': "guichetier",
-    'embarquement': "embarquement",
-
-    // DEFAULT
-    'user': "user",
-  };
-
-  const result = map[raw] ?? "user";
-  console.log("🔍 PrivateRoute normalizeRole - result:", result);
-  
-  return result;
+  if (raw === "company_ceo") return "admin_compagnie";
+  if (raw === "chefagence") return "chefAgence";
+  if (raw === "agentcourrier") return "agentCourrier";
+  if (raw === "chefembarquement") return "chefEmbarquement";
+  if (raw === "agency_boarding_officer" || raw === "embarquement") return "chefEmbarquement";
+  return CANONICAL_ROLES.has(raw) ? (raw as Role) : "unauthenticated";
 };
 
-const defaultLandingByRole: Record<Role, string> = {
-  // PLATFORME
+const defaultLandingByRole: Partial<Record<Role, string>> = {
   admin_platforme: "/admin/dashboard",
-
-  // COMPAGNIE
-  admin_compagnie: "/compagnie/dashboard",
-  company_accountant: "/comptable",
-  financial_director: "/comptable",
-
-  // AGENCE
+  admin_compagnie: "/role-landing",
+  company_accountant: "/role-landing",
+  financial_director: "/role-landing",
+  chef_garage: "/compagnie/garage/dashboard",
   chefAgence: "/agence/dashboard",
+  superviseur: "/agence/dashboard",
+  agentCourrier: "/agence/courrier",
   agency_accountant: "/agence/comptabilite",
   guichetier: "/agence/guichet",
-  embarquement: "/agence/embarquement",
-
-  // DEFAULT
-  user: "/",
+  chefEmbarquement: "/agence/boarding",
+  agency_fleet_controller: "/agence/fleet",
+  unauthenticated: "/login",
+  user: "/login",
 };
 
 const asArray = (v: unknown): string[] =>
@@ -99,14 +70,7 @@ const PrivateRoute: React.FC<PrivateRouteProps> = ({
   const { user, loading } = useAuth();
   const location = useLocation();
 
-  console.log("🔍 PrivateRoute - Début");
-  console.log("🔍 PrivateRoute - location.pathname:", location.pathname);
-  console.log("🔍 PrivateRoute - user:", user);
-  console.log("🔍 PrivateRoute - user?.role:", user?.role);
-  console.log("🔍 PrivateRoute - allowedRoles:", allowedRoles);
-
   if (loading) {
-    console.log("🔍 PrivateRoute - loading state");
     return (
       <div className="p-6 text-center text-gray-600">
         Vérification de l'authentification...
@@ -115,25 +79,23 @@ const PrivateRoute: React.FC<PrivateRouteProps> = ({
   }
 
   if (!user) {
-    console.log("🔍 PrivateRoute - Pas d'utilisateur, redirection vers /login");
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   const userRoles = asArray(user.role).map(normalizeRole);
-  console.log("🔍 PrivateRoute - userRoles après normalisation:", userRoles);
-  
-  const isAllowed = userRoles.some((r) => allowedRoles.includes(r));
-  console.log("🔍 PrivateRoute - isAllowed:", isAllowed);
+  const allowedSet = new Set(allowedRoles.map((r) => String(r).toLowerCase()));
+  const isAllowed = userRoles.some((r) => allowedSet.has(String(r).toLowerCase()));
 
   if (!isAllowed) {
-    console.log("🔍 PrivateRoute - Accès refusé, calcul du fallback...");
+    const role = userRoles[0];
+    if (role === "chef_garage" && user?.companyId) {
+      return <Navigate to={`/compagnie/${user.companyId}/garage/dashboard`} replace />;
+    }
     const fallback =
-      userRoles.map((r) => defaultLandingByRole[r]).find(Boolean) || "/";
-    console.log("🔍 PrivateRoute - fallback calculé:", fallback);
+      userRoles.map((r) => defaultLandingByRole[r]).find(Boolean) || "/login";
     return <Navigate to={fallback} replace />;
   }
 
-  console.log("🔍 PrivateRoute - Accès autorisé, affichage des enfants");
   return <>{children}</>;
 };
 

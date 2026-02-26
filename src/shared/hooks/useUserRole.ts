@@ -7,25 +7,24 @@ import { permissionsByRole } from '@/roles-permissions';
 
 type AnyRole = keyof typeof permissionsByRole | string;
 
-export const normalizeRole = (r?: string): AnyRole => {
-  const raw = (r || 'user').toString().trim();
-  const lc = raw.toLowerCase();
+const CANONICAL_ROLES = new Set([
+  "admin_platforme", "admin_compagnie", "company_accountant", "agency_accountant",
+  "chef_garage", "chefagence", "chefembarquement", "guichetier",
+  "agency_fleet_controller", "financial_director",
+]);
 
-  if (lc === 'chef_agence' || lc === 'chefagence') return 'chefAgence';
-  if (lc === 'admin plateforme' || lc === 'admin_platforme') return 'admin_platforme';
-  if (lc === 'admin compagnie' || lc === 'admin_compagnie') return 'admin_compagnie';
-  if (lc === 'agent_courrier' || lc === 'agentcourrier') return 'agentCourrier';
-  if (lc === 'superviseur') return 'superviseur';
-  if (lc === 'guichetier') return 'guichetier';
-  if (lc === 'comptable') return 'comptable';
-  if (lc === 'compagnie') return 'compagnie';
-  if (lc === 'embarquement') return 'embarquement';
-  return 'user';
+export const normalizeRole = (r?: string): AnyRole => {
+  const raw = (r || "").toString().trim().toLowerCase();
+  if (raw === "company_ceo") return "admin_compagnie";
+  if (raw === "chefagence") return "chefAgence";
+  if (raw === "chefembarquement") return "chefEmbarquement";
+  if (raw === "agency_boarding_officer" || raw === "embarquement") return "chefEmbarquement";
+  return CANONICAL_ROLES.has(raw) ? (raw as AnyRole) : "unauthenticated";
 };
 
 export function useUserRole() {
   const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<AnyRole>('user');
+  const [role, setRole] = useState<AnyRole>('unauthenticated');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -33,7 +32,7 @@ export function useUserRole() {
     const unsubAuth = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (!u) {
-        setRole('user');
+        setRole('unauthenticated');
         setLoading(false);
         return;
       }
@@ -51,14 +50,14 @@ export function useUserRole() {
       const unsubDoc = onSnapshot(
         ref,
         (snap) => {
-          const r = normalizeRole(snap.exists() ? (snap.data() as any).role : 'user');
+          const r = normalizeRole(snap.exists() ? (snap.data() as any).role : undefined);
           setRole(r);
           setLoading(false);
         },
         () => {
           // fallback en cas d’erreur réseau : on tente un getDoc
           getDoc(ref).then((s) => {
-            const r = normalizeRole(s.exists() ? (s.data() as any).role : 'user');
+            const r = normalizeRole(s.exists() ? (s.data() as any).role : undefined);
             setRole(r);
           }).finally(() => setLoading(false));
         }

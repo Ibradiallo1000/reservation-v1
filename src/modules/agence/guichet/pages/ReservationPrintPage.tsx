@@ -1,6 +1,8 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { format } from 'date-fns';
+import { Button } from '@/shared/ui/button';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 // Interface pour les données de réservation
 interface Reservation {
@@ -26,6 +28,7 @@ interface LocationState {
 const ReservationPrintPage: React.FC = () => {
   const location = useLocation();
   const state = location.state as LocationState;
+  const money = useFormatCurrency();
   const today = format(new Date(), 'dd/MM/yyyy');
 
   return (
@@ -35,16 +38,16 @@ const ReservationPrintPage: React.FC = () => {
         Utilisation de media queries CSS pour le cacher lors de l'impression
       */}
       <div className="print:hidden flex justify-end mb-4">
-        <button
+        <Button
           onClick={() => {
             // On déclenche l'impression et on retourne à la page précédente après un délai
             window.print();
             setTimeout(() => window.history.back(), 500);
           }}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded"
+          variant="primary"
         >
           🖨️ Imprimer
-        </button>
+        </Button>
       </div>
 
       {/*
@@ -113,7 +116,7 @@ const ReservationPrintPage: React.FC = () => {
                 <td className="border px-2 py-1">{res.telephone}</td>
                 <td className="border px-2 py-1 text-center">{res.seatsGo || 1}</td>
                 <td className="border px-2 py-1 text-right">
-                  {res.montant?.toLocaleString()} FCFA
+                  {money(res.montant)}
                 </td>
                 <td className="border px-2 py-1 text-center">
                   <span className={`inline-block px-1 rounded ${
@@ -136,7 +139,7 @@ const ReservationPrintPage: React.FC = () => {
         <div className="mt-2 text-right text-xs">
           Total réservations: {state.reservations.length} | 
           Places totales: {state.reservations.reduce((sum, res) => sum + (res.seatsGo || 1), 0)} | 
-          Montant total: {state.reservations.reduce((sum, res) => sum + (res.montant || 0), 0).toLocaleString()} FCFA
+          Montant total: {money(state.reservations.reduce((sum, res) => sum + (res.montant || 0), 0))}
         </div>
 
         {/*

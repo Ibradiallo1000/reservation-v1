@@ -1,9 +1,8 @@
 import React from "react";
 import { v4 as uuidv4 } from "uuid";
 import axios from "axios";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { useCompanyImageUpload } from "@/shared/hooks/useCompanyImageUpload";
 
 const UploadImageCloudinary = ({
   label,
@@ -12,6 +11,7 @@ const UploadImageCloudinary = ({
   className,
 }: any) => {
   const { user } = useAuth();
+  const { uploadImage } = useCompanyImageUpload();
 
   const handleFileChange = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -20,7 +20,6 @@ const UploadImageCloudinary = ({
     const file = input.files?.[0];
     if (!file) return;
 
-    // 🔒 Sécurité : uniquement admin compagnie
     if (!user?.companyId) {
       alert("Accès refusé");
       return;
@@ -41,22 +40,12 @@ const UploadImageCloudinary = ({
       const nom =
         window.prompt("Nom de l'image")?.trim() || "Image";
 
-      // ✅ ÉCRITURE DANS LA COMPAGNIE (ET PAS PLATEFORME)
-      await addDoc(
-        collection(
-          db,
-          "companies",
-          user.companyId,
-          "imagesBibliotheque"
-        ),
-        {
-          url: imageUrl,
-          nom,
-          type: "image",
-          createdAt: serverTimestamp(),
-          uploadedBy: user.uid,
-        }
-      );
+      await uploadImage(user.companyId, {
+        url: imageUrl,
+        nom,
+        type: "image",
+        uploadedBy: user.uid,
+      });
 
       if (onUpload) await onUpload(imageUrl);
       alert("✅ Image ajoutée avec succès");

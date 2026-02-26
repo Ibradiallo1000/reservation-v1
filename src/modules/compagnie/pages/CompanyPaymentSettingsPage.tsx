@@ -46,8 +46,13 @@ async function updateCompanyPaymentMirror(
   return updateDoc(companyRef, payload as any);
 }
 
-const CompanyPaymentSettingsPage: React.FC = () => {
+interface CompanyPaymentSettingsPageProps {
+  companyId?: string;
+}
+
+const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({ companyId: companyIdProp }) => {
   const { user, company } = useAuth();
+  const companyId = companyIdProp ?? user?.companyId ?? '';
   const theme = useCompanyTheme(company);
   const { setHeader, resetHeader } = usePageHeader();
 
@@ -81,12 +86,12 @@ const CompanyPaymentSettingsPage: React.FC = () => {
   // ----- Chargement
   useEffect(() => {
     const fetchPaymentMethods = async () => {
-      if (!user?.companyId) return;
+      if (!companyId) return;
 
       try {
         const qy = query(
           collection(db, 'paymentMethods'),
-          where('companyId', '==', user.companyId)
+          where('companyId', '==', companyId)
         );
         const snapshot = await getDocs(qy);
         const methods = snapshot.docs.map(d => ({
@@ -101,7 +106,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
     };
 
     fetchPaymentMethods();
-  }, [user?.companyId]);
+  }, [companyId]);
 
   // ----- Form change
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -114,7 +119,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
     e.preventDefault();
     setError(null);
 
-    if (!user?.companyId) {
+    if (!companyId) {
       setError('Aucune compagnie associée.');
       return;
     }
@@ -130,7 +135,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
     try {
       const methodData: PaymentMethod = {
         ...formData,
-        companyId: user.companyId,
+        companyId,
       };
 
       const fieldKey = fieldKeyFromName(name);
@@ -141,13 +146,13 @@ const CompanyPaymentSettingsPage: React.FC = () => {
 
         // miroir dans companies.paymentMethods.<clé>
         if (defaultPaymentUrl && defaultPaymentUrl.trim() !== '') {
-          await updateCompanyPaymentMirror(user.companyId, fieldKey, {
+          await updateCompanyPaymentMirror(companyId, fieldKey, {
             url: defaultPaymentUrl,
             logoUrl,
             ussdPattern,
           });
         } else {
-          await updateCompanyPaymentMirror(user.companyId, fieldKey, null);
+          await updateCompanyPaymentMirror(companyId, fieldKey, null);
         }
 
         setPaymentMethods(prev =>
@@ -158,7 +163,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
         const ref = await addDoc(collection(db, 'paymentMethods'), methodData as any);
 
         if (defaultPaymentUrl && defaultPaymentUrl.trim() !== '') {
-          await updateCompanyPaymentMirror(user.companyId, fieldKey, {
+          await updateCompanyPaymentMirror(companyId, fieldKey, {
             url: defaultPaymentUrl,
             logoUrl,
             ussdPattern,
@@ -199,7 +204,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
 
   // ----- Delete
   const handleDelete = async (method: PaymentMethod) => {
-    if (!method.id || !user?.companyId) return;
+    if (!method.id || !companyId) return;
 
     const confirmed = window.confirm(`Supprimer la méthode ${method.name} ?`);
     if (!confirmed) return;
@@ -208,7 +213,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
       await deleteDoc(doc(db, 'paymentMethods', method.id));
 
       const fieldKey = fieldKeyFromName(method.name);
-      await updateCompanyPaymentMirror(user.companyId, fieldKey, null);
+      await updateCompanyPaymentMirror(companyId, fieldKey, null);
 
       setPaymentMethods(prev => prev.filter(m => m.id !== method.id));
 
@@ -229,7 +234,10 @@ const CompanyPaymentSettingsPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
+    <div className="max-w-7xl mx-auto p-6">
+      <p className="text-sm text-gray-600 mb-6">
+        Ces moyens de paiement (comptes mobile money, etc.) sont définis au niveau de la compagnie et servent à encaisser les paiements des réservations en ligne. Les clients les choisissent lors du dépôt de preuve de paiement.
+      </p>
       {error && (
         <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded">
           <p>{error}</p>
@@ -237,7 +245,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
       )}
 
       {/* Liste des méthodes existantes */}
-      <div className="bg-white p-6 rounded-lg shadow-md mb-8 border border-gray-100">
+      <div className="bg-white p-6 rounded-xl shadow-sm mb-8 border border-gray-100">
         <h2 className="text-xl font-semibold mb-4">Méthodes configurées</h2>
 
         {paymentMethods.length === 0 ? (
@@ -293,7 +301,7 @@ const CompanyPaymentSettingsPage: React.FC = () => {
       </div>
 
       {/* Formulaire d'ajout/modification */}
-      <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
         <h2 className="text-xl font-semibold mb-4">
           {selectedId ? 'Modifier une méthode' : 'Ajouter une nouvelle méthode'}
         </h2>

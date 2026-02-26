@@ -25,7 +25,8 @@ function roleLabelFromRole(role?: string) {
   if (r === "agentcourrier" || r === "agent_courrier") return "Agent courrier";
   if (r === "superviseur") return "Superviseur";
   if (r === "guichetier") return "Guichetier";
-  if (r === "comptable") return "Comptable";
+  if (r === "agency_accountant") return "Comptable agence";
+  if (r === "company_accountant") return "Comptable compagnie";
   if (r === "embarquement") return "Embarquement";
   if (r === "compagnie") return "Administration compagnie";
   return "Utilisateur";
