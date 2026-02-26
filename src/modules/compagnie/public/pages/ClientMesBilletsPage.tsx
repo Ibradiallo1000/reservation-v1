@@ -251,7 +251,7 @@ const ClientMesBilletsPage: React.FC = () => {
         getDocs(query(base, where("telephone", "==", phoneE164))),
         nationalOnly.length >= 8
           ? getDocs(query(base, where("telephone", "==", nationalOnly)))
-          : Promise.resolve({ docs: [] } as QuerySnapshot),
+          : Promise.resolve({ docs: [] } as unknown as QuerySnapshot),
       ]);
 
       const addUnique = (d: QueryDocumentSnapshot) => {
