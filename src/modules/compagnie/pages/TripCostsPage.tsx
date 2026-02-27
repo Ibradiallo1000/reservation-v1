@@ -12,12 +12,15 @@ import {
   type TripCostDoc,
 } from "@/core/intelligence";
 import { ArrowLeft, Plus, Pencil } from "lucide-react";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
 
 const TODAY = format(new Date(), "yyyy-MM-dd");
 
 type TripCostWithId = TripCostDoc & { id: string };
 
 export default function TripCostsPage() {
+  const isOnline = useOnlineStatus();
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
@@ -30,6 +33,8 @@ export default function TripCostsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [form, setForm] = useState({
     tripId: "",
     agencyId: user?.agencyId ?? "",
@@ -48,6 +53,7 @@ export default function TripCostsPage() {
   const load = useCallback(async () => {
     if (!companyId) return;
     setLoading(true);
+    setError(null);
     try {
       const list = await listTripCosts(companyId, {
         date: dateFilter,
@@ -58,10 +64,15 @@ export default function TripCostsPage() {
     } catch (e) {
       console.error("listTripCosts:", e);
       setItems([]);
+      setError(
+        !isOnline
+          ? "Connexion indisponible. Impossible de charger les coûts trajet."
+          : "Erreur lors du chargement des coûts trajet."
+      );
     } finally {
       setLoading(false);
     }
-  }, [companyId, dateFilter, isAgencyManager, user?.agencyId]);
+  }, [companyId, dateFilter, isAgencyManager, user?.agencyId, isOnline]);
 
   useEffect(() => {
     setHeader({ title: "Coûts par trajet" });
@@ -70,7 +81,7 @@ export default function TripCostsPage() {
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -141,6 +152,12 @@ export default function TripCostsPage() {
 
   return (
     <div className="space-y-4 p-4 md:p-6 max-w-5xl mx-auto">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: l’historique des coûts peut être incomplet." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <button
           type="button"
@@ -253,7 +270,11 @@ export default function TripCostsPage() {
       <section className="bg-white rounded-xl border p-4 shadow-sm">
         <h2 className="text-lg font-semibold mb-3">Historique</h2>
         {loading ? (
-          <p className="text-sm text-gray-500">Chargement…</p>
+          <div className="space-y-3 animate-fadein">
+            <div className="h-10 rounded-lg skeleton" />
+            <div className="h-10 rounded-lg skeleton" />
+            <div className="h-10 rounded-lg skeleton" />
+          </div>
         ) : items.length === 0 ? (
           <p className="text-sm text-gray-500">Aucun coût enregistré pour cette date.</p>
         ) : (

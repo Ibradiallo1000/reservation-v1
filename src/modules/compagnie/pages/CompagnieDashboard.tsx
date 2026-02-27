@@ -22,6 +22,8 @@ import { CriticalAlertsPanel, type CriticalAlert } from "@/modules/compagnie/adm
 import { useAuth } from "@/contexts/AuthContext";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageOfflineState } from "@/shared/ui/PageStates";
 
 /* ---------- helpers ---------- */
 const DEFAULT_RANGE: RangeKey = "month";
@@ -36,6 +38,7 @@ interface AgencyData {
 export default function CompagnieDashboard() {
   const { user } = useAuth();
   const { companyId: companyIdFromUrl } = useParams();
+  const isOnline = useOnlineStatus();
 
   // 🔥 CLÉ PRINCIPALE
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
@@ -131,6 +134,9 @@ export default function CompagnieDashboard() {
 
   return (
     <div className="space-y-6 p-4 md:p-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: certains blocs de performance peuvent être retardés." />
+      )}
 
       <div className="flex justify-between items-center">
         <div>

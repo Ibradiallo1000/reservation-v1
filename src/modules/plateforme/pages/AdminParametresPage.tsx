@@ -4,6 +4,8 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../../../firebaseConfig';
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageOfflineState, PageLoadingState } from "@/shared/ui/PageStates";
 
 type Features = {
   guichet: boolean;
@@ -22,9 +24,11 @@ type PlatformSettings = {
 };
 
 const AdminParametresPage: React.FC = () => {
+  const isOnline = useOnlineStatus();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{type: 'ok' | 'err'; text: string} | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // champs
   const [email, setEmail] = useState('');
@@ -69,7 +73,7 @@ const AdminParametresPage: React.FC = () => {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [reloadKey]);
 
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -122,16 +126,14 @@ const AdminParametresPage: React.FC = () => {
   };
 
   if (loading) {
-    return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold mb-4">Paramètres plateforme</h1>
-        <div className="text-gray-600">Chargement…</div>
-      </div>
-    );
+    return <PageLoadingState />;
   }
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: certains paramètres peuvent ne pas se sauvegarder." />
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Paramètres plateforme</h1>
         {logoUrl ? (
@@ -267,7 +269,18 @@ const AdminParametresPage: React.FC = () => {
             message.type === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
           }`}
         >
-          {message.text}
+          <div className="flex items-center justify-between gap-3">
+            <span>{message.text}</span>
+            {message.type === 'err' && (
+              <button
+                type="button"
+                onClick={() => setReloadKey((v) => v + 1)}
+                className="px-2 py-1 text-xs rounded border border-red-300 hover:bg-red-100"
+              >
+                Réessayer
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

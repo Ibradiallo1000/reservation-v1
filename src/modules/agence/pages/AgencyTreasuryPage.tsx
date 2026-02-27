@@ -15,9 +15,12 @@ import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import { listExpenses, type ExpenseStatus } from "@/modules/compagnie/treasury/expenses";
 import { ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import { Wallet, ArrowRightLeft, FileText } from "lucide-react";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 
 export default function AgencyTreasuryPage() {
   const { user, company } = useAuth();
+  const isOnline = useOnlineStatus();
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
 
@@ -25,6 +28,8 @@ export default function AgencyTreasuryPage() {
   const [movements, setMovements] = useState<{ id: string; amount: number; movementType: string; performedAt: unknown }[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<{ id: string; amount: number; category: string; status: ExpenseStatus }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -32,11 +37,19 @@ export default function AgencyTreasuryPage() {
       return;
     }
     const currency = (company as { devise?: string })?.devise ?? "XOF";
-    ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as { nom?: string })?.nom).then(() => {
-      listAccounts(companyId, { agencyId }).then(setAccounts);
-      setLoading(false);
-    });
-  }, [companyId, agencyId, company]);
+    setError(null);
+    ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as { nom?: string })?.nom)
+      .then(() => listAccounts(companyId, { agencyId }))
+      .then(setAccounts)
+      .catch(() => {
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger la trésorerie."
+            : "Erreur lors du chargement de la trésorerie."
+        );
+      })
+      .finally(() => setLoading(false));
+  }, [companyId, agencyId, company, isOnline, reloadKey]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -58,22 +71,36 @@ export default function AgencyTreasuryPage() {
           };
         })
       );
+    }, () => {
+      setError(
+        !isOnline
+          ? "Connexion indisponible. Mouvements non synchronisés."
+          : "Erreur lors du chargement des mouvements."
+      );
     });
     return () => unsub();
-  }, [companyId, agencyId]);
+  }, [companyId, agencyId, isOnline]);
 
   useEffect(() => {
     if (!companyId) return;
-    listExpenses(companyId, { agencyId, status: "pending", limitCount: 20 }).then((list) =>
-      setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
-    );
+    listExpenses(companyId, { agencyId, status: "pending", limitCount: 20 })
+      .then((list) =>
+        setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
+      )
+      .catch(() => {
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Dépenses non disponibles."
+            : "Erreur lors du chargement des dépenses."
+        );
+      });
     const interval = setInterval(() => {
       listExpenses(companyId, { agencyId, status: "pending", limitCount: 20 }).then((list) =>
         setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
-      );
+      ).catch(() => {});
     }, 30000);
     return () => clearInterval(interval);
-  }, [companyId, agencyId]);
+  }, [companyId, agencyId, isOnline]);
 
   const totalCash = accounts.reduce((s, a) => s + a.currentBalance, 0);
 
@@ -86,15 +113,17 @@ export default function AgencyTreasuryPage() {
   }
 
   if (loading && accounts.length === 0) {
-    return (
-      <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <div className="text-gray-500">Chargement…</div>
-      </div>
-    );
+    return <PageLoadingState />;
   }
 
   return (
     <div className="space-y-6 p-4 md:p-6 max-w-4xl mx-auto">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: certaines données peuvent être incomplètes." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       <p className="text-sm text-gray-600">{formatDateLongFr(new Date())}</p>
 
       <section className="bg-white rounded-xl border p-4 shadow-sm">

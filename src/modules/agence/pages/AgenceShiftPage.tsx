@@ -11,13 +11,17 @@ import {
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { useActiveShift } from "@/modules/agence/hooks/useActiveShift";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
 
 const AgenceShiftPage: React.FC = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { user } = useAuth();
   const { activeShift } = useActiveShift();
+  const isOnline = useOnlineStatus();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const staffCode =
     (user as any)?.staffCode ||
@@ -42,6 +46,7 @@ const AgenceShiftPage: React.FC = () => {
     if (!canOperate || !companyId || !agencyId) return;
 
     setLoading(true);
+    setError(null);
     try {
       await addDoc(
         collection(db, "companies", companyId, "agences", agencyId, "shifts"),
@@ -59,10 +64,16 @@ const AgenceShiftPage: React.FC = () => {
       );
 
       navigate("/agence/guichet");
+    } catch {
+      setError(
+        !isOnline
+          ? "Connexion indisponible. Impossible d'ouvrir le poste."
+          : "Erreur lors de l'ouverture du poste."
+      );
     } finally {
       setLoading(false);
     }
-  }, [canOperate, companyId, agencyId, navigate, staffCode, user]);
+  }, [canOperate, companyId, agencyId, navigate, staffCode, user, isOnline]);
 
   /* =========================
      FERMER LE POSTE
@@ -71,6 +82,7 @@ const AgenceShiftPage: React.FC = () => {
     if (!canOperate || !companyId || !agencyId || !activeShift?.id) return;
 
     setLoading(true);
+    setError(null);
     try {
       await updateDoc(
         doc(
@@ -94,6 +106,12 @@ const AgenceShiftPage: React.FC = () => {
       );
 
       navigate("/agence/guichet");
+    } catch {
+      setError(
+        !isOnline
+          ? "Connexion indisponible. Impossible de clôturer le poste."
+          : "Erreur lors de la clôture du poste."
+      );
     } finally {
       setLoading(false);
     }
@@ -105,6 +123,7 @@ const AgenceShiftPage: React.FC = () => {
     navigate,
     staffCode,
     user,
+    isOnline,
   ]);
 
   /* =========================
@@ -118,6 +137,12 @@ const AgenceShiftPage: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: les actions d'ouverture/clôture peuvent échouer." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setError(null)} />
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Gestion du poste</h1>
         <Link to="/agence/guichet" className="px-3 py-2 rounded-lg border">

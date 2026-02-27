@@ -13,6 +13,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 import { usePageHeader } from "@/contexts/PageHeaderContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
 
 /* =========================
    Types
@@ -41,11 +43,14 @@ interface Agence {
 const CompagnieInvitationsPage: React.FC = () => {
   const { user, company } = useAuth();
   const theme = useCompanyTheme(company);
+  const isOnline = useOnlineStatus();
   const { setHeader, resetHeader } = usePageHeader();
 
   const [agences, setAgences] = useState<Agence[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
@@ -74,16 +79,25 @@ const CompagnieInvitationsPage: React.FC = () => {
     if (!companyId) return;
 
     const loadAgences = async () => {
-      const snap = await getDocs(
-        collection(db, "companies", companyId, "agences")
-      );
-      setAgences(
-        snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))
-      );
+      try {
+        setError(null);
+        const snap = await getDocs(
+          collection(db, "companies", companyId, "agences")
+        );
+        setAgences(
+          snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))
+        );
+      } catch {
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger les agences."
+            : "Erreur lors du chargement des agences."
+        );
+      }
     };
 
     loadAgences();
-  }, [companyId]);
+  }, [companyId, isOnline]);
 
   /* =========================
      Charger invitations
@@ -93,6 +107,7 @@ const CompagnieInvitationsPage: React.FC = () => {
 
     setLoading(true);
     try {
+      setError(null);
       const q = query(
         collection(db, "invitations"),
         where("companyId", "==", companyId),
@@ -126,6 +141,7 @@ const CompagnieInvitationsPage: React.FC = () => {
       return;
     }
 
+    setSubmitting(true);
     try {
       const result = await createInvitationDoc({
         email: email.trim().toLowerCase(),
@@ -138,12 +154,14 @@ const CompagnieInvitationsPage: React.FC = () => {
       alert(`Invitation envoyée.\n\nLien d'activation :\n${result.activationUrl}`);
     } catch (err: any) {
       alert(err?.message || "Erreur lors de l'envoi de l'invitation.");
+      setSubmitting(false);
       return;
     }
 
     setEmail("");
     setFullName("");
     setAgencyId("");
+    setSubmitting(false);
     loadInvitations();
   };
 
@@ -161,6 +179,12 @@ const CompagnieInvitationsPage: React.FC = () => {
   ========================= */
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: les invitations peuvent être retardées." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={loadInvitations} />
+      )}
       {/* Formulaire */}
       <form
         onSubmit={handleInvite}
@@ -210,10 +234,11 @@ const CompagnieInvitationsPage: React.FC = () => {
 
         <button
           type="submit"
+          disabled={submitting}
           className="px-4 py-2 rounded text-white"
           style={{ backgroundColor: theme.colors.primary }}
         >
-          Envoyer l’invitation
+          {submitting ? "Envoi…" : "Envoyer l’invitation"}
         </button>
       </form>
 
@@ -224,7 +249,11 @@ const CompagnieInvitationsPage: React.FC = () => {
         </div>
 
         {loading ? (
-          <p className="p-6">Chargement…</p>
+          <div className="p-4 space-y-3">
+            <div className="h-14 rounded-lg skeleton" />
+            <div className="h-14 rounded-lg skeleton" />
+            <div className="h-14 rounded-lg skeleton" />
+          </div>
         ) : invitations.length === 0 ? (
           <p className="p-6 text-gray-500">Aucune invitation</p>
         ) : (

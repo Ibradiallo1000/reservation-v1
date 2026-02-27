@@ -22,6 +22,8 @@ import {
   FileText,
 } from "lucide-react";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageLoadingState } from "@/shared/ui/PageStates";
 
 dayjs.locale("fr");
 
@@ -116,6 +118,8 @@ const ClientMesReservationsPage: React.FC = () => {
   const [rows, setRows] = useState<Reservation[]>([]);
   const [error, setError] = useState<string>("");
   const [visibleCount, setVisibleCount] = useState(INITIAL_COUNT);
+  const [hasSearched, setHasSearched] = useState(false);
+  const isOnline = useOnlineStatus();
 
   const title = useMemo(
     () => (slug ? "Mes réservations" : "Retrouver mes réservations"),
@@ -205,6 +209,7 @@ const ClientMesReservationsPage: React.FC = () => {
     // car tes réservations sont déjà enregistrées en format cohérent côté guichet/en ligne.
     setError("");
     setLoading(true);
+    setHasSearched(true);
     setRows([]);
     setVisibleCount(INITIAL_COUNT);
 
@@ -250,7 +255,11 @@ const ClientMesReservationsPage: React.FC = () => {
       setRows(results);
     } catch (e) {
       console.error(e);
-      setError("Erreur lors de la recherche. Réessayez.");
+      setError(
+        !isOnline
+          ? "Connexion indisponible. Impossible de rechercher vos réservations."
+          : "Erreur lors de la recherche. Réessayez."
+      );
     } finally {
       setLoading(false);
     }
@@ -325,9 +334,22 @@ const ClientMesReservationsPage: React.FC = () => {
           </div>
 
           {loading ? (
-            <div className="p-6 text-sm text-gray-600">Chargement…</div>
+            <PageLoadingState blocks={3} />
+          ) : !hasSearched ? (
+            <div className="p-6 text-sm text-gray-500">Lancez une recherche pour afficher vos réservations.</div>
           ) : displayed.length === 0 ? (
-            <div className="p-6 text-sm text-gray-500">Aucun résultat.</div>
+            <div className="p-6 text-sm text-gray-500">
+              {isOnline ? "Aucun résultat." : "Hors ligne: impossible de charger les réservations."}
+              <div className="mt-3">
+                <button
+                  onClick={search}
+                  className="text-sm px-3 py-1.5 rounded-lg border hover:bg-gray-50"
+                  style={{ borderColor: `${theme.primary}40` }}
+                >
+                  Réessayer
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               <ul className="">

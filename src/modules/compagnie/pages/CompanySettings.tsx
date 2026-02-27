@@ -13,6 +13,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/shared/ui/button";
 import { CheckCircle2 } from "lucide-react";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 
 type SupportLevel = "basic" | "standard" | "priority" | "premium" | "enterprise";
 
@@ -54,12 +56,15 @@ const SUPPORT_LABELS: Record<SupportLevel, string> = {
 };
 
 const CompanySettingsPlan: React.FC = () => {
+  const isOnline = useOnlineStatus();
   const { companyId, user } = useAuth();
   const money = useFormatCurrency();
   const [company, setCompany] = useState<Company | null>(null);
   const [plans, setPlans] = useState<PlanDef[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!companyId) {
@@ -70,6 +75,7 @@ const CompanySettingsPlan: React.FC = () => {
     }
     (async () => {
       setLoading(true);
+      setError(null);
       try {
         const snap = await getDoc(doc(db, "companies", companyId));
         if (snap.exists()) {
@@ -143,11 +149,16 @@ const CompanySettingsPlan: React.FC = () => {
         console.error("Erreur chargement plan compagnie:", err);
         setCompany(null);
         setPlans([]);
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger les paramètres de plan."
+            : "Erreur lors du chargement des paramètres de plan."
+        );
       } finally {
         setLoading(false);
       }
     })();
-  }, [companyId]);
+  }, [companyId, isOnline, reloadKey]);
 
   const currentPlan = useMemo(
     () => plans.find((p) => p.id === company?.plan) || null,
@@ -158,7 +169,7 @@ const CompanySettingsPlan: React.FC = () => {
     return <p className="text-sm text-gray-600">Aucune compagnie active.</p>;
   }
   if (loading) {
-    return <p className="text-sm text-gray-600">Chargement…</p>;
+    return <PageLoadingState />;
   }
   if (!company) {
     return <p className="text-sm text-gray-600">Compagnie introuvable.</p>;
@@ -190,6 +201,12 @@ const CompanySettingsPlan: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: les données de plan peuvent être incomplètes." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       {/* Current plan card */}
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
         <div className="flex items-center justify-between mb-4">

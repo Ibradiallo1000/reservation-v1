@@ -30,6 +30,8 @@ import {
   getEffectiveStatut,
   type WalletSectionId,
 } from "@/utils/reservationStatusUtils";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageLoadingState } from "@/shared/ui/PageStates";
 
 dayjs.locale("fr");
 
@@ -127,7 +129,9 @@ const ClientMesBilletsPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<Reservation[]>([]);
   const [error, setError] = useState<string>("");
+  const [hasSearched, setHasSearched] = useState(false);
   const [countryOpen, setCountryOpen] = useState(false);
+  const isOnline = useOnlineStatus();
 
   const title = useMemo(
     () => (slug ? "Mon portefeuille" : "Retrouver mes billets"),
@@ -276,6 +280,7 @@ const ClientMesBilletsPage: React.FC = () => {
     }
     setError("");
     setLoading(true);
+    setHasSearched(true);
     setRows([]);
 
     try {
@@ -317,7 +322,11 @@ const ClientMesBilletsPage: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
-      setError("Erreur lors de la recherche. Réessayez.");
+      setError(
+        !isOnline
+          ? "Connexion indisponible. Impossible de rechercher vos billets."
+          : "Erreur lors de la recherche. Réessayez."
+      );
     } finally {
       setLoading(false);
     }
@@ -503,12 +512,26 @@ const ClientMesBilletsPage: React.FC = () => {
           </div>
 
           {loading ? (
+            <PageLoadingState blocks={3} />
+          ) : !hasSearched ? (
             <div className="p-8 text-sm text-gray-500 text-center">
-              Chargement…
+              Lancez une recherche pour afficher vos billets.
             </div>
           ) : sections.every((s) => s.items.length === 0) ? (
             <div className="p-8 text-sm text-gray-500 text-center">
-              Aucun billet pour ce numéro.
+              {isOnline
+                ? "Aucun billet pour ce numéro."
+                : "Hors ligne: impossible de charger les billets pour le moment."}
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={search}
+                  className="text-xs px-3 py-1.5 rounded-lg border hover:bg-gray-50"
+                  style={{ borderColor: `${theme.primary}40` }}
+                >
+                  Réessayer
+                </button>
+              </div>
             </div>
           ) : (
             <div className="p-3 space-y-6">

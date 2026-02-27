@@ -2,11 +2,15 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { canonicalStatut } from '@/utils/reservationStatusUtils';
 import { Company } from '@/types/companyTypes';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { useTranslation } from 'react-i18next';
 import { Clock, MapPin, Ticket, Users, ChevronLeft, Calendar } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
+import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
+import { PageLoadingState } from '@/shared/ui/PageStates';
 
 interface WeeklyTrip {
   id: string;
@@ -59,6 +63,7 @@ const getContrastColor = (hexColor: string): string => {
 };
 
 const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const money = useFormatCurrency();
@@ -71,6 +76,8 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
   const [selectedTime, setSelectedTime] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const isOnline = useOnlineStatus();
 
   const themeConfig = useMemo(() => {
     const primary = company.couleurPrimaire || '#3b82f6';
@@ -110,9 +117,14 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
 
   useEffect(() => {
     const fetchTrajets = async () => {
-      if (!company.id || !departure || !arrival) return;
+      if (!company.id || !departure || !arrival) {
+        setLoading(false);
+        setError('Informations de recherche incomplètes.');
+        return;
+      }
 
       setLoading(true);
+      setError(null);
       try {
         const agencesSnap = await getDocs(collection(db, 'companies', company.id, 'agences'));
         const agences = agencesSnap.docs.map(doc => ({ id: doc.id }));
@@ -142,7 +154,7 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
               const horaires = trip.horaires?.[dayName] || [];
               for (const heure of horaires) {
                 const trajetId = `${trip.id}_${dateStr}_${heure}`;
-                const reserved = reservations.filter(r => r.trajetId === trajetId && r.statut === 'payé');
+                const reserved = reservations.filter(r => r.trajetId === trajetId && (canonicalStatut(r.statut) === 'paye'));
                 const remainingSeats = (trip.places || 30) - reserved.reduce((acc, r) => acc + r.seatsGo, 0);
                 
                 if (remainingSeats > 0) {
@@ -175,7 +187,7 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
     };
 
     fetchTrajets();
-  }, [company.id, allDates, departure, arrival]);
+  }, [company.id, allDates, departure, arrival, reloadKey]);
 
   useEffect(() => {
     if (filteredTrips.length > 0) {
@@ -232,11 +244,10 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen" style={{ background: colors.background }}>
-        <div
-          className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2"
-          style={{ borderColor: colors.primary }}
-        />
+      <div className="min-h-screen p-4 sm:p-6" style={{ background: colors.background }}>
+        <div className="max-w-4xl mx-auto">
+          <PageLoadingState blocks={3} />
+        </div>
       </div>
     );
   }
@@ -250,9 +261,21 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
         <div className={`p-4 rounded-lg max-w-md ${classes.card}`}>
           <h2 className="text-xl font-bold mb-2 text-gray-900">Erreur</h2>
           <p className="text-gray-700">{error}</p>
+          {!isOnline && (
+            <p className="text-sm text-amber-700 mt-2">
+              Vous semblez hors ligne. Vérifiez votre connexion puis réessayez.
+            </p>
+          )}
+          <button
+            onClick={() => setReloadKey((v) => v + 1)}
+            className={`mt-4 px-4 py-2 rounded ${classes.button}`}
+            style={{ backgroundColor: colors.secondary, color: '#111827' }}
+          >
+            Réessayer
+          </button>
           <button
             onClick={() => navigate(`/${company.slug}`)}
-            className={`mt-4 px-4 py-2 rounded ${classes.button}`}
+            className={`mt-2 px-4 py-2 rounded ${classes.button}`}
             style={{ backgroundColor: colors.primary, color: colors.textOnPrimary }}
           >
             Retour à la compagnie
@@ -468,7 +491,7 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
                   color: colors.textOnPrimary
                 }}
               >
-                Réserver maintenant
+                {t('reserveNow')}
               </button>
             </div>
           </div>

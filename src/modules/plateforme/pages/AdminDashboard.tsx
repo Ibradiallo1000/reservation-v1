@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { collection, collectionGroup, getDocs } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useNavigate } from "react-router-dom";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import {
   TrendingUp,
   Building2,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
+import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -69,9 +71,12 @@ const addDays = (d: Date, n: number) => {
 
 const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
+  const isOnline = useOnlineStatus();
 
   const [periode, setPeriode] = useState<"7j" | "30j">("30j");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // SaaS metrics
   const [totalActiveCompanies, setTotalActiveCompanies] = useState(0);
@@ -94,55 +99,56 @@ const AdminDashboard: React.FC = () => {
   useEffect(() => {
     const run = async () => {
       setLoading(true);
+      setError(null);
+      try {
+        const now = new Date();
+        const start30d = addDays(now, -29);
+        const startPrevMonth = addDays(now, -59);
 
-      const now = new Date();
-      const start30d = addDays(now, -29);
-      const startPrevMonth = addDays(now, -59);
+        // Companies
+        const companiesSnap = await getDocs(collection(db, "companies"));
+        const comps: Company[] = companiesSnap.docs.map((docSnap) => {
+          const d = docSnap.data();
+          return {
+            id: docSnap.id,
+            nom: d.nom || "",
+            plan: d.plan || "free",
+            planId: d.planId,
+            status: d.status || "actif",
+            pays: d.pays || "Non défini",
+            createdAt: d.createdAt,
+          };
+        });
 
-      // Companies
-      const companiesSnap = await getDocs(collection(db, "companies"));
-      const comps: Company[] = companiesSnap.docs.map((docSnap) => {
-        const d = docSnap.data();
-        return {
-          id: docSnap.id,
-          nom: d.nom || "",
-          plan: d.plan || "free",
-          planId: d.planId,
-          status: d.status || "actif",
-          pays: d.pays || "Non défini",
-          createdAt: d.createdAt,
-        };
-      });
+        const active = comps.filter((c) => c.status === "actif");
+        const newIn30d = comps.filter((c) => {
+          const sec = c.createdAt?.seconds;
+          if (!sec) return false;
+          const created = new Date(sec * 1000);
+          return created >= start30d;
+        });
 
-      const active = comps.filter((c) => c.status === "actif");
-      const newIn30d = comps.filter((c) => {
-        const sec = c.createdAt?.seconds;
-        if (!sec) return false;
-        const created = new Date(sec * 1000);
-        return created >= start30d;
-      });
+        // Plans for MRR and active subscriptions
+        const plansSnap = await getDocs(collection(db, "plans"));
+        const plansById: Record<string, PlanDoc> = {};
+        plansSnap.docs.forEach((d) => {
+          const x = d.data();
+          plansById[d.id] = {
+            id: d.id,
+            name: x.name ?? x.nom ?? "",
+            priceMonthly: Number(x.priceMonthly) || 0,
+          };
+        });
 
-      // Plans for MRR and active subscriptions
-      const plansSnap = await getDocs(collection(db, "plans"));
-      const plansById: Record<string, PlanDoc> = {};
-      plansSnap.docs.forEach((d) => {
-        const x = d.data();
-        plansById[d.id] = {
-          id: d.id,
-          name: x.name ?? x.nom ?? "",
-          priceMonthly: Number(x.priceMonthly) || 0,
-        };
-      });
-
-      const paidPlans = new Set(
+        const paidPlans = new Set(
         Object.entries(plansById)
           .filter(([, p]) => p.priceMonthly > 0)
           .map(([id]) => id)
       );
 
-      let mrrSum = 0;
-      let activeSubs = 0;
-      active.forEach((c) => {
+        let mrrSum = 0;
+        let activeSubs = 0;
+        active.forEach((c) => {
         const planId = c.planId || "";
         const plan = plansById[planId];
         if (plan && paidPlans.has(planId)) {
@@ -151,27 +157,27 @@ const AdminDashboard: React.FC = () => {
         }
       });
 
-      setTotalActiveCompanies(active.length);
-      setNewCompanies30d(newIn30d.length);
-      setActiveSubscriptions(activeSubs);
-      setMrr(mrrSum);
+        setTotalActiveCompanies(active.length);
+        setNewCompanies30d(newIn30d.length);
+        setActiveSubscriptions(activeSubs);
+        setMrr(mrrSum);
 
       // Reservations (collectionGroup) – global only, no per-company
-      const resSnap = await getDocs(collectionGroup(db, "reservations"));
-      let gmv = 0;
-      let commission = 0;
-      let reservations = 0;
+        const resSnap = await getDocs(collectionGroup(db, "reservations"));
+        let gmv = 0;
+        let commission = 0;
+        let reservations = 0;
 
-      const dailyCurr = new Map<string, { gmv: number; reservations: number }>();
-      const dailyPrev = new Map<string, { gmv: number; reservations: number }>();
-      const countryAgg: Record<string, number> = {};
+        const dailyCurr = new Map<string, { gmv: number; reservations: number }>();
+        const dailyPrev = new Map<string, { gmv: number; reservations: number }>();
+        const countryAgg: Record<string, number> = {};
 
-      const companyIdToCountry: Record<string, string> = {};
-      comps.forEach((c) => {
-        companyIdToCountry[c.id] = c.pays || "Non défini";
-      });
+        const companyIdToCountry: Record<string, string> = {};
+        comps.forEach((c) => {
+          companyIdToCountry[c.id] = c.pays || "Non défini";
+        });
 
-      for (const docSnap of resSnap.docs) {
+        for (const docSnap of resSnap.docs) {
         const d = docSnap.data() as Reservation;
         const montant = toNum(d.total ?? d.montant);
         const comm = toNum(d.commission);
@@ -207,43 +213,51 @@ const AdminDashboard: React.FC = () => {
           cur.reservations += 1;
           dailyPrev.set(k, cur);
         }
-      }
+        }
 
-      setTotalCommission(commission);
-      setGlobalGmv(gmv);
-      setTotalReservations(reservations);
+        setTotalCommission(commission);
+        setGlobalGmv(gmv);
+        setTotalReservations(reservations);
 
       // Monthly growth: compare last 30d vs previous 30d
-      const currTotal = gmv;
-      let prevTotal = 0;
-      dailyPrev.forEach((v) => (prevTotal += v.gmv));
-      const growth =
-        prevTotal > 0 ? ((currTotal - prevTotal) / prevTotal) * 100 : null;
-      setMonthlyGrowthRate(growth);
+        const currTotal = gmv;
+        let prevTotal = 0;
+        dailyPrev.forEach((v) => (prevTotal += v.gmv));
+        const growth =
+          prevTotal > 0 ? ((currTotal - prevTotal) / prevTotal) * 100 : null;
+        setMonthlyGrowthRate(growth);
 
       // Series for trends (last N days)
-      const start = periode === "7j" ? addDays(now, -6) : start30d;
-      const range: { date: string; gmv: number; reservations: number }[] = [];
-      let cur = new Date(start);
-      while (cur <= now) {
-        const k = dayKey(cur);
-        const v = dailyCurr.get(k) ?? { gmv: 0, reservations: 0 };
-        range.push({ date: k, ...v });
-        cur = addDays(cur, 1);
-      }
-      setSeries(range);
+        const start = periode === "7j" ? addDays(now, -6) : start30d;
+        const range: { date: string; gmv: number; reservations: number }[] = [];
+        let cur = new Date(start);
+        while (cur <= now) {
+          const k = dayKey(cur);
+          const v = dailyCurr.get(k) ?? { gmv: 0, reservations: 0 };
+          range.push({ date: k, ...v });
+          cur = addDays(cur, 1);
+        }
+        setSeries(range);
 
       // Country distribution (anonymized, aggregated)
-      const dist = Object.entries(countryAgg).map(([name, value]) => ({
-        name,
-        value,
-      }));
-      setCountryDistribution(dist);
-
-      setLoading(false);
+        const dist = Object.entries(countryAgg).map(([name, value]) => ({
+          name,
+          value,
+        }));
+        setCountryDistribution(dist);
+      } catch (e) {
+        console.error(e);
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger le dashboard admin."
+            : "Erreur lors du chargement des indicateurs admin."
+        );
+      } finally {
+        setLoading(false);
+      }
     };
     run();
-  }, [periode]);
+  }, [periode, isOnline, reloadKey]);
 
   const kpis = useMemo(
     () => [
@@ -357,15 +371,17 @@ const AdminDashboard: React.FC = () => {
   const COLORS = ["#ea580c", "#2563eb", "#16a34a", "#9333ea", "#0d9488"];
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <div className="text-gray-500">Chargement des indicateurs…</div>
-      </div>
-    );
+    return <PageLoadingState blocks={3} />;
   }
 
   return (
     <div className="space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: les données peuvent être incomplètes." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Vue d’ensemble plateforme</h2>

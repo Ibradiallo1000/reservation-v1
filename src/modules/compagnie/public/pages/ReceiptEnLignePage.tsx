@@ -30,6 +30,8 @@ import html2pdf from 'html2pdf.js';
 import { safeTextColor } from '@/utils/color';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
+import { PageLoadingState } from '@/shared/ui/PageStates';
 
 import TicketOnline from '@/modules/compagnie/public/components/ticket/TicketOnline';
 import { getEffectiveStatut } from '@/utils/reservationStatusUtils';
@@ -55,6 +57,9 @@ interface Reservation {
   canal?: string;
   seatsGo: number;
   createdAt?: any;
+  modePaiement?: string;
+  preuveVia?: string;
+  remboursement?: { mode?: string };
 }
 
 interface CompanyInfo {
@@ -94,6 +99,9 @@ const ReceiptEnLignePage: React.FC = () => {
   const [agencyName, setAgencyName] = useState<string>('Agence');
   const [loading, setLoading] = useState<boolean>(!reservationFromState);
   const [notFound, setNotFound] = useState<boolean>(false);
+  const [loadError, setLoadError] = useState<string>('');
+  const [reloadKey, setReloadKey] = useState(0);
+  const isOnline = useOnlineStatus();
 
   const receiptRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +127,7 @@ const ReceiptEnLignePage: React.FC = () => {
     const load = async () => {
       setLoading(true);
       setNotFound(false);
+      setLoadError('');
 
       const firestorePath = companyId && agencyId
         ? `companies/${companyId}/agences/${agencyId}/reservations/${id}`
@@ -155,6 +164,9 @@ const ReceiptEnLignePage: React.FC = () => {
               nomAgence: data.nomAgence as string | undefined,
               agencyNom: data.agencyNom as string | undefined,
               agenceNom: data.agenceNom as string | undefined,
+              modePaiement: data.modePaiement as string | undefined,
+              preuveVia: data.preuveVia as string | undefined,
+              remboursement: data.remboursement as { mode?: string } | undefined,
             });
             setLoading(false);
             return;
@@ -207,14 +219,18 @@ const ReceiptEnLignePage: React.FC = () => {
         }
       } catch (err) {
         console.error('[ReceiptEnLignePage] load error', err);
-        setNotFound(true);
+        setLoadError(
+          !isOnline
+            ? 'Connexion indisponible. Impossible de charger le reçu.'
+            : 'Erreur de chargement du reçu. Veuillez réessayer.'
+        );
       } finally {
         setLoading(false);
       }
     };
 
     load();
-  }, [id, companyIdFromState, agencyIdFromState, reservationFromState?.id]);
+  }, [id, companyIdFromState, agencyIdFromState, reservationFromState?.id, isOnline, reloadKey]);
 
   /* LOAD COMPANY */
   useEffect(() => {
@@ -234,13 +250,19 @@ const ReceiptEnLignePage: React.FC = () => {
           slug: d.slug,
           telephone: d.telephone,
         });
+      } catch {
+        setLoadError(
+          !isOnline
+            ? 'Connexion indisponible. Impossible de charger les infos compagnie.'
+            : 'Erreur lors du chargement des informations de la compagnie.'
+        );
       } finally {
         setLoading(false);
       }
     };
 
     fetchCompany();
-  }, [reservation?.companyId, companyInfo]);
+  }, [reservation?.companyId, companyInfo, isOnline]);
 
   /* AGENCY */
   useEffect(() => {
@@ -271,6 +293,20 @@ const ReceiptEnLignePage: React.FC = () => {
     ? format(parseISO(reservation.date), 'dd/MM/yyyy', { locale: fr })
     : '';
 
+  /** Libellé dynamique mode de paiement : guichet → espèces, en_ligne → preuveVia, remboursé → mode remboursement. */
+  const paymentMethodDisplay = useMemo(() => {
+    if (!reservation) return undefined;
+    const effective = getEffectiveStatut(reservation) ?? reservation.statut;
+    if (effective === 'rembourse' && reservation.remboursement?.mode) {
+      const m = reservation.remboursement.mode.toLowerCase();
+      if (m === 'especes' || m === 'espèces') return 'Remboursé (espèces)';
+      if (m.includes('mobile') || m === 'mobile_money') return 'Remboursé (Mobile Money)';
+      return `Remboursé (${reservation.remboursement.mode})`;
+    }
+    if ((reservation.canal ?? '').toLowerCase() === 'guichet') return reservation.modePaiement ? `Paiement ${reservation.modePaiement}` : undefined;
+    return reservation.preuveVia ?? undefined;
+  }, [reservation]);
+
   const handlePDF = useCallback(() => {
     if (!receiptRef.current) return;
     const opt = {
@@ -286,8 +322,27 @@ const ReceiptEnLignePage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        Chargement du reçu...
+      <div className="min-h-screen p-6 bg-gray-50">
+        <div className="max-w-md mx-auto">
+          <PageLoadingState />
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-6">
+        <h1 className="text-xl font-semibold text-gray-800 mb-2">Erreur de chargement</h1>
+        <p className="text-gray-500 text-center mb-4">{loadError}</p>
+        <button
+          type="button"
+          onClick={() => setReloadKey((v) => v + 1)}
+          className="px-4 py-2 rounded-lg font-medium text-white"
+          style={{ backgroundColor: primaryColor }}
+        >
+          Réessayer
+        </button>
       </div>
     );
   }
@@ -355,6 +410,7 @@ const ReceiptEnLignePage: React.FC = () => {
             montant={reservation.montant}
             qrValue={qrValue}
             emissionDate={emissionDate}
+            paymentMethod={paymentMethodDisplay}
           />
         </div>
       </main>

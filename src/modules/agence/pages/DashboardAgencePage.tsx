@@ -5,6 +5,8 @@ import { collection, onSnapshot, query, where, Timestamp, orderBy } from 'fireba
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
+import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
+import { PageErrorState, PageOfflineState } from '@/shared/ui/PageStates';
 import type { Reservation } from '@/types/index';
 import { toJSDate } from '@/utils/toJSDate';
 
@@ -53,6 +55,7 @@ const DashboardAgencePage: React.FC = () => {
   const { user } = useAuth();
   const theme = useCompanyTheme();
   const { id: agencyIdFromRoute } = useParams();
+  const isOnline = useOnlineStatus();
 
   // Filtres de période
   const now = new Date();
@@ -84,14 +87,21 @@ const DashboardAgencePage: React.FC = () => {
     nextDeparture: '—', destinations: [], channels: [], topRoutes: []
   });
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const unsubscribeRef = useRef<() => void>();
 
   const fetchStats = useCallback(async (startDate: Date, endDate: Date) => {
     const companyId = user?.companyId;
     const agencyId  = agencyIdFromRoute || user?.agencyId;
-    if (!companyId || !agencyId) return;
+    if (!companyId || !agencyId) {
+      setLoadError("Informations agence/compagnie introuvables.");
+      setIsLoading(false);
+      return;
+    }
 
     setIsLoading(true);
+    setLoadError(null);
     if (unsubscribeRef.current) unsubscribeRef.current();
 
     // ✅ IMPORTANT : on ne prend que les réservations "payé"
@@ -169,7 +179,15 @@ const DashboardAgencePage: React.FC = () => {
         topRoutes
       });
       setIsLoading(false);
-    }, (e)=>{ console.error(e); setIsLoading(false); });
+    }, (e)=>{
+      console.error(e);
+      setLoadError(
+        !isOnline
+          ? "Connexion indisponible. Impossible de charger le dashboard agence."
+          : "Erreur lors du chargement des indicateurs agence."
+      );
+      setIsLoading(false);
+    });
 
     unsubscribeRef.current = unsub;
   }, [user?.companyId, user?.agencyId, agencyIdFromRoute]);
@@ -177,7 +195,7 @@ const DashboardAgencePage: React.FC = () => {
   useEffect(() => {
     fetchStats(dateRange[0], dateRange[1]);
     return () => { if (unsubscribeRef.current) unsubscribeRef.current(); };
-  }, [fetchStats, dateRange]);
+  }, [fetchStats, dateRange, reloadKey]);
 
   // Pagination “Top trajets”
   const [routePage, setRoutePage] = useState(1);
@@ -202,6 +220,12 @@ const DashboardAgencePage: React.FC = () => {
   return (
     <div className="min-h-screen p-4 md:p-6" style={{ backgroundColor: theme.colors.background }}>
       <div className="max-w-7xl mx-auto space-y-6">
+        {!isOnline && (
+          <PageOfflineState message="Connexion instable: les indicateurs peuvent être incomplets." />
+        )}
+        {loadError && (
+          <PageErrorState message={loadError} onRetry={() => setReloadKey((v) => v + 1)} />
+        )}
 
         {/* En-tête + filtres période */}
         <div className="rounded-xl bg-white shadow-sm border p-4 space-y-4">

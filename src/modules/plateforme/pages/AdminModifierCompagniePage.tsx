@@ -14,6 +14,8 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { Button } from "@/shared/ui/button";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 
 // Secondary app (pour envoyer le reset sans toucher la session courante)
 import { getApp, initializeApp, deleteApp, FirebaseApp } from "firebase/app";
@@ -47,6 +49,7 @@ function slugify(input: string) {
 }
 
 const AdminModifierCompagniePage: React.FC = () => {
+  const isOnline = useOnlineStatus();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
@@ -67,6 +70,7 @@ const AdminModifierCompagniePage: React.FC = () => {
   const [adminFullName, setAdminFullName] = useState("");
   const [adminPhone, setAdminPhone] = useState("");
   const [resetSending, setResetSending] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const canSave = useMemo(() => {
     return nom.trim().length >= 2 && slug.trim().length >= 2 && !saving;
@@ -112,7 +116,7 @@ const AdminModifierCompagniePage: React.FC = () => {
         setLoading(false);
       }
     })();
-  }, [id]);
+  }, [id, reloadKey]);
 
   // garder un slug propre si l’utilisateur ne le force pas
   useEffect(() => {
@@ -186,10 +190,17 @@ const AdminModifierCompagniePage: React.FC = () => {
     }
   }
 
-  if (loading) return <p className="p-6">Chargement…</p>;
+  if (loading) {
+    return <PageLoadingState />;
+  }
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
+      {!isOnline && (
+        <div className="mb-4">
+          <PageOfflineState message="Connexion instable: certaines opérations peuvent échouer." />
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-orange-700">Modifier la compagnie</h1>
         <button
@@ -200,7 +211,20 @@ const AdminModifierCompagniePage: React.FC = () => {
         </button>
       </div>
 
-      {message && <div className="mb-4 text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded p-3">{message}</div>}
+      {message && (
+        <div className="mb-4 text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded p-3 flex items-center justify-between gap-3">
+          <span>{message}</span>
+          {message.includes("Erreur") && (
+            <button
+              type="button"
+              onClick={() => setReloadKey((v) => v + 1)}
+              className="px-2 py-1 text-xs rounded border border-blue-300 hover:bg-blue-100"
+            >
+              Réessayer
+            </button>
+          )}
+        </div>
+      )}
 
       <form onSubmit={handleSave} className="grid md:grid-cols-2 gap-5">
         {/* Bloc compagnie */}

@@ -19,6 +19,8 @@ import {
   Users,
   ChevronRight,
 } from "lucide-react";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
 
 function getDateKey(d: Date) {
   const y = d.getFullYear();
@@ -29,6 +31,7 @@ function getDateKey(d: Date) {
 
 export default function OperationsFlotteLandingPage() {
   const { user } = useAuth();
+  const isOnline = useOnlineStatus();
   const { companyId: companyIdFromUrl } = useParams<{ companyId: string }>();
   const navigate = useNavigate();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
@@ -44,6 +47,8 @@ export default function OperationsFlotteLandingPage() {
   const [fleetTotal, setFleetTotal] = useState<number>(0);
   const [fleetAvailable, setFleetAvailable] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!companyId) {
@@ -57,6 +62,7 @@ export default function OperationsFlotteLandingPage() {
 
     (async () => {
       setLoading(true);
+      setError(null);
       try {
         const agencesSnap = await getDocs(collection(db, "companies", companyId, "agences"));
         const agencyIds = agencesSnap.docs.map((d) => d.id);
@@ -97,16 +103,27 @@ export default function OperationsFlotteLandingPage() {
         setFleetAvailable(available);
       } catch (e) {
         console.error("OperationsFlotteLandingPage load:", e);
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger la synthèse opérationnelle."
+            : "Erreur lors du chargement de la synthèse opérationnelle."
+        );
       } finally {
         setLoading(false);
       }
     })();
-  }, [companyId]);
+  }, [companyId, isOnline, reloadKey]);
 
   const basePath = `/compagnie/${companyId}`;
 
   return (
     <div className="space-y-6 p-4 md:p-6 max-w-4xl mx-auto">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: certaines métriques peuvent être incomplètes." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       <p className="text-sm text-gray-600">
         Vue d&apos;ensemble opérationnelle. Accédez aux réservations et à la flotte ci-dessous.
       </p>
