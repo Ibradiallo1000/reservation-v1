@@ -43,7 +43,7 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
   return (
     <section className="relative w-full pt-[72px]">
       {/* Conteneur image avec hauteur contrôlée */}
-      <div className="relative h-[520px] sm:h-[560px] md:h-[600px] overflow-hidden">
+      <div className="relative h-[420px] sm:h-[560px] md:h-[900px] overflow-hidden">
 
         {/* Image ou fond fallback */}
         {hasBgImage ? (
