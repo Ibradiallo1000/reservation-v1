@@ -6,13 +6,16 @@ import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info, Clock, Check } from 'lucide-react';
 import {
-  collection, getDocs, query, where, addDoc, doc, updateDoc, serverTimestamp, getDoc,
+  collection, getDocs, query, where, addDoc, doc, updateDoc, serverTimestamp, getDoc, arrayUnion,
 } from 'firebase/firestore';
+import { buildStatutTransitionPayload } from '@/modules/agence/services/reservationStatutService';
+import { canonicalStatut } from '@/utils/reservationStatusUtils';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 
 /* ============== Anti-spam: mémoire locale ============== */
 const PENDING_KEY = 'pendingReservation';
@@ -334,6 +337,7 @@ export default function ReservationClientPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const money = useFormatCurrency();
+  const isOnline = useOnlineStatus();
 
   // Refs pour le scroll automatique
   const paymentSectionRef = useRef<HTMLDivElement>(null);
@@ -639,9 +643,7 @@ export default function ReservationClientPage() {
                 const total = t.places || 30;
                 const reserved = reservations
                   .filter(r => String((r as any).trajetId) === trajetId && 
-                          ['confirme', 'payé'].includes(
-                          String((r as any).statut).toLowerCase()
-                          ))
+                          ['confirme', 'paye'].includes(canonicalStatut((r as any).statut)))
                   .reduce((a, r: any) => a + (r.seatsGo || 0), 0);
                 const remaining = total - reserved;
                 if (remaining > 0) {
@@ -1019,15 +1021,21 @@ export default function ReservationClientPage() {
         ? existing.canal
         : 'en_ligne';
 
+      const auditEntry = buildStatutTransitionPayload(
+        existing?.statut ?? 'en_attente_paiement',
+        'preuve_recue',
+        { userId: 'client_anonymous', userRole: 'client' }
+      );
       await updateDoc(
-        doc(db, 'companies', effectiveCompanyId, 'agences', effectiveAgencyId, 'reservations', reservationId), 
+        doc(db, 'companies', effectiveCompanyId, 'agences', effectiveAgencyId, 'reservations', reservationId),
         {
           statut: 'preuve_recue',
           canal: nextCanal,
-          preuveVia: paymentMethodKey, 
-          preuveMessage: message.trim(), 
-          paymentHint: paymentMethodKey, 
+          preuveVia: paymentMethodKey,
+          preuveMessage: message.trim(),
+          paymentHint: paymentMethodKey,
           paymentTriggeredAt: paymentTriggeredAt ? new Date(paymentTriggeredAt) : null,
+          auditLog: arrayUnion(auditEntry),
           updatedAt: serverTimestamp(),
         }
       );
@@ -1361,6 +1369,13 @@ export default function ReservationClientPage() {
     <div className="min-h-screen bg-gradient-to-br from-white to-gray-50">
       {header}
       <PaymentInstructionsPopup />
+      {!isOnline && (
+        <div className="max-w-[1100px] mx-auto px-3 sm:px-4 pt-3">
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+            Connexion instable: certaines actions (chargement, paiement, envoi de preuve) peuvent échouer.
+          </div>
+        </div>
+      )}
 
       {/* Mode consultation (id présent) */}
       {existing ? (

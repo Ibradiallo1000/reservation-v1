@@ -1,6 +1,7 @@
 import React from "react";
 import { WhyChooseItem } from "@/types/companyTypes";
 import { Clock, ShieldCheck, Bus, Star } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface Props {
   companyName: string;
@@ -23,31 +24,32 @@ const WhyChooseSection: React.FC<Props> = ({
   secondaryColor = "#0063ff",
 }) => {
   if (!items || items.length === 0) return null;
+  const { t } = useTranslation();
 
   return (
     <section
-      className="py-6 px-4"
-      style={{
-        backgroundColor: `${secondaryColor}08`,
-      }}
+      className="py-6 px-4 bg-[color:var(--section-bg)] dark:bg-neutral-950/70"
+      style={
+        {
+          ["--section-bg" as string]: `${secondaryColor}08`,
+        } as React.CSSProperties
+      }
     >
       <div className="max-w-5xl mx-auto">
 
         {/* Titre */}
         <div className="flex items-center justify-center gap-2 mb-4">
           <Bus size={18} style={{ color: primaryColor }} />
-          <h2 className="text-lg font-semibold text-gray-900 text-center">
-            Pourquoi choisir {companyName} ?
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:!text-white text-center drop-shadow-[0_1px_6px_rgba(0,0,0,0.25)]">
+            {t("whyChooseCompany", { companyName })}
           </h2>
         </div>
 
         {/* Carte principale */}
         <div
-          className="rounded-2xl overflow-hidden"
+          className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700"
           style={{
-            border: `1px solid ${primaryColor}20`,
             boxShadow: `0 6px 18px ${primaryColor}12`,
-            backgroundColor: "#ffffff",
           }}
         >
           <div
@@ -85,12 +87,12 @@ const WhyChooseSection: React.FC<Props> = ({
 
                   {/* Texte */}
                   <div>
-                    <p className="text-sm font-medium text-gray-800 leading-tight">
+                    <p className="text-sm font-medium text-gray-800 dark:text-gray-100 leading-tight">
                       {item.label}
                     </p>
 
                     {item.description && (
-                      <p className="text-xs text-gray-500 mt-1 leading-tight">
+                      <p className="text-xs text-gray-500 dark:text-gray-300 mt-1 leading-tight">
                         {item.description}
                       </p>
                     )}

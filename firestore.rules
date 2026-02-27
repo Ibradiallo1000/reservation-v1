@@ -26,14 +26,15 @@ service cloud.firestore {
     function isAgencyManager() {
       return isAuth() && (getUserRole() == 'chefAgence' || getUserRole() == 'admin_compagnie');
     }
-    /* Phase B — transition de statut réservation (guichetier, chef_agence, comptable, embarquement). Valeurs canoniques uniquement. */
+    /* Phase B — transition de statut réservation (guichetier, chef_agence, comptable, embarquement, validation en ligne). Valeurs canoniques uniquement. */
     function validReservationStatutTransition() {
       let oldS = resource.data.get('statut', '');
       let newS = request.resource.data.get('statut', '');
       return (isGuichetier() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'annulation_en_attente')
         || (isAgencyManager() && oldS == 'annulation_en_attente' && newS == 'annule')
         || (isComptable() && oldS == 'annule' && newS == 'rembourse')
-        || (isBoardingOfficer() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'embarque');
+        || (isBoardingOfficer() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'embarque')
+        || ((getUserRole() == 'admin_compagnie' || isAgencyManager() || isComptable()) && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
     }
     /* Phase B — contrôleur embarquement : ne peut modifier que statut, statutEmbarquement, controleurId, checkInTime, auditLog, updatedAt */
     function boardingOfficerAllowedKeysOnly() {
@@ -79,9 +80,9 @@ service cloud.firestore {
     match /companies/{companyId} {
       allow get, list: if true;
 
-      /* Avis clients (vitrine publique) : lecture publique, écriture authentifiée */
+      /* Avis clients (vitrine publique) : lecture publique sans auth pour page compagnie */
       match /avis/{avisId} {
-        allow get, list: if true;
+        allow read: if true;
         allow create, update, delete: if isAuth();
       }
 
@@ -141,10 +142,15 @@ service cloud.firestore {
             request.resource.data.diff(resource.data).changedKeys()
               .hasOnly([
                 "statut",
+                "canal",
                 "preuveVia",
                 "preuveMessage",
+                "preuveUrl",
+                "companyId",
+                "companySlug",
                 "paymentHint",
                 "paymentTriggeredAt",
+                "auditLog",
                 "updatedAt"
               ])
           );

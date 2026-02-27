@@ -12,6 +12,11 @@ i18n
     interpolation: {
       escapeValue: false
     },
+    detection: {
+      order: ['localStorage', 'navigator'],
+      lookupLocalStorage: 'i18nextLng',
+      caches: ['localStorage']
+    },
     resources: {
       fr: {
         translation: {
@@ -43,6 +48,7 @@ i18n
           legalMentions: 'Mentions légales',
           privacyPolicy: 'Politique de confidentialité',
           ourCompany: 'Notre compagnie',
+          defaultAbout: 'Votre partenaire de confiance pour vos déplacements.',
           allRightsReserved: 'Tous droits réservés',
           defaultSlogan: 'Votre monde, plus rapide. Plus simple.',
           searchInstruction: 'Où souhaitez-vous partir aujourd’hui ?',
@@ -63,8 +69,31 @@ i18n
           legalNotice: 'Mentions légales',
           termsConditions: 'Conditions générales',
           leaveReview: 'Laisser un avis',
-
-
+          heroTitleWith: 'Réservez votre billet avec',
+          themeLight: 'Mode clair',
+          themeDark: 'Mode sombre',
+          destinationsPopular: 'Destinations populaires',
+          reserveNowArrow: 'Réserver →',
+          openingHoursVariable: 'Horaires variables',
+          dailyDepartures: 'Départs quotidiens',
+          departuresPerWeek: '{{count}} départs / semaine',
+          whyChooseCompany: 'Pourquoi choisir {{companyName}} ?',
+          readyToTravelWith: 'Prêt à voyager avec {{companyName}} ?',
+          reserveNow: 'Réserver maintenant',
+          findAgency: 'Trouver une agence',
+          helpTitle: 'Aide',
+          helpSubtitle: '{{companyName}} — Aide',
+          helpComingSoon: 'FAQ, contact et informations pratiques à venir.',
+          contactToConfigure: 'Coordonnées à configurer par la compagnie.',
+          onBoardServices: 'Services à bord',
+          home: 'Accueil',
+          myTickets: 'Mes billets',
+          reservations: 'Réservations',
+          help: 'Aide',
+          yearsExperience: '{{count}}+ ans d’expérience',
+          fastOnlineBooking: 'Réservation en ligne rapide',
+          modernOnBoardServices: 'Services à bord modernes',
+          safeTrips: 'Voyages sécurisés',
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Sécurité',
@@ -107,6 +136,7 @@ i18n
           legalMentions: 'Legal mentions',
           privacyPolicy: 'Privacy policy',
           ourCompany: 'Our company',
+          defaultAbout: 'Your trusted partner for your travels.',
           allRightsReserved: 'All rights reserved',
           defaultSlogan: 'Your world, faster. Simpler.',
           searchInstruction: 'Where do you want to go today?',
@@ -127,6 +157,31 @@ i18n
           legalNotice: 'Legal notice',
           termsConditions: 'Terms and Conditions',
           leaveReview: 'Leave a review',
+          heroTitleWith: 'Book your ticket with',
+          themeLight: 'Light mode',
+          themeDark: 'Dark mode',
+          destinationsPopular: 'Popular destinations',
+          reserveNowArrow: 'Book →',
+          openingHoursVariable: 'Variable schedules',
+          dailyDepartures: 'Daily departures',
+          departuresPerWeek: '{{count}} departures / week',
+          whyChooseCompany: 'Why choose {{companyName}}?',
+          readyToTravelWith: 'Ready to travel with {{companyName}}?',
+          reserveNow: 'Book now',
+          findAgency: 'Find an agency',
+          helpTitle: 'Help',
+          helpSubtitle: '{{companyName}} — Help',
+          helpComingSoon: 'FAQ, contact and practical information coming soon.',
+          contactToConfigure: 'Contact details to be configured by the company.',
+          onBoardServices: 'On-board services',
+          home: 'Home',
+          myTickets: 'My tickets',
+          reservations: 'Reservations',
+          help: 'Help',
+          yearsExperience: '{{count}}+ years of experience',
+          fastOnlineBooking: 'Fast online booking',
+          modernOnBoardServices: 'Modern on-board services',
+          safeTrips: 'Safe trips',
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Security',

@@ -5,9 +5,9 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight } from 'lucide-react';
 import { Company } from '@/types/companyTypes';
 import { hexToRgba } from '@/utils/color';
+import { useTranslation } from 'react-i18next';
 
 interface FinalCTAProps {
   company: Company;
@@ -18,6 +18,7 @@ interface FinalCTAProps {
 }
 
 const FinalCTA: React.FC<FinalCTAProps> = ({ company, slug, colors, navigate, setShowAgences }) => {
+  const { t } = useTranslation();
   return (
     <motion.section 
       className="py-6 mt-[-20px] px-4 bg-transparent"
@@ -34,7 +35,7 @@ const FinalCTA: React.FC<FinalCTAProps> = ({ company, slug, colors, navigate, se
           whileInView={{ y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          Prêt à voyager avec {company.nom} ?
+          {t('readyToTravelWith', { companyName: company.nom })}
         </motion.h2>
 
         {/* ✅ Texte de sous-titre */}
@@ -44,7 +45,7 @@ const FinalCTA: React.FC<FinalCTAProps> = ({ company, slug, colors, navigate, se
           whileInView={{ opacity: 1 }}
           transition={{ delay: 0.2, duration: 0.5 }}
         >
-          Réservez dès maintenant votre prochain trajet en toute simplicité et sécurité.
+          {t('bookInOneClick')}
         </motion.p>
 
         {/* ✅ Boutons d'action */}
@@ -61,13 +62,13 @@ const FinalCTA: React.FC<FinalCTAProps> = ({ company, slug, colors, navigate, se
               boxShadow: `0 8px 25px ${hexToRgba(colors.primary, 0.4)}`
             }}
             whileTap={{ scale: 0.98 }}
-            className="px-8 py-3 rounded-xl font-bold text-lg bg-white text-black hover:bg-gray-100 transition"
+            className="px-8 py-3 min-h-[44px] rounded-xl font-bold text-lg bg-white text-black hover:bg-gray-100 transition"
             onClick={() => navigate(`/compagnie/${slug}/resultats`)}
             style={{
               boxShadow: `0 4px 15px ${hexToRgba(colors.primary, 0.3)}`
             }}
           >
-            Réserver maintenant
+            {t('reserveNow')}
           </motion.button>
 
           {/* ✅ BOUTON SECONDAIRE : Trouver une agence */}
@@ -77,13 +78,13 @@ const FinalCTA: React.FC<FinalCTAProps> = ({ company, slug, colors, navigate, se
               backgroundColor: 'rgba(255, 255, 255, 0.15)'
             }}
             whileTap={{ scale: 0.98 }}
-            className="px-8 py-3 rounded-xl font-bold text-lg border-2 border-white text-white transition"
+            className="px-8 py-3 min-h-[44px] rounded-xl font-bold text-lg border-2 border-white text-white transition"
             onClick={() => setShowAgences(true)}
             style={{
               borderColor: colors.primary
             }}
           >
-            Trouver une agence
+            {t('findAgency')}
           </motion.button>
         </motion.div>
       </div>

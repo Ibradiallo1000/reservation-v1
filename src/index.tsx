@@ -3,9 +3,10 @@ import { initFirebase } from "./firebaseConfig";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
+import { I18nextProvider } from "react-i18next";
 import App from "./App";
 import "./index.css";
-import "./i18n";
+import i18n from "./i18n";
 import { handleFirestoreError } from "./utils/firestoreErrorHandler";
 
 /* ================== Interception globale des erreurs Firestore ================== */
@@ -64,8 +65,21 @@ type RouterFuture = Partial<{
   v7_relativeSplatPath: boolean;
 }>;
 
+const THEME_STORAGE_KEY = "public-theme-dark";
+
+/** Apply saved theme before paint (no flash) */
+function applySavedTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "true") document.documentElement.classList.add("dark");
+    else document.documentElement.classList.remove("dark");
+  } catch (_) {}
+}
+
 /* ===================== Boot app (attend initFirebase) ===================== */
 (async () => {
+  applySavedTheme();
+
   try {
     await initFirebase(); // connecte émulateurs si activés
   } catch (err) {
@@ -88,7 +102,9 @@ type RouterFuture = Partial<{
           } as RouterFuture
         }
       >
-        <App />
+        <I18nextProvider i18n={i18n}>
+          <App />
+        </I18nextProvider>
       </BrowserRouter>
     </React.StrictMode>
   );

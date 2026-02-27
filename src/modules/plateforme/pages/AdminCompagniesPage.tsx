@@ -11,6 +11,8 @@ import {
 import { db } from "@/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/shared/ui/button";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 
 type Company = {
   id: string;
@@ -22,24 +24,40 @@ type Company = {
 };
 
 const AdminCompagniesPage: React.FC = () => {
+  const isOnline = useOnlineStatus();
   const [compagnies, setCompagnies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const navigate = useNavigate();
 
   useEffect(() => {
     (async () => {
-      const snap = await getDocs(
-        query(collection(db, "companies"), orderBy("nom", "asc"))
-      );
-      setCompagnies(
-        snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as any),
-        }))
-      );
-      setLoading(false);
+      setLoading(true);
+      setError(null);
+      try {
+        const snap = await getDocs(
+          query(collection(db, "companies"), orderBy("nom", "asc"))
+        );
+        setCompagnies(
+          snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+          }))
+        );
+      } catch (e) {
+        console.error(e);
+        setCompagnies([]);
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger les compagnies."
+            : "Erreur lors du chargement des compagnies."
+        );
+      } finally {
+        setLoading(false);
+      }
     })();
-  }, []);
+  }, [isOnline, reloadKey]);
 
   async function toggleStatus(c: Company) {
     const newStatus = c.status === "inactif" ? "actif" : "inactif";
@@ -52,10 +70,18 @@ const AdminCompagniesPage: React.FC = () => {
     );
   }
 
-  if (loading) return <div className="p-6">Chargement…</div>;
+  if (loading) {
+    return <PageLoadingState />;
+  }
 
   return (
     <div className="p-6 space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: la liste peut être incomplète." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Compagnies</h1>
         <Button

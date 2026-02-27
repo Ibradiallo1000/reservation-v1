@@ -35,7 +35,8 @@ export default defineConfig({
     }),
     copyRedirectsPlugin(),
     VitePWA({
-      registerType: 'autoUpdate',
+      /* prompt = pas de rechargement auto : bannière "Nouvelle version" puis rechargement au clic uniquement */
+      registerType: 'prompt',
       /* ⛔️ important : pas de PWA en DEV */
       devOptions: { enabled: false },
       includeAssets: ['favicon.ico', 'icons/*.png', 'images/*.{png,svg,jpg}'],

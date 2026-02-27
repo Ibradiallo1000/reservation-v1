@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { db } from "@/firebaseConfig";
 import { getCurrencySymbol } from "@/shared/utils/formatCurrency";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 import {
   collection, doc, getDoc, getDocs, serverTimestamp, setDoc
 } from "firebase/firestore";
@@ -33,45 +35,60 @@ const inputClass =
   "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20";
 
 export default function AdminCompanyDetail() {
+  const isOnline = useOnlineStatus();
   const { companyId } = useParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [c, setC] = useState<Company>({});
   const [plans, setPlans] = useState<PlanLite[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     (async () => {
       if (!companyId) return;
-      const [csnap, psnap] = await Promise.all([
-        getDoc(doc(db, "companies", companyId)),
-        getDocs(collection(db, "plans")),
-      ]);
-      if (csnap.exists()) {
-        const data = csnap.data() as Record<string, unknown>;
-        setC({
-          id: csnap.id,
-          nom: data.nom as string,
-          plan: data.plan as string,
-          publicPageEnabled: true,
-          onlineBookingEnabled: true,
-          guichetEnabled: true,
-          digitalFeePercent: Number(data.digitalFeePercent) || 0,
-          feeGuichet: Number(data.feeGuichet) || 0,
-          minimumMonthly: Number(data.minimumMonthly) || 0,
-          maxAgences: Number(data.maxAgences) || 0,
-          maxUsers: Number(data.maxUsers) || 0,
-          supportLevel: (data.supportLevel as SupportLevel) || "basic",
-          planType: (data.planType as "trial" | "paid") || "paid",
-          subscriptionStatus: (data.subscriptionStatus as string) || "active",
-        });
+      setLoading(true);
+      setError(null);
+      try {
+        const [csnap, psnap] = await Promise.all([
+          getDoc(doc(db, "companies", companyId)),
+          getDocs(collection(db, "plans")),
+        ]);
+        if (csnap.exists()) {
+          const data = csnap.data() as Record<string, unknown>;
+          setC({
+            id: csnap.id,
+            nom: data.nom as string,
+            plan: data.plan as string,
+            publicPageEnabled: true,
+            onlineBookingEnabled: true,
+            guichetEnabled: true,
+            digitalFeePercent: Number(data.digitalFeePercent) || 0,
+            feeGuichet: Number(data.feeGuichet) || 0,
+            minimumMonthly: Number(data.minimumMonthly) || 0,
+            maxAgences: Number(data.maxAgences) || 0,
+            maxUsers: Number(data.maxUsers) || 0,
+            supportLevel: (data.supportLevel as SupportLevel) || "basic",
+            planType: (data.planType as "trial" | "paid") || "paid",
+            subscriptionStatus: (data.subscriptionStatus as string) || "active",
+          });
+        }
+        setPlans(psnap.docs.map(d => ({
+          id: d.id,
+          name: (d.data() as Record<string, unknown>).name as string,
+        })));
+      } catch (e) {
+        console.error(e);
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger la compagnie."
+            : "Erreur lors du chargement de la compagnie."
+        );
+      } finally {
+        setLoading(false);
       }
-      setPlans(psnap.docs.map(d => ({
-        id: d.id,
-        name: (d.data() as Record<string, unknown>).name as string,
-      })));
-      setLoading(false);
     })();
-  }, [companyId]);
+  }, [companyId, isOnline, reloadKey]);
 
   const onSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,10 +121,18 @@ export default function AdminCompanyDetail() {
     [plans]
   );
 
-  if (loading) return <div className="p-6">Chargement...</div>;
+  if (loading) {
+    return <PageLoadingState />;
+  }
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: la configuration peut être incomplète." />
+      )}
+      {error && (
+        <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       <h1 className="text-2xl font-bold text-gray-900">
         {c.nom || "Compagnie"} - Plan & Configuration
       </h1>

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db, storage } from '@/firebaseConfig';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { doc, getDoc, updateDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, getDocs, query, where, arrayUnion } from 'firebase/firestore';
+import { buildStatutTransitionPayload } from '@/modules/agence/services/reservationStatutService';
 import { Upload, CheckCircle, XCircle, Loader2, ChevronLeft, Info, MapPin, Calendar, User, Users, ArrowRight, Banknote } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -12,6 +13,7 @@ import ErrorScreen from '@/shared/ui/ErrorScreen';
 import LoadingScreen from '@/shared/ui/LoadingScreen';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 
 // ===================== DEBUG / LOGGER =====================
 const DEBUG = true;
@@ -71,6 +73,7 @@ const UploadPreuvePage: React.FC = () => {
   const location = useLocation();
   const { slug, id } = useParams<{ slug: string; id?: string }>();
   const money = useFormatCurrency();
+  const isOnline = useOnlineStatus();
 
   // Récup context navigation si présent
   const { draft: locationDraft, companyInfo: locationCompanyInfo } = (location.state as any) || {};
@@ -161,7 +164,6 @@ const UploadPreuvePage: React.FC = () => {
     } catch (error) {
       log.error('loadInitialData error', error);
       setError(error instanceof Error ? error.message : 'Erreur inconnue');
-      navigate(`/${slug || ''}`, { replace: true, state: { error: 'Erreur de chargement des données' } });
     } finally {
       setLoadingData(false);
       log.groupEnd();
@@ -288,6 +290,13 @@ const UploadPreuvePage: React.FC = () => {
         companyId: reservationDraft.companyId || '',
         companySlug: reservationDraft.companySlug || '',
 
+        auditLog: arrayUnion(
+          buildStatutTransitionPayload(
+            (reservationDraft as any).statut ?? 'en_attente_paiement',
+            'preuve_recue',
+            { userId: 'client_anonymous', userRole: 'client' }
+          )
+        ),
         updatedAt: new Date(),
       };
 
@@ -334,7 +343,37 @@ const UploadPreuvePage: React.FC = () => {
   }
 
   if (!reservationDraft || !companyInfo) {
-    return <ErrorScreen slug={slug} navigate={navigate} error={error || ''} />;
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-white">
+        <div className="max-w-md w-full rounded-xl border border-gray-200 p-6 text-center">
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">Impossible de charger les données</h2>
+          <p className="text-sm text-gray-600 mb-4">
+            {error || "Une erreur est survenue pendant le chargement."}
+          </p>
+          {!isOnline && (
+            <p className="text-xs text-amber-700 mb-4">
+              Connexion indisponible. Vérifiez le réseau puis réessayez.
+            </p>
+          )}
+          <div className="flex items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={loadInitialData}
+              className="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50"
+            >
+              Réessayer
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(`/${slug || ''}`)}
+              className="px-4 py-2 rounded-lg text-white bg-gray-800 hover:bg-gray-700"
+            >
+              Retour
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (success) {
@@ -351,6 +390,13 @@ const UploadPreuvePage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {!isOnline && (
+        <div className="max-w-4xl mx-auto px-4 pt-4">
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+            Connexion instable: l’envoi de la preuve peut échouer.
+          </div>
+        </div>
+      )}
       <Header companyInfo={companyInfo} themeConfig={themeConfig} onBack={() => navigate(-1)} />
 
       <main className="max-w-4xl mx-auto p-4 space-y-6 pb-24">

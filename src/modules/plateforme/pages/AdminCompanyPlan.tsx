@@ -15,6 +15,8 @@ import {
 import { Button } from "@/shared/ui/button";
 import { CheckCircle2 } from "lucide-react";
 import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 
 /* ====================================================================
    TYPES
@@ -66,11 +68,14 @@ const SUPPORT_LABELS: Record<SupportLevel, string> = {
    COMPONENT
 ==================================================================== */
 export default function AdminCompanyPlan() {
+  const isOnline = useOnlineStatus();
   const { companyId } = useParams();
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [company, setCompany] = useState<CompanyDoc | null>(null);
 
@@ -86,36 +91,59 @@ export default function AdminCompanyPlan() {
 
   useEffect(() => {
     if (!companyId) return;
+    setLoading(true);
+    setLoadError(null);
     const unsub: Array<() => void> = [];
 
-    const offCompany = onSnapshot(doc(db, "companies", companyId), (snap) => {
-      if (snap.exists()) {
-        const c = { id: snap.id, ...(snap.data() as Record<string, unknown>) } as CompanyDoc;
-        setCompany(c);
-        setChosenPlanId((curr) => (curr ? curr : c.planId || ""));
-      } else {
-        setCompany(null);
+    const offCompany = onSnapshot(
+      doc(db, "companies", companyId),
+      (snap) => {
+        if (snap.exists()) {
+          const c = { id: snap.id, ...(snap.data() as Record<string, unknown>) } as CompanyDoc;
+          setCompany(c);
+          setChosenPlanId((curr) => (curr ? curr : c.planId || ""));
+        } else {
+          setCompany(null);
+        }
+        setLoading(false);
+      },
+      () => {
+        setLoadError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger la compagnie."
+            : "Erreur lors du chargement de la compagnie."
+        );
+        setLoading(false);
       }
-      setLoading(false);
-    });
+    );
     unsub.push(offCompany);
 
     const q = query(collection(db, "plans"), orderBy("priceMonthly", "asc"));
-    const offPlans = onSnapshot(q, (qs) => {
-      const list: Array<{ id: string; name: string }> = [];
-      const map: Record<string, PlanDoc> = {};
-      qs.docs.forEach((d) => {
-        const data = d.data() as PlanDoc;
-        list.push({ id: d.id, name: data.name || d.id });
-        map[d.id] = data;
-      });
-      setPlans(list);
-      setPlansById(map);
-    });
+    const offPlans = onSnapshot(
+      q,
+      (qs) => {
+        const list: Array<{ id: string; name: string }> = [];
+        const map: Record<string, PlanDoc> = {};
+        qs.docs.forEach((d) => {
+          const data = d.data() as PlanDoc;
+          list.push({ id: d.id, name: data.name || d.id });
+          map[d.id] = data;
+        });
+        setPlans(list);
+        setPlansById(map);
+      },
+      () => {
+        setLoadError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger les plans."
+            : "Erreur lors du chargement des plans."
+        );
+      }
+    );
     unsub.push(offPlans);
 
     return () => unsub.forEach((u) => u());
-  }, [companyId]);
+  }, [companyId, isOnline, reloadKey]);
 
   async function applySelectedPlan() {
     if (!companyId || !chosenPlanId) return;
@@ -148,10 +176,18 @@ export default function AdminCompanyPlan() {
     }
   }
 
-  if (loading || !company) return <div className="p-6">Chargement…</div>;
+  if (loading || !company) {
+    return <PageLoadingState />;
+  }
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
+      {!isOnline && (
+        <PageOfflineState message="Connexion instable: les données de plan peuvent être incomplètes." />
+      )}
+      {loadError && (
+        <PageErrorState message={loadError} onRetry={() => setReloadKey((v) => v + 1)} />
+      )}
       <h1 className="text-2xl font-bold text-gray-900">
         Plan & options — {company.nom || "Compagnie"}
       </h1>

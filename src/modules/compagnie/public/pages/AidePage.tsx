@@ -2,6 +2,7 @@
 import React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ChevronLeft, HelpCircle, Phone, Mail, MessageCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface AidePageProps {
   company?: { nom?: string; telephone?: string; email?: string; couleurPrimaire?: string };
@@ -10,6 +11,7 @@ interface AidePageProps {
 export default function AidePage({ company }: AidePageProps) {
   const { slug } = useParams<{ slug?: string }>();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const primary = company?.couleurPrimaire ?? "#ea580c";
 
   return (
@@ -22,11 +24,11 @@ export default function AidePage({ company }: AidePageProps) {
           <button
             onClick={() => navigate(slug ? `/${slug}` : "/")}
             className="p-2 rounded-lg hover:bg-gray-100"
-            aria-label="Retour"
+            aria-label={t("backToHome")}
           >
             <ChevronLeft className="w-5 h-5 text-gray-700" />
           </button>
-          <h1 className="font-semibold text-gray-900">Aide</h1>
+          <h1 className="font-semibold text-gray-900">{t("helpTitle")}</h1>
         </div>
       </header>
 
@@ -40,17 +42,17 @@ export default function AidePage({ company }: AidePageProps) {
           </div>
           <div>
             <h2 className="font-semibold text-gray-900">
-              {company?.nom ?? "Compagnie"} — Aide
+              {t("helpSubtitle", { companyName: company?.nom ?? t("ourCompany") })}
             </h2>
             <p className="text-sm text-gray-600 mt-0.5">
-              FAQ, contact et informations pratiques à venir.
+              {t("helpComingSoon")}
             </p>
           </div>
         </div>
 
         <section className="rounded-xl bg-white border border-gray-200 overflow-hidden">
           <h3 className="px-4 py-3 text-sm font-medium text-gray-500 border-b border-gray-100">
-            Contact
+            {t("contact")}
           </h3>
           <div className="divide-y divide-gray-100">
             {company?.telephone && (
@@ -74,7 +76,7 @@ export default function AidePage({ company }: AidePageProps) {
             {!company?.telephone && !company?.email && (
               <div className="px-4 py-3 flex items-center gap-3 text-gray-500">
                 <MessageCircle className="w-5 h-5" />
-                <span className="text-sm">Coordonnées à configurer par la compagnie.</span>
+                <span className="text-sm">{t("contactToConfigure")}</span>
               </div>
             )}
           </div>

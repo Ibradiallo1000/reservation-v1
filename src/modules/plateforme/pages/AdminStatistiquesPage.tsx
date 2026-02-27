@@ -26,6 +26,8 @@ import {
 } from "recharts";
 import { format } from "date-fns";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
+import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 
 /* =======================
    Types
@@ -44,15 +46,20 @@ type Company = {
    Component
 ======================= */
 const AdminStatistiquesPage: React.FC = () => {
+  const isOnline = useOnlineStatus();
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   /* =======================
      Fetch data (ADMIN)
   ======================= */
   useEffect(() => {
     const fetchData = async () => {
+      setLoading(true);
+      setError(null);
       try {
         // ✅ Toutes les réservations (collectionGroup)
         const resSnap = await getDocs(
@@ -70,13 +77,18 @@ const AdminStatistiquesPage: React.FC = () => {
         setCompanies(compData);
       } catch (err) {
         console.error("AdminStatistiquesPage error:", err);
+        setError(
+          !isOnline
+            ? "Connexion indisponible. Impossible de charger les statistiques."
+            : "Erreur lors du chargement des statistiques."
+        );
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-  }, []);
+  }, [isOnline, reloadKey]);
 
   /* =======================
      Stats globales
@@ -129,7 +141,7 @@ const AdminStatistiquesPage: React.FC = () => {
   }, [reservations]);
 
   if (loading) {
-    return <div className="p-6">Chargement des statistiques…</div>;
+    return <PageLoadingState />;
   }
 
   /* =======================
@@ -137,6 +149,16 @@ const AdminStatistiquesPage: React.FC = () => {
   ======================= */
   return (
     <div className="p-6">
+      {!isOnline && (
+        <div className="mb-4">
+          <PageOfflineState message="Connexion instable: les statistiques peuvent être incomplètes." />
+        </div>
+      )}
+      {error && (
+        <div className="mb-4">
+          <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
+        </div>
+      )}
       <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
         <AlertTriangle className="h-6 w-6 text-amber-600 shrink-0 mt-0.5" />
         <div>

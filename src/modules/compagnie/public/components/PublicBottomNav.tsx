@@ -3,6 +3,7 @@
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Home, Ticket, FileText, HelpCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 const NAV_HEIGHT = 64; // hauteur barre (px) pour padding-bottom du contenu
 
@@ -12,16 +13,16 @@ type TabId = "accueil" | "mes-billets" | "reservations" | "aide";
 
 interface TabConfig {
   id: TabId;
-  label: string;
+  labelKey: string;
   icon: React.ReactNode;
   pathSuffix: string; // segment après /:slug ("" = accueil)
 }
 
 const TABS: TabConfig[] = [
-  { id: "accueil", label: "Accueil", icon: <Home className="w-5 h-5" />, pathSuffix: "" },
-  { id: "mes-billets", label: "Mes billets", icon: <Ticket className="w-5 h-5" />, pathSuffix: "mes-billets" },
-  { id: "reservations", label: "Réservations", icon: <FileText className="w-5 h-5" />, pathSuffix: "mes-reservations" },
-  { id: "aide", label: "Aide", icon: <HelpCircle className="w-5 h-5" />, pathSuffix: "aide" },
+  { id: "accueil", labelKey: "home", icon: <Home className="w-5 h-5" />, pathSuffix: "" },
+  { id: "mes-billets", labelKey: "myTickets", icon: <Ticket className="w-5 h-5" />, pathSuffix: "mes-billets" },
+  { id: "reservations", labelKey: "reservations", icon: <FileText className="w-5 h-5" />, pathSuffix: "mes-reservations" },
+  { id: "aide", labelKey: "help", icon: <HelpCircle className="w-5 h-5" />, pathSuffix: "aide" },
 ];
 
 interface PublicBottomNavProps {
@@ -31,6 +32,7 @@ interface PublicBottomNavProps {
 }
 
 export default function PublicBottomNav({ slug, primaryColor = "#ea580c" }: PublicBottomNavProps) {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.pathname;
@@ -75,7 +77,7 @@ export default function PublicBottomNav({ slug, primaryColor = "#ea580c" }: Publ
                 color: active ? primaryColor : "#6b7280",
               }}
               aria-current={active ? "page" : undefined}
-              aria-label={tab.label}
+              aria-label={t(tab.labelKey)}
             >
               <span className={active ? "opacity-100" : "opacity-70"}>
                 {tab.icon}
@@ -84,7 +86,7 @@ export default function PublicBottomNav({ slug, primaryColor = "#ea580c" }: Publ
                 className="text-[10px] font-medium truncate w-full text-center"
                 style={{ color: active ? primaryColor : "#6b7280" }}
               >
-                {tab.label}
+                {t(tab.labelKey)}
               </span>
             </button>
           );

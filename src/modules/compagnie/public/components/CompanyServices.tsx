@@ -9,6 +9,7 @@ import {
   Snowflake,
   Bus,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface CompanyServicesProps {
   services: string[];
@@ -37,6 +38,7 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
   primaryColor,
   secondaryColor,
 }) => {
+  const { t } = useTranslation();
   if (!services?.length) return null;
 
   const validServices = services.filter((k) => SERVICES_MAP[k]);
@@ -44,28 +46,28 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
 
   return (
     <section
-      className="py-6 px-4"
-      style={{
-        backgroundColor: `${secondaryColor}08`,
-      }}
+      className="py-6 px-4 bg-[color:var(--section-bg)] dark:bg-neutral-950/70"
+      style={
+        {
+          ["--section-bg" as string]: `${secondaryColor}08`,
+        } as React.CSSProperties
+      }
     >
       <div className="max-w-5xl mx-auto">
 
         {/* Titre */}
         <div className="flex items-center justify-center gap-2 mb-4">
           <Bus size={18} style={{ color: primaryColor }} />
-          <h2 className="text-lg font-semibold text-gray-900">
-            Services à bord
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:!text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.25)]">
+            {t("onBoardServices")}
           </h2>
         </div>
 
         {/* Carte harmonisée */}
         <div
-          className="rounded-2xl overflow-hidden"
+          className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700"
           style={{
-            border: `1px solid ${primaryColor}20`,
             boxShadow: `0 6px 18px ${primaryColor}12`,
-            backgroundColor: "#ffffff",
           }}
         >
           <div
@@ -101,7 +103,7 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
                   </div>
 
                   {/* Texte */}
-                  <span className="text-sm font-medium text-gray-800">
+                  <span className="text-sm font-medium text-gray-800 dark:text-gray-100">
                     {label}
                   </span>
                 </div>

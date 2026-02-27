@@ -1,10 +1,11 @@
 // src/pages/chef-comptable/ReservationsEnLigne.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  collection, query, where, orderBy, limit, updateDoc, doc,
+  collection, query, where, orderBy, limit, doc,
   deleteDoc, onSnapshot, Timestamp, getDocs
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { updateReservationStatut } from '@/modules/agence/services/reservationStatutService';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { 
@@ -617,21 +618,20 @@ const ReservationsEnLigne: React.FC = () => {
     
     setProcessingId(reservation.id);
     try {
-      await updateDoc(
-        doc(
-          db,
-          'companies',
-          user.companyId,
-          'agences',
-          reservation.agencyId,
-          'reservations',
-          reservation.id
-        ),
-        {
-          statut: 'confirme',
-          validatedAt: Timestamp.now(),
-          updatedAt: Timestamp.now(),
-        }
+      const ref = doc(
+        db,
+        'companies',
+        user.companyId,
+        'agences',
+        reservation.agencyId,
+        'reservations',
+        reservation.id
+      );
+      await updateReservationStatut(
+        ref,
+        'confirme',
+        { userId: user.uid ?? '', userRole: (user as { role?: string }).role ?? 'admin_compagnie' },
+        { validatedAt: Timestamp.now() }
       );
       
       // Retirer de la liste des réservations à vérifier
@@ -671,23 +671,20 @@ const ReservationsEnLigne: React.FC = () => {
     setProcessingId(reservation.id);
     try {
       const reason = window.prompt('Raison du refus ?') || 'Raison non spécifiée';
-      
-      await updateDoc(
-        doc(
-          db,
-          'companies',
-          user.companyId,
-          'agences',
-          reservation.agencyId,
-          'reservations',
-          reservation.id
-        ),
-        {
-          statut: 'refuse',
-          refusedAt: Timestamp.now(),
-          updatedAt: Timestamp.now(),
-          reason: reason,
-        }
+      const ref = doc(
+        db,
+        'companies',
+        user.companyId,
+        'agences',
+        reservation.agencyId,
+        'reservations',
+        reservation.id
+      );
+      await updateReservationStatut(
+        ref,
+        'refuse',
+        { userId: user.uid ?? '', userRole: (user as { role?: string }).role ?? 'admin_compagnie' },
+        { refusedAt: Timestamp.now(), reason }
       );
       
       // Retirer de la liste des réservations à vérifier

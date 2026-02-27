@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { Star, MessageCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface Avis {
   id: string;
@@ -31,31 +32,39 @@ const AvisListePublic: React.FC<Props> = ({
   secondaryColor,
 }) => {
   const [avis, setAvis] = useState<Avis[]>([]);
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (!companyId) return;
 
     const fetchAvis = async () => {
-      const qRef = query(
-        collection(db, `companies/${companyId}/avis`),
-        where("visible", "==", true),
-        orderBy("createdAt", "desc"),
-        limit(5)
-      );
+      try {
+        const qRef = query(
+          collection(db, `companies/${companyId}/avis`),
+          where("visible", "==", true),
+          orderBy("createdAt", "desc"),
+          limit(5)
+        );
 
-      const snap = await getDocs(qRef);
+        const snap = await getDocs(qRef);
 
-      const data = snap.docs.map((doc) => {
-        const d = doc.data() as any;
-        return {
-          id: doc.id,
-          nom: d.nom,
-          note: d.note,
-          commentaire: d.commentaire,
-        };
-      });
+        const data = snap.docs.map((doc) => {
+          const d = doc.data() as any;
+          return {
+            id: doc.id,
+            nom: d.nom,
+            note: d.note,
+            commentaire: d.commentaire,
+          };
+        });
 
-      setAvis(data);
+        setAvis(data);
+      } catch (err: any) {
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          console.warn("AvisListePublic: lecture avis refusée (règles Firestore ou index manquant). Déployer firestore.rules et firestore.indexes.json.");
+        }
+        setAvis([]);
+      }
     };
 
     fetchAvis();
@@ -75,18 +84,17 @@ const AvisListePublic: React.FC<Props> = ({
         {/* Titre harmonisé */}
         <div className="flex items-center justify-center gap-2 mb-4">
           <MessageCircle size={18} style={{ color: primaryColor }} />
-          <h2 className="text-lg font-semibold text-gray-900 text-center">
-            Avis clients
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white text-center">
+            {t("customerReviews")}
           </h2>
         </div>
 
         {/* Carte principale */}
         <div
-          className="rounded-2xl border overflow-hidden"
+          className="rounded-2xl border border-gray-200 dark:border-neutral-700 overflow-hidden bg-white dark:bg-neutral-800"
           style={{
             borderColor: `${primaryColor}30`,
             boxShadow: `0 4px 15px ${primaryColor}10`,
-            backgroundColor: "#ffffff",
           }}
         >
           <div className="grid sm:grid-cols-2 md:grid-cols-3 divide-x divide-y">
@@ -115,7 +123,7 @@ const AvisListePublic: React.FC<Props> = ({
                 </div>
 
                 {/* commentaire */}
-                <p className="text-sm text-gray-700 italic mb-3 line-clamp-3">
+                <p className="text-sm text-gray-700 dark:text-gray-200 italic mb-3 line-clamp-3">
                   “{a.commentaire}”
                 </p>
 

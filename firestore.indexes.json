@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "avis",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "visible", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionId": "tripCosts",
       "queryScope": "COLLECTION",
       "fields": [

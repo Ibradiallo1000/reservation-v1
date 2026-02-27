@@ -7,8 +7,7 @@ import { useTranslation } from "react-i18next";
 import { AnimatePresence } from "framer-motion";
 
 import VilleSuggestionBar from "@/modules/compagnie/public/components/VilleSuggestionBar";
-import LanguageSuggestionPopup from "@/modules/compagnie/public/components/LanguageSuggestionPopup";
-import HeroSection from "@/modules/plateforme/components/HeroSection";
+import HeroCompanySection from "@/modules/compagnie/public/components/HeroCompanySection";
 import CompanyServices from "@/modules/compagnie/public/components/CompanyServices";
 import WhyChooseSection from "@/modules/compagnie/public/components/WhyChooseSection";
 import Footer from "@/modules/compagnie/public/components/Footer";
@@ -17,6 +16,7 @@ import AvisListePublic from "@/modules/compagnie/public/components/AvisListePubl
 import Header from "@/modules/compagnie/public/layout/CompanyPublicHeader";
 
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { Company, Agence, TripSuggestion, WhyChooseItem } from "@/types/companyTypes";
 import NotFoundScreen from "@/shared/ui/NotFoundScreen";
 import { getCompanyFromCache } from "@/utils/companyCache";
@@ -26,12 +26,44 @@ interface PublicCompanyPageProps {
   isMobile?: boolean;
 }
 
+const SUGGESTIONS_CACHE_PREFIX = "public-company-suggestions:";
+const suggestionsMemoryCache = new Map<string, TripSuggestion[]>();
+
+function readSuggestionsCache(companyId: string): TripSuggestion[] | null {
+  const memoryValue = suggestionsMemoryCache.get(companyId);
+  if (memoryValue && memoryValue.length > 0) return memoryValue;
+
+  try {
+    const raw = sessionStorage.getItem(`${SUGGESTIONS_CACHE_PREFIX}${companyId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.slice(0, 6) as TripSuggestion[];
+  } catch {
+    return null;
+  }
+}
+
+function writeSuggestionsCache(companyId: string, trips: TripSuggestion[]) {
+  const safeTrips = trips.slice(0, 6);
+  suggestionsMemoryCache.set(companyId, safeTrips);
+  try {
+    sessionStorage.setItem(
+      `${SUGGESTIONS_CACHE_PREFIX}${companyId}`,
+      JSON.stringify(safeTrips)
+    );
+  } catch {
+    // ignore storage quota/private mode issues
+  }
+}
+
 const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   company: propCompany,
 }) => {
   const { slug = "" } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const isOnline = useOnlineStatus();
 
   const cached = getCompanyFromCache(slug);
   const [company, setCompany] = useState<Company | undefined>(
@@ -42,10 +74,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
 
   const [agences, setAgences] = useState<Agence[]>([]);
   const [suggestedTrips, setSuggestedTrips] = useState<TripSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [showAgences, setShowAgences] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openVilles, setOpenVilles] = useState<Record<string, boolean>>({});
-  const [showLangPopup, setShowLangPopup] = useState(false);
 
   const toggleVille = (ville: string) => {
     setOpenVilles((prev) => ({ ...prev, [ville]: !prev[ville] }));
@@ -91,38 +123,54 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     })();
   }, [slug]);
 
-  /* ================= POPUP LANG ================= */
+  /* ================= AGENCES + SUGGESTED TRIPS ================= */
 
   useEffect(() => {
-    const timer = setTimeout(() => setShowLangPopup(true), 4000);
-    return () => clearTimeout(timer);
-  }, []);
+    if (!company?.id) return;
+    let cancelled = false;
+    const companyId = company.id;
+    const cachedSuggestions = readSuggestionsCache(companyId);
+    if (cachedSuggestions && cachedSuggestions.length > 0) {
+      setSuggestedTrips(cachedSuggestions);
+    }
 
-  /* ================= SUGGESTED TRIPS ================= */
-
-  useEffect(() => {
-    const fetchSuggestions = async () => {
-      if (!company?.id) return;
-
+    const fetchAgencesAndSuggestions = async () => {
+      setSuggestionsLoading(!(cachedSuggestions && cachedSuggestions.length > 0));
       try {
         const agencesSnap = await getDocs(
-          collection(db, "companies", company.id, "agences")
+          collection(db, "companies", companyId, "agences")
         );
+        if (cancelled) return;
+
+        const agencesData = agencesSnap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as Agence[];
+        setAgences(agencesData);
+
+        if (agencesSnap.empty) {
+          setSuggestedTrips([]);
+          return;
+        }
+
+        const weeklySnapshots = await Promise.all(
+          agencesSnap.docs.map((ag) =>
+            getDocs(
+              collection(
+                db,
+                "companies",
+                companyId,
+                "agences",
+                ag.id,
+                "weeklyTrips"
+              )
+            )
+          )
+        );
+        if (cancelled) return;
 
         const uniqueMap = new Map<string, TripSuggestion>();
-
-        for (const ag of agencesSnap.docs) {
-          const weekly = await getDocs(
-            collection(
-              db,
-              "companies",
-              company.id,
-              "agences",
-              ag.id,
-              "weeklyTrips"
-            )
-          );
-
+        for (const weekly of weeklySnapshots) {
           for (const d of weekly.docs) {
             const trip: any = d.data();
             const departure = trip.depart || trip.departure;
@@ -132,46 +180,35 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
             if (!departure || !arrival) continue;
 
             const key = `${departure}_${arrival}`;
-
             if (!uniqueMap.has(key)) {
-              uniqueMap.set(key, {
-                departure,
-                arrival,
-                price,
-              });
+              uniqueMap.set(key, { departure, arrival, price });
+              if (uniqueMap.size >= 6) break;
             }
           }
+          if (uniqueMap.size >= 6) break;
         }
 
-        setSuggestedTrips(Array.from(uniqueMap.values()).slice(0, 6));
+        const trips = Array.from(uniqueMap.values());
+        setSuggestedTrips(trips);
+        writeSuggestionsCache(companyId, trips);
       } catch (e) {
-        console.warn("Suggestions error:", e);
+        console.warn("Suggestions/agences error:", e);
+        if (!cancelled) {
+          if (!(cachedSuggestions && cachedSuggestions.length > 0)) {
+            setSuggestedTrips([]);
+          }
+          setAgences([]);
+        }
+      } finally {
+        if (!cancelled) setSuggestionsLoading(false);
       }
     };
 
-    fetchSuggestions();
-  }, [company]);
-
-  /* ================= AGENCES ================= */
-
-  useEffect(() => {
-    const fetchAgences = async () => {
-      if (!company?.id) return;
-
-      const agSnap = await getDocs(
-        collection(db, "companies", company.id, "agences")
-      );
-
-      setAgences(
-        agSnap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Agence[]
-      );
+    fetchAgencesAndSuggestions();
+    return () => {
+      cancelled = true;
     };
-
-    fetchAgences();
-  }, [company]);
+  }, [company?.id]);
 
   /* ================= SECURITE ================= */
 
@@ -199,7 +236,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
 
       if (diff > 0) {
         items.push({
-          label: `${diff}+ ans d'expérience`,
+          label: t("yearsExperience", { count: diff }),
           icon: "award",
         });
       }
@@ -208,7 +245,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     // Réservation en ligne
     if (comp.onlineBookingEnabled) {
       items.push({
-        label: "Réservation en ligne rapide",
+        label: t("fastOnlineBooking"),
         icon: "clock",
       });
     }
@@ -216,14 +253,14 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     // Services à bord
     if (comp.services && comp.services.length > 0) {
       items.push({
-        label: "Services à bord modernes",
+        label: t("modernOnBoardServices"),
         icon: "bus",
       });
     }
 
     // Sécurité par défaut
     items.push({
-      label: "Voyages sécurisés",
+      label: t("safeTrips"),
       icon: "shield",
     });
 
@@ -253,23 +290,28 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         t={t}
       />
 
+      {/* Hero full-bleed passe derrière le header (72px). Sans Hero, on compense le header. */}
+      <div className={`${allowOnline ? "pt-0" : "pt-[72px]"} flex flex-col flex-grow min-h-0`}>
       <main className="flex-grow">
 
         {allowOnline && (
           <>
-            <HeroSection
-              company={company}
-              onSearch={(departure: string, arrival: string) => {
+            <HeroCompanySection
+              companyName={company?.nom ?? ""}
+              primaryColor={colors.primary}
+              secondaryColor={colors.secondary}
+              heroImageUrl={company?.banniereUrl ?? company?.imagesSlider?.[0]}
+              onSearch={(departure, arrival) => {
                 navigate(
-                  `/${slug}/booking?departure=${encodeURIComponent(
-                    departure
-                  )}&arrival=${encodeURIComponent(arrival)}`
+                  `/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
                 );
               }}
             />
 
             <VilleSuggestionBar
               suggestions={suggestedTrips}
+              loading={suggestionsLoading}
+              offline={!isOnline}
               company={company}
               onSelect={(departure, arrival) => {
                 navigate(
@@ -322,21 +364,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           )}
         </AnimatePresence>
 
-        {showLangPopup && (
-          <LanguageSuggestionPopup
-            onSelectLanguage={(lang) => {
-              import("@/i18n").then(({ default: i18n }) =>
-                i18n.changeLanguage(lang)
-              );
-              setShowLangPopup(false);
-            }}
-            delayMs={8000}
-          />
-        )}
-
       </main>
 
       <Footer company={company} />
+      </div>
     </div>
   );
 };

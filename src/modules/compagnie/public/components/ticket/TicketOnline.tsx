@@ -34,7 +34,17 @@ interface TicketOnlineProps {
   montant: number;
   qrValue: string;
   emissionDate: string;
+  /** Libellé affiché pour le mode de paiement (ex. "Paiement en espèces", "Mobile Money", "Remboursé (espèces)"). Aucun hardcode. */
   paymentMethod?: string;
+}
+
+/** Libellé affiché pour la section paiement du billet. Ne pas hardcoder "PAIEMENT MOBILE". */
+function getPaymentDisplayLabel(canal?: string, paymentMethod?: string): string {
+  const c = (canal ?? '').toLowerCase();
+  if (c === 'guichet') return 'Paiement en espèces';
+  if (paymentMethod && paymentMethod.trim()) return paymentMethod.trim();
+  if (c === 'en_ligne') return 'Paiement en ligne';
+  return 'Paiement';
 }
 
 const TicketOnline: React.FC<TicketOnlineProps> = ({
@@ -56,7 +66,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   montant,
   qrValue,
   emissionDate,
-  paymentMethod = 'PAIEMENT MOBILE'
+  paymentMethod
 }) => {
   const money = useFormatCurrency();
   const textOnPrimary = safeTextColor(primaryColor);
@@ -76,7 +86,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   };
 
   const formattedName = formatName(nomClient);
-
+  const paymentLabel = getPaymentDisplayLabel(canal, paymentMethod);
   const isTicketValid = isTicketValidForQR(statut);
 
   return (
@@ -205,7 +215,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
           </p>
 
           <span className="text-[10px] text-gray-600 uppercase">
-            {paymentMethod}
+            {paymentLabel}
           </span>
 
         </div>

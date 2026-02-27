@@ -73,6 +73,11 @@
 @layer base {
   * { @apply border-border; }
   html, body { @apply bg-background text-foreground; }
+  html, body, #root {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+  }
 
   /* 1) Supprimer le “flash” bleu au tap (Android) */
   html, body, a, button, [role="button"] {
@@ -88,7 +93,6 @@
   body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    color: var(--teliya-text);
   }
 
   /* 3) Couleur de sélection (cohérence marque) */

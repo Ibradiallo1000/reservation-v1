@@ -33,6 +33,7 @@ import {
   updateProfile,
 } from "firebase/auth";
 import { auth, db } from "@/firebaseConfig";
+import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -62,6 +63,7 @@ function normalizeInvitationRole(role: string, agencyId?: string): string {
 /* ------------------------------------------------------------------ */
 
 const AcceptInvitationPage = () => {
+  const isOnline = useOnlineStatus();
   const { invitationId: token } = useParams<{ invitationId: string }>();
   const navigate = useNavigate();
 
@@ -70,6 +72,7 @@ const AcceptInvitationPage = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Form fields
   const [password, setPassword] = useState("");
@@ -136,7 +139,7 @@ const AcceptInvitationPage = () => {
         setLoading(false);
       }
     })();
-  }, [token]);
+  }, [token, reloadKey]);
 
   /* ── Handle account creation ── */
   const handleSubmit = async (e: React.FormEvent) => {
@@ -265,6 +268,19 @@ const AcceptInvitationPage = () => {
           </div>
           <h2 className="text-lg font-semibold text-gray-900 mb-2">Invitation invalide</h2>
           <p className="text-sm text-red-600 mb-4">{error}</p>
+          {!isOnline && (
+            <p className="text-xs text-amber-700 mb-4">
+              Connexion indisponible. Vérifiez le réseau puis réessayez.
+            </p>
+          )}
+          <div className="flex items-center justify-center gap-2 mb-3">
+            <button
+              onClick={() => setReloadKey((v) => v + 1)}
+              className="text-sm px-3 py-1.5 border rounded-lg hover:bg-gray-50"
+            >
+              Réessayer
+            </button>
+          </div>
           <button
             onClick={() => navigate("/login")}
             className="text-sm text-orange-600 hover:underline"
@@ -310,6 +326,13 @@ const AcceptInvitationPage = () => {
         onSubmit={handleSubmit}
         className="bg-white p-8 rounded-xl shadow-sm border w-full max-w-md space-y-5"
       >
+        {!isOnline && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
+            <p className="text-xs text-amber-800">
+              Connexion instable: la création de compte peut échouer.
+            </p>
+          </div>
+        )}
         <div className="text-center">
           <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-3">
             <svg className="w-6 h-6 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">

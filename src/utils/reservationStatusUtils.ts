@@ -63,6 +63,9 @@ const VALID_STATUTS = new Set<string>([
 
 /** Transitions autorisées (old → new). Clés et valeurs en canonique (paye, embarque). */
 const TRANSITIONS: Map<string, Set<string>> = new Map([
+  ["en_attente_paiement", new Set(["preuve_recue"])],
+  ["preuve_recue", new Set(["confirme", "refuse"])],
+  ["verification", new Set(["confirme", "refuse"])],
   ["confirme", new Set(["embarque", "annulation_en_attente", "expire"])],
   ["paye", new Set(["embarque", "annulation_en_attente", "expire"])],
   ["annulation_en_attente", new Set(["annule"])],

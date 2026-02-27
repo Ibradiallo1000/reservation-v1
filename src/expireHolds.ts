@@ -17,7 +17,19 @@ export const expireHolds = functions.pubsub.schedule('every 5 minutes').onRun(as
         .where('holdUntil','<', now)
         .get();
       const batch = db.batch();
-      snap.forEach(d => batch.update(d.ref, { statut: 'annule', updatedAt: now }));
+      const auditEntry = {
+        action: 'transition_statut',
+        ancienStatut: 'en_attente_paiement',
+        nouveauStatut: 'annule',
+        effectuePar: 'system',
+        role: 'cron',
+        date: now,
+      };
+      snap.forEach(d => batch.update(d.ref, {
+        statut: 'annule',
+        updatedAt: now,
+        auditLog: admin.firestore.FieldValue.arrayUnion(auditEntry),
+      }));
       if (!snap.empty) await batch.commit();
     }
   }
