@@ -4,29 +4,28 @@ import { Routes, Route, Navigate, useParams, useLocation } from "react-router-do
 import { useAuth } from "./contexts/AuthContext";
 import PrivateRoute from "./modules/auth/components/PrivateRoute";
 import ProtectedRoute from "./modules/auth/components/ProtectedRoute";
-import RouteResolver from "./modules/compagnie/public/router/RouteResolver";
 import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 import { AuthCurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { routePermissions } from "@/constants/routePermissions";
-import AdminCompanyPlan from "@/modules/plateforme/pages/AdminCompanyPlan";
-import PlansManager from "@/modules/plateforme/pages/PlansManager";
-import MentionsPage from "./modules/compagnie/public/pages/MentionsPage";
-import ConfidentialitePage from "./modules/compagnie/public/pages/ConfidentialitePage";
-import ConditionsPage from "@/modules/compagnie/public/pages/ConditionsPage";
-import CookiesPage from "@/modules/compagnie/public/pages/CookiesPage";
-import ReservationDetailsPage from "@/modules/compagnie/public/pages/ReservationDetailsPage";
-import AdminParametresPlatformPage from "./modules/plateforme/pages/AdminParametresPlatformPage";
-import ValidationComptablePage from "@/shared/workflows/pages/ValidationComptablePage";
-import ValidationChefAgencePage from "@/shared/workflows/pages/ValidationChefAgencePage";
-import ChefComptableCompagniePage from "./modules/compagnie/finances/pages/ChefComptableCompagnie";
-import {
-  VueGlobale,
-  ReservationsEnLigne,
-  Finances,
-  Rapports,
-  Parametres,
-} from "@/modules/compagnie/finances/pages";
-import ReservationPrintPage from "@/modules/agence/guichet/pages/ReservationPrintPage";
+
+const RouteResolver = lazy(() => import("./modules/compagnie/public/router/RouteResolver"));
+const AdminCompanyPlan = lazy(() => import("@/modules/plateforme/pages/AdminCompanyPlan"));
+const PlansManager = lazy(() => import("@/modules/plateforme/pages/PlansManager"));
+const MentionsPage = lazy(() => import("./modules/compagnie/public/pages/MentionsPage"));
+const ConfidentialitePage = lazy(() => import("./modules/compagnie/public/pages/ConfidentialitePage"));
+const ConditionsPage = lazy(() => import("@/modules/compagnie/public/pages/ConditionsPage"));
+const CookiesPage = lazy(() => import("@/modules/compagnie/public/pages/CookiesPage"));
+const ReservationDetailsPage = lazy(() => import("./modules/compagnie/public/pages/ReservationDetailsPage"));
+const AdminParametresPlatformPage = lazy(() => import("./modules/plateforme/pages/AdminParametresPlatformPage"));
+const ValidationComptablePage = lazy(() => import("@/shared/workflows/pages/ValidationComptablePage"));
+const ValidationChefAgencePage = lazy(() => import("@/shared/workflows/pages/ValidationChefAgencePage"));
+const ChefComptableCompagniePage = lazy(() => import("@/modules/compagnie/finances/pages/ChefComptableCompagnie"));
+const VueGlobale = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.VueGlobale })));
+const ReservationsEnLigne = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.ReservationsEnLigne })));
+const Finances = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Finances })));
+const Rapports = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Rapports })));
+const Parametres = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Parametres })));
+const ReservationPrintPage = lazy(() => import("@/modules/agence/guichet/pages/ReservationPrintPage"));
 
 const HomePage = lazy(() => import("./modules/plateforme/pages/HomePage"));
 const PlatformSearchResultsPage = lazy(() => import("./modules/plateforme/pages/PlatformSearchResultsPage"));
@@ -465,7 +464,7 @@ const AppRoutes = () => {
         <Route path="/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/mes-billets" element={<ClientMesBilletsPage />} />
         {/* /:slug/mes-reservations et /:slug/mes-billets passent par RouteResolver (bottom nav) */}
-        <Route path="/:slug/*" element={<RouteResolver />} />
+        <Route path="/:slug/*" element={<Suspense fallback={null}><RouteResolver /></Suspense>} />
 
         {/* ========= REDIRECTIONS DE COMPATIBILITÉ ========= */}
         <Route path="/comptable" element={<Navigate to="/chef-comptable" replace />} />

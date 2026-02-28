@@ -1,5 +1,4 @@
-/* === DOIT RESTER EN PREMIER si tu utilises des cartes === */
-@import 'leaflet/dist/leaflet.css';
+/* Leaflet CSS : chargé uniquement dans les composants carte (CompagnieAgencesPage, AjouterAgenceForm) */
 
 @tailwind base;
 @tailwind components;

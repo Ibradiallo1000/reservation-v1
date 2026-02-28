@@ -87,13 +87,15 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-router-dom')) return 'react';
             if (id.includes('firebase')) return 'firebase';
-            if (id.includes('lodash') || id.includes('axios') || id.includes('date-fns')) return 'vendor';
+            if (id.includes('react-router')) return 'router';
+            if (id.includes('lucide-react')) return 'icons';
+            return 'vendor';
           }
-          if (id.includes('/src/pages/Compagnie/')) return 'compagnie';
-          if (id.includes('/src/pages/Agence/')) return 'agence';
-          if (id.includes('/src/pages/Admin/')) return 'admin';
+          if (id.includes('/src/modules/compagnie/')) return 'compagnie';
+          if (id.includes('/src/modules/agence/')) return 'agence';
+          if (id.includes('/src/modules/logistics/')) return 'courier';
+          if (id.includes('/src/modules/ceo/')) return 'ceo';
         },
         chunkFileNames: 'assets/js/[name]-[hash].js',
         assetFileNames: 'assets/[ext]/[name]-[hash].[ext]',

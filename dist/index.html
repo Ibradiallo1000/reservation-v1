@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#FF6600" />
+    <title>Teliya</title>
+    <base href="/" />
+
+    <!-- Préconnect pour Firestore/Storage -->
+    <link rel="preconnect" href="https://firebasestorage.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
+    <link rel="preconnect" href="https://www.googleapis.com" crossorigin />
+
+    <!-- Préchargement images critiques -->
+    <link rel="preload" as="image" href="/images/teliya-logo.svg" />
+    <link rel="preload" as="image" href="/images/hero-fallback.jpg" />
+    <link rel="preload" as="image" href="/images/partner-placeholder.png" />
+
+    <style>
+      /* évite les sauts visuels */
+      .img-fixed {
+        width: 100%;
+        height: 100%;
+        -o-object-fit: cover;
+           object-fit: cover;
+      }
+      html, body, #root {
+        margin: 0;
+        height: 100%;
+        font-family: system-ui, sans-serif;
+        background-color: #FF6600;
+      }
+    </style>
+
+    <script>
+      // Injection immédiate des derniers settings/partenaires (avant React)
+      (function () {
+        try {
+          window.__BOOT__ = JSON.parse(localStorage.getItem("platform:settings") || "null");
+          window.__PARTNERS__ = JSON.parse(localStorage.getItem("platform:partners") || "null");
+        } catch {
+          window.__BOOT__ = null;
+          window.__PARTNERS__ = null;
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BGKI5gTU.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/js/firebase-CURBI7X6.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/router-DoGdw-3y.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/icons-C0JHUK9Z.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/courier-CoQgRaHG.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/agence-Bsj2lp2X.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/compagnie-DiuZFnHS.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-Bq-8_m9i.js">
+    <link rel="stylesheet" crossorigin href="/assets/css/vendor-DroWa5sQ.css">
+    <link rel="stylesheet" crossorigin href="/assets/css/index-DN4jXvhe.css">
+  <link rel="manifest" href="/manifest.webmanifest"></head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
