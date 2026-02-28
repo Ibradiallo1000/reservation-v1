@@ -16,7 +16,6 @@ import PageNotFound from "@/shared/ui/PageNotFound";
 import ErrorBoundary from "@/shared/core/ErrorBoundary";
 import MobileErrorScreen from "@/shared/ui/MobileErrorScreen";
 import type { Company } from "@/types/companyTypes";
-import  PageLoader  from "@/shared/ui/PageLoader";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 
 /* ---------- Lazy pages ---------- */
@@ -190,7 +189,7 @@ export default function RouteResolver() {
   }, [slug]);
 
   /* ---------- states ---------- */
-  if (loading) return <PageLoader fullScreen />;
+  if (loading) return null;
   if (error) return <MobileErrorScreen error={error} />;
   if (notFound || !company) return <PageNotFound />;
 
@@ -269,7 +268,7 @@ export default function RouteResolver() {
   return (
     <CurrencyProvider currency={company?.devise}>
       <ErrorBoundary fallback={<MobileErrorScreen />}>
-        <Suspense fallback={<PageLoader fullScreen />}>
+        <Suspense fallback={null}>
           <div className="min-h-screen pb-20 md:pb-0">
             {content}
           </div>

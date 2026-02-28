@@ -248,11 +248,9 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicle
     state?: { trajet?: string; date?: string; heure?: string; agencyId?: string; tripId?: string; departure?: string; arrival?: string };
   };
 
-  const theme = {
-    primary: (company as any)?.couleurPrimaire || "#0ea5e9",
-    secondary: (company as any)?.couleurSecondaire || "#f59e0b",
-    bg: "#f7f8fa",
-  };
+  // Use global Teliya brand variables so this page matches the unified agency theme
+  const primary = "var(--teliya-primary)";
+  const secondary = "var(--teliya-secondary)";
 
   const companyId = user?.companyId ?? null;
   const userAgencyId = user?.agencyId ?? null;
@@ -1230,14 +1228,14 @@ useEffect(() => {
             className={`px-3 py-2 rounded-lg text-sm font-medium shadow-sm ${
               active ? "text-white" : "bg-gray-200 text-gray-700"
             }`}
-            style={active ? { background: theme.primary } : undefined}
+            style={active ? { background: primary } : undefined}
           >
             {trip.departure} → {trip.arrival} à {h}
           </button>
         );
       })
     );
-  }, [trajetsDuJour, dayName, selectedTrip, theme.primary]);
+  }, [trajetsDuJour, dayName, selectedTrip]);
 
   if (!user) {
     return (
@@ -1248,7 +1246,7 @@ useEffect(() => {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: theme.bg }}>
+    <div className="agency-content-transition">
       <style>{`
         .brand-logo{height:40px;width:auto;object-fit:contain}
         .case{display:inline-flex;align-items:center;justify-content:center;min-width:20px;min-height:20px;width:20px;height:20px;border:2px solid #0f172a;border-radius:6px;background:#fff;cursor:pointer;user-select:none}
@@ -1299,7 +1297,7 @@ useEffect(() => {
         <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 p-4 shadow-md space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <span className="font-semibold" style={{ color: theme.secondary }}>
+              <span className="font-semibold" style={{ color: secondary }}>
                 Agence :
               </span>
               {selectedAgencyId ? (
@@ -1320,7 +1318,7 @@ useEffect(() => {
               )}
             </div>
 
-            <span className="font-semibold" style={{ color: theme.secondary }}>
+            <span className="font-semibold" style={{ color: secondary }}>
               Date :
             </span>
             <button
@@ -1482,7 +1480,7 @@ useEffect(() => {
 
         {/* Saisie manuelle */}
         <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 shadow-md p-4">
-          <div className="text-sm font-semibold mb-2" style={{ color: theme.secondary }}>
+          <div className="text-sm font-semibold mb-2" style={{ color: secondary }}>
             Saisir une référence
           </div>
           <form onSubmit={submitManual} className="flex gap-2">
@@ -1495,7 +1493,7 @@ useEffect(() => {
             <button
               type="submit"
               className="px-3 py-2 rounded-lg text-white text-sm"
-              style={{ background: theme.primary }}
+              style={{ background: primary }}
               disabled={!selectedAgencyId && !userAgencyId}
             >
               Valider

@@ -46,7 +46,7 @@ export default defineConfig({
         id: '/',
         description: 'Réservation de billets en ligne et au guichet',
         theme_color: '#FF6600',
-        background_color: '#FFFFFF',
+        background_color: '#FF6600',
         display: 'standalone',
         orientation: 'portrait',
         lang: 'fr',

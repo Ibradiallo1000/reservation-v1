@@ -25,7 +25,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
   const secondary = company.couleurSecondaire || "#f3f4f6";
 
   const getFrequencyLabel = (days?: string[]) => {
-    if (!days || days.length === 0) return t("openingHoursVariable");
+    if (!days || days.length === 0) return "";
     if (days.length === 7) return t("dailyDepartures");
     return t("departuresPerWeek", { count: days.length });
   };
@@ -63,7 +63,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
             : suggestions.slice(0, 4).map((trip, index) => (
                 <div
                   key={index}
-                  className="bg-white dark:bg-neutral-800 rounded-xl p-4 border border-gray-200 dark:border-neutral-700 transition-all duration-300 hover:-translate-y-1 animate-fadein"
+                  className="bg-white dark:bg-neutral-800 rounded-xl p-4 border border-gray-200 dark:border-neutral-700 text-center"
                   style={{
                     borderColor: `${primary}30`,
                     boxShadow: `0 4px 15px ${primary}12`,
@@ -90,17 +90,19 @@ const VilleSuggestionBar: React.FC<Props> = ({
                     </div>
                   )}
 
-                  {/* Fréquence */}
-                  <div className="text-[11px] text-gray-500 dark:text-gray-300 mt-2">
-                    {getFrequencyLabel(trip.days)}
-                  </div>
+                  {/* Fréquence (affichée seulement si connue) */}
+                  {getFrequencyLabel(trip.days) && (
+                    <div className="text-[11px] text-gray-500 dark:text-gray-300 mt-2">
+                      {getFrequencyLabel(trip.days)}
+                    </div>
+                  )}
 
                   {/* Bouton */}
                   <button
                     onClick={() =>
                       onSelect(trip.departure, trip.arrival)
                     }
-                    className="mt-4 w-full min-h-[44px] py-2 rounded-lg text-white text-sm font-semibold transition-all duration-300"
+                    className="mt-4 w-full min-h-[44px] py-2 rounded-lg text-white text-sm font-semibold"
                     style={{
                       background: `linear-gradient(90deg, ${primary}, ${secondary})`,
                     }}
@@ -111,7 +113,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
               ))}
         </div>
         {!loading && suggestions.length === 0 && (
-          <div className="mt-4 rounded-xl border border-dashed border-gray-300 dark:border-neutral-700 bg-white/80 dark:bg-neutral-900/70 p-4 text-center animate-fadein">
+          <div className="mt-4 rounded-xl border border-dashed border-gray-300 dark:border-neutral-700 bg-white/80 dark:bg-neutral-900/70 p-4 text-center">
             <p className="text-sm text-gray-700 dark:text-gray-200">
               {offline
                 ? "Connexion indisponible : impossible de charger les destinations pour le moment."

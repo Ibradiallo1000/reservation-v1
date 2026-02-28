@@ -4,9 +4,7 @@ import { Routes, Route, Navigate, useParams, useLocation } from "react-router-do
 import { useAuth } from "./contexts/AuthContext";
 import PrivateRoute from "./modules/auth/components/PrivateRoute";
 import ProtectedRoute from "./modules/auth/components/ProtectedRoute";
-import PageLoader from "@/shared/ui/PageLoader";
 import RouteResolver from "./modules/compagnie/public/router/RouteResolver";
-import SplashScreen from "@/shared/ui/SplashScreen";
 import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 import { AuthCurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { routePermissions } from "@/constants/routePermissions";
@@ -216,36 +214,15 @@ const AppRoutes = () => {
   const { pathname } = useLocation();
   const isHome = pathname === "/";
 
-  if (loading && !isHome) return <PageLoader fullScreen />;
+  if (loading && !isHome) return null;
 
   return (
-    <Suspense fallback={isHome ? null : <PageLoader fullScreen />}>
+    <Suspense fallback={null}>
       <Routes key={pathname}>
         {/* Route de debug - accessible à tous */}
         <Route path="/debug-auth" element={<DebugAuthPage />} />
 
-        <Route
-          path="/"
-          element={
-            <SplashScreen
-              logo="/images/teliya-logo.jpg"
-              sizePx={190}
-              ringWidthPx={2}
-              ringOpacity={0.45}
-              spinnerSpeedMs={800}
-              minMs={1200}
-              maxMs={3600}
-              extraHoldMs={900}
-              preload={[
-                "/images/hero-fallback.jpg",
-                "/images/partners/mali-trans.png",
-                "/images/partners/diarra-trans.png",
-              ]}
-            >
-              <HomePage />
-            </SplashScreen>
-          }
-        />
+        <Route path="/" element={<HomePage />} />
 
         {/* Role-based landing (used by PrivateRoute redirects) */}
         <Route path="/role-landing" element={<RoleLanding />} />
@@ -386,7 +363,7 @@ const AppRoutes = () => {
           <Route path="parametres" element={<Parametres />} />
         </Route>
 
-        {/* ========= AGENCY MANAGER (refactored cockpit) ========= */}
+        {/* ========= AGENCY MANAGER (refactored cockpit) + Courrier as nested collapsible ========= */}
         <Route
           path="/agence"
           element={
@@ -403,6 +380,21 @@ const AppRoutes = () => {
           <Route path="treasury" element={<AgencyTreasuryPage />} />
           <Route path="team" element={<ManagerTeamPage />} />
           <Route path="reports" element={<ManagerReportsPage />} />
+          <Route
+            path="courrier"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.courrier} withCurrency>
+                <CourierLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<CourierSessionPage />} />
+            <Route path="nouveau" element={<CourierCreateShipmentPage />} />
+            <Route path="lots" element={<CourierBatchesPage />} />
+            <Route path="reception" element={<CourierReceptionPage />} />
+            <Route path="remise" element={<CourierPickupPage />} />
+            <Route path="rapport" element={<CourierReportsPage />} />
+          </Route>
         </Route>
 
         {/* ========= BOARDING (Phase 3 - separate from Agency Manager) ========= */}
@@ -432,23 +424,6 @@ const AppRoutes = () => {
           <Route path="assignment" element={<FleetAssignmentPage />} />
           <Route path="vehicles" element={<FleetVehiclesPage />} />
           <Route path="movements" element={<FleetMovementLogPage />} />
-        </Route>
-
-        {/* ========= COURRIER (Phase 1 - Agence sub-domain) ========= */}
-        <Route
-          path="/agence/courrier"
-          element={
-            <ProtectedRoute allowedRoles={routePermissions.courrier} withCurrency>
-              <CourierLayout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<CourierSessionPage />} />
-          <Route path="nouveau" element={<CourierCreateShipmentPage />} />
-          <Route path="lots" element={<CourierBatchesPage />} />
-          <Route path="reception" element={<CourierReceptionPage />} />
-          <Route path="remise" element={<CourierPickupPage />} />
-          <Route path="rapport" element={<CourierReportsPage />} />
         </Route>
 
         {/* ========= PAGES HORS SHELL AGENCE ========= */}

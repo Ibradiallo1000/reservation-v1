@@ -1,6 +1,6 @@
 // src/index.tsx
 import { initFirebase } from "./firebaseConfig";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { I18nextProvider } from "react-i18next";
@@ -76,23 +76,14 @@ function applySavedTheme() {
   } catch (_) {}
 }
 
-/* ===================== Boot app (attend initFirebase) ===================== */
-(async () => {
+/* ===================== Boot app ===================== */
+const rootEl = document.getElementById("root");
+if (!rootEl) {
+  console.error("❌ Impossible de trouver #root");
+} else {
   applySavedTheme();
 
-  try {
-    await initFirebase(); // connecte émulateurs si activés
-  } catch (err) {
-    console.warn("⚠️ initFirebase a échoué — on continue :", err);
-  }
-
-  const rootEl = document.getElementById("root");
-  if (!rootEl) {
-    console.error("❌ Impossible de trouver #root");
-    return;
-  }
-
-  ReactDOM.createRoot(rootEl).render(
+  const FullApp = () => (
     <React.StrictMode>
       <BrowserRouter
         future={
@@ -108,4 +99,17 @@ function applySavedTheme() {
       </BrowserRouter>
     </React.StrictMode>
   );
-})();
+
+  const BootWrapper: React.FC = () => {
+    const [ready, setReady] = useState(false);
+    useEffect(() => {
+      initFirebase()
+        .catch((err) => console.warn("⚠️ initFirebase a échoué — on continue :", err))
+        .finally(() => setReady(true));
+    }, []);
+    // Un seul splash (natif, fond orange dans index.html/index.css). Pas de loader React intermédiaire.
+    return ready ? <FullApp /> : null;
+  };
+
+  ReactDOM.createRoot(rootEl).render(<BootWrapper />);
+}

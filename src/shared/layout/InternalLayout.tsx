@@ -1,12 +1,13 @@
 // src/shared/layout/InternalLayout.tsx
 // Unified layout for ALL internal back-office spaces.
 // Automatically switches between sidebar (>4 items) and horizontal tabs (<=4).
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   NavLink,
   Outlet,
+  useLocation,
 } from "react-router-dom";
-import { LogOut, Menu, X, User, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { LogOut, Menu, X, User, PanelLeftClose, PanelLeftOpen, ChevronDown, ChevronRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DESIGN } from "@/app/design-system";
@@ -14,6 +15,13 @@ import { DESIGN } from "@/app/design-system";
 /* ================================================================
    PUBLIC TYPES
    ================================================================ */
+export interface NavSectionChild {
+  label: string;
+  path: string;
+  /** If true, match exact path only (e.g. index route) */
+  end?: boolean;
+}
+
 export interface NavSection {
   label: string;
   icon: LucideIcon;
@@ -22,6 +30,8 @@ export interface NavSection {
   badge?: number;
   /** If true, match exact path only */
   end?: boolean;
+  /** Optional children for collapsible ERP-style submenu */
+  children?: NavSectionChild[];
 }
 
 export interface InternalLayoutProps {
@@ -159,6 +169,16 @@ interface LayoutVariantProps {
 /* ================================================================
    SIDEBAR LAYOUT (>4 items)
    ================================================================ */
+/** Returns true if pathname is the section path or any child path */
+function isSectionOrChildActive(pathname: string, section: { path: string; children?: NavSectionChild[] }): boolean {
+  if (pathname === section.path) return true;
+  if (!section.children?.length) return false;
+  return section.children.some((c) => {
+    if (c.end) return pathname === c.path;
+    return pathname === c.path || pathname.startsWith(c.path + "/");
+  });
+}
+
 const SidebarLayout: React.FC<LayoutVariantProps> = ({
   sections,
   role,
@@ -177,6 +197,33 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const location = useLocation();
+  const pathname = location.pathname;
+
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    sections.forEach((s) => {
+      if (s.children?.length && isSectionOrChildActive(pathname, s)) initial.add(s.path);
+    });
+    return initial;
+  });
+
+  useEffect(() => {
+    sections.forEach((s) => {
+      if (s.children?.length && isSectionOrChildActive(pathname, s)) {
+        setExpandedKeys((prev) => (prev.has(s.path) ? prev : new Set(prev).add(s.path)));
+      }
+    });
+  }, [pathname, sections]);
+
+  const toggleExpanded = (path: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   const sidebarContent = (
     <div className="flex-1 flex flex-col">
@@ -215,35 +262,116 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 pt-3 pb-24">
-        {sections.map(({ label, icon: Icon, path, badge, end }) => (
-          <NavLink
-            key={path}
-            to={path}
-            end={end}
-            className={({ isActive: active }) =>
-              cn(
-                "group flex items-center gap-3 my-1 rounded-xl px-3 py-2.5 transition-all duration-200",
-                "whitespace-nowrap overflow-hidden",
-                active
-                  ? "font-semibold text-white shadow-sm"
-                  : "text-white/80 hover:text-white hover:bg-white/10",
-              )
-            }
-            style={({ isActive: active }) =>
-              active ? { backgroundColor: secondary, borderLeftWidth: "4px", borderLeftColor: "rgba(255,255,255,0.6)" } : { borderLeftWidth: "4px", borderLeftColor: "transparent" }
-            }
-            title={label}
-            onClick={() => setMobileOpen(false)}
-          >
-            <Icon className="w-5 h-5 shrink-0" />
-            {!collapsed && <span className="truncate flex-1 text-sm">{label}</span>}
-            {!collapsed && typeof badge === "number" && badge > 0 && (
-              <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full leading-none">
-                {badge > 99 ? "99+" : badge}
-              </span>
-            )}
-          </NavLink>
-        ))}
+        {sections.map(({ label, icon: Icon, path, badge, end, children: childItems }) => {
+          const hasChildren = childItems && childItems.length > 0;
+          const isExpanded = expandedKeys.has(path);
+
+          if (hasChildren) {
+            return (
+              <div key={path} className="my-1">
+                <div className="flex items-center gap-1 rounded-xl overflow-hidden">
+                  <NavLink
+                    to={path}
+                    end={end}
+                    className={({ isActive: active }) =>
+                      cn(
+                        "group flex flex-1 items-center gap-3 rounded-xl px-3 py-2.5 transition-all duration-200 min-w-0",
+                        "whitespace-nowrap overflow-hidden",
+                        active
+                          ? "font-semibold text-white shadow-sm"
+                          : "text-white/80 hover:text-white hover:bg-white/10",
+                      )
+                    }
+                    style={({ isActive: active }) =>
+                      active ? { backgroundColor: secondary, borderLeftWidth: "4px", borderLeftColor: "rgba(255,255,255,0.6)" } : { borderLeftWidth: "4px", borderLeftColor: "transparent" }
+                    }
+                    title={label}
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    <Icon className="w-5 h-5 shrink-0" />
+                    {!collapsed && <span className="truncate flex-1 text-sm">{label}</span>}
+                    {!collapsed && typeof badge === "number" && badge > 0 && (
+                      <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full leading-none">
+                        {badge > 99 ? "99+" : badge}
+                      </span>
+                    )}
+                  </NavLink>
+                  {!collapsed && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); toggleExpanded(path); }}
+                      className="p-2 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-all duration-200"
+                      aria-expanded={isExpanded}
+                      aria-label={isExpanded ? "Réduire" : "Développer"}
+                    >
+                      {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    </button>
+                  )}
+                </div>
+                {!collapsed && (
+                  <div
+                    className="grid transition-[grid-template-rows] duration-200 ease-in-out"
+                    style={{ gridTemplateRows: isExpanded ? "1fr" : "0fr" }}
+                    aria-hidden={!isExpanded}
+                  >
+                    <div className="overflow-hidden">
+                      <div className="pl-4 pr-2 py-1 space-y-0.5 border-l-2 border-white/20 ml-3 mt-0.5">
+                        {childItems!.map((ch) => (
+                          <NavLink
+                            key={ch.path}
+                            to={ch.path}
+                            end={ch.end}
+                            className={({ isActive: active }) =>
+                              cn(
+                                "flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-all duration-200",
+                                active
+                                  ? "font-medium text-white bg-white/20"
+                                  : "text-white/70 hover:text-white hover:bg-white/10",
+                              )
+                            }
+                            onClick={() => setMobileOpen(false)}
+                          >
+                            {ch.label}
+                          </NavLink>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <NavLink
+              key={path}
+              to={path}
+              end={end}
+              className={({ isActive: active }) =>
+                cn(
+                  "group flex items-center gap-3 my-1 rounded-xl px-3 py-2.5 transition-all duration-200",
+                  "whitespace-nowrap overflow-hidden",
+                  active
+                    ? "font-semibold text-white shadow-sm"
+                    : "text-white/80 hover:text-white hover:bg-white/10",
+                )
+              }
+              style={({ isActive: active }) =>
+                active ? { backgroundColor: secondary, borderLeftWidth: "4px", borderLeftColor: "rgba(255,255,255,0.6)" } : { borderLeftWidth: "4px", borderLeftColor: "transparent" }
+              }
+              title={label}
+              onClick={() => setMobileOpen(false)}
+            >
+              <Icon className="w-5 h-5 shrink-0" />
+              {!collapsed && <span className="truncate flex-1 text-sm">{label}</span>}
+              {!collapsed && typeof badge === "number" && badge > 0 && (
+                <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full leading-none">
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
 
       {/* Profile footer */}

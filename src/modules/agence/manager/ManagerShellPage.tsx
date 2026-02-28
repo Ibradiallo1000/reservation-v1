@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { lightenForDarkMode } from "@/utils/color";
@@ -14,7 +14,7 @@ import {
   Package,
 } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
-import type { NavSection } from "@/shared/layout/InternalLayout";
+import type { NavSection, NavSectionChild } from "@/shared/layout/InternalLayout";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { SubscriptionBanner } from "@/shared/subscription";
 import type { SubscriptionStatus } from "@/shared/subscription";
@@ -29,6 +29,15 @@ import {
   AgencyHeaderExtras,
 } from "@/modules/agence/shared";
 
+const COURRIER_CHILDREN: NavSectionChild[] = [
+  { label: "Vue générale", path: "/agence/courrier", end: true },
+  { label: "Nouvel envoi", path: "/agence/courrier/nouveau" },
+  { label: "Lots", path: "/agence/courrier/lots" },
+  { label: "Réception", path: "/agence/courrier/reception" },
+  { label: "Remise", path: "/agence/courrier/remise" },
+  { label: "Rapports courrier", path: "/agence/courrier/rapport" },
+];
+
 const BASE_SECTIONS: Array<NavSection & { moduleKey: string }> = [
   { label: "Dashboard",   icon: LayoutDashboard, path: "/agence/dashboard",   end: true, moduleKey: "dashboard" },
   { label: "Opérations",  icon: Activity,        path: "/agence/operations",             moduleKey: "operations" },
@@ -42,6 +51,7 @@ const BASE_SECTIONS: Array<NavSection & { moduleKey: string }> = [
 const ManagerShellInner: React.FC = () => {
   const { user, company, logout } = useAuth() as any;
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const theme = useCompanyTheme(company);
   const { alerts, totalAlertCount, badgeByModule } = useManagerAlerts();
   const isOnline = useOnlineStatus();
@@ -52,20 +62,21 @@ const ManagerShellInner: React.FC = () => {
   const has = (r: string) => roles.has(r);
 
   const sections: NavSection[] = useMemo(() => {
-    const list = BASE_SECTIONS.map((s) => ({
+    const list: NavSection[] = BASE_SECTIONS.map((s) => ({
       label: s.label,
       icon: s.icon,
       path: s.path,
       end: s.end,
       badge: badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined,
     }));
-    if (has("chefAgence") || has("admin_compagnie")) {
+    if (has("chefAgence") || has("admin_compagnie") || has("agentCourrier")) {
       list.push({
         label: "Courrier",
         icon: Package,
         path: "/agence/courrier",
         end: false,
         badge: (badgeByModule as Record<string, number>).courrier,
+        children: COURRIER_CHILDREN,
       });
     }
     return list;
@@ -73,9 +84,11 @@ const ManagerShellInner: React.FC = () => {
 
   useAgencyKeyboardShortcuts(sections);
 
-  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie");
+  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier");
 
-  if (has("agentCourrier")) return <Navigate to="/agence/courrier" replace />;
+  if (has("agentCourrier") && !pathname.startsWith("/agence/courrier")) {
+    return <Navigate to="/agence/courrier" replace />;
+  }
   if (!canUseShell) {
     if (has("chefEmbarquement")) return <Navigate to="/agence/boarding" replace />;
     if (has("agency_fleet_controller")) return <Navigate to="/agence/fleet" replace />;

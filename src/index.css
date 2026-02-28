@@ -72,12 +72,14 @@
 
 @layer base {
   * { @apply border-border; }
-  html, body { @apply bg-background text-foreground; }
   html, body, #root {
     margin: 0;
     padding: 0;
     height: 100%;
+    /* Splash natif unique : fond orange jusqu’à ce que React affiche le contenu (évite flash gris/blanc) */
+    background-color: var(--teliya-orange);
   }
+  html, body { @apply text-foreground; }
 
   /* 1) Supprimer le “flash” bleu au tap (Android) */
   html, body, a, button, [role="button"] {
