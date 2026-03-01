@@ -90,7 +90,7 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('node_modules')) {
             if (id.includes('firebase')) return 'firebase';
-            if (id.includes('react-router')) return 'router';
+            // Keep react-router-dom in vendor with React to avoid "createContext of undefined" (router chunk had no React)
             if (id.includes('lucide-react')) return 'icons';
             return 'vendor';
           }
