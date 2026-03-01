@@ -2,8 +2,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import {
   initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
   memoryLocalCache,
   connectFirestoreEmulator,
   setLogLevel,
@@ -70,15 +68,11 @@ if (typeof window !== "undefined") {
 
 const FORCE_LONG_POLLING =
   import.meta?.env?.VITE_FIRESTORE_FORCE_LONG_POLLING === "true";
-const DISABLE_PERSISTENCE =
-  import.meta?.env?.VITE_FIRESTORE_DISABLE_PERSISTENCE === "true";
 
+// IndexedDB persistence disabled to avoid production crash (AS before initialization / heartbeat in separate chunk).
+// Firestore works normally with in-memory cache only.
 const db = initializeFirestore(app, {
-  localCache: DISABLE_PERSISTENCE
-    ? memoryLocalCache()
-    : persistentLocalCache({
-        tabManager: persistentMultipleTabManager(),
-      }),
+  localCache: memoryLocalCache(),
   ignoreUndefinedProperties: true,
   experimentalAutoDetectLongPolling: !FORCE_LONG_POLLING,
   experimentalForceLongPolling: FORCE_LONG_POLLING,

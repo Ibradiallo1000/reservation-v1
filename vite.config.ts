@@ -93,8 +93,7 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('firebase')) return 'firebase';
-            // Keep react-router-dom and lucide-react in vendor with React to avoid "createContext/forwardRef of undefined" in separate chunks
+            // No firebase split: keep firebase in vendor to avoid IndexedDB/heartbeat "AS before initialization" crash in production
             return 'vendor';
           }
           if (id.includes('/src/modules/compagnie/')) return 'compagnie';
