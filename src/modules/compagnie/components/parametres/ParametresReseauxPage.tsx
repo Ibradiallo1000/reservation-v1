@@ -10,6 +10,7 @@ import { useParams } from "react-router-dom";
 import { Save } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/shared/ui/button";
+import { SectionCard, StatusBadge } from "@/ui";
 interface Props {
   companyId: string;
 }
@@ -134,27 +135,26 @@ const ParametresReseauxPage: React.FC<Props> = ({ companyId }) => {
   }
 
   return (
-    <div className="max-w-7xl mx-auto p-6 bg-white rounded-xl shadow-sm border">
-      <h2 className="text-xl font-bold mb-6">
-        Réseaux sociaux & affichage
-      </h2>
-
-      {/* MESSAGE */}
+    <SectionCard title="Réseaux sociaux & affichage" icon={Save} className="max-w-7xl mx-auto">
       <AnimatePresence>
         {message.text && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
-            className={`p-4 rounded mb-4 text-sm ${
-              message.type === "success"
-                ? "bg-green-100 text-green-800"
-                : message.type === "error"
-                ? "bg-red-100 text-red-800"
-                : "bg-blue-100 text-blue-800"
-            }`}
+            className="mb-4"
           >
-            {message.text}
+            <StatusBadge
+              status={
+                message.type === "success"
+                  ? "success"
+                  : message.type === "error"
+                  ? "danger"
+                  : "info"
+              }
+            >
+              {message.text}
+            </StatusBadge>
           </motion.div>
         )}
       </AnimatePresence>
@@ -215,7 +215,7 @@ const ParametresReseauxPage: React.FC<Props> = ({ companyId }) => {
           {loading ? "Enregistrement..." : "Enregistrer"}
         </Button>
       </div>
-    </div>
+    </SectionCard>
   );
 };
 

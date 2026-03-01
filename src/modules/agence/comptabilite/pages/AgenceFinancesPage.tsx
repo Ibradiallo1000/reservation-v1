@@ -5,7 +5,8 @@ import { Timestamp, collection, query, where, getDocs } from 'firebase/firestore
 import { db } from '@/firebaseConfig';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { Button } from '@/shared/ui/button';
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
+import { Wallet } from 'lucide-react';
 
 const AgenceFinancesPage: React.FC = () => {
   const { user } = useAuth();
@@ -49,44 +50,23 @@ const AgenceFinancesPage: React.FC = () => {
   }, [periode, user]);
 
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold mb-4">État financier de l'agence</h2>
-
-      <div className="flex gap-4 mb-4">
-        <Button
-          variant={periode === 'jour' ? 'primary' : 'secondary'}
-          onClick={() => setPeriode('jour')}
-        >
-          Aujourd'hui
-        </Button>
-        <Button
-          variant={periode === 'semaine' ? 'primary' : 'secondary'}
-          onClick={() => setPeriode('semaine')}
-        >
-          7 derniers jours
-        </Button>
-        <Button
-          variant={periode === 'mois' ? 'primary' : 'secondary'}
-          onClick={() => setPeriode('mois')}
-        >
-          Ce mois-ci
-        </Button>
-      </div>
-
-      <div className="bg-white p-6 rounded shadow border">
+    <StandardLayoutWrapper>
+      <PageHeader title="État financier de l'agence" icon={Wallet} />
+      <SectionCard title="Période">
+        <div className="flex flex-wrap gap-2 mb-4">
+          <ActionButton variant={periode === 'jour' ? 'primary' : 'secondary'} onClick={() => setPeriode('jour')}>Aujourd'hui</ActionButton>
+          <ActionButton variant={periode === 'semaine' ? 'primary' : 'secondary'} onClick={() => setPeriode('semaine')}>7 derniers jours</ActionButton>
+          <ActionButton variant={periode === 'mois' ? 'primary' : 'secondary'} onClick={() => setPeriode('mois')}>Ce mois-ci</ActionButton>
+        </div>
+      </SectionCard>
+      <SectionCard title="Résumé">
         <p className="text-lg">Revenu total : <span className="font-bold text-green-700">{money(revenu)}</span></p>
         <p className="text-lg">Nombre de réservations : <span className="font-bold text-blue-700">{nombre}</span></p>
-      </div>
-
-      <div className="mt-4">
-        <button
-          onClick={() => window.print()}
-          className="bg-indigo-600 text-white px-4 py-2 rounded"
-        >
-          Imprimer le résumé
-        </button>
-      </div>
-    </div>
+        <div className="mt-4">
+          <ActionButton onClick={() => window.print()}>Imprimer le résumé</ActionButton>
+        </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

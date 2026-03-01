@@ -3,7 +3,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader, SectionCard } from "@/ui";
 import {
   createTripCost,
   updateTripCost,
@@ -25,7 +25,6 @@ export default function TripCostsPage() {
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const navigate = useNavigate();
-  const { setHeader, resetHeader } = usePageHeader();
 
   const [items, setItems] = useState<TripCostWithId[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,11 +72,6 @@ export default function TripCostsPage() {
       setLoading(false);
     }
   }, [companyId, dateFilter, isAgencyManager, user?.agencyId, isOnline]);
-
-  useEffect(() => {
-    setHeader({ title: "Coûts par trajet" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
 
   useEffect(() => {
     load();
@@ -141,17 +135,19 @@ export default function TripCostsPage() {
 
   if (!companyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
+        <PageHeader title="Coûts par trajet" />
         <p className="text-gray-500">Compagnie introuvable.</p>
         <button type="button" onClick={() => navigate(-1)} className="mt-2 text-sm text-blue-600">
           Retour
         </button>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="space-y-4 p-4 md:p-6 max-w-5xl mx-auto">
+    <StandardLayoutWrapper maxWidthClass="max-w-5xl">
+      <PageHeader title="Coûts par trajet" />
       {!isOnline && (
         <PageOfflineState message="Connexion instable: l’historique des coûts peut être incomplet." />
       )}
@@ -201,8 +197,7 @@ export default function TripCostsPage() {
       )}
 
       {showForm && (
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Créer un coût trajet</h2>
+        <SectionCard title="Créer un coût trajet" icon={Plus}>
           <form onSubmit={handleCreate} className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input
               type="text"
@@ -242,12 +237,11 @@ export default function TripCostsPage() {
               </button>
             </div>
           </form>
-        </section>
+        </SectionCard>
       )}
 
       {editingId && (
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Modifier (même jour uniquement)</h2>
+        <SectionCard title="Modifier (même jour uniquement)" icon={Pencil}>
           <form onSubmit={(e) => handleUpdate(e, editingId)} className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input type="number" placeholder="Carburant" value={form.fuelCost || ""} onChange={(e) => setForm((f) => ({ ...f, fuelCost: Number(e.target.value) || 0 }))} className="border rounded px-3 py-2 text-sm" min={0} step={0.01} />
             <input type="number" placeholder="Chauffeur" value={form.driverCost || ""} onChange={(e) => setForm((f) => ({ ...f, driverCost: Number(e.target.value) || 0 }))} className="border rounded px-3 py-2 text-sm" min={0} step={0.01} />
@@ -264,11 +258,10 @@ export default function TripCostsPage() {
               </button>
             </div>
           </form>
-        </section>
+        </SectionCard>
       )}
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3">Historique</h2>
+      <SectionCard title="Historique" icon={ArrowLeft}>
         {loading ? (
           <div className="space-y-3 animate-fadein">
             <div className="h-10 rounded-lg skeleton" />
@@ -323,7 +316,7 @@ export default function TripCostsPage() {
             </table>
           </div>
         )}
-      </section>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 }

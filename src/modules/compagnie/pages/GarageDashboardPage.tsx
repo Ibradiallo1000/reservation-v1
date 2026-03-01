@@ -1,7 +1,8 @@
 // Phase 1F/1G/1H + Phase 1 Stabilization: plaque 3 parties, VilleCombobox, model autocomplete, Edit/Delete, pagination.
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams } from "react-router-dom";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge } from "@/ui";
+import type { StatusVariant } from "@/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import { Timestamp, type DocumentSnapshot } from "firebase/firestore";
 import {
@@ -65,14 +66,16 @@ const OPERATIONAL_LABELS: Record<string, string> = {
   EN_TRANSIT: "En transit",
 };
 
-const STATUS_BADGE_CLASS: Record<string, string> = {
-  GARAGE: "bg-slate-200 text-slate-800",
-  EN_SERVICE: "bg-emerald-100 text-emerald-800",
-  EN_TRANSIT: "bg-blue-100 text-blue-800",
-  EN_MAINTENANCE: "bg-amber-100 text-amber-800",
-  ACCIDENTE: "bg-red-100 text-red-800",
-  HORS_SERVICE: "bg-slate-300 text-slate-700",
-};
+function statusToVariant(s: string): StatusVariant {
+  switch (s) {
+    case "EN_SERVICE": return "success";
+    case "EN_TRANSIT": return "info";
+    case "EN_MAINTENANCE": return "warning";
+    case "ACCIDENTE": return "danger";
+    case "HORS_SERVICE": return "neutral";
+    default: return "neutral";
+  }
+}
 
 function formatUpdatedAt(updatedAt: VehicleRow["updatedAt"]): string {
   if (!updatedAt) return "—";
@@ -91,8 +94,8 @@ interface GarageDashboardPageProps {
 export default function GarageDashboardPage({ view }: GarageDashboardPageProps) {
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? "";
-  const { setHeader, resetHeader } = usePageHeader();
   const { user } = useAuth();
+  const pageTitle = view === "maintenance" ? "Maintenance" : view === "transit" ? "Transit" : view === "incidents" ? "Incidents" : "Flotte — Chef Garage";
   const theme = useGarageTheme();
 
   const [vehicles, setVehicles] = useState<VehicleRow[]>([]);
@@ -205,12 +208,6 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
       setLoading(false);
     }
   }, [companyId, orderByField]);
-
-  useEffect(() => {
-    const title = view === "maintenance" ? "Maintenance" : view === "transit" ? "Transit" : view === "incidents" ? "Incidents" : "Flotte — Chef Garage";
-    setHeader({ title });
-    return () => resetHeader();
-  }, [setHeader, resetHeader, view]);
 
   useEffect(() => {
     load(0);
@@ -438,36 +435,39 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
 
   if (!companyId) {
     return (
-      <div className="p-6 text-slate-600 bg-slate-50 rounded-lg">Compagnie introuvable.</div>
+      <StandardLayoutWrapper>
+        <PageHeader title={pageTitle} />
+        <p className="text-slate-600">Compagnie introuvable.</p>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl mx-auto garage-dashboard">
+    <StandardLayoutWrapper className="garage-dashboard">
+      <PageHeader
+        title={pageTitle}
+        icon={Truck}
+        right={
+          isChefGarage ? (
+            <button
+              type="button"
+              onClick={() => {
+                setPlateError(null);
+                setAddModalOpen(true);
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition hover:opacity-90"
+              style={{ backgroundColor: theme.secondary }}
+            >
+              <Plus className="w-4 h-4" /> Ajouter un véhicule
+            </button>
+          ) : undefined
+        }
+      />
       {error && (
         <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
           {error}
         </div>
       )}
-
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-        <h1 className="text-xl font-semibold text-slate-800 flex items-center gap-2">
-          <Truck className="w-5 h-5 text-slate-600" /> Flotte
-        </h1>
-        {isChefGarage && (
-          <button
-            type="button"
-            onClick={() => {
-              setPlateError(null);
-              setAddModalOpen(true);
-            }}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition hover:opacity-90"
-            style={{ backgroundColor: theme.secondary }}
-          >
-            <Plus className="w-4 h-4" /> Ajouter un véhicule
-          </button>
-        )}
-      </div>
 
       {/* Recherche, filtre ville, tri */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -507,12 +507,12 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
       {/* Cartes récap : Total, Disponibles, En transit, Maintenance, Accidentés, Hors service */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-6">
         {[
-          { key: "all" as ViewFilter, count: total, label: "Total véhicules", className: "bg-slate-100 hover:bg-slate-200" },
-          { key: "available" as ViewFilter, count: available, label: "Disponibles", className: "bg-emerald-50 hover:bg-emerald-100" },
-          { key: "transit" as ViewFilter, count: inTransit, label: "En transit", className: "bg-blue-50 hover:bg-blue-100" },
-          { key: "maintenance" as ViewFilter, count: maintenance, label: "Maintenance", className: "bg-amber-50 hover:bg-amber-100" },
-          { key: "accidented" as ViewFilter, count: accidented, label: "Accidentés", className: "bg-red-50 hover:bg-red-100" },
-          { key: "hors_service" as ViewFilter, count: horsService, label: "Hors service", className: "bg-slate-200 hover:bg-slate-300" },
+          { key: "all" as ViewFilter, count: total, label: "Total véhicules", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
+          { key: "available" as ViewFilter, count: available, label: "Disponibles", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
+          { key: "transit" as ViewFilter, count: inTransit, label: "En transit", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
+          { key: "maintenance" as ViewFilter, count: maintenance, label: "Maintenance", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
+          { key: "accidented" as ViewFilter, count: accidented, label: "Accidentés", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
+          { key: "hors_service" as ViewFilter, count: horsService, label: "Hors service", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
         ].map(({ key, count, label, className }) => (
           <button
             key={key}
@@ -532,11 +532,11 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
           <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
         </div>
       ) : filteredVehicles.length === 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-600">
-          {effectiveFilter ? "Aucun véhicule pour ce filtre." : "Aucun véhicule enregistré."}
-        </div>
+        <SectionCard title={effectiveFilter ? "Aucun véhicule pour ce filtre" : "Aucun véhicule enregistré"} icon={Truck}>
+          <p className="text-slate-600 text-center py-4">{effectiveFilter ? "Aucun véhicule pour ce filtre." : "Aucun véhicule enregistré."}</p>
+        </SectionCard>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <SectionCard title="Flotte" icon={Truck} noPad>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -564,14 +564,10 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                       <td className="p-3">{v.model}</td>
                       <td className="p-3">{v.year}</td>
                       <td className="p-3">
-                        <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${STATUS_BADGE_CLASS[v.status] ?? "bg-slate-100"}`}>
-                          {OPERATIONAL_LABELS[v.operationalStatus] ?? v.operationalStatus}
-                        </span>
+                        <StatusBadge status={statusToVariant(v.status)}>{OPERATIONAL_LABELS[v.operationalStatus] ?? v.operationalStatus}</StatusBadge>
                       </td>
                       <td className="p-3">
-                        <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${STATUS_BADGE_CLASS[v.status] ?? "bg-slate-100"}`}>
-                          {TECHNICAL_LABELS[v.technicalStatus] ?? v.technicalStatus}
-                        </span>
+                        <StatusBadge status={statusToVariant(v.status)}>{TECHNICAL_LABELS[v.technicalStatus] ?? v.technicalStatus}</StatusBadge>
                       </td>
                       <td className="p-3">{v.currentCity}</td>
                       <td className="p-3">{v.destinationCity ?? "—"}</td>
@@ -639,7 +635,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
               </button>
             </div>
           </div>
-        </div>
+        </SectionCard>
       )}
 
       {/* Modal Ajout véhicule — Phase 1G : max-height 90vh, body scrollable, footer sticky */}
@@ -922,6 +918,6 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
           </div>
         </div>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

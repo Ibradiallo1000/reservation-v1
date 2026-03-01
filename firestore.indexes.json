@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionId": "publicReservations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "slug", "order": "ASCENDING" },
+        { "fieldPath": "publicToken", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "avis",
       "queryScope": "COLLECTION_GROUP",
       "fields": [

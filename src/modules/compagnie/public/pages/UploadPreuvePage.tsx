@@ -2,8 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db, storage } from '@/firebaseConfig';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { doc, getDoc, updateDoc, collection, getDocs, query, where, arrayUnion } from 'firebase/firestore';
-import { buildStatutTransitionPayload } from '@/modules/agence/services/reservationStatutService';
+import { doc, getDoc, updateDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
+import { SectionCard } from '@/ui';
 import { Upload, CheckCircle, XCircle, Loader2, ChevronLeft, Info, MapPin, Calendar, User, Users, ArrowRight, Banknote } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -290,31 +290,37 @@ const UploadPreuvePage: React.FC = () => {
         companyId: reservationDraft.companyId || '',
         companySlug: reservationDraft.companySlug || '',
 
-        auditLog: arrayUnion(
-          buildStatutTransitionPayload(
-            (reservationDraft as any).statut ?? 'en_attente_paiement',
-            'preuve_recue',
-            { userId: 'client_anonymous', userRole: 'client' }
-          )
-        ),
-        updatedAt: new Date(),
       };
 
       // NE PAS ECRASER referenceCode : on le laisse tel quel s’il existe déjà dans le doc.
-      log.info('Update payload (no ref code write)', updatePayload);
-
-      await updateDoc(
-        doc(
-          db,
-          'companies',
-          reservationDraft.companyId!,
-          'agences',
-          reservationDraft.agencyId!,
-          'reservations',
-          reservationDraft.id!
-        ),
-        updatePayload
+      const resRef = doc(
+        db,
+        'companies',
+        reservationDraft.companyId!,
+        'agences',
+        reservationDraft.agencyId!,
+        'reservations',
+        reservationDraft.id!
       );
+      const docSnap = await getDoc(resRef);
+      if (!docSnap.exists()) {
+        setError('Réservation introuvable.');
+        return;
+      }
+      const data = docSnap.data() as any;
+      const currentStatut = (data.statut || '').toLowerCase();
+      if (currentStatut !== 'en_attente_paiement') {
+        setError('Cette réservation a expiré ou a déjà été traitée.');
+        return;
+      }
+
+      const inputReference = (message && message.trim()) || (file ? file.name : '');
+      await updateDoc(resRef, {
+        statut: 'preuve_recue',
+        paymentReference: inputReference,
+        proofSubmittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       // Nettoyage du cache (on a fini le flux PMA)
       sessionStorage.removeItem('reservationDraft');
@@ -344,9 +350,8 @@ const UploadPreuvePage: React.FC = () => {
 
   if (!reservationDraft || !companyInfo) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-white">
-        <div className="max-w-md w-full rounded-xl border border-gray-200 p-6 text-center">
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">Impossible de charger les données</h2>
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
+        <SectionCard title="Impossible de charger les données" icon={XCircle} className="max-w-md w-full shadow-md">
           <p className="text-sm text-gray-600 mb-4">
             {error || "Une erreur est survenue pendant le chargement."}
           </p>
@@ -355,23 +360,25 @@ const UploadPreuvePage: React.FC = () => {
               Connexion indisponible. Vérifiez le réseau puis réessayez.
             </p>
           )}
-          <div className="flex items-center justify-center gap-2">
+          <p className="text-xs text-gray-500 mb-4">Réessayez ou retournez à l'accueil pour reprendre votre réservation.</p>
+          <div className="flex flex-col gap-2">
             <button
               type="button"
               onClick={loadInitialData}
-              className="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50"
+              className="w-full px-4 py-3 rounded-lg font-medium text-white hover:opacity-95"
+              style={{ backgroundColor: companyInfo?.couleurPrimaire || '#3b82f6' }}
             >
               Réessayer
             </button>
             <button
               type="button"
               onClick={() => navigate(`/${slug || ''}`)}
-              className="px-4 py-2 rounded-lg text-white bg-gray-800 hover:bg-gray-700"
+              className="w-full px-4 py-2.5 rounded-lg text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50"
             >
               Retour
             </button>
           </div>
-        </div>
+        </SectionCard>
       </div>
     );
   }
@@ -402,8 +409,12 @@ const UploadPreuvePage: React.FC = () => {
       <main className="max-w-4xl mx-auto p-4 space-y-6 pb-24">
         <ReservationSummaryCard reservationDraft={reservationDraft} primaryColor={themeConfig.colors.primary} />
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-6 space-y-6">
+        <SectionCard title="Justificatif de paiement" icon={Upload} className="shadow-md">
+          <p className="text-xs text-gray-500 mb-4 flex items-center gap-1.5">
+            <Info className="w-3.5 h-3.5 text-gray-400" />
+            Paiement sécurisé · Support disponible
+          </p>
+          <div className="space-y-6">
             <AmountSection amount={reservationDraft.montant} primaryColor={themeConfig.colors.primary} />
 
             <div>
@@ -427,7 +438,7 @@ const UploadPreuvePage: React.FC = () => {
 
             {error && <ErrorDisplay error={error} />}
           </div>
-        </div>
+        </SectionCard>
       </main>
 
       <SubmitButton
@@ -475,16 +486,21 @@ const SuccessScreen: React.FC<{
   }, [navigate, reservationDraft, companyInfo, slug]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-white">
-      <div className="text-center max-w-md">
-        <div className="mx-auto mb-4 flex items-center justify-center">
-          <div className="p-3 rounded-full" style={{ backgroundColor: hexToRgba(themeConfig.colors.primary, 0.1) }}>
-            <CheckCircle className="h-10 w-10" style={{ color: themeConfig.colors.primary }} />
-          </div>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
+      <SectionCard
+        title="Justificatif envoyé"
+        icon={CheckCircle}
+        className="max-w-md w-full shadow-md border-gray-200"
+      >
+        <div className="text-center py-2">
+          <p className="text-gray-700 font-medium">Votre justificatif a bien été enregistré.</p>
+          <p className="text-sm text-gray-500 mt-2">Vous allez être redirigé vers votre réservation...</p>
+          <p className="text-xs text-gray-500 mt-4 flex items-center justify-center gap-1.5">
+            <CheckCircle className="w-3.5 h-3.5" />
+            Confirmation par SMS ou email après validation.
+          </p>
         </div>
-        <h1 className="text-xl font-bold text-gray-900 mb-2">Preuve envoyée avec succès !</h1>
-        <p className="text-gray-600">Vous allez être redirigé vers votre réservation...</p>
-      </div>
+      </SectionCard>
     </div>
   );
 };
@@ -511,7 +527,7 @@ const Header: React.FC<{ companyInfo?: CompanyInfo; themeConfig: any; onBack: ()
             style={{ borderColor: themeConfig.colors.text }}
           />
         )}
-        <h1 className="text-lg font-bold">Envoyer la preuve de paiement</h1>
+        <h1 className="text-lg font-bold">Envoyer le justificatif de paiement</h1>
       </div>
     </div>
   </header>
@@ -527,14 +543,8 @@ const ReservationSummaryCard: React.FC<{
     : reservationDraft.date;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-      <div className="px-6 py-4 border-b" style={{ backgroundColor: hexToRgba(primaryColor, 0.05), borderColor: hexToRgba(primaryColor, 0.2) }}>
-        <h3 className="text-lg font-semibold" style={{ color: primaryColor }}>
-          Récapitulatif de votre réservation
-        </h3>
-      </div>
-
-      <div className="p-6 space-y-4 text-sm">
+    <SectionCard title="Récapitulatif de votre réservation" icon={MapPin} className="shadow-md">
+      <div className="space-y-4 text-sm">
         <div className="flex items-start gap-4">
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-3">
@@ -585,7 +595,7 @@ const ReservationSummaryCard: React.FC<{
           </div>
         </div>
       </div>
-    </div>
+    </SectionCard>
   );
 };
 

@@ -14,6 +14,8 @@ import {
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { affectationKey, type FleetVehicleDoc, type FleetVehicleStatus } from "./types";
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, StatusBadge, table, tableRowClassName, EmptyState } from "@/ui";
+import { Truck } from "lucide-react";
 
 type WeeklyTrip = {
   id: string;
@@ -195,19 +197,15 @@ const FleetAssignmentRow: React.FC<{
         <input className="w-40 px-2 py-1 border rounded text-sm" placeholder="Convoyeur" value={convoyeur} onChange={(e) => setConvoyeur(e.target.value)} disabled={loading || saving} />
       </td>
       <td className="px-2 py-2 text-center">
-        <button
-          onClick={save}
-          disabled={saving || loading}
-          className={`px-3 py-1 rounded text-sm text-white ${exists ? "bg-emerald-600 hover:bg-emerald-700" : "bg-indigo-600 hover:bg-indigo-700"}`}
-        >
+        <ActionButton size="sm" onClick={save} disabled={saving || loading}>
           {saving ? "…" : exists ? "Mettre à jour" : "Affecter"}
-        </button>
+        </ActionButton>
       </td>
       <td className="px-3 py-2 text-xs text-center">
         {loading ? "…" : exists ? (
-          <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Affecté</span>
+          <StatusBadge status="success">Affecté</StatusBadge>
         ) : (
-          <span className="inline-flex items-center px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">Non affecté</span>
+          <StatusBadge status="pending">Non affecté</StatusBadge>
         )}
       </td>
     </tr>
@@ -277,9 +275,9 @@ const FleetAssignmentPage: React.FC = () => {
   if (!user) return null;
 
   return (
-    <div className="min-h-screen" style={{ background: theme.bg }}>
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        <div className="bg-white rounded-xl border p-4 shadow-sm space-y-3">
+    <StandardLayoutWrapper>
+      <PageHeader title="Affectation véhicule (flotte)" subtitle={agencies.find((a) => a.id === (selectedAgencyId || userAgencyId))?.nom} icon={Truck} primaryColorVar={theme.primary} />
+      <SectionCard title="Agence et date">
           <div className="flex flex-wrap items-center gap-3">
             <span className="font-semibold" style={{ color: theme.secondary }}>Agence :</span>
             {userAgencyId ? (
@@ -338,25 +336,24 @@ const FleetAssignmentPage: React.FC = () => {
               </>
             )}
           </div>
-        </div>
+      </SectionCard>
 
-        <div className="bg-white rounded-xl border shadow-sm">
-          <div className="px-4 py-3 border-b font-semibold">Affectation véhicule & équipage (flotte)</div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50">
+      <SectionCard title="Affectation véhicule & équipage (flotte)" noPad>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className="px-3 py-2 text-left">Trajet</th>
-                  <th className="px-3 py-2 text-left">N° Bus</th>
-                  <th className="px-3 py-2 text-left">Immat.</th>
-                  <th className="px-3 py-2 text-left">Capacité</th>
-                  <th className="px-3 py-2 text-left">Chauffeur</th>
-                  <th className="px-3 py-2 text-left">Convoyeur</th>
-                  <th className="px-3 py-2 text-center w-32">Action</th>
-                  <th className="px-3 py-2 text-center w-32">Statut</th>
+                  <th className={table.th}>Trajet</th>
+                  <th className={table.th}>N° Bus</th>
+                  <th className={table.th}>Immat.</th>
+                  <th className={table.th}>Capacité</th>
+                  <th className={table.th}>Chauffeur</th>
+                  <th className={table.th}>Convoyeur</th>
+                  <th className={table.th + " text-center w-32"}>Action</th>
+                  <th className={table.th + " text-center w-32"}>Statut</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={table.body}>
                 {selectedTrip && selectedHeure ? (
                   <FleetAssignmentRow
                     key={`${selectedTrip.id}_${selectedHeure}`}
@@ -389,7 +386,7 @@ const FleetAssignmentPage: React.FC = () => {
                     if (rows.length === 0) {
                       return (
                         <tr>
-                          <td className="px-3 py-4 text-gray-500" colSpan={8}>Aucun trajet pour cette date.</td>
+                          <td colSpan={8} className="px-3 py-4"><EmptyState message="Aucun trajet pour cette date." /></td>
                         </tr>
                       );
                     }
@@ -399,9 +396,8 @@ const FleetAssignmentPage: React.FC = () => {
               </tbody>
             </table>
           </div>
-        </div>
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

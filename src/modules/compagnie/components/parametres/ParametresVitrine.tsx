@@ -11,16 +11,12 @@ import ImageSelectorModal from "@/shared/ui/ImageSelectorModal";
 import { HexColorPicker } from "react-colorful";
 import { DocumentData } from "firebase/firestore";
 import { Button } from "@/shared/ui/button";
+import { SectionCard } from "@/ui";
 
 import {
-  CheckCircle,
-  AlertCircle,
-  Save,
   Image as ImageIcon,
   Palette,
-  Moon,
-  Sun,
-  Type,
+  Save,
   Settings,
   TextCursorInput,
 } from "lucide-react";
@@ -153,28 +149,11 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
     <div className="min-h-screen bg-gray-50 py-8 px-6">
       <div className="max-w-7xl mx-auto space-y-6">
 
-        {/* HEADER */}
-        <div
-          className="bg-white rounded-xl shadow-sm p-6 border-l-4 flex items-center gap-4"
-          style={{ borderLeftColor: companyData.couleurPrimaire }}
-        >
-          <Settings className="h-8 w-8 text-gray-700" />
-          <div>
-            <h1 className="text-2xl font-bold">
-              Personnalisation de la vitrine
-            </h1>
-            <p className="text-gray-500">
-              Configuration de la page publique
-            </p>
-          </div>
-        </div>
+        <SectionCard title="Personnalisation de la vitrine" icon={Settings}>
+          <p className="text-gray-500 mb-4">Configuration de la page publique</p>
+        </SectionCard>
 
-        {/* TEXTES */}
-        <div className="bg-white rounded-xl p-6 border space-y-4">
-          <h3 className="font-semibold flex items-center gap-2">
-            <TextCursorInput />
-            Textes personnalisés
-          </h3>
+        <SectionCard title="Textes personnalisés" icon={TextCursorInput}>
 
           <input
             type="text"
@@ -201,14 +180,9 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
             }
             className="w-full border rounded-lg px-4 py-2"
           />
-        </div>
+        </SectionCard>
 
-        {/* COULEURS */}
-        <div className="bg-white rounded-xl p-6 border">
-          <h3 className="font-semibold flex items-center gap-2 mb-4">
-            <Palette />
-            Couleurs
-          </h3>
+        <SectionCard title="Couleurs" icon={Palette}>
 
           <div className="grid grid-cols-2 gap-6">
             {(
@@ -241,14 +215,9 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
               </div>
             ))}
           </div>
-        </div>
+        </SectionCard>
 
-        {/* IMAGES (SANS SLIDER) */}
-        <div className="bg-white rounded-xl p-6 border space-y-4">
-          <h3 className="font-semibold flex items-center gap-2">
-            <ImageIcon />
-            Images
-          </h3>
+        <SectionCard title="Images" icon={ImageIcon}>
 
           <button
             onClick={() => setModalType("logo")}
@@ -270,9 +239,8 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
           >
             Modifier bannière
           </button>
-        </div>
+        </SectionCard>
 
-        {/* SAVE */}
         <div className="flex justify-end">
           <Button
             onClick={handleSave}

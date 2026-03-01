@@ -14,10 +14,10 @@ import type { Shipment } from "@/modules/logistics/domain/shipment.types";
 import type { Company } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import CourierSessionLivePanel from "../components/CourierSessionLivePanel";
-import CourierPageHeader from "../components/CourierPageHeader";
 import CourierReceipt from "../components/CourierReceipt";
+import { PageHeader, StandardLayoutWrapper, ActionButton, SectionCard, EmptyState } from "@/ui";
 import CourierPackageLabel from "../components/CourierPackageLabel";
-import { LayoutDashboard, Loader2, AlertCircle, Plus } from "lucide-react";
+import { LayoutDashboard, Loader2, AlertCircle, Plus, Package } from "lucide-react";
 import { Link } from "react-router-dom";
 
 export default function CourierSessionPage() {
@@ -137,26 +137,21 @@ export default function CourierSessionPage() {
     agencies.find((a) => a.id === destId)?.nomAgence ?? agencies.find((a) => a.id === destId)?.nom ?? (destId || "—");
 
   return (
-    <div className="p-4 max-w-4xl mx-auto space-y-6">
-      <CourierPageHeader
+    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
+      <PageHeader
         icon={LayoutDashboard}
         title="Session Courrier"
-        primaryColor={primaryColor}
+        primaryColorVar="var(--courier-primary, #ea580c)"
         right={
           session?.status === "ACTIVE" ? (
-            <Link
-              to="/agence/courrier/nouveau"
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg px-4 py-2.5 text-white transition-colors duration-200 hover:opacity-90 active:opacity-95"
-              style={{ backgroundColor: "var(--courier-primary, #ea580c)" }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.backgroundColor = "var(--courier-secondary, #f97316)";
-              }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.backgroundColor = "var(--courier-primary, #ea580c)";
-              }}
-            >
-              <Plus className="h-4 w-4" />
-              Nouvel envoi
+            <Link to="/agence/courrier/nouveau">
+              <ActionButton
+                variant="primary"
+                className="!bg-[var(--courier-primary,#ea580c)] hover:!brightness-90"
+              >
+                <Plus className="h-4 w-4" />
+                Nouvel envoi
+              </ActionButton>
             </Link>
           ) : undefined
         }
@@ -178,11 +173,7 @@ export default function CourierSessionPage() {
         </div>
       )}
 
-      <section className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm sm:p-6">
-        <h2 className="mb-4 flex items-center gap-2 font-semibold text-gray-800">
-          <LayoutDashboard className="h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} />
-          Session
-        </h2>
+      <SectionCard title="Session" icon={LayoutDashboard}>
         {!session || (session.status !== "PENDING" && session.status !== "ACTIVE") ? (
           <div>
             <p className="text-gray-600 mb-3">
@@ -245,13 +236,12 @@ export default function CourierSessionPage() {
             )}
           </div>
         ) : null}
-      </section>
+      </SectionCard>
 
       {/* Close session modal — no counted amount (computed at close; validation by accountant later) */}
       {showCloseModal && sessionId && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl">
-            <h3 className="font-semibold mb-2">Fermer la session</h3>
+          <SectionCard title="Fermer la session" className="max-w-sm w-full">
             <p className="text-gray-600 text-sm mb-4">Le montant attendu sera calculé à partir des envois de cette session.</p>
             <div className="flex gap-2 justify-end">
               <button type="button" onClick={() => setShowCloseModal(false)} className="min-h-[44px] rounded-lg border border-gray-300 px-4 py-2.5 transition-colors duration-200 hover:bg-gray-50">
@@ -261,18 +251,14 @@ export default function CourierSessionPage() {
                 {loading ? <Loader2 className="h-4 w-4 animate-spin inline" /> : null} Confirmer
               </button>
             </div>
-          </div>
+          </SectionCard>
         </div>
       )}
 
       {sessionId && (
-        <section className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="mb-4 flex items-center gap-2 font-semibold text-gray-800">
-            <span style={{ color: "var(--courier-primary, #ea580c)" }}>📦</span>
-            Envois de la session
-          </h2>
+        <SectionCard title="Envois de la session" icon={Package}>
           {shipments.length === 0 ? (
-            <p className="text-gray-500 text-sm">Aucun envoi pour cette session.</p>
+            <EmptyState message="Aucun envoi pour cette session." />
           ) : (
             <div className="overflow-x-auto rounded-lg border border-gray-200">
               <table className="w-full text-sm">
@@ -304,7 +290,7 @@ export default function CourierSessionPage() {
               </table>
             </div>
           )}
-        </section>
+        </SectionCard>
       )}
 
       {receiptShipment && (
@@ -326,6 +312,6 @@ export default function CourierSessionPage() {
           onClose={() => setLabelShipment(null)}
         />
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

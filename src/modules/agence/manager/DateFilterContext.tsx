@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { DatePreset } from "./ui";
-import { computeRange } from "./ui";
+import type { DatePreset } from "./dateFilterUtils";
+import { computeRange } from "./dateFilterUtils";
 
 interface DateFilterState {
   preset: DatePreset;

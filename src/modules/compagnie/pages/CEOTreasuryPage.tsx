@@ -14,12 +14,12 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard } from "@/ui";
 import { listExpenses } from "@/modules/compagnie/treasury/expenses";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { getDateRangeForPeriod, isInRange, type PeriodKind } from "@/shared/date/periodUtils";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
-import { Wallet, Building2, TrendingUp, AlertCircle } from "lucide-react";
+import { Wallet, Building2, TrendingUp, AlertCircle, Banknote, Smartphone, PiggyBank } from "lucide-react";
 
 const MOVEMENTS_LIMIT = 100;
 const LOW_BALANCE_THRESHOLD = 50000;
@@ -28,8 +28,6 @@ export default function CEOTreasuryPage() {
   const { user, company } = useAuth() as { user?: { companyId?: string }; company?: { nom?: string } };
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
-  const { setHeader, resetHeader } = usePageHeader();
-
   const [accounts, setAccounts] = useState<{ id: string; agencyId: string | null; accountType: string; accountName: string; currentBalance: number; currency: string }[]>([]);
   const [movements, setMovements] = useState<{ id: string; amount: number; movementType: string; performedAt: unknown; referenceId: string; agencyId: string }[]>([]);
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
@@ -39,11 +37,6 @@ export default function CEOTreasuryPage() {
   const [period, setPeriod] = useState<PeriodKind>("month");
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
-
-  useEffect(() => {
-    setHeader({ title: "Trésorerie" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
 
   useEffect(() => {
     if (!companyId) {
@@ -185,65 +178,57 @@ export default function CEOTreasuryPage() {
 
   if (!companyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
+        <PageHeader title="Trésorerie" />
         <p className="text-gray-500">Compagnie introuvable.</p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
   if (loading && accounts.length === 0) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <div className="text-gray-500">Chargement trésorerie…</div>
-      </div>
+      <StandardLayoutWrapper>
+        <PageHeader title="Trésorerie" />
+        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement trésorerie…</div>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="space-y-6 p-4 md:p-6 max-w-6xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <p className="text-sm text-gray-600">{formatDateLongFr(new Date())}</p>
-        <PeriodFilterBar
-          period={period}
-          customStart={customStart || undefined}
-          customEnd={customEnd || undefined}
-          onPeriodChange={(kind, start, end) => {
-            setPeriod(kind);
-            setCustomStart(start ?? "");
-            setCustomEnd(end ?? "");
-          }}
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Trésorerie"
+        subtitle={formatDateLongFr(new Date())}
+        right={
+          <PeriodFilterBar
+            period={period}
+            customStart={customStart || undefined}
+            customEnd={customEnd || undefined}
+            onPeriodChange={(kind, start, end) => {
+              setPeriod(kind);
+              setCustomStart(start ?? "");
+              setCustomEnd(end ?? "");
+            }}
+          />
+        }
+      />
+
+      <SectionCard title="Liquidité totale" icon={Wallet}>
+        <MetricCard
+          label="Liquidité totale"
+          value={totalLiquid.toLocaleString("fr-FR")}
+          icon={Wallet}
+          valueColorVar="#4338ca"
         />
-      </div>
-
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <Wallet className="w-5 h-5" /> Liquidité totale
-        </h2>
-        <div className="text-2xl font-bold text-indigo-700">{totalLiquid.toLocaleString("fr-FR")}</div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
-          <div className="p-3 rounded-lg bg-amber-50">
-            <div className="text-sm text-amber-800">Caisse (agences)</div>
-            <div className="font-bold">{cashByType.cash.toLocaleString("fr-FR")}</div>
-          </div>
-          <div className="p-3 rounded-lg bg-blue-50">
-            <div className="text-sm text-blue-800">Banque</div>
-            <div className="font-bold">{cashByType.bank.toLocaleString("fr-FR")}</div>
-          </div>
-          <div className="p-3 rounded-lg bg-green-50">
-            <div className="text-sm text-green-800">Mobile money</div>
-            <div className="font-bold">{cashByType.mobile.toLocaleString("fr-FR")}</div>
-          </div>
-          <div className="p-3 rounded-lg bg-slate-50">
-            <div className="text-sm text-slate-800">Réserve dépenses</div>
-            <div className="font-bold">{cashByType.reserve.toLocaleString("fr-FR")}</div>
-          </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+          <MetricCard label="Caisse (agences)" value={cashByType.cash.toLocaleString("fr-FR")} icon={Banknote} valueColorVar="#b45309" />
+          <MetricCard label="Banque" value={cashByType.bank.toLocaleString("fr-FR")} icon={Building2} valueColorVar="#1d4ed8" />
+          <MetricCard label="Mobile money" value={cashByType.mobile.toLocaleString("fr-FR")} icon={Smartphone} valueColorVar="#15803d" />
+          <MetricCard label="Réserve dépenses" value={cashByType.reserve.toLocaleString("fr-FR")} icon={PiggyBank} />
         </div>
-      </section>
+      </SectionCard>
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <Building2 className="w-5 h-5" /> Par agence
-        </h2>
+      <SectionCard title="Par agence" icon={Building2} noPad>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -274,20 +259,14 @@ export default function CEOTreasuryPage() {
             </tbody>
           </table>
         </div>
-      </section>
+      </SectionCard>
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <TrendingUp className="w-5 h-5" /> Flux sur la période
-        </h2>
+      <SectionCard title="Flux sur la période" icon={TrendingUp}>
         <div className="text-xl font-bold">{flowInPeriod.toLocaleString("fr-FR")}</div>
-      </section>
+      </SectionCard>
 
       {lowBalanceAccounts.length > 0 && (
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-amber-700">
-            <AlertCircle className="w-5 h-5" /> Comptes à faible solde
-          </h2>
+        <SectionCard title="Comptes à faible solde" icon={AlertCircle}>
           <ul className="space-y-1 text-sm">
             {lowBalanceAccounts.map((a) => {
               const label = a.agencyId
@@ -300,11 +279,10 @@ export default function CEOTreasuryPage() {
               );
             })}
           </ul>
-        </section>
+        </SectionCard>
       )}
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3">Derniers mouvements</h2>
+      <SectionCard title="Derniers mouvements" noPad>
         <div className="overflow-x-auto max-h-64 overflow-y-auto">
           <table className="w-full text-sm">
             <thead>
@@ -325,10 +303,9 @@ export default function CEOTreasuryPage() {
             </tbody>
           </table>
         </div>
-      </section>
+      </SectionCard>
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3">Dépenses récentes</h2>
+      <SectionCard title="Dépenses récentes">
         {largestExpenses.length === 0 ? (
           <p className="text-sm text-gray-500">Aucune dépense.</p>
         ) : (
@@ -340,7 +317,7 @@ export default function CEOTreasuryPage() {
             ))}
           </ul>
         )}
-      </section>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 }

@@ -14,6 +14,7 @@ import {
   PieChart, Calendar, Eye, EyeOff, Lock, Unlock, Receipt
 } from 'lucide-react';
 import { Button } from '@/shared/ui/button';
+import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard, StatusBadge } from '@/ui';
 import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 
 // ============================================================================
@@ -572,86 +573,73 @@ const CompagnieComptabilitePage: React.FC = () => {
   // ==========================================================================
   
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {/* Header */}
-      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
-                <Building2 className="h-5 w-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">Contrôle & Audit</h1>
-                <p className="text-sm text-gray-600">Sessions · Réconciliations · Validations CEO · Anomalies — {label}</p>
-              </div>
-              <div className="ml-4 px-3 py-1 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100">
-                <span className="text-xs font-medium text-blue-700 capitalize">
-                  {userRole.replace('_', ' ')}
-                </span>
-              </div>
+    <StandardLayoutWrapper className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      <PageHeader
+        title="Comptabilité"
+        subtitle={`Sessions · Réconciliations · Validations CEO · Anomalies — ${label}`}
+        right={
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="px-3 py-1 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100">
+              <span className="text-xs font-medium text-blue-700 capitalize">
+                {userRole.replace('_', ' ')}
+              </span>
             </div>
-            
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
-                <button
-                  className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'jour' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => setRange('jour')}
-                >
-                  Jour
-                </button>
-                <button
-                  className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'semaine' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => setRange('semaine')}
-                >
-                  Semaine
-                </button>
-                <button
-                  className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'mois' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => setRange('mois')}
-                >
-                  Mois
-                </button>
-                <button
-                  className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'custom' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                  onClick={() => setRange('custom')}
-                >
-                  Perso
-                </button>
-              </div>
-              
-              {range === 'custom' && (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="date"
-                    className="border rounded-lg px-3 py-1.5 text-sm"
-                    value={customStart}
-                    onChange={e => setCustomStart(e.target.value)}
-                  />
-                  <span className="text-gray-400">→</span>
-                  <input
-                    type="date"
-                    className="border rounded-lg px-3 py-1.5 text-sm"
-                    value={customEnd}
-                    onChange={e => setCustomEnd(e.target.value)}
-                  />
-                </div>
-              )}
-              
+            <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
               <button
-                onClick={loadPerformanceData}
-                disabled={loading}
-                className="p-2 rounded-lg border hover:bg-gray-50"
+                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'jour' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
+                onClick={() => setRange('jour')}
               >
-                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Jour
+              </button>
+              <button
+                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'semaine' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
+                onClick={() => setRange('semaine')}
+              >
+                Semaine
+              </button>
+              <button
+                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'mois' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
+                onClick={() => setRange('mois')}
+              >
+                Mois
+              </button>
+              <button
+                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'custom' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
+                onClick={() => setRange('custom')}
+              >
+                Perso
               </button>
             </div>
+            {range === 'custom' && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  className="border rounded-lg px-3 py-1.5 text-sm"
+                  value={customStart}
+                  onChange={e => setCustomStart(e.target.value)}
+                />
+                <span className="text-gray-400">→</span>
+                <input
+                  type="date"
+                  className="border rounded-lg px-3 py-1.5 text-sm"
+                  value={customEnd}
+                  onChange={e => setCustomEnd(e.target.value)}
+                />
+              </div>
+            )}
+            <button
+              onClick={loadPerformanceData}
+              disabled={loading}
+              className="p-2 rounded-lg border hover:bg-gray-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
           </div>
-        </div>
-      </div>
+        }
+      />
       
-      {/* Navigation */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+      {/* Navigation (sticky tabs) */}
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b py-4">
         <div className="flex overflow-x-auto pb-2">
           <nav className="flex space-x-1">
             <TabButton
@@ -699,7 +687,7 @@ const CompagnieComptabilitePage: React.FC = () => {
       </div>
       
       {/* Contenu principal */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-8">
+      <div className="pb-8">
         {activeTab === 'dashboard' && (
           <DashboardTab 
             totals={totals}
@@ -763,7 +751,7 @@ const CompagnieComptabilitePage: React.FC = () => {
           }}
         />
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 
@@ -803,51 +791,48 @@ const DashboardTab: React.FC<{
   <div className="space-y-6">
     {/* KPI Principaux */}
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <KpiCard
-        icon={<TrendingUp className="h-5 w-5" />}
+      <MetricCard
         label="Chiffre d'affaires"
         value={money(totals.ventesTotal)}
-        sublabel={`${money(totals.ventesGuichet)} guichet + ${money(totals.ventesEnLigne)} ligne`}
-        trend="up"
+        icon={TrendingUp}
+        valueColorVar="#15803d"
       />
-      <KpiCard
-        icon={<Wallet className="h-5 w-5" />}
+      <MetricCard
         label="Argent en caisse"
         value={money(totals.especesRecues)}
-        sublabel={`Solde total: ${money(totals.soldeTotalCaisse)}`}
-        trend={totals.soldeTotalCaisse >= 0 ? "up" : "down"}
+        icon={Wallet}
+        valueColorVar={totals.soldeTotalCaisse >= 0 ? "#15803d" : "#b91c1c"}
       />
-      <KpiCard
-        icon={<CreditCard className="h-5 w-5" />}
+      <MetricCard
         label="Argent compagnie"
         value={money(totals.mobileMoneyRecu + totals.onlineRecu)}
-        sublabel={`${money(totals.mobileMoneyRecu)} MM + ${money(totals.onlineRecu)} ligne`}
-        trend="up"
+        icon={CreditCard}
+        valueColorVar="#15803d"
       />
-      <KpiCard
-        icon={<AlertTriangle className="h-5 w-5" />}
+      <MetricCard
         label="Écart total"
         value={money(totals.ecartTotalEspeces)}
-        sublabel={Math.abs(totals.ecartTotalEspeces) < 1000 ? "OK" : "À vérifier"}
-        trend={Math.abs(totals.ecartTotalEspeces) < 1000 ? "up" : "down"}
+        icon={AlertTriangle}
+        critical={Math.abs(totals.ecartTotalEspeces) >= 1000}
+        criticalMessage={Math.abs(totals.ecartTotalEspeces) >= 1000 ? "À vérifier" : undefined}
+        valueColorVar={Math.abs(totals.ecartTotalEspeces) < 1000 ? "#15803d" : undefined}
       />
     </div>
     
     {/* Alertes */}
     {alerts.length > 0 && (
-      <div className="bg-gradient-to-r from-red-50 to-orange-50 border border-red-100 rounded-xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-red-600" />
-            <h3 className="font-semibold text-red-800">Alertes ({alerts.length})</h3>
-          </div>
+      <SectionCard
+        title={`Alertes (${alerts.length})`}
+        icon={AlertTriangle}
+        right={
           <button className="text-sm text-red-600 hover:text-red-800">
             Tout marquer comme vu
           </button>
-        </div>
+        }
+      >
         <div className="space-y-2">
           {alerts.slice(0, 3).map(alert => (
-            <div key={alert.id} className="flex items-center justify-between p-3 bg-white rounded-lg border">
+            <div key={alert.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200 bg-gray-50/50">
               <div>
                 <div className="font-medium text-gray-900">{alert.title}</div>
                 <div className="text-sm text-gray-600">{alert.message}</div>
@@ -855,13 +840,9 @@ const DashboardTab: React.FC<{
                   <div className="text-xs text-gray-500 mt-1">Agence: {alert.agencyName}</div>
                 )}
               </div>
-              <div className={`px-2 py-1 rounded text-xs font-medium ${
-                alert.severity === 'high' ? 'bg-red-100 text-red-700' :
-                alert.severity === 'medium' ? 'bg-orange-100 text-orange-700' :
-                'bg-yellow-100 text-yellow-700'
-              }`}>
+              <StatusBadge status={alert.severity === 'high' ? 'danger' : alert.severity === 'medium' ? 'warning' : 'info'}>
                 {alert.severity === 'high' ? 'Critique' : alert.severity === 'medium' ? 'Important' : 'Info'}
-              </div>
+              </StatusBadge>
             </div>
           ))}
           {alerts.length > 3 && (
@@ -872,20 +853,15 @@ const DashboardTab: React.FC<{
             </div>
           )}
         </div>
-      </div>
+      </SectionCard>
     )}
     
     {/* Performance Agences */}
-    <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-      <div className="px-6 py-4 border-b">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-900">Performance par agence</h3>
-          <span className="text-sm text-gray-600">
-            {performanceData.length} agence{performanceData.length > 1 ? 's' : ''}
-          </span>
-        </div>
-      </div>
-      
+    <SectionCard
+      title="Performance par agence"
+      right={<span className="text-sm text-gray-600">{performanceData.length} agence{performanceData.length > 1 ? 's' : ''}</span>}
+      noPad
+    >
       {loading ? (
         <div className="p-8 text-center">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent"></div>
@@ -903,7 +879,7 @@ const DashboardTab: React.FC<{
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Agence</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Total</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Guichet</th>
-                <th className="px6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Ligne</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Ligne</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Solde Caisse</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Écart</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Statut</th>
@@ -947,14 +923,9 @@ const DashboardTab: React.FC<{
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      agency.statutCaisse === 'ok' ? 'bg-green-100 text-green-800' :
-                      agency.statutCaisse === 'warning' ? 'bg-orange-100 text-orange-800' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {agency.statutCaisse === 'ok' ? 'OK' : 
-                       agency.statutCaisse === 'warning' ? 'Attention' : 'Problème'}
-                    </div>
+                    <StatusBadge status={agency.statutCaisse === 'ok' ? 'success' : agency.statutCaisse === 'warning' ? 'warning' : 'danger'}>
+                      {agency.statutCaisse === 'ok' ? 'OK' : agency.statutCaisse === 'warning' ? 'Attention' : 'Problème'}
+                    </StatusBadge>
                     {agency.hasAlert && (
                       <AlertTriangle className="h-4 w-4 text-red-500 ml-1 inline" />
                     )}
@@ -993,7 +964,7 @@ const DashboardTab: React.FC<{
           </table>
         </div>
       )}
-    </div>
+    </SectionCard>
   </div>
   );
 };
@@ -1029,54 +1000,36 @@ const ReconciliationTab: React.FC<{
         </div>
         
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white p-4 rounded-lg border">
-            <div className="text-sm text-gray-500 mb-1">Ventes totales agences</div>
-            <div className="text-2xl font-bold text-gray-900">
-              {money(performanceData.reduce((sum, a) => sum + a.ventesTotal, 0))}
-            </div>
-          </div>
-          
-          <div className="bg-white p-4 rounded-lg border">
-            <div className="text-sm text-gray-500 mb-1">Argent en caisse</div>
-            <div className="text-2xl font-bold text-gray-900">
-              {money(performanceData.reduce((sum, a) => sum + a.especesRecues, 0))}
-            </div>
-          </div>
-          
-          <div className={`p-4 rounded-lg ${
-            Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) < 1000
-              ? 'bg-gradient-to-r from-green-50 to-emerald-50 border border-green-100'
-              : 'bg-gradient-to-r from-red-50 to-orange-50 border border-red-100'
-          }`}>
-            <div className="text-sm text-gray-500 mb-1">Écart global</div>
-            <div className={`text-2xl font-bold ${
-              Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) < 1000
-                ? 'text-green-700'
-                : 'text-red-700'
-            }`}>
-              {money(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0))}
-            </div>
-            <div className="text-sm mt-1">
-              {Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) < 1000
-                ? '✓ Équilibre respecté'
-                : '⚠️ Déséquilibre détecté'}
-            </div>
-          </div>
+          <MetricCard
+            label="Ventes totales agences"
+            value={money(performanceData.reduce((sum, a) => sum + a.ventesTotal, 0))}
+            icon={TrendingUp}
+          />
+          <MetricCard
+            label="Argent en caisse"
+            value={money(performanceData.reduce((sum, a) => sum + a.especesRecues, 0))}
+            icon={Wallet}
+          />
+          <MetricCard
+            label="Écart global"
+            value={money(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0))}
+            icon={AlertTriangle}
+            critical={Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) >= 1000}
+            criticalMessage={Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) >= 1000 ? "Déséquilibre détecté" : undefined}
+            valueColorVar={Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) < 1000 ? "#15803d" : undefined}
+          />
         </div>
       </div>
       
-      <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-gray-900">Réconciliation par agence</h3>
-            {['ceo', 'financial_director'].includes(userRole) && (
-              <Button variant="primary" className="text-sm">
-                Valider toute la période
-              </Button>
-            )}
-          </div>
-        </div>
-        
+      <SectionCard
+        title="Réconciliation par agence"
+        right={['ceo', 'financial_director'].includes(userRole) ? (
+          <Button variant="primary" className="text-sm">
+            Valider toute la période
+          </Button>
+        ) : undefined}
+        noPad
+      >
         {loading ? (
           <div className="p-8 text-center">
             <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent"></div>
@@ -1119,25 +1072,16 @@ const ReconciliationTab: React.FC<{
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        Math.abs(agency.ecartEspeces) < 1000 ? 'bg-green-100 text-green-800' :
-                        Math.abs(agency.ecartEspeces) < 10000 ? 'bg-orange-100 text-orange-800' :
-                        'bg-red-100 text-red-800'
-                      }`}>
-                        {Math.abs(agency.ecartEspeces) < 1000 ? 'OK' : 
-                         Math.abs(agency.ecartEspeces) < 10000 ? 'Attention' : 'Problème'}
-                      </div>
+                      <StatusBadge status={Math.abs(agency.ecartEspeces) < 1000 ? 'success' : Math.abs(agency.ecartEspeces) < 10000 ? 'warning' : 'danger'}>
+                        {Math.abs(agency.ecartEspeces) < 1000 ? 'OK' : Math.abs(agency.ecartEspeces) < 10000 ? 'Attention' : 'Problème'}
+                      </StatusBadge>
                     </td>
                     <td className="px-6 py-4">
                       {['ceo', 'financial_director', 'company_accountant'].includes(userRole) ? (
                         <button
                           onClick={() => handleValidate(agency.agenceId)}
                           disabled={validating === agency.agenceId}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium ${
-                            Math.abs(agency.ecartEspeces) < 1000
-                              ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
+                          className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200"
                         >
                           {validating === agency.agenceId ? 'Validation...' : 'Valider'}
                         </button>
@@ -1151,7 +1095,7 @@ const ReconciliationTab: React.FC<{
             </table>
           </div>
         )}
-      </div>
+    </SectionCard>
     </div>
   );
 };
@@ -1169,41 +1113,19 @@ const AgenciesTab: React.FC<{
       const perf = performanceData.find(p => p.agenceId === agency.id);
       
       return (
-        <div key={agency.id} className="bg-white rounded-xl border shadow-sm overflow-hidden hover:shadow-md transition-shadow">
-          <div className="p-6">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">{agency.nom}</h3>
-                {agency.ville && (
-                  <p className="text-sm text-gray-600">{agency.ville}</p>
-                )}
-              </div>
-              <div className={`h-10 w-10 rounded-lg flex items-center justify-center ${
-                perf?.statutCaisse === 'ok' ? 'bg-green-100' :
-                perf?.statutCaisse === 'warning' ? 'bg-orange-100' : 'bg-red-100'
-              }`}>
-                <Building2 className={`h-5 w-5 ${
-                  perf?.statutCaisse === 'ok' ? 'text-green-600' :
-                  perf?.statutCaisse === 'warning' ? 'text-orange-600' : 'text-red-600'
-                }`} />
-              </div>
-            </div>
-            
+        <SectionCard key={agency.id} title={agency.nom} icon={Building2} className="hover:shadow-md transition-shadow">
+            {agency.ville && <p className="text-sm text-gray-600 -mt-2 mb-4">{agency.ville}</p>}
             {perf ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="text-sm text-gray-500">Chiffre d'affaires</div>
-                    <div className="font-semibold text-gray-900">{money(perf.ventesTotal)}</div>
-                  </div>
-                  <div>
-                    <div className="text-sm text-gray-500">Solde caisse</div>
-                    <div className={`font-semibold ${
-                      perf.soldeCaisse >= 0 ? 'text-green-700' : 'text-red-700'
-                    }`}>
-                      {money(perf.soldeCaisse)}
-                    </div>
-                  </div>
+                  <MetricCard label="Chiffre d'affaires" value={money(perf.ventesTotal)} icon={TrendingUp} />
+                  <MetricCard
+                    label="Solde caisse"
+                    value={money(perf.soldeCaisse)}
+                    icon={Wallet}
+                    critical={perf.soldeCaisse < 0}
+                    valueColorVar={perf.soldeCaisse >= 0 ? "#15803d" : undefined}
+                  />
                 </div>
                 
                 <div>
@@ -1236,17 +1158,13 @@ const AgenciesTab: React.FC<{
                 Aucune donnée disponible
               </div>
             )}
-          </div>
-          
-          <div className="px-6 py-4 bg-gray-50 border-t">
-            <button
-              onClick={() => onSelectAgency(agency.id)}
-              className="w-full px-4 py-2 bg-white border rounded-lg text-gray-700 hover:bg-gray-50 font-medium"
-            >
-              Voir le détail
-            </button>
-          </div>
-        </div>
+          <button
+            onClick={() => onSelectAgency(agency.id)}
+            className="w-full mt-4 px-4 py-2 bg-gray-50 border rounded-lg text-gray-700 hover:bg-gray-100 font-medium"
+          >
+            Voir le détail
+          </button>
+        </SectionCard>
       );
     })}
   </div>
@@ -1274,9 +1192,9 @@ const MovementsTab: React.FC<{
   return (
     <div className="space-y-6">
       {canEdit && (
-        <div className="bg-white rounded-xl border shadow-sm p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-gray-900">Nouveau mouvement</h3>
+        <SectionCard
+          title="Nouveau mouvement"
+          right={
             <Button
               variant="primary"
               onClick={() => setShowForm(!showForm)}
@@ -1284,8 +1202,8 @@ const MovementsTab: React.FC<{
             >
               {showForm ? 'Annuler' : 'Ajouter un mouvement'}
             </Button>
-          </div>
-          
+          }
+        >
           {showForm && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
@@ -1376,14 +1294,10 @@ const MovementsTab: React.FC<{
               </div>
             </div>
           )}
-        </div>
+        </SectionCard>
       )}
       
-      <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b">
-          <h3 className="text-lg font-semibold text-gray-900">Historique des mouvements</h3>
-        </div>
-        
+      <SectionCard title="Historique des mouvements" noPad>
         {movements.length === 0 ? (
           <div className="p-8 text-center text-gray-500">
             Aucun mouvement enregistré
@@ -1411,13 +1325,9 @@ const MovementsTab: React.FC<{
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        movement.type === 'entree' 
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
+                      <StatusBadge status={movement.type === 'entree' ? 'success' : 'danger'}>
                         {movement.type === 'entree' ? 'Entrée' : 'Dépense'}
-                      </div>
+                      </StatusBadge>
                     </td>
                     <td className="px-6 py-4">
                       <div className="font-medium text-gray-900">{movement.label}</div>
@@ -1444,13 +1354,9 @@ const MovementsTab: React.FC<{
                     </td>
                     <td className="px-6 py-4">
                       {movement.validated ? (
-                        <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          Validé
-                        </div>
+                        <StatusBadge status="success">Validé</StatusBadge>
                       ) : (
-                        <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                          En attente
-                        </div>
+                        <StatusBadge status="pending">En attente</StatusBadge>
                       )}
                     </td>
                   </tr>
@@ -1459,7 +1365,7 @@ const MovementsTab: React.FC<{
             </table>
           </div>
         )}
-      </div>
+      </SectionCard>
     </div>
   );
 };
@@ -1497,32 +1403,22 @@ const ReportsTab: React.FC<{
   
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-xl border shadow-sm p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Rapports financiers</h3>
-            <p className="text-sm text-gray-600">Générez des rapports détaillés pour la période</p>
-          </div>
+      <SectionCard
+        title="Rapports financiers"
+        help={<span className="text-sm font-normal text-gray-500">Générez des rapports détaillés pour la période</span>}
+        right={
           <div className="flex items-center gap-3">
-            <Button
-              variant="primary"
-              onClick={exportExcel}
-              className="text-sm"
-            >
+            <Button variant="primary" onClick={exportExcel} className="text-sm">
               <Download className="h-4 w-4 inline mr-2" />
               Export Excel
             </Button>
-            <Button
-              variant="danger"
-              onClick={exportPDF}
-              className="text-sm"
-            >
+            <Button variant="danger" onClick={exportPDF} className="text-sm">
               <FileText className="h-4 w-4 inline mr-2" />
               Export PDF
             </Button>
           </div>
-        </div>
-        
+        }
+      >
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <ReportCard
             title="Rapport financier complet"
@@ -1545,31 +1441,15 @@ const ReportsTab: React.FC<{
             onGenerate={() => console.log('Générer analyse performances')}
           />
         </div>
-      </div>
+      </SectionCard>
       
-      <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b">
-          <h3 className="text-lg font-semibold text-gray-900">Aperçu des données</h3>
-        </div>
-        <div className="p-6">
+      <SectionCard title="Aperçu des données">
           <div className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-500">Période</div>
-                <div className="font-medium text-gray-900">{label}</div>
-              </div>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-500">Nombre d'agences</div>
-                <div className="font-medium text-gray-900">{performanceData.length}</div>
-              </div>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-500">Réservations totales</div>
-                <div className="font-medium text-gray-900">{formatNumber(totals.nbReservations)}</div>
-              </div>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-sm text-gray-500">Billets vendus</div>
-                <div className="font-medium text-gray-900">{formatNumber(totals.nbBillets)}</div>
-              </div>
+              <MetricCard label="Période" value={label} icon={Calendar} />
+              <MetricCard label="Nombre d'agences" value={performanceData.length} icon={Building2} />
+              <MetricCard label="Réservations totales" value={formatNumber(totals.nbReservations)} icon={Receipt} />
+              <MetricCard label="Billets vendus" value={formatNumber(totals.nbBillets)} icon={Receipt} />
             </div>
             
             <div className="pt-4 border-t">
@@ -1616,8 +1496,7 @@ const ReportsTab: React.FC<{
               </div>
             </div>
           </div>
-        </div>
-      </div>
+      </SectionCard>
     </div>
   );
 };
@@ -1627,55 +1506,26 @@ const AuditTab: React.FC<{
 }> = ({ userRole }) => {
   if (!['ceo', 'financial_director'].includes(userRole)) {
     return (
-      <div className="bg-white rounded-xl border shadow-sm p-8 text-center">
-        <Shield className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">Accès restreint</h3>
-        <p className="text-gray-600">
+      <SectionCard title="Accès restreint" icon={Shield}>
+        <p className="text-gray-600 text-center">
           Cette section est réservée aux directeurs financiers et CEO.
         </p>
-      </div>
+      </SectionCard>
     );
   }
   
   return (
     <div className="space-y-6">
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-xl p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <Shield className="h-6 w-6 text-blue-600" />
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Audit et traçabilité</h3>
-            <p className="text-sm text-gray-600">
-              Historique complet des actions et modifications
-            </p>
-          </div>
-        </div>
+      <SectionCard title="Audit et traçabilité" icon={Shield} help={<span className="text-sm font-normal text-gray-500">Historique complet des actions et modifications</span>}>
         
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white p-4 rounded-lg border">
-            <div className="text-sm text-gray-500 mb-1">Validations récentes</div>
-            <div className="text-2xl font-bold text-gray-900">12</div>
-            <div className="text-sm text-gray-600 mt-1">7 derniers jours</div>
-          </div>
-          
-          <div className="bg-white p-4 rounded-lg border">
-            <div className="text-sm text-gray-500 mb-1">Modifications</div>
-            <div className="text-2xl font-bold text-gray-900">47</div>
-            <div className="text-sm text-gray-600 mt-1">Ce mois</div>
-          </div>
-          
-          <div className="bg-white p-4 rounded-lg border">
-            <div className="text-sm text-gray-500 mb-1">Connexions suspectes</div>
-            <div className="text-2xl font-bold text-gray-900">0</div>
-            <div className="text-sm text-green-600 mt-1">✓ Aucune alerte</div>
-          </div>
+          <MetricCard label="Validations récentes" value="12" icon={CheckCircle2} />
+          <MetricCard label="Modifications" value="47" icon={FileText} />
+          <MetricCard label="Connexions suspectes" value="0" icon={Shield} valueColorVar="#15803d" />
         </div>
-      </div>
+      </SectionCard>
       
-      <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b">
-          <h3 className="text-lg font-semibold text-gray-900">Journal d'audit</h3>
-        </div>
-        <div className="p-6">
+      <SectionCard title="Journal d'audit">
           <div className="space-y-4">
             {[1, 2, 3, 4, 5].map(i => (
               <div key={i} className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50">
@@ -1699,8 +1549,7 @@ const AuditTab: React.FC<{
               </div>
             ))}
           </div>
-        </div>
-      </div>
+      </SectionCard>
     </div>
   );
 };
@@ -1708,32 +1557,6 @@ const AuditTab: React.FC<{
 // ============================================================================
 // COMPOSANTS UTILITAIRES
 // ============================================================================
-
-const KpiCard: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sublabel?: string;
-  trend?: 'up' | 'down' | 'neutral';
-}> = ({ icon, label, value, sublabel, trend = 'neutral' }) => (
-  <div className="bg-white rounded-xl border shadow-sm p-6 hover:shadow-md transition-shadow">
-    <div className="flex items-start justify-between mb-4">
-      <div className="text-sm font-medium text-gray-500">{label}</div>
-      <div className={`h-10 w-10 rounded-lg flex items-center justify-center ${
-        trend === 'up' ? 'bg-green-100' :
-        trend === 'down' ? 'bg-red-100' : 'bg-gray-100'
-      }`}>
-        <span className={trend === 'up' ? 'text-green-600' : trend === 'down' ? 'text-red-600' : 'text-gray-600'}>
-          {icon}
-        </span>
-      </div>
-    </div>
-    <div className="space-y-1">
-      <div className="text-2xl font-bold text-gray-900">{value}</div>
-      {sublabel && <div className="text-sm text-gray-600">{sublabel}</div>}
-    </div>
-  </div>
-);
 
 const ReportCard: React.FC<{
   title: string;
@@ -1786,23 +1609,17 @@ const AgencyDetailsModal: React.FC<{
         </div>
         
         <div className="flex-1 overflow-auto p-6">
-          {agency.performance ? (
+            {agency.performance ? (
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-500">Chiffre d'affaires</div>
-                  <div className="text-2xl font-bold text-gray-900">
-                    {money(agency.performance.ventesTotal)}
-                  </div>
-                </div>
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-500">Solde caisse</div>
-                  <div className={`text-2xl font-bold ${
-                    agency.performance.soldeCaisse >= 0 ? 'text-green-700' : 'text-red-700'
-                  }`}>
-                    {money(agency.performance.soldeCaisse)}
-                  </div>
-                </div>
+                <MetricCard label="Chiffre d'affaires" value={money(agency.performance.ventesTotal)} icon={TrendingUp} />
+                <MetricCard
+                  label="Solde caisse"
+                  value={money(agency.performance.soldeCaisse)}
+                  icon={Wallet}
+                  critical={agency.performance.soldeCaisse < 0}
+                  valueColorVar={agency.performance.soldeCaisse >= 0 ? "#15803d" : undefined}
+                />
               </div>
               
               <div className="space-y-4">
@@ -1834,18 +1651,8 @@ const AgencyDetailsModal: React.FC<{
               <div className="space-y-4">
                 <h4 className="font-medium text-gray-900">Statistiques</h4>
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white border rounded-lg p-4">
-                    <div className="text-sm text-gray-500">Réservations</div>
-                    <div className="text-xl font-bold text-gray-900">
-                      {formatNumber(agency.performance.nbReservations)}
-                    </div>
-                  </div>
-                  <div className="bg-white border rounded-lg p-4">
-                    <div className="text-sm text-gray-500">Billets vendus</div>
-                    <div className="text-xl font-bold text-gray-900">
-                      {formatNumber(agency.performance.nbBillets)}
-                    </div>
-                  </div>
+                  <MetricCard label="Réservations" value={formatNumber(agency.performance.nbReservations)} icon={Receipt} />
+                  <MetricCard label="Billets vendus" value={formatNumber(agency.performance.nbBillets)} icon={Receipt} />
                 </div>
               </div>
             </div>

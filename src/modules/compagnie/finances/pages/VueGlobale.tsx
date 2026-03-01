@@ -29,6 +29,7 @@ import {
   Smartphone,
   Receipt
 } from 'lucide-react';
+import { MetricCard, SectionCard, StatusBadge } from '@/ui';
 
 // Type pour les agences
 interface Agency {
@@ -326,44 +327,6 @@ const VueGlobale: React.FC = () => {
     minute: '2-digit' 
   });
 
-  // Composants UI
-  const KpiCard: React.FC<{
-    icon: React.ReactNode; 
-    label: string; 
-    value: string; 
-    sublabel?: string;
-    theme: { primary: string; secondary: string };
-    emphasis: boolean;
-  }> = ({ icon, label, value, sublabel, theme, emphasis }) => (
-    <div
-      className={`relative overflow-hidden rounded-xl border border-gray-200 p-5 bg-white shadow-sm
-        hover:shadow-md transition-all duration-300
-        ${emphasis ? 'ring-2 ring-offset-2' : ''}`}
-      style={
-        emphasis
-          ? { ['--tw-ring-color' as any]: theme.primary }
-          : undefined
-      }
-    >
-      <div className="absolute top-0 right-0 h-20 w-20 opacity-10">
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full blur-xl"></div>
-      </div>
-      
-      <div className="flex items-start justify-between mb-4">
-        <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">{label}</div>
-        <div className="h-10 w-10 rounded-xl grid place-items-center"
-             style={{background: `linear-gradient(135deg, ${theme.primary}20, ${theme.secondary}20)`}}>
-          <span className="text-gray-700">{icon}</span>
-        </div>
-      </div>
-      
-      <div className="space-y-1">
-        <div className={`font-bold ${emphasis ? 'text-3xl' : 'text-2xl'} text-gray-900`}>{value}</div>
-        {sublabel && <div className="text-xs font-medium text-gray-500">{sublabel}</div>}
-      </div>
-    </div>
-  );
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -378,112 +341,70 @@ const VueGlobale: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* ================= EN-TÊTE ================= */}
-      <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
-              <Globe className="h-6 w-6 text-blue-600" />
-            </div>
-            <div>
-              <div className="text-xl font-bold text-gray-900">Vue Globale Compagnie</div>
-              <div className="text-sm text-gray-600">Tableau de bord financier multi-agences</div>
-            </div>
-          </div>
-          
+      <SectionCard
+        title="Vue Globale Compagnie"
+        icon={Globe}
+        help={<span className="text-sm font-normal text-gray-500">Tableau de bord financier multi-agences</span>}
+        right={
           <div className="flex flex-wrap items-center gap-3">
-            {/* Sélecteur de période */}
-            <div className="flex rounded-xl border border-gray-300 p-1 bg-white">
-              <button
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${period === 'today' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
-                onClick={() => setPeriod('today')}
-              >
-                Aujourd'hui
-              </button>
-              <button
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${period === 'week' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
-                onClick={() => setPeriod('week')}
-              >
-                7 jours
-              </button>
-              <button
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${period === 'month' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
-                onClick={() => setPeriod('month')}
-              >
-                30 jours
-              </button>
-              <button
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${period === 'all' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
-                onClick={() => setPeriod('all')}
-              >
-                Toutes
-              </button>
+            <div className="flex rounded-lg border border-gray-300 p-1 bg-gray-50">
+              {(['today', 'week', 'month', 'all'] as const).map((p) => (
+                <button
+                  key={p}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${period === p ? 'bg-white border border-gray-200 shadow-sm text-gray-900' : 'text-gray-600 hover:bg-gray-100'}`}
+                  onClick={() => setPeriod(p)}
+                >
+                  {p === 'today' ? 'Aujourd\'hui' : p === 'week' ? '7 jours' : p === 'month' ? '30 jours' : 'Toutes'}
+                </button>
+              ))}
             </div>
-            
             <button
               onClick={loadGlobalData}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium"
             >
               <RefreshCw className="h-4 w-4" />
               Actualiser
             </button>
           </div>
+        }
+      >
+        <div className="text-sm text-gray-600">
+          Période analysée: {fmtDate(getDateRange().start)} → {fmtDate(getDateRange().end)}
         </div>
-        
-        {/* Période affichée */}
-        <div className="mt-4 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
-          <div className="text-sm text-gray-600">
-            Période analysée: {fmtDate(getDateRange().start)} → {fmtDate(getDateRange().end)}
-          </div>
-        </div>
-      </div>
+      </SectionCard>
 
       {/* ================= KPIs PRINCIPAUX ================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        <KpiCard 
-          icon={<CreditCard className="h-6 w-6" />} 
-          label="Réservations totales" 
-          value={globalStats.totalReservations.toString()} 
-          sublabel={`${globalStats.activeAgencies}/${globalStats.totalAgencies} agences actives`}
-          theme={theme}
-          emphasis={false}
+        <MetricCard
+          label="Réservations totales"
+          value={globalStats.totalReservations.toString()}
+          icon={CreditCard}
         />
-        <KpiCard 
-          icon={<TrendingUp className="h-6 w-6" />} 
-          label="Chiffre d'affaires" 
-          value={fmtMoney(globalStats.totalAmount)} 
-          sublabel={`${fmtMoney(globalStats.totalOnlineAmount)} en ligne`}
-          theme={theme}
-          emphasis={true}
+        <MetricCard
+          label="Chiffre d'affaires"
+          value={fmtMoney(globalStats.totalAmount)}
+          icon={TrendingUp}
+          valueColorVar={theme.primary}
         />
-        <KpiCard 
-          icon={<Building2 className="h-6 w-6" />} 
-          label="Agences" 
-          value={globalStats.totalAgencies.toString()} 
-          sublabel={`${globalStats.activeAgencies} avec activité`}
-          theme={theme}
-          emphasis={false}
+        <MetricCard
+          label="Agences"
+          value={`${globalStats.totalAgencies} (${globalStats.activeAgencies} actives)`}
+          icon={Building2}
         />
-        <KpiCard 
-          icon={<AlertTriangle className="h-6 w-6" />} 
-          label="Validations en attente" 
-          value={globalStats.pendingValidations.toString()} 
-          sublabel="Nécessitent votre attention"
-          theme={theme}
-          emphasis={false}
+        <MetricCard
+          label="Validations en attente"
+          value={globalStats.pendingValidations.toString()}
+          icon={AlertTriangle}
         />
       </div>
 
       {/* ================= DEUX COLONNES ================= */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
         {/* RÉPARTITION DES PAIEMENTS */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-5">
-            <div className="text-lg font-bold text-gray-900">Répartition des paiements</div>
-            <div className="text-sm text-gray-600">
-              {fmtMoney(globalStats.totalAmount)}
-            </div>
-          </div>
-          
+        <SectionCard
+          title="Répartition des paiements"
+          right={<span className="text-sm text-gray-600">{fmtMoney(globalStats.totalAmount)}</span>}
+        >
           <div className="space-y-4">
             {/* Espèces */}
             <div className="space-y-2">
@@ -542,17 +463,14 @@ const VueGlobale: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </SectionCard>
         
         {/* TOP 5 AGENCES */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-5">
-            <div className="text-lg font-bold text-gray-900">Top 5 Agences (CA)</div>
-            <div className="text-sm text-gray-600">
-              {agenciesData.filter(a => a.amount > 0).length} agences avec activité
-            </div>
-          </div>
-          
+        <SectionCard
+          title="Top 5 Agences (CA)"
+          icon={Building2}
+          right={<span className="text-sm text-gray-600">{agenciesData.filter(a => a.amount > 0).length} agences avec activité</span>}
+        >
           {agenciesData.filter(a => a.amount > 0).length === 0 ? (
             <div className="text-center py-8 text-gray-500">
               Aucune activité d'agence sur la période
@@ -564,10 +482,10 @@ const VueGlobale: React.FC = () => {
                 .sort((a, b) => b.amount - a.amount)
                 .slice(0, 5)
                 .map((agency, index) => (
-                  <div key={agency.id} className="flex items-center justify-between p-3 rounded-xl border border-gray-200 hover:bg-gray-50/50">
+                  <div key={agency.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200 hover:bg-gray-50/50">
                     <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
-                        <div className="text-sm font-bold text-blue-600">#{index + 1}</div>
+                      <div className="h-10 w-10 rounded-lg bg-gray-200 flex items-center justify-center">
+                        <div className="text-sm font-bold text-gray-700">#{index + 1}</div>
                       </div>
                       <div>
                         <div className="font-medium text-gray-900">{agency.name}</div>
@@ -582,66 +500,46 @@ const VueGlobale: React.FC = () => {
                 ))}
             </div>
           )}
-        </div>
+        </SectionCard>
       </div>
 
       {/* ================= ALERTES ================= */}
       {alerts.length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-gradient-to-r from-white to-gray-50/50 p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
-                <AlertTriangle className="h-5 w-5 text-amber-600" />
-              </div>
-              <div>
-                <div className="text-lg font-bold text-gray-900">Alertes et notifications</div>
-                <div className="text-sm text-amber-700">Points nécessitant votre attention</div>
-              </div>
-            </div>
-            <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">
-              {alerts.length} alerte{alerts.length > 1 ? 's' : ''}
-            </span>
-          </div>
-          
+        <SectionCard
+          title="Alertes et notifications"
+          icon={AlertTriangle}
+          help={<span className="text-sm font-normal text-gray-500">Points nécessitant votre attention</span>}
+          right={<StatusBadge status="warning">{alerts.length} alerte{alerts.length > 1 ? 's' : ''}</StatusBadge>}
+        >
           <div className="space-y-3">
             {alerts.map((alert, index) => (
-              <div key={index} className={`p-3 rounded-lg border ${
-                alert.type === 'error' ? 'border-red-200 bg-red-50' :
-                alert.type === 'warning' ? 'border-amber-200 bg-amber-50' :
-                'border-blue-200 bg-blue-50'
-              }`}>
+              <div key={index} className="p-3 rounded-lg border border-gray-200 bg-gray-50/50">
                 <div className="flex items-center justify-between">
                   <div className="font-medium text-gray-900">{alert.title}</div>
-                  <span className={`text-xs px-2 py-1 rounded-full ${
-                    alert.type === 'error' ? 'bg-red-100 text-red-800' :
-                    alert.type === 'warning' ? 'bg-amber-100 text-amber-800' :
-                    'bg-blue-100 text-blue-800'
-                  }`}>
+                  <StatusBadge status={alert.type === 'error' ? 'danger' : alert.type === 'warning' ? 'warning' : 'info'}>
                     {alert.type === 'error' ? 'Urgent' : alert.type === 'warning' ? 'Avertissement' : 'Information'}
-                  </span>
+                  </StatusBadge>
                 </div>
                 <div className="text-sm text-gray-600 mt-1">{alert.description}</div>
               </div>
             ))}
           </div>
-        </div>
+        </SectionCard>
       )}
 
       {/* ================= RÉSERVATIONS RÉCENTES ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-bold text-gray-900">Réservations récentes</div>
-          <div className="text-sm text-gray-600">
-            {recentReservations.length} plus récentes
-          </div>
-        </div>
-        
+      <SectionCard
+        title="Réservations récentes"
+        icon={Receipt}
+        right={<span className="text-sm text-gray-600">{recentReservations.length} plus récentes</span>}
+        noPad
+      >
         {recentReservations.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             Aucune réservation récente
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-gray-200">
+          <div className="overflow-hidden border border-gray-200 rounded-lg">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
@@ -678,9 +576,7 @@ const VueGlobale: React.FC = () => {
                           <div className="font-medium">{fmtDateTime(createDate)}</div>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700">
-                            {reservation.agencyName || 'Agence inconnue'}
-                          </span>
+                          <StatusBadge status="info">{reservation.agencyName || 'Agence inconnue'}</StatusBadge>
                         </td>
                         <td className="px-4 py-3">
                           <div className="font-medium">{reservation.nomClient || 'Sans nom'}</div>
@@ -695,17 +591,9 @@ const VueGlobale: React.FC = () => {
                           <span className="font-bold text-gray-900">{fmtMoney(reservation.montant || 0)}</span>
                         </td>
                         <td className="px-4 py-3">
-                          <span className={`text-xs px-2 py-1 rounded-full ${
-                            reservation.statut === 'confirme' ? 'bg-emerald-100 text-emerald-800' :
-                            reservation.statut === 'en_attente' ? 'bg-amber-100 text-amber-800' :
-                            reservation.statut === 'verification' ? 'bg-blue-100 text-blue-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {reservation.statut === 'confirme' ? 'Confirmé' :
-                             reservation.statut === 'en_attente' ? 'En attente' :
-                             reservation.statut === 'verification' ? 'À vérifier' :
-                             reservation.statut || 'Inconnu'}
-                          </span>
+                          <StatusBadge status={reservation.statut === 'confirme' ? 'success' : reservation.statut === 'en_attente' ? 'pending' : reservation.statut === 'verification' ? 'warning' : 'neutral'}>
+                            {reservation.statut === 'confirme' ? 'Réservation confirmée' : reservation.statut === 'en_attente' ? 'En attente' : reservation.statut === 'verification' ? 'En attente de validation' : reservation.statut || 'Inconnu'}
+                          </StatusBadge>
                         </td>
                       </tr>
                     );
@@ -715,7 +603,7 @@ const VueGlobale: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
+      </SectionCard>
     </div>
   );
 };

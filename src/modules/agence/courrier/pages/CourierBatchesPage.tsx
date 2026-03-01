@@ -22,7 +22,7 @@ import {
 } from "@/modules/logistics/services/courierBatches";
 import { Layers, Plus, Loader2, CheckCircle, Truck, MapPin, X } from "lucide-react";
 import { Link } from "react-router-dom";
-import CourierPageHeader from "../components/CourierPageHeader";
+import { PageHeader, StandardLayoutWrapper, ActionButton, SectionCard } from "@/ui";
 import type { Company } from "@/types/companyTypes";
 
 type BatchWithId = CourierBatch & { id: string };
@@ -342,19 +342,17 @@ export default function CourierBatchesPage() {
   };
 
   return (
-    <div className="p-4 max-w-5xl mx-auto space-y-6">
-      <CourierPageHeader
+    <StandardLayoutWrapper maxWidthClass="max-w-5xl">
+      <PageHeader
         icon={Layers}
         title="Lots"
-        primaryColor={primaryColor}
-        description="Créez des lots, assignez des envois, confirmez le départ et les arrivées escale."
+        primaryColorVar="var(--courier-primary, #ea580c)"
+        subtitle="Créez des lots, assignez des envois, confirmez le départ et les arrivées escale."
         right={
-          <Link
-            to="/agence/courrier"
-            className="inline-flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm"
-            style={{ borderColor: primaryColor, color: primaryColor }}
-          >
-            Retour
+          <Link to="/agence/courrier">
+            <ActionButton variant="secondary" className="!border-[var(--courier-primary,#ea580c)] !text-[var(--courier-primary,#ea580c)] hover:!bg-[var(--courier-primary,#ea580c)] hover:!text-white">
+              Retour
+            </ActionButton>
           </Link>
         }
       />
@@ -366,11 +364,7 @@ export default function CourierBatchesPage() {
         </div>
       )}
 
-      <section className="rounded-xl border bg-white p-4 shadow-sm">
-        <h2 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <Plus className="w-5 h-5" style={{ color: primaryColor }} />
-          Nouveau lot
-        </h2>
+      <SectionCard title="Nouveau lot" icon={Plus}>
         <form onSubmit={handleCreateBatch} className="flex flex-wrap gap-3 items-end">
           <div className="min-w-[200px]">
             <label className="block text-sm font-medium text-gray-700 mb-1">Clé trajet (dep_arr_heure_date)</label>
@@ -405,15 +399,11 @@ export default function CourierBatchesPage() {
             Créer lot
           </button>
         </form>
-      </section>
+      </SectionCard>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {(["DRAFT", "READY", "DEPARTED", "CLOSED"] as const).map((status) => (
-          <section key={status} className="rounded-xl border bg-white p-4 shadow-sm">
-            <h3 className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
-              <Layers className="w-4 h-4 shrink-0" style={{ color: primaryColor }} />
-              <BatchStatusBadge status={status} />
-            </h3>
+          <SectionCard key={status} title={STATUS_LABELS[status] ?? status} icon={Layers} right={<BatchStatusBadge status={status} />}>
             <ul className="space-y-2">
               {byStatus[status].length === 0 && <li className="text-sm text-gray-500">Aucun</li>}
               {byStatus[status].map((b) => (
@@ -435,14 +425,15 @@ export default function CourierBatchesPage() {
                 </li>
               ))}
             </ul>
-          </section>
+          </SectionCard>
         ))}
       </div>
 
       {batchDetail && (
-        <section className="rounded-xl border bg-white p-4 shadow-sm space-y-4">
+        <SectionCard title="Détail du lot" icon={Layers}>
+          <div className="space-y-4">
           {/* Phase 3 UX: summary panel — visible without scrolling */}
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm">
+          <div className="p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm bg-gray-50/50 border-b border-gray-100">
             <div>
               <span className="text-gray-500 block">Véhicule</span>
               <span className="font-medium text-gray-900">{vehicleDisplay || "—"}</span>
@@ -633,15 +624,16 @@ export default function CourierBatchesPage() {
               </button>
             </div>
           )}
-        </section>
+          </div>
+        </SectionCard>
       )}
 
       {/* Phase 3 UX: confirmation modal for irreversible actions */}
       {confirmAction !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 space-y-4">
-            <h2 id="confirm-title" className="text-lg font-semibold text-gray-900">Confirmer l&apos;action</h2>
-            <p className="text-sm text-gray-600">Cette action est irréversible. Voulez-vous continuer ?</p>
+          <SectionCard title="Confirmer l'action" className="max-w-sm w-full">
+            <span id="confirm-title" className="sr-only">Confirmer l'action</span>
+            <p className="text-sm text-gray-600 mb-4">Cette action est irréversible. Voulez-vous continuer ?</p>
             <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
               <button
                 type="button"
@@ -661,9 +653,9 @@ export default function CourierBatchesPage() {
                 Confirmer
               </button>
             </div>
-          </div>
+          </SectionCard>
         </div>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

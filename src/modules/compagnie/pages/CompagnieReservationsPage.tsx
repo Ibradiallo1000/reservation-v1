@@ -23,7 +23,7 @@ import {
 } from "react-icons/fa";
 import { saveAs } from "file-saver";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { getDateRangeForPeriod, getPeriodLabel, type PeriodKind } from "@/shared/date/periodUtils";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
@@ -68,7 +68,6 @@ const CompagnieReservationsPage: React.FC = () => {
   // 🔥 LOGIQUE UNIFIÉE
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
   const theme = useCompanyTheme(company);
-  const { setHeader, resetHeader } = usePageHeader();
 
   // Période (partagée : Semaine | Mois | Année | Personnalisé)
   const [period, setPeriod] = useState<PeriodKind>("month");
@@ -293,89 +292,68 @@ const CompagnieReservationsPage: React.FC = () => {
     saveAs(blob, `reservations-agregees-${agencyName}-${new Date().toISOString().slice(0,10)}.csv`);
   };
 
-  /* -------------------- Header dynamique du layout ---------------------- */
-  useEffect(() => {
-    const actions = (
-      <>
-        <button
-          onClick={() => setShowFilters((s) => !s)}
-          className="ml-2 flex items-center px-3 py-1 rounded-full text-sm border bg-white/10 text-white hover:bg-white/20 border-white/30"
-          title="Filtres & période personnalisée"
-        >
-          <FaFilter className="mr-2" />
-          Filtres
-        </button>
-
-        {selectedAgencyId && (
-          <>
-            <button
-              onClick={exportAggregatedCSV}
-              className="flex items-center px-3 py-1 rounded-full text-sm border bg-white/10 text-white hover:bg-white/20 border-white/30"
-            >
-              <FaDownload className="mr-2" />
-              Exporter
-            </button>
-            <button
-              onClick={() => window.print()}
-              className="flex items-center px-3 py-1 rounded-full text-sm bg-white text-gray-900 hover:bg-gray-100"
-            >
-              <FaPrint className="mr-2" />
-              Imprimer
-            </button>
-          </>
-        )}
-      </>
-    );
-
-    setHeader({
-      title: `Réservations — ${label}`,
-      subtitle: selectedAgencyId ? findAgencyDisplay(selectedAgencyId) : "",
-      actions,
-      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
-      fg: "#fff",
-    });
-
-    return () => resetHeader();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [label, selectedAgencyId, period, showFilters, theme.colors.primary, theme.colors.secondary]);
-
   /* ----------------------------- Rendering ------------------------------ */
   if (!companyId) {
     return (
-      <div className="p-6">
-        <h1 className="text-xl font-semibold mb-2">Réservations</h1>
+      <StandardLayoutWrapper>
+        <PageHeader title="Réservations" />
         <p className="text-sm text-muted-foreground">
           Impossible d'identifier la compagnie (companyId manquant).
         </p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
-  return (
-    <div
-      className="min-h-screen p-4 md:p-8"
-      style={{
-        background: "linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)",
-      }}
-    >
-      <div className="max-w-7xl mx-auto">
-        {/* Date + filtre de période (Semaine | Mois | Année | Personnalisé) */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-          <p className="text-sm text-gray-600">{formatDateLongFr(new Date())}</p>
-          <PeriodFilterBar
-            period={period}
-            customStart={customStart || undefined}
-            customEnd={customEnd || undefined}
-            onPeriodChange={(kind, start, end) => {
-              setPeriod(kind);
-              setCustomStart(start ?? "");
-              setCustomEnd(end ?? "");
-              setCurrentPage(1);
-              setSelectedAgencyId(null);
-            }}
-          />
-        </div>
+  const headerActions = (
+    <>
+      <PeriodFilterBar
+        period={period}
+        customStart={customStart || undefined}
+        customEnd={customEnd || undefined}
+        onPeriodChange={(kind, start, end) => {
+          setPeriod(kind);
+          setCustomStart(start ?? "");
+          setCustomEnd(end ?? "");
+          setCurrentPage(1);
+          setSelectedAgencyId(null);
+        }}
+      />
+      <button
+        onClick={() => setShowFilters((s) => !s)}
+        className="ml-2 flex items-center px-3 py-1 rounded-full text-sm border bg-gray-200 text-gray-800 hover:bg-gray-300"
+        title="Filtres & période personnalisée"
+      >
+        <FaFilter className="mr-2" />
+        Filtres
+      </button>
+      {selectedAgencyId && (
+        <>
+          <button
+            onClick={exportAggregatedCSV}
+            className="ml-2 flex items-center px-3 py-1 rounded-full text-sm border bg-gray-200 text-gray-800 hover:bg-gray-300"
+          >
+            <FaDownload className="mr-2" />
+            Exporter
+          </button>
+          <button
+            onClick={() => window.print()}
+            className="ml-2 flex items-center px-3 py-1 rounded-full text-sm bg-gray-800 text-white hover:bg-gray-700"
+          >
+            <FaPrint className="mr-2" />
+            Imprimer
+          </button>
+        </>
+      )}
+    </>
+  );
 
+  return (
+    <StandardLayoutWrapper>
+      <PageHeader
+        title={`Réservations — ${label}`}
+        subtitle={selectedAgencyId ? findAgencyDisplay(selectedAgencyId) : undefined}
+        right={headerActions}
+      />
         {/* Filtres détails (départ, arrivée, canal) — affichés quand une agence est sélectionnée */}
         {showFilters && selectedAgencyId && (
           <div
@@ -637,8 +615,7 @@ const CompagnieReservationsPage: React.FC = () => {
             )}
           </>
         )}
-      </div>
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

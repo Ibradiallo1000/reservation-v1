@@ -16,6 +16,7 @@ import {
   addDoc, collection, doc, getDoc, getDocs, onSnapshot, orderBy, query,
   runTransaction, Timestamp, updateDoc, where, writeBatch
 } from 'firebase/firestore';
+import { cn } from '@/lib/utils';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { activateSession, pauseSession, continueSession, validateSessionByAccountant } from '@/modules/agence/services/sessionService';
@@ -32,7 +33,8 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Button } from '@/shared/ui/button';
+import { StandardLayoutWrapper, SectionCard, ActionButton, MetricCard, StatusBadge, EmptyState as UIEmptyState } from '@/ui';
+import { typography } from '@/ui/foundation';
 import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus, useAgencyDarkMode, AgencyHeaderExtras } from '@/modules/agence/shared';
 import { listCompanyBanks } from '@/modules/compagnie/treasury/companyBanks';
@@ -1355,7 +1357,7 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Contenu des différents onglets
          ============================================================================ */}
       
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+      <StandardLayoutWrapper>
         {/* ============================================================================
            ONGLET : CONTRÔLE DES POSTES
            Description : Gestion des postes de vente en temps réel
@@ -1365,39 +1367,33 @@ const AgenceComptabilitePage: React.FC = () => {
           <div className="space-y-6">
             {/* KPI Globaux */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-              <KpiCard 
-                icon={<Ticket className="h-6 w-6" />} 
-                label="Billets vendus" 
-                value={liveTotalsGlobal.tickets.toString()} 
-                sublabel="en direct"
-                theme={theme}
-                emphasis={false}
+              <MetricCard
+                label="Billets vendus"
+                value={liveTotalsGlobal.tickets.toString()}
+                icon={Ticket}
+                valueColorVar={theme?.primary}
               />
-              <KpiCard 
-                icon={<Wallet className="h-6 w-6" />} 
-                label="Chiffre d'affaires" 
-                value={money(liveTotalsGlobal.amount)} 
-                sublabel="en direct"
-                theme={theme}
-                emphasis={true}
+              <MetricCard
+                label="Chiffre d'affaires"
+                value={money(liveTotalsGlobal.amount)}
+                icon={Wallet}
+                valueColorVar={theme?.primary}
               />
-              <KpiCard 
-                icon={<Activity className="h-6 w-6" />} 
-                label="Réservations" 
-                value={liveTotalsGlobal.reservations.toString()} 
-                sublabel="en direct"
-                theme={theme}
-                emphasis={false}
+              <MetricCard
+                label="Réservations"
+                value={liveTotalsGlobal.reservations.toString()}
+                icon={Activity}
+                valueColorVar={theme?.primary}
               />
             </div>
 
             {/* Stats rapides */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-              <StatCard tone="indigo" label="En attente" value={pendingShifts.length} icon={<Clock4 className="h-4 w-4" />} />
-              <StatCard tone="emerald" label="En service" value={activeShifts.length} icon={<Play className="h-4 w-4" />} />
-              <StatCard tone="amber" label="En pause" value={pausedShifts.length} icon={<Pause className="h-4 w-4" />} />
-              <StatCard tone="rose" label="Clôturés" value={closedShifts.length} icon={<StopCircle className="h-4 w-4" />} />
-              <StatCard tone="slate" label="Validés" value={validatedShifts.length} icon={<CheckCircle2 className="h-4 w-4" />} />
+              <MetricCard label="En attente" value={pendingShifts.length} icon={Clock4} valueColorVar="#4f46e5" />
+              <MetricCard label="En service" value={activeShifts.length} icon={Play} valueColorVar="#059669" />
+              <MetricCard label="En pause" value={pausedShifts.length} icon={Pause} valueColorVar="#d97706" />
+              <MetricCard label="Clôturés" value={closedShifts.length} icon={StopCircle} valueColorVar="#e11d48" />
+              <MetricCard label="Validés" value={validatedShifts.length} icon={CheckCircle2} valueColorVar="#64748b" />
             </div>
 
             {/* Postes en attente */}
@@ -1410,10 +1406,10 @@ const AgenceComptabilitePage: React.FC = () => {
               liveStats={{}}
               theme={theme}
               actions={(s) => (
-                <Button variant="primary" onClick={() => activateShift(s.id)}>
+                <ActionButton onClick={() => activateShift(s.id)}>
                   <Play className="h-4 w-4 mr-2" />
                   Activer le poste
-                </Button>
+                </ActionButton>
               )}
             />
 
@@ -1428,10 +1424,10 @@ const AgenceComptabilitePage: React.FC = () => {
               theme={theme}
               actions={(s) => (
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <Button variant="secondary" onClick={() => pauseShift(s.id)}>
+                  <ActionButton variant="secondary" onClick={() => pauseShift(s.id)}>
                     <Pause className="h-4 w-4 mr-2" /> 
                     Pause
-                  </Button>
+                  </ActionButton>
                   <span className="text-xs text-gray-500 self-center">Clôture par le guichetier uniquement.</span>
                 </div>
               )}
@@ -1448,10 +1444,10 @@ const AgenceComptabilitePage: React.FC = () => {
               theme={theme}
               actions={(s) => (
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <Button variant="primary" onClick={() => continueShift(s.id)}>
+                  <ActionButton onClick={() => continueShift(s.id)}>
                     <Play className="h-4 w-4 mr-2" />
                     Continuer
-                  </Button>
+                  </ActionButton>
                   <span className="text-xs text-gray-500 self-center">Clôture par le guichetier uniquement.</span>
                 </div>
               )}
@@ -1466,22 +1462,13 @@ const AgenceComptabilitePage: React.FC = () => {
         
         {tab === 'receptions' && (
           <div className="space-y-6">
-            <SectionHeader
-              icon={<Receipt className="h-6 w-6" />}
-              title="Réceptions de caisse à valider"
-              subtitle="Validez la remise d'espèces des postes clôturés par les guichetiers."
-            />
-
+            <SectionCard title="Réceptions de caisse à valider" help="Validez la remise d'espèces des postes clôturés par les guichetiers.">
             {(() => {
               const toReceive = closedShifts.filter(s => s.status === 'closed');
               
               if (toReceive.length === 0) {
                 return (
-                  <EmptyState
-                    icon={<CheckCircle2 className="h-12 w-12" />}
-                    title="Aucune réception en attente"
-                    description="Toutes les remises de caisse ont été validées."
-                  />
+                  <UIEmptyState message="Aucune réception en attente — Toutes les remises de caisse ont été validées." />
                 );
               }
               
@@ -1588,23 +1575,22 @@ const AgenceComptabilitePage: React.FC = () => {
 
                           {/* Actions */}
                           <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                            <Button 
+                            <ActionButton 
                               variant="secondary"
                               onClick={() => { setTab('rapports'); loadReportForShift(s.id); }}
                               className="w-full sm:w-auto"
                             >
                               <FileText className="h-4 w-4 mr-2" /> 
                               Voir le détail
-                            </Button>
-                            <Button 
-                              variant="primary"
+                            </ActionButton>
+                            <ActionButton 
                               disabled={disableValidate || !!savingShiftIds[s.id]} 
                               onClick={() => validateReception(s)} 
                               className="w-full sm:w-auto"
                             >
                               <CheckCircle2 className="h-4 w-4 mr-2" /> 
                               {savingShiftIds[s.id] ? 'Validation...' : 'Valider la réception'}
-                            </Button>
+                            </ActionButton>
                           </div>
                         </div>
                       </div>
@@ -1613,6 +1599,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
               );
             })()}
+            </SectionCard>
           </div>
         )}
 
@@ -1713,30 +1700,9 @@ const AgenceComptabilitePage: React.FC = () => {
 
             {/* KPI du rapport */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-              <KpiCard 
-                icon={<Ticket className="h-6 w-6" />} 
-                label="Billets vendus" 
-                value={totals.billets.toString()} 
-                sublabel={`${totals.guichet.billets} guichet + ${totals.en_ligne.billets} ligne`}
-                theme={theme}
-                emphasis={false}
-              />
-              <KpiCard 
-                icon={<Wallet className="h-6 w-6" />} 
-                label="Chiffre d'affaires" 
-                value={money(totals.montant)} 
-                sublabel={`${money(totals.guichet.montant)} guichet + ${money(totals.en_ligne.montant)} ligne`}
-                theme={theme}
-                emphasis={true}
-              />
-              <KpiCard 
-                icon={<Activity className="h-6 w-6" />} 
-                label="Réservations" 
-                value={tickets.length.toString()} 
-                sublabel={`${tickets.filter(t => t.canal === 'guichet' || t.canal === '').length} guichet + ${tickets.filter(t => t.canal === 'en_ligne').length} ligne`}
-                theme={theme}
-                emphasis={false}
-              />
+              <MetricCard label="Billets vendus" value={totals.billets.toString()} icon={Ticket} valueColorVar={theme?.primary} />
+              <MetricCard label="Chiffre d'affaires" value={money(totals.montant)} icon={Wallet} valueColorVar={theme?.primary} />
+              <MetricCard label="Réservations" value={tickets.length.toString()} icon={Activity} valueColorVar={theme?.primary} />
             </div>
 
             {/* Tableau détaillé */}
@@ -1756,11 +1722,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   </div>
                 </div>
               ) : !tickets.length ? (
-                <EmptyState
-                  icon={<FileText className="h-12 w-12" />}
-                  title="Aucune donnée disponible"
-                  description="Sélectionnez un poste pour afficher son rapport détaillé"
-                />
+                <UIEmptyState message="Aucune donnée disponible — Sélectionnez un poste pour afficher son rapport détaillé" />
               ) : (
                 <div className="overflow-hidden rounded-xl border border-gray-200">
                   <div className="overflow-x-auto">
@@ -1865,15 +1827,14 @@ const AgenceComptabilitePage: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button 
-                    variant="primary"
+                  <ActionButton 
                     onClick={() => setShowOutModal(true)} 
                     className="whitespace-nowrap"
                   >
                     <Plus className="h-4 w-4 mr-2" /> 
                     Nouveau mouvement
-                  </Button>
-                  <Button
+                  </ActionButton>
+                  <ActionButton
                     variant="secondary"
                     onClick={() => exportCsv(days, currencySymbol)}
                     disabled={days.length === 0}
@@ -1881,7 +1842,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   >
                     <Download className="h-4 w-4 mr-2" /> 
                     Export CSV
-                  </Button>
+                  </ActionButton>
                 </div>
               </div>
 
@@ -1938,37 +1899,18 @@ const AgenceComptabilitePage: React.FC = () => {
                     </>
                   )}
                   
-                  <Button variant="secondary" onClick={reloadCash} disabled={loadingCash}>
+                  <ActionButton variant="secondary" onClick={reloadCash} disabled={loadingCash}>
                     {loadingCash ? 'Actualisation...' : 'Actualiser'}
-                  </Button>
+                  </ActionButton>
                 </div>
               </div>
             </div>
 
             {/* KPI de caisse */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-              <KpiCard 
-                icon={<Wallet className="h-6 w-6" />} 
-                label="Entrées totales" 
-                value={money(totIn)} 
-                theme={theme}
-                emphasis={false}
-              />
-              <KpiCard 
-                icon={<AlertTriangle className="h-6 w-6" />} 
-                label="Sorties totales" 
-                value={money(totOut)} 
-                theme={theme}
-                emphasis={false}
-              />
-              <KpiCard 
-                icon={<Banknote className="h-6 w-6" />} 
-                label="Solde de période" 
-                value={money(totIn - totOut)} 
-                sublabel={totIn - totOut >= 0 ? "Positif" : "Déficitaire"}
-                theme={theme}
-                emphasis={true}
-              />
+              <MetricCard label="Entrées totales" value={money(totIn)} icon={Wallet} valueColorVar={theme?.primary} />
+              <MetricCard label="Sorties totales" value={money(totOut)} icon={AlertTriangle} valueColorVar="#b91c1c" />
+              <MetricCard label="Solde de période" value={money(totIn - totOut)} icon={Banknote} valueColorVar={theme?.primary} />
             </div>
 
             {/* Journal de caisse */}
@@ -1988,11 +1930,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   </div>
                 </div>
               ) : days.length === 0 ? (
-                <EmptyState
-                  icon={<Banknote className="h-12 w-12" />}
-                  title="Aucun mouvement enregistré"
-                  description={`Aucun mouvement de caisse sur la période sélectionnée`}
-                />
+                <UIEmptyState message="Aucun mouvement enregistré sur la période sélectionnée" />
               ) : (
                 <div className="overflow-hidden rounded-xl border border-gray-200">
                   <div className="overflow-x-auto">
@@ -2077,9 +2015,9 @@ const AgenceComptabilitePage: React.FC = () => {
                     value={reconciliationDate} 
                     onChange={(e) => setReconciliationDate(e.target.value)} 
                   />
-                  <Button variant="secondary" onClick={loadReconciliation} disabled={loadingReconciliation}>
+                  <ActionButton variant="secondary" onClick={loadReconciliation} disabled={loadingReconciliation}>
                     {loadingReconciliation ? 'Chargement...' : 'Actualiser'}
-                  </Button>
+                  </ActionButton>
                 </div>
               </div>
               
@@ -2097,39 +2035,14 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
               </div>
             ) : !reconciliationData ? (
-              <EmptyState
-                icon={<RefreshCw className="h-12 w-12" />}
-                title="Aucune donnée disponible"
-                description="Sélectionnez une date pour voir la réconciliation"
-              />
+              <UIEmptyState message="Aucune donnée disponible — Sélectionnez une date pour voir la réconciliation" />
             ) : (
               <>
                 {/* KPI de réconciliation */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-                  <KpiCard 
-                    icon={<Ticket className="h-6 w-6" />} 
-                    label="Billets vendus" 
-                    value={(reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets).toString()} 
-                    sublabel={`${reconciliationData.ventesGuichet.tickets} guichet + ${reconciliationData.ventesEnLigne.tickets} ligne`}
-                    theme={theme}
-                    emphasis={false}
-                  />
-                  <KpiCard 
-                    icon={<TrendingUp className="h-6 w-6" />} 
-                    label="Chiffre d'affaires total" 
-                    value={money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)} 
-                    sublabel={`${money(reconciliationData.ventesGuichet.montant)} guichet + ${money(reconciliationData.ventesEnLigne.montant)} ligne`}
-                    theme={theme}
-                    emphasis={true}
-                  />
-                  <KpiCard 
-                    icon={reconciliationData.ecart === 0 ? <CheckCircle2 className="h-6 w-6" /> : <AlertTriangle className="h-6 w-6" />} 
-                    label="Écart de caisse" 
-                    value={money(reconciliationData.ecart)} 
-                    sublabel={reconciliationData.ecart === 0 ? "Caisse OK" : reconciliationData.ecart > 0 ? "Caisse en déficit" : "Excédent"}
-                    theme={theme}
-                    emphasis={true}
-                  />
+                  <MetricCard label="Billets vendus" value={(reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets).toString()} icon={Ticket} valueColorVar={theme?.primary} />
+                  <MetricCard label="Chiffre d'affaires total" value={money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)} icon={TrendingUp} valueColorVar={theme?.primary} />
+                  <MetricCard label="Écart de caisse" value={money(reconciliationData.ecart)} icon={reconciliationData.ecart === 0 ? CheckCircle2 : AlertTriangle} critical={reconciliationData.ecart !== 0} criticalMessage={reconciliationData.ecart !== 0 ? (reconciliationData.ecart > 0 ? "Caisse en déficit" : "Excédent") : undefined} valueColorVar={reconciliationData.ecart === 0 ? theme?.primary : undefined} />
                 </div>
 
                 {/* Tableau détaillé */}
@@ -2344,26 +2257,13 @@ const AgenceComptabilitePage: React.FC = () => {
            ============================================================================ */}
         {tab === 'courrier' && (
           <div className="space-y-6">
-            <SectionHeader
-              icon={<Package className="h-6 w-6" />}
-              title="Sessions courrier"
-              subtitle="Activation des sessions en attente et validation des sessions clôturées."
-            />
-
+            <SectionCard title="Sessions courrier" help="Activation des sessions en attente et validation des sessions clôturées.">
             {/* KPI Courrier */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <StatCard tone="indigo" label="En attente" value={courierKpis.pendingCount} icon={<Clock4 className="h-4 w-4" />} />
-              <StatCard tone="emerald" label="Actives" value={courierKpis.activeCount} icon={<Play className="h-4 w-4" />} />
-              <StatCard tone="rose" label="Clôturées" value={courierKpis.closedCount} icon={<StopCircle className="h-4 w-4" />} />
-              <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-                <div className="flex items-center gap-2 text-gray-600 mb-1">
-                  <Wallet className="h-4 w-4" />
-                  <span className="text-sm font-medium">Total CA Courrier (validées)</span>
-                </div>
-                <div className="text-xl font-bold" style={{ color: theme.primary }}>
-                  {money(courierKpis.totalCAValidated)}
-                </div>
-              </div>
+              <MetricCard label="En attente" value={courierKpis.pendingCount} icon={Clock4} valueColorVar="#4f46e5" />
+              <MetricCard label="Actives" value={courierKpis.activeCount} icon={Play} valueColorVar="#059669" />
+              <MetricCard label="Clôturées" value={courierKpis.closedCount} icon={StopCircle} valueColorVar="#e11d48" />
+              <MetricCard label="Total CA Courrier (validées)" value={money(courierKpis.totalCAValidated)} icon={Wallet} valueColorVar={theme?.primary} />
             </div>
 
             {/* Sessions PENDING */}
@@ -2383,11 +2283,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </span>
               </div>
               {pendingCourierSessions.length === 0 ? (
-                <EmptyState
-                  icon={<Clock4 className="h-12 w-12" />}
-                  title="Aucune session en attente"
-                  description="Aucune session courrier en attente d'activation."
-                />
+                <UIEmptyState message="Aucune session courrier en attente d'activation." />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {pendingCourierSessions.map(s => (
@@ -2402,10 +2298,10 @@ const AgenceComptabilitePage: React.FC = () => {
                       <div className="text-xs text-gray-500 mb-3">
                         Créée le {s.createdAt ? fmtDT((s.createdAt as { toDate: () => Date }).toDate?.()) : '—'}
                       </div>
-                      <Button variant="primary" onClick={() => activateCourierSessionAction(s.id)}>
+                      <ActionButton onClick={() => activateCourierSessionAction(s.id)}>
                         <Play className="h-4 w-4 mr-2" />
                         Activer
-                      </Button>
+                      </ActionButton>
                     </div>
                   ))}
                 </div>
@@ -2429,11 +2325,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </span>
               </div>
               {activeCourierSessions.length === 0 ? (
-                <EmptyState
-                  icon={<Play className="h-12 w-12" />}
-                  title="Aucune session active"
-                  description="Aucune session courrier en cours."
-                />
+                <UIEmptyState message="Aucune session courrier en cours." />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {activeCourierSessions.map(s => (
@@ -2471,11 +2363,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </span>
               </div>
               {closedCourierSessions.length === 0 ? (
-                <EmptyState
-                  icon={<CheckCircle2 className="h-12 w-12" />}
-                  title="Aucune réception en attente"
-                  description="Toutes les sessions clôturées ont été validées."
-                />
+                <UIEmptyState message="Aucune réception en attente — Toutes les sessions clôturées ont été validées." />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {closedCourierSessions.map(s => {
@@ -2507,23 +2395,22 @@ const AgenceComptabilitePage: React.FC = () => {
                             onChange={e => setReceptionInputCourier(s.id, e.target.value)}
                           />
                         </div>
-                        <Button
-                          variant="primary"
+                        <ActionButton
                           disabled={!Number.isFinite(counted) || counted < 0 || !!savingCourierSessionIds[s.id]}
                           onClick={() => validateCourierSessionAction(s)}
                         >
                           <CheckCircle2 className="h-4 w-4 mr-2" />
                           {savingCourierSessionIds[s.id] ? 'Validation...' : 'Valider'}
-                        </Button>
+                        </ActionButton>
                       </div>
                     );
                   })}
                 </div>
               )}
             </div>
+            </SectionCard>
           </div>
         )}
-      </div>
 
       {/* ============================================================================
          MODALE : NOUVEAU MOUVEMENT DE SORTIE
@@ -2658,17 +2545,18 @@ const AgenceComptabilitePage: React.FC = () => {
 
             {/* Actions de la modale */}
             <div className="mt-8 flex justify-end gap-3">
-              <Button variant="secondary" onClick={() => setShowOutModal(false)}>
+              <ActionButton variant="secondary" onClick={() => setShowOutModal(false)}>
                 Annuler
-              </Button>
-              <Button variant="primary" onClick={createOutMovement}>
+              </ActionButton>
+              <ActionButton onClick={createOutMovement}>
                 <Plus className="h-4 w-4 mr-2" />
                 Enregistrer le mouvement
-              </Button>
+              </ActionButton>
             </div>
           </div>
         </div>
       )}
+    </StandardLayoutWrapper>
     </div>
   );
 };
@@ -2711,93 +2599,17 @@ const TabButton: React.FC<{
 );
 
 
-const KpiCard: React.FC<{
-  icon: React.ReactNode; 
-  label: string; 
-  value: string; 
-  sublabel?: string;
-  theme: { primary: string; secondary: string };
-  emphasis: boolean;
-}> = ({ icon, label, value, sublabel, theme, emphasis }) => (
-  <div
-  className={`relative overflow-hidden rounded-xl border border-gray-200 p-5 bg-white shadow-sm
-    hover:shadow-sm transition-all duration-300
-    ${emphasis ? 'ring-2 ring-offset-2' : ''}`}
-  style={
-    emphasis
-      ? { ['--tw-ring-color' as any]: theme.primary }
-      : undefined
-  }
->
-    <div className="absolute top-0 right-0 h-20 w-20 opacity-10">
-      <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full blur-xl"></div>
-    </div>
-    
-    <div className="flex items-start justify-between mb-4">
-      <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">{label}</div>
-      <div className="h-10 w-10 rounded-xl grid place-items-center"
-           style={{background: `linear-gradient(135deg, ${theme.primary}20, ${theme.secondary}20)`}}>
-        <span className="text-gray-700">{icon}</span>
-      </div>
-    </div>
-    
-    <div className="space-y-1">
-      <div className={`font-bold ${emphasis ? 'text-3xl' : 'text-2xl'} text-gray-900`}>{value}</div>
-      {sublabel && <div className="text-xs font-medium text-gray-500">{sublabel}</div>}
-    </div>
-  </div>
-);
-
-const StatCard: React.FC<{
-  tone: 'indigo'|'emerald'|'amber'|'rose'|'slate'; 
-  label: string; 
-  value: number;
-  icon: React.ReactNode;
-}> = ({ tone, label, value, icon }) => {
-  const styles = {
-    indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-100' },
-    emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-100' },
-    amber: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-100' },
-    rose: { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-100' },
-    slate: { bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-100' },
-  }[tone];
-
-  return (
-    <div className={`rounded-xl border ${styles.border} p-4 bg-white shadow-sm hover:shadow-sm transition-shadow`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className={`px-2.5 py-1 rounded-lg text-xs font-medium ${styles.bg} ${styles.text}`}>
-          {label}
-        </div>
-        <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${styles.bg}`}>
-          <span className={styles.text}>{icon}</span>
-        </div>
-      </div>
-      <div className="text-2xl font-bold text-gray-900">{value}</div>
-    </div>
-  );
+const shiftStatusToBadge: Record<string, "active" | "pending" | "success" | "warning" | "neutral"> = {
+  active: "active",
+  paused: "pending",
+  closed: "warning",
+  pending: "pending",
+  validated: "success",
 };
 
-const SectionHeader: React.FC<{
-  icon: React.ReactNode; 
-  title: string; 
-  subtitle?: string;
-}> = ({ icon, title, subtitle }) => (
-  <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
-    <div className="flex items-center gap-4">
-      <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
-        {icon}
-      </div>
-      <div>
-        <div className="text-xl font-bold text-gray-900">{title}</div>
-        {subtitle && <div className="text-sm text-gray-600 mt-1">{subtitle}</div>}
-      </div>
-    </div>
-  </div>
-);
-
 const SectionShifts: React.FC<{
-  title: string; 
-  hint?: string; 
+  title: string;
+  hint?: string;
   icon: React.ReactNode;
   list: ShiftDoc[];
   usersCache: Record<string, { name?: string; email?: string; code?: string }>;
@@ -2806,127 +2618,79 @@ const SectionShifts: React.FC<{
   theme: { primary: string; secondary: string };
 }> = ({ title, hint, icon, list, usersCache, liveStats, actions, theme }) => {
   const money = useFormatCurrency();
+  const statusLabels: Record<string, string> = {
+    active: "En service",
+    paused: "En pause",
+    closed: "Clôturé",
+    pending: "En attente",
+    validated: "Validé",
+  };
   return (
-  <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
-    <div className="flex items-center justify-between mb-4">
-      <div className="flex items-center gap-3">
-        <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
-          {icon}
-        </div>
-        <div>
-          <div className="text-lg font-bold text-gray-900">{title}</div>
-          {hint && <div className="text-sm text-gray-600">{hint}</div>}
-        </div>
-      </div>
-      <div className="text-sm font-medium px-3 py-1.5 rounded-full bg-gradient-to-r from-gray-100 to-gray-200 text-gray-700 shadow-inner">
-        {list.length} poste{list.length > 1 ? 's' : ''}
-      </div>
-    </div>
+    <SectionCard title={title} help={hint} right={<StatusBadge status="neutral">{list.length} poste{list.length > 1 ? "s" : ""}</StatusBadge>}>
+      {list.length === 0 ? (
+        <UIEmptyState message={`Aucun ${title.toLowerCase()} — Aucun poste dans cet état pour le moment`} />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {list.map((s) => {
+            const ui = usersCache[s.userId] || {};
+            const name = ui.name || s.userName || s.userEmail || s.userId;
+            const code = ui.code || s.userCode || "—";
+            const live = liveStats[s.id];
+            const reservations = live?.reservations ?? s.totalReservations ?? 0;
+            const tickets = live?.tickets ?? s.totalTickets ?? 0;
+            const amount = live?.amount ?? s.totalAmount ?? 0;
+            const badgeStatus = shiftStatusToBadge[s.status] ?? "neutral";
 
-    {list.length === 0 ? (
-      <EmptyState
-        icon={icon}
-        title={`Aucun ${title.toLowerCase()}`}
-        description="Aucun poste dans cet état pour le moment"
-      />
-    ) : (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {list.map(s => {
-          const ui   = usersCache[s.userId] || {};
-          const name = ui.name || s.userName || s.userEmail || s.userId;
-          const code = ui.code || s.userCode || '—';
-          const live = liveStats[s.id];
-          const reservations = (live?.reservations ?? s.totalReservations ?? 0);
-          const tickets      = (live?.tickets      ?? s.totalTickets      ?? 0);
-          const amount       = (live?.amount       ?? s.totalAmount       ?? 0);
-
-          const statusConfig = {
-            active: { label: 'En service', colors: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-            paused: { label: 'En pause', colors: 'bg-amber-50 text-amber-700 border-amber-200' },
-            closed: { label: 'Clôturé', colors: 'bg-rose-50 text-rose-700 border-rose-200' },
-            pending: { label: 'En attente', colors: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
-            validated: { label: 'Validé', colors: 'bg-slate-50 text-slate-700 border-slate-200' },
-          }[s.status];
-
-          return (
-            <div
-              key={s.id}
-              className="group relative rounded-xl border border-gray-200 bg-white p-5 
-                         hover:border-gray-300 hover:shadow-md transition-all duration-300"
-            >
-              {/* Effet de survol */}
+            return (
               <div
-                className="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                style={{background: `linear-gradient(135deg, ${theme.primary}08, ${theme.secondary}08)`}}
-              />
-
-              <div className="relative">
-                {/* En-tête */}
-                <div className="flex items-start justify-between gap-3 mb-4">
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Guichetier</div>
-                    <div className="font-semibold text-gray-900 truncate">
-                      {name} 
-                      <span className="text-gray-500 text-sm ml-2">({code})</span>
+                key={s.id}
+                className="group relative rounded-xl border border-gray-200 bg-white p-5 hover:border-gray-300 hover:shadow-md transition-all duration-300"
+              >
+                <div
+                  className="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                  style={{ background: `linear-gradient(135deg, ${theme.primary}08, ${theme.secondary}08)` }}
+                />
+                <div className="relative">
+                  <div className="flex items-start justify-between gap-3 mb-4">
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Guichetier</div>
+                      <div className="font-semibold text-gray-900 truncate">
+                        {name} <span className="text-gray-500 text-sm ml-2">({code})</span>
+                      </div>
+                    </div>
+                    <StatusBadge status={badgeStatus}>{statusLabels[s.status] ?? s.status}</StatusBadge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <InfoCard label="Réservations" value={reservations.toString()} />
+                    <InfoCard label="Billets" value={tickets.toString()} />
+                    <InfoCard label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
+                    <InfoCard label="Fin" value={s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
+                  </div>
+                  <div className="mb-5 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
+                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Montant total</div>
+                    <div className="text-xl font-bold" style={{ color: theme.primary }}>
+                      {money(amount)}
                     </div>
                   </div>
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium border ${statusConfig.colors}`}>
-                    {statusConfig.label}
-                  </span>
-                </div>
-
-                {/* Statistiques */}
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <InfoCard label="Réservations" value={reservations.toString()} />
-                  <InfoCard label="Billets" value={tickets.toString()} />
-                  <InfoCard label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} />
-                  <InfoCard label="Fin" value={s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'} />
-                </div>
-
-                {/* Montant total */}
-                <div className="mb-5 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
-                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Montant total</div>
-                  <div className="text-xl font-bold" style={{ color: theme.primary }}>
-                    {money(amount)}
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex justify-end">
-                  {actions(s)}
+                  <div className="flex justify-end">{actions(s)}</div>
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-    )}
-  </div>
+            );
+          })}
+        </div>
+      )}
+    </SectionCard>
   );
 };
 
-const InfoCard: React.FC<{ label: string; value: string; emphasis?: boolean }> = ({ 
-  label, 
-  value, 
-  emphasis = false 
+const InfoCard: React.FC<{ label: string; value: string; emphasis?: boolean }> = ({
+  label,
+  value,
+  emphasis = false,
 }) => (
   <div>
-    <div className="text-xs text-gray-500 mb-1">{label}</div>
-    <div className={`font-medium ${emphasis ? 'text-gray-900' : 'text-gray-700'}`}>{value}</div>
-  </div>
-);
-
-const EmptyState: React.FC<{
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-}> = ({ icon, title, description }) => (
-  <div className="text-center py-12 px-4 rounded-xl border-2 border-dashed border-gray-300 bg-gradient-to-b from-white to-gray-50/50">
-    <div className="inline-flex h-16 w-16 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 items-center justify-center mb-4">
-      {icon}
-    </div>
-    <div className="text-lg font-medium text-gray-900 mb-2">{title}</div>
-    <div className="text-sm text-gray-600 max-w-md mx-auto">{description}</div>
+    <div className={cn(typography.mutedSm, "mb-1")}>{label}</div>
+    <div className={cn("font-medium", emphasis ? "text-gray-900 dark:text-gray-100" : "text-gray-700 dark:text-gray-300")}>{value}</div>
   </div>
 );
 

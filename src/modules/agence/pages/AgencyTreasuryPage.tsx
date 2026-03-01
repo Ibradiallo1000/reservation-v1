@@ -17,6 +17,7 @@ import { ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financ
 import { Wallet, ArrowRightLeft, FileText } from "lucide-react";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
+import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState, table, tableRowClassName } from "@/ui";
 
 export default function AgencyTreasuryPage() {
   const { user, company } = useAuth();
@@ -106,9 +107,9 @@ export default function AgencyTreasuryPage() {
 
   if (!companyId || !agencyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
         <p className="text-gray-500">Contexte agence introuvable.</p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
@@ -117,20 +118,21 @@ export default function AgencyTreasuryPage() {
   }
 
   return (
-    <div className="space-y-6 p-4 md:p-6 max-w-4xl mx-auto">
+    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
       {!isOnline && (
         <PageOfflineState message="Connexion instable: certaines données peuvent être incomplètes." />
       )}
       {error && (
         <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
       )}
-      <p className="text-sm text-gray-600">{formatDateLongFr(new Date())}</p>
+      <PageHeader
+        title="Trésorerie agence"
+        subtitle={formatDateLongFr(new Date())}
+        icon={Wallet}
+      />
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <Wallet className="w-5 h-5" /> Position caisse
-        </h2>
-        <div className="text-2xl font-bold text-indigo-700">{totalCash.toLocaleString("fr-FR")}</div>
+      <SectionCard title="Position caisse" icon={Wallet}>
+        <div className="text-2xl font-bold text-indigo-700 dark:text-indigo-300">{totalCash.toLocaleString("fr-FR")}</div>
         <ul className="mt-3 space-y-2 text-sm">
           {accounts.map((a) => (
             <li key={a.id} className="flex justify-between">
@@ -139,42 +141,36 @@ export default function AgencyTreasuryPage() {
             </li>
           ))}
         </ul>
-      </section>
+      </SectionCard>
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <ArrowRightLeft className="w-5 h-5" /> Derniers mouvements
-        </h2>
-        <div className="overflow-x-auto max-h-64 overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="text-left py-1">Type</th>
-                <th className="text-right py-1">Montant</th>
+      <SectionCard title="Derniers mouvements" icon={ArrowRightLeft}>
+        <div className={table.wrapper + " max-h-64 overflow-y-auto"}>
+          <table className={table.base}>
+            <thead className={table.head}>
+              <tr>
+                <th className={table.th}>Type</th>
+                <th className={table.thRight}>Montant</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className={table.body}>
               {movements.length === 0 ? (
                 <tr><td colSpan={2} className="py-4 text-gray-500 text-center">Aucun mouvement</td></tr>
               ) : (
                 movements.slice(0, 25).map((m) => (
-                  <tr key={m.id} className="border-b">
-                    <td className="py-1">{m.movementType}</td>
-                    <td className="py-1 text-right">+{m.amount.toLocaleString("fr-FR")}</td>
+                  <tr key={m.id} className={tableRowClassName()}>
+                    <td className={table.td}>{m.movementType}</td>
+                    <td className={table.tdRight}>+{m.amount.toLocaleString("fr-FR")}</td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-      </section>
+      </SectionCard>
 
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <FileText className="w-5 h-5" /> Dépenses en attente
-        </h2>
+      <SectionCard title="Dépenses en attente" icon={FileText}>
         {pendingExpenses.length === 0 ? (
-          <p className="text-sm text-gray-500">Aucune dépense en attente.</p>
+          <EmptyState message="Aucune dépense en attente." />
         ) : (
           <ul className="space-y-2 text-sm">
             {pendingExpenses.map((e) => (
@@ -185,7 +181,7 @@ export default function AgencyTreasuryPage() {
             ))}
           </ul>
         )}
-      </section>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 }

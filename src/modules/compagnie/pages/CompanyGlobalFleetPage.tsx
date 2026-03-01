@@ -4,8 +4,9 @@ import { useParams } from "react-router-dom";
 import { collection, query, where, onSnapshot, getDocs, limit } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
-import { Truck, Circle } from "lucide-react";
+import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge } from "@/ui";
+import type { StatusVariant } from "@/ui";
+import { Truck } from "lucide-react";
 
 const STATUS_LABELS: Record<string, string> = {
   garage: "Garage",
@@ -14,6 +15,16 @@ const STATUS_LABELS: Record<string, string> = {
   arrived: "Arrivé",
   maintenance: "Maintenance",
 };
+
+function statusToVariant(s: string): StatusVariant {
+  switch (s) {
+    case "arrived": return "success";
+    case "in_transit": return "info";
+    case "maintenance": return "warning";
+    case "assigned": return "active";
+    default: return "neutral";
+  }
+}
 
 const IN_TRANSIT_WARN_MS = 6 * 60 * 60 * 1000;  // 6h = orange
 const IN_TRANSIT_STALE_MS = 12 * 60 * 60 * 1000; // 12h = red
@@ -34,16 +45,9 @@ export default function CompanyGlobalFleetPage() {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
-  const { setHeader, resetHeader } = usePageHeader();
-
   const [vehicles, setVehicles] = useState<FleetDoc[]>([]);
   const [agencies, setAgencies] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setHeader({ title: "Flotte globale" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
 
   useEffect(() => {
     if (!companyId) {
@@ -86,32 +90,27 @@ export default function CompanyGlobalFleetPage() {
 
   if (!companyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
+        <PageHeader title="Flotte globale" />
         <p className="text-gray-500">Compagnie introuvable.</p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
   if (loading && vehicles.length === 0) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <div className="text-gray-500">Chargement de la flotte…</div>
-      </div>
+      <StandardLayoutWrapper>
+        <PageHeader title="Flotte globale" />
+        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement de la flotte…</div>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="space-y-6 p-4 md:p-6 max-w-6xl mx-auto">
-      <p className="text-sm text-gray-600">
-        Vue globale en lecture seule. Les modifications se font depuis l&apos;espace Flotte de chaque agence.
-      </p>
+    <StandardLayoutWrapper>
+      <PageHeader title="Flotte globale" subtitle="Vue globale en lecture seule. Les modifications se font depuis l'espace Flotte de chaque agence." />
 
-      <section className="bg-white rounded-xl border shadow-sm overflow-hidden">
-        <div className="p-4 border-b bg-gray-50">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Truck className="w-5 h-5" /> Véhicules ({vehicles.length})
-          </h2>
-        </div>
+      <SectionCard title={`Véhicules (${vehicles.length})`} icon={Truck} noPad>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -135,7 +134,9 @@ export default function CompanyGlobalFleetPage() {
                   return (
                     <tr key={v.id} className="border-b hover:bg-gray-50">
                       <td className="py-2 px-3 font-medium">{v.plateNumber ?? v.id}</td>
-                      <td className="py-2 px-3">{STATUS_LABELS[v.status] ?? v.status}</td>
+                      <td className="py-2 px-3">
+                        <StatusBadge status={statusToVariant(v.status)}>{STATUS_LABELS[v.status] ?? v.status}</StatusBadge>
+                      </td>
                       <td className="py-2 px-3">
                         {v.currentAgencyId ? agencies[v.currentAgencyId] ?? v.currentAgencyId : "—"}
                       </td>
@@ -146,21 +147,9 @@ export default function CompanyGlobalFleetPage() {
                         {v.currentTripId ? `${v.currentDate ?? ""} ${v.currentHeure ?? ""} (${v.currentTripId})` : "—"}
                       </td>
                       <td className="py-2 px-3 text-center">
-                        {delay === "normal" && (
-                          <span className="inline-flex items-center gap-1 text-emerald-600" title="Normal">
-                            <Circle className="w-3 h-3 fill-current" /> Normal
-                          </span>
-                        )}
-                        {delay === "delayed" && (
-                          <span className="inline-flex items-center gap-1 text-amber-600" title="Retard possible">
-                            <Circle className="w-3 h-3 fill-current" /> Retard
-                          </span>
-                        )}
-                        {delay === "anomaly" && (
-                          <span className="inline-flex items-center gap-1 text-red-600" title="Anomalie / transit prolongé">
-                            <Circle className="w-3 h-3 fill-current" /> Anomalie
-                          </span>
-                        )}
+                        {delay === "normal" && <StatusBadge status="success">Normal</StatusBadge>}
+                        {delay === "delayed" && <StatusBadge status="warning">Retard</StatusBadge>}
+                        {delay === "anomaly" && <StatusBadge status="danger">Anomalie</StatusBadge>}
                       </td>
                     </tr>
                   );
@@ -169,7 +158,7 @@ export default function CompanyGlobalFleetPage() {
             </tbody>
           </table>
         </div>
-      </section>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 }

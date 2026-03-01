@@ -12,6 +12,7 @@ import { listAffectationsByCompany } from "@/modules/compagnie/fleet/affectation
 import { AFFECTATION_STATUS } from "@/modules/compagnie/fleet/affectationTypes";
 import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
 import { Truck, Loader2, MapPin, CheckCircle, UserPlus, X } from "lucide-react";
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, EmptyState } from "@/ui";
 
 type VehicleRow = {
   id: string;
@@ -223,21 +224,22 @@ const AgenceFleetOperationsPage: React.FC = () => {
 
   if (!companyId || !agencyId) {
     return (
-      <div className="p-6 text-gray-600 bg-gray-50 rounded-lg">Compagnie ou agence introuvable.</div>
+      <StandardLayoutWrapper>
+        <p className="text-gray-600">Compagnie ou agence introuvable.</p>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto">
-      <h1 className="text-xl font-semibold text-gray-800 mb-2 flex items-center gap-2">
-        <Truck className="w-5 h-5" /> Exploitation
-      </h1>
-      <p className="text-sm text-gray-600 mb-4">
-        Agence : <strong>{agencyCity || "—"}</strong>. Affectez les véhicules et confirmez départs / arrivées.
-      </p>
+    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
+      <PageHeader
+        title="Exploitation"
+        subtitle={`Agence : ${agencyCity || "—"}. Affectez les véhicules et confirmez départs / arrivées.`}
+        icon={Truck}
+      />
 
       {error && (
-        <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
+        <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm dark:bg-red-900/20 dark:border-red-800">
           {error}
         </div>
       )}
@@ -247,14 +249,10 @@ const AgenceFleetOperationsPage: React.FC = () => {
           <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
         </div>
       ) : (
-        <div className="space-y-8">
-          {/* Section 1 – Véhicules disponibles */}
-          <section>
-            <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-              <MapPin className="w-4 h-4" /> 1. Véhicules disponibles (dans votre agence)
-            </h2>
+        <div className="space-y-6">
+          <SectionCard title="1. Véhicules disponibles (dans votre agence)" icon={MapPin}>
             {vehiclesDisponibles.length === 0 ? (
-              <p className="text-sm text-gray-500">Aucun véhicule disponible à l'affectation.</p>
+              <EmptyState message="Aucun véhicule disponible à l'affectation." />
             ) : (
               <ul className="space-y-2">
                 {vehiclesDisponibles.map((v) => (
@@ -278,15 +276,11 @@ const AgenceFleetOperationsPage: React.FC = () => {
                 ))}
               </ul>
             )}
-          </section>
+          </SectionCard>
 
-          {/* Section 2 – Départs affectés */}
-          <section>
-            <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-              <MapPin className="w-4 h-4" /> 2. Départs affectés
-            </h2>
+          <SectionCard title="2. Départs affectés" icon={MapPin}>
             {departsAffectes.length === 0 ? (
-              <p className="text-sm text-gray-500">Aucun départ en attente de confirmation.</p>
+              <EmptyState message="Aucun départ en attente de confirmation." />
             ) : (
               <ul className="space-y-2">
                 {departsAffectes.map((a) => (
@@ -310,15 +304,11 @@ const AgenceFleetOperationsPage: React.FC = () => {
                 ))}
               </ul>
             )}
-          </section>
+          </SectionCard>
 
-          {/* Section 3 – En transit vers moi */}
-          <section>
-            <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-              <CheckCircle className="w-4 h-4" /> 3. En transit vers moi
-            </h2>
+          <SectionCard title="3. En transit vers moi" icon={CheckCircle}>
             {enTransitVersMoi.length === 0 ? (
-              <p className="text-sm text-gray-500">Aucun véhicule en attente d'arrivée.</p>
+              <EmptyState message="Aucun véhicule en attente d'arrivée." />
             ) : (
               <ul className="space-y-2">
                 {enTransitVersMoi.map((a) => (
@@ -342,7 +332,7 @@ const AgenceFleetOperationsPage: React.FC = () => {
                 ))}
               </ul>
             )}
-          </section>
+          </SectionCard>
         </div>
       )}
 
@@ -460,7 +450,7 @@ const AgenceFleetOperationsPage: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

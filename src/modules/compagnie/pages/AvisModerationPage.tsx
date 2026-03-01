@@ -15,7 +15,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../../firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { useParams } from "react-router-dom";
 
@@ -36,7 +36,6 @@ const AvisModerationPage: React.FC = () => {
   const effectiveCompanyId = routeCompanyId ?? user?.companyId;
 
   const theme = useCompanyTheme(company);
-  const { setHeader, resetHeader } = usePageHeader();
 
   const [avisList, setAvisList] = useState<Avis[]>([]);
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
@@ -97,22 +96,6 @@ const AvisModerationPage: React.FC = () => {
   }, [filteredAvis]);
 
   /* =========================
-     HEADER DYNAMIQUE
-  ========================= */
-  useEffect(() => {
-    setHeader({
-      title: "Avis clients",
-      subtitle: avisList.length
-        ? `${avisList.length} avis en attente`
-        : "Aucun avis en attente",
-      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
-      fg: "#fff",
-    });
-
-    return () => resetHeader();
-  }, [avisList.length, theme.colors.primary, theme.colors.secondary]);
-
-  /* =========================
      ACTIONS
   ========================= */
   const toggleVisibility = async (id: string, visible: boolean) => {
@@ -147,7 +130,11 @@ const AvisModerationPage: React.FC = () => {
      UI
   ========================= */
   return (
-    <div className="max-w-7xl mx-auto p-6">
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Avis clients"
+        subtitle={avisList.length ? `${avisList.length} avis en attente` : "Aucun avis en attente"}
+      />
       {agencies.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <label className="text-sm font-medium text-gray-700">Agence :</label>
@@ -214,7 +201,7 @@ const AvisModerationPage: React.FC = () => {
         ))}
       </ul>
 
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

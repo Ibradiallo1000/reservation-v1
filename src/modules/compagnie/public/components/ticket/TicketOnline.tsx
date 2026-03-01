@@ -36,6 +36,8 @@ interface TicketOnlineProps {
   emissionDate: string;
   /** Libellé affiché pour le mode de paiement (ex. "Paiement en espèces", "Mobile Money", "Remboursé (espèces)"). Aucun hardcode. */
   paymentMethod?: string;
+  /** Badge statut affiché (ex. "Réservation confirmée", "En attente de validation"). Si absent, utilise statut. */
+  statusLabel?: string;
 }
 
 /** Libellé affiché pour la section paiement du billet. Ne pas hardcoder "PAIEMENT MOBILE". */
@@ -66,11 +68,13 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   montant,
   qrValue,
   emissionDate,
-  paymentMethod
+  paymentMethod,
+  statusLabel
 }) => {
   const money = useFormatCurrency();
   const textOnPrimary = safeTextColor(primaryColor);
   const accent = secondaryColor || primaryColor;
+  const displayStatus = statusLabel ?? statut;
 
   /* ==============================
      FORMAT NOM (Majuscules auto)
@@ -140,7 +144,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
             color: safeTextColor(accent)
           }}
         >
-          {statut}
+          {displayStatus}
         </span>
 
         <span className="uppercase tracking-wide text-gray-600">

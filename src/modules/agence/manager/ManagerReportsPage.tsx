@@ -8,10 +8,10 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { FileBarChart2, Download } from "lucide-react";
+import { DateFilterBar } from "./DateFilterBar";
 import {
-  KpiCard, SectionCard, StatusBadge, EmptyState, MGR,
-  DateFilterBar,
-} from "./ui";
+  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, ActionButton, table, tableRowClassName, typography,
+} from "@/ui";
 import { useDateFilterContext } from "./DateFilterContext";
 
 type ShiftDoc = {
@@ -77,63 +77,61 @@ export default function ManagerReportsPage() {
     URL.revokeObjectURL(url);
   };
 
-  if (loading) return <div className={MGR.page}><p className={MGR.muted}>Chargement des rapports…</p></div>;
+  if (loading) return <StandardLayoutWrapper><p className={typography.muted}>Chargement des rapports…</p></StandardLayoutWrapper>;
 
   return (
-    <div className={MGR.page}>
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className={MGR.h1}>Rapports</h1>
-          <p className={MGR.muted}>{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <DateFilterBar
-            preset={dateFilter.preset} onPresetChange={dateFilter.setPreset}
-            customStart={dateFilter.customStart} customEnd={dateFilter.customEnd}
-            onCustomStartChange={dateFilter.setCustomStart} onCustomEndChange={dateFilter.setCustomEnd}
-          />
-          <button onClick={handleExportCSV} disabled={fullyApproved.length === 0} className={MGR.btnSecondary}>
-            <Download className="w-4 h-4" />
-            Export CSV
-          </button>
-        </div>
-      </div>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Rapports"
+        subtitle={format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
+        right={
+          <div className="flex flex-wrap items-center gap-2">
+            <DateFilterBar
+              preset={dateFilter.preset} onPresetChange={dateFilter.setPreset}
+              customStart={dateFilter.customStart} customEnd={dateFilter.customEnd}
+              onCustomStartChange={dateFilter.setCustomStart} onCustomEndChange={dateFilter.setCustomEnd}
+            />
+            <ActionButton onClick={handleExportCSV} disabled={fullyApproved.length === 0} variant="secondary">
+              <Download className="w-4 h-4" />
+              Export CSV
+            </ActionButton>
+          </div>
+        }
+      />
 
       <div className="grid grid-cols-3 gap-4">
-        <KpiCard label="Revenu" value={money(revenue)} accent="text-emerald-700" />
-        <KpiCard label="Billets" value={tickets} accent="text-blue-700" />
-        <KpiCard label="Rapports validés" value={fullyApproved.length} accent="text-indigo-700"
-          help="Nombre de rapports de session ayant été validés par le comptable ET approuvés par le chef d'agence." />
+        <MetricCard label="Revenu" value={money(revenue)} valueColorVar="#059669" />
+        <MetricCard label="Billets" value={tickets} valueColorVar="#1d4ed8" />
+        <MetricCard label="Rapports validés" value={fullyApproved.length} valueColorVar="#4f46e5" />
       </div>
 
-      <SectionCard title="Rapports validés (comptable + chef)" icon={FileBarChart2} noPad
-        help="Historique des sessions entièrement validées. Un rapport apparaît ici uniquement après la double validation (comptable + chef d'agence).">
+      <SectionCard title="Rapports validés (comptable + chef)" icon={FileBarChart2} noPad>
         {fullyApproved.length === 0 ? (
           <EmptyState message="Aucun rapport entièrement validé." />
         ) : (
-          <div className={MGR.table.wrapper}>
-            <table className={MGR.table.base}>
-              <thead className={MGR.table.head}>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className={MGR.table.th}>Guichetier</th>
-                  <th className={MGR.table.th}>Code</th>
-                  <th className={MGR.table.th}>Début</th>
-                  <th className={MGR.table.th}>Fin</th>
-                  <th className={MGR.table.th}>Validé compta</th>
-                  <th className={MGR.table.th}>Approuvé chef</th>
+                  <th className={table.th}>Guichetier</th>
+                  <th className={table.th}>Code</th>
+                  <th className={table.th}>Début</th>
+                  <th className={table.th}>Fin</th>
+                  <th className={table.th}>Validé compta</th>
+                  <th className={table.th}>Approuvé chef</th>
                 </tr>
               </thead>
-              <tbody className={MGR.table.body}>
+              <tbody className={table.body}>
                 {fullyApproved.map((s) => (
-                  <tr key={s.id} className={MGR.table.row}>
-                    <td className={MGR.table.td}>{s.userName ?? s.userId}</td>
-                    <td className={MGR.table.td}>
-                      <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{s.userCode ?? "—"}</code>
+                  <tr key={s.id} className={tableRowClassName()}>
+                    <td className={table.td}>{s.userName ?? s.userId}</td>
+                    <td className={table.td}>
+                      <code className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">{s.userCode ?? "—"}</code>
                     </td>
-                    <td className={MGR.table.td}>{s.startTime?.toDate ? format(s.startTime.toDate(), "dd/MM HH:mm") : "—"}</td>
-                    <td className={MGR.table.td}>{s.endTime?.toDate ? format(s.endTime.toDate(), "dd/MM HH:mm") : "—"}</td>
-                    <td className={MGR.table.td}><StatusBadge color="green">{s.comptable?.by?.name ?? "Oui"}</StatusBadge></td>
-                    <td className={MGR.table.td}><StatusBadge color="green">{s.chef?.by?.name ?? "Oui"}</StatusBadge></td>
+                    <td className={table.td}>{s.startTime?.toDate ? format(s.startTime.toDate(), "dd/MM HH:mm") : "—"}</td>
+                    <td className={table.td}>{s.endTime?.toDate ? format(s.endTime.toDate(), "dd/MM HH:mm") : "—"}</td>
+                    <td className={table.td}><StatusBadge status="success">{s.comptable?.by?.name ?? "Oui"}</StatusBadge></td>
+                    <td className={table.td}><StatusBadge status="success">{s.chef?.by?.name ?? "Oui"}</StatusBadge></td>
                   </tr>
                 ))}
               </tbody>
@@ -141,6 +139,6 @@ export default function ManagerReportsPage() {
           </div>
         )}
       </SectionCard>
-    </div>
+    </StandardLayoutWrapper>
   );
 }

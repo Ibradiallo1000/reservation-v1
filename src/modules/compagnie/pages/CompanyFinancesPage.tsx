@@ -11,7 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader, MetricCard } from "@/ui";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { DollarSign, AlertTriangle, Building2, Download } from "lucide-react";
 import { useCapabilities } from "@/core/hooks/useCapabilities";
@@ -46,7 +46,6 @@ export default function CompanyFinancesPage() {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
-  const { setHeader, resetHeader } = usePageHeader();
   const { hasCapability, loading: capLoading } = useCapabilities();
 
   const [dailyStats, setDailyStats] = useState<DailyStatsDoc[]>([]);
@@ -54,11 +53,6 @@ export default function CompanyFinancesPage() {
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
   const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setHeader({ title: "Finances compagnie" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
 
   useEffect(() => {
     if (!companyId) {
@@ -202,9 +196,10 @@ export default function CompanyFinancesPage() {
 
   if (capLoading) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <div className="text-gray-500">Chargement…</div>
-      </div>
+      <StandardLayoutWrapper>
+        <PageHeader title="Finances compagnie" />
+        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement…</div>
+      </StandardLayoutWrapper>
     );
   }
 
@@ -214,40 +209,34 @@ export default function CompanyFinancesPage() {
 
   if (!companyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
+        <PageHeader title="Finances compagnie" />
         <p className="text-gray-500">Compagnie introuvable.</p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
   if (loading) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <div className="text-gray-500">Chargement…</div>
-      </div>
+      <StandardLayoutWrapper>
+        <PageHeader title="Finances compagnie" />
+        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement…</div>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="space-y-6 p-4 md:p-6 max-w-6xl mx-auto">
+    <StandardLayoutWrapper>
+      <PageHeader title="Finances compagnie" />
       {/* Consolidated Revenue */}
       <section className="bg-white rounded-xl border p-4 shadow-sm">
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
           <DollarSign className="w-5 h-5" /> Revenus consolidés (sessions validées)
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 rounded-lg bg-indigo-50 border border-indigo-100">
-            <div className="text-2xl font-bold text-indigo-700">{revenueToday.toLocaleString("fr-FR")}</div>
-            <div className="text-sm text-indigo-800">Aujourd&apos;hui</div>
-          </div>
-          <div className="p-4 rounded-lg bg-purple-50 border border-purple-100">
-            <div className="text-2xl font-bold text-purple-700">{revenueWeek.toLocaleString("fr-FR")}</div>
-            <div className="text-sm text-purple-800">7 derniers jours</div>
-          </div>
-          <div className="p-4 rounded-lg bg-teal-50 border border-teal-100">
-            <div className="text-2xl font-bold text-teal-700">{revenueMonth.toLocaleString("fr-FR")}</div>
-            <div className="text-sm text-teal-800">30 derniers jours</div>
-          </div>
+          <MetricCard label="Aujourd'hui" value={revenueToday.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#4338ca" />
+          <MetricCard label="7 derniers jours" value={revenueWeek.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#7c3aed" />
+          <MetricCard label="30 derniers jours" value={revenueMonth.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#0f766e" />
         </div>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-sm">
@@ -329,6 +318,6 @@ export default function CompanyFinancesPage() {
       <p className="text-xs text-gray-500">
         Accès : CEO (admin_compagnie) et comptable compagnie (company_accountant). Aucune validation ni modification des sessions depuis cette page.
       </p>
-    </div>
+    </StandardLayoutWrapper>
   );
 }

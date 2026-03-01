@@ -8,7 +8,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { format, addDays } from "date-fns";
 import { fr } from "date-fns/locale";
 import { Bus, Truck, MapPin, Loader2, X } from "lucide-react";
-import { SectionCard, StatusBadge, EmptyState, KpiCard, MGR } from "./ui";
+import {
+  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, table, tableRowClassName, typography, ActionButton,
+} from "@/ui";
 import { listAffectationsByAgency } from "@/modules/compagnie/fleet/affectationService";
 import { AFFECTATION_STATUS } from "@/modules/compagnie/fleet/affectationTypes";
 import {
@@ -50,12 +52,13 @@ function deriveDepartureStatus(d: {
   return "ready";
 }
 
-const STATUS_CONFIG: Record<DepartureStatus, { label: string; color: "green" | "yellow" | "red" | "gray" | "blue" | "purple" }> = {
-  boarding:  { label: "Embarquement", color: "blue" },
-  ready:     { label: "Prêt",        color: "green" },
-  departed:  { label: "Parti",       color: "gray" },
-  delayed:   { label: "En retard",   color: "red" },
-  cancelled: { label: "Annulé",      color: "red" },
+type StatusVariant = "success" | "pending" | "danger" | "neutral" | "info";
+const STATUS_CONFIG: Record<DepartureStatus, { label: string; status: StatusVariant }> = {
+  boarding:  { label: "Embarquement", status: "info" },
+  ready:     { label: "Prêt",         status: "success" },
+  departed:  { label: "Parti",       status: "neutral" },
+  delayed:   { label: "En retard",   status: "danger" },
+  cancelled: { label: "Annulé",      status: "danger" },
 };
 
 export default function ManagerOperationsPage() {
@@ -354,21 +357,21 @@ export default function ManagerOperationsPage() {
     }
   }, [companyId, agencyId, user, loadFleetStats]);
 
-  if (loading) return <div className={MGR.page}><p className={MGR.muted}>Chargement…</p></div>;
+  if (loading) return <StandardLayoutWrapper><p className={typography.muted}>Chargement…</p></StandardLayoutWrapper>;
 
   return (
-    <div className={MGR.page}>
-      <div>
-        <h1 className={MGR.h1}>Opérations</h1>
-        <p className={MGR.muted}>{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — Vue lecture seule</p>
-      </div>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Opérations"
+        subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — Vue lecture seule`}
+      />
 
       {/* Fleet overview — synchronisé véhicules + affectations */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Au garage" value={fleetStats.auGarage} icon={Truck} />
-        <KpiCard label="Affectés" value={fleetStats.affectes} icon={Bus} />
-        <KpiCard label="En route" value={fleetStats.enRoute} icon={MapPin} />
-        <KpiCard label="En approche" value={fleetStats.enApproche} icon={Bus} />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <MetricCard label="Au garage" value={fleetStats.auGarage} icon={Truck} />
+        <MetricCard label="Affectés" value={fleetStats.affectes} icon={Bus} />
+        <MetricCard label="En route" value={fleetStats.enRoute} icon={MapPin} />
+        <MetricCard label="En approche" value={fleetStats.enApproche} icon={Bus} />
       </div>
 
       {/* Date controls + Departures table */}
@@ -400,23 +403,23 @@ export default function ManagerOperationsPage() {
         {departures.length === 0 ? (
           <EmptyState message={`Aucun départ planifié pour cette date.`} />
         ) : (
-          <div className={MGR.table.wrapper}>
-            <table className={MGR.table.base}>
-              <thead className={MGR.table.head}>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className={MGR.table.th}>Itinéraire</th>
-                  <th className={MGR.table.th}>Heure</th>
-                  <th className={MGR.table.thRight}>Réservés</th>
-                  <th className={MGR.table.thRight}>Embarqués</th>
-                  <th className={MGR.table.thRight}>Absents</th>
-                  <th className={MGR.table.thRight}>Remplissage</th>
-                  <th className={MGR.table.th}>Statut</th>
-                  <th className={MGR.table.th}>Véhicule</th>
-                  <th className={MGR.table.th}>Chauffeur</th>
-                  <th className={MGR.table.th}>Affectation</th>
+                  <th className={table.th}>Itinéraire</th>
+                  <th className={table.th}>Heure</th>
+                  <th className={table.thRight}>Réservés</th>
+                  <th className={table.thRight}>Embarqués</th>
+                  <th className={table.thRight}>Absents</th>
+                  <th className={table.thRight}>Remplissage</th>
+                  <th className={table.th}>Statut</th>
+                  <th className={table.th}>Véhicule</th>
+                  <th className={table.th}>Chauffeur</th>
+                  <th className={table.th}>Affectation</th>
                 </tr>
               </thead>
-              <tbody className={MGR.table.body}>
+              <tbody className={table.body}>
                 {departures.map((d) => {
                   const pct = d.capacity ? Math.round((d.embarked / d.capacity) * 100) : 0;
                   const sc = STATUS_CONFIG[d.status];
@@ -425,23 +428,23 @@ export default function ManagerOperationsPage() {
                   const driverDisplay = aff ? (aff.driverName || "—") : (d.driver || "—");
                   const isActioning = actioningKey === d.key;
                   return (
-                    <tr key={d.key} className={MGR.table.row}>
-                      <td className={MGR.table.td}>{d.departure} → {d.arrival}</td>
-                      <td className={MGR.table.td}>{d.heure}</td>
-                      <td className={MGR.table.tdRight}>{d.booked}</td>
-                      <td className={MGR.table.tdRight}>{d.embarked}</td>
-                      <td className={MGR.table.tdRight}>{d.absent}</td>
-                      <td className={MGR.table.tdRight}>
+                    <tr key={d.key} className={tableRowClassName()}>
+                      <td className={table.td}>{d.departure} → {d.arrival}</td>
+                      <td className={table.td}>{d.heure}</td>
+                      <td className={table.tdRight}>{d.booked}</td>
+                      <td className={table.tdRight}>{d.embarked}</td>
+                      <td className={table.tdRight}>{d.absent}</td>
+                      <td className={table.tdRight}>
                         <span className={pct < 30 ? "text-red-600 font-medium" : pct < 70 ? "text-amber-600" : "text-emerald-600 font-medium"}>
                           {pct}%
                         </span>
                       </td>
-                      <td className={MGR.table.td}>
-                        <StatusBadge color={sc.color}>{sc.label}</StatusBadge>
+                      <td className={table.td}>
+                        <StatusBadge status={sc.status}>{sc.label}</StatusBadge>
                       </td>
-                      <td className={MGR.table.td}>{vehicleDisplay}</td>
-                      <td className={MGR.table.td}>{driverDisplay}</td>
-                      <td className={MGR.table.td}>
+                      <td className={table.td}>{vehicleDisplay}</td>
+                      <td className={table.td}>{driverDisplay}</td>
+                      <td className={table.td}>
                         {!aff ? (
                           <button
                             type="button"
@@ -550,6 +553,6 @@ export default function ManagerOperationsPage() {
           </div>
         </div>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import UploadImageCloudinary from "@/shared/components/UploadImageCloudinary";
 import { Image as ImageIcon, Trash2 } from "lucide-react";
 
@@ -47,14 +48,15 @@ const BibliothequeImagesPage: React.FC = () => {
   ========================= */
   if (!effectiveCompanyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
+        <PageHeader title="Bibliothèque d'images" />
         <div className="rounded-lg border p-6 bg-yellow-50 text-yellow-800">
           <p className="font-medium">Accès non autorisé</p>
           <p className="text-sm mt-1">
             Aucune compagnie associée à votre compte ou à l'URL.
           </p>
         </div>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
@@ -131,10 +133,10 @@ const BibliothequeImagesPage: React.FC = () => {
      UI
   ========================= */
   return (
-    <div className="p-6">
+    <StandardLayoutWrapper>
+      <PageHeader title="Bibliothèque d'images" icon={ImageIcon} />
       {/* Header avec badge mode inspection */}
       <div className="mb-6 flex items-center gap-3 flex-wrap">
-        <ImageIcon className="text-orange-600" />
         <h1 className="text-2xl font-bold">
           Bibliothèque d’images de la compagnie
         </h1>
@@ -183,7 +185,7 @@ const BibliothequeImagesPage: React.FC = () => {
           isReadOnly={isInspectionMode}
         />
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

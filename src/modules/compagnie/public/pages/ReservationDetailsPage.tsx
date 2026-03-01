@@ -1,23 +1,26 @@
 // src/pages/ReservationDetailsPage.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
-  doc, onSnapshot, getDoc,
-  collection, getDocs, query, where,
-  collectionGroup, documentId, DocumentReference, limit
+  doc, onSnapshot, getDoc, getDocs, collection, query, where,
+  updateDoc, serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { resolveReservationById, resolveReservationByToken } from '../utils/resolveReservation';
+import { SectionCard, StatusBadge } from '@/ui';
 import {
   ChevronLeft, MapPin, Clock, Calendar, CheckCircle, XCircle, Loader2,
-  CreditCard, Ticket, Heart, ChevronRight, Hash, Upload, ShieldCheck
+  CreditCard, Ticket, Heart, ChevronRight, Hash, Upload, ShieldCheck, Shield
 } from 'lucide-react';
+import type { DocumentReference } from 'firebase/firestore';
+import TicketOnline from '../components/ticket/TicketOnline';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { motion, AnimatePresence } from 'framer-motion';
 import Confetti from 'react-confetti';
 import { useWindowSize } from '@react-hook/window-size';
 import { hexToRgba, safeTextColor } from '@/utils/color';
-import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import type { ReservationStatus } from '@/types/reservation';
 import { showTicketDirect as showTicketDirectUtil, canViewReceiptPage } from '@/utils/reservationStatusUtils';
 
@@ -49,6 +52,7 @@ interface Reservation {
   validatedAt?: any;
   paymentMethodLabel?: string;
   reason?: string;
+  refusalReason?: string;
 
   companyId: string;
   companySlug: string;
@@ -123,57 +127,19 @@ const getPaymentChip = (label?: string) =>
 const formatCompactDate = (dateString: string) =>
   new Date(dateString).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
 
-async function resolveById(slug: string, reservationId: string) {
-  const cSnap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)));
-  if (cSnap.empty) throw new Error('Compagnie introuvable');
-  const companyId = cSnap.docs[0].id;
-
-  const cg = await getDocs(
-    query(collectionGroup(db, 'reservations'), where(documentId(), '==', reservationId))
-  );
-  for (const d of cg.docs) {
-    if (d.ref.path.includes(`/companies/${companyId}/`)) {
-      const agencyId = d.ref.parent.parent?.id as string;
-      return { ref: d.ref, companyId, agencyId };
-    }
-  }
-
-  const aSnap = await getDocs(collection(db, 'companies', companyId, 'agences'));
-  for (const a of aSnap.docs) {
-    const rRef = doc(db, 'companies', companyId, 'agences', a.id, 'reservations', reservationId);
-    const rSnap = await getDoc(rRef);
-    if (rSnap.exists()) return { ref: rRef, companyId, agencyId: a.id };
-  }
-  throw new Error('Réservation introuvable');
-}
-
-async function resolveByToken(slug: string, token: string) {
-  const qRef = query(
-    collectionGroup(db, 'reservations'),
-    where('companySlug', '==', slug),
-    where('publicToken', '==', token),
-    limit(1)
-  );
-  const snap = await getDocs(qRef);
-  if (snap.empty) throw new Error('Réservation introuvable');
-  const d = snap.docs[0];
-  const parts = d.ref.path.split('/');
-  return { ref: d.ref, companyId: parts[1], agencyId: parts[3], hardId: d.id };
-}
-
 /* ====== Configuration des étapes ====== */
 const STEPS_CONFIG = [
   {
     key: 'verification',
-    label: 'Preuve envoyée',
-    description: 'Preuve envoyée. En attente de vérification par la compagnie.',
+    label: 'En attente de validation',
+    description: 'En attente de validation.',
     icon: <Upload className="h-4 w-4" />,
     isFinal: false
   },
   {
     key: 'confirme',
-    label: 'Paiement confirmé',
-    description: 'Paiement confirmé. Votre billet est disponible.',
+    label: 'Réservation confirmée',
+    description: 'Réservation confirmée. Votre billet est disponible.',
     icon: <ShieldCheck className="h-4 w-4" />,
     isFinal: true
   }
@@ -186,15 +152,22 @@ const ReservationDetailsPage: React.FC = () => {
   const money = useFormatCurrency();
   const qs = new URLSearchParams(location.search);
   const token = qs.get('r') || '';
-  const { companyInfo: locationCompanyInfo } = (location.state as any) || {};
+  const reservationRef = useRef<DocumentReference | null>(null);
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [agencyName, setAgencyName] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(locationCompanyInfo || null);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
   const [width, height] = useWindowSize();
+
+  /* Payment / proof section (en_attente_paiement only) */
+  const [paymentMethods, setPaymentMethods] = useState<Record<string, { url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string }>>({});
+  const [paymentMethodKey, setPaymentMethodKey] = useState<string | null>(null);
+  const [proofMessage, setProofMessage] = useState('');
+  const [proofUploading, setProofUploading] = useState(false);
+  const [proofError, setProofError] = useState<string | null>(null);
 
   const fallbackColor = '#3b82f6';
   const primaryColor = companyInfo?.couleurPrimaire || companyInfo?.primaryColor || fallbackColor;
@@ -217,24 +190,25 @@ const ReservationDetailsPage: React.FC = () => {
     (async () => {
       try {
         setLoading(true);
-        console.log(`🔍 Recherche réservation: ID=${id}, token=${token}, slug=${slug}`);
+        setError(null);
 
-        let ref: DocumentReference, hardId = id || '';
-        const st: any = location.state || {};
+        let ref: DocumentReference;
+        let hardId = id || '';
 
         if (id) {
-          if (st?.companyId && st?.agencyId) {
-            ref = doc(db, 'companies', st.companyId, 'agences', st.agencyId, 'reservations', id);
-          } else {
-            const r = await resolveById(slug, id);
-            ref = r.ref;
-          }
-        } else {
-          const r = await resolveByToken(slug, token!);
+          const r = await resolveReservationById(slug, id);
+          ref = r.ref;
+        } else if (token) {
+          const r = await resolveReservationByToken(slug, token);
           ref = r.ref;
           hardId = r.hardId;
+        } else {
+          setError('Paramètres manquants');
+          setLoading(false);
+          return;
         }
 
+        reservationRef.current = ref;
         unsub = onSnapshot(ref, async (snap) => {
           if (!snap.exists()) { 
             // 🔴 CORRECTION CRITIQUE : Nettoyage forcé si réservation introuvable
@@ -255,11 +229,12 @@ const ReservationDetailsPage: React.FC = () => {
           
           // Normalisation des anciens statuts vers les nouveaux (ALIGNÉ AVEC ADMIN)
           const normalizedStatus = (() => {
-            const s = data.statut?.toLowerCase() || '';
+            const s = (data.statut ?? '').toString().toLowerCase();
             if (['preuve_recue', 'verif', 'vérif'].some(k => s.includes(k))) return 'verification';
             if (['pay', 'confirm', 'valid'].some(k => s.includes(k))) return 'confirme';
             if (['refuse', 'refusé', 'reject', 'rejeté'].some(k => s.includes(k))) return 'refuse';
             if (['annule', 'cancel', 'cancelled'].some(k => s.includes(k))) return 'annule';
+            if (s === 'en_attente_paiement' || s.includes('attente_paiement')) return 'en_attente_paiement' as ReservationStatus;
             return 'en_attente' as ReservationStatus;
           })();
 
@@ -300,30 +275,28 @@ const ReservationDetailsPage: React.FC = () => {
             } catch {}
           }
 
-          // Récupération des infos de la compagnie
-          if (!companyInfo) {
-            try {
-              const companyId = ref.path.split('/')[1];
-              const cSnap = await getDoc(doc(db, 'companies', companyId));
-              if (cSnap.exists()) {
-                const d = cSnap.data() as any;
-                setCompanyInfo({
-                  id: cSnap.id,
-                  name: d?.name || d?.nom,
-                  primaryColor: d?.primaryColor,
-                  secondaryColor: d?.secondaryColor,
-                  couleurPrimaire: d?.couleurPrimaire,
-                  logoUrl: d?.logoUrl
-                });
-              }
-            } catch {}
-          }
+          // Récupération des infos de la compagnie (toujours depuis Firestore, pas de state)
+          try {
+            const companyId = ref.path.split('/')[1];
+            const cSnap = await getDoc(doc(db, 'companies', companyId));
+            if (cSnap.exists()) {
+              const d = cSnap.data() as any;
+              setCompanyInfo({
+                id: cSnap.id,
+                name: d?.name || d?.nom,
+                primaryColor: d?.primaryColor,
+                secondaryColor: d?.secondaryColor,
+                couleurPrimaire: d?.couleurPrimaire,
+                logoUrl: d?.logoUrl
+              });
+            }
+          } catch {}
 
           setLoading(false);
 
           // Normalisation de l'URL si arrivé via token
           if (!id && hardId) {
-            const slugToUse = (location as any)?.state?.slug || finalReservation.companySlug || slug;
+            const slugToUse = finalReservation.companySlug || slug;
             window.history.replaceState({}, '', `/${slugToUse}/reservation/${hardId}`);
           }
         }, (e) => {
@@ -347,7 +320,7 @@ const ReservationDetailsPage: React.FC = () => {
         unsub(); 
       }
     };
-  }, [id, token, slug, location, companyInfo]);
+  }, [id, token, slug]);
 
   // 🎉 Confetti pour paiement confirmé
   useEffect(() => {
@@ -362,6 +335,73 @@ const ReservationDetailsPage: React.FC = () => {
     }
   }, [reservation?.statut, reservation?.id]);
 
+  /* Chargement des moyens de paiement (pour section preuve, en_attente_paiement uniquement) */
+  useEffect(() => {
+    if (!reservation?.companyId || reservation?.statut !== 'en_attente_paiement') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const pmSnap = await getDocs(
+          query(collection(db, 'paymentMethods'), where('companyId', '==', reservation.companyId))
+        );
+        if (cancelled) return;
+        const pms: Record<string, { url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string }> = {};
+        pmSnap.forEach((ds) => {
+          const d = ds.data() as any;
+          if (d.name) pms[d.name] = {
+            url: d.defaultPaymentUrl || '',
+            logoUrl: d.logoUrl || '',
+            ussdPattern: d.ussdPattern || '',
+            merchantNumber: d.merchantNumber || '',
+          };
+        });
+        setPaymentMethods(pms);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [reservation?.companyId, reservation?.statut]);
+
+  const submitProof = useCallback(async () => {
+    const ref = reservationRef.current;
+    if (!ref || !reservation) return;
+    if (!paymentMethodKey) {
+      setProofError('Sélectionnez un moyen de paiement');
+      return;
+    }
+    if ((proofMessage || '').trim().length < 4) {
+      setProofError('Indiquez la référence reçue (au moins 4 caractères)');
+      return;
+    }
+    setProofUploading(true);
+    setProofError(null);
+    try {
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        setProofError('Réservation introuvable.');
+        return;
+      }
+      const data = snap.data() as any;
+      const currentStatut = (data.statut || '').toLowerCase();
+      if (currentStatut !== 'en_attente_paiement') {
+        setProofError('Cette réservation a expiré ou a déjà été traitée. Créez une nouvelle réservation si besoin.');
+        return;
+      }
+      const inputReference = (proofMessage || '').trim();
+      await updateDoc(ref, {
+        statut: 'preuve_recue',
+        paymentReference: inputReference,
+        proofSubmittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setProofMessage('');
+      setProofError(null);
+    } catch (e: any) {
+      setProofError(e?.message || "L'envoi n'a pas abouti. Réessayez.");
+    } finally {
+      setProofUploading(false);
+    }
+  }, [reservation, paymentMethodKey, proofMessage]);
+
   /* ===== Décision d'affichage (utilitaire partagé) ===== */
   const isTicketAvailable = showTicketDirectUtil(reservation);
   const canViewReceipt = canViewReceiptPage(reservation);
@@ -373,32 +413,23 @@ const ReservationDetailsPage: React.FC = () => {
     : -1;
 
   const stepDescriptions: Record<string, string> = {
-    en_attente: 'Veuillez envoyer votre preuve de paiement.',
-    verification: 'Preuve envoyée. En attente de vérification par la compagnie.',
-    confirme: 'Paiement confirmé. Votre billet est disponible.',
+    en_attente: 'Veuillez envoyer votre justificatif de paiement.',
+    verification: 'En attente de validation.',
+    confirme: 'Réservation confirmée. Votre billet est disponible.',
     refuse: 'Cette réservation a été refusée par la compagnie.',
     annule: 'Cette réservation a été annulée.'
   };
 
-  /* 🚀 Redirection automatique si billet disponible */
+  /* 🚀 Redirection automatique si billet disponible (URL seule, pas de state) */
   useEffect(() => {
     if (!isTicketAvailable || !reservation) return;
-    
-    // Vérification supplémentaire pour éviter les boucles
     const currentPath = window.location.pathname;
-    const targetPath = `/${(location as any)?.state?.slug || reservation.companySlug || slug}/receipt/${reservation.id}`;
-    
+    const slugToUse = reservation.companySlug || slug;
+    const targetPath = `/${slugToUse}/receipt/${reservation.id}`;
     if (currentPath !== targetPath) {
-      console.log('🚀 Redirection automatique vers le billet');
-      navigate(targetPath, {
-        replace: true,
-        state: { 
-          reservation: { ...reservation, agencyNom: agencyName, canal }, 
-          companyInfo 
-        }
-      });
+      navigate(targetPath, { replace: true });
     }
-  }, [isTicketAvailable, reservation, agencyName, companyInfo, canal, slug, location, navigate]);
+  }, [isTicketAvailable, reservation, slug, navigate]);
 
   // Méthode de paiement affichée
   const paymentLabel =
@@ -450,16 +481,14 @@ const ReservationDetailsPage: React.FC = () => {
   if (error || !reservation) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4" style={{ background: '#f8fafc' }}>
-        <div className="bg-white rounded-xl shadow-sm p-6 max-w-md w-full text-center border border-gray-100">
-          <XCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Réservation introuvable</h3>
-          <p className="text-gray-600 mb-5">
+        <SectionCard title="Réservation introuvable" icon={XCircle} className="max-w-md w-full shadow-md">
+          <p className="text-gray-600 mb-5 text-center">
             {error || 'Cette réservation a expiré ou a été supprimée.'}
           </p>
-          <div className="space-y-3">
+          <div className="space-y-2">
             <button 
               onClick={handleNewReservation}
-              className="w-full px-5 py-3 rounded-lg text-sm font-medium shadow-sm"
+              className="w-full px-5 py-3 rounded-lg text-sm font-semibold shadow-sm"
               style={{ 
                 backgroundColor: primaryColor, 
                 color: safeTextColor(primaryColor) 
@@ -469,7 +498,7 @@ const ReservationDetailsPage: React.FC = () => {
             </button>
             <button 
               onClick={handleGoBack}
-              className="w-full px-5 py-2.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+              className="w-full px-5 py-2.5 rounded-lg text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 transition-colors"
             >
               Retour
             </button>
@@ -477,7 +506,7 @@ const ReservationDetailsPage: React.FC = () => {
           <p className="text-xs text-gray-500 mt-4 pt-4 border-t border-gray-200">
             💡 Conseil : Videz le cache de votre navigateur si le problème persiste.
           </p>
-        </div>
+        </SectionCard>
       </div>
     );
   }
@@ -546,13 +575,8 @@ const ReservationDetailsPage: React.FC = () => {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.05 }}
-            className="rounded-xl p-4 border shadow-xs bg-white"
-            style={{ borderColor: 'rgba(0,0,0,0.06)' }}
           >
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="text-sm font-semibold text-gray-800">Suivi de paiement</h2>
-              {lastUpdated && <span className="text-xs text-gray-500">{lastUpdated}</span>}
-            </div>
+            <SectionCard title="Suivi de paiement" icon={Upload} right={lastUpdated ? <span className="text-xs text-gray-500">{lastUpdated}</span> : undefined} className="shadow-md">
 
             <div className="relative">
               <div className="absolute top-3 left-0 right-0 h-1 bg-gray-200 rounded-full z-0" />
@@ -607,6 +631,7 @@ const ReservationDetailsPage: React.FC = () => {
                 })}
               </div>
             </div>
+            </SectionCard>
           </motion.div>
         )}
 
@@ -615,20 +640,9 @@ const ReservationDetailsPage: React.FC = () => {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
-          className="p-4 rounded-xl flex items-start gap-3 border bg-white"
-          style={{
-            borderColor:
-              reservation.statut === 'confirme'
-                ? hexToRgba('#10b981', 0.2)
-                : reservation.statut === 'verification'
-                ? hexToRgba('#7c3aed', 0.2)
-                : reservation.statut === 'refuse'
-                ? hexToRgba('#ef4444', 0.2)
-                : reservation.statut === 'annule'
-                ? hexToRgba('#9ca3af', 0.2)
-                : 'rgba(0,0,0,0.06)'
-          }}
         >
+          <SectionCard title="Statut" icon={CheckCircle} className="shadow-md">
+          <div className="flex items-start gap-3">
           <div
             className="p-2 rounded-lg flex-shrink-0"
             style={{
@@ -652,17 +666,17 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
           <div className="flex-1">
             <p className="font-medium text-sm mb-1">
-              {reservation.statut === 'confirme' ? 'Paiement confirmé' :
-               reservation.statut === 'refuse' ? 'Refusée par la compagnie' :
+              {reservation.statut === 'confirme' ? 'Réservation confirmée' :
+               reservation.statut === 'refuse' ? 'Refusée' :
                reservation.statut === 'annule' ? 'Annulée' :
-               reservation.statut === 'verification' ? 'En vérification' :
-               'En attente de preuve'}
+               reservation.statut === 'verification' ? 'En attente de validation' :
+               'En attente de paiement'}
             </p>
             <p className="text-xs text-gray-600">
               {stepDescriptions[reservation.statut] || stepDescriptions.en_attente}
-              {reservation.reason && reservation.statut === 'refuse' && (
+              {(reservation.refusalReason || reservation.reason) && reservation.statut === 'refuse' && (
                 <span className="block mt-1 text-red-600 font-medium">
-                  Raison : {reservation.reason}
+                  Raison : {reservation.refusalReason || reservation.reason}
                 </span>
               )}
             </p>
@@ -679,25 +693,80 @@ const ReservationDetailsPage: React.FC = () => {
                 <span className="font-semibold">Agence :</span> {agencyName}
               </p>
             )}
+            {reservation.statut === 'confirme' && (
+              <p className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-500 flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-gray-400" />
+                Réservation confirmée · Support disponible
+              </p>
+            )}
           </div>
+          </div>
+          </SectionCard>
         </motion.div>
 
-        {/* Détails du voyage */}
+        {/* Section paiement / justificatif (en_attente_paiement uniquement) */}
+        {reservation.canal === 'en_ligne' && reservation.statut === 'en_attente_paiement' && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }}>
+            <SectionCard title="Justificatif de paiement" icon={CreditCard} className="shadow-md">
+              <p className="text-sm text-gray-600 mb-3">Choisissez un moyen de paiement, effectuez le paiement, puis indiquez la référence reçue.</p>
+              {proofError && (
+                <div className="mb-3 p-2 rounded-lg bg-red-50 text-red-800 text-sm">{proofError}</div>
+              )}
+              <div className="flex flex-wrap gap-2 mb-3">
+                {Object.entries(paymentMethods).map(([key, method]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setPaymentMethodKey(key);
+                      if (method.url) {
+                        try { new URL(method.url); window.open(method.url, '_blank', 'noopener,noreferrer'); } catch {}
+                      } else if (method.ussdPattern && method.merchantNumber) {
+                        const ussd = method.ussdPattern.replace('MERCHANT', method.merchantNumber || '').replace('AMOUNT', String(reservation.montant || 0));
+                        window.location.href = `tel:${encodeURIComponent(ussd)}`;
+                      }
+                    }}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                      paymentMethodKey === key ? 'border-gray-400 bg-gray-100' : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    {key}
+                  </button>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-gray-700">Référence reçue (SMS / reçu)</label>
+                <input
+                  type="text"
+                  value={proofMessage}
+                  onChange={(e) => setProofMessage(e.target.value)}
+                  placeholder="Ex. 12345678"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={submitProof}
+                  disabled={proofUploading || !paymentMethodKey || proofMessage.trim().length < 4}
+                  className="w-full py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                  style={{ backgroundColor: primaryColor, color: safeTextColor(primaryColor) }}
+                >
+                  {proofUploading ? 'Envoi…' : 'Envoyer le justificatif'}
+                </button>
+              </div>
+              <p className="mt-3 text-xs text-gray-500 flex items-center gap-1">
+                <Shield className="h-3.5 w-3.5" /> Paiement sécurisé · Support disponible
+              </p>
+            </SectionCard>
+          </motion.div>
+        )}
+
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.22 }}
-          className="rounded-xl shadow-xs border overflow-hidden bg-white"
-          style={{ borderColor: 'rgba(0,0,0,0.06)' }}
         >
-          <div className="p-4 border-b" style={{ borderColor: 'rgba(0,0,0,0.06)' }}>
-            <h2 className="font-semibold text-sm flex items-center gap-2" style={{ color: '#111827' }}>
-              <Ticket className="h-4 w-4" style={{ color: primaryColor }} />
-              Détails du voyage
-            </h2>
-          </div>
-
-          <div className="p-4 space-y-4">
+          <SectionCard title="Détails du voyage" icon={Ticket} className="shadow-md">
+          <div className="space-y-4">
             <div className="flex items-start gap-3">
               <div className="p-1.5 rounded-lg bg-gray-100 flex-shrink-0">
                 <MapPin className="h-4 w-4 text-gray-600" />
@@ -744,9 +813,7 @@ const ReservationDetailsPage: React.FC = () => {
                   <p className="text-sm font-medium text-gray-900">
                     {money(reservation.montant)}
                   </p>
-                  <span className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">
-                    {paymentChip.text}
-                  </span>
+                  <StatusBadge status="neutral">{paymentChip.text}</StatusBadge>
                 </div>
               </div>
             </div>
@@ -761,6 +828,35 @@ const ReservationDetailsPage: React.FC = () => {
               </div>
             )}
           </div>
+          </SectionCard>
+        </motion.div>
+
+        {/* Billet toujours visible (QR actif ou "En attente de validation") */}
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.28 }}>
+          <SectionCard title="Votre billet" icon={Ticket} className="shadow-md">
+            <TicketOnline
+              companyName={companyInfo?.name || reservation.companyName || 'Compagnie'}
+              logoUrl={companyInfo?.logoUrl}
+              primaryColor={primaryColor}
+              secondaryColor={secondaryColor}
+              agencyName={agencyName}
+              receiptNumber={reservation.referenceCode || reservation.id}
+              statut={reservation.statut}
+              statusLabel={reservation.statut === 'confirme' ? 'Réservation confirmée' : 'En attente de validation'}
+              nomClient={reservation.nomClient}
+              telephone={reservation.telephone}
+              depart={reservation.depart}
+              arrivee={reservation.arrivee}
+              date={reservation.date}
+              heure={reservation.heure}
+              seats={reservation.seatsGo ?? 1}
+              canal={reservation.canal}
+              montant={reservation.montant}
+              qrValue={`${typeof window !== 'undefined' ? window.location.origin : ''}/r/${encodeURIComponent(reservation.referenceCode || reservation.id)}`}
+              emissionDate={new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+              paymentMethod={paymentLabel}
+            />
+          </SectionCard>
         </motion.div>
 
         <motion.div 
@@ -789,13 +885,8 @@ const ReservationDetailsPage: React.FC = () => {
             <>
               <button
                 onClick={() => {
-                  const slugToUse = (location as any)?.state?.slug || reservation.companySlug || slug;
-                  navigate(`/${slugToUse}/receipt/${reservation.id}`, {
-                    state: { 
-                      reservation: { ...reservation, agencyNom: agencyName, canal }, 
-                      companyInfo 
-                    }
-                  });
+                  const slugToUse = reservation.companySlug || slug;
+                  navigate(`/${slugToUse}/receipt/${reservation.id}`, { replace: false });
                 }}
                 className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${
                   canViewReceipt ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'

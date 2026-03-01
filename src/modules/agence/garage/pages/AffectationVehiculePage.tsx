@@ -11,6 +11,8 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, table, EmptyState } from "@/ui";
+import { Truck } from "lucide-react";
 
 /* ===================== Types ===================== */
 type WeeklyTrip = {
@@ -280,9 +282,9 @@ const AffectationVehiculePage: React.FC = () => {
   if (!user) return null;
 
   return (
-    <div className="min-h-screen" style={{ background: theme.bg }}>
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        <div className="bg-white rounded-xl border p-4 shadow-sm space-y-3">
+    <StandardLayoutWrapper>
+      <PageHeader title="Affectation véhicule" subtitle={agencies.find((a) => a.id === (selectedAgencyId || userAgencyId))?.nom} icon={Truck} primaryColorVar={theme.primary} />
+      <SectionCard title="Agence et date">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <span className="font-semibold" style={{ color: theme.secondary }}>
@@ -311,8 +313,7 @@ const AffectationVehiculePage: React.FC = () => {
             <span className="font-semibold" style={{ color: theme.secondary }}>
               Date :
             </span>
-            <button
-              className="px-2 py-1 rounded border"
+            <ActionButton variant="secondary" size="sm"
               onClick={() => {
                 const d = new Date(selectedDate);
                 d.setDate(d.getDate() - 1);
@@ -320,15 +321,14 @@ const AffectationVehiculePage: React.FC = () => {
               }}
             >
               ◀ Jour précédent
-            </button>
+            </ActionButton>
             <input
               type="date"
               className="border rounded px-3 py-1"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
             />
-            <button
-              className="px-2 py-1 rounded border"
+            <ActionButton variant="secondary" size="sm"
               onClick={() => {
                 const d = new Date(selectedDate);
                 d.setDate(d.getDate() + 1);
@@ -336,7 +336,7 @@ const AffectationVehiculePage: React.FC = () => {
               }}
             >
               Jour suivant ▶
-            </button>
+            </ActionButton>
           </div>
 
           <div className="font-semibold">Sélectionner un trajet</div>
@@ -395,7 +395,6 @@ const AffectationVehiculePage: React.FC = () => {
               )}
             </div>
           )}
-        </div>
 
         {/* Tableau d’affectation pour (trajet sélectionné + toutes les heures) OU toutes les lignes du jour */}
         <div className="bg-white rounded-xl border shadow-sm">
@@ -474,8 +473,8 @@ const AffectationVehiculePage: React.FC = () => {
             Astuce : si vous ne sélectionnez pas d’heure, le tableau affiche toutes les rotations du jour pour affecter en masse.
           </div>
         </div>
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

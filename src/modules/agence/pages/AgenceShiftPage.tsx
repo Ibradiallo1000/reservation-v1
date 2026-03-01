@@ -1,6 +1,6 @@
 // src/pages/AgenceShiftPage.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams, Link, useNavigate } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   addDoc,
   collection,
@@ -13,6 +13,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useActiveShift } from "@/modules/agence/hooks/useActiveShift";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
+import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge, ActionButton } from "@/ui";
 
 const AgenceShiftPage: React.FC = () => {
   const navigate = useNavigate();
@@ -136,21 +137,23 @@ const AgenceShiftPage: React.FC = () => {
   }, [params, activeShift, loading, openShift, closeShift]);
 
   return (
-    <div className="p-6 space-y-6">
+    <StandardLayoutWrapper>
       {!isOnline && (
         <PageOfflineState message="Connexion instable: les actions d'ouverture/clôture peuvent échouer." />
       )}
       {error && (
         <PageErrorState message={error} onRetry={() => setError(null)} />
       )}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Gestion du poste</h1>
-        <Link to="/agence/guichet" className="px-3 py-2 rounded-lg border">
-          Retour guichet
-        </Link>
-      </div>
+      <PageHeader
+        title="Gestion du poste"
+        right={
+          <ActionButton variant="secondary" onClick={() => navigate("/agence/guichet")}>
+            Retour guichet
+          </ActionButton>
+        }
+      />
 
-      <div className="rounded-xl border p-4 space-y-3">
+      <SectionCard title="Poste guichet">
         <div className="text-sm text-gray-600">
           Guichetier :{" "}
           <strong>{user?.displayName || user?.email}</strong> (
@@ -160,36 +163,27 @@ const AgenceShiftPage: React.FC = () => {
         <div className="text-sm">
           État actuel :{" "}
           {activeShift ? (
-            <span className="text-green-700 font-semibold">
-              Poste actif (#{activeShift.id?.slice?.(0, 6)})
-            </span>
+            <StatusBadge status="active">Poste actif (#{activeShift.id?.slice?.(0, 6)})</StatusBadge>
           ) : (
-            <span className="text-amber-700 font-semibold">
-              Aucun poste ouvert
-            </span>
+            <StatusBadge status="pending">Aucun poste ouvert</StatusBadge>
           )}
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <button
+          <ActionButton
             disabled={loading || !!activeShift || !canOperate}
             onClick={openShift}
-            className={`px-4 py-2 rounded-lg border ${
-              activeShift ? "opacity-50 cursor-not-allowed" : ""
-            }`}
+            variant="primary"
           >
             Activer le poste
-          </button>
-
-          <button
+          </ActionButton>
+          <ActionButton
             disabled={loading || !activeShift || !canOperate}
             onClick={closeShift}
-            className={`px-4 py-2 rounded-lg border ${
-              !activeShift ? "opacity-50 cursor-not-allowed" : ""
-            }`}
+            variant="secondary"
           >
             Clôturer le poste
-          </button>
+          </ActionButton>
         </div>
 
         {!canOperate && (
@@ -197,8 +191,8 @@ const AgenceShiftPage: React.FC = () => {
             Impossible d’opérer : informations utilisateur incomplètes.
           </div>
         )}
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

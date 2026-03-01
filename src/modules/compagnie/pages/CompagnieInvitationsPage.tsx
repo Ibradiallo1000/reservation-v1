@@ -11,7 +11,7 @@ import {
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
@@ -44,7 +44,6 @@ const CompagnieInvitationsPage: React.FC = () => {
   const { user, company } = useAuth();
   const theme = useCompanyTheme(company);
   const isOnline = useOnlineStatus();
-  const { setHeader, resetHeader } = usePageHeader();
 
   const [agences, setAgences] = useState<Agence[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -57,20 +56,6 @@ const CompagnieInvitationsPage: React.FC = () => {
   const [agencyId, setAgencyId] = useState("");
 
   const companyId = user?.companyId;
-
-  /* =========================
-     Header
-  ========================= */
-  useEffect(() => {
-    setHeader({
-      title: "Invitations",
-      subtitle: "Inviter des gérants d’agence",
-      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
-      fg: "#fff",
-    });
-    return () => resetHeader();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme.colors.primary, theme.colors.secondary]);
 
   /* =========================
      Charger agences
@@ -178,7 +163,8 @@ const CompagnieInvitationsPage: React.FC = () => {
      Render
   ========================= */
   return (
-    <div className="max-w-7xl mx-auto p-6 space-y-6">
+    <StandardLayoutWrapper>
+      <PageHeader title="Invitations" subtitle="Inviter des gérants d'agence" />
       {!isOnline && (
         <PageOfflineState message="Connexion instable: les invitations peuvent être retardées." />
       )}
@@ -292,7 +278,7 @@ const CompagnieInvitationsPage: React.FC = () => {
           </ul>
         )}
       </div>
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

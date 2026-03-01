@@ -11,7 +11,12 @@ import { allocateCourierAgentCode } from "@/modules/logistics/services/allocateC
 import {
   Users, UserPlus, X, RotateCcw, Loader2, Copy, Check, RefreshCw,
 } from "lucide-react";
-import { SectionCard, StatusBadge, EmptyState, KpiCard, HelpTip, ConfirmModal, MGR } from "./ui";
+import { HelpTip, ConfirmModal } from "./ui";
+import {
+  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, ActionButton, table, tableRowClassName, typography,
+} from "@/ui";
+
+const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 dark:border-gray-600 dark:bg-gray-800";
 
 const ROLE_LABELS: Record<string, string> = {
   chefAgence: "Chef d'agence",
@@ -302,17 +307,18 @@ export default function ManagerTeamPage() {
     return { total, active, inactive: total - active };
   }, [agents]);
 
-  if (loading) return <div className={MGR.page}><p className={MGR.muted}>Chargement de l'équipe…</p></div>;
+  if (loading) return <StandardLayoutWrapper><p className={typography.muted}>Chargement de l'équipe…</p></StandardLayoutWrapper>;
 
   return (
-    <div className={MGR.page}>
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className={MGR.h1}>Équipe</h1>
-        <button onClick={() => { setShowForm(!showForm); setLastUrl(""); }}
-          className={showForm ? MGR.btnSecondary : MGR.btnPrimary}>
-          {showForm ? <><X className="w-4 h-4" /> Fermer</> : <><UserPlus className="w-4 h-4" /> Ajouter un agent</>}
-        </button>
-      </div>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Équipe"
+        right={
+          <ActionButton onClick={() => { setShowForm(!showForm); setLastUrl(""); }} variant={showForm ? "secondary" : "primary"} size="sm">
+            {showForm ? <><X className="w-4 h-4" /> Fermer</> : <><UserPlus className="w-4 h-4" /> Ajouter un agent</>}
+          </ActionButton>
+        }
+      />
 
       {/* ── Feedback message ── */}
       {message && (
@@ -330,34 +336,34 @@ export default function ManagerTeamPage() {
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Nom complet *</label>
               <input value={formName} onChange={(e) => setFormName(e.target.value)}
-                placeholder="Prénom Nom" className={MGR.input + " w-full"} />
+                placeholder="Prénom Nom" className={inputClass} />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Email *</label>
               <input value={formEmail} onChange={(e) => setFormEmail(e.target.value)}
-                type="email" placeholder="email@exemple.com" className={MGR.input + " w-full"} />
+                type="email" placeholder="email@exemple.com" className={inputClass} />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Téléphone</label>
               <input value={formPhone} onChange={(e) => setFormPhone(e.target.value)}
-                placeholder="Optionnel" className={MGR.input + " w-full"} />
+                placeholder="Optionnel" className={inputClass} />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">
                 Rôle <HelpTip text="Le rôle détermine les permissions de l'agent dans l'application. Le guichetier vend les billets, le comptable valide les rapports, etc." />
               </label>
               <select value={formRole} onChange={(e) => setFormRole(e.target.value as Role)}
-                className={MGR.input + " w-full"}>
+                className={inputClass}>
                 {assignableRoles.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
               {isChefAgence && <p className="text-xs text-gray-400 col-span-full">Seuls les administrateurs de la compagnie peuvent attribuer le rôle Chef d'agence.</p>}
             </div>
           </div>
           <div className="mt-4 flex items-center gap-3">
-            <button onClick={handleAdd} disabled={busy === "add"} className={MGR.btnPrimary}>
+            <ActionButton onClick={handleAdd} disabled={busy === "add"} variant="primary">
               {busy === "add" ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
               Envoyer l'invitation
-            </button>
+            </ActionButton>
           </div>
           {lastUrl && (
             <div className="mt-3 p-3 rounded-lg bg-gray-50 border border-gray-200">
@@ -375,9 +381,9 @@ export default function ManagerTeamPage() {
 
       {/* ── Summary KPIs ── */}
       <div className="grid grid-cols-3 gap-4">
-        <KpiCard label="Total" value={summary.total} />
-        <KpiCard label="Actifs" value={summary.active} accent="text-emerald-700" />
-        <KpiCard label="Inactifs" value={summary.inactive} accent="text-red-700" />
+        <MetricCard label="Total" value={summary.total} />
+        <MetricCard label="Actifs" value={summary.active} valueColorVar="#059669" />
+        <MetricCard label="Inactifs" value={summary.inactive} valueColorVar="#b91c1c" />
       </div>
 
       {/* ── Staff list ── */}
@@ -385,91 +391,91 @@ export default function ManagerTeamPage() {
         {agents.length === 0 ? (
           <EmptyState message="Aucun membre dans l'équipe." />
         ) : (
-          <div className={MGR.table.wrapper}>
-            <table className={MGR.table.base}>
-              <thead className={MGR.table.head}>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className={MGR.table.th}>Nom</th>
-                  <th className={MGR.table.th}>Rôle</th>
-                  <th className={MGR.table.th}>Code</th>
-                  <th className={MGR.table.th}>Contact</th>
-                  <th className={MGR.table.th}>Statut</th>
-                  <th className={MGR.table.thRight}>Actions</th>
+                  <th className={table.th}>Nom</th>
+                  <th className={table.th}>Rôle</th>
+                  <th className={table.th}>Code</th>
+                  <th className={table.th}>Contact</th>
+                  <th className={table.th}>Statut</th>
+                  <th className={table.thRight}>Actions</th>
                 </tr>
               </thead>
-              <tbody className={MGR.table.body}>
+              <tbody className={table.body}>
                 {agents.map((a) => (
-                  <tr key={a.id} className={MGR.table.row}>
+                  <tr key={a.id} className={tableRowClassName()}>
                     {editId === a.id ? (
                       <>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>
                           <input value={editName} onChange={(e) => setEditName(e.target.value)}
-                            className={MGR.input + " w-full text-sm"} />
+                            className={inputClass + " text-sm"} />
                         </td>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>
                           <select value={editRole} onChange={(e) => setEditRole(e.target.value as Role)}
-                            className={MGR.input + " w-full text-sm"}>
+                            className={inputClass + " text-sm"}>
                             {assignableRoles.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                           </select>
                         </td>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>
                           <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{a.staffCode || "—"}</code>
                         </td>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>
                           <input value={editPhone} onChange={(e) => setEditPhone(e.target.value)}
-                            placeholder="Téléphone" className={MGR.input + " w-full text-sm"} />
+                            placeholder="Téléphone" className={inputClass + " text-sm"} />
                         </td>
-                        <td className={MGR.table.td}>
-                          {a.active ? <StatusBadge color="green">Actif</StatusBadge> : <StatusBadge color="red">Inactif</StatusBadge>}
+                        <td className={table.td}>
+                          {a.active ? <StatusBadge status="active">Actif</StatusBadge> : <StatusBadge status="danger">Inactif</StatusBadge>}
                         </td>
-                        <td className={MGR.table.tdRight}>
+                        <td className={table.tdRight}>
                           <div className="flex items-center justify-end gap-1.5">
-                            <button onClick={saveEdit} disabled={busy === a.id} className={MGR.btnPrimary + " !py-1.5 !text-xs"}>
+                            <ActionButton onClick={saveEdit} disabled={busy === a.id} variant="primary" size="sm" className="!py-1.5 !text-xs">
                               {busy === a.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Sauver"}
-                            </button>
-                            <button onClick={cancelEdit} className={MGR.btnSecondary + " !py-1.5 !text-xs"}>Annuler</button>
+                            </ActionButton>
+                            <ActionButton onClick={cancelEdit} variant="secondary" size="sm" className="!py-1.5 !text-xs">Annuler</ActionButton>
                           </div>
                         </td>
                       </>
                     ) : (
                       <>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>
                           <span className="font-medium text-gray-900">{a.displayName}</span>
                         </td>
-                        <td className={MGR.table.td}>{ROLE_LABELS[a.role] ?? a.role}</td>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>{ROLE_LABELS[a.role] ?? a.role}</td>
+                        <td className={table.td}>
                           <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{a.staffCode || "—"}</code>
                         </td>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>
                           <div className="text-sm">{a.email}</div>
                           {a.telephone && <div className="text-xs text-gray-500">{a.telephone}</div>}
                         </td>
-                        <td className={MGR.table.td}>
+                        <td className={table.td}>
                           {a.invitationPending
-                            ? <StatusBadge color="purple">Invitation en attente</StatusBadge>
-                            : a.active ? <StatusBadge color="green">Actif</StatusBadge> : <StatusBadge color="red">Inactif</StatusBadge>}
+                            ? <StatusBadge status="info">Invitation en attente</StatusBadge>
+                            : a.active ? <StatusBadge status="active">Actif</StatusBadge> : <StatusBadge status="danger">Inactif</StatusBadge>}
                         </td>
-                        <td className={MGR.table.tdRight}>
+                        <td className={table.tdRight}>
                           <div className="flex items-center justify-end gap-1.5">
                             {a.invitationPending && a.invitationToken && (
-                              <button onClick={() => handleResendInvitation(a)}
+                              <ActionButton onClick={() => handleResendInvitation(a)}
                                 title="Renvoyer le lien d'invitation"
-                                className={MGR.btnSecondary + " !py-1.5 !text-xs"}>
+                                variant="secondary" size="sm" className="!py-1.5 !text-xs">
                                 <RefreshCw className="w-3.5 h-3.5" /> Renvoyer
-                              </button>
+                              </ActionButton>
                             )}
-                            <button onClick={() => startEdit(a)} className={MGR.btnSecondary + " !py-1.5 !text-xs"}>Modifier</button>
+                            <ActionButton onClick={() => startEdit(a)} variant="secondary" size="sm" className="!py-1.5 !text-xs">Modifier</ActionButton>
                             {!a.invitationPending && (
                               <>
-                                <button onClick={() => handleToggle(a, !a.active)} disabled={busy === a.id}
-                                  className={`${a.active ? MGR.btnSecondary : MGR.btnPrimary} !py-1.5 !text-xs`}>
+                                <ActionButton onClick={() => handleToggle(a, !a.active)} disabled={busy === a.id}
+                                  variant={a.active ? "secondary" : "primary"} size="sm" className="!py-1.5 !text-xs">
                                   {busy === a.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : a.active ? "Désactiver" : "Activer"}
-                                </button>
-                                <button onClick={() => setConfirmResetAgent(a)} disabled={busy === a.id}
+                                </ActionButton>
+                                <ActionButton onClick={() => setConfirmResetAgent(a)} disabled={busy === a.id}
                                   title="Réinitialiser le mot de passe"
-                                  className={MGR.btnSecondary + " !py-1.5 !text-xs !px-2"}>
+                                  variant="secondary" size="sm" className="!py-1.5 !text-xs !px-2">
                                   <RotateCcw className="w-3.5 h-3.5" />
-                                </button>
+                                </ActionButton>
                               </>
                             )}
                           </div>
@@ -494,6 +500,6 @@ export default function ManagerTeamPage() {
         onConfirm={confirmPasswordReset}
         onCancel={() => setConfirmResetAgent(null)}
       />
-    </div>
+    </StandardLayoutWrapper>
   );
 }

@@ -11,7 +11,7 @@ import { markReadyForPickup } from "@/modules/logistics/services/markReadyForPic
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
 import type { Company } from "@/types/companyTypes";
 import { Inbox, Loader2, CheckCircle, Truck } from "lucide-react";
-import CourierPageHeader from "../components/CourierPageHeader";
+import { PageHeader, StandardLayoutWrapper, SectionCard, EmptyState } from "@/ui";
 
 export default function CourierReceptionPage() {
   const { user, company } = useAuth() as { user: { uid: string; companyId?: string; agencyId?: string }; company: unknown };
@@ -81,12 +81,12 @@ export default function CourierReceptionPage() {
   };
 
   return (
-    <div className="p-4 max-w-4xl mx-auto space-y-6">
-      <CourierPageHeader
+    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
+      <PageHeader
         icon={Inbox}
         title="Réception Colis"
-        primaryColor={primaryColor}
-        description="Marquez les envois « Arrivés », puis « Prêt à retirer » pour la remise."
+        primaryColorVar="var(--courier-primary, #ea580c)"
+        subtitle="Marquez les envois « Arrivés », puis « Prêt à retirer » pour la remise."
       />
       {error && (
         <div className="p-3 rounded-lg bg-red-50 text-red-800 border border-red-200 text-sm flex justify-between">
@@ -96,11 +96,7 @@ export default function CourierReceptionPage() {
       )}
 
       {pendingArrival.length > 0 && (
-        <section className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 shadow-sm">
-          <h2 className="font-semibold text-gray-800 flex items-center gap-2 mb-3">
-            <Truck className="w-5 h-5" />
-            Envois à marquer arrivés (simulation Phase 1)
-          </h2>
+        <SectionCard title="Envois à marquer arrivés (simulation Phase 1)" icon={Truck}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -133,13 +129,12 @@ export default function CourierReceptionPage() {
               </tbody>
             </table>
           </div>
-        </section>
+        </SectionCard>
       )}
 
-      <section className="rounded-xl border bg-white shadow-sm overflow-hidden">
-        <h2 className="font-semibold text-gray-800 p-4 pb-0">Envois arrivés — Prêt à retirer</h2>
+      <SectionCard title="Envois arrivés — Prêt à retirer" noPad={arrived.length > 0}>
         {arrived.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">Aucun envoi en statut Arrivé.</div>
+          <EmptyState message="Aucun envoi en statut Arrivé." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -176,7 +171,7 @@ export default function CourierReceptionPage() {
             </table>
           </div>
         )}
-      </section>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 }

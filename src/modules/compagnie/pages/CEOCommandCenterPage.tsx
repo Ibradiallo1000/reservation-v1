@@ -15,7 +15,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge } from "@/ui";
 import { format } from "date-fns";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
@@ -124,7 +124,6 @@ export default function CEOCommandCenterPage() {
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const navigate = useNavigate();
-  const { setHeader, resetHeader } = usePageHeader();
 
   const [dailyStatsList, setDailyStatsList] = useState<DailyStatsDoc[]>([]);
   const [liveStateList, setLiveStateList] = useState<AgencyLiveStateDoc[]>([]);
@@ -159,11 +158,6 @@ export default function CEOCommandCenterPage() {
   }, [period, customStart, customEnd]);
 
   const loadRunIdRef = useRef(0);
-
-  useEffect(() => {
-    setHeader({ title: "Centre de commande" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
 
   // PendingRevenue : calcul isolé, sans collectionGroup, sans filtre période
   useEffect(() => {
@@ -576,113 +570,106 @@ export default function CEOCommandCenterPage() {
 
   if (!companyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
+        <PageHeader title="Centre de commande" />
         <p className="text-gray-500">Compagnie introuvable.</p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
   if (loading) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <div className="text-gray-500">Chargement du centre de commande…</div>
-      </div>
+      <StandardLayoutWrapper>
+        <PageHeader title="Centre de commande" />
+        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement du centre de commande…</div>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="min-w-0 w-full space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6 max-w-7xl mx-auto overflow-x-hidden">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-        <p className="text-sm text-gray-600">{formatDateLongFr(new Date())}</p>
-        <PeriodFilterBar
-          period={period}
-          customStart={customStart || undefined}
-          customEnd={customEnd || undefined}
-          onPeriodChange={(kind, start, end) => {
-            setPeriod(kind);
-            setCustomStart(start ?? "");
-            setCustomEnd(end ?? "");
-          }}
-        />
-      </div>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Centre de commande"
+        subtitle={formatDateLongFr(new Date())}
+        right={
+          <PeriodFilterBar
+            period={period}
+            customStart={customStart || undefined}
+            customEnd={customEnd || undefined}
+            onPeriodChange={(kind, start, end) => {
+              setPeriod(kind);
+              setCustomStart(start ?? "");
+              setCustomEnd(end ?? "");
+            }}
+          />
+        }
+      />
 
       {/* ——— CEO Cockpit V2 — 8 blocs exécutifs (frozen) ——— */}
       <CommandCenterBlocksAtoE companyId={companyId} navigate={navigate} data={blocksAtoEData} />
 
       {/* 3. Network Operational Status (read-only, company-level) */}
-      <section className="bg-white rounded-xl border p-3 sm:p-4 shadow-sm" aria-label="Network Operational Status">
-        <h2 className="text-base sm:text-lg font-semibold mb-3 flex items-center gap-2">
-          <Truck className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" /> 3. Network Operational Status
-        </h2>
+      <SectionCard title="3. Network Operational Status" icon={Truck}>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-100 min-w-0">
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
             <div className="font-bold">{fleetOverviewCounts.total}</div>
             <div className="text-xs text-gray-600">Total véhicules</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-emerald-50 min-w-0">
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
             <div className="font-bold">{fleetOverviewCounts.enService}</div>
-            <div className="text-xs text-emerald-700">Disponibles (Garage + Normal)</div>
+            <div className="text-xs text-gray-600">Disponibles (Garage + Normal)</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-blue-50 min-w-0">
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
             <div className="font-bold">{fleetOverviewCounts.enTransit}</div>
-            <div className="text-xs text-blue-700">En transit</div>
+            <div className="text-xs text-gray-600">En transit</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-orange-50 min-w-0">
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
             <div className="font-bold">{fleetOverviewCounts.maintenance}</div>
-            <div className="text-xs text-orange-700">Maintenance</div>
+            <div className="text-xs text-gray-600">Maintenance</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-red-50 min-w-0">
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
             <div className="font-bold">{fleetOverviewCounts.accidente}</div>
-            <div className="text-xs text-red-700">Accidentés</div>
+            <div className="text-xs text-gray-600">Accidentés</div>
           </div>
         </div>
         <div className="mt-3">
           <button
             type="button"
             onClick={() => navigate(`/compagnie/${companyId}/garage/fleet`)}
-            className="px-4 py-2 rounded-lg bg-indigo-100 text-indigo-800 font-medium text-sm hover:bg-indigo-200 transition"
+            className="px-4 py-2 rounded-lg border border-gray-200 bg-white font-medium text-sm hover:bg-gray-50 transition"
           >
             Voir la flotte
           </button>
         </div>
-      </section>
+      </SectionCard>
 
-      {/* 5. Alertes (short list) */}
-      <section className="bg-white rounded-xl border p-3 sm:p-4 shadow-sm" aria-label="Alertes">
-        <h2 className="text-base sm:text-lg font-semibold mb-3 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" /> 4. Alertes
-        </h2>
+      {/* 4. Alertes (short list) */}
+      <SectionCard title="4. Alertes" icon={AlertTriangle}>
         {alerts.length === 0 ? (
           <p className="text-sm text-gray-500">Aucune alerte.</p>
         ) : (
           <ul className="space-y-2">
             {alerts.slice(0, 7).map((a, i) => (
-              <li
-                key={i}
-                className={`flex items-center gap-2 text-xs sm:text-sm p-2 rounded break-words min-w-0 ${
-                  a.level === "error" ? "bg-red-50 text-red-800" : a.level === "warning" ? "bg-amber-50 text-amber-800" : "bg-gray-50 text-gray-700"
-                }`}
-              >
-                <span className="w-2 h-2 rounded-full bg-current" />
-                {a.message}
+              <li key={i} className="flex items-center gap-2 text-xs sm:text-sm p-2 rounded-lg border border-gray-200 bg-gray-50/50 break-words min-w-0">
+                <StatusBadge status={a.level === "error" ? "danger" : a.level === "warning" ? "warning" : "neutral"}>
+                  {a.level === "error" ? "Erreur" : a.level === "warning" ? "Avertissement" : "Info"}
+                </StatusBadge>
+                <span className="text-gray-700">{a.message}</span>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </SectionCard>
 
       {/* 5. Position financière (summary only) */}
-      <section className="bg-white rounded-xl border p-3 sm:p-4 shadow-sm" aria-label="Position financière">
-        <h2 className="text-base sm:text-lg font-semibold mb-3 flex items-center gap-2">
-          <Wallet className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" /> 5. Position financière
-        </h2>
+      <SectionCard title="5. Position financière" icon={Wallet}>
         <div className="flex flex-wrap items-center gap-3 sm:gap-4 min-w-0">
-          <div className="p-2 sm:p-3 rounded-lg bg-emerald-50 border border-emerald-200 min-w-0">
-            <div className="text-lg sm:text-xl font-bold text-emerald-800 truncate">{financialPosition.netPosition.toLocaleString("fr-FR")}</div>
-            <div className="text-xs text-emerald-700">Position nette</div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
+            <div className="text-lg sm:text-xl font-bold text-gray-900 truncate">{financialPosition.netPosition.toLocaleString("fr-FR")}</div>
+            <div className="text-xs text-gray-600">Position nette</div>
           </div>
         </div>
-      </section>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 }

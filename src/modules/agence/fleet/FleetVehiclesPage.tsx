@@ -8,6 +8,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import type { FleetVehicle, FleetVehicleStatus } from "./types";
 import { transitionVehicleStatus } from "./fleetStateMachine";
 import { canTransition } from "./types";
+import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge, ActionButton, table, tableRowClassName, EmptyState } from "@/ui";
+import { Truck } from "lucide-react";
 
 const statusLabels: Record<FleetVehicleStatus, string> = {
   garage: "En garage",
@@ -91,50 +93,60 @@ const FleetVehiclesPage: React.FC = () => {
 
   const primaryColor = (company as { couleurPrimaire?: string })?.couleurPrimaire ?? "#0ea5e9";
 
+  const statusToVariant: Record<FleetVehicleStatus, "neutral" | "pending" | "info" | "success" | "danger"> = {
+    garage: "neutral",
+    assigned: "pending",
+    in_transit: "info",
+    arrived: "success",
+    maintenance: "danger",
+  };
+
   if (loading) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
-        <div className="text-gray-500">Chargement des véhicules…</div>
-      </div>
+      <StandardLayoutWrapper maxWidthClass="max-w-5xl">
+        <p className="text-gray-500">Chargement des véhicules…</p>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-4">
-      <h1 className="text-xl font-semibold">Véhicules flotte</h1>
-      {statusFilter && (
-        <p className="text-sm text-gray-600">Filtre : {statusLabels[statusFilter] ?? statusFilter}</p>
-      )}
+    <StandardLayoutWrapper maxWidthClass="max-w-5xl">
+      <PageHeader
+        title="Véhicules flotte"
+        subtitle={statusFilter ? `Filtre : ${statusLabels[statusFilter] ?? statusFilter}` : undefined}
+        icon={Truck}
+      />
 
-      <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50">
+      <SectionCard title="Liste des véhicules" noPad>
+        {vehicles.length === 0 ? (
+          <div className="p-6"><EmptyState message="Aucun véhicule pour ce filtre." /></div>
+        ) : (
+        <div className={table.wrapper}>
+          <table className={table.base}>
+            <thead className={table.head}>
               <tr>
-                <th className="px-3 py-2 text-left">Plaque / Code</th>
-                <th className="px-3 py-2 text-left">Capacité</th>
-                <th className="px-3 py-2 text-left">Statut</th>
-                <th className="px-3 py-2 text-left">Agence / Trajet</th>
-                <th className="px-3 py-2 text-left">Chauffeur / Convoyeur</th>
-                <th className="px-3 py-2 text-center w-40">Action</th>
+                <th className={table.th}>Plaque / Code</th>
+                <th className={table.th}>Capacité</th>
+                <th className={table.th}>Statut</th>
+                <th className={table.th}>Agence / Trajet</th>
+                <th className={table.th}>Chauffeur / Convoyeur</th>
+                <th className={table.th}>Action</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className={table.body}>
               {vehicles.map((v) => (
-                <tr key={v.id} className="border-t">
-                  <td className="px-3 py-2 font-medium">{v.plateNumber} — {v.internalCode}</td>
-                  <td className="px-3 py-2">{v.capacity}</td>
-                  <td className="px-3 py-2">
-                    <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                      {statusLabels[v.status]}
-                    </span>
+                <tr key={v.id} className={tableRowClassName()}>
+                  <td className={table.td + " font-medium"}>{v.plateNumber} — {v.internalCode}</td>
+                  <td className={table.td}>{v.capacity}</td>
+                  <td className={table.td}>
+                    <StatusBadge status={statusToVariant[v.status]}>{statusLabels[v.status]}</StatusBadge>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className={table.td}>
                     {v.currentAgencyId ? agencies[v.currentAgencyId] ?? v.currentAgencyId : "—"}
                     {v.currentTripId && ` • ${v.currentDate ?? ""} ${v.currentHeure ?? ""}`}
                   </td>
-                  <td className="px-3 py-2">{v.chauffeurName || "—"} / {v.convoyeurName || "—"}</td>
-                  <td className="px-3 py-2 text-center">
+                  <td className={table.td}>{v.chauffeurName || "—"} / {v.convoyeurName || "—"}</td>
+                  <td className={table.td}>
                     {updatingId === v.id ? (
                       <span className="text-xs text-gray-500">…</span>
                     ) : (
@@ -156,11 +168,9 @@ const FleetVehiclesPage: React.FC = () => {
             </tbody>
           </table>
         </div>
-        {vehicles.length === 0 && (
-          <div className="p-6 text-center text-gray-500">Aucun véhicule.</div>
         )}
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

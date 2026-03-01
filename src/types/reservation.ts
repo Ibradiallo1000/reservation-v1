@@ -3,6 +3,7 @@
 
 export type ReservationStatus =
   | "en_attente"
+  | "en_attente_paiement"
   | "paiement_en_cours"
   | "preuve_recue"
   | "verification"
@@ -41,11 +42,15 @@ export interface Reservation {
   proofUrl?: string;
   receiptUrl?: string;
   preuveMessage?: string;
+  /** Référence paiement (une seule preuve) */
+  paymentReference?: string;
   companySlug?: string;
   paymentMethodLabel?: string;
   guichetierId?: string;
   shiftId?: string;
   reason?: string;
+  /** Motif de refus (validation/refusal flow) */
+  refusalReason?: string;
   validatedAt?: any;
   refusedAt?: any;
   createdAt?: any;

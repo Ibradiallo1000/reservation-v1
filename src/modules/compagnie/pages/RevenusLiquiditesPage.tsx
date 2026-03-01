@@ -3,7 +3,7 @@
 import React, { useState, useMemo } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { DollarSign, Wallet } from "lucide-react";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import type { Company } from "@/types/companyTypes";
 import { useAuth } from "@/contexts/AuthContext";
@@ -36,12 +36,6 @@ export default function RevenusLiquiditesPage() {
   }, [companyId]);
 
   const theme = useCompanyTheme((companyInfo ?? company ?? null) as Company | null);
-  const { setHeader, resetHeader } = usePageHeader();
-
-  React.useEffect(() => {
-    setHeader({ title: "Revenus & Liquidités" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
 
   const setTab = (tab: typeof TAB_REVENUS | typeof TAB_LIQUIDITES) => {
     setActiveTab(tab);
@@ -58,14 +52,16 @@ export default function RevenusLiquiditesPage() {
 
   if (!companyId) {
     return (
-      <div className="p-6">
+      <StandardLayoutWrapper>
+        <PageHeader title="Revenus & Liquidités" />
         <p className="text-gray-500">Compagnie introuvable.</p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="space-y-4 p-4 md:p-6 max-w-6xl mx-auto">
+    <StandardLayoutWrapper>
+      <PageHeader title="Revenus & Liquidités" />
       <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-3">
         {tabs.map(({ key, label, icon: Icon, description }) => {
           const active = activeTab === key;
@@ -96,6 +92,6 @@ export default function RevenusLiquiditesPage() {
 
       {activeTab === TAB_REVENUS && <CompanyFinancesPage />}
       {activeTab === TAB_LIQUIDITES && <CEOTreasuryPage />}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

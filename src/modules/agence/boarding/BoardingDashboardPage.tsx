@@ -6,6 +6,8 @@ import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatDateLongFr } from "@/utils/dateFmt";
+import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState } from "@/ui";
+import { Plane } from "lucide-react";
 
 type AgencyItem = { id: string; nom: string };
 type WeeklyTrip = {
@@ -93,18 +95,20 @@ const BoardingDashboardPage: React.FC = () => {
   const primaryColor = (company as { couleurPrimaire?: string })?.couleurPrimaire ?? "#0ea5e9";
 
   return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto min-h-screen text-sm sm:text-base text-gray-900 dark:text-white" style={{ fontSize: "14px" }}>
-      <h1 className="text-xl font-semibold mb-2 text-gray-900 dark:text-white">Départs du jour</h1>
-      <p className="text-sm text-gray-600 dark:text-gray-200 mb-4">
-        {formatDateLongFr(new Date())} — Sélectionnez un départ pour ouvrir la liste d&apos;embarquement.
-      </p>
+    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
+      <PageHeader
+        title="Départs du jour"
+        subtitle={`${formatDateLongFr(new Date())} — Sélectionnez un départ pour ouvrir la liste d'embarquement.`}
+        icon={Plane}
+      />
       {loading ? (
-        <div className="text-gray-600 dark:text-gray-200">Chargement…</div>
+        <p className="text-gray-600 dark:text-gray-200">Chargement…</p>
       ) : departures.length === 0 ? (
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 shadow-md p-6 text-center text-gray-600 dark:text-gray-200">
-          Aucun départ planifié pour aujourd&apos;hui.
-        </div>
+        <SectionCard title="Départs">
+          <EmptyState message="Aucun départ planifié pour aujourd'hui." />
+        </SectionCard>
       ) : (
+        <SectionCard title="Départs du jour">
         <ul className="space-y-2">
           {departures.map((d) => (
             <li key={`${d.agencyId}_${d.tripId}_${d.heure}`}>
@@ -134,8 +138,9 @@ const BoardingDashboardPage: React.FC = () => {
             </li>
           ))}
         </ul>
+        </SectionCard>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

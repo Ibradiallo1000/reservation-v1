@@ -38,6 +38,8 @@ import {
 import { getAffectationForBoarding } from "@/modules/compagnie/fleet/affectationService";
 import { getEffectiveStatut, canEmbarkWithScan, RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
+import { Plane } from "lucide-react";
 
 /* ===================== Types ===================== */
 type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
@@ -1246,6 +1248,8 @@ useEffect(() => {
   }
 
   return (
+    <StandardLayoutWrapper>
+      <PageHeader title="Liste d'embarquement" subtitle={selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedDate} ${selectedTrip.heure}` : undefined} icon={Plane} />
     <div className="agency-content-transition">
       <style>{`
         .brand-logo{height:40px;width:auto;object-fit:contain}
@@ -1659,6 +1663,7 @@ useEffect(() => {
         </div>
       </div>
     </div>
+    </StandardLayoutWrapper>
   );
 };
 

@@ -1,4 +1,5 @@
 // CourierPageHeader — Consistent page header with icon + title using company primary color.
+// @deprecated Use PageHeader from @/ui (or @/ui/layout) with primaryColorVar="var(--courier-primary, #ea580c)".
 
 import React from "react";
 import type { LucideIcon } from "lucide-react";

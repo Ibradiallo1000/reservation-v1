@@ -6,6 +6,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
 import { useCurrencySymbol } from "@/shared/currency/CurrencyContext";
 import { Button } from "@/shared/ui/button";
+import { SectionCard, StatusBadge } from "@/ui";
+import type { StatusVariant } from "@/ui";
 import { CheckCircle2, Shield, Star, Zap, Crown } from "lucide-react";
 import {
   collection,
@@ -52,13 +54,23 @@ interface Props {
 ==================================================================== */
 const nf = new Intl.NumberFormat("fr-FR");
 
-const SUPPORT_CONFIG: Record<SupportLevel, { label: string; color: string; icon: React.ReactNode }> = {
-  basic: { label: "Basic", color: "bg-gray-100 text-gray-700", icon: <Shield className="h-3.5 w-3.5" /> },
-  standard: { label: "Standard", color: "bg-blue-100 text-blue-700", icon: <Shield className="h-3.5 w-3.5" /> },
-  priority: { label: "Prioritaire", color: "bg-amber-100 text-amber-700", icon: <Star className="h-3.5 w-3.5" /> },
-  premium: { label: "Premium", color: "bg-purple-100 text-purple-700", icon: <Zap className="h-3.5 w-3.5" /> },
-  enterprise: { label: "Enterprise", color: "bg-indigo-100 text-indigo-700", icon: <Crown className="h-3.5 w-3.5" /> },
+const SUPPORT_LABELS: Record<SupportLevel, string> = {
+  basic: "Basic",
+  standard: "Standard",
+  priority: "Prioritaire",
+  premium: "Premium",
+  enterprise: "Enterprise",
 };
+
+function supportToVariant(s: SupportLevel): StatusVariant {
+  switch (s) {
+    case "standard": return "info";
+    case "priority": return "warning";
+    case "premium": return "active";
+    case "enterprise": return "completed";
+    default: return "neutral";
+  }
+}
 
 /* ====================================================================
    COMPONENT
@@ -200,18 +212,14 @@ const ParametresPlan: React.FC<Props> = ({ companyId }) => {
     return <div className="p-6">Chargement…</div>;
 
   const companySupport = (cmp.supportLevel as SupportLevel) || activePlan?.supportLevel || "basic";
-  const supportInfo = SUPPORT_CONFIG[companySupport] ?? SUPPORT_CONFIG.basic;
 
   return (
     <div className="space-y-6">
-      {/* CURRENT PLAN */}
-      <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Votre plan</h2>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${supportInfo.color}`}>
-            {supportInfo.icon}
-            Support {supportInfo.label}
-          </span>
+      <SectionCard title="Votre plan" icon={Shield}>
+        <div className="flex items-center gap-2 mb-4">
+          <StatusBadge status={supportToVariant(companySupport)}>
+            Support {SUPPORT_LABELS[companySupport]}
+          </StatusBadge>
         </div>
 
         {activePlan ? (
@@ -221,9 +229,7 @@ const ParametresPlan: React.FC<Props> = ({ companyId }) => {
                 <div className="flex items-center gap-2">
                   <h3 className="font-semibold text-gray-900">{activePlan.name}</h3>
                   {activePlan.isTrial && (
-                    <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
-                      Essai
-                    </span>
+                    <StatusBadge status="warning">Essai</StatusBadge>
                   )}
                 </div>
                 <div className="text-2xl font-bold mt-1">
@@ -265,56 +271,37 @@ const ParametresPlan: React.FC<Props> = ({ companyId }) => {
               </div>
             </div>
 
-            {/* All features included */}
             <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-gray-100">
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
-                <CheckCircle2 className="h-3 w-3" /> Gestion interne
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
-                <CheckCircle2 className="h-3 w-3" /> Page publique
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
-                <CheckCircle2 className="h-3 w-3" /> Réservation en ligne
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
-                <CheckCircle2 className="h-3 w-3" /> Guichet
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
-                <CheckCircle2 className="h-3 w-3" /> Tableau de bord
-              </span>
+              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Gestion interne</StatusBadge>
+              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Page publique</StatusBadge>
+              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Réservation en ligne</StatusBadge>
+              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Guichet</StatusBadge>
+              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Tableau de bord</StatusBadge>
             </div>
           </>
         ) : (
           <p className="text-gray-500">Aucun plan actif.</p>
         )}
-      </section>
+      </SectionCard>
 
-      {/* OTHER PLANS */}
       {otherPlans.length > 0 && (
-        <section className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Autres plans disponibles</h3>
-
+        <SectionCard title="Autres plans disponibles" icon={Star}>
           <div className="grid md:grid-cols-3 gap-4">
-            {otherPlans.map((p) => {
-              const pSupport = SUPPORT_CONFIG[p.supportLevel] ?? SUPPORT_CONFIG.basic;
-              return (
+            {otherPlans.map((p) => (
                 <div
                   key={p.id}
-                  className="rounded-xl border border-gray-200 p-4 flex flex-col"
+                  className="rounded-lg border border-gray-200 p-4 flex flex-col"
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div>
                       <h4 className="font-semibold text-gray-900">{p.name}</h4>
                       {p.isTrial && (
-                        <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 mt-1">
-                          Essai
-                        </span>
+                        <StatusBadge status="warning" className="mt-1">Essai</StatusBadge>
                       )}
                     </div>
-                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${pSupport.color}`}>
-                      {pSupport.icon}
-                      {pSupport.label}
-                    </span>
+                    <StatusBadge status={supportToVariant(p.supportLevel)}>
+                      {SUPPORT_LABELS[p.supportLevel]}
+                    </StatusBadge>
                   </div>
 
                   <div className="text-xl font-bold">
@@ -357,10 +344,9 @@ const ParametresPlan: React.FC<Props> = ({ companyId }) => {
                     Demander ce plan
                   </Button>
                 </div>
-              );
-            })}
+            ))}
           </div>
-        </section>
+        </SectionCard>
       )}
     </div>
   );

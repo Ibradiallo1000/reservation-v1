@@ -15,8 +15,9 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import { usePageHeader } from '@/contexts/PageHeaderContext';
+import { StandardLayoutWrapper, PageHeader, SectionCard } from '@/ui';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
+import { CreditCard } from 'lucide-react';
 
 interface PaymentMethod {
   id?: string;
@@ -54,7 +55,6 @@ const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({
   const { user, company } = useAuth();
   const companyId = companyIdProp ?? user?.companyId ?? '';
   const theme = useCompanyTheme(company);
-  const { setHeader, resetHeader } = usePageHeader();
 
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [formData, setFormData] = useState<Omit<PaymentMethod, 'id'>>({
@@ -67,21 +67,6 @@ const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // ----- Header dynamique
-  useEffect(() => {
-    setHeader({
-      title: 'Moyens de paiement',
-      subtitle:
-        paymentMethods.length > 0
-          ? `${paymentMethods.length} méthode${paymentMethods.length > 1 ? 's' : ''} configurée${paymentMethods.length > 1 ? 's' : ''}`
-          : 'Aucune méthode configurée',
-      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
-      fg: '#fff',
-    });
-    return () => resetHeader();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paymentMethods.length, theme.colors.primary, theme.colors.secondary]);
 
   // ----- Chargement
   useEffect(() => {
@@ -233,21 +218,24 @@ const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({
     }
   };
 
+  const subtitle =
+    paymentMethods.length > 0
+      ? `${paymentMethods.length} méthode${paymentMethods.length > 1 ? 's' : ''} configurée${paymentMethods.length > 1 ? 's' : ''}`
+      : 'Aucune méthode configurée';
+
   return (
-    <div className="max-w-7xl mx-auto p-6">
+    <StandardLayoutWrapper>
+      <PageHeader title="Moyens de paiement" subtitle={subtitle} />
       <p className="text-sm text-gray-600 mb-6">
         Ces moyens de paiement (comptes mobile money, etc.) sont définis au niveau de la compagnie et servent à encaisser les paiements des réservations en ligne. Les clients les choisissent lors du dépôt de preuve de paiement.
       </p>
       {error && (
-        <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded">
+        <div className="border border-gray-300 bg-gray-50 p-4 mb-6 rounded-lg text-gray-800">
           <p>{error}</p>
         </div>
       )}
 
-      {/* Liste des méthodes existantes */}
-      <div className="bg-white p-6 rounded-xl shadow-sm mb-8 border border-gray-100">
-        <h2 className="text-xl font-semibold mb-4">Méthodes configurées</h2>
-
+      <SectionCard title="Méthodes configurées" icon={CreditCard}>
         {paymentMethods.length === 0 ? (
           <p className="text-gray-500 italic">Aucune méthode de paiement configurée</p>
         ) : (
@@ -288,7 +276,7 @@ const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({
                     </button>
                     <button
                       onClick={() => handleDelete(method)}
-                      className="px-3 py-1 text-sm bg-red-50 text-red-700 rounded hover:bg-red-100 transition"
+                      className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 text-gray-700 transition"
                     >
                       Supprimer
                     </button>
@@ -298,14 +286,9 @@ const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({
             ))}
           </ul>
         )}
-      </div>
+      </SectionCard>
 
-      {/* Formulaire d'ajout/modification */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-        <h2 className="text-xl font-semibold mb-4">
-          {selectedId ? 'Modifier une méthode' : 'Ajouter une nouvelle méthode'}
-        </h2>
-
+      <SectionCard title={selectedId ? 'Modifier une méthode' : 'Ajouter une nouvelle méthode'} icon={CreditCard}>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -392,8 +375,8 @@ const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

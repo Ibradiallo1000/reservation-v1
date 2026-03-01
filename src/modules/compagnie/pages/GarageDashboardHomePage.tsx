@@ -1,11 +1,12 @@
 // Phase 1F/1G — Tableau de bord Garage : KPIs, activité récente, alertes. Thème compagnie.
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard, StatusBadge } from "@/ui";
+import type { StatusVariant } from "@/ui";
 import { listVehicles } from "@/modules/compagnie/fleet/vehiclesService";
 import { TECHNICAL_STATUS, OPERATIONAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
 import { useGarageTheme } from "@/modules/compagnie/layout/GarageThemeContext";
-import { Truck, Loader2, AlertTriangle } from "lucide-react";
+import { Truck, Loader2, AlertTriangle, Car, Wrench, AlertCircle, Ban } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 
@@ -18,14 +19,16 @@ const STATUS_LABELS: Record<string, string> = {
   HORS_SERVICE: "Hors service",
 };
 
-const STATUS_BADGE_CLASS: Record<string, string> = {
-  GARAGE: "bg-slate-200 text-slate-800",
-  EN_SERVICE: "bg-emerald-100 text-emerald-800",
-  EN_TRANSIT: "bg-blue-100 text-blue-800",
-  EN_MAINTENANCE: "bg-amber-100 text-amber-800",
-  ACCIDENTE: "bg-red-100 text-red-800",
-  HORS_SERVICE: "bg-slate-300 text-slate-700",
-};
+function statusToVariant(status: string): StatusVariant {
+  switch (status) {
+    case "EN_SERVICE": return "success";
+    case "EN_TRANSIT": return "info";
+    case "EN_MAINTENANCE": return "warning";
+    case "ACCIDENTE": return "danger";
+    case "HORS_SERVICE": return "neutral";
+    default: return "neutral";
+  }
+}
 
 const ALERT_DAYS = 30;
 
@@ -48,7 +51,6 @@ function daysUntil(d: Date | null): number | null {
 export default function GarageDashboardHomePage() {
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? "";
-  const { setHeader, resetHeader } = usePageHeader();
   const theme = useGarageTheme();
 
   const [vehicles, setVehicles] = useState<Array<{
@@ -96,11 +98,6 @@ export default function GarageDashboardHomePage() {
   }, [companyId]);
 
   useEffect(() => {
-    setHeader({ title: "Tableau de bord — Garage" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
-
-  useEffect(() => {
     load();
   }, [load]);
 
@@ -143,20 +140,22 @@ export default function GarageDashboardHomePage() {
   alerts.sort((a, b) => a.daysLeft - b.daysLeft);
 
   if (!companyId) {
-    return <div className="p-6 text-slate-600 bg-slate-50 rounded-lg">Compagnie introuvable.</div>;
+    return (
+      <StandardLayoutWrapper>
+        <PageHeader title="Tableau de bord — Garage" />
+        <p className="text-slate-600">Compagnie introuvable.</p>
+      </StandardLayoutWrapper>
+    );
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl mx-auto garage-dashboard-home">
+    <StandardLayoutWrapper className="garage-dashboard-home">
+      <PageHeader title="Tableau de bord — Garage" icon={Truck} />
       {error && (
         <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
           {error}
         </div>
       )}
-
-      <h1 className="text-xl font-semibold text-slate-800 mb-6 flex items-center gap-2">
-        <Truck className="w-5 h-5 text-slate-600" /> Tableau de bord
-      </h1>
 
       {loading ? (
         <div className="flex justify-center py-12">
@@ -164,36 +163,16 @@ export default function GarageDashboardHomePage() {
         </div>
       ) : (
         <>
-          {/* KPIs uniquement */}
-          <section className="mb-8">
-            <h2 className="text-sm font-semibold text-slate-700 mb-3">Indicateurs</h2>
+          <SectionCard title="Indicateurs" icon={Truck}>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              <div className="p-3 rounded-lg bg-slate-100">
-                <div className="text-xl font-bold text-slate-800">{total}</div>
-                <div className="text-xs text-slate-600">Total véhicules</div>
-              </div>
-              <div className="p-3 rounded-lg bg-emerald-50">
-                <div className="text-xl font-bold text-emerald-700">{available}</div>
-                <div className="text-xs text-emerald-800">Disponibles</div>
-              </div>
-              <div className="p-3 rounded-lg bg-blue-50">
-                <div className="text-xl font-bold text-blue-700">{inTransit}</div>
-                <div className="text-xs text-blue-800">En transit</div>
-              </div>
-              <div className="p-3 rounded-lg bg-amber-50">
-                <div className="text-xl font-bold text-amber-700">{maintenance}</div>
-                <div className="text-xs text-amber-800">Maintenance</div>
-              </div>
-              <div className="p-3 rounded-lg bg-red-50">
-                <div className="text-xl font-bold text-red-700">{accidented}</div>
-                <div className="text-xs text-red-800">Accidentés</div>
-              </div>
-              <div className="p-3 rounded-lg bg-slate-200">
-                <div className="text-xl font-bold text-slate-700">{horsService}</div>
-                <div className="text-xs text-slate-700">Hors service</div>
-              </div>
+              <MetricCard label="Total véhicules" value={total} icon={Truck} />
+              <MetricCard label="Disponibles" value={available} icon={Car} valueColorVar="#047857" />
+              <MetricCard label="En transit" value={inTransit} icon={Truck} valueColorVar="#1d4ed8" />
+              <MetricCard label="Maintenance" value={maintenance} icon={Wrench} valueColorVar="#b45309" />
+              <MetricCard label="Accidentés" value={accidented} icon={AlertCircle} critical />
+              <MetricCard label="Hors service" value={horsService} icon={Ban} valueColorVar="#475569" />
             </div>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-4 text-xs text-slate-500">
               <Link
                 to={`/compagnie/${companyId}/garage/fleet`}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium text-white hover:opacity-90 transition"
@@ -202,34 +181,25 @@ export default function GarageDashboardHomePage() {
                 Voir la liste flotte →
               </Link>
             </p>
-          </section>
+          </SectionCard>
 
-          {/* Alertes (assurance, contrôle, vignette ≤ 30 jours) */}
           {alerts.length > 0 && (
-            <section className="mb-8">
-              <h2 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600" /> Alertes (expiration sous 30 jours)
-              </h2>
+            <SectionCard title="Alertes (expiration sous 30 jours)" icon={AlertTriangle}>
               <ul className="space-y-2">
                 {alerts.slice(0, 15).map((a, i) => (
-                  <li
-                    key={`${a.plateNumber}-${a.type}-${i}`}
-                    className="flex flex-wrap items-center gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-900"
-                  >
+                  <li key={`${a.plateNumber}-${a.type}-${i}`} className="flex flex-wrap items-center gap-2 p-3 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-800">
                     <span className="font-medium">{a.plateNumber}</span>
                     <span>{a.label}</span>
-                    <span>
+                    <StatusBadge status={a.daysLeft <= 1 ? "danger" : "warning"}>
                       {a.daysLeft === 0 ? "expire aujourd'hui" : a.daysLeft === 1 ? "expire demain" : `expire dans ${a.daysLeft} jours`}
-                    </span>
+                    </StatusBadge>
                   </li>
                 ))}
               </ul>
-            </section>
+            </SectionCard>
           )}
 
-          {/* Activité récente */}
-          <section>
-            <h2 className="text-sm font-semibold text-slate-700 mb-3">Dernières mises à jour</h2>
+          <SectionCard title="Dernières mises à jour" icon={Car}>
             {recentActivity.length === 0 ? (
               <p className="text-sm text-slate-500">Aucune activité récente.</p>
             ) : (
@@ -237,9 +207,9 @@ export default function GarageDashboardHomePage() {
                 {recentActivity.map((v) => (
                   <li key={v.id} className="flex flex-wrap items-center gap-2 text-slate-600">
                     <span className="font-medium text-slate-800">{v.plateNumber}</span>
-                    <span className={`inline-flex px-1.5 py-0.5 rounded text-xs ${STATUS_BADGE_CLASS[v.status] ?? ""}`}>
+                    <StatusBadge status={statusToVariant(v.status)}>
                       {v.operationalStatus === "EN_TRANSIT" ? "En transit" : v.technicalStatus === "MAINTENANCE" ? "Maintenance" : v.technicalStatus === "ACCIDENTE" ? "Accidenté" : v.technicalStatus === "HORS_SERVICE" ? "Hors service" : "Disponible"}
-                    </span>
+                    </StatusBadge>
                     <span>
                       {v.updatedAt && toDate(v.updatedAt)
                         ? format(toDate(v.updatedAt)!, "dd/MM/yyyy HH:mm", { locale: fr })
@@ -249,7 +219,7 @@ export default function GarageDashboardHomePage() {
                 ))}
               </ul>
             )}
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-4 text-xs text-slate-500">
               <Link
                 to={`/compagnie/${companyId}/garage/fleet`}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium text-white hover:opacity-90 transition"
@@ -258,9 +228,9 @@ export default function GarageDashboardHomePage() {
                 Voir la liste flotte →
               </Link>
             </p>
-          </section>
+          </SectionCard>
         </>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

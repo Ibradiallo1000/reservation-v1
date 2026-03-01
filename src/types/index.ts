@@ -72,6 +72,7 @@ export interface Reservation {
   // Preuve (en ligne)
   preuveUrl?: string;
   preuveMessage?: string;
+  paymentReference?: string;
 
   // Métadonnées
   companySlug?: string;

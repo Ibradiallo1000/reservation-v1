@@ -19,7 +19,7 @@ import ParametresBanques from '@/modules/compagnie/components/parametres/Paramet
 import CompagnieAgencesPage from '@/modules/compagnie/pages/CompagnieAgencesPage';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { usePageHeader } from '@/contexts/PageHeaderContext';
+import { StandardLayoutWrapper, PageHeader } from '@/ui';
 
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
@@ -67,7 +67,6 @@ const CompagnieParametresTabsPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
 
   const theme = useCompanyTheme(companyInfo || company || undefined);
-  const { setHeader, resetHeader } = usePageHeader();
 
   /* =========================
      Chargement compagnie
@@ -102,24 +101,6 @@ const CompagnieParametresTabsPage: React.FC = () => {
 
     fetchCompany();
   }, [companyId]);
-
-  /* =========================
-     Header dynamique
-  ========================= */
-  useEffect(() => {
-    setHeader({
-      title: 'Paramètres de la compagnie',
-      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
-      fg: '#fff',
-    });
-
-    return () => resetHeader();
-  }, [
-    setHeader,
-    resetHeader,
-    theme.colors.primary,
-    theme.colors.secondary,
-  ]);
 
   /* =========================
      Rendu onglet actif
@@ -165,8 +146,8 @@ const CompagnieParametresTabsPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-4 md:p-6">
-
+    <StandardLayoutWrapper>
+      <PageHeader title="Paramètres de la compagnie" />
       <div className="flex flex-wrap gap-2 md:gap-3 mb-6">
         {TABS.map(tab => {
           const active = selectedTab === tab.key;
@@ -200,7 +181,7 @@ const CompagnieParametresTabsPage: React.FC = () => {
       ) : (
         renderTab()
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

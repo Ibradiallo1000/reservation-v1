@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { Button } from '@/shared/ui/button';
+import { SectionCard } from '@/ui';
 import { useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 import { getCurrencySymbol } from '@/shared/utils/formatCurrency';
 import {
@@ -84,9 +85,9 @@ const Parametres: React.FC = () => {
     onChange: () => void;
     icon: React.ReactNode;
   }> = ({ label, description, checked, onChange, icon }) => (
-    <div className="flex items-start justify-between p-4 border border-gray-200 rounded-xl hover:bg-gray-50/50">
+    <div className="flex items-start justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50/50">
       <div className="flex items-start gap-3">
-        <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
+        <div className="h-10 w-10 rounded-lg bg-gray-100 flex items-center justify-center">
           {icon}
         </div>
         <div>
@@ -118,9 +119,9 @@ const Parametres: React.FC = () => {
     options?: { value: string; label: string }[];
     icon: React.ReactNode;
   }> = ({ label, description, value, onChange, type = 'text', options, icon }) => (
-    <div className="p-4 border border-gray-200 rounded-xl">
+    <div className="p-4 border border-gray-200 rounded-lg">
       <div className="flex items-start gap-3 mb-3">
-        <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
+        <div className="h-10 w-10 rounded-lg bg-gray-100 flex items-center justify-center">
           {icon}
         </div>
         <div className="flex-1">
@@ -154,19 +155,10 @@ const Parametres: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* ================= EN-TÊTE ================= */}
-      <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-slate-50 to-gray-50 flex items-center justify-center">
-              <Settings className="h-6 w-6 text-gray-600" />
-            </div>
-            <div>
-              <div className="text-xl font-bold text-gray-900">Paramètres comptables</div>
-              <div className="text-sm text-gray-600">Configuration de l'espace chef comptable</div>
-            </div>
-          </div>
-          
+      <SectionCard
+        title="Paramètres comptables"
+        icon={Settings}
+        right={
           <Button
             variant="primary"
             onClick={handleSave}
@@ -182,29 +174,19 @@ const Parametres: React.FC = () => {
             )}
             {saving ? 'Enregistrement...' : saveStatus === 'success' ? 'Enregistré !' : 'Enregistrer'}
           </Button>
-        </div>
-        
+        }
+      >
+        <p className="text-sm text-gray-600 mb-4">Configuration de l'espace chef comptable</p>
         {saveStatus === 'success' && (
-          <div className="mt-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
-            <div className="text-emerald-700 text-sm">Les paramètres ont été enregistrés avec succès.</div>
+          <div className="mb-4 p-3 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-700">
+            Les paramètres ont été enregistrés avec succès.
           </div>
         )}
-      </div>
+      </SectionCard>
 
-      {/* ================= SECTIONS ================= */}
       <div className="space-y-6">
-        {/* ALERTES ET NOTIFICATIONS */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
-              <Bell className="h-5 w-5 text-blue-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Alertes et notifications</div>
-              <div className="text-sm text-gray-600">Configurez les notifications système</div>
-            </div>
-          </div>
-          
+        <SectionCard title="Alertes et notifications" icon={Bell}>
+          <p className="text-sm text-gray-600 mb-4">Configurez les notifications système</p>
           <div className="space-y-3">
             <SettingToggle
               label="Notifications par email"
@@ -239,20 +221,10 @@ const Parametres: React.FC = () => {
               icon={<AlertTriangle className="h-5 w-5" />}
             />
           </div>
-        </div>
+        </SectionCard>
 
-        {/* VALIDATION AUTOMATIQUE */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-50 to-green-50 flex items-center justify-center">
-              <CheckCircle className="h-5 w-5 text-emerald-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Validation automatique</div>
-              <div className="text-sm text-gray-600">Paramètres de validation des réservations</div>
-            </div>
-          </div>
-          
+        <SectionCard title="Validation automatique" icon={CheckCircle}>
+          <p className="text-sm text-gray-600 mb-4">Paramètres de validation des réservations</p>
           <div className="space-y-3">
             <SettingToggle
               label="Validation automatique"
@@ -280,20 +252,10 @@ const Parametres: React.FC = () => {
               icon={<CreditCard className="h-5 w-5" />}
             />
           </div>
-        </div>
+        </SectionCard>
 
-        {/* SÉCURITÉ */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
-              <Shield className="h-5 w-5 text-amber-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Sécurité</div>
-              <div className="text-sm text-gray-600">Paramètres de sécurité de l'espace</div>
-            </div>
-          </div>
-          
+        <SectionCard title="Sécurité" icon={Shield}>
+          <p className="text-sm text-gray-600 mb-4">Paramètres de sécurité de l'espace</p>
           <div className="space-y-3">
             <SettingToggle
               label="Authentification à deux facteurs"
@@ -320,20 +282,10 @@ const Parametres: React.FC = () => {
               icon={<AlertTriangle className="h-5 w-5" />}
             />
           </div>
-        </div>
+        </SectionCard>
 
-        {/* AFFICHAGE */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-purple-50 to-pink-50 flex items-center justify-center">
-              <Eye className="h-5 w-5 text-purple-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Affichage</div>
-              <div className="text-sm text-gray-600">Préférences d'affichage des données</div>
-            </div>
-          </div>
-          
+        <SectionCard title="Affichage" icon={Eye}>
+          <p className="text-sm text-gray-600 mb-4">Préférences d'affichage des données</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <SettingInput
               label="Devise par défaut"
@@ -373,20 +325,10 @@ const Parametres: React.FC = () => {
               />
             </div>
           </div>
-        </div>
+        </SectionCard>
 
-        {/* RAPPORTS */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-50 to-blue-50 flex items-center justify-center">
-              <FileText className="h-5 w-5 text-indigo-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Rapports</div>
-              <div className="text-sm text-gray-600">Configuration des rapports automatiques</div>
-            </div>
-          </div>
-          
+        <SectionCard title="Rapports" icon={FileText}>
+          <p className="text-sm text-gray-600 mb-4">Configuration des rapports automatiques</p>
           <div className="space-y-3">
             <SettingToggle
               label="Génération automatique"
@@ -429,7 +371,7 @@ const Parametres: React.FC = () => {
               icon={<Shield className="h-5 w-5" />}
             />
           </div>
-        </div>
+        </SectionCard>
       </div>
     </div>
   );

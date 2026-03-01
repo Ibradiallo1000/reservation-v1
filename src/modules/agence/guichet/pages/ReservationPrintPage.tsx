@@ -1,8 +1,9 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { format } from 'date-fns';
-import { Button } from '@/shared/ui/button';
+import { ActionButton } from '@/ui';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { typography } from '@/ui/foundation';
 
 // Interface pour les données de réservation
 interface Reservation {
@@ -38,16 +39,14 @@ const ReservationPrintPage: React.FC = () => {
         Utilisation de media queries CSS pour le cacher lors de l'impression
       */}
       <div className="print:hidden flex justify-end mb-4">
-        <Button
+        <ActionButton
           onClick={() => {
-            // On déclenche l'impression et on retourne à la page précédente après un délai
             window.print();
             setTimeout(() => window.history.back(), 500);
           }}
-          variant="primary"
         >
           🖨️ Imprimer
-        </Button>
+        </ActionButton>
       </div>
 
       {/*
@@ -72,7 +71,7 @@ const ReservationPrintPage: React.FC = () => {
           )}
           
           {/* Nom de la compagnie */}
-          <h1 className="text-xl font-bold print:text-lg">{state.companyName}</h1>
+          <h1 className={typography.pageTitle + " text-center print:text-lg"}>{state.companyName}</h1>
           
           {/* Informations secondaires (agence et date) */}
           <div className="text-xs text-gray-600 print:text-xs">
@@ -81,7 +80,7 @@ const ReservationPrintPage: React.FC = () => {
           </div>
           
           {/* Titre principal avec informations du trajet */}
-          <h2 className="text-lg font-semibold mt-2 print:mt-1 print:text-base">
+          <h2 className={typography.sectionTitle + " mt-2 print:mt-1 print:text-base"}>
             Liste des réservations pour le trajet :{' '}
             <span className="text-blue-600">{state.trajet}</span>
           </h2>

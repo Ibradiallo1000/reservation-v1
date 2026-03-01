@@ -11,6 +11,8 @@ import { db } from "@/firebaseConfig";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 import { useNavigate, useParams } from "react-router-dom";
+import { SectionCard, StatusBadge } from "@/ui";
+import type { StatusVariant } from "@/ui";
 import {
   ChevronLeft,
   Search,
@@ -69,34 +71,24 @@ const toDayjs = (d: Reservation["date"]) => {
 const normalizePhone = (raw: string) =>
   (raw || "").replace(/[^\d+]/g, "").replace(/^00/, "+").trim();
 
+function statusToVariant(s?: string): StatusVariant {
+  const v = (s || "").toLowerCase();
+  if (v.includes("pay") || v.includes("confirm")) return "success";
+  if (v.includes("attent")) return "pending";
+  if (v.includes("annul") || v.includes("refus")) return "cancelled";
+  return "neutral";
+}
+
 const StatusPill: React.FC<{ s?: string }> = ({ s }) => {
   const v = (s || "").toLowerCase();
-  const css =
-    v.includes("pay") || v.includes("confirm")
-      ? "bg-emerald-100 text-emerald-700 border border-emerald-200"
-      : v.includes("attent")
-      ? "bg-amber-100 text-amber-700 border border-amber-200"
-      : v.includes("annul") || v.includes("refus")
-      ? "bg-rose-100 text-rose-700 border border-rose-200"
-      : "bg-slate-100 text-slate-700 border border-slate-200";
   const label =
-    v.includes("pay")
-      ? "Payé"
-      : v.includes("confirm")
-      ? "Confirmée"
-      : v.includes("attent")
-      ? "En attente"
-      : v.includes("annul")
-      ? "Annulée"
-      : v.includes("refus")
-      ? "Refusée"
-      : s || "—";
-
-  return (
-    <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full ${css}`}>
-      {label}
-    </span>
-  );
+    v.includes("pay") ? "Payé"
+    : v.includes("confirm") ? "Confirmée"
+    : v.includes("attent") ? "En attente"
+    : v.includes("annul") ? "Annulée"
+    : v.includes("refus") ? "Refusée"
+    : s || "—";
+  return <StatusBadge status={statusToVariant(s)}>{label}</StatusBadge>;
 };
 
 const INITIAL_COUNT = 5;
@@ -288,8 +280,7 @@ const ClientMesReservationsPage: React.FC = () => {
 
       {/* Body */}
       <main className="max-w-3xl mx-auto p-4 space-y-4">
-        {/* Formulaire téléphone avec instruction */}
-        <section className="bg-white border rounded-xl p-4">
+        <SectionCard title="Recherche par téléphone" icon={Phone} className="shadow-md">
           <label className="text-sm font-medium text-gray-800">
             Numéro de téléphone
           </label>
@@ -321,29 +312,33 @@ const ClientMesReservationsPage: React.FC = () => {
             </button>
           </div>
           {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-        </section>
+        </SectionCard>
 
-        {/* Résultats */}
-        <section className="bg-white border rounded-xl overflow-hidden">
-          <div className="p-3 border-b flex items-center gap-2 text-gray-800">
-            <FileText className="w-4 h-4" style={{ color: theme.primary }} />
-            <span className="text-sm font-medium">Résultats</span>
-            <span className="ml-auto text-xs text-gray-500">
-              {rows.length} élément(s)
-            </span>
-          </div>
+        <SectionCard
+          title="Résultats"
+          icon={FileText}
+          right={rows.length > 0 ? <span className="text-xs text-gray-500">{rows.length} élément(s)</span> : undefined}
+          className="shadow-md"
+          noPad
+        >
 
           {loading ? (
             <PageLoadingState blocks={3} />
           ) : !hasSearched ? (
-            <div className="p-6 text-sm text-gray-500">Lancez une recherche pour afficher vos réservations.</div>
+            <div className="p-6 text-center">
+              <p className="text-sm text-gray-600">Entrez le numéro utilisé lors de vos réservations pour les afficher ici.</p>
+              <p className="text-xs text-gray-500 mt-2">Vous pouvez aussi rechercher un trajet depuis la page d'accueil de la compagnie.</p>
+            </div>
           ) : displayed.length === 0 ? (
-            <div className="p-6 text-sm text-gray-500">
-              {isOnline ? "Aucun résultat." : "Hors ligne: impossible de charger les réservations."}
-              <div className="mt-3">
+            <div className="p-6 text-center">
+              <p className="text-sm text-gray-600">
+                {isOnline ? "Aucune réservation trouvée pour ce numéro." : "Hors ligne: impossible de charger les réservations."}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">Vérifiez le numéro ou réservez un trajet depuis la page d'accueil.</p>
+              <div className="mt-4">
                 <button
                   onClick={search}
-                  className="text-sm px-3 py-1.5 rounded-lg border hover:bg-gray-50"
+                  className="text-sm px-4 py-2 rounded-lg border hover:bg-gray-50 font-medium"
                   style={{ borderColor: `${theme.primary}40` }}
                 >
                   Réessayer
@@ -418,9 +413,7 @@ const ClientMesReservationsPage: React.FC = () => {
                               <div className="mt-3 flex items-center gap-2">
                                 <StatusPill s={r.statut} />
                                 {r.canal && (
-                                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 border text-gray-700">
-                                    {r.canal === "guichet" ? "Guichet" : "En ligne"}
-                                  </span>
+                                  <StatusBadge status="neutral">{r.canal === "guichet" ? "Guichet" : "En ligne"}</StatusBadge>
                                 )}
                               </div>
                             </div>
@@ -469,7 +462,7 @@ const ClientMesReservationsPage: React.FC = () => {
               )}
             </>
           )}
-        </section>
+        </SectionCard>
       </main>
     </div>
   );

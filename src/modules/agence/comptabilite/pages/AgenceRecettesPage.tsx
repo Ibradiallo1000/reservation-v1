@@ -14,6 +14,8 @@ import {
 } from 'recharts';
 import { format, parseISO } from 'date-fns';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
+import { Receipt } from 'lucide-react';
 
 interface Recette {
   id?: string;
@@ -172,30 +174,21 @@ const AgenceRecettesPage: React.FC = () => {
   };
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold" style={{ color: theme.primary }}>
-          Gestion des Recettes
-        </h2>
-        <div className="flex gap-2">
-          <button onClick={exportPDF}
-            className="px-4 py-2 text-white rounded shadow"
-            style={{ background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})` }}
-          >
-            📄 Exporter PDF
-          </button>
-          <button onClick={exportExcel}
-            className="px-4 py-2 text-white rounded shadow"
-            style={{ background: `linear-gradient(to right, ${theme.secondary}, ${theme.primary})` }}
-          >
-            📊 Exporter Excel
-          </button>
-        </div>
-      </div>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Gestion des Recettes"
+        icon={Receipt}
+        primaryColorVar={theme.primary}
+        right={
+          <div className="flex gap-2">
+            <ActionButton onClick={exportPDF}>Exporter PDF</ActionButton>
+            <ActionButton variant="secondary" onClick={exportExcel}>Exporter Excel</ActionButton>
+          </div>
+        }
+      />
 
-      {/* Formulaire */}
-      <form onSubmit={handleAdd} className="grid md:grid-cols-2 gap-4 mb-6 bg-white p-6 rounded-lg shadow border"
+      <SectionCard title="Nouvelle recette">
+      <form onSubmit={handleAdd} className="grid md:grid-cols-2 gap-4 mb-6"
         style={{ borderColor: theme.secondary }}>
         <input value={libelle} onChange={e => setLibelle(e.target.value)} placeholder="Libellé" required className="border p-2 rounded" />
         <input type="number" value={montant} onChange={e => setMontant(parseFloat(e.target.value))} placeholder="Montant" required className="border p-2 rounded" />
@@ -211,11 +204,9 @@ const AgenceRecettesPage: React.FC = () => {
           ))}
         </select>
         <input value={commentaire} onChange={e => setCommentaire(e.target.value)} placeholder="Commentaire (optionnel)" className="border p-2 rounded col-span-2" />
-        <button type="submit" className="col-span-2 px-4 py-2 text-white font-semibold rounded shadow"
-          style={{ background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})` }}>
-          Ajouter
-        </button>
+        <ActionButton type="submit" className="col-span-2">Ajouter</ActionButton>
       </form>
+      </SectionCard>
 
       {/* Filtres */}
       <div className="mb-6 flex flex-wrap gap-4 items-center">
@@ -308,7 +299,7 @@ const AgenceRecettesPage: React.FC = () => {
           </table>
         </div>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

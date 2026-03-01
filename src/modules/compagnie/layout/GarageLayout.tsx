@@ -6,7 +6,6 @@ import { LayoutDashboard, List, Wrench, MapPin, AlertTriangle, Moon, Sun } from 
 import { useAuth } from "@/contexts/AuthContext";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
@@ -108,23 +107,21 @@ const GarageLayout: React.FC = () => {
   return (
     <div className={darkMode ? "agency-dark" : ""}>
       <CurrencyProvider currency={(currentCompany as any)?.devise}>
-        <PageHeaderProvider>
-          <GarageThemeProvider value={garageTheme}>
-            <InternalLayout
-              sections={sections}
-              role={(user as any)?.role || "chef_garage"}
-              userName={user?.displayName || undefined}
-              userEmail={user?.email || undefined}
-              brandName={currentCompany?.nom || "Garage"}
-              logoUrl={currentCompany?.logoUrl}
-              primaryColor={garageTheme.primary}
-              secondaryColor={garageTheme.secondary}
-              onLogout={logout}
-              mainClassName="garage-content"
-              headerRight={headerRight}
-            />
-          </GarageThemeProvider>
-        </PageHeaderProvider>
+        <GarageThemeProvider value={garageTheme}>
+          <InternalLayout
+            sections={sections}
+            role={(user as any)?.role || "chef_garage"}
+            userName={user?.displayName || undefined}
+            userEmail={user?.email || undefined}
+            brandName={currentCompany?.nom || "Garage"}
+            logoUrl={currentCompany?.logoUrl}
+            primaryColor={garageTheme.primary}
+            secondaryColor={garageTheme.secondary}
+            onLogout={logout}
+            mainClassName="garage-content"
+            headerRight={headerRight}
+          />
+        </GarageThemeProvider>
       </CurrencyProvider>
     </div>
   );

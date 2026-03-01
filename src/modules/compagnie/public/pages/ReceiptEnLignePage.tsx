@@ -14,17 +14,9 @@ import {
   useLocation
 } from 'react-router-dom';
 
-import {
-  doc,
-  getDoc,
-  collectionGroup,
-  getDocs,
-  query,
-  where,
-  limit
-} from 'firebase/firestore';
-
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { resolveReservationById } from '@/modules/compagnie/public/utils/resolveReservation';
 import { ChevronLeft, Download, Printer, Home } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
 import { safeTextColor } from '@/utils/color';
@@ -82,22 +74,10 @@ const ReceiptEnLignePage: React.FC = () => {
   const slug = params.slug ?? pathParts[0] ?? '';
   const id = params.id ?? (pathParts[1] === 'receipt' ? pathParts[2] : undefined);
 
-  const {
-    companyInfo: companyInfoFromState,
-    reservation: reservationFromState,
-    companyId: companyIdFromState,
-    agencyId: agencyIdFromState,
-  } = (location.state || {}) as {
-    companyInfo?: CompanyInfo;
-    reservation?: Reservation;
-    companyId?: string;
-    agencyId?: string;
-  };
-
-  const [reservation, setReservation] = useState<Reservation | null>(reservationFromState ?? null);
-  const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(companyInfoFromState ?? null);
+  const [reservation, setReservation] = useState<Reservation | null>(null);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [agencyName, setAgencyName] = useState<string>('Agence');
-  const [loading, setLoading] = useState<boolean>(!reservationFromState);
+  const [loading, setLoading] = useState<boolean>(true);
   const [notFound, setNotFound] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -109,128 +89,70 @@ const ReceiptEnLignePage: React.FC = () => {
   const secondaryColor = companyInfo?.couleurSecondaire ?? '#f59e0b';
   const textColor = safeTextColor(primaryColor);
 
-  /* LOAD RESERVATION — par ID uniquement, sans filtre statut */
+  /* LOAD RESERVATION — par slug + id uniquement (URL comme source de vérité, pas de state) */
   useEffect(() => {
-    if (!id) {
+    if (!id || !slug) {
       setLoading(false);
-      setNotFound(true);
-      return;
-    }
-    if (reservationFromState?.id === id) {
-      setLoading(false);
+      setNotFound(!id);
       return;
     }
 
-    const companyId = companyIdFromState ?? reservation?.companyId;
-    const agencyId = agencyIdFromState ?? reservation?.agencyId;
-
-    const load = async () => {
+    let cancelled = false;
+    (async () => {
       setLoading(true);
       setNotFound(false);
       setLoadError('');
-
-      const firestorePath = companyId && agencyId
-        ? `companies/${companyId}/agences/${agencyId}/reservations/${id}`
-        : null;
-
-      console.log('[ReceiptEnLignePage] load', { id, companyId, agencyId, firestorePath });
-
       try {
-        // 1) Si on a companyId + agencyId (ex: depuis Mes Billets), lecture directe par path
-        if (companyId && agencyId) {
-          const resRef = doc(db, 'companies', companyId, 'agences', agencyId, 'reservations', id);
-          const snap = await getDoc(resRef);
-          console.log('[ReceiptEnLignePage] getDoc path', resRef.path, 'exists:', snap.exists());
-
-          if (snap.exists()) {
-            const data = snap.data() as Record<string, unknown>;
-            setReservation({
-              id: snap.id,
-              companyId,
-              agencyId,
-              companySlug: (data.companySlug as string) ?? '',
-              nomClient: (data.nomClient as string) ?? (data.clientNom as string) ?? '',
-              telephone: (data.telephone as string) ?? '',
-              depart: (data.depart as string) ?? (data.departure as string) ?? '',
-              arrivee: (data.arrivee as string) ?? (data.arrival as string) ?? '',
-              date: typeof data.date === 'string' ? data.date : (data.date as any)?.seconds ? new Date((data.date as any).seconds * 1000).toISOString().slice(0, 10) : '',
-              heure: (data.heure as string) ?? '',
-              montant: Number(data.montant ?? data.montant_total ?? 0),
-              referenceCode: data.referenceCode as string | undefined,
-              statut: data.statut as ReservationStatus | undefined,
-              canal: (data.canal as string) ?? 'en_ligne',
-              seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
-              createdAt: data.createdAt,
-              nomAgence: data.nomAgence as string | undefined,
-              agencyNom: data.agencyNom as string | undefined,
-              agenceNom: data.agenceNom as string | undefined,
-              modePaiement: data.modePaiement as string | undefined,
-              preuveVia: data.preuveVia as string | undefined,
-              remboursement: data.remboursement as { mode?: string } | undefined,
-            });
-            setLoading(false);
-            return;
-          }
+        const { ref: resRef } = await resolveReservationById(slug, id);
+        if (cancelled) return;
+        const snap = await getDoc(resRef);
+        if (cancelled) return;
+        if (!snap.exists()) {
+          setNotFound(true);
+          return;
         }
-
-        // 2) Sinon fallback: collectionGroup par referenceCode ou par __name__ (aucun filtre statut)
-        let snap = await getDocs(
-          query(
-            collectionGroup(db, 'reservations'),
-            where('referenceCode', '==', id),
-            limit(1)
-          )
-        );
-
-        if (snap.empty) {
-          snap = await getDocs(
-            query(
-              collectionGroup(db, 'reservations'),
-              where('__name__', '==', id),
-              limit(1)
-            )
+        const data = snap.data() as Record<string, unknown>;
+        const companyId = resRef.path.split('/')[1];
+        const agencyId = resRef.path.split('/')[3];
+        setReservation({
+          id: snap.id,
+          companyId,
+          agencyId,
+          companySlug: (data.companySlug as string) ?? '',
+          nomClient: (data.nomClient as string) ?? (data.clientNom as string) ?? '',
+          telephone: (data.telephone as string) ?? '',
+          depart: (data.depart as string) ?? (data.departure as string) ?? '',
+          arrivee: (data.arrivee as string) ?? (data.arrival as string) ?? '',
+          date: typeof data.date === 'string' ? data.date : (data.date as any)?.seconds ? new Date((data.date as any).seconds * 1000).toISOString().slice(0, 10) : '',
+          heure: (data.heure as string) ?? '',
+          montant: Number(data.montant ?? data.montant_total ?? 0),
+          referenceCode: data.referenceCode as string | undefined,
+          statut: data.statut as ReservationStatus | undefined,
+          canal: (data.canal as string) ?? 'en_ligne',
+          seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
+          createdAt: data.createdAt,
+          nomAgence: data.nomAgence as string | undefined,
+          agencyNom: data.agencyNom as string | undefined,
+          agenceNom: data.agenceNom as string | undefined,
+          modePaiement: data.modePaiement as string | undefined,
+          preuveVia: data.preuveVia as string | undefined,
+          remboursement: data.remboursement as { mode?: string } | undefined,
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setLoadError(
+            !isOnline
+              ? 'Connexion indisponible. Impossible de charger le reçu.'
+              : 'Erreur de chargement du reçu. Veuillez réessayer.'
           );
-        }
-
-        if (!snap.empty) {
-          const d = snap.docs[0];
-          const refPath = d.ref.path;
-          const pathSegments = refPath.split('/');
-          const cId = pathSegments[1];
-          const aId = pathSegments[3];
-          const data = d.data() as Record<string, unknown>;
-          setReservation({
-            ...(data as Partial<Reservation>),
-            id: d.id,
-            companyId: cId,
-            agencyId: aId,
-            companySlug: (data.companySlug as string) ?? '',
-            nomClient: (data.nomClient as string) ?? (data.clientNom as string) ?? '',
-            telephone: (data.telephone as string) ?? '',
-            depart: (data.depart as string) ?? (data.departure as string) ?? '',
-            arrivee: (data.arrivee as string) ?? (data.arrival as string) ?? '',
-            date: typeof data.date === 'string' ? data.date : (data.date as any)?.seconds ? new Date((data.date as any).seconds * 1000).toISOString().slice(0, 10) : '',
-            heure: (data.heure as string) ?? '',
-            montant: Number(data.montant ?? data.montant_total ?? 0),
-            seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
-          });
-        } else {
           setNotFound(true);
         }
-      } catch (err) {
-        console.error('[ReceiptEnLignePage] load error', err);
-        setLoadError(
-          !isOnline
-            ? 'Connexion indisponible. Impossible de charger le reçu.'
-            : 'Erreur de chargement du reçu. Veuillez réessayer.'
-        );
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    };
-
-    load();
-  }, [id, companyIdFromState, agencyIdFromState, reservationFromState?.id, isOnline, reloadKey]);
+    })();
+    return () => { cancelled = true; };
+  }, [id, slug, isOnline, reloadKey]);
 
   /* LOAD COMPANY */
   useEffect(() => {

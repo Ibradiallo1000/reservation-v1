@@ -31,6 +31,7 @@ import ErrorMessage from '@/shared/ui/ErrorMessage';
 
 import ReceiptModal from '@/modules/agence/guichet/components/ReceiptModal';
 import type { ReservationStatus } from '@/types/reservation';
+import { typography } from '@/ui/foundation';
 
 interface ReservationData {
   id: string;
@@ -367,7 +368,7 @@ const ReceiptGuichetPage: React.FC = () => {
             <ChevronLeft />
           </button>
 
-          <h1 className="font-bold text-sm">
+          <h1 className={typography.cardTitle + " font-bold"}>
             Reçu de voyage
           </h1>
 

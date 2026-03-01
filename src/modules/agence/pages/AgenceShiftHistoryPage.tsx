@@ -16,6 +16,8 @@ import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge, ActionButton, table, tableRowClassName, EmptyState } from '@/ui';
+import { History } from 'lucide-react';
 
 type Row = {
   id: string;
@@ -169,30 +171,25 @@ const AgenceShiftHistoryPage: React.FC = () => {
     setTimeout(() => URL.revokeObjectURL(url), 400);
   };
 
-  return (
-    <div className="max-w-7xl mx-auto px-4 py-6">
-      {/* En-tête */}
-      <div className="rounded-xl overflow-hidden border shadow-sm bg-white mb-4">
-        <div className="p-4 text-white" style={gradient}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              {companyLogo ? (
-                <img src={companyLogo} className="h-8 w-8 object-contain bg-white/90 rounded p-1" />
-              ) : <div className="h-8 w-8 rounded bg-white/30" />}
-              <div>
-                <div className="text-lg font-semibold">Historique des postes — Agence</div>
-                <div className="text-xs opacity-90">{companyName}</div>
-              </div>
-            </div>
-            <div className="hidden sm:flex gap-2">
-              <button onClick={load} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm">Actualiser</button>
-              <button onClick={exportCSV} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm">Export CSV</button>
-            </div>
-          </div>
-        </div>
+  const statusToVariant = (s: Row['status']) => (s === 'active' ? 'active' : s === 'paused' ? 'pending' : 'neutral') as 'active' | 'pending' | 'neutral';
 
-        {/* Filtres */}
-        <div className="p-3 border-b grid grid-cols-1 sm:grid-cols-5 gap-2">
+  return (
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Historique des postes — Agence"
+        subtitle={companyName}
+        icon={History}
+        primaryColorVar={theme?.primary}
+        right={
+          <div className="flex gap-2">
+            <ActionButton variant="secondary" size="sm" onClick={load}>Actualiser</ActionButton>
+            <ActionButton variant="secondary" size="sm" onClick={exportCSV}>Export CSV</ActionButton>
+          </div>
+        }
+      />
+
+      <SectionCard title="Filtres">
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
           <div className="sm:col-span-1">
             <label className="text-xs text-gray-500">Du</label>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
@@ -220,64 +217,56 @@ const AgenceShiftHistoryPage: React.FC = () => {
                    className="w-full border rounded-lg px-3 py-2" />
           </div>
         </div>
+      </SectionCard>
 
-        {/* Table */}
-        <div className="p-3">
-          {err && <div className="mb-3 p-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">{err}</div>}
-
-          <div className="overflow-auto rounded-xl border">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="text-left text-white" style={gradient}>
-                  <th className="px-3 py-2">Guichetier</th>
-                  <th className="px-3 py-2">Statut</th>
-                  <th className="px-3 py-2">Début</th>
-                  <th className="px-3 py-2">Fin</th>
-                  <th className="px-3 py-2 text-right">Ventes</th>
-                  <th className="px-3 py-2 text-right">Billets</th>
-                  <th className="px-3 py-2 text-right">Montant</th>
-                  <th className="px-3 py-2 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white">
+      <SectionCard title="Sessions" noPad>
+        {err && <div className="mb-3 p-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200 mx-5 mt-4">{err}</div>}
+        <div className={table.wrapper}>
+          <table className={table.base}>
+            <thead className={table.head}>
+              <tr>
+                <th className={table.th}>Guichetier</th>
+                <th className={table.th}>Statut</th>
+                <th className={table.th}>Début</th>
+                <th className={table.th}>Fin</th>
+                <th className={table.thRight}>Ventes</th>
+                <th className={table.thRight}>Billets</th>
+                <th className={table.thRight}>Montant</th>
+                <th className={table.thRight}>Actions</th>
+              </tr>
+            </thead>
+            <tbody className={table.body}>
                 {loading ? (
                   <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-500">Chargement…</td></tr>
                 ) : rows.length === 0 ? (
-                  <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-500">Aucun résultat.</td></tr>
+                  <tr><td colSpan={8} className="px-3 py-6 text-center"><EmptyState message="Aucun résultat." /></td></tr>
                 ) : (
-                  rows.map(r => {
-                    const t = tag(r.status);
-                    return (
-                      <tr key={r.id} className="border-t hover:bg-gray-50">
-                        <td className="px-3 py-2">{r.guichetierCode || '—'}</td>
-                        <td className="px-3 py-2">
-                          <span className="text-xs px-2 py-1 rounded" style={{ backgroundColor: t.bg, color: t.txt }}>{t.label}</span>
-                        </td>
-                        <td className="px-3 py-2">{r.startTime ? new Date(r.startTime).toLocaleString('fr-FR') : '—'}</td>
-                        <td className="px-3 py-2">{r.endTime ? new Date(r.endTime).toLocaleString('fr-FR') : '—'}</td>
-                        <td className="px-3 py-2 text-right">{r.reservations}</td>
-                        <td className="px-3 py-2 text-right">{r.billets}</td>
-                        <td className="px-3 py-2 text-right font-medium">{money(r.montant)}</td>
-                        <td className="px-3 py-2 text-right">
-                          <div className="flex justify-end gap-2">
-                            <button onClick={() => openReport(r.id)} className="px-3 py-1.5 rounded-lg text-sm text-white" style={gradient}>Voir rapport</button>
-                            <button onClick={() => printReport(r.id)} className="px-3 py-1.5 rounded-lg text-sm border">Imprimer</button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
+                  rows.map(r => (
+                    <tr key={r.id} className={tableRowClassName()}>
+                      <td className={table.td}>{r.guichetierCode || '—'}</td>
+                      <td className={table.td}>
+                        <StatusBadge status={statusToVariant(r.status)}>{tag(r.status).label}</StatusBadge>
+                      </td>
+                      <td className={table.td}>{r.startTime ? new Date(r.startTime).toLocaleString('fr-FR') : '—'}</td>
+                      <td className={table.td}>{r.endTime ? new Date(r.endTime).toLocaleString('fr-FR') : '—'}</td>
+                      <td className={table.tdRight}>{r.reservations}</td>
+                      <td className={table.tdRight}>{r.billets}</td>
+                      <td className={table.tdRight + " font-medium"}>{money(r.montant)}</td>
+                      <td className={table.tdRight}>
+                        <div className="flex justify-end gap-2">
+                          <ActionButton size="sm" onClick={() => openReport(r.id)}>Voir rapport</ActionButton>
+                          <ActionButton variant="secondary" size="sm" onClick={() => printReport(r.id)}>Imprimer</ActionButton>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
                 )}
               </tbody>
             </table>
-          </div>
-
-          <div className="text-xs text-gray-500 mt-3">
-            Vue agence : appliquez les filtres pour retrouver une session d’un guichetier et ouvrir/ imprimer son rapport.
-          </div>
         </div>
-      </div>
-    </div>
+        <p className="text-xs text-gray-500 mt-3 px-5 pb-4">Vue agence : appliquez les filtres pour retrouver une session et ouvrir / imprimer son rapport.</p>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

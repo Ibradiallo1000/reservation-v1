@@ -8,6 +8,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import type { DailyStatsDoc } from "../aggregates/types";
 import type { AgencyLiveStateDoc } from "../aggregates/types";
+import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, EmptyState, table, tableRowClassName } from "@/ui";
+import { LayoutDashboard } from "lucide-react";
 
 const SESSION_DURATION_WARNING_HOURS = 8;
 
@@ -242,155 +244,137 @@ const ManagerDashboardPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-6xl mx-auto">
-        <div className="text-gray-500">Chargement du tableau de bord…</div>
-      </div>
+      <StandardLayoutWrapper>
+        <p className="text-gray-500">Chargement du tableau de bord…</p>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-6xl mx-auto p-6 space-y-6">
-        <h1 className="text-2xl font-bold text-gray-900">Tableau de bord Manager</h1>
-        <p className="text-sm text-gray-600">{formatDateLongFr(new Date())}</p>
+    <StandardLayoutWrapper maxWidthClass="max-w-6xl">
+      <PageHeader
+        title="Tableau de bord Manager"
+        subtitle={formatDateLongFr(new Date())}
+        icon={LayoutDashboard}
+      />
 
-        {/* 1) Live Cashier Sessions */}
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Sessions guichet</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
-              <div className="text-2xl font-bold text-emerald-700">{activeShiftsCount}</div>
-              <div className="text-sm text-emerald-800">Actives</div>
-            </div>
-            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
-              <div className="text-2xl font-bold text-amber-700">{closedPendingCount}</div>
-              <div className="text-sm text-amber-800">Clôturées (en attente validation)</div>
-            </div>
-            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-              <div className="text-2xl font-bold text-slate-700">{validatedShiftsCount}</div>
-              <div className="text-sm text-slate-800">Validées</div>
-            </div>
-          </div>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-2">Guichetier</th>
-                  <th className="text-left py-2">Statut</th>
-                  <th className="text-right py-2">Revenu</th>
-                  <th className="text-left py-2">Alerte</th>
+      <SectionCard title="Sessions guichet">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <MetricCard label="Actives" value={activeShiftsCount} valueColorVar="#059669" />
+          <MetricCard label="Clôturées (en attente validation)" value={closedPendingCount} valueColorVar="#d97706" />
+          <MetricCard label="Validées" value={validatedShiftsCount} valueColorVar="#475569" />
+        </div>
+        <div className={table.wrapper}>
+          <table className={table.base}>
+            <thead className={table.head}>
+              <tr>
+                <th className={table.th}>Guichetier</th>
+                <th className={table.th}>Statut</th>
+                <th className={table.thRight}>Revenu</th>
+                <th className={table.th}>Alerte</th>
+              </tr>
+            </thead>
+            <tbody className={table.body}>
+              {shifts.slice(0, 20).map((s) => (
+                <tr key={s.id} className={tableRowClassName()}>
+                  <td className={table.td}>{s.userName ?? s.userId ?? s.id}</td>
+                  <td className={table.td}>{s.status}</td>
+                  <td className={table.tdRight}>{revenueByShift[s.id] != null ? `${(revenueByShift[s.id] ?? 0).toFixed(0)}` : "—"}</td>
+                  <td className={table.td}>
+                    {sessionWarnings.some((w) => w.id === s.id) && (
+                      <span className="text-amber-600 text-xs">Session &gt; {SESSION_DURATION_WARNING_HOURS}h</span>
+                    )}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {shifts.slice(0, 20).map((s) => (
-                  <tr key={s.id} className="border-b">
-                    <td className="py-2">{s.userName ?? s.userId ?? s.id}</td>
-                    <td className="py-2 capitalize">{s.status}</td>
-                    <td className="py-2 text-right">{revenueByShift[s.id] != null ? `${(revenueByShift[s.id] ?? 0).toFixed(0)}` : "—"}</td>
-                    <td className="py-2">
-                      {sessionWarnings.some((w) => w.id === s.id) && (
-                        <span className="text-amber-600 text-xs">Session &gt; {SESSION_DURATION_WARNING_HOURS}h</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {/* 2) Live Boarding Overview */}
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Embarquement du jour</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-2">Départ → Arrivée</th>
-                  <th className="text-left py-2">Heure</th>
-                  <th className="text-right py-2">Remplissage</th>
-                  <th className="text-center py-2">Statut</th>
-                </tr>
-              </thead>
-              <tbody>
-                {departuresToday.length === 0 ? (
-                  <tr><td colSpan={4} className="py-4 text-gray-500 text-center">Aucun départ planifié</td></tr>
-                ) : (
-                  departuresToday.map((d, i) => (
-                    <tr key={i} className="border-b">
-                      <td className="py-2">{d.departure} → {d.arrival}</td>
-                      <td className="py-2">{d.heure}</td>
-                      <td className="py-2 text-right">
-                        {d.embarked} / {d.capacity} ({d.capacity ? Math.round((d.embarked / d.capacity) * 100) : 0}%)
-                      </td>
-                      <td className="py-2 text-center">{d.closed ? "Clôturé" : "Ouvert"}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {/* 3) Fleet Status Overview */}
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Flotte</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="p-3 rounded-lg bg-gray-100"><div className="font-bold">{fleetByStatus.garage}</div><div className="text-xs text-gray-600">En garage</div></div>
-            <div className="p-3 rounded-lg bg-amber-50"><div className="font-bold">{fleetByStatus.assigned}</div><div className="text-xs text-gray-600">Affectés</div></div>
-            <div className="p-3 rounded-lg bg-blue-50"><div className="font-bold">{fleetByStatus.inTransit}</div><div className="text-xs text-gray-600">En transit</div></div>
-            <div className="p-3 rounded-lg bg-emerald-50"><div className="font-bold">{fleetByStatus.approaching}</div><div className="text-xs text-gray-600">Approchant cette agence</div></div>
-          </div>
-        </section>
-
-        {/* 4) Alerts Panel */}
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Alertes</h2>
-          {alerts.length === 0 ? (
-            <p className="text-sm text-gray-500">Aucune alerte.</p>
-          ) : (
-            <ul className="space-y-2">
-              {alerts.slice(0, 10).map((a, i) => (
-                <li key={i} className="flex items-center gap-2 text-sm">
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  {a.message}
-                </li>
               ))}
-            </ul>
-          )}
-        </section>
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
 
-        {/* 5) Performance Metrics */}
-        <section className="bg-white rounded-xl border p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-3">Indicateurs du jour</h2>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="p-4 rounded-lg bg-indigo-50 border border-indigo-100">
-              <div className="text-2xl font-bold text-indigo-700">{totalRevenueToday.toFixed(0)}</div>
-              <div className="text-sm text-indigo-800">Revenu total (aujourd&apos;hui)</div>
-            </div>
-            <div className="p-4 rounded-lg bg-purple-50 border border-purple-100">
-              <div className="text-2xl font-bold text-purple-700">{totalPassengersToday}</div>
-              <div className="text-sm text-purple-800">Passagers</div>
-            </div>
-            <div className="p-4 rounded-lg bg-teal-50 border border-teal-100">
-              <div className="text-2xl font-bold text-teal-700">
-                {departuresToday.length > 0
-                  ? Math.round(
-                      (departuresToday.reduce((a, d) => a + d.embarked, 0) /
-                        Math.max(1, departuresToday.reduce((a, d) => a + d.capacity, 0))) * 100
-                    )
-                  : 0}%
-              </div>
-              <div className="text-sm text-teal-800">Taux de remplissage</div>
-            </div>
-            <div className="p-4 rounded-lg bg-amber-50 border border-amber-100">
-              <div className="text-lg font-bold text-amber-700">{topCashier?.userName ?? "—"}</div>
-              <div className="text-sm text-amber-800">Meilleur guichetier (revenu: {topCashier?.revenue?.toFixed(0) ?? "0"})</div>
-            </div>
-          </div>
-        </section>
-      </div>
-    </div>
+      <SectionCard title="Embarquement du jour">
+        <div className={table.wrapper}>
+          <table className={table.base}>
+            <thead className={table.head}>
+              <tr>
+                <th className={table.th}>Départ → Arrivée</th>
+                <th className={table.th}>Heure</th>
+                <th className={table.thRight}>Remplissage</th>
+                <th className={table.th}>Statut</th>
+              </tr>
+            </thead>
+            <tbody className={table.body}>
+              {departuresToday.length === 0 ? (
+                <tr><td colSpan={4} className="py-4 text-gray-500 text-center">Aucun départ planifié</td></tr>
+              ) : (
+                departuresToday.map((d, i) => (
+                  <tr key={i} className={tableRowClassName()}>
+                    <td className={table.td}>{d.departure} → {d.arrival}</td>
+                    <td className={table.td}>{d.heure}</td>
+                    <td className={table.tdRight}>
+                      {d.embarked} / {d.capacity} ({d.capacity ? Math.round((d.embarked / d.capacity) * 100) : 0}%)
+                    </td>
+                    <td className={table.td}>{d.closed ? "Clôturé" : "Ouvert"}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Flotte">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <MetricCard label="En garage" value={fleetByStatus.garage} valueColorVar="#4b5563" />
+          <MetricCard label="Affectés" value={fleetByStatus.assigned} valueColorVar="#d97706" />
+          <MetricCard label="En transit" value={fleetByStatus.inTransit} valueColorVar="#2563eb" />
+          <MetricCard label="Approchant cette agence" value={fleetByStatus.approaching} valueColorVar="#059669" />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Alertes">
+        {alerts.length === 0 ? (
+          <EmptyState message="Aucune alerte." />
+        ) : (
+          <ul className="space-y-2">
+            {alerts.slice(0, 10).map((a, i) => (
+              <li key={i} className="flex items-center gap-2 text-sm">
+                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                {a.message}
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Indicateurs du jour">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <MetricCard
+            label="Revenu total (aujourd'hui)"
+            value={totalRevenueToday.toFixed(0)}
+            valueColorVar="#4f46e5"
+          />
+          <MetricCard label="Passagers" value={totalPassengersToday} valueColorVar="#7c3aed" />
+          <MetricCard
+            label="Taux de remplissage"
+            value={
+              departuresToday.length > 0
+                ? `${Math.round(
+                    (departuresToday.reduce((a, d) => a + d.embarked, 0) /
+                      Math.max(1, departuresToday.reduce((a, d) => a + d.capacity, 0))) * 100
+                  )}%`
+                : "0%"
+            }
+            valueColorVar="#0d9488"
+          />
+          <MetricCard
+            label="Meilleur guichetier"
+            value={topCashier?.userName ?? "—"}
+            valueColorVar="#d97706"
+          />
+        </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

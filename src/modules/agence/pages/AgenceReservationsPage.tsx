@@ -69,43 +69,14 @@ const isOnline   = (raw?: string) => {
 const norm = (s?: string) => (s||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
 
 /* ===================== UI bits ===================== */
-// ✅ Corrige TS: déclarer explicitement children
-type BadgeColor = 'green'|'amber'|'gray'|'red'|'indigo'|'emerald';
-const Badge = ({ color, children }: { color: BadgeColor; children?: React.ReactNode }) => {
-  const map: Record<BadgeColor, {bg:string; fg:string}> = {
-    green:{bg:'#DCFCE7', fg:'#166534'},
-    emerald:{bg:'#D1FAE5', fg:'#065F46'},
-    amber:{bg:'#FEF3C7', fg:'#92400E'},
-    gray: {bg:'#F3F4F6', fg:'#374151'},
-    red:  {bg:'#FEE2E2', fg:'#B91C1C'},
-    indigo:{bg:'#E0E7FF', fg:'#3730A3'}
-  };
-  const c = map[color];
-  return <span className="px-2 py-0.5 rounded text-xs font-medium" style={{backgroundColor:c.bg,color:c.fg}}>{children}</span>;
-};
+import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, ActionButton, EmptyState, table, tableRowClassName } from '@/ui';
+import { BarChart3 } from 'lucide-react';
 
-const FancyKpi: React.FC<{label:string; value:string; icon?:React.ReactNode; primary:string; secondary:string}> =
-({label,value,icon,primary,secondary}) => (
-  <div
-    className="rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow border"
-    style={{borderColor:`${primary}22`, background: `linear-gradient(180deg, #ffffff, ${secondary}0f)`}}
-  >
-    <div className="flex items-center justify-between">
-      <div className="text-sm text-gray-600">{label}</div>
-      <div
-        className="h-9 w-9 rounded-xl grid place-items-center"
-        style={{background:`linear-gradient(135deg, ${primary}22, ${secondary}22)`}}
-      >
-        <span className="text-gray-700">{icon ?? '📊'}</span>
-      </div>
-    </div>
-    <div
-      className="text-2xl font-bold mt-1"
-      style={{background:`linear-gradient(90deg, ${primary}, ${secondary})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}
-    >
-      {value}
-    </div>
-  </div>
+const badgeColorToStatus: Record<string, 'success'|'pending'|'neutral'|'danger'|'info'> = {
+  green: 'success', emerald: 'success', amber: 'pending', gray: 'neutral', red: 'danger', indigo: 'info',
+};
+const Badge = ({ color, children }: { color: keyof typeof badgeColorToStatus; children?: React.ReactNode }) => (
+  <StatusBadge status={badgeColorToStatus[color] ?? 'neutral'}>{children}</StatusBadge>
 );
 
 const OnlineKioskCard: React.FC<{
@@ -355,13 +326,17 @@ const AgenceReservationsPage: React.FC = () => {
 
   /* ===================== UI ===================== */
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100" style={{background:theme.background}}>
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Réservations agence"
+        subtitle={`Période : ${fmtDate(range[0])} → ${fmtDate(range[1])}`}
+        icon={BarChart3}
+        primaryColorVar={theme?.primary}
+      />
 
-        {/* ===== KPIs de période (EN HAUT) ===== */}
-        <div className="rounded-xl bg-white border shadow-sm p-4 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="font-semibold">
+      <SectionCard title="Période et indicateurs">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div className="font-semibold text-gray-700">
               Période : <span className="text-gray-600">{fmtDate(range[0])} → {fmtDate(range[1])}</span>
             </div>
             <div className="flex items-center gap-3">
@@ -392,19 +367,16 @@ const AgenceReservationsPage: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <FancyKpi label="Billets (Guichet)" value={String(kpis.gTickets)} primary={theme.primary} secondary={theme.secondary}/>
-            <FancyKpi label="Montant (Guichet)" value={money(kpis.gMontant)} primary={theme.primary} secondary={theme.secondary}/>
-            <FancyKpi label="Billets (En ligne)" value={String(kpis.oTickets)} primary={theme.primary} secondary={theme.secondary}/>
-            <FancyKpi label="Montant (En ligne)" value={money(kpis.oMontant)} primary={theme.primary} secondary={theme.secondary}/>
+            <MetricCard label="Billets (Guichet)" value={String(kpis.gTickets)} valueColorVar={theme?.primary} />
+            <MetricCard label="Montant (Guichet)" value={money(kpis.gMontant)} valueColorVar={theme?.primary} />
+            <MetricCard label="Billets (En ligne)" value={String(kpis.oTickets)} valueColorVar={theme?.secondary} />
+            <MetricCard label="Montant (En ligne)" value={money(kpis.oMontant)} valueColorVar={theme?.secondary} />
           </div>
-        </div>
+      </SectionCard>
 
-        {/* ===== Guichets en activité (y compris EN LIGNE) ===== */}
-        <div className="rounded-xl bg-white border shadow-sm p-4">
-          <div className="text-lg font-bold mb-3 flex items-center gap-2">🧾 Guichets en activité</div>
-
+      <SectionCard title="Guichets en activité">
           {shifts.length===0 && kpis.oTickets===0 ? (
-            <div className="text-gray-500">Aucun poste en attente / en service / en pause / clôturé.</div>
+            <EmptyState message="Aucun poste en attente / en service / en pause / clôturé." />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
               {/* Guichet “EN LIGNE” en 1ʳᵉ position si ventes en ligne */}
@@ -488,65 +460,55 @@ const AgenceReservationsPage: React.FC = () => {
               })}
             </div>
           )}
-          <div className="text-xs text-gray-500 mt-2">
+          <p className="text-xs text-gray-500 mt-2">
             Lorsqu’un poste est <b>validé</b> (Comptable + Chef), il est archivé dans “Rapports de poste (validés)” plus bas.
-          </div>
-        </div>
+          </p>
+      </SectionCard>
 
-        {/* ===== Départs groupés ===== */}
-        <div className="rounded-xl bg-white border shadow-sm">
-          <div className="px-4 py-3 font-semibold">Départs (regroupés par trajet / date / heure)</div>
-          <div className="overflow-x-auto">
+      <SectionCard title="Départs (regroupés par trajet / date / heure)" noPad>
+        <div className={table.wrapper}>
             {grouped.length===0 ? (
-              <div className="px-4 py-6 text-gray-500">Aucun départ sur la période.</div>
+              <div className="px-4 py-6"><EmptyState message="Aucun départ sur la période." /></div>
             ) : (
-              <table className="w-full text-sm">
-                <thead style={{background:`${theme.secondary}22`}} className="text-gray-700">
+              <table className={table.base}>
+                <thead className={table.head}>
                   <tr>
-                    <th className="px-3 py-2 text-left">Trajet</th>
-                    <th className="px-3 py-2 text-left">Date</th>
-                    <th className="px-3 py-2 text-left">Heure</th>
-                    <th className="px-3 py-2 text-right">Billets (Guichet)</th>
-                    <th className="px-3 py-2 text-right">Billets (En ligne)</th>
-                    <th className="px-3 py-2 text-right">Billets (Total)</th>
-                    <th className="px-3 py-2 text-right">Montant (Guichet)</th>
-                    <th className="px-3 py-2 text-right">Montant (En ligne)</th>
-                    <th className="px-3 py-2 text-right">Montant (Total)</th>
-                    <th className="px-3 py-2 text-right">Actions</th>
+                    <th className={table.th}>Trajet</th>
+                    <th className={table.th}>Date</th>
+                    <th className={table.th}>Heure</th>
+                    <th className={table.thRight}>Billets (Guichet)</th>
+                    <th className={table.thRight}>Billets (En ligne)</th>
+                    <th className={table.thRight}>Billets (Total)</th>
+                    <th className={table.thRight}>Montant (Guichet)</th>
+                    <th className={table.thRight}>Montant (En ligne)</th>
+                    <th className={table.thRight}>Montant (Total)</th>
+                    <th className={table.thRight}>Actions</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className={table.body}>
                   {grouped.map(g=>(
-                    <tr key={g.key} className="border-t hover:bg-gray-50">
-                      <td className="px-3 py-2">{g.trajet}</td>
-                      <td className="px-3 py-2">{g.date}</td>
-                      <td className="px-3 py-2">{g.heure}</td>
-                      <td className="px-3 py-2 text-right">{g.billetsGuichet}</td>
-                      <td className="px-3 py-2 text-right">{g.billetsOnline}</td>
-                      <td className="px-3 py-2 text-right font-semibold">{g.billetsTotal}</td>
-                      <td className="px-3 py-2 text-right">{money(g.montantGuichet)}</td>
-                      <td className="px-3 py-2 text-right">{money(g.montantOnline)}</td>
-                      <td className="px-3 py-2 text-right font-semibold">{money(g.montantTotal)}</td>
-                      <td className="px-3 py-2 text-right">
-                        <button
-                          onClick={()=>navigate('/agence/embarquement', {state:{trajet:g.trajet, date:g.date, heure:g.heure}})}
-                          className="px-3 py-1.5 rounded-lg border hover:bg-gray-50 focus:outline-none focus:ring-2"
-                          style={{outlineColor: theme.primary}}
-                          title="Afficher la liste d'embarquement"
-                        >
-                          Afficher
-                        </button>
+                    <tr key={g.key} className={tableRowClassName()}>
+                      <td className={table.td}>{g.trajet}</td>
+                      <td className={table.td}>{g.date}</td>
+                      <td className={table.td}>{g.heure}</td>
+                      <td className={table.tdRight}>{g.billetsGuichet}</td>
+                      <td className={table.tdRight}>{g.billetsOnline}</td>
+                      <td className={table.tdRight + " font-semibold"}>{g.billetsTotal}</td>
+                      <td className={table.tdRight}>{money(g.montantGuichet)}</td>
+                      <td className={table.tdRight}>{money(g.montantOnline)}</td>
+                      <td className={table.tdRight + " font-semibold"}>{money(g.montantTotal)}</td>
+                      <td className={table.tdRight}>
+                        <ActionButton size="sm" onClick={()=>navigate('/agence/embarquement', {state:{trajet:g.trajet, date:g.date, heure:g.heure}})} title="Afficher la liste d'embarquement">Afficher</ActionButton>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-          </div>
         </div>
+      </SectionCard>
 
-        {/* ===== Rapports validés (limités + filtre) ===== */}
-        <div className="rounded-xl bg-white border shadow-sm">
+      <SectionCard title="Rapports de poste (validés)" noPad>
           <div className="px-4 py-3 flex items-center justify-between gap-3">
             <div className="font-semibold">Rapports de poste (validés)</div>
             <div className="flex items-center gap-2">
@@ -628,10 +590,8 @@ const AgenceReservationsPage: React.FC = () => {
           <div className="text-xs text-gray-500 px-4 py-3 border-t">
             Un poste n’apparaît ici qu’après <b>validation comptable</b> (définitif).
           </div>
-        </div>
-
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

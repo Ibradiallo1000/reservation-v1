@@ -13,10 +13,10 @@ import {
   Banknote, Ticket, Gauge, Wallet, Bus,
   AlertTriangle, CheckCircle2, Clock, Monitor,
 } from "lucide-react";
+import { DateFilterBar } from "./DateFilterBar";
 import {
-  KpiCard, SectionCard, AlertItem, StatusBadge, EmptyState, MGR,
-  DateFilterBar,
-} from "./ui";
+  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, AlertMessage, table, tableRowClassName, typography,
+} from "@/ui";
 import { useDateFilterContext } from "./DateFilterContext";
 import { useManagerAlerts } from "./useManagerAlerts";
 import type { DailyStatsDoc, AgencyLiveStateDoc } from "../aggregates/types";
@@ -152,58 +152,54 @@ export default function ManagerCockpitPage() {
       })),
   [managerAlerts]);
 
-  if (loading) return <div className={MGR.page}><p className={MGR.muted}>Chargement du cockpit…</p></div>;
+  if (loading) return <StandardLayoutWrapper><p className={typography.muted}>Chargement du cockpit…</p></StandardLayoutWrapper>;
 
   return (
-    <div className={MGR.page}>
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className={MGR.h1}>Dashboard</h1>
-          <p className={MGR.muted}>{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}</p>
-        </div>
-        <DateFilterBar
-          preset={dateFilter.preset} onPresetChange={dateFilter.setPreset}
-          customStart={dateFilter.customStart} customEnd={dateFilter.customEnd}
-          onCustomStartChange={dateFilter.setCustomStart} onCustomEndChange={dateFilter.setCustomEnd}
-        />
-      </div>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Dashboard"
+        subtitle={format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
+        right={
+          <DateFilterBar
+            preset={dateFilter.preset} onPresetChange={dateFilter.setPreset}
+            customStart={dateFilter.customStart} customEnd={dateFilter.customEnd}
+            onCustomStartChange={dateFilter.setCustomStart} onCustomEndChange={dateFilter.setCustomEnd}
+          />
+        }
+      />
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <KpiCard label="Revenu" value={money(filteredRevenue)} icon={Banknote} accent="text-emerald-700"
-          help="Total des revenus encaissés sur la période sélectionnée (billets payés)." />
-        <KpiCard label="Billets vendus" value={filteredTickets} icon={Ticket} accent="text-blue-700" />
-        <KpiCard label="Taux de remplissage" value={`${avgOccupancy}%`} icon={Gauge} accent="text-purple-700"
-          help="Pourcentage moyen de places occupées par rapport à la capacité totale des départs du jour." />
-        <KpiCard label="Position caisse" value={money(cashPosition)} icon={Wallet} accent="text-indigo-700"
-          help="Solde actuel de tous les comptes de caisse de l'agence." />
-        <KpiCard label="Départs restants" value={departuresRemaining} icon={Bus} accent="text-orange-700" />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        <MetricCard label="Revenu" value={money(filteredRevenue)} icon={Banknote} valueColorVar="#059669" />
+        <MetricCard label="Billets vendus" value={filteredTickets} icon={Ticket} valueColorVar="#1d4ed8" />
+        <MetricCard label="Taux de remplissage" value={`${avgOccupancy}%`} icon={Gauge} valueColorVar="#7c3aed" />
+        <MetricCard label="Position caisse" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
+        <MetricCard label="Départs restants" value={departuresRemaining} icon={Bus} valueColorVar="#c2410c" />
       </div>
 
       <SectionCard title="Guichets actifs" icon={Monitor}
-        help="Vue en temps réel de l'activité de chaque guichet ouvert. Les données se mettent à jour automatiquement."
-        right={<StatusBadge color="green">{activeCounters.length} actif{activeCounters.length > 1 ? "s" : ""}</StatusBadge>}
+        right={<StatusBadge status="success">{activeCounters.length} actif{activeCounters.length > 1 ? "s" : ""}</StatusBadge>}
         noPad>
         {activeCounters.length === 0 ? (
           <EmptyState message="Aucun guichet actif en ce moment." />
         ) : (
-          <div className={MGR.table.wrapper}>
-            <table className={MGR.table.base}>
-              <thead className={MGR.table.head}>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className={MGR.table.th}>Guichetier</th>
-                  <th className={MGR.table.thRight}>Billets (session)</th>
-                  <th className={MGR.table.thRight}>Revenu (session)</th>
-                  <th className={MGR.table.th}>Statut</th>
+                  <th className={table.th}>Guichetier</th>
+                  <th className={table.thRight}>Billets (session)</th>
+                  <th className={table.thRight}>Revenu (session)</th>
+                  <th className={table.th}>Statut</th>
                 </tr>
               </thead>
-              <tbody className={MGR.table.body}>
+              <tbody className={table.body}>
                 {activeCounters.map((c) => (
-                  <tr key={c.id} className={MGR.table.row}>
-                    <td className={MGR.table.td}><span className="font-medium text-gray-900">{c.name}</span></td>
-                    <td className={MGR.table.tdRight}>{c.tickets}</td>
-                    <td className={MGR.table.tdRight}>{money(c.revenue)}</td>
-                    <td className={MGR.table.td}>
-                      {c.status === "active" ? <StatusBadge color="green">Actif</StatusBadge> : <StatusBadge color="yellow">En pause</StatusBadge>}
+                  <tr key={c.id} className={tableRowClassName()}>
+                    <td className={table.td}><span className="font-medium text-gray-900">{c.name}</span></td>
+                    <td className={table.tdRight}>{c.tickets}</td>
+                    <td className={table.tdRight}>{money(c.revenue)}</td>
+                    <td className={table.td}>
+                      {c.status === "active" ? <StatusBadge status="active">Actif</StatusBadge> : <StatusBadge status="pending">En pause</StatusBadge>}
                     </td>
                   </tr>
                 ))}
@@ -217,45 +213,44 @@ export default function ManagerCockpitPage() {
         <SectionCard title="Alertes" icon={AlertTriangle}>
           <div className="space-y-2">
             {alertItems.slice(0, 10).map((a, i) => (
-              <AlertItem key={i} severity={a.severity} message={a.message} />
+              <AlertMessage key={i} severity={a.severity} message={a.message} />
             ))}
           </div>
         </SectionCard>
       )}
 
-      <SectionCard title="Validations en attente" icon={CheckCircle2} noPad
-        help="Rapports de session guichet en attente de validation. Le comptable valide en premier, puis le chef d'agence approuve définitivement.">
+      <SectionCard title="Validations en attente" icon={CheckCircle2} noPad>
         {closedPending.length === 0 && validatedByCompta.length === 0 ? (
           <EmptyState message="Aucune validation en attente." />
         ) : (
-          <div className={MGR.table.wrapper}>
-            <table className={MGR.table.base}>
-              <thead className={MGR.table.head}>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className={MGR.table.th}>Guichetier</th>
-                  <th className={MGR.table.th}>Statut</th>
-                  <th className={MGR.table.th}>Début</th>
-                  <th className={MGR.table.thRight}>Revenu</th>
+                  <th className={table.th}>Guichetier</th>
+                  <th className={table.th}>Statut</th>
+                  <th className={table.th}>Début</th>
+                  <th className={table.thRight}>Revenu</th>
                 </tr>
               </thead>
-              <tbody className={MGR.table.body}>
+              <tbody className={table.body}>
                 {[...closedPending, ...validatedByCompta].map((s) => {
                   const rev = reservationsToday.filter((r) => r.shiftId === s.id).reduce((a, r) => a + (r.montant ?? 0), 0);
                   return (
-                    <tr key={s.id} className={MGR.table.row}>
-                      <td className={MGR.table.td}>{s.userName ?? s.userId}</td>
-                      <td className={MGR.table.td}>
+                    <tr key={s.id} className={tableRowClassName()}>
+                      <td className={table.td}>{s.userName ?? s.userId}</td>
+                      <td className={table.td}>
                         {s.status === "closed"
-                          ? <StatusBadge color="yellow">En attente compta</StatusBadge>
-                          : <StatusBadge color="blue">Validé compta — à approuver</StatusBadge>}
+                          ? <StatusBadge status="pending">En attente compta</StatusBadge>
+                          : <StatusBadge status="info">Validé compta — à approuver</StatusBadge>}
                       </td>
-                      <td className={MGR.table.td}>
+                      <td className={table.td}>
                         <span className="flex items-center gap-1">
                           <Clock className="w-3.5 h-3.5 text-gray-400" />
                           {s.startTime?.toMillis ? format(new Date(s.startTime.toMillis()), "HH:mm") : "—"}
                         </span>
                       </td>
-                      <td className={MGR.table.tdRight}>{money(rev)}</td>
+                      <td className={table.tdRight}>{money(rev)}</td>
                     </tr>
                   );
                 })}
@@ -264,6 +259,6 @@ export default function ManagerCockpitPage() {
           </div>
         )}
       </SectionCard>
-    </div>
+    </StandardLayoutWrapper>
   );
 }

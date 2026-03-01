@@ -65,9 +65,9 @@ export function normalizeReservationStatus(status: string): ReservationStatus {
 // Fonction pour afficher le libellé du statut
 export function getStatusDisplay(status: ReservationStatus): string {
   switch (status) {
-    case 'preuve_recue': return 'Preuve reçue';
-    case 'verification': return 'En vérification';
-    case 'confirme': return 'Confirmé';
+    case 'preuve_recue': return 'En attente de validation';
+    case 'verification': return 'En attente de validation';
+    case 'confirme': return 'Réservation confirmée';
     case 'payé': return 'Payé';
     case 'refuse': case 'refusé': return 'Refusé';
     case 'annule': case 'annulé': return 'Annulé';

@@ -19,8 +19,8 @@ import { Package, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { Link } from "react-router-dom";
 import CourierReceipt from "../components/CourierReceipt";
 import CourierPackageLabel from "../components/CourierPackageLabel";
-import CourierPageHeader from "../components/CourierPageHeader";
 import AgencySearchSelect from "../components/AgencySearchSelect";
+import { PageHeader, StandardLayoutWrapper, ActionButton, SectionCard } from "@/ui";
 
 const MAX_PHONE_SUGGESTIONS = 5;
 const RECENT_SHIPMENTS_LIMIT = 50;
@@ -279,41 +279,31 @@ export default function CourierCreateShipmentPage() {
   const destinationAgencyName = (id: string) => agencies.find((a) => a.id === id)?.nomAgence ?? agencies.find((a) => a.id === id)?.nom ?? id;
 
   return (
-    <div className="p-4 max-w-2xl mx-auto space-y-6">
-      <CourierPageHeader
+    <StandardLayoutWrapper maxWidthClass="max-w-2xl">
+      <PageHeader
         icon={Package}
         title="Nouvel Envoi"
-        primaryColor={primaryColor}
+        primaryColorVar="var(--courier-primary, #ea580c)"
         right={
-          <Link
-            to="/agence/courrier"
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border px-4 py-2.5 text-sm transition-colors duration-200"
-            style={{ borderColor: "var(--courier-primary, #ea580c)", color: "var(--courier-primary, #ea580c)" }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.backgroundColor = "var(--courier-primary, #ea580c)";
-              e.currentTarget.style.color = "#fff";
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.backgroundColor = "";
-              e.currentTarget.style.color = "var(--courier-primary, #ea580c)";
-            }}
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Courrier
+          <Link to="/agence/courrier">
+            <ActionButton variant="secondary" className="!border-[var(--courier-primary,#ea580c)] !text-[var(--courier-primary,#ea580c)] hover:!bg-[var(--courier-primary,#ea580c)] hover:!text-white">
+              <ArrowLeft className="h-4 w-4" />
+              Courrier
+            </ActionButton>
           </Link>
         }
       />
 
       {!session && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800 text-sm">
-          Aucune session active. Ouvrez une session depuis Courrier et attendez son activation par le comptable.
-        </div>
+        <SectionCard title="Information">
+          <p className="text-sm text-amber-800">Aucune session active. Ouvrez une session depuis Courrier et attendez son activation par le comptable.</p>
+        </SectionCard>
       )}
 
       {session?.status === "PENDING" && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800 text-sm">
-          Session en attente d&apos;activation par le comptable.
-        </div>
+        <SectionCard title="Information">
+          <p className="text-sm text-amber-800">Session en attente d&apos;activation par le comptable.</p>
+        </SectionCard>
       )}
 
       {error && (
@@ -325,7 +315,8 @@ export default function CourierCreateShipmentPage() {
       )}
 
       {session?.status === "ACTIVE" && (
-        <form onSubmit={handleSubmit} className="space-y-6 rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm sm:p-6" style={{ ["--focus-ring" as string]: secondaryColor }}>
+        <SectionCard title="Créer un envoi">
+          <form onSubmit={handleSubmit} className="space-y-6" style={{ ["--focus-ring" as string]: secondaryColor }}>
           {frequentSenders.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wider text-gray-500">Expéditeurs fréquents</p>
@@ -347,8 +338,7 @@ export default function CourierCreateShipmentPage() {
             </div>
           )}
 
-          <section className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
-            <h2 className="mb-3 font-semibold" style={{ color: "var(--courier-primary, #ea580c)" }}>Expéditeur</h2>
+          <SectionCard title="Expéditeur">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Nom <span className="text-red-500">*</span></label>
@@ -370,10 +360,9 @@ export default function CourierCreateShipmentPage() {
                 )}
               </div>
             </div>
-          </section>
+          </SectionCard>
 
-          <section className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
-            <h2 className="mb-3 font-semibold" style={{ color: "var(--courier-primary, #ea580c)" }}>Destinataire</h2>
+          <SectionCard title="Destinataire">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Nom <span className="text-red-500">*</span></label>
@@ -395,9 +384,9 @@ export default function CourierCreateShipmentPage() {
                 )}
               </div>
             </div>
-          </section>
+          </SectionCard>
 
-          <section className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
+          <SectionCard title="Agence de destination">
             {frequentDestinations.length > 0 && (
               <div className="mb-3">
                 <p className="mb-2 text-xs font-medium uppercase tracking-wider text-gray-500">Destinations fréquentes</p>
@@ -426,10 +415,9 @@ export default function CourierCreateShipmentPage() {
               placeholder="Rechercher une agence…"
               aria-label="Agence de destination"
             />
-          </section>
+          </SectionCard>
 
-          <section className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
-            <h2 className="mb-3 font-semibold" style={{ color: "var(--courier-primary, #ea580c)" }}>Colis</h2>
+          <SectionCard title="Colis">
             <div className="space-y-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Nature <span className="text-red-500">*</span></label>
@@ -447,30 +435,32 @@ export default function CourierCreateShipmentPage() {
                 </div>
               </div>
             </div>
-          </section>
+          </SectionCard>
 
-          <div className="flex flex-col gap-4 rounded-xl border-2 bg-gray-50/80 p-5 sm:flex-row sm:items-center sm:justify-between" style={{ borderColor: "var(--courier-primary, #ea580c)" }}>
-            <div>
-              <span className="text-sm font-medium uppercase tracking-wider text-gray-600">Total à payer</span>
-              <p className="mt-1 text-2xl font-bold teliya-monetary">{money(total)}</p>
-            </div>
-            <button type="submit" disabled={!canSubmit || submitting} className="w-full min-h-[48px] rounded-lg px-4 py-2.5 text-white transition-colors duration-200 disabled:opacity-50 sm:w-auto inline-flex items-center justify-center gap-2" style={{ backgroundColor: "var(--courier-primary, #ea580c)" }} onMouseOver={(e) => { if (canSubmit && !submitting) e.currentTarget.style.backgroundColor = "var(--courier-secondary, #f97316)"; }} onMouseOut={(e) => { e.currentTarget.style.backgroundColor = "var(--courier-primary, #ea580c)"; }}>
-              {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-              Créer l&apos;envoi
-            </button>
-          </div>
+          <SectionCard
+            title="Total à payer"
+            right={
+              <button type="submit" disabled={!canSubmit || submitting} className="min-h-[48px] rounded-lg px-4 py-2.5 text-white transition-colors duration-200 disabled:opacity-50 inline-flex items-center justify-center gap-2" style={{ backgroundColor: "var(--courier-primary, #ea580c)" }} onMouseOver={(e) => { if (canSubmit && !submitting) e.currentTarget.style.backgroundColor = "var(--courier-secondary, #f97316)"; }} onMouseOut={(e) => { e.currentTarget.style.backgroundColor = "var(--courier-primary, #ea580c)"; }}>
+                {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
+                Créer l&apos;envoi
+              </button>
+            }
+          >
+            <p className="text-2xl font-bold teliya-monetary">{money(total)}</p>
+          </SectionCard>
         </form>
+        </SectionCard>
       )}
 
       {lastCreatedShipment && (
-        <div className="space-y-4 rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm sm:p-6">
+        <SectionCard title="Envoi créé">
           <p className="font-medium text-green-700">Envoi créé : {lastCreatedShipment.shipmentNumber ?? lastCreatedShipment.shipmentId}</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setShowReceipt(true)} className="min-h-[44px] rounded-lg px-4 py-2.5 text-sm text-white transition-colors duration-200" style={{ backgroundColor: "var(--courier-primary, #ea580c)" }} onMouseOver={(e) => { e.currentTarget.style.backgroundColor = "var(--courier-secondary, #f97316)"; }} onMouseOut={(e) => { e.currentTarget.style.backgroundColor = "var(--courier-primary, #ea580c)"; }}>Imprimer reçu</button>
             <button type="button" onClick={() => setShowLabel(true)} className="min-h-[44px] rounded-lg border px-4 py-2.5 text-sm transition-colors duration-200" style={{ borderColor: "var(--courier-primary, #ea580c)", color: "var(--courier-primary, #ea580c)" }} onMouseOver={(e) => { e.currentTarget.style.backgroundColor = "var(--courier-primary, #ea580c)"; e.currentTarget.style.color = "#fff"; }} onMouseOut={(e) => { e.currentTarget.style.backgroundColor = ""; e.currentTarget.style.color = "var(--courier-primary, #ea580c)"; }}>Imprimer étiquette</button>
             <button type="button" onClick={() => { setLastCreatedShipment(null); setShowReceipt(false); setShowLabel(false); }} className="min-h-[44px] rounded-lg border border-gray-300 px-4 py-2.5 text-sm transition-colors duration-200 hover:bg-gray-50">Fermer</button>
           </div>
-        </div>
+        </SectionCard>
       )}
 
       {lastCreatedShipment && showReceipt && (
@@ -479,6 +469,6 @@ export default function CourierCreateShipmentPage() {
       {lastCreatedShipment && showLabel && (
         <CourierPackageLabel shipment={lastCreatedShipment} destinationAgencyName={destinationAgencyName(lastCreatedShipment.destinationAgencyId)} originAgencyName={agencyName} onClose={() => setShowLabel(false)} />
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

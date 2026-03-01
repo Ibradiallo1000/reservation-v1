@@ -74,6 +74,13 @@ service cloud.firestore {
       allow get, list: if true;
     }
 
+    /* Résolution publique des réservations (slug + id ou token). Pas de collectionGroup. */
+    match /publicReservations/{reservationId} {
+      allow get, list: if true;
+      allow create: if true;
+      allow update, delete: if false;
+    }
+
     /* =====================
        COMPAGNIES / AGENCES
     ===================== */
@@ -132,7 +139,7 @@ service cloud.firestore {
 
           /* =============================
              UPDATE 2 — APRÈS PAIEMENT
-             (preuve de paiement)
+             (une seule preuve : statut + paymentReference + proofSubmittedAt)
           ============================= */
           allow update: if (
             request.auth == null &&
@@ -142,15 +149,8 @@ service cloud.firestore {
             request.resource.data.diff(resource.data).changedKeys()
               .hasOnly([
                 "statut",
-                "canal",
-                "preuveVia",
-                "preuveMessage",
-                "preuveUrl",
-                "companyId",
-                "companySlug",
-                "paymentHint",
-                "paymentTriggeredAt",
-                "auditLog",
+                "paymentReference",
+                "proofSubmittedAt",
                 "updatedAt"
               ])
           );

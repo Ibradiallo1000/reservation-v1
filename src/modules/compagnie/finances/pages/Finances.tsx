@@ -30,13 +30,12 @@ import {
   Building2,
   Info,
   Calculator,
-  ArrowUpRight,
-  ArrowDownRight,
   Banknote,
   Smartphone as MobileIcon,
   Globe,
   ChevronRight
 } from 'lucide-react';
+import { MetricCard, SectionCard, StatusBadge } from '@/ui';
 
 // Types
 interface AgencyRevenue {
@@ -394,71 +393,11 @@ const Finances: React.FC = () => {
   };
 
   // ==================== COMPOSANTS UI ====================
-  const KpiCard: React.FC<{
-    icon: React.ReactNode; 
-    label: string; 
-    value: string; 
-    sublabel?: string;
-    trend?: number;
-    theme: { primary: string; secondary: string };
-    emphasis: boolean;
-    warning?: boolean;
-    info?: boolean;
-  }> = ({ icon, label, value, sublabel, trend, theme, emphasis, warning = false, info = false }) => (
-    <div
-      className={`relative overflow-hidden rounded-xl border p-5 bg-white shadow-sm
-        hover:shadow-md transition-all duration-300
-        ${emphasis ? 'ring-2 ring-offset-2' : ''}
-        ${warning ? 'border-amber-300 bg-amber-50/30' : info ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'}`}
-      style={
-        emphasis
-          ? { ['--tw-ring-color' as any]: theme.primary }
-          : undefined
-      }
-    >
-      <div className="absolute top-0 right-0 h-20 w-20 opacity-10">
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full blur-xl"></div>
-      </div>
-      
-      <div className="flex items-start justify-between mb-4">
-        <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">{label}</div>
-        <div className={`h-10 w-10 rounded-xl grid place-items-center ${
-          warning ? 'bg-amber-100' : info ? 'bg-blue-100' : ''
-        }`}
-             style={!warning && !info ? {background: `linear-gradient(135deg, ${theme.primary}20, ${theme.secondary}20)`} : undefined}>
-          <span className={warning ? 'text-amber-600' : info ? 'text-blue-600' : 'text-gray-700'}>{icon}</span>
-        </div>
-      </div>
-      
-      <div className="space-y-1">
-        <div className={`font-bold ${emphasis ? 'text-3xl' : 'text-2xl'} 
-          ${warning ? 'text-amber-700' : info ? 'text-blue-700' : 'text-gray-900'}`}>
-          {value}
-        </div>
-        {sublabel && <div className={`text-xs font-medium ${warning ? 'text-amber-600' : info ? 'text-blue-600' : 'text-gray-500'}`}>
-          {sublabel}
-        </div>}
-        
-        {trend !== undefined && trend !== null && (
-          <div className={`inline-flex items-center gap-1 text-xs font-medium ${
-            trend >= 0 ? 'text-emerald-600' : 'text-red-600'
-          }`}>
-            {trend >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-            {Math.abs(trend).toFixed(1)}% vs période précédente
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
   const PeriodBadge: React.FC<{ period: FinancialData['period'] }> = ({ period }) => (
-    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200">
-      <Calendar className="h-3 w-3 text-blue-600" />
+    <div className="inline-flex items-center gap-2">
       <span className="text-sm font-medium text-blue-700">{period.label}</span>
       {period.isCurrentMonth && (
-        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-          En cours
-        </span>
+        <StatusBadge status="success">En cours</StatusBadge>
       )}
     </div>
   );
@@ -496,69 +435,43 @@ const Finances: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* ================= EN-TÊTE ================= */}
-      <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
+      <SectionCard
+        title="Finances Compagnie"
+        icon={TrendingUp}
+        help={<span className="text-sm font-normal text-gray-500">Données consolidées pour la prise de décision</span>}
+        right={
+          <div className="flex items-center gap-2">
+            <button onClick={handleRefresh} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium">
+              <RefreshCw className="h-4 w-4" /> Actualiser
+            </button>
+            <button className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium">
+              <Download className="h-4 w-4" /> Exporter
+            </button>
+          </div>
+        }
+      >
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-emerald-50 to-green-50 flex items-center justify-center">
-              <TrendingUp className="h-6 w-6 text-emerald-600" />
-            </div>
-            <div>
-              <div className="text-xl font-bold text-gray-900">Finances Compagnie</div>
-              <div className="text-sm text-gray-600">Données consolidées pour la prise de décision</div>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={handleRefresh}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Actualiser
-            </button>
-            <button className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium">
-              <Download className="h-4 w-4" />
-              Exporter
-            </button>
-          </div>
-        </div>
-        
-        {/* Période active */}
-        <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
             <PeriodBadge period={financialData.period} />
-            <div className="text-sm text-gray-600">
-              Données consolidées de {financialData.revenue.byAgency.length} agences
-            </div>
+            <span className="text-sm text-gray-600">Données consolidées de {financialData.revenue.byAgency.length} agences</span>
           </div>
-          
-          <div className="text-xs text-gray-500">
-            Dernière mise à jour : {lastUpdated.toLocaleTimeString('fr-FR', { 
-              hour: '2-digit', 
-              minute: '2-digit' 
-            })}
-          </div>
+          <span className="text-xs text-gray-500">
+            Dernière mise à jour : {lastUpdated.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+          </span>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ================= FILTRES DE PÉRIODE ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
-              <Calendar className="h-5 w-5 text-gray-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Période d'analyse</div>
-              <div className="text-sm text-gray-600">Sélectionnez la période à analyser</div>
-            </div>
-          </div>
-          
-          <div className="text-sm text-gray-600">
-            <span className="font-medium">Période :</span>{' '}
+      <SectionCard
+        title="Période d'analyse"
+        icon={Calendar}
+        help={<span className="text-sm font-normal text-gray-500">Sélectionnez la période à analyser</span>}
+        right={
+          <span className="text-sm text-gray-600">
             {financialData.period.start.toLocaleDateString('fr-FR')} → {financialData.period.end.toLocaleDateString('fr-FR')}
-          </div>
-        </div>
+          </span>
+        }
+      >
         
         <div className="space-y-4">
           {/* Sélecteur rapide */}
@@ -665,86 +578,65 @@ const Finances: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ================= KPIs FINANCIERS ================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        <KpiCard 
-          icon={<DollarSign className="h-6 w-6" />} 
-          label="Chiffre d'affaires" 
-          value={fmtMoney(financialData.revenue.total)} 
-          sublabel={`${financialData.revenue.byAgency.length} agences actives`}
-          theme={theme}
-          emphasis={true}
+        <MetricCard
+          label="Chiffre d'affaires"
+          value={fmtMoney(financialData.revenue.total)}
+          icon={DollarSign}
+          valueColorVar={theme.primary}
         />
-        
         {hasExpensesData ? (
-          <KpiCard 
-            icon={<TrendingDown className="h-6 w-6" />} 
-            label="Dépenses totales" 
-            value={fmtMoney(financialData.expenses.total)} 
-            sublabel={`${financialData.expenses.byAgency.length} agences renseignées`}
-            theme={theme}
-            emphasis={false}
+          <MetricCard
+            label="Dépenses totales"
+            value={fmtMoney(financialData.expenses.total)}
+            icon={TrendingDown}
           />
         ) : (
-          <KpiCard 
-            icon={<AlertTriangle className="h-6 w-6" />} 
-            label="Dépenses totales" 
-            value="Données manquantes" 
-            sublabel="À renseigner par les agences"
-            theme={theme}
-            emphasis={false}
-            warning={true}
+          <MetricCard
+            label="Dépenses totales"
+            value="Données manquantes"
+            icon={AlertTriangle}
+            critical
+            criticalMessage="À renseigner par les agences"
           />
         )}
-        
         {hasExpensesData ? (
-          <KpiCard 
-            icon={<PieChart className="h-6 w-6" />} 
-            label="Bénéfice net" 
-            value={fmtMoney(totalProfit)} 
-            sublabel={`Marge : ${fmtPercent(profitMargin)}`}
-            theme={theme}
-            emphasis={false}
+          <MetricCard
+            label="Bénéfice net"
+            value={fmtMoney(totalProfit)}
+            icon={PieChart}
           />
         ) : (
-          <KpiCard 
-            icon={<Calculator className="h-6 w-6" />} 
-            label="Bénéfice net" 
-            value="Non calculable" 
-            sublabel="En attente des données de dépenses"
-            theme={theme}
-            emphasis={false}
-            info={true}
+          <MetricCard
+            label="Bénéfice net"
+            value="Non calculable"
+            icon={Calculator}
+            critical
+            criticalMessage="En attente des données de dépenses"
           />
         )}
-        
-        <KpiCard 
-          icon={<BarChart3 className="h-6 w-6" />} 
-          label="Transactions" 
-          value={fmtShortMoney(financialData.revenue.total)} 
-          sublabel={`${financialData.paymentMethods.total > 0 
-            ? `${((financialData.paymentMethods.cash / financialData.paymentMethods.total) * 100).toFixed(0)}% espèces`
-            : '0 transaction'}`}
-          theme={theme}
-          emphasis={false}
+        <MetricCard
+          label="Transactions"
+          value={fmtShortMoney(financialData.revenue.total)}
+          icon={BarChart3}
         />
       </div>
 
       {/* ================= RÉPARTITION PAR CANAL ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-bold text-gray-900">Répartition du chiffre d'affaires par canal</div>
-          <div className="text-sm text-gray-600">Analyse des points de vente</div>
-        </div>
-        
+      <SectionCard
+        title="Répartition du chiffre d'affaires par canal"
+        icon={BarChart3}
+        help={<span className="text-sm font-normal text-gray-500">Analyse des points de vente</span>}
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Guichet */}
-          <div className="p-5 rounded-xl border border-gray-200 bg-gradient-to-br from-blue-50 to-indigo-50">
+          <div className="p-5 rounded-lg border border-gray-200 bg-gray-50/50">
             <div className="flex items-center gap-3 mb-4">
-              <div className="h-12 w-12 rounded-xl bg-white border border-blue-200 flex items-center justify-center">
-                <Building2 className="h-6 w-6 text-blue-600" />
+              <div className="h-12 w-12 rounded-lg border border-gray-200 bg-white flex items-center justify-center">
+                <Building2 className="h-6 w-6 text-gray-600" />
               </div>
               <div>
                 <div className="font-bold text-gray-900">Guichet</div>
@@ -770,8 +662,8 @@ const Finances: React.FC = () => {
                     .map((agency, index) => (
                       <div key={agency.id} className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <div className="h-6 w-6 rounded-md bg-blue-100 flex items-center justify-center">
-                            <span className="text-xs font-bold text-blue-600">#{index + 1}</span>
+                          <div className="h-6 w-6 rounded-md bg-gray-200 flex items-center justify-center">
+                            <span className="text-xs font-bold text-gray-700">#{index + 1}</span>
                           </div>
                           <span className="text-sm text-gray-700 truncate">{agency.name}</span>
                         </div>
@@ -786,10 +678,10 @@ const Finances: React.FC = () => {
           </div>
           
           {/* En ligne */}
-          <div className="p-5 rounded-xl border border-gray-200 bg-gradient-to-br from-purple-50 to-pink-50">
+          <div className="p-5 rounded-lg border border-gray-200 bg-gray-50/50">
             <div className="flex items-center gap-3 mb-4">
-              <div className="h-12 w-12 rounded-xl bg-white border border-purple-200 flex items-center justify-center">
-                <Globe className="h-6 w-6 text-purple-600" />
+              <div className="h-12 w-12 rounded-lg border border-gray-200 bg-white flex items-center justify-center">
+                <Globe className="h-6 w-6 text-gray-600" />
               </div>
               <div>
                 <div className="font-bold text-gray-900">En ligne</div>
@@ -815,8 +707,8 @@ const Finances: React.FC = () => {
                     .map((agency, index) => (
                       <div key={agency.id} className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <div className="h-6 w-6 rounded-md bg-purple-100 flex items-center justify-center">
-                            <span className="text-xs font-bold text-purple-600">#{index + 1}</span>
+                          <div className="h-6 w-6 rounded-md bg-gray-200 flex items-center justify-center">
+                            <span className="text-xs font-bold text-gray-700">#{index + 1}</span>
                           </div>
                           <span className="text-sm text-gray-700 truncate">{agency.name}</span>
                         </div>
@@ -830,21 +722,20 @@ const Finances: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ================= MOYENS DE PAIEMENT ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-bold text-gray-900">Moyens de paiement utilisés</div>
-          <div className="text-sm text-gray-600">Répartition des encaissements</div>
-        </div>
-        
+      <SectionCard
+        title="Moyens de paiement utilisés"
+        icon={CreditCard}
+        help={<span className="text-sm font-normal text-gray-500">Répartition des encaissements</span>}
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Espèces */}
-          <div className="p-5 rounded-xl border border-gray-200">
+          <div className="p-5 rounded-lg border border-gray-200 bg-gray-50/50">
             <div className="flex items-center gap-3 mb-4">
-              <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center">
-                <Banknote className="h-6 w-6 text-emerald-600" />
+              <div className="h-12 w-12 rounded-lg border border-gray-200 bg-white flex items-center justify-center">
+                <Banknote className="h-6 w-6 text-gray-600" />
               </div>
               <div>
                 <div className="font-bold text-gray-900">Espèces</div>
@@ -876,10 +767,10 @@ const Finances: React.FC = () => {
           </div>
           
           {/* Mobile Money */}
-          <div className="p-5 rounded-xl border border-gray-200">
+          <div className="p-5 rounded-lg border border-gray-200 bg-gray-50/50">
             <div className="flex items-center gap-3 mb-4">
-              <div className="h-12 w-12 rounded-xl bg-blue-100 flex items-center justify-center">
-                <MobileIcon className="h-6 w-6 text-blue-600" />
+              <div className="h-12 w-12 rounded-lg border border-gray-200 bg-white flex items-center justify-center">
+                <MobileIcon className="h-6 w-6 text-gray-600" />
               </div>
               <div>
                 <div className="font-bold text-gray-900">Mobile Money</div>
@@ -918,19 +809,21 @@ const Finances: React.FC = () => {
             Cette répartition montre comment l'argent est physiquement encaissé.
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ================= PERFORMANCE PAR AGENCE ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-bold text-gray-900">Performance par agence</div>
-          <div className="text-sm text-gray-600">
+      <SectionCard
+        title="Performance par agence"
+        icon={Building2}
+        right={
+          <span className="text-sm text-gray-600">
             {financialData.agencies.length} agences
             {!hasExpensesData && ' (bénéfice non calculable - dépenses manquantes)'}
-          </div>
-        </div>
-        
-        <div className="overflow-hidden rounded-xl border border-gray-200">
+          </span>
+        }
+        noPad
+      >
+        <div className="overflow-hidden border border-gray-200 rounded-lg">
           <table className="w-full text-sm">
             <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
               <tr>
@@ -1030,106 +923,87 @@ const Finances: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ================= DÉPENSES DÉTAILLÉES ================= */}
       {hasExpensesData && financialData.expenses.detail && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-5">
-            <div className="text-lg font-bold text-gray-900">Détail des dépenses consolidées</div>
-            <div className="text-sm text-gray-600">
-              {financialData.expenses.byAgency.length} agences ont renseigné leurs dépenses
-            </div>
-          </div>
-          
+        <SectionCard
+          title="Détail des dépenses consolidées"
+          icon={PieChart}
+          right={<span className="text-sm text-gray-600">{financialData.expenses.byAgency.length} agences ont renseigné leurs dépenses</span>}
+        >
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-4 rounded-xl border border-gray-200">
-              <div className="text-sm text-gray-500 mb-2">Salaires</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {fmtMoney(financialData.expenses.detail.salaries)}
-              </div>
-              <div className="text-sm text-gray-500">
-                {financialData.expenses.total 
-                  ? `${((financialData.expenses.detail.salaries / financialData.expenses.total) * 100).toFixed(1)}% des dépenses`
-                  : '0%'}
-              </div>
-            </div>
-            
-            <div className="p-4 rounded-xl border border-gray-200">
-              <div className="text-sm text-gray-500 mb-2">Opérations</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {fmtMoney(financialData.expenses.detail.operations)}
-              </div>
-              <div className="text-sm text-gray-500">
-                {financialData.expenses.total 
-                  ? `${((financialData.expenses.detail.operations / financialData.expenses.total) * 100).toFixed(1)}% des dépenses`
-                  : '0%'}
-              </div>
-            </div>
-            
-            <div className="p-4 rounded-xl border border-gray-200">
-              <div className="text-sm text-gray-500 mb-2">Marketing</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {fmtMoney(financialData.expenses.detail.marketing)}
-              </div>
-              <div className="text-sm text-gray-500">
-                {financialData.expenses.total 
-                  ? `${((financialData.expenses.detail.marketing / financialData.expenses.total) * 100).toFixed(1)}% des dépenses`
-                  : '0%'}
-              </div>
-            </div>
-            
-            <div className="p-4 rounded-xl border border-gray-200">
-              <div className="text-sm text-gray-500 mb-2">Autres</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {fmtMoney(financialData.expenses.detail.other)}
-              </div>
-              <div className="text-sm text-gray-500">
-                {financialData.expenses.total 
-                  ? `${((financialData.expenses.detail.other / financialData.expenses.total) * 100).toFixed(1)}% des dépenses`
-                  : '0%'}
-              </div>
-            </div>
+            <MetricCard
+              label="Salaires"
+              value={fmtMoney(financialData.expenses.detail.salaries)}
+              help={financialData.expenses.total ? (
+                <span className="text-xs text-gray-500">
+                  {((financialData.expenses.detail.salaries / financialData.expenses.total) * 100).toFixed(1)}% des dépenses
+                </span>
+              ) : undefined}
+            />
+            <MetricCard
+              label="Opérations"
+              value={fmtMoney(financialData.expenses.detail.operations)}
+              help={financialData.expenses.total ? (
+                <span className="text-xs text-gray-500">
+                  {((financialData.expenses.detail.operations / financialData.expenses.total) * 100).toFixed(1)}% des dépenses
+                </span>
+              ) : undefined}
+            />
+            <MetricCard
+              label="Marketing"
+              value={fmtMoney(financialData.expenses.detail.marketing)}
+              help={financialData.expenses.total ? (
+                <span className="text-xs text-gray-500">
+                  {((financialData.expenses.detail.marketing / financialData.expenses.total) * 100).toFixed(1)}% des dépenses
+                </span>
+              ) : undefined}
+            />
+            <MetricCard
+              label="Autres"
+              value={fmtMoney(financialData.expenses.detail.other)}
+              help={financialData.expenses.total ? (
+                <span className="text-xs text-gray-500">
+                  {((financialData.expenses.detail.other / financialData.expenses.total) * 100).toFixed(1)}% des dépenses
+                </span>
+              ) : undefined}
+            />
           </div>
-        </div>
+        </SectionCard>
       )}
 
       {/* ================= INSTRUCTIONS POUR DÉPENSES ================= */}
       {!hasExpensesData && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-            <AlertTriangle className="h-6 w-6 text-amber-600" />
-            <div className="text-lg font-bold text-amber-800">Données de dépenses incomplètes</div>
-          </div>
-          
-          <div className="text-amber-700">
+        <SectionCard title="Données de dépenses incomplètes" icon={AlertTriangle}>
+          <div className="text-gray-700">
             <p className="mb-3">
               Pour calculer les bénéfices et marges réelles, les agences doivent renseigner leurs dépenses individuelles.
             </p>
             
-            <div className="bg-white p-4 rounded-lg border border-amber-200">
-              <h4 className="font-medium text-amber-800 mb-3">Procédure recommandée :</h4>
+            <div className="p-4 rounded-lg border border-gray-200 bg-gray-50">
+              <h4 className="font-medium text-gray-800 mb-3">Procédure recommandée :</h4>
               <ol className="space-y-2 text-sm">
                 <li className="flex items-start gap-2">
-                  <div className="h-6 w-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
+                  <div className="h-6 w-6 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 text-xs font-medium">
                     1
                   </div>
                   <span>Chaque agence saisit ses dépenses mensuelles dans son espace administratif</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <div className="h-6 w-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
+                  <div className="h-6 w-6 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 text-xs font-medium">
                     2
                   </div>
                   <span>Les dépenses sont catégorisées (salaires, opérations, marketing, autres)</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <div className="h-6 w-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
+                  <div className="h-6 w-6 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 text-xs font-medium">
                     3
                   </div>
                   <span>Le système consolide automatiquement les données au niveau compagnie</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <div className="h-6 w-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center flex-shrink-0">
+                  <div className="h-6 w-6 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 text-xs font-medium">
                     4
                   </div>
                   <span>Les bénéfices et marges sont calculés pour chaque agence et globalement</span>
@@ -1137,7 +1011,7 @@ const Finances: React.FC = () => {
               </ol>
             </div>
           </div>
-        </div>
+        </SectionCard>
       )}
     </div>
   );

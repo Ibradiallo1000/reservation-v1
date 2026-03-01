@@ -3,7 +3,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { getDoc } from "firebase/firestore";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge } from "@/ui";
 import RequireRole from "@/shared/auth/RequireRole";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -31,8 +31,6 @@ function CEOPaymentApprovalsContent() {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
-  const { setHeader, resetHeader } = usePageHeader();
-
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioningId, setActioningId] = useState<string | null>(null);
@@ -98,11 +96,6 @@ function CEOPaymentApprovalsContent() {
   }, [companyId]);
 
   useEffect(() => {
-    setHeader({ title: "Approbations de paiement" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
-
-  useEffect(() => {
     load();
   }, [load]);
 
@@ -152,14 +145,16 @@ function CEOPaymentApprovalsContent() {
 
   if (!companyId) {
     return (
-      <div className="p-4 text-slate-600">
-        Aucune compagnie sélectionnée.
-      </div>
+      <StandardLayoutWrapper>
+        <PageHeader title="Approbations de paiement" />
+        <p className="text-slate-600">Aucune compagnie sélectionnée.</p>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="p-4 max-w-6xl mx-auto">
+    <StandardLayoutWrapper>
+      <PageHeader title="Approbations de paiement" />
       <div className="mb-4 flex items-center gap-2">
         <Link
           to={`/compagnie/${companyId}/command-center`}
@@ -180,11 +175,11 @@ function CEOPaymentApprovalsContent() {
           <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
         </div>
       ) : rows.length === 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-600">
-          Aucune demande de paiement en attente d&apos;approbation.
-        </div>
+        <SectionCard title="Demandes d'approbation" icon={ShieldAlert}>
+          <p className="text-center text-gray-600 py-4">Aucune demande de paiement en attente d&apos;approbation.</p>
+        </SectionCard>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <SectionCard title="Demandes en attente d'approbation" icon={ShieldAlert} noPad>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -223,18 +218,10 @@ function CEOPaymentApprovalsContent() {
                       <td className="p-3">{row.cumulativeAmountLast24h.toLocaleString("fr-FR")}</td>
                       <td className="p-3">{row.threshold.toLocaleString("fr-FR")}</td>
                       <td className="p-3">
-                        <span
-                          className={
-                            row.statusIndicator === "Threshold exceeded"
-                              ? "text-amber-700 font-medium flex items-center gap-1"
-                              : "text-slate-600"
-                          }
-                        >
-                          {row.statusIndicator === "Threshold exceeded" && (
-                            <ShieldAlert className="w-4 h-4 inline" />
-                          )}
+                        <StatusBadge status={row.statusIndicator === "Threshold exceeded" ? "warning" : "neutral"}>
+                          {row.statusIndicator === "Threshold exceeded" && <ShieldAlert className="w-3 h-3 inline mr-1" />}
                           {row.statusIndicator}
-                        </span>
+                        </StatusBadge>
                       </td>
                       <td className="p-3">
                         <div className="flex items-center gap-2">
@@ -275,9 +262,9 @@ function CEOPaymentApprovalsContent() {
               </tbody>
             </table>
           </div>
-        </div>
+        </SectionCard>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }
 

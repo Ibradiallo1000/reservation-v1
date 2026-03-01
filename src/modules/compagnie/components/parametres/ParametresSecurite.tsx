@@ -6,6 +6,8 @@ import React, { useState } from 'react';
 import { updatePassword } from 'firebase/auth';
 import { auth } from '@/firebaseConfig';
 import { Button } from '@/shared/ui/button';
+import { SectionCard } from '@/ui';
+import { Shield } from 'lucide-react';
 
 interface ParametresSecuriteProps {
   companyId: string; // 🔥 nécessaire pour compatibilité Tabs
@@ -71,9 +73,7 @@ const ParametresSecurite: React.FC<ParametresSecuriteProps> = ({ companyId }) =>
   };
 
   return (
-    <div className="bg-white rounded-xl border p-6 max-w-7xl mx-auto">
-      <h2 className="text-xl font-bold mb-6">Sécurité</h2>
-
+    <SectionCard title="Sécurité" icon={Shield} className="max-w-7xl mx-auto">
       <div className="space-y-4">
         <input
           type="password"
@@ -109,7 +109,7 @@ const ParametresSecurite: React.FC<ParametresSecuriteProps> = ({ companyId }) =>
           </p>
         )}
       </div>
-    </div>
+    </SectionCard>
   );
 };
 

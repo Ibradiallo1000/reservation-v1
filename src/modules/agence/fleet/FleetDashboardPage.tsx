@@ -2,10 +2,12 @@
 // Phase 3: Fleet dashboard — garage, assigned, in_transit, maintenance, approaching.
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import type { FleetVehicle, FleetVehicleStatus } from "./types";
+import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard } from "@/ui";
+import { Truck } from "lucide-react";
 
 type AgencyItem = { id: string; nom: string };
 
@@ -75,54 +77,51 @@ const FleetDashboardPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
-        <div className="text-gray-500">Chargement du tableau de bord flotte…</div>
-      </div>
+      <StandardLayoutWrapper maxWidthClass="max-w-5xl">
+        <p className="text-gray-500">Chargement du tableau de bord flotte…</p>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      <h1 className="text-xl font-semibold">Tableau de bord Flotte</h1>
+    <StandardLayoutWrapper maxWidthClass="max-w-5xl">
+      <PageHeader title="Tableau de bord Flotte" icon={Truck} primaryColorVar={primaryColor} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <button
-          type="button"
-          onClick={() => navigate("/agence/fleet/vehicles?status=garage")}
-          className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50"
-        >
-          <div className="text-2xl font-bold" style={{ color: primaryColor }}>{inGarage.length}</div>
-          <div className="text-sm text-gray-600">{statusLabels.garage}</div>
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate("/agence/fleet/vehicles?status=assigned")}
-          className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50"
-        >
-          <div className="text-2xl font-bold text-amber-600">{assigned.length}</div>
-          <div className="text-sm text-gray-600">{statusLabels.assigned}</div>
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate("/agence/fleet/vehicles?status=in_transit")}
-          className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50"
-        >
-          <div className="text-2xl font-bold text-blue-600">{inTransit.length}</div>
-          <div className="text-sm text-gray-600">{statusLabels.in_transit}</div>
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate("/agence/fleet/vehicles?status=maintenance")}
-          className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50"
-        >
-          <div className="text-2xl font-bold text-red-600">{maintenance.length}</div>
-          <div className="text-sm text-gray-600">{statusLabels.maintenance}</div>
-        </button>
-      </div>
+      <SectionCard title="Véhicules par statut">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <button
+            type="button"
+            onClick={() => navigate("/agence/fleet/vehicles?status=garage")}
+            className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700"
+          >
+            <MetricCard label={statusLabels.garage} value={inGarage.length} valueColorVar={primaryColor} />
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/agence/fleet/vehicles?status=assigned")}
+            className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700"
+          >
+            <MetricCard label={statusLabels.assigned} value={assigned.length} valueColorVar="#d97706" />
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/agence/fleet/vehicles?status=in_transit")}
+            className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700"
+          >
+            <MetricCard label={statusLabels.in_transit} value={inTransit.length} valueColorVar="#2563eb" />
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/agence/fleet/vehicles?status=maintenance")}
+            className="text-left p-4 rounded-xl border bg-white hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700"
+          >
+            <MetricCard label={statusLabels.maintenance} value={maintenance.length} valueColorVar="#dc2626" />
+          </button>
+        </div>
+      </SectionCard>
 
       {approaching.length > 0 && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
-          <h2 className="font-semibold text-emerald-800 mb-2">Véhicules approchant cette agence</h2>
+        <SectionCard title="Véhicules approchant cette agence">
           <ul className="space-y-2">
             {approaching.map((v) => (
               <li key={v.id} className="flex items-center justify-between text-sm">
@@ -131,14 +130,13 @@ const FleetDashboardPage: React.FC = () => {
               </li>
             ))}
           </ul>
-        </div>
+        </SectionCard>
       )}
 
-      <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="px-4 py-3 border-b font-semibold">Véhicules récents</div>
+      <SectionCard title="Véhicules récents" noPad>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50">
+            <thead className="bg-gray-50 dark:bg-gray-800">
               <tr>
                 <th className="px-3 py-2 text-left">Plaque / Code</th>
                 <th className="px-3 py-2 text-left">Capacité</th>
@@ -149,11 +147,11 @@ const FleetDashboardPage: React.FC = () => {
             </thead>
             <tbody>
               {vehicles.slice(0, 15).map((v) => (
-                <tr key={v.id} className="border-t">
+                <tr key={v.id} className="border-t border-gray-100 dark:border-gray-700">
                   <td className="px-3 py-2">{v.plateNumber} — {v.internalCode}</td>
                   <td className="px-3 py-2">{v.capacity}</td>
                   <td className="px-3 py-2">
-                    <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                    <span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
                       {statusLabels[v.status]}
                     </span>
                   </td>
@@ -170,8 +168,8 @@ const FleetDashboardPage: React.FC = () => {
         {vehicles.length === 0 && (
           <div className="p-6 text-center text-gray-500">Aucun véhicule enregistré. Créez-en depuis Véhicules ou Affectation.</div>
         )}
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { collection, addDoc, getDocs } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import { Button } from '@/shared/ui/button';
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
+import { Users } from 'lucide-react';
 
 interface Utilisateur {
   id: string;
@@ -65,10 +66,11 @@ const ChefAgencePersonnelPage: React.FC = () => {
   }, [user]);
 
   return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold mb-4">Personnel de l'agence</h2>
+    <StandardLayoutWrapper>
+      <PageHeader title="Personnel de l'agence" icon={Users} />
 
-      <form onSubmit={handleSubmit} className="bg-gray-100 p-4 rounded mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <SectionCard title="Ajouter un membre">
+      <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block mb-1">Nom complet</label>
           <input
@@ -104,45 +106,46 @@ const ChefAgencePersonnelPage: React.FC = () => {
           </select>
         </div>
 
-        <Button
+        <ActionButton
           type="submit"
-          variant="primary"
           className="mt-4 md:col-span-2"
         >
           Ajouter l'utilisateur
-        </Button>
+        </ActionButton>
       </form>
+      </SectionCard>
 
-      <h3 className="text-lg font-semibold mb-2">Liste actuelle</h3>
-      <div className="overflow-x-auto">
-        <table className="min-w-full bg-white border border-gray-200 shadow">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="px-4 py-2 border">Nom</th>
-              <th className="px-4 py-2 border">Email</th>
-              <th className="px-4 py-2 border">Rôle</th>
-            </tr>
-          </thead>
-          <tbody>
-            {personnel.length > 0 ? (
-              personnel.map((p) => (
-                <tr key={p.id}>
-                  <td className="px-4 py-2 border">{p.nom}</td>
-                  <td className="px-4 py-2 border">{p.email}</td>
-                  <td className="px-4 py-2 border capitalize">{p.role}</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan={3} className="text-center p-4 text-gray-500">
-                  Aucun personnel enregistré pour cette agence.
-                </td>
+      <SectionCard title="Liste actuelle" noPad>
+        <div className="overflow-x-auto">
+          <table className="min-w-full border border-gray-200 dark:border-gray-700">
+            <thead>
+              <tr className="bg-gray-100 dark:bg-gray-800">
+                <th className="px-4 py-2 border border-gray-200 dark:border-gray-700 text-left">Nom</th>
+                <th className="px-4 py-2 border border-gray-200 dark:border-gray-700 text-left">Email</th>
+                <th className="px-4 py-2 border border-gray-200 dark:border-gray-700 text-left">Rôle</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+            </thead>
+            <tbody>
+              {personnel.length > 0 ? (
+                personnel.map((p) => (
+                  <tr key={p.id}>
+                    <td className="px-4 py-2 border border-gray-200 dark:border-gray-700">{p.nom}</td>
+                    <td className="px-4 py-2 border border-gray-200 dark:border-gray-700">{p.email}</td>
+                    <td className="px-4 py-2 border border-gray-200 dark:border-gray-700 capitalize">{p.role}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={3} className="text-center p-4 text-gray-500">
+                    Aucun personnel enregistré pour cette agence.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

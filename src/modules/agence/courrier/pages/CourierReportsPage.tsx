@@ -12,7 +12,7 @@ import type { Shipment } from "@/modules/logistics/domain/shipment.types";
 import type { Company } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { FileText, Package, Banknote, Truck, Wallet } from "lucide-react";
-import CourierPageHeader from "../components/CourierPageHeader";
+import { PageHeader, StandardLayoutWrapper, SectionCard, MetricCard, EmptyState } from "@/ui";
 
 export default function CourierReportsPage() {
   const { user, company } = useAuth() as { user: { uid: string; companyId?: string; agencyId?: string }; company: unknown };
@@ -62,12 +62,12 @@ export default function CourierReportsPage() {
   const globalTotal = (sessionId: string) => originRevenue(sessionId) + destinationRevenue(sessionId);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-4">
-      <CourierPageHeader
+    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
+      <PageHeader
         icon={FileText}
         title="Rapport Session"
-        primaryColor={primaryColor}
-        description="Synthèse des sessions et envois : créés, livrés, totaux origine/destination, écart si validé."
+        primaryColorVar="var(--courier-primary, #ea580c)"
+        subtitle="Synthèse des sessions et envois : créés, livrés, totaux origine/destination, écart si validé."
       />
 
       <div className="space-y-6">
@@ -78,42 +78,19 @@ export default function CourierReportsPage() {
           const dest = destinationRevenue(session.id);
           const total = globalTotal(session.id);
           return (
-            <section key={session.id} className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm sm:p-6">
-              <h2 className="mb-4 flex items-center gap-2 text-2xl font-bold" style={{ color: "var(--courier-primary, #ea580c)" }}>
-                <FileText className="h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-                Session {session.id.slice(0, 8)} — {session.status} — Agent {session.agentCode}
-              </h2>
+            <SectionCard
+              key={session.id}
+              title={`Session ${session.id.slice(0, 8)} — ${session.status} — Agent ${session.agentCode}`}
+              icon={FileText}
+            >
               <div className="mb-4 grid grid-cols-1 gap-4 xs:grid-cols-2 sm:grid-cols-4">
-                <div className="flex flex-col rounded-xl border border-gray-100 bg-gray-50/80 p-4 shadow-sm">
-                  <Package className="mb-1 h-5 w-5 text-gray-500" aria-hidden />
-                  <span className="text-xs font-medium uppercase text-gray-500">Envois créés</span>
-                  <span className="mt-1 text-2xl font-bold text-gray-800">{created.length}</span>
-                </div>
-                <div
-                  className="flex flex-col rounded-xl border p-4 shadow-sm"
-                  style={{ borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 25%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 5%, transparent)" }}
-                >
-                  <Banknote className="mb-1 h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-                  <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Revenus origine</span>
-                  <span className="mt-1 text-xl font-bold teliya-monetary">{money(origin)}</span>
-                </div>
-                <div className="flex flex-col rounded-xl border border-gray-100 bg-gray-50/80 p-4 shadow-sm">
-                  <Truck className="mb-1 h-5 w-5 text-gray-500" aria-hidden />
-                  <span className="text-xs font-medium uppercase text-gray-500">Envois livrés</span>
-                  <span className="mt-1 text-2xl font-bold text-gray-800">{delivered.length}</span>
-                </div>
-                <div
-                  className="flex flex-col rounded-xl border p-4 shadow-sm"
-                  style={{ borderColor: "color-mix(in srgb, var(--courier-secondary, #f97316) 25%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-secondary, #f97316) 5%, transparent)" }}
-                >
-                  <Wallet className="mb-1 h-5 w-5" style={{ color: "var(--courier-secondary, #f97316)" }} aria-hidden />
-                  <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Revenus destination</span>
-                  <span className="mt-1 text-xl font-bold teliya-monetary">{money(dest)}</span>
-                </div>
+                <MetricCard label="Envois créés" value={created.length} icon={Package} />
+                <MetricCard label="Revenus origine" value={money(origin)} icon={Banknote} valueColorVar="var(--courier-primary, #ea580c)" className="teliya-monetary" />
+                <MetricCard label="Envois livrés" value={delivered.length} icon={Truck} />
+                <MetricCard label="Revenus destination" value={money(dest)} icon={Wallet} valueColorVar="var(--courier-secondary, #f97316)" className="teliya-monetary" />
               </div>
               <div
-                className="flex flex-wrap items-center gap-2 rounded-xl border-2 py-3 px-4"
-                style={{ borderColor: "var(--courier-primary, #ea580c)", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 5%, transparent)" }}
+                className="flex flex-wrap items-center gap-2 py-3 px-4 border border-gray-200 bg-gray-50/50 rounded-lg"
               >
                 <span className="font-semibold text-gray-900">Total global :</span>
                 <span className="text-xl font-bold teliya-monetary">{money(total)}</span>
@@ -154,15 +131,15 @@ export default function CourierReportsPage() {
                   {created.length > 20 && <p className="mt-1 text-gray-500">… et {created.length - 20} autres</p>}
                 </div>
               )}
-            </section>
+            </SectionCard>
           );
         })}
       </div>
       {sessions.length === 0 && (
-        <div className="rounded-xl border border-gray-200/80 bg-white p-8 text-center text-gray-500 shadow-sm">
-          Aucune session courrier.
-        </div>
+        <SectionCard title="Rapport Session">
+          <EmptyState message="Aucune session courrier." />
+        </SectionCard>
       )}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

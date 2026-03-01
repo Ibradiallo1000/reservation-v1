@@ -16,8 +16,9 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import VilleInput from '@/modules/agence/components/form/VilleInput';
 import { ajouterVillesDepuisTrajet } from '@/modules/agence/utils/updateVilles';
-import { Button } from '@/shared/ui/button';
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
 import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
+import { Route, FileDown } from 'lucide-react';
 
 const joursDeLaSemaine = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 
@@ -226,46 +227,35 @@ const AgenceTrajetsPage: React.FC = () => {
 
   if (accesRefuse) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6 text-gray-800 flex items-center justify-center">
-        <div className="bg-white rounded-xl shadow-md border border-gray-200 p-8 max-w-md text-center">
-          <h1 className="text-2xl font-bold text-red-600 mb-4">Accès Refusé</h1>
-          <p className="text-gray-600 mb-4">
+      <StandardLayoutWrapper maxWidthClass="max-w-md">
+        <SectionCard title="Accès Refusé">
+          <p className="text-gray-600 mb-2">
             Vous n'avez pas les permissions nécessaires pour accéder à cette page.
           </p>
           <p className="text-sm text-gray-500">
             Seuls les administrateurs et chefs d'agence peuvent gérer les trajets.
           </p>
-        </div>
-      </div>
+        </SectionCard>
+      </StandardLayoutWrapper>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6 text-gray-800">
-      {/* En-tête */}
-      <div className="mb-8 p-6 rounded-xl bg-white shadow-md border border-gray-200 flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold" style={{ color: theme.primary }}>
-            Gestion des Trajets
-          </h1>
-          <p className="text-gray-600 mt-1">
-            Connecté en tant que <span className="font-semibold">{user?.role}</span>
-          </p>
-        </div>
-        <button
-          onClick={exporterPDF}
-          disabled={trajets.length === 0}
-          className={`px-6 py-2 text-white font-semibold rounded-lg shadow-md hover:opacity-90 transition-all ${trajets.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
-          style={{ background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})` }}
-        >
-          📄 Exporter la liste
-        </button>
-      </div>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Gestion des Trajets"
+        subtitle={`Connecté en tant que ${user?.role ?? "—"}`}
+        icon={Route}
+        primaryColorVar={theme.primary}
+        right={
+          <ActionButton onClick={exporterPDF} disabled={trajets.length === 0}>
+            Exporter la liste
+          </ActionButton>
+        }
+      />
 
       <div className="grid md:grid-cols-2 gap-6">
-        {/* Formulaire */}
-        <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
-          <h2 className="text-xl font-bold mb-4">{modifierId ? 'Modifier le trajet' : 'Ajouter un trajet'}</h2>
+        <SectionCard title={modifierId ? "Modifier le trajet" : "Ajouter un trajet"}>
           <VilleInput label="Ville de départ" value={departure} onChange={setDeparture} />
           <VilleInput label="Ville d'arrivée" value={arrival} onChange={setArrival} />
           <input 
@@ -305,26 +295,24 @@ const AgenceTrajetsPage: React.FC = () => {
                   </button>
                 </div>
               ))}
-              <Button 
-                type="button" 
-                onClick={() => addHoraire(jour)} 
-                variant="primary"
+              <ActionButton
+                type="button"
+                onClick={() => addHoraire(jour)}
                 size="sm"
                 className="mt-1"
               >
                 + Ajouter un horaire
-              </Button>
+              </ActionButton>
             </div>
           ))}
 
-          <Button 
+          <ActionButton 
             onClick={handleSubmit} 
             disabled={loading}
-            variant="primary"
             className="mt-4 w-full"
           >
             {loading ? '⏳ En cours...' : modifierId ? 'Mettre à jour' : 'Enregistrer le trajet'}
-          </Button>
+          </ActionButton>
 
           {message && (
             <p className={`mt-2 p-3 rounded ${message.includes('❌') ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
@@ -340,11 +328,9 @@ const AgenceTrajetsPage: React.FC = () => {
               Annuler la modification
             </button>
           )}
-        </div>
+        </SectionCard>
 
-        {/* Liste des trajets */}
-        <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
-          <h2 className="text-xl font-bold mb-4">Liste des trajets</h2>
+        <SectionCard title="Liste des trajets">
           
           {/* Filtres */}
           <div className="flex gap-2 mb-4">
@@ -438,7 +424,7 @@ const AgenceTrajetsPage: React.FC = () => {
                       >
                         Modifier
                       </button>
-                      <Button
+                      <ActionButton
                         onClick={async () => {
                           if (!user?.companyId || !user?.agencyId) {
                             alert("Votre session a expiré. Merci de vous reconnecter.");
@@ -467,7 +453,7 @@ const AgenceTrajetsPage: React.FC = () => {
                         size="sm"
                       >
                         {t.active ? 'Désactiver' : 'Activer'}
-                      </Button>
+                      </ActionButton>
                     </div>
                   </div>
                 )}
@@ -478,9 +464,9 @@ const AgenceTrajetsPage: React.FC = () => {
               {loading ? 'Chargement...' : 'Aucun trajet disponible'}
             </div>
           )}
-        </div>
+        </SectionCard>
       </div>
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

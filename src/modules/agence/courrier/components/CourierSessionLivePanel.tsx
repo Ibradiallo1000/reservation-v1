@@ -1,5 +1,5 @@
 // CourierSessionLivePanel — Live panel: session status, agent code, opening time, shipment counts, totals.
-// Visual: KPI cards with icons, primary/secondary colors for origin/destination revenue.
+// Uses @/ui SectionCard + MetricCard for visual consistency with other modules.
 
 import React from "react";
 import type { CourierSession } from "@/modules/logistics/domain/courierSession.types";
@@ -8,6 +8,7 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { Activity, User, Clock, Package, Banknote, Truck, Wallet, Building2 } from "lucide-react";
+import { SectionCard, MetricCard } from "@/ui";
 
 export interface CourierSessionLivePanelProps {
   session: CourierSession | null;
@@ -52,79 +53,20 @@ export default function CourierSessionLivePanel({
           : "Validée"
     : "—";
 
+  const primaryVar = "var(--courier-primary, #ea580c)";
+  const secondaryVar = "var(--courier-secondary, #f97316)";
+
   return (
-    <section
-      className="mb-6 rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm print:hidden sm:p-6"
-      aria-label="Session courrier en direct"
-    >
-      <h2 className="mb-4 text-2xl font-bold" style={{ color: "var(--courier-primary, #ea580c)" }}>
-        Session en direct
-      </h2>
+    <SectionCard title="Session en direct" className="mb-6 print:hidden">
       <div className="grid grid-cols-1 gap-4 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 30%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 6%, transparent)" }}
-        >
-          <Activity className="mb-1 h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Statut</span>
-          <span className="mt-1 text-xl font-semibold" style={{ color: "var(--courier-primary, #ea580c)" }}>{statusLabel}</span>
-        </div>
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 30%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 6%, transparent)" }}
-        >
-          <User className="mb-1 h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Code agent</span>
-          <span className="mt-1 font-mono text-xl font-semibold" style={{ color: "var(--courier-primary, #ea580c)" }}>{session?.agentCode ?? "—"}</span>
-        </div>
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 30%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 6%, transparent)" }}
-        >
-          <Clock className="mb-1 h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Ouverture</span>
-          <span className="mt-1 text-lg font-medium" style={{ color: "var(--courier-primary, #ea580c)" }}>{openingTime}</span>
-        </div>
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 30%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 6%, transparent)" }}
-        >
-          <Package className="mb-1 h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Envois créés</span>
-          <span className="mt-1 text-2xl font-bold" style={{ color: "var(--courier-primary, #ea580c)" }}>{createdInSession.length}</span>
-        </div>
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow courier-kpi-origin"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 25%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 5%, transparent)" }}
-        >
-          <Banknote className="mb-1 h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Total encaissé origine</span>
-          <span className="mt-1 text-xl font-bold teliya-monetary">{money(originTotal)}</span>
-        </div>
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-secondary, #f97316) 30%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-secondary, #f97316) 6%, transparent)" }}
-        >
-          <Truck className="mb-1 h-5 w-5" style={{ color: "var(--courier-secondary, #f97316)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Envois livrés</span>
-          <span className="mt-1 text-2xl font-bold" style={{ color: "var(--courier-secondary, #f97316)" }}>{deliveredFromSession.length}</span>
-        </div>
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow courier-kpi-dest"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-secondary, #f97316) 25%, transparent)", backgroundColor: "color-mix(in srgb, var(--courier-secondary, #f97316) 5%, transparent)" }}
-        >
-          <Wallet className="mb-1 h-5 w-5" style={{ color: "var(--courier-secondary, #f97316)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Total encaissé destination</span>
-          <span className="mt-1 text-xl font-bold teliya-monetary">{money(destinationTotal)}</span>
-        </div>
-        <div
-          className="flex flex-col rounded-xl border p-4 shadow-sm transition-shadow hover:shadow"
-          style={{ borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 50%, var(--courier-secondary, #f97316))", backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 8%, transparent)" }}
-        >
-          <Wallet className="mb-1 h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} aria-hidden />
-          <span className="text-xs font-medium uppercase" style={{ color: "var(--courier-secondary, #f97316)" }}>Total global</span>
-          <span className="mt-1 text-2xl font-bold teliya-monetary">{money(globalTotal)}</span>
-        </div>
+        <MetricCard label="Statut" value={statusLabel} icon={Activity} valueColorVar={primaryVar} />
+        <MetricCard label="Code agent" value={session?.agentCode ?? "—"} icon={User} valueColorVar={primaryVar} className="font-mono" />
+        <MetricCard label="Ouverture" value={openingTime} icon={Clock} valueColorVar={primaryVar} />
+        <MetricCard label="Envois créés" value={createdInSession.length} icon={Package} valueColorVar={primaryVar} />
+        <MetricCard label="Total encaissé origine" value={money(originTotal)} icon={Banknote} valueColorVar={primaryVar} className="teliya-monetary" />
+        <MetricCard label="Envois livrés" value={deliveredFromSession.length} icon={Truck} valueColorVar={secondaryVar} />
+        <MetricCard label="Total encaissé destination" value={money(destinationTotal)} icon={Wallet} valueColorVar={secondaryVar} className="teliya-monetary" />
+        <MetricCard label="Total global" value={money(globalTotal)} icon={Wallet} valueColorVar={primaryVar} className="teliya-monetary" />
       </div>
       {agencyName && (
         <p className="mt-4 flex items-center gap-1.5 text-xs text-gray-500">
@@ -132,6 +74,6 @@ export default function CourierSessionLivePanel({
           Agence : {agencyName}
         </p>
       )}
-    </section>
+    </SectionCard>
   );
 }

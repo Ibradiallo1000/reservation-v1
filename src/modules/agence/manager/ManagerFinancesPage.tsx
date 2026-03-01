@@ -14,10 +14,10 @@ import {
   Banknote, Wallet, TrendingDown, ArrowRightLeft,
   CheckCircle2, Loader2,
 } from "lucide-react";
+import { DateFilterBar } from "./DateFilterBar";
 import {
-  KpiCard, SectionCard, StatusBadge, EmptyState, MGR,
-  DateFilterBar,
-} from "./ui";
+  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, ActionButton, table, tableRowClassName, typography,
+} from "@/ui";
 import { useDateFilterContext } from "./DateFilterContext";
 
 type ShiftDoc = {
@@ -138,73 +138,73 @@ export default function ManagerFinancesPage() {
     } finally { setBusyShiftId(null); }
   };
 
-  if (loading) return <div className={MGR.page}><p className={MGR.muted}>Chargement…</p></div>;
+  if (loading) return <StandardLayoutWrapper><p className={typography.muted}>Chargement…</p></StandardLayoutWrapper>;
 
   return (
-    <div className={MGR.page}>
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className={MGR.h1}>Finances</h1>
-          <p className={MGR.muted}>{format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}</p>
-        </div>
-        <DateFilterBar
-          preset={dateFilter.preset} onPresetChange={dateFilter.setPreset}
-          customStart={dateFilter.customStart} customEnd={dateFilter.customEnd}
-          onCustomStartChange={dateFilter.setCustomStart} onCustomEndChange={dateFilter.setCustomEnd}
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Finances"
+        subtitle={format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
+        right={
+          <DateFilterBar
+            preset={dateFilter.preset} onPresetChange={dateFilter.setPreset}
+            customStart={dateFilter.customStart} customEnd={dateFilter.customEnd}
+            onCustomStartChange={dateFilter.setCustomStart} onCustomEndChange={dateFilter.setCustomEnd}
+          />
+        }
+      />
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        <MetricCard label="Revenu" value={money(revenue)} icon={Banknote} valueColorVar="#059669" />
+        <MetricCard label="Billets" value={tickets} icon={Banknote} valueColorVar="#1d4ed8" />
+        <MetricCard label="Dépenses" value={money(expenses)} icon={TrendingDown} valueColorVar="#b91c1c" />
+        <MetricCard label="Position caisse" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
+        <MetricCard
+          label="Écart caisse"
+          value={money(Math.abs(cashVariance))}
+          icon={ArrowRightLeft}
+          critical={hasCashVariance}
+          criticalMessage={hasCashVariance ? "Écart de caisse détecté" : undefined}
+          valueColorVar={hasCashVariance ? undefined : "#059669"}
         />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <KpiCard label="Revenu" value={money(revenue)} icon={Banknote} accent="text-emerald-700"
-          help="Total des paiements encaissés sur la période sélectionnée." />
-        <KpiCard label="Billets" value={tickets} icon={Banknote} accent="text-blue-700" />
-        <KpiCard label="Dépenses" value={money(expenses)} icon={TrendingDown} accent="text-red-700"
-          help="Total des dépenses enregistrées sur la période sélectionnée." />
-        <KpiCard label="Position caisse" value={money(cashPosition)} icon={Wallet} accent="text-indigo-700"
-          help="Solde actuel de tous les comptes de caisse de l'agence. Indépendant de la période." />
-        <KpiCard label="Écart caisse" value={money(Math.abs(cashVariance))} icon={ArrowRightLeft}
-          accent={hasCashVariance ? "text-red-700" : "text-emerald-700"}
-          critical={hasCashVariance}
-          help="Différence entre la position caisse attendue et la position réelle. Un écart nul signifie que la caisse est équilibrée." />
-      </div>
-
-      <SectionCard title="Rapports à valider" icon={CheckCircle2} noPad
-        help="Rapports de session clôturés par les guichetiers. Flux : Guichetier clôture → Comptable valide → Chef d'agence approuve.">
+      <SectionCard title="Rapports à valider" icon={CheckCircle2} noPad>
         {pendingApproval.length === 0 && closedShifts.length === 0 ? (
           <EmptyState message="Aucun rapport en attente de validation." />
         ) : (
-          <div className={MGR.table.wrapper}>
-            <table className={MGR.table.base}>
-              <thead className={MGR.table.head}>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className={MGR.table.th}>Guichetier</th>
-                  <th className={MGR.table.th}>Début</th>
-                  <th className={MGR.table.th}>Fin</th>
-                  <th className={MGR.table.th}>Statut</th>
-                  <th className={MGR.table.thRight}>Action</th>
+                  <th className={table.th}>Guichetier</th>
+                  <th className={table.th}>Début</th>
+                  <th className={table.th}>Fin</th>
+                  <th className={table.th}>Statut</th>
+                  <th className={table.thRight}>Action</th>
                 </tr>
               </thead>
-              <tbody className={MGR.table.body}>
+              <tbody className={table.body}>
                 {closedShifts.map((s) => (
-                  <tr key={s.id} className={MGR.table.row}>
-                    <td className={MGR.table.td}>{s.userName ?? s.userId}</td>
-                    <td className={MGR.table.td}>{s.startTime?.toDate ? format(s.startTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
-                    <td className={MGR.table.td}>{s.endTime?.toDate ? format(s.endTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
-                    <td className={MGR.table.td}><StatusBadge color="yellow">En attente du comptable</StatusBadge></td>
-                    <td className={MGR.table.tdRight}><span className={MGR.muted}>En attente</span></td>
+                  <tr key={s.id} className={tableRowClassName()}>
+                    <td className={table.td}>{s.userName ?? s.userId}</td>
+                    <td className={table.td}>{s.startTime?.toDate ? format(s.startTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
+                    <td className={table.td}>{s.endTime?.toDate ? format(s.endTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
+                    <td className={table.td}><StatusBadge status="pending">En attente du comptable</StatusBadge></td>
+                    <td className={table.tdRight}><span className={typography.muted}>En attente</span></td>
                   </tr>
                 ))}
                 {pendingApproval.map((s) => (
-                  <tr key={s.id} className={MGR.table.row}>
-                    <td className={MGR.table.td}>{s.userName ?? s.userId}</td>
-                    <td className={MGR.table.td}>{s.startTime?.toDate ? format(s.startTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
-                    <td className={MGR.table.td}>{s.endTime?.toDate ? format(s.endTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
-                    <td className={MGR.table.td}><StatusBadge color="blue">Validé compta — à approuver</StatusBadge></td>
-                    <td className={MGR.table.tdRight}>
-                      <button disabled={busyShiftId === s.id} onClick={() => handleApprove(s.id)} className={MGR.btnPrimary}>
+                  <tr key={s.id} className={tableRowClassName()}>
+                    <td className={table.td}>{s.userName ?? s.userId}</td>
+                    <td className={table.td}>{s.startTime?.toDate ? format(s.startTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
+                    <td className={table.td}>{s.endTime?.toDate ? format(s.endTime.toDate(), "HH:mm", { locale: fr }) : "—"}</td>
+                    <td className={table.td}><StatusBadge status="info">Validé compta — à approuver</StatusBadge></td>
+                    <td className={table.tdRight}>
+                      <ActionButton disabled={busyShiftId === s.id} onClick={() => handleApprove(s.id)} variant="primary" size="sm">
                         {busyShiftId === s.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                         Approuver
-                      </button>
+                      </ActionButton>
                     </td>
                   </tr>
                 ))}
@@ -218,25 +218,25 @@ export default function ManagerFinancesPage() {
         {movements.length === 0 ? (
           <EmptyState message="Aucun mouvement récent." />
         ) : (
-          <div className={MGR.table.wrapper}>
-            <table className={MGR.table.base}>
-              <thead className={MGR.table.head}>
+          <div className={table.wrapper}>
+            <table className={table.base}>
+              <thead className={table.head}>
                 <tr>
-                  <th className={MGR.table.th}>Type</th>
-                  <th className={MGR.table.th}>Description</th>
-                  <th className={MGR.table.thRight}>Montant</th>
+                  <th className={table.th}>Type</th>
+                  <th className={table.th}>Description</th>
+                  <th className={table.thRight}>Montant</th>
                 </tr>
               </thead>
-              <tbody className={MGR.table.body}>
+              <tbody className={table.body}>
                 {movements.map((m) => (
-                  <tr key={m.id} className={MGR.table.row}>
-                    <td className={MGR.table.td}>
-                      <StatusBadge color={m.movementType === "credit" ? "green" : "red"}>
+                  <tr key={m.id} className={tableRowClassName()}>
+                    <td className={table.td}>
+                      <StatusBadge status={m.movementType === "credit" ? "success" : "danger"}>
                         {m.movementType === "credit" ? "Crédit" : "Débit"}
                       </StatusBadge>
                     </td>
-                    <td className={MGR.table.td}>{m.description || "—"}</td>
-                    <td className={MGR.table.tdRight}>{money(m.amount)}</td>
+                    <td className={table.td}>{m.description || "—"}</td>
+                    <td className={table.tdRight}>{money(m.amount)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -244,6 +244,6 @@ export default function ManagerFinancesPage() {
           </div>
         )}
       </SectionCard>
-    </div>
+    </StandardLayoutWrapper>
   );
 }

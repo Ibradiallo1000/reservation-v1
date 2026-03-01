@@ -14,6 +14,7 @@ import { db } from "@/firebaseConfig";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 import { useNavigate, useParams } from "react-router-dom";
+import { SectionCard } from "@/ui";
 import {
   ChevronLeft,
   Search,
@@ -104,7 +105,7 @@ function toE164(dialCode: string, nationalDigits: string): string {
 const WALLET_SECTION_TITLES: Record<WalletSectionId, string> = {
   a_venir: "À venir",
   voyages_effectues: "Voyages effectués",
-  en_verification: "En vérification",
+  en_verification: "En attente de validation",
   annules: "Annulés / Remboursés",
 };
 
@@ -398,11 +399,7 @@ const ClientMesBilletsPage: React.FC = () => {
       </header>
 
       <main className="max-w-3xl mx-auto p-4 space-y-5">
-        {/* ---------- Section téléphone PRO ---------- */}
-        <section
-          className="rounded-2xl border bg-white p-4 shadow-sm"
-          style={{ borderColor: `${theme.primary}15` }}
-        >
+        <SectionCard title="Recherche par téléphone" icon={Phone} className="shadow-md rounded-2xl">
           <label className="block text-sm font-medium text-gray-800">
             Numéro de téléphone
           </label>
@@ -490,43 +487,36 @@ const ClientMesBilletsPage: React.FC = () => {
               {error}
             </p>
           )}
-        </section>
+        </SectionCard>
 
-        {/* ---------- Portefeuille : 3 sections (À venir, Voyages effectués, Annulés) ---------- */}
-        <section
-          className="rounded-2xl border bg-white overflow-hidden shadow-sm"
-          style={{ borderColor: `${theme.primary}15` }}
+        <SectionCard
+          title="Mon portefeuille"
+          icon={Wallet}
+          right={rows.length > 0 ? <span className="text-xs text-gray-500">{rows.length} billet{rows.length !== 1 ? "s" : ""}</span> : undefined}
+          className="shadow-md rounded-2xl"
+          noPad
         >
-          <div className="px-4 py-3 border-b flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Wallet className="w-4 h-4" style={{ color: theme.primary }} />
-              <span className="text-sm font-medium text-gray-800">
-                Mon portefeuille
-              </span>
-            </div>
-            {rows.length > 0 && (
-              <span className="text-xs text-gray-500">
-                {rows.length} billet{rows.length !== 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
 
           {loading ? (
             <PageLoadingState blocks={3} />
           ) : !hasSearched ? (
-            <div className="p-8 text-sm text-gray-500 text-center">
-              Lancez une recherche pour afficher vos billets.
+            <div className="p-8 text-center">
+              <p className="text-sm text-gray-600">Entrez le numéro utilisé pour vos billets pour les afficher ici.</p>
+              <p className="text-xs text-gray-500 mt-2">Une confirmation vous a été envoyée par SMS ou email après chaque réservation.</p>
             </div>
           ) : sections.every((s) => s.items.length === 0) ? (
-            <div className="p-8 text-sm text-gray-500 text-center">
-              {isOnline
-                ? "Aucun billet pour ce numéro."
-                : "Hors ligne: impossible de charger les billets pour le moment."}
-              <div className="mt-3">
+            <div className="p-8 text-center">
+              <p className="text-sm text-gray-600">
+                {isOnline
+                  ? "Aucun billet trouvé pour ce numéro."
+                  : "Hors ligne: impossible de charger les billets pour le moment."}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">Vérifiez le numéro ou consultez vos réservations depuis la page d'accueil.</p>
+              <div className="mt-4">
                 <button
                   type="button"
                   onClick={search}
-                  className="text-xs px-3 py-1.5 rounded-lg border hover:bg-gray-50"
+                  className="text-sm px-4 py-2 rounded-lg border hover:bg-gray-50 font-medium"
                   style={{ borderColor: `${theme.primary}40` }}
                 >
                   Réessayer
@@ -668,7 +658,7 @@ const ClientMesBilletsPage: React.FC = () => {
               )}
             </div>
           )}
-        </section>
+        </SectionCard>
       </main>
     </div>
   );

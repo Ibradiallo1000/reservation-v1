@@ -4,11 +4,12 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info, Clock, Check } from 'lucide-react';
+import { SectionCard, StatusBadge } from '@/ui';
+import type { StatusVariant } from '@/ui';
+import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info, Clock, Check, CreditCard, Calendar, Shield } from 'lucide-react';
 import {
-  collection, getDocs, query, where, addDoc, doc, updateDoc, serverTimestamp, getDoc, arrayUnion,
+  collection, getDocs, query, where, addDoc, doc, updateDoc, setDoc, serverTimestamp, getDoc,
 } from 'firebase/firestore';
-import { buildStatutTransitionPayload } from '@/modules/agence/services/reservationStatutService';
 import { canonicalStatut } from '@/utils/reservationStatusUtils';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/firebaseConfig';
@@ -166,36 +167,37 @@ const PaymentProofSection = ({
   const hasChosenPayment = !!paymentMethodKey;
   
   return (
-    <section className="bg-white rounded-2xl border border-gray-100 p-4">
-      <h2 className="text-sm font-semibold text-gray-900 mb-2">
-        {reservationId ? 'Paiement' : 'Preuve de paiement'}
-      </h2>
+    <SectionCard title={reservationId ? 'Paiement' : 'Justificatif de paiement'} icon={CreditCard} className="shadow-md">
 
       {isProofSent && (
-        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-center gap-2 text-blue-800">
-            <Clock className="w-4 h-4" />
-            <span className="text-sm font-medium">Preuve envoyée</span>
+        <div className="mb-4 p-4 rounded-lg border border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-2 text-gray-800">
+            <Clock className="w-4 h-4 text-gray-600" />
+            <span className="text-sm font-medium">En attente de validation</span>
           </div>
-          <p className="text-xs text-blue-700 mt-1">
-            Votre preuve de paiement est en cours de vérification par la compagnie.
+          <p className="text-xs text-gray-600 mt-1">
+            Votre justificatif a bien été reçu. Confirmation par SMS ou email après validation.
           </p>
         </div>
       )}
 
       {isConfirmed && (
-        <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-          <div className="flex items-center gap-2 text-emerald-800">
-            <Check className="w-4 h-4" />
-            <span className="text-sm font-medium">Paiement confirmé</span>
+        <div className="mb-4 p-4 rounded-lg border border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-2 text-gray-800">
+            <Check className="w-4 h-4 text-gray-600" />
+            <span className="text-sm font-medium">Réservation confirmée</span>
           </div>
-          <p className="text-xs text-emerald-700 mt-1">
-            Votre paiement a été validé. Votre billet est confirmé.
+          <p className="text-xs text-gray-600 mt-1">
+            Votre billet est confirmé.
+          </p>
+          <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
+            <Check className="w-3.5 h-3.5" />
+            Support disponible.
           </p>
         </div>
       )}
 
-      {/* 🔥 AMÉLIORATION UX : Titre incitatif pour guider l'utilisateur */}
+      {/* Titre + réassurance */}
       {!isLocked && (
         <div className="mb-3">
           <h3 className="text-sm font-semibold text-gray-900 mb-1">
@@ -203,6 +205,10 @@ const PaymentProofSection = ({
           </h3>
           <p className="text-xs text-gray-600">
             Cliquez sur un moyen de paiement pour continuer
+          </p>
+          <p className="text-xs text-gray-500 mt-2 flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5 text-gray-400" />
+            Paiement sécurisé
           </p>
         </div>
       )}
@@ -255,7 +261,7 @@ const PaymentProofSection = ({
           className="mt-4"
         >
           <div className="mb-3">
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">Preuve de paiement</h3>
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">Justificatif de paiement</h3>
             <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
             
             {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && !isLocked && (
@@ -318,7 +324,7 @@ const PaymentProofSection = ({
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg"
+          className="mt-5 p-4 bg-gray-50 border border-gray-200 rounded-lg"
         >
           <div className="flex items-center gap-2 text-gray-700">
             <Info className="w-4 h-4 text-gray-500" />
@@ -328,7 +334,7 @@ const PaymentProofSection = ({
           </div>
         </motion.div>
       )}
-    </section>
+    </SectionCard>
   );
 };
 
@@ -884,19 +890,19 @@ export default function ReservationClientPage() {
         doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations', refDoc.id),
         { publicToken: token, publicUrl }
       );
+
+      await setDoc(doc(db, 'publicReservations', refDoc.id), {
+        reservationId: refDoc.id,
+        companyId: selectedTrip.companyId,
+        agencyId: selectedTrip.agencyId,
+        slug: slug!,
+        publicToken: token,
+        createdAt: serverTimestamp(),
+      });
       
       try { 
         await navigator.clipboard.writeText(publicUrl); 
       } catch {}
-
-      setReservationId(refDoc.id);
-      setCurrentStep('payment');
-      
-      setTimeout(() => {
-        paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 100);
-
-      setShowPaymentPopup(true);
 
       rememberPending({
         slug: slug!,
@@ -907,15 +913,7 @@ export default function ReservationClientPage() {
         agencyId: selectedTrip.agencyId
       });
 
-      sessionStorage.setItem('reservationDraft', JSON.stringify({ ...reservation, id: refDoc.id, publicUrl }));
-      sessionStorage.setItem('companyInfo', JSON.stringify({
-        id: company.id, 
-        name: company.name, 
-        logoUrl: company.logoUrl,
-        couleurPrimaire: company.couleurPrimaire, 
-        couleurSecondaire: company.couleurSecondaire, 
-        slug
-      }));
+      navigate(`/${slug}/reservation/${refDoc.id}`, { replace: true });
     } catch (e: any) {
       setError(e?.message || 'Impossible de créer la réservation');
     } finally { 
@@ -1016,36 +1014,27 @@ export default function ReservationClientPage() {
     setUploading(true); 
     setError('');
     try {
-      // ⚠️ NE JAMAIS basculer un billet "guichet" en "en_ligne"
-      const nextCanal = (existing?.canal && existing.canal.toLowerCase() !== 'en_ligne')
-        ? existing.canal
-        : 'en_ligne';
-
-      const auditEntry = buildStatutTransitionPayload(
-        existing?.statut ?? 'en_attente_paiement',
-        'preuve_recue',
-        { userId: 'client_anonymous', userRole: 'client' }
-      );
-      await updateDoc(
-        doc(db, 'companies', effectiveCompanyId, 'agences', effectiveAgencyId, 'reservations', reservationId),
-        {
-          statut: 'preuve_recue',
-          canal: nextCanal,
-          preuveVia: paymentMethodKey,
-          preuveMessage: message.trim(),
-          paymentHint: paymentMethodKey,
-          paymentTriggeredAt: paymentTriggeredAt ? new Date(paymentTriggeredAt) : null,
-          auditLog: arrayUnion(auditEntry),
-          updatedAt: serverTimestamp(),
-        }
-      );
-
-      // Mise à jour IMMÉDIATE de l'état local pour feedback instantané
-      setExisting(prev => prev ? { 
-        ...prev, 
+      const resRef = doc(db, 'companies', effectiveCompanyId, 'agences', effectiveAgencyId, 'reservations', reservationId);
+      const snap = await getDoc(resRef);
+      if (!snap.exists()) {
+        setError('Réservation introuvable.');
+        return;
+      }
+      const data = snap.data() as any;
+      const currentStatut = (data.statut || '').toLowerCase();
+      if (currentStatut !== 'en_attente_paiement') {
+        setError('Cette réservation a expiré ou a déjà été traitée. Créez une nouvelle réservation si besoin.');
+        return;
+      }
+      const inputReference = message.trim();
+      await updateDoc(resRef, {
         statut: 'preuve_recue',
-        canal: nextCanal
-      } : prev);
+        paymentReference: inputReference,
+        proofSubmittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      setExisting(prev => prev ? { ...prev, statut: 'preuve_recue' } : prev);
 
       // Navigation UNIQUEMENT après envoi réussi de la preuve
       navigate(`/${slug}/reservation/${reservationId}`, {
@@ -1062,7 +1051,7 @@ export default function ReservationClientPage() {
         rememberPending({ ...p, status: 'preuve_recue' });
       }
     } catch (e) { 
-      setError("Échec de l'envoi de la preuve"); 
+      setError("L'envoi n'a pas abouti. Réessayez."); 
     } finally { 
       setUploading(false); 
     }
@@ -1070,8 +1059,8 @@ export default function ReservationClientPage() {
 
   // ---------- UI components ----------
   const RouteCard = (titleRight?: string) => (
-    <section className="bg-white rounded-2xl border border-gray-100 shadow-sm">
-      <div className="flex items-center justify-between gap-4 px-4 sm:px-5 py-3">
+    <SectionCard title="Votre trajet" icon={undefined} className="shadow-md rounded-2xl" noPad>
+      <div className="flex items-center justify-between gap-4 px-5 sm:px-6 py-4">
         <div className="flex items-center gap-3 min-w-0">
           {company.logoUrl && (
             <img src={company.logoUrl} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-gray-200" />
@@ -1115,7 +1104,7 @@ export default function ReservationClientPage() {
           )}
         </div>
       </div>
-    </section>
+    </SectionCard>
   );
 
   const StepIndicator = () => (
@@ -1261,14 +1250,10 @@ export default function ReservationClientPage() {
   const TicketView = existing && (
     <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4">
       {RouteCard("Billet")}
-      <section className="bg-white rounded-2xl border p-4">
-        <div className="text-sm text-gray-600 mb-3">
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200 mr-2">
-            {canal === 'guichet' ? 'Guichet' : 'En ligne'}
-          </span>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border">
-            Référence: {existing.referenceCode || existing.id}
-          </span>
+      <SectionCard title="Détails du billet" icon={CheckCircle} className="shadow-md">
+        <div className="flex flex-wrap gap-2 mb-4">
+          <StatusBadge status="success">{canal === 'guichet' ? 'Guichet' : 'En ligne'}</StatusBadge>
+          <StatusBadge status="neutral">Référence: {existing.referenceCode || existing.id}</StatusBadge>
         </div>
         <div className="grid sm:grid-cols-2 gap-3 text-sm">
           <div><span className="text-gray-500">Passager</span><div className="font-medium">{existing.nomClient || '—'}</div></div>
@@ -1278,7 +1263,7 @@ export default function ReservationClientPage() {
           <div><span className="text-gray-500">Places</span><div className="font-medium">{existing.seatsGo || 1}</div></div>
           <div><span className="text-gray-500">Montant</span><div className="font-medium">{money(existing.montant ?? 0)}</div></div>
         </div>
-      </section>
+      </SectionCard>
     </div>
   );
 
@@ -1292,14 +1277,14 @@ export default function ReservationClientPage() {
       
       {/* Affichage clair du statut */}
       {existing?.statut && (
-        <div className="bg-white rounded-2xl border border-gray-100 p-4">
+        <SectionCard title="Statut" icon={Clock} className="shadow-md">
           <div className="flex items-center gap-3">
             {existing.statut === 'en_attente_paiement' && (
               <>
                 <Clock className="w-5 h-5 text-amber-500" />
                 <div>
                   <div className="font-medium text-gray-900">En attente de paiement</div>
-                  <div className="text-sm text-gray-600">Veuillez effectuer le paiement et envoyer la preuve</div>
+                  <div className="text-sm text-gray-600">Veuillez envoyer votre justificatif de paiement.</div>
                 </div>
               </>
             )}
@@ -1307,8 +1292,8 @@ export default function ReservationClientPage() {
               <>
                 <Clock className="w-5 h-5 text-blue-500" />
                 <div>
-                  <div className="font-medium text-gray-900">Preuve reçue – en vérification</div>
-                  <div className="text-sm text-gray-600">Votre preuve de paiement est en cours de vérification par la compagnie</div>
+                  <div className="font-medium text-gray-900">En attente de validation</div>
+                  <div className="text-sm text-gray-600">Votre justificatif a bien été reçu.</div>
                 </div>
               </>
             )}
@@ -1316,17 +1301,17 @@ export default function ReservationClientPage() {
               <>
                 <Check className="w-5 h-5 text-emerald-500" />
                 <div>
-                  <div className="font-medium text-gray-900">Paiement confirmé</div>
-                  <div className="text-sm text-gray-600">Votre billet est confirmé et valide pour le voyage</div>
+                  <div className="font-medium text-gray-900">Réservation confirmée</div>
+                  <div className="text-sm text-gray-600">Votre billet est confirmé.</div>
                 </div>
               </>
             )}
           </div>
-        </div>
+        </SectionCard>
       )}
 
       {error && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>
+        <div className="p-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-800">{error}</div>
       )}
 
       {/* Indicateur contextuel pour guider l'utilisateur */}
@@ -1372,7 +1357,7 @@ export default function ReservationClientPage() {
       {!isOnline && (
         <div className="max-w-[1100px] mx-auto px-3 sm:px-4 pt-3">
           <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-            Connexion instable: certaines actions (chargement, paiement, envoi de preuve) peuvent échouer.
+            Connexion instable. Certaines actions peuvent échouer.
           </div>
         </div>
       )}
@@ -1390,12 +1375,12 @@ export default function ReservationClientPage() {
           )}
 
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-800">{error}</div>
+            <div className="p-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-800">{error}</div>
           )}
 
           {/* Avertissement si réservation en cours */}
           {hasActiveReservation && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <div className="border border-gray-200 rounded-xl p-5 bg-gray-50">
               <div className="flex items-start gap-3">
                 <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
                 <div className="flex-1">
@@ -1404,7 +1389,7 @@ export default function ReservationClientPage() {
                   </h3>
                   <p className="text-sm text-amber-700">
                     Vous avez déjà une réservation en attente de paiement.
-                    Veuillez terminer le paiement et envoyer la preuve.
+                    Veuillez envoyer votre justificatif de paiement.
                   </p>
                 </div>
               </div>
@@ -1412,8 +1397,7 @@ export default function ReservationClientPage() {
           )}
 
           {/* dates */}
-          <section className="bg-white rounded-2xl border border-gray-100 p-4">
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre date de départ</h2>
+          <SectionCard title="Choisissez votre date de départ" icon={Calendar} className="shadow-md">
             <div className="flex gap-2 overflow-x-auto scrollbar-none">
               {dates.map(d => (
                 <button
@@ -1436,12 +1420,11 @@ export default function ReservationClientPage() {
                 </button>
               ))}
             </div>
-          </section>
+          </SectionCard>
 
           {/* heures */}
           {!!filteredTrips.length && (
-            <section className="bg-white rounded-2xl border border-gray-100 p-4">
-              <h2 className="text-sm font-semibold text-gray-900 mb-3">Choisissez votre heure de départ</h2>
+            <SectionCard title="Choisissez votre heure de départ" icon={Clock} className="shadow-md">
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
                 {filteredTrips.map((t: any) => (
                   <button
@@ -1468,15 +1451,17 @@ export default function ReservationClientPage() {
                   </button>
                 ))}
               </div>
-            </section>
+            </SectionCard>
           )}
 
           {/* infos personnelles */}
           {selectedTrip && !hasActiveReservation && (
             <>
-              <section className="bg-white rounded-2xl border border-gray-100 p-4">
+              <SectionCard title="Informations personnelles" icon={User} className="shadow-md">
                 <StepIndicator />
-                <h2 className="text-sm font-semibold text-gray-900 mb-2">Informations personnelles</h2>
+                <p className="text-xs text-gray-500 mb-3">
+                  Entrez votre <span className="font-medium">nom complet</span> et votre <span className="font-medium">numéro de téléphone</span> utilisés pour voyager.
+                </p>
                 <p className="text-xs text-gray-500 mb-3">
                   Entrez votre <span className="font-medium">nom complet</span> et votre <span className="font-medium">numéro de téléphone</span> utilisés pour voyager.
                 </p>
@@ -1609,13 +1594,13 @@ export default function ReservationClientPage() {
                     </div>
                   </motion.div>
                 )}
-              </section>
+              </SectionCard>
             </>
           )}
 
           {/* Section paiement (seulement après création de réservation) */}
           {reservationId && (
-            <section ref={paymentSectionRef} className="bg-white rounded-2xl border border-gray-100 p-4">
+            <div ref={paymentSectionRef}>
               <PaymentProofSection
                 reservationId={reservationId}
                 paymentMethods={paymentMethods}
@@ -1633,7 +1618,7 @@ export default function ReservationClientPage() {
                 seats={seats}
                 theme={theme}
               />
-            </section>
+            </div>
           )}
         </main>
       )}

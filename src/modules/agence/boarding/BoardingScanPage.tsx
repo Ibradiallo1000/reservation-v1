@@ -6,6 +6,7 @@ import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import AgenceEmbarquementPage from "@/modules/agence/embarquement/pages/AgenceEmbarquementPage";
+import { StandardLayoutWrapper } from "@/ui";
 
 /**
  * Fetches vehicle capacity for the given assignment from fleetVehicles.
@@ -76,9 +77,11 @@ const BoardingScanPage: React.FC = () => {
 
   if (!resolved) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[200px] text-gray-500">
-        Chargement de la capacité véhicule…
-      </div>
+      <StandardLayoutWrapper>
+        <div className="p-6 flex items-center justify-center min-h-[200px] text-gray-500">
+          Chargement de la capacité véhicule…
+        </div>
+      </StandardLayoutWrapper>
     );
   }
 

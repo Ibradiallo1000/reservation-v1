@@ -6,6 +6,7 @@ import { canonicalStatut } from '@/utils/reservationStatusUtils';
 import { Company } from '@/types/companyTypes';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useTranslation } from 'react-i18next';
+import { SectionCard } from '@/ui';
 import { Clock, MapPin, Ticket, Users, ChevronLeft, Calendar } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -92,7 +93,6 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
         background: '#ffffff'
       },
       classes: {
-        card: 'bg-white rounded-xl shadow-sm border border-gray-200',
         button: 'transition-all hover:scale-105 active:scale-95',
         animations: 'transition-all duration-300 ease-in-out',
         header: 'sticky top-0 z-50 px-4 py-3'
@@ -258,29 +258,29 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
         className="flex flex-col items-center justify-center min-h-screen p-4 text-center"
         style={{ background: colors.background }}
       >
-        <div className={`p-4 rounded-lg max-w-md ${classes.card}`}>
-          <h2 className="text-xl font-bold mb-2 text-gray-900">Erreur</h2>
+        <SectionCard title="Erreur" icon={Clock} className="max-w-md shadow-md">
           <p className="text-gray-700">{error}</p>
           {!isOnline && (
             <p className="text-sm text-amber-700 mt-2">
               Vous semblez hors ligne. Vérifiez votre connexion puis réessayez.
             </p>
           )}
-          <button
-            onClick={() => setReloadKey((v) => v + 1)}
-            className={`mt-4 px-4 py-2 rounded ${classes.button}`}
-            style={{ backgroundColor: colors.secondary, color: '#111827' }}
-          >
-            Réessayer
-          </button>
-          <button
-            onClick={() => navigate(`/${company.slug}`)}
-            className={`mt-2 px-4 py-2 rounded ${classes.button}`}
-            style={{ backgroundColor: colors.primary, color: colors.textOnPrimary }}
-          >
-            Retour à la compagnie
-          </button>
-        </div>
+          <div className="mt-5 flex flex-col gap-2">
+            <button
+              onClick={() => navigate(`/${company.slug}`)}
+              className={`w-full px-4 py-3 rounded-lg font-medium ${classes.button}`}
+              style={{ backgroundColor: colors.primary, color: colors.textOnPrimary }}
+            >
+              Retour à la compagnie
+            </button>
+            <button
+              onClick={() => setReloadKey((v) => v + 1)}
+              className="w-full px-4 py-2.5 rounded-lg text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50"
+            >
+              Réessayer
+            </button>
+          </div>
+        </SectionCard>
       </div>
     );
   }
@@ -332,11 +332,7 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
       </header>
 
       <main className="max-w-4xl mx-auto p-4 sm:p-6 pb-24">
-        <div className={`p-4 rounded-xl mb-6 ${classes.card}`}>
-          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <span>{departure} → {arrival}</span>
-          </h2>
-
+        <SectionCard title={`${departure} → ${arrival}`} icon={MapPin} className="mb-6 shadow-md">
           <div className="mb-4">
             <h3 className="text-lg font-semibold mb-3 flex items-center gap-2 text-gray-800">
               <Calendar className="h-5 w-5" style={{ color: colors.primary }} />
@@ -370,18 +366,13 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
           </div>
 
           {filteredTrips.length === 0 ? (
-            <div className={`p-6 rounded-xl text-center ${classes.card} text-gray-800`}>
-              <div className="bg-gray-100 p-4 rounded-full inline-flex mb-3">
-                <Clock className="h-6 w-6 text-gray-500" />
-              </div>
-              <h3 className="text-lg font-medium mb-1">
-                Aucun trajet disponible pour cette date
-              </h3>
-              <p className="text-sm opacity-80">Veuillez choisir une autre date</p>
-            </div>
+            <SectionCard title="Aucun trajet disponible" icon={Clock} className="text-center text-gray-800 shadow-md">
+              <p className="text-sm text-gray-600">Veuillez choisir une autre date ou modifier votre recherche.</p>
+              <p className="text-xs text-gray-500 mt-2">Rechercher un trajet depuis la page d'accueil pour voir toutes les destinations.</p>
+            </SectionCard>
           ) : (
             <div className="space-y-4">
-              <div className={`rounded-xl overflow-hidden ${classes.card}`}>
+              <SectionCard title="Choisissez votre heure de départ" icon={Clock} className="shadow-md overflow-hidden" noPad>
                 <div className="p-4 border-b" style={{ borderColor: hexToRgba(colors.primary, 0.1) }}>
                   <h3 className="font-semibold flex items-center gap-2 mb-3 text-gray-800">
                     <Clock className="h-5 w-5" style={{ color: colors.primary }} />
@@ -465,10 +456,10 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
                       </div>
                     </div>
                   ))}
-              </div>
+              </SectionCard>
             </div>
           )}
-        </div>
+        </SectionCard>
 
         {selectedTime && (
           <div className="fixed bottom-0 left-0 right-0 bg-white shadow-lg p-4 border-t border-gray-200">

@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Save, CheckCircle, AlertCircle } from 'lucide-react';
 import { Button } from '@/shared/ui/button';
+import { SectionCard, StatusBadge } from '@/ui';
 interface Props {
   companyId: string;
 }
@@ -65,37 +66,35 @@ const ParametresLegauxPage: React.FC<Props> = ({ companyId }) => {
   );
 
   return (
-    <div className="max-w-7xl mx-auto p-6 bg-white rounded shadow">
-      <h2 className="text-xl font-bold mb-6">Mentions légales & politiques multilingues</h2>
-
+    <SectionCard title="Mentions légales & politiques multilingues" icon={Save} className="max-w-7xl mx-auto">
       <AnimatePresence>
         {message.text && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className={`p-4 rounded mb-4 ${
-              message.type === 'success'
-                ? 'bg-green-100 text-green-800'
-                : message.type === 'error'
-                ? 'bg-red-100 text-red-800'
-                : 'bg-blue-100 text-blue-800'
-            }`}
+            className="mb-4 flex items-center justify-between gap-2"
           >
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                {message.type === 'success' ? <CheckCircle /> : message.type === 'error' ? <AlertCircle /> : <Save />}
-                <span>{message.text}</span>
-              </div>
-              {message.type === 'success' && (
-                <button
-                  onClick={() => setMessage({ text: '', type: 'info' })}
-                  className="text-sm underline"
-                >
-                  OK
-                </button>
-              )}
-            </div>
+            <StatusBadge
+              status={
+                message.type === 'success'
+                  ? 'success'
+                  : message.type === 'error'
+                  ? 'danger'
+                  : 'info'
+              }
+            >
+              {message.type === 'success' ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : message.type === 'error' ? <AlertCircle className="inline w-3.5 h-3.5 mr-1" /> : <Save className="inline w-3.5 h-3.5 mr-1" />}
+              {message.text}
+            </StatusBadge>
+            {message.type === 'success' && (
+              <button
+                onClick={() => setMessage({ text: '', type: 'info' })}
+                className="text-sm underline"
+              >
+                OK
+              </button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -114,7 +113,7 @@ const ParametresLegauxPage: React.FC<Props> = ({ companyId }) => {
           </Button>
         </div>
       </div>
-    </div>
+    </SectionCard>
   );
 };
 

@@ -16,7 +16,8 @@ import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
-import { Button } from "@/shared/ui/button";
+import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, StatusBadge } from "@/ui";
+import { Users } from "lucide-react";
 
 type Role = "guichetier" | "controleur" | "agency_accountant" | "chefAgence" | "chefEmbarquement" | "agency_fleet_controller";
 
@@ -598,20 +599,14 @@ const AgencePersonnelPage: React.FC = () => {
 
   /* ===================== UI ===================== */
   return (
-    <div className="p-6 max-w-7xl mx-auto min-h-screen"
-         style={{ background: "#f7f7fb" }}>
-      <h1 className="text-2xl font-bold text-gray-900 mb-6"
-          style={{ color: theme.primary }}>
-        Gestion du personnel (Agence)
-      </h1>
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Gestion du personnel (Agence)"
+        icon={Users}
+        primaryColorVar={theme.primary}
+      />
 
-      {/* Formulaire d'ajout */}
-      <div className="mb-8 bg-white p-6 rounded-xl shadow-sm border"
-           style={{ borderColor: theme.secondary }}>
-        <h2 className="text-lg font-semibold mb-4"
-            style={{ color: theme.secondary }}>
-          Ajouter un agent
-        </h2>
+      <SectionCard title="Ajouter un agent">
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <input
@@ -646,33 +641,22 @@ const AgencePersonnelPage: React.FC = () => {
           </select>
         </div>
 
-        <button
+        <ActionButton
           onClick={handleAdd}
           disabled={busy}
-          className="w-full py-3 rounded font-semibold text-white transition disabled:opacity-60"
-          style={{
-            background: `linear-gradient(to right, ${theme.primary}, ${theme.secondary})`,
-          }}
+          className="w-full"
         >
           {busy ? "⏳ Traitement..." : "Envoyer l'invitation"}
-        </button>
+        </ActionButton>
         {message && (
           <p className="mt-3 text-center text-sm text-gray-700">{message}</p>
         )}
-      </div>
+      </SectionCard>
 
-      {/* Liste des agents */}
-      <div className="bg-white rounded-xl shadow-sm border"
-           style={{ borderColor: theme.secondary }}>
-        <div className="p-4 border-b" style={{ borderColor: theme.secondary }}>
-          <h2 className="text-lg font-semibold"
-              style={{ color: theme.secondary }}>
-            Agents de cette agence ({agents.length})
-          </h2>
-        </div>
+      <SectionCard title={`Agents de cette agence (${agents.length})`}>
 
         {agents.length === 0 ? (
-          <p className="p-6 text-gray-500">Aucun agent enregistré.</p>
+          <p className="py-4 text-gray-500">Aucun agent enregistré.</p>
         ) : (
           <div className="divide-y">
             {agents.map((agent) => (
@@ -708,11 +692,8 @@ const AgencePersonnelPage: React.FC = () => {
                       <div className="text-sm text-gray-500 flex items-center">
                         Code: <span className="font-mono ml-1">{agent.staffCode || "—"}</span>
                       </div>
-                      <div className="text-xs text-gray-500 flex items-center">
-                        Statut: 
-                        <span className={`ml-1 ${agent.active ? "text-green-600" : "text-red-600"}`}>
-                          {agent.active ? "Actif" : "Désactivé"}
-                        </span>
+                      <div className="text-xs text-gray-500 flex items-center gap-1">
+                        Statut: <StatusBadge status={agent.active ? "active" : "cancelled"}>{agent.active ? "Actif" : "Désactivé"}</StatusBadge>
                       </div>
                     </div>
                   ) : (
@@ -731,10 +712,7 @@ const AgencePersonnelPage: React.FC = () => {
                         {agent.telephone ? ` • ${agent.telephone}` : ""}
                       </p>
                       <p className="text-xs">
-                        Statut :{" "}
-                        <span className={agent.active ? "text-green-600" : "text-red-600"}>
-                          {agent.active ? "Actif" : "Désactivé"}
-                        </span>
+                        Statut : <StatusBadge status={agent.active ? "active" : "cancelled"}>{agent.active ? "Actif" : "Désactivé"}</StatusBadge>
                       </p>
                     </>
                   )}
@@ -744,58 +722,18 @@ const AgencePersonnelPage: React.FC = () => {
                 <div className="flex flex-wrap gap-2">
                   {editId === agent.id ? (
                     <>
-                      <button
-                        onClick={handleEditSave}
-                        disabled={busy}
-                        className="px-3 py-1 rounded text-white"
-                        style={{ background: theme.primary }}
-                      >
-                        Enregistrer
-                      </button>
-                      <button
-                        onClick={() => setEditId(null)}
-                        className="px-3 py-1 rounded border"
-                      >
-                        Annuler
-                      </button>
+                      <ActionButton onClick={handleEditSave} disabled={busy} size="sm">Enregistrer</ActionButton>
+                      <ActionButton variant="secondary" onClick={() => setEditId(null)} size="sm">Annuler</ActionButton>
                     </>
                   ) : (
                     <>
-                      <button
-                        onClick={() => handleEditStart(agent)}
-                        className="px-3 py-1 rounded border"
-                      >
-                        Modifier
-                      </button>
-
+                      <ActionButton variant="secondary" onClick={() => handleEditStart(agent)} size="sm">Modifier</ActionButton>
                       {agent.active ? (
-                        <button
-                          onClick={() => handleToggleActive(agent, false)}
-                          disabled={busy}
-                          className="px-3 py-1 rounded text-white"
-                          style={{ background: "#b45309" }}
-                        >
-                          Désactiver
-                        </button>
+                        <ActionButton variant="secondary" onClick={() => handleToggleActive(agent, false)} disabled={busy} size="sm">Désactiver</ActionButton>
                       ) : (
-                        <button
-                          onClick={() => handleToggleActive(agent, true)}
-                          disabled={busy}
-                          className="px-3 py-1 rounded text-white"
-                          style={{ background: "#16a34a" }}
-                        >
-                          Activer
-                        </button>
+                        <ActionButton onClick={() => handleToggleActive(agent, true)} disabled={busy} size="sm">Activer</ActionButton>
                       )}
-
-                      <button
-                        onClick={() => handleDelete(agent)}
-                        disabled={busy}
-                        className="px-3 py-1 rounded text-white"
-                        style={{ background: "#dc2626" }}
-                      >
-                        Supprimer
-                      </button>
+                      <ActionButton variant="danger" onClick={() => handleDelete(agent)} disabled={busy} size="sm">Supprimer</ActionButton>
                     </>
                   )}
                 </div>
@@ -803,8 +741,8 @@ const AgencePersonnelPage: React.FC = () => {
             ))}
           </div>
         )}
-      </div>
-    </div>
+      </SectionCard>
+    </StandardLayoutWrapper>
   );
 };
 

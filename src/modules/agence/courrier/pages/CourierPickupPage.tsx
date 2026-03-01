@@ -11,7 +11,7 @@ import type { Shipment } from "@/modules/logistics/domain/shipment.types";
 import type { Company } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { Package, Truck, Search, Loader2, CheckCircle } from "lucide-react";
-import CourierPageHeader from "../components/CourierPageHeader";
+import { PageHeader, StandardLayoutWrapper, SectionCard } from "@/ui";
 
 export default function CourierPickupPage() {
   const { user, company } = useAuth() as { user: { uid: string; companyId?: string; agencyId?: string }; company: unknown };
@@ -115,19 +115,15 @@ export default function CourierPickupPage() {
       (destinationAmount.trim() !== "" && !Number.isNaN(Number(destinationAmount)) && Number(destinationAmount) >= 0));
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6 p-4">
-      <CourierPageHeader
+    <StandardLayoutWrapper maxWidthClass="max-w-2xl">
+      <PageHeader
         icon={Truck}
         title="Remise Colis"
-        primaryColor={primaryColor}
-        description="Recherchez par code envoi ou téléphone destinataire, puis confirmez la remise."
+        primaryColorVar="var(--courier-primary, #ea580c)"
+        subtitle="Recherchez par code envoi ou téléphone destinataire, puis confirmez la remise."
       />
 
-      <section className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm sm:p-6">
-        <h2 className="mb-4 flex items-center gap-2 font-semibold text-gray-800">
-          <Search className="h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} />
-          Recherche
-        </h2>
+      <SectionCard title="Recherche" icon={Search}>
         <div className="flex flex-col gap-4 sm:flex-row sm:gap-2">
           <select
             value={searchBy}
@@ -160,7 +156,7 @@ export default function CourierPickupPage() {
             </button>
           </div>
         </div>
-      </section>
+      </SectionCard>
 
       {error && (
         <div className="flex justify-between rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
@@ -170,11 +166,7 @@ export default function CourierPickupPage() {
       )}
 
       {shipment && (
-        <section className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-sm sm:p-6">
-          <h2 className="mb-4 flex items-center gap-2 font-semibold text-gray-800">
-            <Package className="h-5 w-5" style={{ color: "var(--courier-primary, #ea580c)" }} />
-            Détails envoi
-          </h2>
+        <SectionCard title="Détails envoi" icon={Package}>
           <dl className="grid grid-cols-1 gap-3 text-sm">
             <div><dt className="text-gray-500">N° Envoi</dt><dd className="font-mono font-medium">{shipment.shipmentNumber ?? shipment.shipmentId}</dd></div>
             <div><dt className="text-gray-500">Destinataire</dt><dd>{shipment.receiver?.name ?? "—"}</dd></div>
@@ -215,9 +207,9 @@ export default function CourierPickupPage() {
           {shipment.currentStatus !== "READY_FOR_PICKUP" && shipment.currentStatus !== "DELIVERED" && (
             <p className="mt-3 text-sm text-amber-700">Statut : {shipment.currentStatus}. Non remis.</p>
           )}
-        </section>
+        </SectionCard>
       )}
       {searchValue.trim() && !shipment && <p className="text-sm text-gray-500">Aucun envoi trouvé.</p>}
-    </div>
+    </StandardLayoutWrapper>
   );
 }

@@ -1,4 +1,5 @@
 import React from "react";
+import { SectionCard } from "@/ui";
 import { Bus } from "lucide-react";
 import { Company, TripSuggestion } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
@@ -33,16 +34,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
   return (
     <section className="px-3 pt-4 pb-6 dark:bg-neutral-950/70">
       <div className="max-w-5xl mx-auto">
-
-        {/* ===== Titre ===== */}
-        <div className="flex items-center justify-center gap-2 mb-5">
-          <Bus size={20} style={{ color: primary }} />
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:!text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.25)]">
-            {t("destinationsPopular")}
-          </h2>
-        </div>
-
-        {/* ===== Cartes ===== */}
+        <SectionCard title={t("destinationsPopular")} icon={Bus} className="shadow-md">
         <div className="grid grid-cols-2 gap-4">
           {loading
             ? Array.from({ length: 4 }).map((_, index) => (
@@ -121,6 +113,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
             </p>
           </div>
         )}
+        </SectionCard>
       </div>
     </section>
   );

@@ -29,6 +29,8 @@ import {
   ChevronUp,
   TrendingDown
 } from 'lucide-react';
+import { SectionCard, StatusBadge as UIStatusBadge } from '@/ui';
+import type { StatusVariant } from '@/ui';
 
 interface GeneratedReport {
   id: string;
@@ -263,82 +265,64 @@ const Rapports: React.FC = () => {
   const statistics = getRealStatistics();
 
   // ==================== COMPOSANTS UI ====================
+  const categoryStatus: Record<GeneratedReport['type'], StatusVariant> = {
+    comptable: 'info',
+    operationnel: 'success',
+    analytique: 'neutral'
+  };
+
   const CategoryBadge: React.FC<{ category: GeneratedReport['type'] }> = ({ category }) => {
-    const config = {
-      comptable: { label: 'Comptable', color: 'bg-blue-100 text-blue-800 border-blue-300' },
-      operationnel: { label: 'Opérationnel', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
-      analytique: { label: 'Analytique', color: 'bg-purple-100 text-purple-800 border-purple-300' }
-    }[category];
-    
-    return (
-      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${config.color}`}>
-        {config.label}
-      </span>
-    );
+    const labels = { comptable: 'Comptable', operationnel: 'Opérationnel', analytique: 'Analytique' };
+    return <UIStatusBadge status={categoryStatus[category]}>{labels[category]}</UIStatusBadge>;
   };
 
-  const PeriodBadge: React.FC<{ period: GeneratedReport['period'] }> = ({ period }) => {
-    const labels = {
-      daily: 'Quotidien',
-      weekly: 'Hebdomadaire',
-      monthly: 'Mensuel',
-      quarterly: 'Trimestriel',
-      custom: 'Personnalisé'
-    };
-    
-    return (
-      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-300">
-        <Calendar className="h-3 w-3" />
-        {labels[period]}
-      </span>
-    );
+  const periodLabels: Record<GeneratedReport['period'], string> = {
+    daily: 'Quotidien',
+    weekly: 'Hebdomadaire',
+    monthly: 'Mensuel',
+    quarterly: 'Trimestriel',
+    custom: 'Personnalisé'
   };
 
-  const StatusBadge: React.FC<{ status: GeneratedReport['status'] }> = ({ status }) => {
-    const config = {
-      generating: { label: 'Génération...', icon: <RefreshCw className="h-3 w-3 animate-spin" />, color: 'bg-amber-100 text-amber-800 border-amber-300' },
-      ready: { label: 'Prêt', icon: <CheckCircle className="h-3 w-3" />, color: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
-      failed: { label: 'Échec', icon: <XCircle className="h-3 w-3" />, color: 'bg-red-100 text-red-800 border-red-300' }
-    }[status];
-    
-    return (
-      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${config.color}`}>
-        {config.icon}
-        {config.label}
-      </span>
-    );
+  const PeriodBadge: React.FC<{ period: GeneratedReport['period'] }> = ({ period }) => (
+    <UIStatusBadge status="neutral">
+      <Calendar className="h-3 w-3 inline mr-1" />
+      {periodLabels[period]}
+    </UIStatusBadge>
+  );
+
+  const reportStatusVariant: Record<GeneratedReport['status'], StatusVariant> = {
+    generating: 'warning',
+    ready: 'success',
+    failed: 'danger'
+  };
+
+  const ReportStatusBadge: React.FC<{ status: GeneratedReport['status'] }> = ({ status }) => {
+    const label = status === 'generating' ? 'Génération...' : status === 'ready' ? 'Prêt' : 'Échec';
+    const icon = status === 'generating' ? <RefreshCw className="h-3 w-3 animate-spin inline mr-1" /> : status === 'ready' ? <CheckCircle className="h-3 w-3 inline mr-1" /> : <XCircle className="h-3 w-3 inline mr-1" />;
+    return <UIStatusBadge status={reportStatusVariant[status]}>{icon}{label}</UIStatusBadge>;
   };
 
   return (
     <div className="space-y-6">
       {/* ================= EN-TÊTE ================= */}
-      <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-gradient-to-r from-white to-gray-50/50">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-indigo-50 to-purple-50 flex items-center justify-center">
-              <FileText className="h-6 w-6 text-indigo-600" />
-            </div>
-            <div>
-              <div className="text-xl font-bold text-gray-900">Rapports comptables</div>
-              <div className="text-sm text-gray-600">Génération de documents officiels pour la direction</div>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-3">
-            <button className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium">
-              <Eye className="h-4 w-4" />
-              Voir historique
-            </button>
-          </div>
-        </div>
-        
-        {/* Information sur le rôle des rapports */}
-        <div className="mt-4 p-4 rounded-lg bg-blue-50 border border-blue-200">
+      <SectionCard
+        title="Rapports comptables"
+        icon={FileText}
+        help={<span className="text-sm font-normal text-gray-500">Génération de documents officiels pour la direction</span>}
+        right={
+          <button className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium">
+            <Eye className="h-4 w-4" />
+            Voir historique
+          </button>
+        }
+      >
+        <div className="p-4 rounded-lg bg-gray-50 border border-gray-200">
           <div className="flex items-start gap-3">
-            <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <Info className="h-5 w-5 text-gray-600 mt-0.5 flex-shrink-0" />
             <div>
-              <div className="font-medium text-blue-800">Documentation officielle</div>
-              <div className="text-sm text-blue-700 mt-1">
+              <div className="font-medium text-gray-800">Documentation officielle</div>
+              <div className="text-sm text-gray-700 mt-1">
                 Cette interface permet de générer des rapports comptables et financiers officiels 
                 destinés à la direction, aux audits et aux partenaires. Tous les chiffres présentés 
                 sont issus des données réelles de la compagnie.
@@ -346,25 +330,15 @@ const Rapports: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ================= FILTRES ET CONFIGURATION ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
-              <Filter className="h-5 w-5 text-gray-600" />
-            </div>
-            <div>
-              <div className="text-lg font-bold text-gray-900">Configuration du rapport</div>
-              <div className="text-sm text-gray-600">Définissez les paramètres de génération</div>
-            </div>
-          </div>
-          
-          <div className="text-sm text-gray-600">
-            {filteredReports.length} rapport{filteredReports.length > 1 ? 's' : ''} disponible{filteredReports.length > 1 ? 's' : ''}
-          </div>
-        </div>
+      <SectionCard
+        title="Configuration du rapport"
+        icon={Filter}
+        help={<span className="text-sm font-normal text-gray-500">Définissez les paramètres de génération</span>}
+        right={<span className="text-sm text-gray-600">{filteredReports.length} rapport{filteredReports.length > 1 ? 's' : ''} disponible{filteredReports.length > 1 ? 's' : ''}</span>}
+      >
         
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Catégorie de rapport */}
@@ -453,15 +427,14 @@ const Rapports: React.FC = () => {
             {period === 'custom' && 'Période personnalisée'}
           </div>
         </div>
-      </div>
+      </SectionCard>
 
       {/* ================= STATISTIQUES RÉELLES ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-bold text-gray-900">Historique des générations</div>
-          <div className="text-sm text-gray-600">Données réelles depuis la création</div>
-        </div>
-        
+      <SectionCard
+        title="Historique des générations"
+        icon={FileText}
+        right={<span className="text-sm text-gray-600">Données réelles depuis la création</span>}
+      >
         {generatedReports.length === 0 ? (
           <div className="text-center py-8">
             <FileText className="mx-auto h-12 w-12 text-gray-400 mb-4" />
@@ -472,33 +445,33 @@ const Rapports: React.FC = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-4 rounded-xl border border-gray-200">
+            <div className="p-4 rounded-lg border border-gray-200 bg-gray-50/50">
               <div className="flex items-center justify-between mb-4">
                 <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Rapports générés</div>
-                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
-                  <FileText className="h-5 w-5 text-blue-600" />
+                <div className="h-10 w-10 rounded-lg border border-gray-200 bg-white flex items-center justify-center">
+                  <FileText className="h-5 w-5 text-gray-600" />
                 </div>
               </div>
               <div className="text-3xl font-bold text-gray-900">{statistics.totalGenerated}</div>
               <div className="text-sm text-gray-500 mt-2">Depuis le début</div>
             </div>
             
-            <div className="p-4 rounded-xl border border-gray-200">
+            <div className="p-4 rounded-lg border border-gray-200 bg-gray-50/50">
               <div className="flex items-center justify-between mb-4">
                 <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Volume total</div>
-                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-50 to-green-50 flex items-center justify-center">
-                  <BarChart3 className="h-5 w-5 text-emerald-600" />
+                <div className="h-10 w-10 rounded-lg border border-gray-200 bg-white flex items-center justify-center">
+                  <BarChart3 className="h-5 w-5 text-gray-600" />
                 </div>
               </div>
               <div className="text-3xl font-bold text-gray-900">{statistics.totalSizeMB.toFixed(1)} MB</div>
               <div className="text-sm text-gray-500 mt-2">Stockage réel utilisé</div>
             </div>
             
-            <div className="p-4 rounded-xl border border-gray-200">
+            <div className="p-4 rounded-lg border border-gray-200 bg-gray-50/50">
               <div className="flex items-center justify-between mb-4">
                 <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Dernière génération</div>
-                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
-                  <Clock className="h-5 w-5 text-amber-600" />
+                <div className="h-10 w-10 rounded-lg border border-gray-200 bg-white flex items-center justify-center">
+                  <Clock className="h-5 w-5 text-gray-600" />
                 </div>
               </div>
               <div className="text-xl font-bold text-gray-900">
@@ -510,21 +483,14 @@ const Rapports: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
+      </SectionCard>
 
       {/* ================= RAPPORTS DISPONIBLES ================= */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="text-lg font-bold text-gray-900">
-            {reportType === 'comptable' && 'Rapports comptables disponibles'}
-            {reportType === 'operationnel' && 'Rapports opérationnels disponibles'}
-            {reportType === 'analytique' && 'Rapports analytiques disponibles'}
-          </div>
-          <div className="text-sm text-gray-600">
-            {filteredReports.length} rapport{filteredReports.length > 1 ? 's' : ''}
-          </div>
-        </div>
-        
+      <SectionCard
+        title={reportType === 'comptable' ? 'Rapports comptables disponibles' : reportType === 'operationnel' ? 'Rapports opérationnels disponibles' : 'Rapports analytiques disponibles'}
+        icon={BarChart3}
+        right={<span className="text-sm text-gray-600">{filteredReports.length} rapport{filteredReports.length > 1 ? 's' : ''}</span>}
+      >
         {filteredReports.length === 0 ? (
           <div className="text-center py-12">
             <AlertTriangle className="mx-auto h-12 w-12 text-gray-400 mb-4" />
@@ -540,24 +506,10 @@ const Rapports: React.FC = () => {
               const isGenerating = generatingReportId === report.id;
               
               return (
-                <div key={report.id} className="border border-gray-200 rounded-xl p-5 hover:shadow-md transition-shadow">
+                <div key={report.id} className="border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between mb-4">
-                    <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${
-                      report.color === 'blue' ? 'bg-blue-50' :
-                      report.color === 'emerald' ? 'bg-emerald-50' :
-                      report.color === 'amber' ? 'bg-amber-50' :
-                      report.color === 'purple' ? 'bg-purple-50' :
-                      'bg-indigo-50'
-                    }`}>
-                      <span className={
-                        report.color === 'blue' ? 'text-blue-600' :
-                        report.color === 'emerald' ? 'text-emerald-600' :
-                        report.color === 'amber' ? 'text-amber-600' :
-                        report.color === 'purple' ? 'text-purple-600' :
-                        'text-indigo-600'
-                      }>
-                        {report.icon}
-                      </span>
+                    <div className="h-12 w-12 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-600">
+                      {report.icon}
                     </div>
                     <CategoryBadge category={report.category} />
                   </div>
@@ -603,34 +555,23 @@ const Rapports: React.FC = () => {
             })}
           </div>
         )}
-      </div>
+      </SectionCard>
 
       {/* ================= RAPPORTS GÉNÉRÉS RÉCEMMENT ================= */}
       {generatedReports.length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-5">
-            <div className="text-lg font-bold text-gray-900">Rapports générés récemment</div>
-            <div className="text-sm text-gray-600">
-              {generatedReports.length} rapport{generatedReports.length > 1 ? 's' : ''}
-            </div>
-          </div>
-          
+        <SectionCard
+          title="Rapports générés récemment"
+          icon={FileText}
+          right={<span className="text-sm text-gray-600">{generatedReports.length} rapport{generatedReports.length > 1 ? 's' : ''}</span>}
+        >
           <div className="space-y-3">
             {generatedReports.slice(0, 5).map((report) => (
-              <div key={report.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="p-4 bg-gradient-to-r from-gray-50 to-gray-100/50 border-b">
+              <div key={report.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="p-4 bg-gray-50 border-b border-gray-200">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className={`h-10 w-10 rounded-xl flex items-center justify-center ${
-                        report.type === 'comptable' ? 'bg-blue-50' :
-                        report.type === 'operationnel' ? 'bg-emerald-50' :
-                        'bg-purple-50'
-                      }`}>
-                        <FileText className={
-                          report.type === 'comptable' ? 'h-5 w-5 text-blue-600' :
-                          report.type === 'operationnel' ? 'h-5 w-5 text-emerald-600' :
-                          'h-5 w-5 text-purple-600'
-                        } />
+                      <div className="h-10 w-10 rounded-lg border border-gray-200 bg-white flex items-center justify-center text-gray-600">
+                        <FileText className="h-5 w-5" />
                       </div>
                       <div>
                         <div className="font-medium text-gray-900">{report.title}</div>
@@ -639,7 +580,7 @@ const Rapports: React.FC = () => {
                     </div>
                     
                     <div className="flex items-center gap-3">
-                      <StatusBadge status={report.status} />
+                      <ReportStatusBadge status={report.status} />
                       <PeriodBadge period={report.period} />
                       <button
                         onClick={() => handleViewReport(report)}
@@ -726,17 +667,12 @@ const Rapports: React.FC = () => {
               </button>
             </div>
           )}
-        </div>
+        </SectionCard>
       )}
 
       {/* ================= INFORMATION SUR LES RAPPORTS ================= */}
-      <div className="rounded-xl border border-blue-300 bg-blue-50 p-5 shadow-sm">
-        <div className="flex items-center gap-3 mb-4">
-          <Info className="h-6 w-6 text-blue-600" />
-          <div className="text-lg font-bold text-blue-800">À propos des rapports générés</div>
-        </div>
-        
-        <div className="text-blue-700">
+      <SectionCard title="À propos des rapports générés" icon={Info}>
+        <div className="text-gray-700">
           <p className="mb-3">
             Les rapports générés sont des documents officiels contenant des données financières réelles. 
             Ils sont destinés à :
@@ -744,34 +680,34 @@ const Rapports: React.FC = () => {
           
           <ul className="space-y-2 mb-4">
             <li className="flex items-start gap-2">
-              <div className="h-5 w-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <div className="h-5 w-5 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs">
                 ✓
               </div>
               <span>La direction générale pour le pilotage stratégique</span>
             </li>
             <li className="flex items-start gap-2">
-              <div className="h-5 w-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <div className="h-5 w-5 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs">
                 ✓
               </div>
               <span>Les audits internes et externes</span>
             </li>
             <li className="flex items-start gap-2">
-              <div className="h-5 w-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <div className="h-5 w-5 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs">
                 ✓
               </div>
               <span>Les partenaires financiers et institutionnels</span>
             </li>
             <li className="flex items-start gap-2">
-              <div className="h-5 w-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <div className="h-5 w-5 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center flex-shrink-0 mt-0.5 text-xs">
                 ✓
               </div>
               <span>Les autorités de régulation (le cas échéant)</span>
             </li>
           </ul>
           
-          <div className="bg-white p-4 rounded-lg border border-blue-200">
-            <div className="text-sm font-medium text-blue-800 mb-2">Procédure de génération</div>
-            <div className="text-sm text-blue-700 space-y-1">
+          <div className="p-4 rounded-lg border border-gray-200 bg-gray-50">
+            <div className="text-sm font-medium text-gray-800 mb-2">Procédure de génération</div>
+            <div className="text-sm text-gray-700 space-y-1">
               <p>1. Sélectionnez la catégorie et la période du rapport</p>
               <p>2. Cliquez sur "Générer" pour créer le document</p>
               <p>3. Téléchargez le rapport au format PDF</p>
@@ -779,7 +715,7 @@ const Rapports: React.FC = () => {
             </div>
           </div>
         </div>
-      </div>
+      </SectionCard>
     </div>
   );
 };

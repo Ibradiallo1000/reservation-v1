@@ -11,21 +11,22 @@ import type { Reservation } from '@/types/index';
 import { toJSDate } from '@/utils/toJSDate';
 
 import {
-  MetricCard,
   RevenueChart,
   ChannelsChart,
   DestinationsChart,
   TopTrajetsCard,
   NextDepartureCard
 } from '@/modules/agence/dashboard/components';
-
 import {
-  TicketIcon,
-  CurrencyDollarIcon,
-  ComputerDesktopIcon,
-  BuildingStorefrontIcon,
-  DocumentArrowDownIcon
-} from '@heroicons/react/24/outline';
+  StandardLayoutWrapper,
+  PageHeader,
+  SectionCard,
+  MetricCard as UIMetricCard,
+  ActionButton,
+  typography,
+} from '@/ui';
+import { Ticket, DollarSign, Monitor, Store, FileDown } from 'lucide-react';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 /* ===================== Types & helpers ===================== */
 type DailyStat = { date: string; reservations: number; revenue: number };
@@ -54,6 +55,7 @@ type ModePeriode = 'month'|'year'|'range';
 const DashboardAgencePage: React.FC = () => {
   const { user } = useAuth();
   const theme = useCompanyTheme();
+  const money = useFormatCurrency();
   const { id: agencyIdFromRoute } = useParams();
   const isOnline = useOnlineStatus();
 
@@ -218,8 +220,8 @@ const DashboardAgencePage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen p-4 md:p-6" style={{ backgroundColor: theme.colors.background }}>
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen" style={{ backgroundColor: theme.colors.background }}>
+      <StandardLayoutWrapper>
         {!isOnline && (
           <PageOfflineState message="Connexion instable: les indicateurs peuvent être incomplets." />
         )}
@@ -227,30 +229,19 @@ const DashboardAgencePage: React.FC = () => {
           <PageErrorState message={loadError} onRetry={() => setReloadKey((v) => v + 1)} />
         )}
 
-        {/* En-tête + filtres période */}
-        <div className="rounded-xl bg-white shadow-sm border p-4 space-y-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold" style={{ color: theme.colors.primary }}>
-                Tableau de bord • Réservations
-              </h1>
-              <p
-                className="px-3 py-1 rounded-md text-sm font-medium shadow-sm"
-                style={{ backgroundColor: `${theme.colors.secondary}20`, color: theme.colors.primary }}
-              >
-                {user?.agencyName} • Période {dateRange[0].toLocaleDateString()} → {dateRange[1].toLocaleDateString()}
-              </p>
-            </div>
-            <button
-              onClick={exportCSV}
-              className="inline-flex items-center gap-2 border rounded-lg px-3 py-2 shadow-sm"
-              style={{ borderColor: theme.colors.primary, color: theme.colors.primary }}
-            >
-              <DocumentArrowDownIcon className="h-5 w-5" /> Exporter
-            </button>
-          </div>
+        <PageHeader
+          title="Tableau de bord • Réservations"
+          subtitle={`${user?.agencyName} • Période ${dateRange[0].toLocaleDateString()} → ${dateRange[1].toLocaleDateString()}`}
+          icon={Ticket}
+          primaryColorVar={theme.colors.primary}
+          right={
+            <ActionButton variant="secondary" onClick={exportCSV}>
+              <FileDown className="h-4 w-4" /> Exporter
+            </ActionButton>
+          }
+        />
 
-          {/* Contrôles période */}
+        <SectionCard title="Filtres période">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="flex items-center gap-3">
               <label className="flex items-center gap-2 text-sm">
@@ -291,77 +282,70 @@ const DashboardAgencePage: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
+        </SectionCard>
 
-        {/* KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard
-            title="Billets vendus"
-            value={stats.sales}
-            icon={<TicketIcon className="h-5 w-5" style={{ color: theme.colors.secondary }} />}
-            color="primary"
-            link="/agence/reservations"
-            isLoading={isLoading}
+          <UIMetricCard
+            label="Billets vendus"
+            value={isLoading ? "—" : stats.sales}
+            icon={Ticket}
+            valueColorVar={theme.colors.secondary}
           />
-          <MetricCard
-            title="Revenus totaux"
-            value={stats.totalRevenue}
-            icon={<CurrencyDollarIcon className="h-5 w-5" style={{ color: theme.colors.primary }} />}
-            color="success"
-            isCurrency
-            isLoading={isLoading}
+          <UIMetricCard
+            label="Revenus totaux"
+            value={isLoading ? "—" : money(stats.totalRevenue)}
+            icon={DollarSign}
+            valueColorVar={theme.colors.primary}
           />
-          <MetricCard
-            title="En ligne"
-            value={stats.channels.find(c => c.name==='En ligne')?.value || 0}
-            icon={<ComputerDesktopIcon className="h-5 w-5" style={{ color: theme.colors.primary }} />}
-            color="info"
-            isLoading={isLoading}
+          <UIMetricCard
+            label="En ligne"
+            value={isLoading ? "—" : (stats.channels.find(c => c.name==='En ligne')?.value ?? 0)}
+            icon={Monitor}
+            valueColorVar={theme.colors.primary}
           />
-          <MetricCard
-            title="Au guichet"
-            value={stats.channels.find(c => c.name==='Guichet')?.value || 0}
-            icon={<BuildingStorefrontIcon className="h-5 w-5" style={{ color: theme.colors.secondary }} />}
-            color="warning"
-            isLoading={isLoading}
+          <UIMetricCard
+            label="Au guichet"
+            value={isLoading ? "—" : (stats.channels.find(c => c.name==='Guichet')?.value ?? 0)}
+            icon={Store}
+            valueColorVar={theme.colors.secondary}
           />
         </div>
 
-        {/* Graph + canaux */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 p-4 rounded-lg shadow-sm bg-white">
-            <RevenueChart data={stats.dailyStats} isLoading={isLoading} />
+          <div className="lg:col-span-2">
+            <SectionCard title="Revenus">
+              <RevenueChart data={stats.dailyStats} isLoading={isLoading} />
+            </SectionCard>
           </div>
-          <div className="p-4 rounded-lg shadow-sm bg-white">
+          <SectionCard title="Canaux">
             <ChannelsChart data={stats.channels} isLoading={isLoading} />
-          </div>
+          </SectionCard>
         </div>
 
-        {/* Destinations / Top trajets (pagination) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="p-4 rounded-lg shadow-sm bg-white">
+          <SectionCard title="Prochain départ">
             <NextDepartureCard isLoading={isLoading} />
-          </div>
-          <div className="p-4 rounded-lg shadow-sm bg-white">
+          </SectionCard>
+          <SectionCard title="Destinations">
             <DestinationsChart destinations={stats.destinations} isLoading={isLoading} />
-          </div>
-
-          <div className="p-4 rounded-lg shadow-sm bg-white space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-semibold">Top trajets</div>
-              <div className="text-sm text-gray-600">
+          </SectionCard>
+          <SectionCard
+            title="Top trajets"
+            right={
+              <span className={typography.muted}>
                 {stats.topRoutes.length} lignes • page {routePage}/{totalRoutePages}
-              </div>
-            </div>
+              </span>
+            }
+          >
             <TopTrajetsCard trajets={visibleTopRoutes} isLoading={isLoading} />
-            <div className="flex items-center justify-end gap-2">
-              <button className="px-3 py-1 rounded border" onClick={()=>setRoutePage(p=>Math.max(1,p-1))} disabled={routePage<=1}>Préc.</button>
-              <button className="px-3 py-1 rounded border" onClick={()=>setRoutePage(p=>Math.min(totalRoutePages,p+1))} disabled={routePage>=totalRoutePages}>Suiv.</button>
+            <div className="flex items-center justify-end gap-2 mt-3">
+              <ActionButton variant="secondary" size="sm" onClick={()=>setRoutePage(p=>Math.max(1,p-1))} disabled={routePage<=1}>Préc.</ActionButton>
+              <ActionButton variant="secondary" size="sm" onClick={()=>setRoutePage(p=>Math.min(totalRoutePages,p+1))} disabled={routePage>=totalRoutePages}>Suiv.</ActionButton>
             </div>
-          </div>
+          </SectionCard>
         </div>
 
-      </div>
+      </StandardLayoutWrapper>
     </div>
   );
 };

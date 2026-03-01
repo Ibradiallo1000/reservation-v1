@@ -12,7 +12,7 @@ import {
 } from "firebase/firestore";
 import { db, functions, dbReady } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -255,7 +255,6 @@ const DeleteAgencyModal: React.FC<{
 const CompagnieAgencesPage: React.FC = () => {
   const { user, company } = useAuth();
   const theme = useCompanyTheme(company);
-  const { setHeader, resetHeader } = usePageHeader();
   const navigate = useNavigate();
 
   const [agences, setAgences] = useState<Agence[]>([]);
@@ -299,17 +298,6 @@ const CompagnieAgencesPage: React.FC = () => {
     });
     return null;
   };
-
-  useEffect(() => {
-    setHeader({
-      title: "Agences",
-      subtitle: agences.length ? `${agences.length} agence${agences.length > 1 ? "s" : ""}` : "",
-      bg: `linear-gradient(90deg, ${theme.colors.primary} 0%, ${theme.colors.secondary} 100%)`,
-      fg: "#fff",
-    });
-    return () => resetHeader();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agences.length, theme.colors.primary, theme.colors.secondary]);
 
   // fetchAgences now waits for dbReady (ensures emulators / firestore initialisation is done)
   const fetchAgences = async () => {
@@ -635,20 +623,22 @@ const CompagnieAgencesPage: React.FC = () => {
 
   // Render
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
-        <div />
-        <Button
-          onClick={() => setShowForm(!showForm)}
-          variant="primary"
-        >
-          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-          </svg>
-          {showForm ? "Masquer le formulaire" : "Ajouter une nouvelle agence"}
-        </Button>
-      </div>
-
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Agences"
+        subtitle={agences.length ? `${agences.length} agence${agences.length > 1 ? "s" : ""}` : undefined}
+        right={
+          <Button
+            onClick={() => setShowForm(!showForm)}
+            variant="primary"
+          >
+            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            {showForm ? "Masquer le formulaire" : "Ajouter une nouvelle agence"}
+          </Button>
+        }
+      />
       {showForm && (
         <form
           onSubmit={handleSubmit}
@@ -1046,7 +1036,7 @@ const CompagnieAgencesPage: React.FC = () => {
         agencyIdToDelete={agencyIdToDelete}
         loading={deleteLoading}
       />
-    </div>
+    </StandardLayoutWrapper>
   );
 };
 

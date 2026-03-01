@@ -56,6 +56,8 @@ import {
   CalendarDays, Clock4, Receipt, History, Pencil, XCircle, Loader2,
   Search, Moon, Sun, Printer as PrinterIcon,
 } from "lucide-react";
+import { StatusBadge, ActionButton, SectionCard, EmptyState } from "@/ui";
+import { typography } from "@/ui/foundation";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { updateReservationStatut } from "@/modules/agence/services/reservationStatutService";
 
@@ -890,23 +892,22 @@ const AgenceGuichetPage: React.FC = () => {
           {/* ═══════ RAPPORT TAB ═══════ */}
           {tab === "rapport" && (
             <div className="max-w-[1600px] mx-auto p-4 lg:p-6 space-y-5">
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <div>
-                    <h2 className="text-xl font-bold text-gray-900">Rapport de session</h2>
-                    <p className="text-sm text-gray-500 mt-0.5">{reportDateLabel}</p>
-                  </div>
+              <SectionCard
+                title="Rapport de session"
+                right={
                   <div className="flex items-center gap-3">
                     <div className="text-right">
-                      <p className="text-2xl font-bold" style={{ color: theme.primary }}>{sessionTotals.billets} <span className="text-sm font-normal text-gray-500">billets</span></p>
+                      <p className={typography.valueLarge} style={{ color: theme.primary }}>{sessionTotals.billets} <span className={typography.muted}>billets</span></p>
                     </div>
                     <div className="h-8 w-px bg-gray-200" />
                     <div className="text-right">
-                      <p className="text-2xl font-bold" style={{ color: theme.primary }}>{money(sessionTotals.montant)}</p>
+                      <p className={typography.valueLarge} style={{ color: theme.primary }}>{money(sessionTotals.montant)}</p>
                     </div>
                   </div>
-                </div>
-              </div>
+                }
+              >
+                <p className={typography.muted}>{reportDateLabel}</p>
+              </SectionCard>
 
               {/* Search bar */}
               <div className="relative">
@@ -921,17 +922,15 @@ const AgenceGuichetPage: React.FC = () => {
               </div>
 
               {(status === "active" || status === "paused" || status === "pending") && (
-                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                  <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-                    <h3 className="font-semibold text-gray-900">Ventes du poste en cours</h3>
-                    <span className="text-xs text-gray-400">Temps réel</span>
-                  </div>
+                <SectionCard
+                  title="Ventes du poste en cours"
+                  right={<span className={typography.mutedSm}>Temps réel</span>}
+                  noPad
+                >
                   {loadingReport ? (
                     <div className="p-8 text-center text-gray-400">Chargement…</div>
                   ) : !filteredTickets.length ? (
-                    <div className="p-8 text-center text-gray-400">
-                      {reportSearch ? "Aucun résultat pour cette recherche." : "Aucune vente pour cette session."}
-                    </div>
+                    <EmptyState message={reportSearch ? "Aucun résultat pour cette recherche." : "Aucune vente pour cette session."} />
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
@@ -964,23 +963,20 @@ const AgenceGuichetPage: React.FC = () => {
                                   {canceled ? <span className="text-gray-400 line-through">{money(t.montant)}</span> : money(t.montant)}
                                 </td>
                                 <td className="px-4 py-3 text-center">
-                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                    canceled ? "bg-red-100 text-red-700" : boarded ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"
-                                  }`}>
+                                  <StatusBadge status={canceled ? "danger" : boarded ? "success" : "info"}>
                                     {canceled ? "Annulé" : boarded ? "Embarqué" : "Actif"}
-                                  </span>
+                                  </StatusBadge>
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <div className="flex items-center justify-end gap-1.5">
                                     {!canceled && !boarded && (
                                       <>
-                                        <button onClick={() => openEdit(t)} className="p-1.5 rounded-lg hover:bg-gray-100 transition" title="Modifier">
+                                        <ActionButton size="icon" variant="ghost" onClick={() => openEdit(t)} title="Modifier" aria-label="Modifier">
                                           <Pencil className="w-3.5 h-3.5 text-gray-500" />
-                                        </button>
-                                        <button onClick={() => cancelReservation(t)} disabled={cancelingId === t.id}
-                                          className="p-1.5 rounded-lg hover:bg-red-50 transition" title="Annuler">
+                                        </ActionButton>
+                                        <ActionButton size="icon" variant="ghost" onClick={() => cancelReservation(t)} disabled={cancelingId === t.id} title="Annuler" aria-label="Annuler" className="hover:bg-red-50">
                                           {cancelingId === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin text-red-500" /> : <XCircle className="w-3.5 h-3.5 text-red-500" />}
-                                        </button>
+                                        </ActionButton>
                                       </>
                                     )}
                                     <code className="text-[10px] text-gray-400 bg-gray-50 px-1 py-0.5 rounded">{t.referenceCode || t.id.slice(0, 8)}</code>
@@ -993,18 +989,15 @@ const AgenceGuichetPage: React.FC = () => {
                       </table>
                     </div>
                   )}
-                </div>
+                </SectionCard>
               )}
 
               {/* Pending reports */}
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="px-5 py-4 border-b border-gray-100">
-                  <h3 className="font-semibold text-gray-900">Sessions en attente de validation</h3>
-                </div>
+              <SectionCard title="Sessions en attente de validation" noPad>
                 {loadingPending ? (
                   <div className="p-8 text-center text-gray-400">Chargement…</div>
                 ) : pendingReports.length === 0 ? (
-                  <div className="p-8 text-center text-gray-400">Aucune session en attente.</div>
+                  <div className="p-5"><EmptyState message="Aucune session en attente." /></div>
                 ) : (
                   <div className="divide-y divide-gray-100">
                     {pendingReports.map((rep) => {
@@ -1018,12 +1011,12 @@ const AgenceGuichetPage: React.FC = () => {
                               <p className="text-xs text-gray-500">{start.toLocaleString("fr-FR")} — {end.toLocaleString("fr-FR")}</p>
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${rep.accountantValidated ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                              <StatusBadge status={rep.accountantValidated ? "success" : "warning"}>
                                 Comptable {rep.accountantValidated ? "✓" : "…"}
-                              </span>
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${rep.managerValidated ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                              </StatusBadge>
+                              <StatusBadge status={rep.managerValidated ? "success" : "warning"}>
                                 Chef {rep.managerValidated ? "✓" : "…"}
-                              </span>
+                              </StatusBadge>
                             </div>
                           </div>
                           {rep.details.length > 0 && (
@@ -1051,22 +1044,21 @@ const AgenceGuichetPage: React.FC = () => {
                     })}
                   </div>
                 )}
-              </div>
+              </SectionCard>
             </div>
           )}
 
           {/* ═══════ HISTORIQUE TAB ═══════ */}
           {tab === "historique" && (
             <div className="max-w-[1600px] mx-auto p-4 lg:p-6 space-y-5">
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
-                <h2 className="text-xl font-bold text-gray-900">Historique des sessions validées</h2>
-                <p className="text-sm text-gray-500">{user?.displayName || user?.email || "—"} ({sellerCodeCached})</p>
-              </div>
-              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              <SectionCard title="Historique des sessions validées">
+                <p className={typography.muted}>{user?.displayName || user?.email || "—"} ({sellerCodeCached})</p>
+              </SectionCard>
+              <SectionCard title="Liste des sessions validées" noPad>
                 {loadingHistory ? (
                   <div className="p-8 text-center text-gray-400">Chargement…</div>
                 ) : historyReports.length === 0 ? (
-                  <div className="p-8 text-center text-gray-400">Aucune session validée.</div>
+                  <div className="p-5"><EmptyState message="Aucune session validée." /></div>
                 ) : (
                   <div className="divide-y divide-gray-100">
                     {historyReports.map((rep) => {
@@ -1080,8 +1072,8 @@ const AgenceGuichetPage: React.FC = () => {
                               <p className="text-xs text-gray-500">{start.toLocaleString("fr-FR")} → {end.toLocaleString("fr-FR")}</p>
                             </div>
                             <div className="flex gap-1.5">
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">Comptable ✓</span>
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">Chef ✓</span>
+                              <StatusBadge status="success">Comptable ✓</StatusBadge>
+                              <StatusBadge status="success">Chef ✓</StatusBadge>
                             </div>
                           </div>
                           {rep.details.length > 0 && (
@@ -1109,7 +1101,7 @@ const AgenceGuichetPage: React.FC = () => {
                     })}
                   </div>
                 )}
-              </div>
+              </SectionCard>
             </div>
           )}
         </div>
@@ -1203,12 +1195,10 @@ const EditForm: React.FC<{
       </div>
       <input className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm" placeholder="Motif (optionnel)" value={reason} onChange={(e) => setReason(e.target.value)} />
       <div className="flex justify-end gap-2 pt-2">
-        <button onClick={onClose} className="px-4 py-2.5 rounded-xl border border-gray-300 text-sm font-medium bg-white hover:bg-gray-50 transition">Annuler</button>
-        <button disabled={saving || !nom} onClick={() => onSave({ id: target.id, nomClient: capitalizeFullName(nom), telephone: rawPhoneMali(tel) || tel, seatsGo: sGo, seatsReturn: sRet, montant: amt, editReason: reason || undefined })}
-          className="px-4 py-2.5 rounded-xl text-sm font-medium text-white transition disabled:opacity-50"
-          style={{ background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` }}>
+        <ActionButton variant="secondary" onClick={onClose}>Annuler</ActionButton>
+        <ActionButton disabled={saving || !nom} onClick={() => onSave({ id: target.id, nomClient: capitalizeFullName(nom), telephone: rawPhoneMali(tel) || tel, seatsGo: sGo, seatsReturn: sRet, montant: amt, editReason: reason || undefined })}>
           {saving ? "Enregistrement…" : "Enregistrer"}
-        </button>
+        </ActionButton>
       </div>
     </div>
   );

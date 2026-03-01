@@ -171,7 +171,7 @@ export function getWalletDisplayState(statut?: string): WalletDisplayState | nul
   if (s === "annulation_en_attente")
     return { label: "En attente d'annulation", section: "en_verification" };
   if (s === "preuve_recue" || s === "verification")
-    return { label: "En vérification", section: "en_verification" };
+    return { label: "En attente de validation", section: "en_verification" };
   if (s === "confirme" || s === "paye")
     return { label: "Valide", section: "a_venir" };
   return null;

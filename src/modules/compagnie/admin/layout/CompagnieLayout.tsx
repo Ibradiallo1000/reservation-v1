@@ -25,10 +25,8 @@ import {
 import { db } from "@/firebaseConfig";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { lightenForDarkMode } from "@/utils/color";
-import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
-import { DESIGN } from "@/app/design-system";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { SubscriptionBanner } from "@/shared/subscription";
 import type { SubscriptionStatus } from "@/shared/subscription";
@@ -224,26 +222,24 @@ const CompagnieLayout: React.FC = () => {
 
   return (
     <CurrencyProvider currency={(currentCompany as any)?.devise}>
-      <PageHeaderProvider>
-        <div className={darkMode ? "agency-dark" : ""} style={cssVars}>
-          <InternalLayout
-            sections={sections}
-            role={(user as any)?.role || "admin_compagnie"}
-            userName={user?.displayName || undefined}
-            userEmail={user?.email || undefined}
-            brandName={currentCompany?.nom || "Compagnie"}
-            logoUrl={currentCompany?.logoUrl}
-            primaryColor={theme.colors.primary}
-            secondaryColor={theme.colors.secondary}
-            onLogout={logout}
-            banner={bannerContent}
-            headerRight={
-              <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
-            }
-            mainClassName="agency-content-transition"
-          />
-        </div>
-      </PageHeaderProvider>
+      <div className={darkMode ? "agency-dark" : ""} style={cssVars}>
+        <InternalLayout
+          sections={sections}
+          role={(user as any)?.role || "admin_compagnie"}
+          userName={user?.displayName || undefined}
+          userEmail={user?.email || undefined}
+          brandName={currentCompany?.nom || "Compagnie"}
+          logoUrl={currentCompany?.logoUrl}
+          primaryColor={theme.colors.primary}
+          secondaryColor={theme.colors.secondary}
+          onLogout={logout}
+          banner={bannerContent}
+          headerRight={
+            <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
+          }
+          mainClassName="agency-content-transition"
+        />
+      </div>
     </CurrencyProvider>
   );
 };

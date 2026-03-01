@@ -11,7 +11,9 @@ import {
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/shared/ui/button";
-import { CheckCircle2 } from "lucide-react";
+import { SectionCard, StatusBadge } from "@/ui";
+import type { StatusVariant } from "@/ui";
+import { CheckCircle2, CreditCard, Settings } from "lucide-react";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
@@ -54,6 +56,16 @@ const SUPPORT_LABELS: Record<SupportLevel, string> = {
   premium: "Premium",
   enterprise: "Enterprise",
 };
+
+function supportToVariant(s: SupportLevel): StatusVariant {
+  switch (s) {
+    case "standard": return "info";
+    case "priority": return "warning";
+    case "premium": return "active";
+    case "enterprise": return "completed";
+    default: return "neutral";
+  }
+}
 
 const CompanySettingsPlan: React.FC = () => {
   const isOnline = useOnlineStatus();
@@ -207,13 +219,11 @@ const CompanySettingsPlan: React.FC = () => {
       {error && (
         <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
       )}
-      {/* Current plan card */}
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Plan actuel</h3>
-          <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 capitalize">
+      <SectionCard title="Plan actuel" icon={CreditCard}>
+        <div className="flex items-center gap-2 mb-4">
+          <StatusBadge status={supportToVariant(companySupport)}>
             Support {SUPPORT_LABELS[companySupport]}
-          </span>
+          </StatusBadge>
         </div>
         <p className="text-gray-600 mb-4">
           {currentPlan
@@ -249,24 +259,22 @@ const CompanySettingsPlan: React.FC = () => {
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-gray-500">Modules inclus</p>
             <div className="flex flex-wrap gap-1 mt-1">
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-1.5 py-0.5 text-xs text-green-700">
-                <CheckCircle2 className="h-3 w-3" /> Tous
-              </span>
+              <StatusBadge status="success">
+                <CheckCircle2 className="h-3 w-3 inline mr-1" /> Tous
+              </StatusBadge>
             </div>
           </div>
         </div>
-      </div>
+      </SectionCard>
 
-      {/* Plan catalog */}
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Changer de plan</h3>
+      <SectionCard title="Changer de plan" icon={Settings}>
         <div className="grid gap-4 md:grid-cols-3">
           {plans.map((p) => {
             const isCurrent = p.id === company.plan;
             return (
               <div
                 key={p.id}
-                className={`rounded-xl border p-4 ${
+                className={`rounded-lg border p-4 ${
                   isCurrent
                     ? "ring-2 ring-[var(--btn-primary,#FF6600)] border-orange-200"
                     : "border-gray-200"
@@ -274,9 +282,9 @@ const CompanySettingsPlan: React.FC = () => {
               >
                 <div className="flex items-baseline justify-between">
                   <h4 className="font-semibold text-gray-900">{p.label}</h4>
-                  <span className="text-xs text-gray-500 capitalize">
+                  <StatusBadge status={supportToVariant(p.supportLevel)}>
                     {SUPPORT_LABELS[p.supportLevel]}
-                  </span>
+                  </StatusBadge>
                 </div>
                 {p.description && (
                   <p className="text-sm text-gray-600 mt-1">{p.description}</p>
@@ -293,11 +301,10 @@ const CompanySettingsPlan: React.FC = () => {
                   <li>Minimum mensuel : <b>{money(p.minimumMonthly)}</b></li>
                 </ul>
 
-                {/* All features included */}
                 <div className="flex flex-wrap gap-1 mt-2">
-                  <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-1.5 py-0.5 text-xs text-green-700">
-                    <CheckCircle2 className="h-3 w-3" /> Tous modules inclus
-                  </span>
+                  <StatusBadge status="success">
+                    <CheckCircle2 className="h-3 w-3 inline mr-1" /> Tous modules inclus
+                  </StatusBadge>
                 </div>
 
                 <Button
@@ -312,7 +319,7 @@ const CompanySettingsPlan: React.FC = () => {
             );
           })}
         </div>
-      </div>
+      </SectionCard>
     </div>
   );
 };

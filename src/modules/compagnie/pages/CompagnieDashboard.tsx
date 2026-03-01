@@ -5,13 +5,15 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useCompanyDashboardData } from "@/modules/compagnie/hooks/useCompanyDashboardData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
+import { Link } from "react-router-dom";
 import {
   TrendingUp,
   Building2,
   Ticket,
 } from "lucide-react";
 
-import { KpiHeader } from "@/modules/compagnie/admin/components/CompanyDashboard/KpiHeader";
+import { Skeleton } from "@/shared/ui/skeleton";
+import { StandardLayoutWrapper, PageHeader, MetricCard } from "@/ui";
 import { TimeFilterBar, RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
 import { RevenueReservationsChart } from "@/modules/compagnie/admin/components/CompanyDashboard/RevenueReservationsChart";
 import { ChannelSplitChart } from "@/modules/compagnie/admin/components/CompanyDashboard/ChannelSplitChart";
@@ -20,7 +22,6 @@ import { NetworkHealthSummary } from "@/modules/compagnie/admin/components/Compa
 import { CriticalAlertsPanel, type CriticalAlert } from "@/modules/compagnie/admin/components/CompanyDashboard/CriticalAlertsPanel";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { usePageHeader } from "@/contexts/PageHeaderContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageOfflineState } from "@/shared/ui/PageStates";
@@ -43,12 +44,6 @@ export default function CompagnieDashboard() {
   // 🔥 CLÉ PRINCIPALE
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
   const money = useFormatCurrency();
-
-  const { setHeader, resetHeader } = usePageHeader();
-  useEffect(() => {
-    setHeader({ title: "Performance Réseau" });
-    return () => resetHeader();
-  }, [setHeader, resetHeader]);
 
   const [range, setRange] = useState<RangeKey>(DEFAULT_RANGE);
   const [customStart, setCustomStart] = useState<string | null>(null);
@@ -81,12 +76,12 @@ export default function CompagnieDashboard() {
 
   if (!companyId) {
     return (
-      <div className="p-6">
-        <h1 className="text-xl font-semibold mb-2">Dashboard Compagnie</h1>
+      <StandardLayoutWrapper>
+        <PageHeader title="Performance Réseau" />
         <p className="text-sm text-muted-foreground">
           Company ID introuvable.
         </p>
-      </div>
+      </StandardLayoutWrapper>
     );
   }
 
@@ -133,54 +128,59 @@ export default function CompagnieDashboard() {
   }, [agencies]);
 
   return (
-    <div className="space-y-6 p-4 md:p-6">
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Performance Réseau"
+        subtitle={`CA par agence, classement et alertes — Période : ${periodLabel}`}
+        right={
+          <TimeFilterBar
+            range={range}
+            setRange={setRange}
+            customStart={customStart}
+            setCustomStart={setCustomStart}
+            customEnd={customEnd}
+            setCustomEnd={setCustomEnd}
+          />
+        }
+      />
       {!isOnline && (
         <PageOfflineState message="Connexion instable: certains blocs de performance peuvent être retardés." />
       )}
 
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-bold">Performance Réseau</h2>
-          <p className="text-sm text-muted-foreground">CA par agence, classement et alertes — Période : {periodLabel}</p>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-[110px] rounded-lg" />
+          ))}
         </div>
-        <TimeFilterBar
-          range={range}
-          setRange={setRange}
-          customStart={customStart}
-          setCustomStart={setCustomStart}
-          customEnd={customEnd}
-          setCustomEnd={setCustomEnd}
-        />
-      </div>
-
-      <KpiHeader
-        loading={loading}
-        couleurPrimaire={company?.couleurPrimaire}
-        couleurSecondaire={company?.couleurSecondaire}
-        items={[
-          {
-            icon: TrendingUp,
-            label: "CA",
-            value: kpis.caPeriodeFormatted,
-            sub: kpis.caDeltaPercent != null ? `Variation : ${kpis.caDeltaPercent >= 0 ? "+" : ""}${kpis.caDeltaPercent}%` : kpis.caDeltaText,
-            to: `/compagnie/${companyId}/reservations`,
-          },
-          {
-            icon: Ticket,
-            label: "Billets vendus",
-            value: String(kpis.reservationsCount || 0),
-            sub: "Tous canaux",
-            to: `/compagnie/${companyId}/reservations`,
-          },
-          {
-            icon: Building2,
-            label: "Agences actives",
-            value: String(kpis.agencesActives),
-            sub: `${kpis.totalAgences} au total`,
-            to: `/compagnie/${companyId}/parametres`,
-          },
-        ]}
-      />
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <Link to={`/compagnie/${companyId}/reservations`} className="block">
+            <MetricCard
+              label="CA"
+              value={kpis.caPeriodeFormatted}
+              icon={TrendingUp}
+              valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
+            />
+          </Link>
+          <Link to={`/compagnie/${companyId}/reservations`} className="block">
+            <MetricCard
+              label="Billets vendus"
+              value={String(kpis.reservationsCount || 0)}
+              icon={Ticket}
+              valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
+            />
+          </Link>
+          <Link to={`/compagnie/${companyId}/parametres`} className="block">
+            <MetricCard
+              label="Agences actives"
+              value={`${kpis.agencesActives} / ${kpis.totalAgences}`}
+              icon={Building2}
+              valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
+            />
+          </Link>
+        </div>
+      )}
 
       {kpis.caDeltaPercent != null && (
         <div className="flex items-center gap-2 text-sm">
@@ -264,6 +264,6 @@ export default function CompagnieDashboard() {
         </CardContent>
       </Card>
 
-    </div>
+    </StandardLayoutWrapper>
   );
 }

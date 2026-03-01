@@ -1,6 +1,8 @@
 // src/app/design-system.ts
-// Central design tokens for ALL internal back-office spaces (Teliya global design system).
-// No business logic — visual tokens only.
+// @deprecated Prefer @/ui and @/ui/foundation for new code. This file remains for backward
+// compatibility during migration (InternalLayout, button.tsx still reference it).
+// See docs/DESIGN-SYSTEM-MIGRATION.md. Migration target: replace DESIGN/dsCard/dsPage with
+// tokens and components from src/ui (StandardLayoutWrapper, PageHeader, SectionCard, etc.).
 
 export const DESIGN = {
   // ─── Border Radius ───
