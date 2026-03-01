@@ -93,13 +93,10 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            // No firebase split: keep firebase in vendor to avoid IndexedDB/heartbeat "AS before initialization" crash in production
+            // Single vendor chunk: avoids "X before initialization" (router, icons, firebase, agence/compagnie chunks)
             return 'vendor';
           }
-          if (id.includes('/src/modules/compagnie/')) return 'compagnie';
-          if (id.includes('/src/modules/agence/')) return 'agence';
-          if (id.includes('/src/modules/logistics/')) return 'courier';
-          if (id.includes('/src/modules/ceo/')) return 'ceo';
+          // No app-level chunks (compagnie/agence/courier/ceo): they caused "Cannot access 'r0' before initialization" when agence chunk ran before vendor finished init
         },
         chunkFileNames: 'assets/js/[name]-[hash].js',
         assetFileNames: 'assets/[ext]/[name]-[hash].[ext]',
