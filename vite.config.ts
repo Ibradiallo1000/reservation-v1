@@ -75,6 +75,10 @@ export default defineConfig({
       '@assets': path.resolve(__dirname, './src/assets'),
       '@images': path.resolve(__dirname, './public/images'),
     },
+    dedupe: ['react', 'react-dom'],
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom'],
   },
   css: {
     postcss: './postcss.config.cjs',
@@ -90,8 +94,7 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('node_modules')) {
             if (id.includes('firebase')) return 'firebase';
-            // Keep react-router-dom in vendor with React to avoid "createContext of undefined" (router chunk had no React)
-            if (id.includes('lucide-react')) return 'icons';
+            // Keep react-router-dom and lucide-react in vendor with React to avoid "createContext/forwardRef of undefined" in separate chunks
             return 'vendor';
           }
           if (id.includes('/src/modules/compagnie/')) return 'compagnie';

@@ -8,6 +8,7 @@ import App from "./App";
 import "./index.css";
 import i18n from "./i18n";
 import { handleFirestoreError } from "./utils/firestoreErrorHandler";
+import ErrorBoundary from "@/shared/core/ErrorBoundary";
 
 /* ================== Interception globale des erreurs Firestore ================== */
 /** On évite de patcher plusieurs fois pendant le HMR */
@@ -84,20 +85,22 @@ if (!rootEl) {
   applySavedTheme();
 
   const FullApp = () => (
-    <React.StrictMode>
-      <BrowserRouter
-        future={
-          {
-            v7_startTransition: true,
-            v7_relativeSplatPath: true,
-          } as RouterFuture
-        }
-      >
-        <I18nextProvider i18n={i18n}>
-          <App />
-        </I18nextProvider>
-      </BrowserRouter>
-    </React.StrictMode>
+    <ErrorBoundary>
+      <React.StrictMode>
+        <BrowserRouter
+          future={
+            {
+              v7_startTransition: true,
+              v7_relativeSplatPath: true,
+            } as RouterFuture
+          }
+        >
+          <I18nextProvider i18n={i18n}>
+            <App />
+          </I18nextProvider>
+        </BrowserRouter>
+      </React.StrictMode>
+    </ErrorBoundary>
   );
 
   const BootWrapper: React.FC = () => {
