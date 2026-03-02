@@ -1,4 +1,4 @@
-// Section "À propos" dynamique — affichée uniquement si au moins un champ about est renseigné
+// Section "Pourquoi choisir {company} ?" — accueil, métriques uniquement (confiance)
 import React from "react";
 import { Bus, MapPin, Star, HeadphonesIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -6,6 +6,7 @@ import type { CompanyAbout } from "@/types/companyTypes";
 
 interface CompanyAboutSectionProps {
   about?: CompanyAbout | null;
+  companyName: string;
   primaryColor: string;
   secondaryColor: string;
 }
@@ -22,6 +23,7 @@ function hasAnyAbout(about: CompanyAbout | null | undefined): boolean {
 
 const CompanyAboutSection: React.FC<CompanyAboutSectionProps> = ({
   about,
+  companyName,
   primaryColor,
   secondaryColor,
 }) => {
@@ -58,29 +60,18 @@ const CompanyAboutSection: React.FC<CompanyAboutSectionProps> = ({
   return (
     <section
       className="py-6 px-4 dark:bg-neutral-950/70"
-      style={{
-        backgroundColor: `${secondaryColor}08`,
-      }}
+      style={{ backgroundColor: `${secondaryColor}08` }}
     >
       <div className="max-w-5xl mx-auto">
-        {/* Titre — même hiérarchie que les autres sections */}
         <div className="text-center mb-4">
           <div className="flex justify-center items-center gap-2">
             <Bus size={20} style={{ color: primaryColor }} />
             <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
-              {t("aboutCompanyTitle")}
+              {t("whyChooseCompany", { companyName })}
             </h2>
           </div>
         </div>
 
-        {/* Description */}
-        {about!.description?.trim() && (
-          <p className="text-center max-w-2xl mx-auto text-gray-700 dark:text-gray-200 text-sm sm:text-base leading-relaxed mb-6">
-            {about!.description.trim()}
-          </p>
-        )}
-
-        {/* Métriques — cartes compactes */}
         {metrics.length > 0 && (
           <div className="flex flex-wrap justify-center gap-3 sm:gap-4">
             {metrics.map((m, i) => {

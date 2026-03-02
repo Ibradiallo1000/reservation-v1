@@ -30,6 +30,7 @@ const ReceiptEnLignePage = lazy(() => import("../pages/ReceiptEnLignePage"));
 const UploadPreuvePage = lazy(() => import("../pages/UploadPreuvePage"));
 const ReservationDetailsPage = lazy(() => import("../pages/ReservationDetailsPage"));
 const AidePage = lazy(() => import("../pages/AidePage"));
+const CompanyAboutPage = lazy(() => import("../pages/CompanyAboutPage"));
 
 import PublicBottomNav from "../components/PublicBottomNav";
 
@@ -257,6 +258,9 @@ export default function RouteResolver() {
       break;
     case "aide":
       content = <AidePage company={company} />;
+      break;
+    case "a-propos":
+      content = <CompanyAboutPage company={company} />;
       break;
     case null:
       content = <PublicCompanyPage {...common} isMobile={isMobile} />;

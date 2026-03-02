@@ -97,6 +97,7 @@ i18n
           safeTrips: 'Voyages sécurisés',
 
           aboutCompanyTitle: 'À propos',
+          learnMore: 'En savoir plus',
           aboutYearsExperience: '{{count}}+ ans d\'expérience',
           aboutDestinationsCount: '{{count}}+ destinations',
           aboutSatisfactionRate: '{{rate}}% satisfaction',
@@ -191,6 +192,7 @@ i18n
           safeTrips: 'Safe trips',
 
           aboutCompanyTitle: 'About',
+          learnMore: 'Learn more',
           aboutYearsExperience: '{{count}}+ years of experience',
           aboutDestinationsCount: '{{count}}+ destinations',
           aboutSatisfactionRate: '{{rate}}% satisfaction',

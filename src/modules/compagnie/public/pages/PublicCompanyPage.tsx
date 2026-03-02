@@ -285,9 +285,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
             />
           )}
 
-        {/* À PROPOS */}
+        {/* POURQUOI CHOISIR (MÉTRIQUES DE CONFIANCE) */}
         <CompanyAboutSection
           about={company.about}
+          companyName={company.nom}
           primaryColor={colors.primary}
           secondaryColor={colors.secondary}
         />

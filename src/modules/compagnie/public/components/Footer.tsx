@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Mail, Phone, MapPin, Clock, Info, ThumbsUp,
@@ -30,7 +31,8 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
     adresse,
     horaires,
     socialMedia = {},
-    footerConfig = {}
+    footerConfig = {},
+    about
   } = company;
 
   const {
@@ -59,7 +61,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
 
       <div className="relative z-10 max-w-7xl mx-auto px-6 py-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
 
-        {/* À propos */}
+        {/* À propos — description courte + lien vers page dédiée */}
         {showAbout && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -73,8 +75,20 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
               </h3>
             </div>
             <p className="text-sm text-gray-300 leading-relaxed">
-              {description || t('defaultAbout')}
+              {(() => {
+                const raw = about?.description?.trim() ?? '';
+                if (!raw) return t('defaultAbout');
+                if (raw.length <= 150) return raw;
+                return `${raw.slice(0, 150).trim()}…`;
+              })()}
             </p>
+            <Link
+              to={`/${slug}/a-propos`}
+              className="mt-2 inline-block text-sm font-semibold hover:underline"
+              style={{ color: couleurSecondaire }}
+            >
+              {t('learnMore')}
+            </Link>
           </motion.div>
         )}
 
