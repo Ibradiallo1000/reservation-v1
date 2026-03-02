@@ -14,7 +14,7 @@ import {
   useLocation
 } from 'react-router-dom';
 
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { resolveReservationById } from '@/modules/compagnie/public/utils/resolveReservation';
 import { ChevronLeft, Download, Printer, Home } from 'lucide-react';
@@ -77,6 +77,8 @@ const ReceiptEnLignePage: React.FC = () => {
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [agencyName, setAgencyName] = useState<string>('Agence');
+  const [agencyLatitude, setAgencyLatitude] = useState<number | null>(null);
+  const [agencyLongitude, setAgencyLongitude] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [notFound, setNotFound] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>('');
@@ -89,7 +91,7 @@ const ReceiptEnLignePage: React.FC = () => {
   const secondaryColor = companyInfo?.couleurSecondaire ?? '#f59e0b';
   const textColor = safeTextColor(primaryColor);
 
-  /* LOAD RESERVATION — par slug + id uniquement (URL comme source de vérité, pas de state) */
+  /* LOAD RESERVATION — onSnapshot for real-time update when company validates (statut → confirme) */
   useEffect(() => {
     if (!id || !slug) {
       setLoading(false);
@@ -97,61 +99,67 @@ const ReceiptEnLignePage: React.FC = () => {
       return;
     }
 
-    let cancelled = false;
+    let unsub: (() => void) | undefined;
     (async () => {
       setLoading(true);
       setNotFound(false);
       setLoadError('');
       try {
         const { ref: resRef } = await resolveReservationById(slug, id);
-        if (cancelled) return;
-        const snap = await getDoc(resRef);
-        if (cancelled) return;
-        if (!snap.exists()) {
+        unsub = onSnapshot(resRef, (snap) => {
+          if (!snap.exists()) {
+            setNotFound(true);
+            setReservation(null);
+            setLoading(false);
+            return;
+          }
+          const data = snap.data() as Record<string, unknown>;
+          const companyId = resRef.path.split('/')[1];
+          const agencyId = resRef.path.split('/')[3];
+          setReservation({
+            id: snap.id,
+            companyId,
+            agencyId,
+            companySlug: (data.companySlug as string) ?? '',
+            nomClient: (data.nomClient as string) ?? (data.clientNom as string) ?? '',
+            telephone: (data.telephone as string) ?? '',
+            depart: (data.depart as string) ?? (data.departure as string) ?? '',
+            arrivee: (data.arrivee as string) ?? (data.arrival as string) ?? '',
+            date: typeof data.date === 'string' ? data.date : (data.date as any)?.seconds ? new Date((data.date as any).seconds * 1000).toISOString().slice(0, 10) : '',
+            heure: (data.heure as string) ?? '',
+            montant: Number(data.montant ?? data.montant_total ?? 0),
+            referenceCode: data.referenceCode as string | undefined,
+            statut: data.statut as ReservationStatus | undefined,
+            canal: (data.canal as string) ?? 'en_ligne',
+            seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
+            createdAt: data.createdAt,
+            nomAgence: data.nomAgence as string | undefined,
+            agencyNom: data.agencyNom as string | undefined,
+            agenceNom: data.agenceNom as string | undefined,
+            modePaiement: data.modePaiement as string | undefined,
+            preuveVia: data.preuveVia as string | undefined,
+            remboursement: data.remboursement as { mode?: string } | undefined,
+          });
+          setLoading(false);
+        }, (err) => {
+          console.error('ReceiptEnLignePage onSnapshot error:', err);
+          setLoadError(!isOnline ? 'Connexion indisponible.' : 'Erreur de chargement du reçu.');
           setNotFound(true);
-          return;
-        }
-        const data = snap.data() as Record<string, unknown>;
-        const companyId = resRef.path.split('/')[1];
-        const agencyId = resRef.path.split('/')[3];
-        setReservation({
-          id: snap.id,
-          companyId,
-          agencyId,
-          companySlug: (data.companySlug as string) ?? '',
-          nomClient: (data.nomClient as string) ?? (data.clientNom as string) ?? '',
-          telephone: (data.telephone as string) ?? '',
-          depart: (data.depart as string) ?? (data.departure as string) ?? '',
-          arrivee: (data.arrivee as string) ?? (data.arrival as string) ?? '',
-          date: typeof data.date === 'string' ? data.date : (data.date as any)?.seconds ? new Date((data.date as any).seconds * 1000).toISOString().slice(0, 10) : '',
-          heure: (data.heure as string) ?? '',
-          montant: Number(data.montant ?? data.montant_total ?? 0),
-          referenceCode: data.referenceCode as string | undefined,
-          statut: data.statut as ReservationStatus | undefined,
-          canal: (data.canal as string) ?? 'en_ligne',
-          seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
-          createdAt: data.createdAt,
-          nomAgence: data.nomAgence as string | undefined,
-          agencyNom: data.agencyNom as string | undefined,
-          agenceNom: data.agenceNom as string | undefined,
-          modePaiement: data.modePaiement as string | undefined,
-          preuveVia: data.preuveVia as string | undefined,
-          remboursement: data.remboursement as { mode?: string } | undefined,
+          setLoading(false);
         });
       } catch (err) {
-        if (!cancelled) {
-          setLoadError(
-            !isOnline
-              ? 'Connexion indisponible. Impossible de charger le reçu.'
-              : 'Erreur de chargement du reçu. Veuillez réessayer.'
-          );
-          setNotFound(true);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+        setLoadError(
+          !isOnline
+            ? 'Connexion indisponible. Impossible de charger le reçu.'
+            : 'Erreur de chargement du reçu. Veuillez réessayer.'
+        );
+        setNotFound(true);
+        setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      if (unsub) unsub();
+    };
   }, [id, slug, isOnline, reloadKey]);
 
   /* LOAD COMPANY */
@@ -186,7 +194,7 @@ const ReceiptEnLignePage: React.FC = () => {
     fetchCompany();
   }, [reservation?.companyId, companyInfo, isOnline]);
 
-  /* AGENCY */
+  /* AGENCY name + coords (for itinéraire) */
   useEffect(() => {
     const inline =
       reservation?.nomAgence ||
@@ -194,6 +202,27 @@ const ReceiptEnLignePage: React.FC = () => {
       reservation?.agenceNom;
     if (inline) setAgencyName(inline.toString().trim());
   }, [reservation]);
+
+  useEffect(() => {
+    const companyId = reservation?.companyId;
+    const agencyId = reservation?.agencyId;
+    if (!companyId || !agencyId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
+        if (cancelled) return;
+        const ag = agSnap.exists() ? (agSnap.data() as any) : {};
+        const lat = ag?.latitude != null ? Number(ag.latitude) : null;
+        const lng = ag?.longitude != null ? Number(ag.longitude) : null;
+        if (!cancelled) {
+          setAgencyLatitude(Number.isFinite(lat) ? lat : null);
+          setAgencyLongitude(Number.isFinite(lng) ? lng : null);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [reservation?.companyId, reservation?.agencyId]);
 
   const receiptNumber = reservation?.referenceCode ?? reservation?.id ?? 'BIL-INCONNU';
   const qrValue = useMemo(() => {
@@ -333,6 +362,8 @@ const ReceiptEnLignePage: React.FC = () => {
             qrValue={qrValue}
             emissionDate={emissionDate}
             paymentMethod={paymentMethodDisplay}
+            agencyLatitude={agencyLatitude}
+            agencyLongitude={agencyLongitude}
           />
         </div>
       </main>

@@ -9,7 +9,7 @@ import { AnimatePresence } from "framer-motion";
 import VilleSuggestionBar from "@/modules/compagnie/public/components/VilleSuggestionBar";
 import HeroCompanySection from "@/modules/compagnie/public/components/HeroCompanySection";
 import CompanyServices from "@/modules/compagnie/public/components/CompanyServices";
-import WhyChooseSection from "@/modules/compagnie/public/components/WhyChooseSection";
+import CompanyAboutSection from "@/modules/compagnie/public/components/CompanyAboutSection";
 import Footer from "@/modules/compagnie/public/components/Footer";
 import AgencyList from "@/modules/compagnie/public/components/AgencyList";
 import AvisListePublic from "@/modules/compagnie/public/components/AvisListePublic";
@@ -17,7 +17,7 @@ import Header from "@/modules/compagnie/public/layout/CompanyPublicHeader";
 
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
-import { Company, Agence, TripSuggestion, WhyChooseItem } from "@/types/companyTypes";
+import { Company, Agence, TripSuggestion } from "@/types/companyTypes";
 import NotFoundScreen from "@/shared/ui/NotFoundScreen";
 import { getCompanyFromCache } from "@/utils/companyCache";
 
@@ -223,55 +223,6 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     return <NotFoundScreen primaryColor={colors.primary || "#FF6600"} />;
   }
 
-  /* ================= WHY CHOOSE FALLBACK ================= */
-
-  const buildDefaultWhyChoose = (comp: Company): WhyChooseItem[] => {
-    const items: WhyChooseItem[] = [];
-
-    // Années d'expérience
-    if (comp.createdAt?.toDate) {
-      const createdYear = comp.createdAt.toDate().getFullYear();
-      const currentYear = new Date().getFullYear();
-      const diff = currentYear - createdYear;
-
-      if (diff > 0) {
-        items.push({
-          label: t("yearsExperience", { count: diff }),
-          icon: "award",
-        });
-      }
-    }
-
-    // Réservation en ligne
-    if (comp.onlineBookingEnabled) {
-      items.push({
-        label: t("fastOnlineBooking"),
-        icon: "clock",
-      });
-    }
-
-    // Services à bord
-    if (comp.services && comp.services.length > 0) {
-      items.push({
-        label: t("modernOnBoardServices"),
-        icon: "bus",
-      });
-    }
-
-    // Sécurité par défaut
-    items.push({
-      label: t("safeTrips"),
-      icon: "shield",
-    });
-
-    return items.slice(0, 4);
-  };
-
-  const whyChooseItems =
-    company?.whyChooseUs?.items && company.whyChooseUs.items.length > 0
-      ? company.whyChooseUs.items
-      : buildDefaultWhyChoose(company);
-
   /* ================= RENDER ================= */
 
   return (
@@ -290,8 +241,8 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         t={t}
       />
 
-      {/* Hero full-bleed passe derrière le header (72px). Sans Hero, on compense le header. */}
-      <div className={`${allowOnline ? "pt-0" : "pt-[72px]"} flex flex-col flex-grow min-h-0`}>
+      {/* Hero full-bleed from top; no compensatory padding — header is floating */}
+      <div className="pt-0 flex flex-col flex-grow min-h-0">
       <main className="flex-grow">
 
         {allowOnline && (
@@ -324,15 +275,6 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           </>
         )}
 
-        {/* WHY CHOOSE */}
-        {whyChooseItems.length > 0 && (
-          <WhyChooseSection
-            companyName={company.nom}
-            items={whyChooseItems}
-            primaryColor={colors.primary}
-          />
-        )}
-
         {/* SERVICES */}
         {Array.isArray(company.services) &&
           company.services.length > 0 && (
@@ -342,6 +284,13 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               secondaryColor={colors.secondary}
             />
           )}
+
+        {/* À PROPOS */}
+        <CompanyAboutSection
+          about={company.about}
+          primaryColor={colors.primary}
+          secondaryColor={colors.secondary}
+        />
 
         {/* AVIS CLIENTS */}
         <AvisListePublic

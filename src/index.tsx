@@ -68,7 +68,7 @@ type RouterFuture = Partial<{
 
 const THEME_STORAGE_KEY = "public-theme-dark";
 
-/** Apply saved theme before paint (no flash) */
+/** Apply saved theme before paint (no flash). Default = light; never use system preference. */
 function applySavedTheme() {
   try {
     const saved = localStorage.getItem(THEME_STORAGE_KEY);

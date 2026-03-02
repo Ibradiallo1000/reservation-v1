@@ -1,18 +1,20 @@
 // src/components/ticket/TicketOnline.tsx
 
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import QRCode from 'react-qr-code';
 import {
   ArrowRight,
   User,
   Phone,
-  Calendar,
-  Clock,
-  Users
+  Download,
+  MapPin,
+  CheckCircle,
+  Lock
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 import { safeTextColor } from '@/utils/color';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
-import { DEFAULT_TICKET_MESSAGES } from '@/constants/ticketMessages';
 import { isTicketValidForQR } from '@/utils/reservationStatusUtils';
 
 interface TicketOnlineProps {
@@ -34,14 +36,13 @@ interface TicketOnlineProps {
   montant: number;
   qrValue: string;
   emissionDate: string;
-  /** Libellé affiché pour le mode de paiement (ex. "Paiement en espèces", "Mobile Money", "Remboursé (espèces)"). Aucun hardcode. */
   paymentMethod?: string;
-  /** Badge statut affiché (ex. "Réservation confirmée", "En attente de validation"). Si absent, utilise statut. */
   statusLabel?: string;
+  agencyLatitude?: number | null;
+  agencyLongitude?: number | null;
 }
 
-/** Libellé affiché pour la section paiement du billet. Ne pas hardcoder "PAIEMENT MOBILE". */
-function getPaymentDisplayLabel(canal?: string, paymentMethod?: string): string {
+function getPaymentDisplayLabel(canal?: string, paymentMethod?: string) {
   const c = (canal ?? '').toLowerCase();
   if (c === 'guichet') return 'Paiement en espèces';
   if (paymentMethod && paymentMethod.trim()) return paymentMethod.trim();
@@ -56,7 +57,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   secondaryColor,
   agencyName,
   receiptNumber,
-  statut = 'CONFIRMÉ',
+  statut = 'confirme',
   nomClient,
   telephone,
   depart,
@@ -64,225 +65,213 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   date,
   heure,
   seats,
-  canal = 'EN LIGNE',
+  canal = 'en_ligne',
   montant,
   qrValue,
-  emissionDate,
   paymentMethod,
-  statusLabel
+  agencyLatitude,
+  agencyLongitude
 }) => {
   const money = useFormatCurrency();
-  const textOnPrimary = safeTextColor(primaryColor);
   const accent = secondaryColor || primaryColor;
-  const displayStatus = statusLabel ?? statut;
+  const textOnPrimary = safeTextColor(primaryColor);
+  const [pdfLoading, setPdfLoading] = useState(false);
 
-  /* ==============================
-     FORMAT NOM (Majuscules auto)
-  ============================== */
-  const formatName = (name: string) => {
-    return name
+  const isConfirmed = statut?.toLowerCase() === 'confirme';
+  const isTicketValid = isTicketValidForQR(statut);
+  const paymentLabel = getPaymentDisplayLabel(canal, paymentMethod);
+
+  const handleDownloadPDF = useCallback(async () => {
+    const element = document.getElementById('ticket-content');
+    if (!element) return;
+    setPdfLoading(true);
+    try {
+      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+      const imgW = 190;
+      const imgH = (canvas.height * imgW) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 10, 10, imgW, Math.min(imgH, 270));
+      pdf.save(`billet-${receiptNumber}.pdf`);
+    } catch (err) {
+      console.error('PDF export error:', err);
+    } finally {
+      setPdfLoading(false);
+    }
+  }, [receiptNumber]);
+
+  const handleItineraire = useCallback(() => {
+    if (agencyLatitude == null || agencyLongitude == null) return;
+    window.open(
+      `https://www.google.com/maps/dir/?api=1&destination=${agencyLatitude},${agencyLongitude}`,
+      '_blank'
+    );
+  }, [agencyLatitude, agencyLongitude]);
+
+  const formatName = (name: string) =>
+    name
       .toLowerCase()
       .split(' ')
-      .map(word =>
-        word.charAt(0).toUpperCase() + word.slice(1)
-      )
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
       .join(' ');
-  };
-
-  const formattedName = formatName(nomClient);
-  const paymentLabel = getPaymentDisplayLabel(canal, paymentMethod);
-  const isTicketValid = isTicketValidForQR(statut);
 
   return (
-    <div className="ticket-force-light w-full max-w-md mx-auto bg-white rounded-2xl shadow-lg overflow-hidden text-sm">
-
-      {/* ================= HEADER ================= */}
+    <div className="w-full flex justify-center bg-gray-100 px-3 py-4">
       <div
-        className="px-4 py-3"
-        style={{
-          backgroundColor: primaryColor,
-          color: textOnPrimary
-        }}
+        id="ticket-content"
+        className="w-full max-w-md rounded-3xl bg-[#f9f9f9] shadow-2xl border border-gray-200 overflow-hidden"
       >
-        <div className="flex items-center justify-between">
 
-          <div className="flex items-center gap-2">
-            {logoUrl && (
-              <img
-                src={logoUrl}
-                alt={companyName}
-                className="h-8 w-8 rounded-full object-cover border"
-                style={{ borderColor: textOnPrimary }}
-              />
-            )}
+        {/* HEADER */}
+        <div
+          className="px-4 pt-4 pb-3"
+          style={{
+            background: `linear-gradient(135deg, ${primaryColor}, ${accent})`,
+            color: textOnPrimary
+          }}
+        >
+          <div className="flex justify-between items-start">
             <div>
-              <h1 className="font-bold uppercase text-sm leading-tight">
+              <h1 className="font-bold text-lg uppercase tracking-wide">
                 {companyName}
               </h1>
               {agencyName && (
-                <p className="text-[10px] opacity-90">
-                  {agencyName}
-                </p>
+                <p className="text-xs opacity-80">{agencyName}</p>
               )}
             </div>
+
+            <div className="text-right">
+              <p className="text-[10px] uppercase opacity-80">Référence</p>
+              <p className="font-mono text-sm font-semibold">
+                {receiptNumber}
+              </p>
+            </div>
           </div>
 
-          <div className="text-right text-[10px] font-mono">
-            <p>{receiptNumber}</p>
-            <p>{emissionDate}</p>
-          </div>
-
-        </div>
-      </div>
-
-      {/* ================= STATUS ================= */}
-      <div className="px-4 py-1.5 flex justify-between items-center bg-gray-50 border-b text-[10px]">
-        <span
-          className="font-bold px-2 py-0.5 rounded-full"
-          style={{
-            backgroundColor: accent,
-            color: safeTextColor(accent)
-          }}
-        >
-          {displayStatus}
-        </span>
-
-        <span className="uppercase tracking-wide text-gray-600">
-          {canal}
-        </span>
-      </div>
-
-      {/* ================= CLIENT (compact aligné) ================= */}
-      <div className="px-4 py-3 border-b">
-
-        <div className="flex justify-between items-center">
-
-          <div className="flex items-center gap-2">
-            <User size={14} style={{ color: accent }} />
-            <span className="font-semibold">
-              {formattedName}
+          <div className="mt-3">
+            <span className="inline-flex items-center gap-2 bg-white/20 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold">
+              <CheckCircle size={14} />
+              {isConfirmed ? "PAIEMENT VALIDÉ" : "EN ATTENTE DE VALIDATION"}
             </span>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Phone size={14} style={{ color: accent }} />
-            <span>{telephone}</span>
-          </div>
-
         </div>
 
-      </div>
+        {/* BODY */}
+        <div className="px-4 py-4 space-y-4">
 
-      {/* ================= TRAJET ================= */}
-      <div className="px-4 py-4">
-
-        <div className="flex items-center justify-center gap-2 text-base font-bold uppercase mb-3">
-          <span>{depart}</span>
-          <ArrowRight size={16} style={{ color: accent }} />
-          <span>{arrivee}</span>
-        </div>
-
-        <div
-          className="grid grid-cols-3 gap-2 text-[11px] rounded-xl p-2"
-          style={{
-            backgroundColor: `${accent}15`
-          }}
-        >
-          <div className="flex flex-col items-center gap-1">
-            <Calendar size={14} style={{ color: accent }} />
-            <span className="font-semibold">{date}</span>
+          {/* PASSAGER */}
+          <div className="border border-dashed border-gray-300 rounded-xl p-3">
+            <div className="flex justify-between items-center text-sm">
+              <div className="flex items-center gap-2">
+                <User size={16} />
+                <span className="font-semibold">
+                  {formatName(nomClient)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Phone size={16} />
+                <span>{telephone}</span>
+              </div>
+            </div>
           </div>
 
-          <div className="flex flex-col items-center gap-1">
-            <Clock size={14} style={{ color: accent }} />
-            <span className="font-semibold">{heure}</span>
-          </div>
-
-          <div className="flex flex-col items-center gap-1">
-            <Users size={14} style={{ color: accent }} />
-            <span className="font-semibold">{seats}</span>
-          </div>
-        </div>
-
-      </div>
-
-      {/* ================= PAIEMENT ================= */}
-      <div className="px-4 py-3 border-t border-b bg-gray-50">
-
-        <div className="flex justify-between items-center">
-
-          <p
-            className="text-lg font-bold"
-            style={{ color: primaryColor }}
-          >
-            {money(montant)}
-          </p>
-
-          <span className="text-[10px] text-gray-600 uppercase">
-            {paymentLabel}
-          </span>
-
-        </div>
-
-      </div>
-
-      {/* ================= QR (affiché seulement si statut confirme ou payé) ================= */}
-      <div className="px-4 py-4 text-center">
-        {isTicketValid ? (
-          <>
-            <p
-              className="text-[10px] uppercase mb-2 font-semibold"
-              style={{ color: accent }}
-            >
-              Code d’embarquement
-            </p>
-
-            <div className="inline-block bg-white p-2 rounded-xl shadow">
-              <QRCode
-                value={qrValue}
-                size={95}
-                fgColor="#000000"
-                bgColor="#ffffff"
-                level="H"
-              />
+          {/* TRAJET */}
+          <div className="text-center">
+            <div className="text-xl font-bold uppercase tracking-wide">
+              {depart}
+              <ArrowRight className="inline mx-2" size={18} />
+              {arrivee}
             </div>
 
-            <p className="text-[10px] font-mono mt-2 font-semibold">
+            <div className="mt-3 bg-white rounded-2xl shadow-sm border border-gray-200 grid grid-cols-3 text-center text-xs py-3">
+              <div>
+                <p className="uppercase text-gray-400">Date</p>
+                <p className="font-semibold text-sm">{date}</p>
+              </div>
+              <div>
+                <p className="uppercase text-gray-400">Heure</p>
+                <p className="font-semibold text-sm">{heure}</p>
+              </div>
+              <div>
+                <p className="uppercase text-gray-400">Passager</p>
+                <p className="font-semibold text-sm">{seats}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* PRIX */}
+          <div
+            className="rounded-full px-5 py-4 flex justify-between items-center shadow-lg"
+            style={{
+              background: `linear-gradient(135deg, ${primaryColor}, ${accent})`,
+              color: textOnPrimary
+            }}
+          >
+            <div>
+              <p className="text-[10px] uppercase opacity-80">Prix</p>
+              <p className="text-2xl font-extrabold">
+                {money(montant)}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              <Lock size={14} />
+              <span>{paymentLabel}</span>
+            </div>
+          </div>
+
+          {/* QR */}
+          <div className="text-center">
+            <p className="text-[10px] uppercase text-gray-400 mb-2">
+              Code d'embarquement
+            </p>
+
+            <div className="inline-block bg-white p-3 rounded-2xl shadow-md border border-gray-200">
+              <div className={!isTicketValid ? "opacity-40 blur-sm" : ""}>
+                <QRCode value={qrValue} size={110} level="H" />
+              </div>
+            </div>
+
+            <p className="font-mono text-xs mt-2 text-gray-600">
               {receiptNumber}
             </p>
-          </>
-        ) : (
-          <p className="text-[10px] text-gray-500 italic">
-            Code d’embarquement disponible après confirmation du paiement.
-          </p>
-        )}
+          </div>
+
+          {/* ACTIONS */}
+          <div className="flex gap-3">
+            {isConfirmed && (
+              <button
+                onClick={handleDownloadPDF}
+                disabled={pdfLoading}
+                className="flex-1 bg-white border border-gray-200 rounded-xl py-2 text-sm font-semibold shadow-sm hover:shadow-md transition"
+              >
+                <Download size={14} className="inline mr-1" />
+                PDF
+              </button>
+            )}
+
+            {agencyLatitude != null && agencyLongitude != null && (
+              <button
+                onClick={handleItineraire}
+                className="flex-1 bg-white border border-gray-200 rounded-xl py-2 text-sm font-semibold shadow-sm hover:shadow-md transition"
+              >
+                <MapPin size={14} className="inline mr-1" />
+                Itinéraire
+              </button>
+            )}
+          </div>
+
+          {/* FOOTER */}
+          <div className="text-center text-xs text-gray-500 space-y-1 pt-2">
+            <p>Présentez ce code au contrôle.</p>
+            <p>Valide : 1 mois à compter de la date d’émission.</p>
+            <p className="font-medium" style={{ color: primaryColor }}>
+              Merci d’avoir choisi {companyName}
+            </p>
+          </div>
+
+        </div>
       </div>
-
-      {/* ================= MESSAGES OFFICIELS ================= */}
-      <div className="px-4 py-3 text-center text-[10px] text-gray-600 border-t space-y-1">
-
-       <p className="font-semibold">
-         {DEFAULT_TICKET_MESSAGES.control}
-       </p>
-
-       <p>
-         {DEFAULT_TICKET_MESSAGES.validity}
-       </p>
-
-       <p>
-         Merci d’avoir choisi {companyName}
-       </p>
-
-       <p className="italic">
-         {DEFAULT_TICKET_MESSAGES.arrival}
-       </p>
-
-       <p>
-         {DEFAULT_TICKET_MESSAGES.keep}
-       </p>
-
-     </div>
-
     </div>
   );
 };

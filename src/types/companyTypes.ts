@@ -18,12 +18,23 @@ export interface SocialMediaLinks {
 }
 
 /* =========================
-   WHY CHOOSE US (DYNAMIQUE)
+   WHY CHOOSE US (legacy, conservé pour compat)
 ========================= */
 export interface WhyChooseItem {
   label: string;
   description?: string;
   icon?: "shield" | "clock" | "award" | "support" | "star" | "bus";
+}
+
+/* =========================
+   ABOUT (section dynamique vitrine)
+========================= */
+export interface CompanyAbout {
+  description?: string;
+  yearsExperience?: number;
+  destinationsCount?: number;
+  satisfactionRate?: number;
+  support24h?: boolean;
 }
 
 /* =========================
@@ -153,6 +164,9 @@ export interface Company {
   /* --- Vitrine --- */
   accroche?: string;
   instructionRecherche?: string;
+
+  /* --- À propos (dynamique) --- */
+  about?: CompanyAbout;
 
   /* ⚠️ On supprime sliderImages si on enlève les sliders */
   imagesSlider?: string[];

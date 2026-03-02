@@ -156,6 +156,8 @@ const ReservationDetailsPage: React.FC = () => {
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [agencyName, setAgencyName] = useState<string>('');
+  const [agencyLatitude, setAgencyLatitude] = useState<number | null>(null);
+  const [agencyLongitude, setAgencyLongitude] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -262,18 +264,20 @@ const ReservationDetailsPage: React.FC = () => {
             clearPending();
           }
 
-          // Récupération du nom de l'agence
+          // Récupération du nom et des coordonnées de l'agence (pour itinéraire)
+          const companyId = ref.path.split('/')[1];
+          const agencyId = ref.path.split('/')[3];
           const inline = finalReservation.agencyNom || finalReservation.agenceNom;
           if (inline) setAgencyName(inline);
-          else {
-            const companyId = ref.path.split('/')[1];
-            const agencyId = ref.path.split('/')[3];
-            try {
-              const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
-              const ag = agSnap.data() as any;
-              setAgencyName(ag?.nom || ag?.name || '');
-            } catch {}
-          }
+          try {
+            const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
+            const ag = agSnap.exists() ? (agSnap.data() as any) : {};
+            if (!inline) setAgencyName(ag?.nom || ag?.name || '');
+            const lat = ag?.latitude != null ? Number(ag.latitude) : null;
+            const lng = ag?.longitude != null ? Number(ag.longitude) : null;
+            setAgencyLatitude(Number.isFinite(lat) ? lat : null);
+            setAgencyLongitude(Number.isFinite(lng) ? lng : null);
+          } catch {}
 
           // Récupération des infos de la compagnie (toujours depuis Firestore, pas de state)
           try {
@@ -855,6 +859,8 @@ const ReservationDetailsPage: React.FC = () => {
               qrValue={`${typeof window !== 'undefined' ? window.location.origin : ''}/r/${encodeURIComponent(reservation.referenceCode || reservation.id)}`}
               emissionDate={new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
               paymentMethod={paymentLabel}
+              agencyLatitude={agencyLatitude}
+              agencyLongitude={agencyLongitude}
             />
           </SectionCard>
         </motion.div>

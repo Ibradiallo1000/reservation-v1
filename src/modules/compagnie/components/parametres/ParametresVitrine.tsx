@@ -15,11 +15,13 @@ import { SectionCard } from "@/ui";
 
 import {
   Image as ImageIcon,
+  Info,
   Palette,
   Save,
   Settings,
   TextCursorInput,
 } from "lucide-react";
+import type { CompanyAbout } from "@/types/companyTypes";
 
 interface ParametresVitrineProps {
   companyId?: string;
@@ -44,6 +46,7 @@ interface CompanyData {
   couleurAccent: string;
   couleurTertiaire: string;
   themeStyle: ThemeStyle;
+  about?: CompanyAbout;
 }
 
 const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
@@ -65,6 +68,7 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
     couleurAccent: "#FBBF24",
     couleurTertiaire: "#F472B6",
     themeStyle: "moderne",
+    about: {},
   });
 
   const [message, setMessage] = useState<{
@@ -89,9 +93,11 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
           doc(db, "companies", effectiveCompanyId)
         );
         if (snap.exists()) {
+          const data = snap.data();
           setCompanyData((prev) => ({
             ...prev,
-            ...snap.data(),
+            ...data,
+            about: data?.about && typeof data.about === "object" ? { ...data.about } : {},
           }));
         }
       } catch (e) {
@@ -109,10 +115,21 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
 
     setMessage({ text: "Enregistrement...", type: "info" });
 
+    const aboutRaw = companyData.about ?? {};
+    const aboutClean: Record<string, unknown> = {};
+    if (aboutRaw.description !== undefined && aboutRaw.description !== "") aboutClean.description = aboutRaw.description;
+    if (aboutRaw.yearsExperience !== undefined && aboutRaw.yearsExperience !== null) aboutClean.yearsExperience = aboutRaw.yearsExperience;
+    if (aboutRaw.destinationsCount !== undefined && aboutRaw.destinationsCount !== null) aboutClean.destinationsCount = aboutRaw.destinationsCount;
+    if (aboutRaw.satisfactionRate !== undefined && aboutRaw.satisfactionRate !== null) aboutClean.satisfactionRate = aboutRaw.satisfactionRate;
+    if (aboutRaw.support24h === true) aboutClean.support24h = true;
+
+    const payload: Partial<DocumentData> = { ...companyData };
+    payload.about = Object.keys(aboutClean).length > 0 ? aboutClean : {};
+
     try {
       await updateDoc(
         doc(db, "companies", effectiveCompanyId),
-        companyData as Partial<DocumentData>
+        payload
       );
 
       setMessage({
@@ -180,6 +197,132 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
             }
             className="w-full border rounded-lg px-4 py-2"
           />
+        </SectionCard>
+
+        <SectionCard title="À propos de la compagnie" icon={Info}>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Présentation publique</label>
+              <textarea
+                placeholder="Description affichée sur la page publique"
+                value={companyData.about?.description ?? ""}
+                onChange={(e) =>
+                  setCompanyData({
+                    ...companyData,
+                    about: {
+                      ...(companyData.about ?? {}),
+                      description: e.target.value.slice(0, 1000),
+                    },
+                  })
+                }
+                maxLength={1000}
+                rows={4}
+                className="w-full border border-gray-200 rounded-lg px-4 py-2 resize-y"
+              />
+              <span className="text-xs text-gray-500">
+                {(companyData.about?.description?.length ?? 0)} / 1000
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Années d&apos;expérience</label>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="Optionnel"
+                  value={companyData.about?.yearsExperience ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const n = v === "" ? undefined : parseInt(v, 10);
+                    setCompanyData({
+                      ...companyData,
+                      about: {
+                        ...(companyData.about ?? {}),
+                        yearsExperience: Number.isNaN(n) ? undefined : n,
+                      },
+                    });
+                  }}
+                  className="w-full border border-gray-200 rounded-lg px-4 py-2"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Nombre de destinations</label>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="Optionnel"
+                  value={companyData.about?.destinationsCount ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const n = v === "" ? undefined : parseInt(v, 10);
+                    setCompanyData({
+                      ...companyData,
+                      about: {
+                        ...(companyData.about ?? {}),
+                        destinationsCount: Number.isNaN(n) ? undefined : n,
+                      },
+                    });
+                  }}
+                  className="w-full border border-gray-200 rounded-lg px-4 py-2"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Taux de satisfaction (%)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                placeholder="0–100"
+                value={companyData.about?.satisfactionRate ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "") {
+                    setCompanyData({
+                      ...companyData,
+                      about: { ...(companyData.about ?? {}), satisfactionRate: undefined },
+                    });
+                    return;
+                  }
+                  const n = Math.min(100, Math.max(0, parseInt(v, 10) || 0));
+                  setCompanyData({
+                    ...companyData,
+                    about: { ...(companyData.about ?? {}), satisfactionRate: n },
+                  });
+                }}
+                className="w-full border border-gray-200 rounded-lg px-4 py-2 max-w-[120px]"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="block text-sm font-medium">Support 24/7</label>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={companyData.about?.support24h ?? false}
+                onClick={() =>
+                  setCompanyData({
+                    ...companyData,
+                    about: {
+                      ...(companyData.about ?? {}),
+                      support24h: !(companyData.about?.support24h ?? false),
+                    },
+                  })
+                }
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                  companyData.about?.support24h ? "bg-gray-900" : "bg-gray-200"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${
+                    companyData.about?.support24h ? "translate-x-5" : "translate-x-1"
+                  }`}
+                />
+              </button>
+              <span className="text-sm text-gray-600">
+                {companyData.about?.support24h ? "Oui" : "Non"}
+              </span>
+            </div>
+          </div>
         </SectionCard>
 
         <SectionCard title="Couleurs" icon={Palette}>

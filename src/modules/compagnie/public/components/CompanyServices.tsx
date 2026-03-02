@@ -56,11 +56,13 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
       <div className="max-w-5xl mx-auto">
 
         {/* Titre */}
-        <div className="flex items-center justify-center gap-2 mb-4">
-          <Bus size={18} style={{ color: primaryColor }} />
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:!text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.25)]">
-            {t("onBoardServices")}
-          </h2>
+        <div className="text-center mb-4">
+          <div className="flex justify-center items-center gap-2">
+            <Bus size={20} style={{ color: primaryColor }} />
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+              {t("onBoardServices")}
+            </h2>
+          </div>
         </div>
 
         {/* Carte harmonisée */}
@@ -89,17 +91,14 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
                     borderBottom: `1px solid ${primaryColor}10`,
                   }}
                 >
-                  {/* Icône */}
+                  {/* Icône — secondaryColor, pas de text-blue-* */}
                   <div
                     className="w-9 h-9 rounded-full flex items-center justify-center"
                     style={{
                       backgroundColor: `${secondaryColor}15`,
                     }}
                   >
-                    <Icon
-                      size={16}
-                      style={{ color: secondaryColor }}
-                    />
+                    <Icon size={16} style={{ color: secondaryColor }} />
                   </div>
 
                   {/* Texte */}

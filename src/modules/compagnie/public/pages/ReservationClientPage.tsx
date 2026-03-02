@@ -780,7 +780,6 @@ export default function ReservationClientPage() {
 
   // ---------- Création draft ----------
   const createReservationDraft = useCallback(async () => {
-    // DOUBLE SÉCURITÉ : bloquer si réservation active existe
     if (hasActiveReservation) {
       const pending = readPending();
       if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
@@ -842,7 +841,6 @@ export default function ReservationClientPage() {
         rawCompanyCode
           ? rawCompanyCode.toUpperCase()
           : inferCompanyCode(comp.nom || comp.name);
-      console.log('Company Code utilisé :', companyCode);
       const referenceCode = await generateWebReferenceCode({
         companyId: selectedTrip.companyId,
         companyCode,
@@ -1552,16 +1550,15 @@ export default function ReservationClientPage() {
                   </div>
                 </div>
                 
-                {/* 🔥 CORRECTION DU BUG : Masquer complètement le bouton après création de réservation */}
                 {!reservationId && (
                   <button
                     onClick={createReservationDraft}
                     disabled={creating || hasActiveReservation}
-                    title={hasActiveReservation ? "Une réservation est déjà en cours" : ""}
+                    title={hasActiveReservation ? 'Une réservation est déjà en cours' : ''}
                     className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
-                    style={{ 
-                      background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`, 
-                      color: '#fff' 
+                    style={{
+                      background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`,
+                      color: '#fff',
                     }}
                   >
                     {creating ? 'Traitement…' : (

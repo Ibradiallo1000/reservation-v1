@@ -138,8 +138,8 @@ service cloud.firestore {
           );
 
           /* =============================
-             UPDATE 2 — APRÈS PAIEMENT
-             (une seule preuve : statut + paymentReference + proofSubmittedAt)
+             UPDATE 2 — SOUMISSION PREUVE (public)
+             Passage en_attente_paiement → preuve_recue ; champs limités.
           ============================= */
           allow update: if (
             request.auth == null &&
@@ -150,6 +150,7 @@ service cloud.firestore {
               .hasOnly([
                 "statut",
                 "paymentReference",
+                "proofMessage",
                 "proofSubmittedAt",
                 "updatedAt"
               ])

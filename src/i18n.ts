@@ -13,10 +13,11 @@ i18n
       escapeValue: false
     },
     detection: {
-      order: ['localStorage', 'navigator'],
+      order: ['localStorage'],
       lookupLocalStorage: 'i18nextLng',
       caches: ['localStorage']
     },
+    // Default fr when localStorage empty; stored value used when user has chosen
     resources: {
       fr: {
         translation: {
@@ -94,6 +95,12 @@ i18n
           fastOnlineBooking: 'Réservation en ligne rapide',
           modernOnBoardServices: 'Services à bord modernes',
           safeTrips: 'Voyages sécurisés',
+
+          aboutCompanyTitle: 'À propos',
+          aboutYearsExperience: '{{count}}+ ans d\'expérience',
+          aboutDestinationsCount: '{{count}}+ destinations',
+          aboutSatisfactionRate: '{{rate}}% satisfaction',
+          aboutSupport24h: 'Support 24/7',
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Sécurité',
@@ -182,6 +189,12 @@ i18n
           fastOnlineBooking: 'Fast online booking',
           modernOnBoardServices: 'Modern on-board services',
           safeTrips: 'Safe trips',
+
+          aboutCompanyTitle: 'About',
+          aboutYearsExperience: '{{count}}+ years of experience',
+          aboutDestinationsCount: '{{count}}+ destinations',
+          aboutSatisfactionRate: '{{rate}}% satisfaction',
+          aboutSupport24h: '24/7 support',
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Security',

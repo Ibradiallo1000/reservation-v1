@@ -1,5 +1,5 @@
 // src/modules/compagnie/public/layout/CompanyPublicHeader.tsx
-// Stable header: fixed glass surface, no scroll-based style switching
+// Option C: floating ultra minimal — capsule suspendue, Hero full bleed top
 import React, { useEffect, useState } from 'react';
 import { User, Sun, Moon } from 'lucide-react';
 import LanguageSwitcher from '../components/LanguageSwitcher';
@@ -19,8 +19,6 @@ interface HeaderProps {
   t: (key: string, options?: Record<string, unknown>) => string;
 }
 
-const BRAND_ORANGE = '#FF6600';
-
 const Header: React.FC<HeaderProps> = ({
   company,
   slug: _slug,
@@ -28,16 +26,43 @@ const Header: React.FC<HeaderProps> = ({
   navigate,
   t,
 }) => {
-  const brandColor = colors.primary || BRAND_ORANGE;
+  const [scrollProgress, setScrollProgress] = useState(0);
   const [isDark, setIsDark] = useState(() => {
     if (typeof document === 'undefined') return false;
-    return document.documentElement.classList.contains('dark');
+    try {
+      return localStorage.getItem(THEME_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
   });
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const maxScroll = 120;
+      const current = window.scrollY;
+      const progress = Math.min(current / maxScroll, 1);
+      setScrollProgress(progress);
+    };
+    window.addEventListener('scroll', handleScroll);
+    handleScroll();
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
   useEffect(() => {
     if (!company?.logoUrl) return;
     const img = new Image();
     img.src = company.logoUrl;
   }, [company?.logoUrl]);
+
+  const backgroundOpacity = 0.18 + 0.77 * scrollProgress;
+  const backgroundColor = `rgba(${Math.round(255 * scrollProgress)},${Math.round(255 * scrollProgress)},${Math.round(255 * scrollProgress)},${backgroundOpacity})`;
+  const borderColor =
+    scrollProgress > 0.5 ? 'rgba(229,231,235,0.8)' : 'rgba(255,255,255,0.1)';
+  const boxShadow =
+    scrollProgress > 0.3
+      ? '0 4px 20px rgba(0,0,0,0.1)'
+      : '0 4px 20px rgba(0,0,0,0.25)';
+  const textColor = scrollProgress > 0.6 ? '#111827' : 'white';
 
   const toggleDark = () => {
     const currentlyDark = document.documentElement.classList.contains('dark');
@@ -52,78 +77,72 @@ const Header: React.FC<HeaderProps> = ({
   const name =
     company?.nom || t('ourCompany', { defaultValue: 'Notre compagnie' });
 
-  const Initials = ({ name }: { name?: string }) => {
-    const letter = (name || 'C').trim().charAt(0).toUpperCase();
-    return (
-      <div
-        className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold"
-        style={{ backgroundColor: brandColor }}
-      >
-        {letter}
-      </div>
-    );
-  };
-
   return (
-    <header
-      className="fixed top-0 left-0 right-0 h-[72px] z-50 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-md border-b border-gray-200 dark:border-neutral-800"
-      style={
-        {
-          ['--teliya-primary' as string]: brandColor,
-          ['--teliya-secondary' as string]: colors.secondary || brandColor,
-        } as React.CSSProperties
-      }
-    >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-full flex items-center justify-between">
+    <header className="fixed top-0 left-0 w-full z-50 flex justify-center pt-4 pointer-events-none">
+      <div
+        style={{
+          backgroundColor,
+          border: `1px solid ${borderColor}`,
+          boxShadow,
+        }}
+        className="w-[92%] max-w-sm h-14 flex items-center justify-between px-4 rounded-full backdrop-blur-xl transition-all duration-300 pointer-events-auto"
+      >
+        {/* Partie gauche : logo + nom */}
         <button
           onClick={() => navigate('/')}
-          className="flex items-center gap-3 min-w-0 select-none"
+          className="flex items-center gap-2 min-w-0 select-none"
           aria-label={name}
         >
-          <div
-            className="h-10 w-10 rounded-full bg-white overflow-hidden grid place-items-center shadow-sm shrink-0"
-            style={{ border: `2px solid ${brandColor}` }}
+          {company?.logoUrl ? (
+            <img
+              src={company.logoUrl}
+              alt=""
+              className="h-8 w-8 rounded-full object-cover ring-1 ring-white/20 shrink-0"
+            />
+          ) : (
+            <span
+              className="h-8 w-8 rounded-full flex items-center justify-center font-semibold text-sm shrink-0 ring-1 transition-colors duration-300"
+              style={{
+                backgroundColor: scrollProgress > 0.5 ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.2)',
+                color: textColor,
+                borderColor: scrollProgress > 0.5 ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)',
+              }}
+            >
+              {(name || 'C').trim().charAt(0).toUpperCase()}
+            </span>
+          )}
+          <span
+            className="font-semibold text-sm tracking-wide truncate max-w-[100px] sm:max-w-[140px] transition-colors duration-300"
+            style={{ color: textColor }}
           >
-            {company?.logoUrl ? (
-              <img
-                src={company.logoUrl}
-                alt={`Logo ${name}`}
-                className="w-full h-full object-contain"
-                loading="eager"
-                decoding="async"
-              />
-            ) : (
-              <Initials name={name} />
-            )}
-          </div>
-          <span className="text-lg md:text-xl font-bold tracking-tight truncate max-w-[140px] sm:max-w-[200px] md:max-w-none text-[var(--teliya-primary)] dark:!text-white">
             {name}
           </span>
         </button>
 
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0 text-gray-900 dark:text-white">
-          <LanguageSwitcher
-            primaryColor={brandColor}
-            secondaryColor={colors.secondary || brandColor}
-          />
+        {/* Partie droite : actions compactes */}
+        <div
+          className="flex items-center gap-1.5 shrink-0 transition-colors duration-300"
+          style={{ color: textColor }}
+        >
+          <LanguageSwitcher variant="floating" scrollTextColor={textColor} />
 
           <button
             type="button"
             onClick={toggleDark}
-            className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded-full hover:bg-black/10 dark:hover:bg-white/10 transition"
+            className="px-2 py-1 rounded-md opacity-80 hover:opacity-100 hover:bg-black/10 transition inline-flex items-center justify-center min-h-[36px] min-w-[36px]"
+            style={{ color: textColor }}
             aria-label={isDark ? t('themeLight') : t('themeDark')}
-            style={{ color: brandColor }}
           >
-            {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
 
           <button
             onClick={() => navigate('/login')}
-            className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded-full bg-black/10 dark:bg-white/20 ring-1 ring-black/10 dark:ring-white/30 hover:opacity-90 transition"
+            className="px-2 py-1 rounded-full opacity-80 hover:opacity-100 hover:bg-black/10 transition inline-flex items-center justify-center min-h-[36px] min-w-[36px]"
+            style={{ color: textColor }}
             aria-label={t('login')}
-            style={{ color: brandColor }}
           >
-            <User className="h-5 w-5" />
+            <User className="h-4 w-4" />
           </button>
         </div>
       </div>

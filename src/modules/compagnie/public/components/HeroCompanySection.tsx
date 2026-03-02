@@ -41,20 +41,20 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
   const hasBgImage = Boolean(heroImageUrl);
 
   return (
-    <section className="relative w-full pt-[72px]">
-      {/* Conteneur image avec hauteur contrôlée */}
+    <section className="relative w-full">
+      {/* Image full bleed top, overlay, content on top */}
       <div className="relative h-[390px] sm:h-[560px] md:h-[600px] overflow-hidden">
 
-        {/* Image ou fond fallback */}
+        {/* Image absolute inset-0 bg-cover bg-center */}
         {hasBgImage ? (
           <>
             <img
               src={heroImageUrl}
-              className="absolute inset-0 w-full h-full object-cover"
+              className="absolute inset-0 w-full h-full object-cover object-center"
               alt=""
               aria-hidden
             />
-            <div className="absolute inset-0 bg-black/45 dark:bg-black/60 z-0" aria-hidden />
+            <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/35 to-black/10 z-0" aria-hidden />
           </>
         ) : (
           <div
@@ -63,22 +63,18 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
           />
         )}
 
-        {/* Contenu */}
-        <div className="relative z-10 max-w-4xl mx-auto text-center px-4 pt-16 sm:pt-20">
+        {/* Contenu relative z-10 — pt-24 pour ne pas coller au header */}
+        <div className="relative z-10 max-w-4xl mx-auto text-center px-4 pt-24">
 
           {/* Ligne 1 */}
-          <h1 className="text-2xl sm:text-3xl font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
+          <h1 className="text-2xl sm:text-3xl font-medium text-white/90 drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
             {t("heroTitleWith")}
           </h1>
 
-          {/* Ligne 2 */}
+          {/* Ligne 2 — nom compagnie */}
           <h2
-            className="mt-2 text-3xl sm:text-4xl font-extrabold truncate text-[color:var(--hero-company-color)] dark:!text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]"
-            style={
-              {
-                ["--hero-company-color" as string]: secondaryColor,
-              } as React.CSSProperties
-            }
+            className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight truncate drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]"
+            style={{ color: secondaryColor }}
           >
             {companyName || t("ourCompany")}
           </h2>
@@ -86,7 +82,7 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
           {/* Formulaire */}
           <form
             onSubmit={handleSubmit}
-            className="mt-8 mx-auto max-w-3xl rounded-2xl bg-white/20 dark:bg-neutral-900/65 backdrop-blur-md border border-white/30 dark:border-white/15 shadow-2xl p-4 sm:p-5 md:p-6"
+            className="mt-8 mx-auto max-w-3xl rounded-2xl bg-white/15 backdrop-blur-xl border border-white/20 shadow-2xl p-4 sm:p-5 md:p-6"
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
 
