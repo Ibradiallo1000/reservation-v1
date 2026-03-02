@@ -353,6 +353,243 @@ img.hero, img.logo {
   border-color: #e5e7eb !important;
 }
 
+/* =========================
+   PREMIUM TICKET DESIGN (TicketOnline)
+   ========================= */
+.ticket-premium {
+  background: #f7f7f7;
+  border-radius: 28px;
+  box-shadow:
+    0 20px 40px rgba(0,0,0,0.15),
+    inset 0 1px 0 rgba(255,255,255,0.8);
+  overflow: hidden;
+}
+
+.ticket-header-gradient {
+  position: relative;
+  overflow: hidden;
+}
+
+.ticket-header-gradient::after {
+  content: "";
+  position: absolute;
+  top: -40px;
+  right: -60px;
+  width: 220px;
+  height: 220px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 50%;
+}
+
+.ticket-price-strip {
+  position: relative;
+  border-radius: 999px;
+  box-shadow:
+    0 10px 20px rgba(0,0,0,0.15),
+    inset 0 3px 8px rgba(255,255,255,0.2);
+}
+
+.ticket-price-strip::after {
+  content: "";
+  position: absolute;
+  right: -30px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 120px;
+  height: 160%;
+  background: rgba(255,255,255,0.15);
+  border-radius: 50%;
+}
+
+.ticket-qr-box {
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 14px;
+  box-shadow:
+    0 8px 20px rgba(0,0,0,0.08),
+    inset 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.ticket-pill-actions {
+  background: #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.1);
+}
+
+/* =========================
+   BOARDING PASS B (TicketOnline — mobile first, no scroll)
+   ========================= */
+.ticket-b {
+  max-width: 380px;
+  height: 100vh;
+  max-height: 720px;
+  margin: auto;
+  background: #f4f4f4;
+  border-radius: 24px;
+  box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ticket-b #ticket-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ticket-b-header {
+  padding: 18px;
+  color: white;
+  flex-shrink: 0;
+}
+
+.ticket-b-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ticket-b-header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.ticket-b-header .ref {
+  display: block;
+  font-size: 0.75rem;
+  opacity: 0.9;
+  font-family: ui-monospace, monospace;
+}
+
+.badge-confirmed {
+  background: #16a34a;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.ticket-b-section {
+  padding: 12px 18px;
+  border-bottom: 1px dashed #ddd;
+  flex-shrink: 0;
+}
+
+.ticket-b-section .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.ticket-b-section .row:last-child {
+  margin-bottom: 0;
+}
+
+.ticket-b-route {
+  text-align: center;
+  font-weight: bold;
+  font-size: 18px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ticket-b-infos {
+  display: flex;
+  justify-content: space-around;
+  padding: 10px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.ticket-b-infos div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.ticket-b-infos p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.ticket-b-price {
+  margin: 15px;
+  padding: 15px;
+  border-radius: 999px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ticket-b-price small {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.ticket-b-price h3 {
+  margin: 4px 0 0;
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.ticket-b-qr {
+  text-align: center;
+  padding: 10px;
+  flex-shrink: 0;
+}
+
+.ticket-b-qr p {
+  margin: 8px 0 0;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  color: #374151;
+}
+
+.ticket-b-actions {
+  display: flex;
+  gap: 10px;
+  padding: 15px;
+  flex-shrink: 0;
+}
+
+.ticket-b-actions button {
+  flex: 1;
+  border-radius: 999px;
+  padding: 10px;
+  font-weight: 600;
+  font-size: 14px;
+  background: white;
+  border: none;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.ticket-b-actions button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 @keyframes agencyFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 .agency-content-transition { animation: agencyFadeIn 180ms ease-out; }
 

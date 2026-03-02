@@ -1457,10 +1457,7 @@ export default function ReservationClientPage() {
             <>
               <SectionCard title="Informations personnelles" icon={User} className="shadow-md">
                 <StepIndicator />
-                <p className="text-xs text-gray-500 mb-3">
-                  Entrez votre <span className="font-medium">nom complet</span> et votre <span className="font-medium">numéro de téléphone</span> utilisés pour voyager.
-                </p>
-                <p className="text-xs text-gray-500 mb-3">
+                <p className="text-sm text-gray-500 mb-4">
                   Entrez votre <span className="font-medium">nom complet</span> et votre <span className="font-medium">numéro de téléphone</span> utilisés pour voyager.
                 </p>
                 <div className="grid sm:grid-cols-2 gap-3">
