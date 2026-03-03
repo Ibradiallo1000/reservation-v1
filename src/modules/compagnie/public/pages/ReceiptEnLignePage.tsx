@@ -17,7 +17,8 @@ import {
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { resolveReservationById } from '@/modules/compagnie/public/utils/resolveReservation';
-import { ChevronLeft, Download, Printer, Home } from 'lucide-react';
+import { Download, Printer, Home } from 'lucide-react';
+import ReservationStepHeader from '@/modules/compagnie/public/components/ReservationStepHeader';
 import html2pdf from 'html2pdf.js';
 import { safeTextColor } from '@/utils/color';
 import { format, parseISO } from 'date-fns';
@@ -327,20 +328,16 @@ const ReceiptEnLignePage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header
-        className="sticky top-0 z-20 px-4 py-2 shadow-sm"
-        style={{ backgroundColor: primaryColor, color: textColor }}
-      >
-        <div className="flex items-center justify-between max-w-md mx-auto">
-          <button onClick={() => navigate(-1)} className="p-2 rounded-full">
-            <ChevronLeft size={22} />
-          </button>
-          <h1 className="font-bold text-lg">Reçu de réservation</h1>
-          <div className="w-8" />
-        </div>
-      </header>
+      <ReservationStepHeader
+        onBack={() => navigate(-1)}
+        primaryColor={primaryColor}
+        secondaryColor={secondaryColor}
+        title="Confirmation"
+        subtitle={reservation ? `${reservation.depart} → ${reservation.arrivee}` : undefined}
+        logoUrl={companyInfo.logoUrl}
+      />
 
-      <main className="max-w-md mx-auto px-4 py-6">
+      <main className="max-w-md mx-auto px-4 py-6 -mt-2">
         <div ref={receiptRef}>
           <TicketOnline
             companyName={companyInfo.name}

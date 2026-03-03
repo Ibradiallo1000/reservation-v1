@@ -1,19 +1,21 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
-import { db, storage } from '@/firebaseConfig';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db } from '@/firebaseConfig';
 import { doc, getDoc, updateDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { SectionCard } from '@/ui';
-import { Upload, CheckCircle, XCircle, Loader2, ChevronLeft, Info, MapPin, Calendar, User, Users, ArrowRight, Banknote } from 'lucide-react';
+import { XCircle, Loader2, Info } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
+import ReservationStepHeader from '../components/ReservationStepHeader';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { hexToRgba, safeTextColor } from '@/utils/color';
-import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import ErrorScreen from '@/shared/ui/ErrorScreen';
 import LoadingScreen from '@/shared/ui/LoadingScreen';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { enUS } from 'date-fns/locale';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 // ===================== DEBUG / LOGGER =====================
 const DEBUG = true;
@@ -69,25 +71,25 @@ interface CompanyInfo {
 }
 
 const UploadPreuvePage: React.FC = () => {
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const money = useFormatCurrency();
+  const language = i18n.language?.startsWith('en') ? 'en' : 'fr';
   const location = useLocation();
   const { slug, id } = useParams<{ slug: string; id?: string }>();
-  const money = useFormatCurrency();
   const isOnline = useOnlineStatus();
 
-  // Récup context navigation si présent
-  const { draft: locationDraft, companyInfo: locationCompanyInfo } = (location.state as any) || {};
+  // Récup context navigation si présent (depuis PaymentMethodPage ou autre)
+  const { draft: locationDraft, companyInfo: locationCompanyInfo, paymentMethodKey: statePaymentMethodKey } = (location.state as any) || {};
 
   // States UI / data
   const [reservationDraft, setReservationDraft] = useState<ReservationDraft | null>(null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [loadingData, setLoadingData] = useState(true);
-  const [file, setFile] = useState<File | null>(null);
-  const [message, setMessage] = useState('');
+  const [transactionReference, setTransactionReference] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
 
   // ======= Chargement initial (sessionStorage + Firestore) =======
   const loadInitialData = useCallback(async () => {
@@ -97,11 +99,12 @@ const UploadPreuvePage: React.FC = () => {
 
       let parsedCompanyInfo: CompanyInfo | null = null;
 
-      // 1) Depuis location.state (navigation directe)
+      // 1) Depuis location.state (navigation directe depuis PaymentMethodPage)
       if (locationDraft && locationCompanyInfo) {
         log.info('Init from location.state');
         parsedCompanyInfo = locationCompanyInfo;
         setReservationDraft(locationDraft);
+        if (statePaymentMethodKey) setPaymentMethod(statePaymentMethodKey);
       } else {
         // 2) Depuis sessionStorage (cas de refresh page)
         const savedDraft = sessionStorage.getItem('reservationDraft');
@@ -168,132 +171,23 @@ const UploadPreuvePage: React.FC = () => {
       setLoadingData(false);
       log.groupEnd();
     }
-  }, [locationDraft, locationCompanyInfo, navigate, slug, id]);
+  }, [locationDraft, locationCompanyInfo, statePaymentMethodKey, navigate, slug, id]);
 
   useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
-  // ======= Sélection de fichier =======
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    try {
-      if (!e.target.files || !e.target.files[0]) {
-        setFile(null);
-        return;
-      }
-
-      const selectedFile = e.target.files[0];
-      const validTypes = ['image/jpeg', 'image/png', 'application/pdf'];
-      const maxSize = 5 * 1024 * 1024;
-
-      if (!validTypes.includes(selectedFile.type)) {
-        throw new Error('Type de fichier non supporté (JPEG, PNG ou PDF uniquement)');
-      }
-      if (selectedFile.size > maxSize) {
-        throw new Error('Le fichier est trop volumineux (max 5MB)');
-      }
-
-      setFile(selectedFile);
-      setError(null);
-      log.info('File selected', { name: selectedFile.name, size: selectedFile.size, type: selectedFile.type });
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Erreur lors de la sélection du fichier');
-      setFile(null);
-      log.warn('handleFileChange error', error);
-    }
-  };
-
-  // ======= Choix du moyen de paiement =======
-  const handlePaymentMethodSelect = (methodKey: string) => {
-    try {
-      const method = companyInfo?.paymentMethods?.[methodKey];
-      if (!method) throw new Error('Méthode de paiement non disponible');
-
-      setPaymentMethod(methodKey);
-      setError(null);
-      log.info('Payment method selected', methodKey);
-
-      if (reservationDraft) {
-        const ussd = method.ussdPattern
-          ?.replace('MERCHANT', method.merchantNumber || '')
-          ?.replace('AMOUNT', reservationDraft.montant.toString());
-
-        if (method.url) {
-          window.open(method.url, '_blank', 'noopener,noreferrer');
-          log.info('Open payment URL', method.url);
-        } else if (ussd) {
-          window.open(`tel:${ussd}`, '_blank', 'noopener,noreferrer');
-          log.info('Open USSD', ussd);
-        }
-      }
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Erreur de sélection du paiement');
-      log.warn('handlePaymentMethodSelect error', error);
-    }
-  };
-
-  // ======= Upload / update Firestore (NE CHANGE PAS referenceCode) =======
-  const handleUpload = async () => {
+  const handleSubmitProof = async () => {
+    if (!transactionReference.trim()) return;
     if (!reservationDraft || !reservationDraft.id) {
       setError('Réservation introuvable.');
-      return;
-    }
-    if (!paymentMethod) {
-      setError('Veuillez sélectionner un moyen de paiement.');
-      return;
-    }
-    if (!message && !file) {
-      setError('Veuillez fournir une preuve ou un message.');
       return;
     }
 
     setUploading(true);
     setError(null);
-    log.group('handleUpload');
+    log.group('handleSubmitProof');
 
     try {
-      let preuveUrl: string | null = null;
-
-      // 1) Upload fichier si présent
-      if (file) {
-        const ext = file.name.split('.').pop();
-        const filename = `preuves/preuve_${Date.now()}.${ext}`;
-        const fileRef = ref(storage, filename);
-        const snap = await uploadBytes(fileRef, file);
-        preuveUrl = await getDownloadURL(snap.ref);
-        log.info('File uploaded', { filename, preuveUrl });
-      }
-
-      // ⚠️ IMPORTANT : on NE génère PAS de referenceCode ici.
-      // On met juste le statut "preuve_recue" + infos PMA.
-      const updatePayload: any = {
-        nomClient: reservationDraft.nomClient,
-        telephone: reservationDraft.telephone,
-        depart: reservationDraft.depart,
-        arrivee: reservationDraft.arrivee,
-        date: reservationDraft.date,
-        heure: reservationDraft.heure,
-        montant: reservationDraft.montant,
-        seatsGo: reservationDraft.seatsGo,
-        seatsReturn: reservationDraft.seatsReturn || 0,
-        tripType: reservationDraft.tripType,
-
-        statut: 'preuve_recue',
-
-        // On garde l’info du canal web
-        canal: 'en_ligne',
-
-        // PMA sélectionné
-        preuveVia: paymentMethod,
-        preuveMessage: message.trim(),
-        preuveUrl: preuveUrl || null,
-
-        // Contexte
-        companyId: reservationDraft.companyId || '',
-        companySlug: reservationDraft.companySlug || '',
-
-      };
-
-      // NE PAS ECRASER referenceCode : on le laisse tel quel s’il existe déjà dans le doc.
-      const resRef = doc(
+      const reservationRef = doc(
         db,
         'companies',
         reservationDraft.companyId!,
@@ -302,33 +196,35 @@ const UploadPreuvePage: React.FC = () => {
         'reservations',
         reservationDraft.id!
       );
-      const docSnap = await getDoc(resRef);
+      const docSnap = await getDoc(reservationRef);
       if (!docSnap.exists()) {
         setError('Réservation introuvable.');
         return;
       }
-      const data = docSnap.data() as any;
-      const currentStatut = (data.statut || '').toLowerCase();
+      const data = docSnap.data() as Record<string, unknown>;
+      const currentStatut = ((data.statut as string) || '').toLowerCase();
       if (currentStatut !== 'en_attente_paiement') {
         setError('Cette réservation a expiré ou a déjà été traitée.');
         return;
       }
 
-      const inputReference = (message && message.trim()) || (file ? file.name : '');
-      await updateDoc(resRef, {
+      const trimmed = transactionReference.trim();
+      await updateDoc(reservationRef, {
         statut: 'preuve_recue',
-        paymentReference: inputReference,
+        preuveMessage: trimmed,
+        paymentReference: trimmed,
+        transactionReference: trimmed,
+        ...(paymentMethod ? { preuveVia: paymentMethod } : {}),
         proofSubmittedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
 
-      // Nettoyage du cache (on a fini le flux PMA)
       sessionStorage.removeItem('reservationDraft');
       sessionStorage.removeItem('companyInfo');
-      setSuccess(true);
-      log.info('Upload success → setSuccess(true)');
+      log.info('Proof submitted → redirect to receipt');
+      navigate(`/${reservationDraft.companySlug || slug}/receipt/${reservationDraft.id}`, { replace: true });
     } catch (err) {
-      log.error('handleUpload error', err);
+      log.error('handleSubmitProof error', err);
       setError('Une erreur est survenue lors de l\'envoi.');
     } finally {
       setUploading(false);
@@ -383,10 +279,6 @@ const UploadPreuvePage: React.FC = () => {
     );
   }
 
-  if (success) {
-    return <SuccessScreen reservationDraft={reservationDraft} companyInfo={companyInfo} slug={slug} />;
-  }
-
   const themeConfig = {
     colors: {
       primary: companyInfo.primaryColor || companyInfo.couleurPrimaire || '#3b82f6',
@@ -404,390 +296,122 @@ const UploadPreuvePage: React.FC = () => {
           </div>
         </div>
       )}
-      <Header companyInfo={companyInfo} themeConfig={themeConfig} onBack={() => navigate(-1)} />
-
-      <main className="max-w-4xl mx-auto p-4 space-y-6 pb-24">
-        <ReservationSummaryCard reservationDraft={reservationDraft} primaryColor={themeConfig.colors.primary} />
-
-        <SectionCard title="Justificatif de paiement" icon={Upload} className="shadow-md">
-          <p className="text-xs text-gray-500 mb-4 flex items-center gap-1.5">
-            <Info className="w-3.5 h-3.5 text-gray-400" />
-            Paiement sécurisé · Support disponible
-          </p>
-          <div className="space-y-6">
-            <AmountSection amount={reservationDraft.montant} primaryColor={themeConfig.colors.primary} />
-
-            <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
-                <Banknote className="w-5 h-5" style={{ color: themeConfig.colors.primary }} />
-                <span>Moyen de paiement</span>
-              </h3>
-              <PaymentMethodSection
-                paymentMethod={paymentMethod}
-                onPaymentMethodSelect={handlePaymentMethodSelect}
-                companyInfo={companyInfo}
-                reservationAmount={reservationDraft.montant}
-                primaryColor={themeConfig.colors.primary}
-                secondaryColor={themeConfig.colors.secondary}
-              />
-            </div>
-
-            <MessageSection message={message} setMessage={setMessage} primaryColor={themeConfig.colors.primary} />
-
-            <FileUploadSection handleFileChange={handleFileChange} file={file} primaryColor={themeConfig.colors.primary} />
-
-            {error && <ErrorDisplay error={error} />}
-          </div>
-        </SectionCard>
-      </main>
-
-      <SubmitButton
-        onClick={handleUpload}
-        disabled={uploading || !message.trim() || !paymentMethod}
-        themeConfig={themeConfig}
-        uploading={uploading}
+      <ReservationStepHeader
+        onBack={() => navigate(-1)}
+        primaryColor={themeConfig.colors.primary}
+        secondaryColor={themeConfig.colors.secondary}
+        title={t('uploadProofStepTitle')}
+        subtitle={reservationDraft ? `${reservationDraft.depart} → ${reservationDraft.arrivee}` : undefined}
+        logoUrl={companyInfo.logoUrl}
       />
-    </div>
-  );
-};
 
-// ======= UI subcomponents (commentés) =======
-
-const SuccessScreen: React.FC<{
-  reservationDraft: ReservationDraft;
-  companyInfo: CompanyInfo;
-  slug?: string;
-}> = ({ reservationDraft, companyInfo, slug }) => {
-  const navigate = useNavigate();
-  const themeConfig = {
-    colors: {
-      primary: companyInfo.primaryColor || companyInfo.couleurPrimaire || '#3b82f6',
-      text: companyInfo.primaryColor ? safeTextColor(companyInfo.primaryColor) : '#ffffff',
-    }
-  };
-
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      // Redirection vers la page de détails de réservation
-      navigate(`/${slug}/reservation/${reservationDraft.id}`, {
-        state: {
-          slug: slug,
-          companyInfo: companyInfo,
-          reservation: {
-            ...reservationDraft,
-            id: reservationDraft.id,
-            statut: 'preuve_recue',
-            preuveMessage: reservationDraft.preuveMessage || '',
-          }
-        }
-      });
-    }, 1200);
-    return () => clearTimeout(timeout);
-  }, [navigate, reservationDraft, companyInfo, slug]);
-
-  return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
-      <SectionCard
-        title="Justificatif envoyé"
-        icon={CheckCircle}
-        className="max-w-md w-full shadow-md border-gray-200"
-      >
-        <div className="text-center py-2">
-          <p className="text-gray-700 font-medium">Votre justificatif a bien été enregistré.</p>
-          <p className="text-sm text-gray-500 mt-2">Vous allez être redirigé vers votre réservation...</p>
-          <p className="text-xs text-gray-500 mt-4 flex items-center justify-center gap-1.5">
-            <CheckCircle className="w-3.5 h-3.5" />
-            Confirmation par SMS ou email après validation.
-          </p>
+      <main className="max-w-4xl mx-auto px-4 py-6 pb-24 -mt-2 space-y-6">
+        {/* 3D floating route summary card */}
+        <div
+          className="relative bg-white rounded-2xl p-4 shadow-xl border"
+          style={{
+            borderColor: `${themeConfig.colors.secondary}4D`,
+            boxShadow: '0 12px 25px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.04)',
+          }}
+        >
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-gray-900">
+                {reservationDraft.depart} → {reservationDraft.arrivee}
+              </div>
+              <div className="text-sm text-gray-600 mt-1">
+                {formatDateDepart(reservationDraft.date, reservationDraft.heure, language)}
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-0.5">
+              <span className="text-sm text-gray-500">
+                {reservationDraft.seatsGo === 1 ? '1 place' : `${reservationDraft.seatsGo} places`}
+              </span>
+              <span className="text-xl font-bold" style={{ color: themeConfig.colors.primary }}>
+                {money(reservationDraft.montant)}
+              </span>
+            </div>
+          </div>
         </div>
-      </SectionCard>
-    </div>
-  );
-};
 
-const Header: React.FC<{ companyInfo?: CompanyInfo; themeConfig: any; onBack: () => void }> = ({
-  companyInfo, themeConfig, onBack
-}) => (
-  <header
-    className="sticky top-0 z-50 px-4 py-3 shadow-sm"
-    style={{ backgroundColor: themeConfig.colors.primary, color: themeConfig.colors.text }}
-  >
-    <div className="flex items-center gap-4 max-w-7xl mx-auto">
-      <button onClick={onBack} className="p-2 rounded-full hover:bg-white/10 transition">
-        <ChevronLeft className="h-5 w-5" />
-      </button>
-
-      <div className="flex items-center gap-3">
-        {companyInfo?.logoUrl && (
-          <LazyLoadImage
-            src={companyInfo.logoUrl}
-            alt={`Logo ${companyInfo.name}`}
-            effect="blur"
-            className="h-8 w-8 rounded-full object-cover border-2"
-            style={{ borderColor: themeConfig.colors.text }}
+        {/* Payment details premium card */}
+        <div
+          className="mt-6 bg-white rounded-2xl p-5 shadow-xl border transition hover:shadow-2xl"
+          style={{ borderColor: `${themeConfig.colors.secondary}33` }}
+        >
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Info className="w-5 h-5" style={{ color: themeConfig.colors.primary }} />
+            {t('paymentDetails')}
+          </h2>
+          <p className="text-sm text-gray-600 mt-2">
+            {t('paymentDetailsInstruction')}
+          </p>
+          <label className="block text-sm font-medium text-gray-700 mt-4">{t('transactionReference')} *</label>
+          <textarea
+            required
+            placeholder="Paiement MTN Mobile Money - Réf : SX8T9K - 05/07/2024"
+            value={transactionReference}
+            onChange={(e) => setTransactionReference(e.target.value)}
+            className="w-full mt-3 rounded-xl border p-4 focus:ring-2 focus:outline-none min-h-[120px] shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)]"
+            style={{
+              borderColor: `${themeConfig.colors.secondary}66`,
+            }}
           />
-        )}
-        <h1 className="text-lg font-bold">Envoyer le justificatif de paiement</h1>
-      </div>
-    </div>
-  </header>
-);
+          {error && <ErrorDisplay error={error} />}
 
-const ReservationSummaryCard: React.FC<{
-  reservationDraft: ReservationDraft;
-  primaryColor: string;
-}> = ({ reservationDraft, primaryColor }) => {
-  const isAllerRetour = reservationDraft.tripType === 'aller_retour';
-  const formattedDate = reservationDraft.date
-    ? format(parseISO(reservationDraft.date), 'EEEE d MMMM yyyy', { locale: fr })
-    : reservationDraft.date;
-
-  return (
-    <SectionCard title="Récapitulatif de votre réservation" icon={MapPin} className="shadow-md">
-      <div className="space-y-4 text-sm">
-        <div className="flex items-start gap-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 rounded-lg" style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
-                <MapPin className="w-5 h-5" style={{ color: primaryColor }} />
-              </div>
-              <div>
-                <p className="text-gray-500">Trajet</p>
-                <p className="font-semibold text-gray-900">
-                  {reservationDraft.depart} <ArrowRight className="inline mx-1 w-4 h-4 text-gray-400" /> {reservationDraft.arrivee}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 rounded-lg" style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
-                <Calendar className="w-5 h-5" style={{ color: primaryColor }} />
-              </div>
-              <div>
-                <p className="text-gray-500">Date et heure</p>
-                <p className="font-semibold text-gray-900">{formattedDate} à {reservationDraft.heure}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 rounded-lg" style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
-                <User className="w-5 h-5" style={{ color: primaryColor }} />
-              </div>
-              <div>
-                <p className="text-gray-500">Passager</p>
-                <p className="font-semibold text-gray-900">{reservationDraft.nomClient}</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg" style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
-                <Users className="w-5 h-5" style={{ color: primaryColor }} />
-              </div>
-              <div>
-                <p className="text-gray-500">Places</p>
-                <p className="font-semibold text-gray-900">
-                  {reservationDraft.seatsGo} {isAllerRetour && `+ ${reservationDraft.seatsReturn} retour`}
-                </p>
-              </div>
-            </div>
-          </div>
+          <button
+            type="button"
+            disabled={uploading || !transactionReference.trim()}
+            onClick={handleSubmitProof}
+            className={`mt-6 w-full py-4 rounded-full font-semibold active:scale-95 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 ${
+              transactionReference.trim() && !uploading ? 'text-white' : 'bg-gray-300 text-gray-500'
+            }`}
+            style={
+              transactionReference.trim() && !uploading
+                ? {
+                    background: `linear-gradient(to right, ${themeConfig.colors.secondary}, ${themeConfig.colors.primary})`,
+                    boxShadow: `0 10px 25px ${themeConfig.colors.secondary}66`,
+                  }
+                : undefined
+            }
+          >
+            {uploading ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin inline" />
+                {t('sendingProof')}
+              </span>
+            ) : (
+              t('sendPaymentProof')
+            )}
+          </button>
         </div>
-      </div>
-    </SectionCard>
+      </main>
+    </div>
   );
 };
 
-const PaymentMethodSection: React.FC<{
-  paymentMethod: string | null;
-  onPaymentMethodSelect: (method: string) => void;
-  companyInfo?: CompanyInfo;
-  reservationAmount: number;
-  primaryColor: string;
-  secondaryColor: string;
-}> = ({ paymentMethod, onPaymentMethodSelect, companyInfo, reservationAmount, primaryColor, secondaryColor }) => {
-  const paymentMethods = companyInfo?.paymentMethods || {};
-
-  if (Object.keys(paymentMethods).length === 0) {
-    return (
-      <div className="border-l-4 p-4 rounded-lg" style={{ backgroundColor: hexToRgba('#f59e0b', 0.05), borderColor: '#f59e0b' }}>
-        <div className="flex items-start gap-3">
-          <Info className="h-5 w-5 mt-0.5" style={{ color: '#f59e0b' }} />
-          <p className="text-sm" style={{ color: '#92400e' }}>
-            Aucun moyen de paiement configuré pour cette compagnie. Veuillez contacter l'agence.
-          </p>
-        </div>
-      </div>
-    );
+/** Date with locale: FR "4 mars 2026 à 05:00", EN "March 4, 2026 at 05:00" */
+function formatDateDepart(dateStr: string, heureStr: string, language: string): string {
+  try {
+    if (!dateStr || !heureStr) return `${dateStr ?? ''} ${heureStr ?? ''}`.trim();
+    const d = parseISO(`${dateStr}T${heureStr}:00`);
+    const isFr = language === 'fr';
+    if (isFr) {
+      const datePart = format(d, 'd MMMM yyyy', { locale: fr }).toLowerCase();
+      const timePart = format(d, 'HH:mm');
+      return `${datePart} à ${timePart}`;
+    }
+    return format(d, "d MMMM yyyy 'at' HH:mm", { locale: enUS });
+  } catch {
+    return language === 'fr' ? `${dateStr} à ${heureStr}` : `${dateStr} at ${heureStr}`;
   }
-
-  return (
-    <div>
-      <div className="space-y-3">
-        {Object.entries(paymentMethods)
-          .filter(([_, method]) => method)
-          .map(([key, method]) => {
-            if (!method) return null;
-
-            return (
-              <button
-                key={key}
-                onClick={() => onPaymentMethodSelect(key)}
-                className={`w-full flex items-center gap-4 p-4 rounded-lg border transition-all ${
-                  paymentMethod === key ? 'border-blue-500 shadow-sm' : 'border-gray-200 hover:border-gray-300'
-                }`}
-                style={{ backgroundColor: paymentMethod === key ? hexToRgba(secondaryColor, 0.2) : 'white' }}
-              >
-                {method.logoUrl ? (
-                  <img src={method.logoUrl} alt={key} className="h-10 w-10 object-contain rounded-lg" />
-                ) : (
-                  <div className="h-10 w-10 rounded-lg flex items-center justify-center"
-                       style={{ backgroundColor: hexToRgba(primaryColor, 0.1), color: primaryColor }}>
-                    <Banknote className="w-5 h-5" />
-                  </div>
-                )}
-                <div className="text-left flex-1">
-                  <div className="font-medium capitalize">{key.replace(/_/g, ' ')}</div>
-                  {method.merchantNumber && (
-                    <div className="text-xs text-gray-500">Numéro: {method.merchantNumber}</div>
-                  )}
-                </div>
-                {paymentMethod === key && (
-                  <div className="ml-auto">
-                    <div className="w-5 h-5 rounded-full flex items-center justify-center"
-                         style={{ backgroundColor: primaryColor, color: safeTextColor(primaryColor) }}>
-                      <CheckCircle className="w-3 h-3" />
-                    </div>
-                  </div>
-                )}
-              </button>
-            );
-          })}
-      </div>
-
-      {paymentMethod && paymentMethods[paymentMethod]?.ussdPattern && (
-        <div className="mt-4 p-4 rounded-lg"
-             style={{ backgroundColor: hexToRgba(primaryColor, 0.05), border: `1px solid ${hexToRgba(primaryColor, 0.2)}` }}>
-          <p className="text-sm font-medium mb-2" style={{ color: primaryColor }}>
-            Code USSD généré :
-          </p>
-          <div className="p-3 rounded-lg font-mono text-center text-sm break-all"
-               style={{ backgroundColor: hexToRgba(primaryColor, 0.1) }}>
-            {paymentMethods[paymentMethod]?.ussdPattern
-              ?.replace('MERCHANT', paymentMethods[paymentMethod]?.merchantNumber || '')
-              ?.replace('AMOUNT', reservationAmount.toString())}
-          </div>
-          <p className="text-xs mt-2 text-gray-500">Ce code sera automatiquement utilisé si l'application n'est pas disponible</p>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const AmountSection: React.FC<{ amount: number; primaryColor: string }> = ({ amount, primaryColor }) => {
-  const money = useFormatCurrency();
-  return (
-  <div>
-    <h3 className="text-sm font-medium text-gray-700 mb-2">Montant à payer</h3>
-    <div className="text-3xl font-bold py-3 px-4 rounded-lg"
-         style={{ backgroundColor: hexToRgba(primaryColor, 0.1), color: primaryColor }}>
-      {money(amount)}
-    </div>
-  </div>
-  );
-};
-
-const MessageSection: React.FC<{
-  message: string;
-  setMessage: (msg: string) => void;
-  primaryColor: string;
-}> = ({ message, setMessage, primaryColor }) => (
-  <div>
-    <label className="block text-sm font-medium text-gray-700 mb-2">Détails du paiement *</label>
-    <textarea
-      placeholder="Coller les détails du paiement (ex: ID de transaction, référence, numéro MTN/Moov...)"
-      value={message}
-      onChange={(e) => setMessage(e.target.value)}
-      className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:outline-none"
-      style={{ borderColor: hexToRgba(primaryColor, 0.3) }}
-      rows={4}
-      required
-    />
-    <p className="text-xs text-gray-500 mt-1">
-      Exemple: "Paiement MTN Mobile Money - Réf: 5X8T9K - 05/07/2024"
-    </p>
-  </div>
-);
-
-const FileUploadSection: React.FC<{
-  handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  file: File | null;
-  primaryColor: string;
-}> = ({ handleFileChange, file, primaryColor }) => (
-  <div>
-    <label className="block text-sm font-medium text-gray-700 mb-2">Capture d'écran (optionnel)</label>
-    <div className="flex items-center justify-center w-full">
-      <label
-        className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-all hover:border-gray-400"
-        style={{ borderColor: file ? primaryColor : hexToRgba(primaryColor, 0.3), backgroundColor: file ? hexToRgba(primaryColor, 0.05) : 'white' }}
-      >
-        <div className="flex flex-col items-center justify-center pt-5 pb-6">
-          {file ? (
-            <>
-              <CheckCircle className="h-8 w-8 mb-2" style={{ color: primaryColor }} />
-              <p className="text-sm font-medium" style={{ color: primaryColor }}>{file.name}</p>
-              <p className="text-xs text-gray-500 mt-1">Cliquez pour changer de fichier</p>
-            </>
-          ) : (
-            <>
-              <Upload className="h-8 w-8 text-gray-400 mb-2" />
-              <p className="text-sm text-gray-500">Cliquez pour sélectionner un fichier</p>
-              <p className="text-xs text-gray-400 mt-1">PNG, JPG, PDF (max. 5MB)</p>
-            </>
-          )}
-        </div>
-        <input type="file" className="hidden" onChange={handleFileChange} accept=".png,.jpg,.jpeg,.pdf" />
-      </label>
-    </div>
-  </div>
-);
+}
 
 const ErrorDisplay: React.FC<{ error: string }> = ({ error }) => (
   <div className="border-l-4 p-4 rounded-lg" style={{ backgroundColor: hexToRgba('#ef4444', 0.05), borderColor: '#ef4444' }}>
     <div className="flex items-start gap-3">
       <XCircle className="h-5 w-5 mt-0.5" style={{ color: '#ef4444' }} />
       <p className="text-sm" style={{ color: '#991b1b' }}>{error}</p>
-    </div>
-  </div>
-);
-
-const SubmitButton: React.FC<{
-  onClick: () => void;
-  disabled: boolean;
-  themeConfig: any;
-  uploading: boolean;
-}> = ({ onClick, disabled, themeConfig, uploading }) => (
-  <div className="fixed bottom-0 left-0 w-full z-50 border-t border-gray-200 bg-white px-4 py-3 shadow-lg">
-    <div className="max-w-4xl mx-auto">
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        className="w-full py-3 px-4 rounded-lg font-medium transition-all hover:opacity-90"
-        style={{ backgroundColor: disabled ? '#9ca3af' : themeConfig.colors.primary, color: themeConfig.colors.text }}
-      >
-        {uploading ? (
-          <span className="flex items-center justify-center gap-2">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            Envoi en cours...
-          </span>
-        ) : (
-          <span className="flex items-center justify-center gap-2">
-            <CheckCircle className="h-5 w-5" />
-            Confirmer l'envoi
-          </span>
-        )}
-      </button>
     </div>
   </div>
 );

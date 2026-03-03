@@ -7,6 +7,7 @@ i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
+    lng: 'fr',
     fallbackLng: 'fr',
     debug: false,
     interpolation: {
@@ -17,7 +18,7 @@ i18n
       lookupLocalStorage: 'i18nextLng',
       caches: ['localStorage']
     },
-    // Default fr when localStorage empty; stored value used when user has chosen
+    // Default fr when no language selected; English only when explicitly chosen
     resources: {
       fr: {
         translation: {
@@ -111,7 +112,24 @@ i18n
           serviceSupportTitle: 'Support client',
           serviceSupportDesc: 'Une assistance réactive, où que vous soyez.',
           serviceComfortTitle: 'Confort',
-          serviceComfortDesc: 'Des véhicules spacieux et climatisés pour votre confort.'
+          serviceComfortDesc: 'Des véhicules spacieux et climatisés pour votre confort.',
+
+          ticketStatusAwaitingPayment: 'En attente de paiement',
+          ticketStatusAwaitingValidation: 'En attente de validation',
+          ticketStatusPaymentValidated: 'Paiement validé',
+
+          paymentStepTitle: 'Mode de paiement',
+          paymentChooseMethod: 'Choisissez votre moyen de paiement',
+          paymentMerchantCode: 'Code marchand',
+          paymentUssdCode: 'Code USSD',
+
+          uploadProofStepTitle: 'Téléversement de preuve',
+          paymentDetails: 'Détails du paiement',
+          paymentDetailsInstruction: 'Collez le message ou la confirmation de paiement reçue.',
+          transactionReference: 'Référence de transaction',
+          sendPaymentProof: 'Envoyer la preuve',
+          departureDate: 'Date de départ',
+          sendingProof: 'Envoi en cours...'
         }
       },
       en: {
@@ -206,7 +224,24 @@ i18n
           serviceSupportTitle: 'Customer support',
           serviceSupportDesc: 'Responsive assistance, wherever you are.',
           serviceComfortTitle: 'Comfort',
-          serviceComfortDesc: 'Spacious and air-conditioned vehicles for your comfort.'
+          serviceComfortDesc: 'Spacious and air-conditioned vehicles for your comfort.',
+
+          ticketStatusAwaitingPayment: 'Awaiting Payment',
+          ticketStatusAwaitingValidation: 'Awaiting Validation',
+          ticketStatusPaymentValidated: 'Payment Validated',
+
+          paymentStepTitle: 'Payment method',
+          paymentChooseMethod: 'Choose your payment method',
+          paymentMerchantCode: 'Merchant Code',
+          paymentUssdCode: 'USSD Code',
+
+          uploadProofStepTitle: 'Upload proof',
+          paymentDetails: 'Payment details',
+          paymentDetailsInstruction: 'Paste the transaction message or payment confirmation received.',
+          transactionReference: 'Transaction reference',
+          sendPaymentProof: 'Send payment proof',
+          departureDate: 'Departure date',
+          sendingProof: 'Sending...'
         }
       }
     }

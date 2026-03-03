@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { DocumentReference } from 'firebase/firestore';
 import TicketOnline from '../components/ticket/TicketOnline';
+import ReservationStepHeader from '../components/ReservationStepHeader';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -529,48 +530,14 @@ const ReservationDetailsPage: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Header */}
-      <header
-        className="sticky top-0 z-10 px-5 py-3 shadow-sm"
-        style={{
-          backgroundColor: primaryColor,
-          color: safeTextColor(primaryColor),
-          boxShadow: '0 1px 0 rgba(0,0,0,0.06)'
-        }}
-      >
-        <div className="flex items-center justify-between max-w-md mx-auto">
-          <button 
-            onClick={handleGoBack} 
-            className="p-1.5 rounded-full hover:bg-black/10 transition-colors" 
-            aria-label="Retour"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <h1 className="font-semibold text-base tracking-tight">Détails de réservation</h1>
-          {companyInfo?.logoUrl
-            ? (
-              <LazyLoadImage
-                src={companyInfo.logoUrl}
-                alt="Logo"
-                className="h-8 w-8 rounded-full object-cover border"
-                style={{ borderColor: 'rgba(255,255,255,0.25)' }}
-                effect="blur"
-              />
-            )
-            : (
-              <div
-                className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium border"
-                style={{
-                  backgroundColor: 'rgba(255,255,255,0.15)',
-                  borderColor: 'rgba(255,255,255,0.35)',
-                  color: safeTextColor(primaryColor)
-                }}
-              >
-                {companyInfo?.name?.charAt(0) || 'C'}
-              </div>
-            )}
-        </div>
-      </header>
+      <ReservationStepHeader
+        onBack={handleGoBack}
+        primaryColor={primaryColor}
+        secondaryColor={secondaryColor}
+        title="Détails de réservation"
+        subtitle={reservation ? `${reservation.depart} → ${reservation.arrivee}` : undefined}
+        logoUrl={companyInfo?.logoUrl}
+      />
 
       <main className="max-w-md mx-auto px-4 py-5 space-y-5">
         {/* Étapes – visibles uniquement pour réservations en ligne */}
@@ -846,7 +813,6 @@ const ReservationDetailsPage: React.FC = () => {
               agencyName={agencyName}
               receiptNumber={reservation.referenceCode || reservation.id}
               statut={reservation.statut}
-              statusLabel={reservation.statut === 'confirme' ? 'Réservation confirmée' : 'En attente de validation'}
               nomClient={reservation.nomClient}
               telephone={reservation.telephone}
               depart={reservation.depart}

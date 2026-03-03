@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import QRCode from "react-qr-code";
 import {
   ArrowRight,
@@ -26,16 +27,14 @@ interface TicketOnlineProps {
   arrivee: string;
   date: string;
   heure: string;
+  emissionDate?: string;
   seats: number;
   montant: number;
   qrValue: string;
   agencyLatitude?: number | null;
   agencyLongitude?: number | null;
-  /** Passed by ReceiptEnLignePage / ReservationDetailsPage, accepted for compatibility */
   canal?: string;
-  emissionDate?: string;
   paymentMethod?: string;
-  statusLabel?: string;
 }
 
 const TicketOnline: React.FC<TicketOnlineProps> = ({
@@ -45,24 +44,34 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   secondaryColor,
   agencyName,
   receiptNumber,
-  statut = "confirme",
+  statut = "en_attente",
   nomClient,
   telephone,
   depart,
   arrivee,
   date,
   heure,
+  emissionDate,
   seats,
   montant,
   qrValue,
   agencyLatitude,
   agencyLongitude
 }) => {
+  const { t } = useTranslation();
   const money = useFormatCurrency();
   const [pdfLoading, setPdfLoading] = useState(false);
 
-  const isConfirmed = statut?.toLowerCase() === "confirme";
+  const isConfirmed = statut === "confirme";
   const isValidQR = isTicketValidForQR(statut);
+
+  const getStatusLabel = () => {
+    const s = (statut || "").toLowerCase();
+    if (s === "confirme" || s === "paye") return t("ticketStatusPaymentValidated");
+    if (s === "preuve_recue") return t("ticketStatusAwaitingValidation");
+    if (s === "en_attente_paiement") return t("ticketStatusAwaitingPayment");
+    return t("ticketStatusAwaitingPayment");
+  };
 
   const handleDownloadPDF = useCallback(async () => {
     const element = document.getElementById("ticket-content");
@@ -88,32 +97,20 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   };
 
   return (
-    <div
-      className="flex justify-center p-6"
-      style={{
-        background: `linear-gradient(
-          135deg,
-          ${primaryColor}66 0%,
-          ${secondaryColor || primaryColor}55 100%
-        )`
-      }}
-    >
+    <div className="flex justify-center p-6 bg-[#f4f5f7]">
       <div
         id="ticket-content"
-        className="w-full max-w-md rounded-3xl shadow-2xl overflow-hidden"
-        style={{
-          background: "#ffffff"
-        }}
+        className="w-full max-w-md bg-white rounded-2xl shadow-md overflow-hidden"
       >
-        {/* TOP BRAND LINE */}
+        {/* Ligne branding */}
         <div
           style={{
-            height: 6,
-            background: primaryColor
+            height: 5,
+            background: `linear-gradient(90deg, ${primaryColor}, ${secondaryColor || primaryColor})`
           }}
         />
 
-        <div className="p-5 space-y-5">
+        <div className="p-5 space-y-4">
 
           {/* HEADER */}
           <div className="flex justify-between items-start">
@@ -121,7 +118,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
               {logoUrl && (
                 <img
                   src={logoUrl}
-                  className="h-10 w-10 object-contain"
+                  className="h-8 w-8 object-contain"
                 />
               )}
               <div>
@@ -129,7 +126,10 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
                   {companyName}
                 </h1>
                 {agencyName && (
-                  <p className="text-xs text-gray-500">
+                  <p
+                    className="text-xs"
+                    style={{ color: secondaryColor || "#6c757d" }}
+                  >
                     {agencyName}
                   </p>
                 )}
@@ -137,7 +137,10 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
             </div>
 
             <div className="text-right">
-              <p className="text-[10px] uppercase text-gray-400">
+              <p
+                className="text-[10px] uppercase"
+                style={{ color: secondaryColor || "#6c757d" }}
+              >
                 REF
               </p>
               <p className="font-mono text-xs font-semibold">
@@ -147,32 +150,42 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
           </div>
 
           {/* PASSAGER */}
-          <div className="flex justify-between text-sm border-b pb-3">
+          <div
+            className="flex justify-between text-sm border-b pb-3"
+            style={{ borderColor: secondaryColor + "40" }}
+          >
             <div className="flex items-center gap-2">
-              <User size={16} />
-              <span className="font-medium">{nomClient}</span>
+              <User size={15} style={{ color: secondaryColor }} />
+              <span>{nomClient}</span>
             </div>
             <div className="flex items-center gap-2">
-              <Phone size={16} />
+              <Phone size={15} style={{ color: secondaryColor }} />
               <span>{telephone}</span>
             </div>
           </div>
 
           {/* TRAJET */}
           <div className="text-center">
-            <div className="text-lg font-semibold uppercase tracking-wide">
+            <div className="text-lg font-semibold uppercase">
               {depart}
-              <ArrowRight className="inline mx-3" size={16} />
+              <ArrowRight
+                className="inline mx-2"
+                size={14}
+                style={{ color: secondaryColor }}
+              />
               {arrivee}
             </div>
 
-            <div className="mt-3 text-xs grid grid-cols-3 text-center text-gray-600">
+            <div
+              className="mt-3 text-xs grid grid-cols-3 text-center"
+              style={{ color: secondaryColor || "#6c757d" }}
+            >
               <div>
-                <p>Date</p>
+                <p>Date départ</p>
                 <p className="font-semibold text-gray-800">{date}</p>
               </div>
               <div>
-                <p>Heure</p>
+                <p>Heure départ</p>
                 <p className="font-semibold text-gray-800">{heure}</p>
               </div>
               <div>
@@ -183,7 +196,10 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
           </div>
 
           {/* PRIX + STATUT */}
-          <div className="flex justify-between items-center pt-4 border-t">
+          <div
+            className="flex justify-between items-center border-t pt-4"
+            style={{ borderColor: secondaryColor + "40" }}
+          >
             <div
               className="text-xl font-bold"
               style={{ color: primaryColor }}
@@ -191,44 +207,70 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
               {money(montant)}
             </div>
 
-            {isConfirmed && (
-              <div
-                className="px-4 py-1 rounded-full text-xs font-semibold"
-                style={{
-                  backgroundColor: primaryColor,
-                  color: "#ffffff"
-                }}
-              >
-                Paiement validé
-              </div>
-            )}
+            <div
+              className="px-3 py-1 rounded-md text-xs font-semibold"
+              style={{
+                backgroundColor:
+                  statut === "confirme"
+                    ? primaryColor + "15"
+                    : secondaryColor + "15",
+                color:
+                  statut === "confirme"
+                    ? primaryColor
+                    : secondaryColor,
+                border: `1px solid ${
+                  statut === "confirme"
+                    ? primaryColor + "40"
+                    : secondaryColor + "40"
+                }`
+              }}
+            >
+              {getStatusLabel()}
+            </div>
           </div>
 
           {/* QR */}
-          <div className="text-center pt-3">
-            <p className="text-[10px] uppercase text-gray-400 mb-2">
+          <div className="text-center pt-2">
+            <p
+              className="text-[10px] uppercase mb-2"
+              style={{ color: secondaryColor || "#6c757d" }}
+            >
               Code d'embarquement
             </p>
 
-            <div className="inline-block p-4 rounded-xl border border-gray-200 shadow-sm">
+            <div
+              className="inline-block p-3 rounded-lg"
+              style={{
+                border: `1px solid ${secondaryColor}30`
+              }}
+            >
               <div className={!isValidQR ? "opacity-40 blur-sm" : ""}>
-                <QRCode value={qrValue} size={120} level="H" />
+                <QRCode value={qrValue} size={110} />
               </div>
             </div>
 
-            <p className="font-mono text-xs mt-3 text-gray-500">
+            <p className="font-mono text-xs mt-2 text-gray-500">
               {receiptNumber}
             </p>
           </div>
 
+          {/* DATE EMISSION */}
+          <div
+            className="text-xs text-center"
+            style={{ color: secondaryColor || "#6c757d" }}
+          >
+            Date d’émission :           {emissionDate ?? '—'}
+            </div>
+
           {/* ACTIONS */}
-          <div className="flex justify-between text-sm pt-2">
+          <div className="flex justify-between text-sm pt-3">
             {isConfirmed && (
               <button
                 onClick={handleDownloadPDF}
-                className="flex items-center gap-2 font-medium text-gray-700 hover:opacity-80 transition"
+                className="flex items-center gap-2 font-medium hover:opacity-80 transition"
+                style={{ color: secondaryColor }}
               >
-                <Download size={16} />
+                <Download size={15} />
                 PDF
               </button>
             )}
@@ -237,16 +279,16 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
               <button
                 onClick={handleItineraire}
                 className="flex items-center gap-2 font-medium hover:opacity-80 transition"
-                style={{ color: primaryColor }}
+                style={{ color: secondaryColor }}
               >
-                <MapPin size={16} />
+                <MapPin size={15} />
                 Itinéraire
               </button>
             )}
           </div>
 
           {/* FOOTER */}
-          <div className="text-center text-xs text-gray-600 pt-2">
+          <div className="text-center text-xs text-gray-600 pt-3">
             <p>Présentez ce code au contrôle.</p>
             <p>Valide : 1 mois à compter de la date d’émission.</p>
             <p

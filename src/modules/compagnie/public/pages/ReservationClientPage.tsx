@@ -4,15 +4,14 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { SectionCard, StatusBadge } from '@/ui';
-import type { StatusVariant } from '@/ui';
-import { ChevronLeft, Phone, Plus, Minus, CheckCircle, Upload, User, AlertCircle, ArrowRight, Info, Clock, Check, CreditCard, Calendar, Shield } from 'lucide-react';
+import { SectionCard } from '@/ui';
+import { ChevronLeft, Phone, Plus, Minus, CheckCircle, User, AlertCircle, ArrowRight, Clock, Calendar } from 'lucide-react';
+import ReservationStepHeader from '../components/ReservationStepHeader';
 import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, setDoc, serverTimestamp, getDoc,
 } from 'firebase/firestore';
 import { canonicalStatut } from '@/utils/reservationStatusUtils';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '@/firebaseConfig';
+import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
@@ -21,14 +20,6 @@ import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 /* ============== Anti-spam: mémoire locale ============== */
 const PENDING_KEY = 'pendingReservation';
 
-// 🔥 CORRECTION : Persistance PAR RÉSERVATION
-const getPaymentMethodKey = (reservationId?: string) =>
-  reservationId ? `lastPaymentMethod_${reservationId}` : null;
-
-const getPaymentTriggeredAtKey = (reservationId?: string) =>
-  reservationId ? `paymentTriggeredAt_${reservationId}` : null;
-
-// CORRECTION : Seuls les statuts APRÈS envoi de preuve sont bloquants
 const isBlockingStatus = (s?: string) =>
   ['preuve_recue', 'confirme'].includes(String(s || '').toLowerCase());
 
@@ -47,43 +38,6 @@ const clearPendingIfNotBlocking = () => {
     const p = JSON.parse(raw);
     if (!isBlockingStatus(p?.status)) localStorage.removeItem(PENDING_KEY);
   } catch {}
-};
-
-const clearPending = () => {
-  try { localStorage.removeItem(PENDING_KEY); } catch {}
-};
-
-// 🔥 NOUVEAU : fonctions pour persister le moyen de paiement PAR RÉSERVATION
-const saveLastPaymentMethod = (reservationId: string, method: string) => {
-  try { localStorage.setItem(`lastPaymentMethod_${reservationId}`, method); } catch {}
-};
-
-const getLastPaymentMethod = (reservationId?: string): string | null => {
-  if (!reservationId) return null;
-  try { return localStorage.getItem(`lastPaymentMethod_${reservationId}`); } catch { return null; }
-};
-
-const clearLastPaymentMethod = (reservationId?: string) => {
-  if (!reservationId) return;
-  try { localStorage.removeItem(`lastPaymentMethod_${reservationId}`); } catch {}
-};
-
-// 🔥 NOUVEAU : fonctions pour persister paymentTriggeredAt PAR RÉSERVATION
-const savePaymentTriggeredAt = (reservationId: string, ts: number) => {
-  try { localStorage.setItem(`paymentTriggeredAt_${reservationId}`, String(ts)); } catch {}
-};
-
-const getPaymentTriggeredAt = (reservationId?: string): number | null => {
-  if (!reservationId) return null;
-  try { 
-    const v = localStorage.getItem(`paymentTriggeredAt_${reservationId}`);
-    return v ? Number(v) : null;
-  } catch { return null; }
-};
-
-const clearPaymentTriggeredAt = (reservationId?: string) => {
-  if (!reservationId) return;
-  try { localStorage.removeItem(`paymentTriggeredAt_${reservationId}`); } catch {}
 };
 /* ======================================================= */
 
@@ -125,219 +79,6 @@ const isValidMaliPhone = (value: string) => {
   return value.replace(/\s/g, '').length === 8;
 };
 
-// Composant réutilisable pour la preuve de paiement
-const PaymentProofSection = ({ 
-  reservationId,
-  paymentMethods,
-  paymentMethodKey,
-  onChoosePayment,
-  message,
-  setMessage,
-  referenceInputRef,
-  canConfirm,
-  submitProofInline,
-  uploading,
-  paymentHints,
-  existing,
-  selectedTrip,
-  seats,
-  theme
-}: {
-  reservationId: string | null;
-  paymentMethods: Record<string, {
-    url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string;
-  }>;
-  paymentMethodKey: string | null;
-  onChoosePayment: (key: string) => void;
-  message: string;
-  setMessage: (message: string) => void;
-  referenceInputRef: React.RefObject<HTMLTextAreaElement>;
-  canConfirm: boolean;
-  submitProofInline: () => Promise<void>;
-  uploading: boolean;
-  paymentHints: string;
-  existing: ExistingReservation | null;
-  selectedTrip: any;
-  seats: number;
-  theme: any;
-}) => {
-  const isLocked = (existing?.statut === 'preuve_recue' || existing?.statut === 'confirme') ?? false;
-  const isProofSent = existing?.statut === 'preuve_recue';
-  const isConfirmed = existing?.statut === 'confirme';
-  const hasChosenPayment = !!paymentMethodKey;
-  
-  return (
-    <SectionCard title={reservationId ? 'Paiement' : 'Justificatif de paiement'} icon={CreditCard} className="shadow-md">
-
-      {isProofSent && (
-        <div className="mb-4 p-4 rounded-lg border border-gray-200 bg-gray-50">
-          <div className="flex items-center gap-2 text-gray-800">
-            <Clock className="w-4 h-4 text-gray-600" />
-            <span className="text-sm font-medium">En attente de validation</span>
-          </div>
-          <p className="text-xs text-gray-600 mt-1">
-            Votre justificatif a bien été reçu. Confirmation par SMS ou email après validation.
-          </p>
-        </div>
-      )}
-
-      {isConfirmed && (
-        <div className="mb-4 p-4 rounded-lg border border-gray-200 bg-gray-50">
-          <div className="flex items-center gap-2 text-gray-800">
-            <Check className="w-4 h-4 text-gray-600" />
-            <span className="text-sm font-medium">Réservation confirmée</span>
-          </div>
-          <p className="text-xs text-gray-600 mt-1">
-            Votre billet est confirmé.
-          </p>
-          <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
-            <Check className="w-3.5 h-3.5" />
-            Support disponible.
-          </p>
-        </div>
-      )}
-
-      {/* Titre + réassurance */}
-      {!isLocked && (
-        <div className="mb-3">
-          <h3 className="text-sm font-semibold text-gray-900 mb-1">
-            Choisissez votre moyen de paiement
-          </h3>
-          <p className="text-xs text-gray-600">
-            Cliquez sur un moyen de paiement pour continuer
-          </p>
-          <p className="text-xs text-gray-500 mt-2 flex items-center gap-1.5">
-            <Shield className="w-3.5 h-3.5 text-gray-400" />
-            Paiement sécurisé
-          </p>
-        </div>
-      )}
-
-      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-        {Object.entries(paymentMethods).map(([k,m]) => m && (
-          <button
-            key={k}
-            onClick={() => !isLocked && onChoosePayment(k)}
-            disabled={isLocked}
-            className={`h-12 px-3 rounded-xl border flex items-center gap-2 text-sm w-full transition-all duration-200 ${
-              isLocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:shadow-md hover:-translate-y-0.5'
-            } ${paymentMethodKey === k ? 'bg-white shadow-sm' : ''}`}
-            style={{ 
-              borderColor: paymentMethodKey === k ? theme.primary : '#e5e7eb',
-              backgroundColor: !isLocked && !paymentMethodKey ? `${theme.primary}08` : '#f9fafb',
-              cursor: isLocked ? 'not-allowed' : 'pointer'
-            }}
-            title={isLocked ? "Le paiement a déjà été traité" : `Payer avec ${k.replace(/_/g, ' ')}`}
-          >
-            {m.logoUrl ? (
-              <img src={m.logoUrl} alt={k} className="h-6 w-6 object-contain rounded" />
-            ) : (
-              <div className="h-6 w-6 rounded bg-gray-100" />
-            )}
-            <div className="text-left min-w-0">
-              <div className="font-medium capitalize truncate">{k.replace(/_/g,' ')}</div>
-              {m.merchantNumber && (
-                <div className="text-[11px] text-gray-500 truncate">N° {m.merchantNumber}</div>
-              )}
-            </div>
-            {paymentMethodKey === k && !isLocked && (
-              <div 
-                className="ml-auto h-5 w-5 rounded-full flex items-center justify-center" 
-                style={{ backgroundColor: theme.primary, color: '#fff' }}
-              >
-                <CheckCircle className="w-3 h-3" />
-              </div>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Section preuve de paiement - UNIQUEMENT visible après choix d'un moyen de paiement */}
-      {hasChosenPayment && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-          className="mt-4"
-        >
-          <div className="mb-3">
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">Justificatif de paiement</h3>
-            <p className="text-xs text-gray-600 mb-3">{paymentHints}</p>
-            
-            {paymentMethodKey && paymentMethods[paymentMethodKey]?.ussdPattern && !isLocked && (
-              <div className="mt-1 text-xs text-gray-600">
-                Code USSD : <span className="font-mono bg-gray-50 px-2 py-1 rounded">
-                  {paymentMethods[paymentMethodKey]!.ussdPattern!
-                    .replace('MERCHANT', paymentMethods[paymentMethodKey]!.merchantNumber || '')
-                    .replace('AMOUNT', String(
-                      existing?.montant || (selectedTrip ? selectedTrip.price * seats : 0)
-                    ))}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {!isLocked && (
-            <>
-              <div className="mt-3">
-                <div>
-                  <textarea
-                    ref={referenceInputRef}
-                    rows={3}
-                    className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:ring-2 focus:outline-none"
-                    placeholder="Ex : code reçu par SMS (ex. 123456) ou n° de transfert"
-                    value={message}
-                    onChange={e => setMessage(e.target.value)}
-                  />
-                  <div className="text-xs text-gray-500 mt-1">
-                    Minimum 4 caractères
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div className="text-xs text-amber-600">
-                  {!canConfirm && paymentMethodKey && (
-                    <span className="flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" />
-                      Entrez une référence (≥ 4 caractères)
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={submitProofInline}
-                  disabled={uploading || !canConfirm || isLocked}
-                  title={!canConfirm ? "Ajoutez la référence" : isLocked ? "Le paiement a déjà été traité" : ""}
-                  className="h-11 px-5 rounded-xl font-semibold shadow-sm disabled:opacity-60 disabled:cursor-not-allowed transition hover:brightness-[0.98]"
-                  style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`, color: '#fff' }}
-                >
-                  {uploading ? 'Envoi…' : 'Confirmer l\'envoi'}
-                </button>
-              </div>
-            </>
-          )}
-        </motion.div>
-      )}
-
-      {/* Message d'instruction quand aucun moyen n'a encore été choisi */}
-      {!hasChosenPayment && !isLocked && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="mt-5 p-4 bg-gray-50 border border-gray-200 rounded-lg"
-        >
-          <div className="flex items-center gap-2 text-gray-700">
-            <Info className="w-4 h-4 text-gray-500" />
-            <p className="text-xs">
-              Choisissez un moyen de paiement ci-dessus pour continuer.
-            </p>
-          </div>
-        </motion.div>
-      )}
-    </SectionCard>
-  );
-};
-
 export default function ReservationClientPage() {
   const { slug, id: reservationRouteId } = useParams<{ slug: string; id?: string }>();
   const location = useLocation();
@@ -345,11 +86,8 @@ export default function ReservationClientPage() {
   const money = useFormatCurrency();
   const isOnline = useOnlineStatus();
 
-  // Refs pour le scroll automatique
-  const paymentSectionRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const phoneInputRef = useRef<HTMLInputElement>(null);
-  const referenceInputRef = useRef<HTMLTextAreaElement>(null);
 
   const routeState = (location.state || {}) as { companyId?: string; agencyId?: string };
 
@@ -379,12 +117,6 @@ export default function ReservationClientPage() {
     telephone?: string; 
     code?: string;
   }>({});
-  const [paymentMethods, setPaymentMethods] = useState<Record<string, {
-    url?: string; logoUrl?: string; ussdPattern?: string; merchantNumber?: string;
-  }>>({});
-  const [paymentMethodKey, setPaymentMethodKey] = useState<string | null>(null);
-  const [paymentTriggeredAt, setPaymentTriggeredAt] = useState<number | null>(null);
-
   const [trips, setTrips] = useState<Trip[]>([]);
   const [dates, setDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState('');
@@ -392,70 +124,12 @@ export default function ReservationClientPage() {
   const [seats, setSeats] = useState(1);
   const [passenger, setPassenger] = useState({ fullName: '', phone: '' });
 
-  const [message, setMessage] = useState('');
-  const [reservationId, setReservationId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [uploading, setUploading] = useState(false);
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const [existing, setExisting] = useState<ExistingReservation | null>(null);
-  const [showPaymentPopup, setShowPaymentPopup] = useState(false);
-  const [currentStep, setCurrentStep] = useState<'personal' | 'payment' | 'proof'>('personal');
-
-  // ========== Variable centrale de vérité ==========
-  const hasActiveReservation = useMemo(() => {
-    if (existing) {
-      const statut = String(existing.statut || '').toLowerCase();
-      return isBlockingStatus(statut);
-    }
-    // CORRECTION : Un reservationId seul ne suffit pas pour considérer une réservation active
-    return false;
-  }, [existing]);
-
-  // 🔥 NOUVEAU : Variable pour savoir si une réservation a été créée dans cette session
-  const hasCreatedReservation = useMemo(() => {
-    return !!reservationId && !existing; // reservationId existe mais pas d'existing = création en cours
-  }, [reservationId, existing]);
-
-  // ========== Effets ==========
-
-  // 🔥 CORRECTION N°1 : Restaurer le moyen de paiement choisi au rechargement (PAR RÉSERVATION)
-  useEffect(() => {
-    if (!paymentMethodKey && reservationId) {
-      const saved = getLastPaymentMethod(reservationId);
-      if (saved && paymentMethods[saved]) {
-        setPaymentMethodKey(saved);
-      }
-    }
-  }, [paymentMethodKey, reservationId, paymentMethods]);
-
-  // 🔥 CORRECTION : Restaurer paymentTriggeredAt au rechargement
-  useEffect(() => {
-    if (!paymentTriggeredAt && reservationId) {
-      const saved = getPaymentTriggeredAt(reservationId);
-      if (saved) setPaymentTriggeredAt(saved);
-    }
-  }, [paymentTriggeredAt, reservationId]);
-
-  // 🔥 CORRECTION N°2 : Recalculer le currentStep basé sur existing.statut
-  useEffect(() => {
-    if (!existing) return;
-
-    if (existing.statut === 'en_attente_paiement') {
-      setCurrentStep('payment');
-      // Si on a un moyen de paiement enregistré, on passe directement à proof
-      if (paymentMethodKey) {
-        setCurrentStep('proof');
-      }
-    }
-
-    if (existing.statut === 'preuve_recue' || existing.statut === 'confirme') {
-      setCurrentStep('proof');
-    }
-  }, [existing, paymentMethodKey]);
 
   useEffect(() => {
     clearPendingIfNotBlocking();
@@ -463,16 +137,24 @@ export default function ReservationClientPage() {
     // L'utilisateur doit compléter le processus de paiement explicitement
   }, [slug, navigate, reservationRouteId]);
 
-  // Nettoyer le pending si la réservation est confirmée
+  // Redirect when user lands on booking with existing reservation → send to correct step
   useEffect(() => {
-    if (existing?.statut === 'confirme') {
-      clearPending();
-      clearLastPaymentMethod(existing.id); // Nettoyer aussi le moyen de paiement sauvegardé
-      clearPaymentTriggeredAt(existing.id); // Nettoyer aussi paymentTriggeredAt
+    if (!existing || !slug || !existing.id) return;
+    const statut = String(existing.statut || '').toLowerCase();
+    if (statut === 'en_attente_paiement') {
+      navigate(`/${slug}/payment/${existing.id}`, {
+        replace: true,
+        state: { companyId: existing.companyId, agencyId: existing.agencyId }
+      });
+      return;
     }
-  }, [existing?.statut, existing?.id]);
+    if (statut === 'preuve_recue' || statut === 'confirme') {
+      navigate(`/${slug}/receipt/${existing.id}`, { replace: true });
+      return;
+    }
+  }, [existing, slug, navigate]);
 
-  // Mode consultation
+  // Mode consultation (load existing for redirect)
   useEffect(() => {
     const loadExisting = async () => {
       if (!reservationRouteId) return;
@@ -513,22 +195,6 @@ export default function ReservationClientPage() {
           code: (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined
         });
 
-        const pmSnap = await getDocs(query(
-          collection(db, 'paymentMethods'), 
-          where('companyId', '==', routeState.companyId)
-        ));
-        const pms: any = {};
-        pmSnap.forEach(ds => {
-          const d = ds.data() as any;
-          if (d.name) pms[d.name] = { 
-            url: d.defaultPaymentUrl || '', 
-            logoUrl: d.logoUrl || '', 
-            ussdPattern: d.ussdPattern || '', 
-            merchantNumber: d.merchantNumber || '' 
-          };
-        });
-        setPaymentMethods(pms);
-
         setExisting({
           id: reservationRouteId,
           companyId: routeState.companyId,
@@ -546,7 +212,6 @@ export default function ReservationClientPage() {
           referenceCode: r.referenceCode
         });
 
-        setReservationId(reservationRouteId);
         setLoading(false);
       } catch (e: any) {
         console.error(e);
@@ -594,22 +259,6 @@ export default function ReservationClientPage() {
             code: (a.code || a.codeAgence || '').toString().toUpperCase() || undefined
           });
         }
-
-        const pmSnap = await getDocs(query(
-          collection(db, 'paymentMethods'), 
-          where('companyId', '==', cdoc.id)
-        ));
-        const pms: any = {};
-        pmSnap.forEach(ds => {
-          const d = ds.data() as any;
-          if (d.name) pms[d.name] = { 
-            url: d.defaultPaymentUrl || '', 
-            logoUrl: d.logoUrl || '', 
-            ussdPattern: d.ussdPattern || '', 
-            merchantNumber: d.merchantNumber || '' 
-          };
-        });
-        setPaymentMethods(pms);
 
         const next8 = Array.from({ length: 8 }, (_, i) => { 
           const d = new Date(); 
@@ -704,19 +353,6 @@ export default function ReservationClientPage() {
     load();
   }, [slug, departureQ, arrivalQ, reservationRouteId]);
 
-  // Mise à jour automatique des étapes (pour mode création)
-  useEffect(() => {
-    if (reservationId && currentStep === 'personal') {
-      setCurrentStep('payment');
-    }
-  }, [reservationId, currentStep]);
-
-  useEffect(() => {
-    if (paymentMethodKey && currentStep === 'payment') {
-      setCurrentStep('proof');
-    }
-  }, [paymentMethodKey, currentStep]);
-
   const filteredTrips = useMemo(() => {
     if (!selectedDate) return [] as any[];
     const base = trips.filter((t: any) => t.date === selectedDate);
@@ -780,36 +416,14 @@ export default function ReservationClientPage() {
 
   // ---------- Création draft ----------
   const createReservationDraft = useCallback(async () => {
-    if (hasActiveReservation) {
-      const pending = readPending();
-      if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
-        navigate(`/${slug}/reservation/${pending.id}`, { 
-          replace: true, 
-          state: { companyId: pending.companyId, agencyId: pending.agencyId } 
-        });
-      }
-      return;
-    }
-    
     if (!validatePersonalInfo()) {
       setError('Veuillez corriger les erreurs ci-dessus');
       return;
     }
-    
     if (!selectedTrip) {
       setError('Veuillez sélectionner un horaire');
       return;
     }
-    
-    const pending = readPending();
-    if (pending && isBlockingStatus(pending.status) && pending.slug === slug) {
-      navigate(`/${slug}/reservation/${pending.id}`, { 
-        replace: true, 
-        state: { companyId: pending.companyId, agencyId: pending.agencyId } 
-      });
-      return;
-    }
-
     if (creating) return;
 
     setCreating(true); 
@@ -911,153 +525,20 @@ export default function ReservationClientPage() {
         agencyId: selectedTrip.agencyId
       });
 
-      navigate(`/${slug}/reservation/${refDoc.id}`, { replace: true });
+      navigate(`/${slug}/payment/${refDoc.id}`, {
+        replace: true,
+        state: { companyId: selectedTrip.companyId, agencyId: selectedTrip.agencyId }
+      });
     } catch (e: any) {
       setError(e?.message || 'Impossible de créer la réservation');
     } finally { 
       setCreating(false); 
     }
-  }, [hasActiveReservation, selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo]);
-
-  const onChoosePayment = useCallback((key: string) => {
-    // 🔥 CORRECTION : Persister le moyen de paiement choisi PAR RÉSERVATION
-    setPaymentMethodKey(key); 
-    
-    if (reservationId) {
-      saveLastPaymentMethod(reservationId, key); // Sauvegarder dans localStorage
-      
-      // 🔥 CORRECTION : Sauvegarder aussi paymentTriggeredAt
-      const now = Date.now();
-      setPaymentTriggeredAt(now);
-      savePaymentTriggeredAt(reservationId, now);
-    }
-    
-    setCurrentStep('proof');
-    
-    // Scroll automatique vers le champ de preuve
-    setTimeout(() => {
-      referenceInputRef.current?.scrollIntoView({ 
-        behavior: 'smooth', 
-        block: 'center' 
-      });
-      referenceInputRef.current?.focus();
-    }, 300);
-    
-    const method = paymentMethods[key || '']; 
-    if (!method) return;
-    
-    const total = existing
-      ? (existing.montant || 0)
-      : selectedTrip ? selectedTrip.price * seats : (topPrice || 0);
-      
-    const ussd = method.ussdPattern
-      ?.replace('MERCHANT', method.merchantNumber || '')
-      .replace('AMOUNT', String(total));
-    
-    if (method.url) {
-      try { 
-        new URL(method.url); 
-        window.open(method.url, '_blank', 'noopener,noreferrer'); 
-      } catch {}
-    } else if (ussd) {
-      window.location.href = `tel:${encodeURIComponent(ussd)}`;
-    }
-    // CORRECTION : PAS de navigation automatique ici
-    // L'utilisateur doit compléter explicitement le formulaire
-  }, [paymentMethods, existing, selectedTrip, seats, topPrice, reservationId]);
-
-  const paymentHints = useMemo(() => {
-    if (!paymentMethodKey) return "Choisissez un moyen de paiement pour voir les instructions.";
-    switch (paymentMethodKey) {
-      case "orangemoney":
-        return "Après votre paiement Orange Money, copiez le code reçu par SMS";
-      case "moov":
-        return "Après votre paiement Moov Money, indiquez la référence reçue par SMS";
-      case "wave":
-        return "Après votre paiement Wave, copiez le code du reçu";
-      case "cash":
-        return "Paiement au guichet : entrez le n° du reçu";
-      default:
-        return "Copiez la référence reçue par SMS après paiement";
-    }
-  }, [paymentMethodKey]);
-
-  const canConfirm = useMemo(() => {
-    if (!reservationId) return false;
-    if (!paymentMethodKey) return false;
-    return message.trim().length >= 4;
-  }, [reservationId, paymentMethodKey, message]);
-
-  const submitProofInline = async () => {
-    const effectiveCompanyId = existing?.companyId || company.id;
-    const effectiveAgencyId  = existing?.agencyId || agencyInfo?.id;
-    
-    if (!reservationId || !effectiveCompanyId || !effectiveAgencyId) { 
-      setError('Réservation introuvable'); 
-      return; 
-    }
-    
-    if (!paymentMethodKey) { 
-      setError('Sélectionnez un moyen de paiement'); 
-      return; 
-    }
-    
-    if (!canConfirm) {
-      setError("Ajoutez la référence du paiement (≥ 4 caractères) avant de confirmer.");
-      return;
-    }
-    
-    if (uploading) return;
-
-    setUploading(true); 
-    setError('');
-    try {
-      const resRef = doc(db, 'companies', effectiveCompanyId, 'agences', effectiveAgencyId, 'reservations', reservationId);
-      const snap = await getDoc(resRef);
-      if (!snap.exists()) {
-        setError('Réservation introuvable.');
-        return;
-      }
-      const data = snap.data() as any;
-      const currentStatut = (data.statut || '').toLowerCase();
-      if (currentStatut !== 'en_attente_paiement') {
-        setError('Cette réservation a expiré ou a déjà été traitée. Créez une nouvelle réservation si besoin.');
-        return;
-      }
-      const inputReference = message.trim();
-      await updateDoc(resRef, {
-        statut: 'preuve_recue',
-        paymentReference: inputReference,
-        proofSubmittedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      setExisting(prev => prev ? { ...prev, statut: 'preuve_recue' } : prev);
-
-      // Navigation UNIQUEMENT après envoi réussi de la preuve
-      navigate(`/${slug}/reservation/${reservationId}`, {
-        replace: true,
-        state: {
-          companyId: effectiveCompanyId,
-          agencyId: effectiveAgencyId
-        }
-      });
-
-      // Mise à jour du pending local
-      const p = readPending();
-      if (p && p.id === reservationId) {
-        rememberPending({ ...p, status: 'preuve_recue' });
-      }
-    } catch (e) { 
-      setError("L'envoi n'a pas abouti. Réessayez."); 
-    } finally { 
-      setUploading(false); 
-    }
-  };
+  }, [selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo]);
 
   // ---------- UI components ----------
   const RouteCard = (titleRight?: string) => (
-    <SectionCard title="Votre trajet" icon={undefined} className="shadow-md rounded-2xl" noPad>
+    <div className="border border-gray-200 bg-white rounded-2xl shadow-md overflow-hidden">
       <div className="flex items-center justify-between gap-4 px-5 sm:px-6 py-4">
         <div className="flex items-center gap-3 min-w-0">
           {company.logoUrl && (
@@ -1068,18 +549,12 @@ export default function ReservationClientPage() {
               <span className="truncate">
                 {existing?.depart ? formatCity(existing.depart) : formatCity(departureQ)}
               </span>
-              <svg 
-                viewBox="0 0 24 24" 
-                className="mx-2 h-5 w-5 shrink-0" 
-                style={{ color: theme.primary }}
-              >
-                <path fill="currentColor" d="M5 12h12l-4-4 1.4-1.4L21.8 12l-7.4 5.4L13 16l4-4H5z"/>
-              </svg>
+              <span className="mx-2 text-gray-400 font-normal">→</span>
               <span className="truncate">
                 {existing?.arrivee ? formatCity(existing.arrivee) : formatCity(arrivalQ)}
               </span>
             </div>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-500 mt-0.5">
               {existing?.date ? `${existing.date} · ${existing.heure || ''}` : 'Sélectionnez la date et l\'heure'}
             </p>
           </div>
@@ -1102,93 +577,8 @@ export default function ReservationClientPage() {
           )}
         </div>
       </div>
-    </SectionCard>
-  );
-
-  const StepIndicator = () => (
-    <div className="flex items-center justify-center mb-4">
-      <div className="flex items-center">
-        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
-          currentStep === 'personal' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
-        }`}>
-          1
-        </div>
-        <div className={`h-1 w-12 ${currentStep === 'personal' ? 'bg-gray-300' : 'bg-gray-200'}`} />
-        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
-          currentStep === 'payment' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
-        }`}>
-          2
-        </div>
-        <div className={`h-1 w-12 ${currentStep === 'proof' ? 'bg-gray-300' : 'bg-gray-200'}`} />
-        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
-          currentStep === 'proof' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
-        }`}>
-          3
-        </div>
-      </div>
     </div>
   );
-
-  const PaymentInstructionsPopup = () => {
-    if (!showPaymentPopup) return null;
-    
-    return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
-        <motion.div 
-          initial={{ opacity: 0, y: 50 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full"
-        >
-          <div className="p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-3">
-              Étape suivante : Paiement
-            </h3>
-            
-            <div className="space-y-3 mb-6">
-              <div className="flex items-start gap-3">
-                <div className="h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">
-                  1
-                </div>
-                <div>
-                  <p className="font-medium text-gray-900">Choisissez un moyen de paiement</p>
-                  <p className="text-sm text-gray-600">Sélectionnez Orange Money, Moov Money, etc.</p>
-                </div>
-              </div>
-              
-              <div className="flex items-start gap-3">
-                <div className="h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">
-                  2
-                </div>
-                <div>
-                  <p className="font-medium text-gray-900">Effectuez le paiement</p>
-                  <p className="text-sm text-gray-600">Sortez de l'app pour payer (USSD ou app externe)</p>
-                </div>
-              </div>
-              
-              <div className="flex items-start gap-3">
-                <div className="h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">
-                  3
-                </div>
-                <div>
-                  <p className="font-medium text-gray-900">Revenez coller la référence</p>
-                  <p className="text-sm text-gray-600">Après paiement, copiez le code reçu par SMS</p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowPaymentPopup(false)}
-                className="flex-1 h-11 border border-gray-300 rounded-xl font-medium hover:bg-gray-50 transition"
-              >
-                Compris
-              </button>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    );
-  };
 
   // ---------- Rendu en-tête ----------
   if (loading) {
@@ -1213,145 +603,23 @@ export default function ReservationClientPage() {
     );
   }
 
-  const header = (
-    <header className="sticky top-0 z-50 shadow-sm" style={{ backgroundColor: theme.primary }}>
-      <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-2 flex items-center justify-between text-white">
-        <button 
-          onClick={() => navigate(-1)} 
-          className="p-2 rounded-full hover:bg-white/10 transition" 
-          aria-label="Retour"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-        <div className="flex items-center gap-2">
-          {company.logoUrl && (
-            <img src={company.logoUrl} alt="" className="h-7 w-7 rounded-full object-cover ring-1 ring-white/30" />
-          )}
-          <span className="font-semibold tracking-wide">{company.name || 'MALI TRANS'}</span>
-        </div>
-        <div className="w-9" />
-      </div>
-    </header>
-  );
-
-  // ---------- Décision d'affichage ----------
-  const canal  = String(existing?.canal || '').toLowerCase();
-  const statut = String(existing?.statut || '').toLowerCase();
-  // CORRECTION : Seulement "preuve_recue" ou "confirme" affichent la vue Détails
-  const showTicketDirect = !!existing && (
-    existing.statut === 'preuve_recue' || 
-    existing.statut === 'confirme' || 
-    canal === 'guichet'
-  );
-
-  // ---------- Vue BILLET (direct) ----------
-  const TicketView = existing && (
-    <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4">
-      {RouteCard("Billet")}
-      <SectionCard title="Détails du billet" icon={CheckCircle} className="shadow-md">
-        <div className="flex flex-wrap gap-2 mb-4">
-          <StatusBadge status="success">{canal === 'guichet' ? 'Guichet' : 'En ligne'}</StatusBadge>
-          <StatusBadge status="neutral">Référence: {existing.referenceCode || existing.id}</StatusBadge>
-        </div>
-        <div className="grid sm:grid-cols-2 gap-3 text-sm">
-          <div><span className="text-gray-500">Passager</span><div className="font-medium">{existing.nomClient || '—'}</div></div>
-          <div><span className="text-gray-500">Téléphone</span><div className="font-medium">{existing.telephone || '—'}</div></div>
-          <div><span className="text-gray-500">Trajet</span><div className="font-medium">{existing.depart} → {existing.arrivee}</div></div>
-          <div><span className="text-gray-500">Date & heure</span><div className="font-medium">{existing.date} · {existing.heure}</div></div>
-          <div><span className="text-gray-500">Places</span><div className="font-medium">{existing.seatsGo || 1}</div></div>
-          <div><span className="text-gray-500">Montant</span><div className="font-medium">{money(existing.montant ?? 0)}</div></div>
-        </div>
-      </SectionCard>
-    </div>
-  );
-
-  // ---------- Vue ÉTAT/PAIEMENT (en ligne non payé) ----------
-  const OnlineStateView = (
-    <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4">
-      {RouteCard()}
-      {agencyInfo?.nom && (
-        <div className="text-xs text-gray-500 px-1">Agence : {agencyInfo.nom} — {agencyInfo.telephone}</div>
-      )}
-      
-      {/* Affichage clair du statut */}
-      {existing?.statut && (
-        <SectionCard title="Statut" icon={Clock} className="shadow-md">
-          <div className="flex items-center gap-3">
-            {existing.statut === 'en_attente_paiement' && (
-              <>
-                <Clock className="w-5 h-5 text-amber-500" />
-                <div>
-                  <div className="font-medium text-gray-900">En attente de paiement</div>
-                  <div className="text-sm text-gray-600">Veuillez envoyer votre justificatif de paiement.</div>
-                </div>
-              </>
-            )}
-            {existing.statut === 'preuve_recue' && (
-              <>
-                <Clock className="w-5 h-5 text-blue-500" />
-                <div>
-                  <div className="font-medium text-gray-900">En attente de validation</div>
-                  <div className="text-sm text-gray-600">Votre justificatif a bien été reçu.</div>
-                </div>
-              </>
-            )}
-            {existing.statut === 'confirme' && (
-              <>
-                <Check className="w-5 h-5 text-emerald-500" />
-                <div>
-                  <div className="font-medium text-gray-900">Réservation confirmée</div>
-                  <div className="text-sm text-gray-600">Votre billet est confirmé.</div>
-                </div>
-              </>
-            )}
-          </div>
-        </SectionCard>
-      )}
-
-      {error && (
-        <div className="p-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-800">{error}</div>
-      )}
-
-      {/* Indicateur contextuel pour guider l'utilisateur */}
-      {paymentTriggeredAt && existing?.statut === 'en_attente_paiement' && !paymentMethodKey && (
-        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-          💡 Après votre paiement, choisissez un moyen de paiement ci-dessous, puis collez le code reçu par SMS.
-        </div>
-      )}
-
-      <PaymentProofSection
-        reservationId={reservationId}
-        paymentMethods={paymentMethods}
-        paymentMethodKey={paymentMethodKey}
-        onChoosePayment={onChoosePayment}
-        message={message}
-        setMessage={setMessage}
-        referenceInputRef={referenceInputRef}
-        canConfirm={canConfirm}
-        submitProofInline={submitProofInline}
-        uploading={uploading}
-        paymentHints={paymentHints}
-        existing={existing}
-        selectedTrip={selectedTrip}
-        seats={seats}
-        theme={theme}
-      />
-
-      {existing && existing.statut && (
-        <div className="text-sm text-gray-600">
-          {existing.canal && (
-            <span className="mr-3">Canal : <b>{existing.canal}</b></span>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  const departureLabel = search.get('departure') || '';
+  const arrivalLabel = search.get('arrival') || '';
+  const routeSubtitle = departureLabel && arrivalLabel
+    ? `${formatCity(departureLabel)} → ${formatCity(arrivalLabel)}`
+    : undefined;
 
   // ---------- Rendu principal ----------
   return (
     <div className="min-h-screen bg-gradient-to-br from-white to-gray-50">
-      {header}
-      <PaymentInstructionsPopup />
+      <ReservationStepHeader
+        onBack={() => navigate(-1)}
+        primaryColor={theme.primary}
+        secondaryColor={theme.secondary}
+        title="Réservation"
+        subtitle={routeSubtitle}
+        logoUrl={company.logoUrl || undefined}
+      />
       {!isOnline && (
         <div className="max-w-[1100px] mx-auto px-3 sm:px-4 pt-3">
           <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
@@ -1360,11 +628,13 @@ export default function ReservationClientPage() {
         </div>
       )}
 
-      {/* Mode consultation (id présent) */}
+      {/* Redirecting when existing reservation (user opened booking with id) */}
       {existing ? (
-        showTicketDirect ? TicketView : OnlineStateView
+        <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-12 flex flex-col items-center justify-center">
+          <div className="animate-pulse text-gray-500 text-sm">Redirection…</div>
+        </div>
       ) : (
-        // Mode achat en ligne (logique d'origine)
+        /* Step 1 only: reservation form → then redirect to payment page */
         <main className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4 sm:space-y-5">
           {RouteCard()}
 
@@ -1374,24 +644,6 @@ export default function ReservationClientPage() {
 
           {error && (
             <div className="p-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-800">{error}</div>
-          )}
-
-          {/* Avertissement si réservation en cours */}
-          {hasActiveReservation && (
-            <div className="border border-gray-200 rounded-xl p-5 bg-gray-50">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
-                <div className="flex-1">
-                  <h3 className="font-medium text-amber-800 mb-1">
-                    Une réservation est déjà en cours
-                  </h3>
-                  <p className="text-sm text-amber-700">
-                    Vous avez déjà une réservation en attente de paiement.
-                    Veuillez envoyer votre justificatif de paiement.
-                  </p>
-                </div>
-              </div>
-            </div>
           )}
 
           {/* dates */}
@@ -1453,10 +705,9 @@ export default function ReservationClientPage() {
           )}
 
           {/* infos personnelles */}
-          {selectedTrip && !hasActiveReservation && (
+          {selectedTrip && (
             <>
               <SectionCard title="Informations personnelles" icon={User} className="shadow-md">
-                <StepIndicator />
                 <p className="text-sm text-gray-500 mb-4">
                   Entrez votre <span className="font-medium">nom complet</span> et votre <span className="font-medium">numéro de téléphone</span> utilisés pour voyager.
                 </p>
@@ -1547,72 +798,27 @@ export default function ReservationClientPage() {
                   </div>
                 </div>
                 
-                {!reservationId && (
-                  <button
-                    onClick={createReservationDraft}
-                    disabled={creating || hasActiveReservation}
-                    title={hasActiveReservation ? 'Une réservation est déjà en cours' : ''}
-                    className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
-                    style={{
-                      background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`,
-                      color: '#fff',
-                    }}
-                  >
-                    {creating ? 'Traitement…' : (
-                      <>
-                        Passer au paiement
-                        <ArrowRight className="w-4 h-4" />
-                        <span className="font-bold">
-                          {money(selectedTrip.price * seats)}
-                        </span>
-                      </>
-                    )}
-                  </button>
-                )}
-
-                {/* 🔥 AMÉLIORATION UX : Message de succès quand la réservation est créée */}
-                {reservationId && !existing && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg"
-                  >
-                    <div className="flex items-center gap-2 text-emerald-800">
-                      <CheckCircle className="w-4 h-4" />
-                      <div>
-                        <p className="text-sm font-medium">Réservation créée avec succès !</p>
-                        <p className="text-xs text-emerald-700 mt-0.5">
-                          Choisissez maintenant un moyen de paiement ci-dessous pour continuer.
-                        </p>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
+                <button
+                  onClick={createReservationDraft}
+                  disabled={creating}
+                  className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
+                  style={{
+                    background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`,
+                    color: '#fff',
+                  }}
+                >
+                  {creating ? 'Traitement…' : (
+                    <>
+                      Passer au paiement
+                      <ArrowRight className="w-4 h-4" />
+                      <span className="font-bold">
+                        {money(selectedTrip.price * seats)}
+                      </span>
+                    </>
+                  )}
+                </button>
               </SectionCard>
             </>
-          )}
-
-          {/* Section paiement (seulement après création de réservation) */}
-          {reservationId && (
-            <div ref={paymentSectionRef}>
-              <PaymentProofSection
-                reservationId={reservationId}
-                paymentMethods={paymentMethods}
-                paymentMethodKey={paymentMethodKey}
-                onChoosePayment={onChoosePayment}
-                message={message}
-                setMessage={setMessage}
-                referenceInputRef={referenceInputRef}
-                canConfirm={canConfirm}
-                submitProofInline={submitProofInline}
-                uploading={uploading}
-                paymentHints={paymentHints}
-                existing={existing}
-                selectedTrip={selectedTrip}
-                seats={seats}
-                theme={theme}
-              />
-            </div>
           )}
         </main>
       )}
