@@ -65,7 +65,7 @@ export default function CompanyAboutPage({ company }: CompanyAboutPageProps) {
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-lg font-bold tracking-tight text-gray-900 dark:text-white">
+          <h1 className="text-lg font-bold tracking-tight text-gray-900">
             {t("aboutCompanyTitle")}
           </h1>
         </div>
@@ -73,7 +73,7 @@ export default function CompanyAboutPage({ company }: CompanyAboutPageProps) {
 
       <main className="max-w-3xl mx-auto px-4 pt-8 pb-10">
         {!hasContent ? (
-          <p className="text-center text-gray-600 dark:text-gray-400 py-8">
+          <p className="text-center text-gray-600 py-8">
             {t("defaultAbout")}
           </p>
         ) : (
@@ -81,13 +81,13 @@ export default function CompanyAboutPage({ company }: CompanyAboutPageProps) {
             <div className="text-center">
               <div className="flex justify-center items-center gap-2 mb-4">
                 <Bus size={24} style={{ color: primaryColor }} />
-                <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">
                   {t("aboutCompanyTitle")}
                 </h2>
               </div>
 
               {about?.description?.trim() && (
-                <p className="text-gray-700 dark:text-gray-200 text-sm sm:text-base leading-relaxed max-w-2xl mx-auto">
+                <p className="text-gray-700 text-sm sm:text-base leading-relaxed max-w-2xl mx-auto">
                   {about.description.trim()}
                 </p>
               )}
@@ -117,7 +117,7 @@ export default function CompanyAboutPage({ company }: CompanyAboutPageProps) {
                         >
                           <Icon size={20} style={{ color: secondaryColor }} />
                         </div>
-                        <span className="text-sm font-medium text-gray-800 dark:text-gray-100">
+                        <span className="text-sm font-medium text-gray-800">
                           {m.value}
                         </span>
                       </div>

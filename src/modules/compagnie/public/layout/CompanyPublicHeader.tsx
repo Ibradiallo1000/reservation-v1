@@ -1,11 +1,9 @@
 // src/modules/compagnie/public/layout/CompanyPublicHeader.tsx
-// Option C: floating ultra minimal — capsule suspendue, Hero full bleed top
+// Option C: floating ultra minimal — capsule suspendue, Hero full bleed top (toujours mode clair)
 import React, { useEffect, useState } from 'react';
-import { User, Sun, Moon } from 'lucide-react';
+import { User } from 'lucide-react';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import { Company } from '@/types/companyTypes';
-
-const THEME_STORAGE_KEY = 'public-theme-dark';
 
 interface HeaderProps {
   company: Company;
@@ -27,14 +25,6 @@ const Header: React.FC<HeaderProps> = ({
   t,
 }) => {
   const [scrollProgress, setScrollProgress] = useState(0);
-  const [isDark, setIsDark] = useState(() => {
-    if (typeof document === 'undefined') return false;
-    try {
-      return localStorage.getItem(THEME_STORAGE_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
 
   useEffect(() => {
     const handleScroll = () => {
@@ -63,16 +53,6 @@ const Header: React.FC<HeaderProps> = ({
       ? '0 4px 20px rgba(0,0,0,0.1)'
       : '0 4px 20px rgba(0,0,0,0.25)';
   const textColor = scrollProgress > 0.6 ? '#111827' : 'white';
-
-  const toggleDark = () => {
-    const currentlyDark = document.documentElement.classList.contains('dark');
-    document.documentElement.classList.toggle('dark');
-    const next = !currentlyDark;
-    setIsDark(next);
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, String(next));
-    } catch (_) {}
-  };
 
   const name =
     company?.nom || t('ourCompany', { defaultValue: 'Notre compagnie' });
@@ -125,16 +105,6 @@ const Header: React.FC<HeaderProps> = ({
           style={{ color: textColor }}
         >
           <LanguageSwitcher variant="floating" scrollTextColor={textColor} />
-
-          <button
-            type="button"
-            onClick={toggleDark}
-            className="px-2 py-1 rounded-md opacity-80 hover:opacity-100 hover:bg-black/10 transition inline-flex items-center justify-center min-h-[36px] min-w-[36px]"
-            style={{ color: textColor }}
-            aria-label={isDark ? t('themeLight') : t('themeDark')}
-          >
-            {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
 
           <button
             onClick={() => navigate('/login')}

@@ -93,6 +93,11 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
     [agences]
   );
 
+  /* ================= FORCER MODE CLAIR (pas de mode nuit sur la vitrine publique) ================= */
+  useEffect(() => {
+    document.documentElement.classList.remove("dark");
+  }, []);
+
   /* ================= LOAD COMPANY ================= */
 
   useEffect(() => {

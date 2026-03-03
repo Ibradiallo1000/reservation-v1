@@ -84,14 +84,14 @@ const AvisListePublic: React.FC<Props> = ({
         {/* Titre harmonisé */}
         <div className="flex items-center justify-center gap-2 mb-4">
           <MessageCircle size={18} style={{ color: primaryColor }} />
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white text-center">
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 text-center">
             {t("customerReviews")}
           </h2>
         </div>
 
         {/* Carte principale */}
         <div
-          className="rounded-2xl border border-gray-200 dark:border-neutral-700 overflow-hidden bg-white dark:bg-neutral-800"
+          className="rounded-2xl border border-gray-200 overflow-hidden bg-white"
           style={{
             borderColor: `${primaryColor}30`,
             boxShadow: `0 4px 15px ${primaryColor}10`,
@@ -123,7 +123,7 @@ const AvisListePublic: React.FC<Props> = ({
                 </div>
 
                 {/* commentaire */}
-                <p className="text-sm text-gray-700 dark:text-gray-200 italic mb-3 line-clamp-3">
+                <p className="text-sm text-gray-700 italic mb-3 line-clamp-3">
                   “{a.commentaire}”
                 </p>
 

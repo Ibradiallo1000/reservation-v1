@@ -28,7 +28,7 @@ const WhyChooseSection: React.FC<Props> = ({
 
   return (
     <section
-      className="py-6 px-4 bg-[color:var(--section-bg)] dark:bg-neutral-950/70"
+      className="py-6 px-4 bg-[color:var(--section-bg)]"
       style={
         {
           ["--section-bg" as string]: `${secondaryColor}08`,
@@ -41,7 +41,7 @@ const WhyChooseSection: React.FC<Props> = ({
         <div className="text-center mb-4">
           <div className="flex justify-center items-center gap-2">
             <Bus size={20} style={{ color: primaryColor }} />
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">
               {t("whyChooseCompany", { companyName })}
             </h2>
           </div>
@@ -49,7 +49,7 @@ const WhyChooseSection: React.FC<Props> = ({
 
         {/* Carte principale */}
         <div
-          className="rounded-2xl overflow-hidden bg-white dark:bg-neutral-800 border border-gray-200 dark:border-neutral-700"
+          className="rounded-2xl overflow-hidden bg-white border border-gray-200"
           style={{
             boxShadow: `0 6px 18px ${primaryColor}12`,
           }}
@@ -86,12 +86,12 @@ const WhyChooseSection: React.FC<Props> = ({
 
                   {/* Texte */}
                   <div>
-                    <p className="text-sm font-medium text-gray-800 dark:text-gray-100 leading-tight">
+                    <p className="text-sm font-medium text-gray-800 leading-tight">
                       {item.label}
                     </p>
 
                     {item.description && (
-                      <p className="text-xs text-gray-500 dark:text-gray-300 mt-1 leading-tight">
+                      <p className="text-xs text-gray-500 mt-1 leading-tight">
                         {item.description}
                       </p>
                     )}
