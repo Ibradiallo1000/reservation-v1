@@ -31,6 +31,11 @@ interface TicketOnlineProps {
   qrValue: string;
   agencyLatitude?: number | null;
   agencyLongitude?: number | null;
+  /** Passed by ReceiptEnLignePage / ReservationDetailsPage, accepted for compatibility */
+  canal?: string;
+  emissionDate?: string;
+  paymentMethod?: string;
+  statusLabel?: string;
 }
 
 const TicketOnline: React.FC<TicketOnlineProps> = ({
