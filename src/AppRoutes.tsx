@@ -208,6 +208,18 @@ function RedirectTreasuryToRevenus() {
   return <Navigate to={`/compagnie/${companyId}/revenus-liquidites?tab=liquidites`} replace />;
 }
 
+/** Sous-domaine compagnie (ex: malitrans.teliya.app). Utilisé pour rendre RouteResolver sur "/" */
+function isPublicSubdomain(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname;
+  return (h.endsWith(".teliya.app") && h !== "teliya.app") || (h.endsWith(".localhost") && h !== "localhost");
+}
+
+function SubdomainAwareHome() {
+  const isSub = typeof window !== "undefined" && isPublicSubdomain();
+  return isSub ? <RouteResolver /> : <HomePage />;
+}
+
 const AppRoutes = () => {
   const { loading } = useAuth();
   const { pathname } = useLocation();
@@ -221,7 +233,8 @@ const AppRoutes = () => {
         {/* Route de debug - accessible à tous */}
         <Route path="/debug-auth" element={<DebugAuthPage />} />
 
-        <Route path="/" element={<HomePage />} />
+        {/* "/" : sous-domaine → RouteResolver (slug depuis l'hôte), sinon HomePage */}
+        <Route path="/" element={<Suspense fallback={null}><SubdomainAwareHome /></Suspense>} />
 
         {/* Role-based landing (used by PrivateRoute redirects) */}
         <Route path="/role-landing" element={<RoleLanding />} />

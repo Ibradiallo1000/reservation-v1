@@ -45,6 +45,10 @@ service cloud.firestore {
     function getUserAgencyId() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('agencyId', '');
     }
+    function userCompanyId() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path) ? get(path).data.get('companyId', '') : '';
+    }
     function canWriteTripCosts(isCreate) {
       let role = getUserRole();
       return isAuth() && (
@@ -81,29 +85,54 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    /* Invitations (onboarding, accept link). Get by id for accept flow; list/create/update/delete authenticated. */
+    match /invitations/{invitationId} {
+      allow get: if true;
+      allow list, create, update, delete: if isAuth();
+    }
+
+    /* Medias (platform / company assets). Authenticated read/write. */
+    match /medias/{mediaId} {
+      allow get, list, create, update, delete: if isAuth();
+    }
+
+    /* Plans catalog (subscription plans). Public read for plan selection; write authenticated (platform admin). */
+    match /plans/{planId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAuth();
+    }
+
+    /* Metadata (e.g. plansCatalog document). Public read; write authenticated. */
+    match /_meta/{docId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAuth();
+    }
+
     /* =====================
        COMPAGNIES / AGENCES
+       Multi-tenant: authenticated users may only access their company's data (userCompanyId() == companyId).
+       Platform admin (admin_platforme) may access any company. Public read when unauthenticated (vitrine).
     ===================== */
     match /companies/{companyId} {
-      allow get, list: if true;
+      allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
 
       /* Avis clients (vitrine publique) : lecture publique sans auth pour page compagnie */
       match /avis/{avisId} {
-        allow read: if true;
-        allow create, update, delete: if isAuth();
+        allow read: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
+        allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
       match /agences/{agencyId} {
-        allow get, list: if true;
+        allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
 
         match /users/{agencyUserId} {
-          allow get, list: if isAuth();
-          allow create: if isAuth() && (
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             request.resource.data.get('role', '') != 'chefAgence'
             || getUserRole() == 'admin_compagnie'
             || getUserRole() == 'admin_platforme'
           );
-          allow update: if isAuth() && (
+          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
             || request.resource.data.get('role', '') != 'chefAgence'
             || getUserRole() == 'admin_compagnie'
@@ -113,13 +142,13 @@ service cloud.firestore {
         }
 
         match /weeklyTrips/{tripId} {
-          allow get, list: if true;
+          allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
         }
 
         match /reservations/{reservationId} {
 
-          /* 🔓 Lecture & création publiques */
-          allow get, list, create: if true;
+          /* 🔓 Lecture & création publiques (unauthenticated) ou même compagnie / admin plateforme */
+          allow get, list, create: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
 
           /* =============================
              UPDATE 1 — APRÈS CRÉATION
@@ -157,7 +186,7 @@ service cloud.firestore {
           );
 
           /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ; contrôleur embarquement : champs restreints */
-          allow update, delete: if isAuth() && (
+          allow update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             (resource.data.get('shiftId', '') == '' ||
             !exists(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)) ||
             get(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)).data.get('status', '') != 'validated')
@@ -172,9 +201,9 @@ service cloud.firestore {
         }
 
         match /shifts/{shiftId} {
-          allow get, list: if isAuth();
-          allow create: if isAuth();
-          allow update: if isAuth() && (
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             resource.data.status != 'validated' &&
             (request.resource.data.status != 'validated' || isComptable()) &&
             (request.resource.data.status != 'closed' || (isGuichetier() && resource.data.userId == request.auth.uid))
@@ -183,9 +212,9 @@ service cloud.firestore {
         }
 
         match /shiftReports/{reportId} {
-          allow get, list: if isAuth();
-          allow create: if isAuth();
-          allow update: if isAuth() && (
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             resource.data.get('status', '') != 'validated' &&
             (request.resource.data.get('status', '') != 'validated' || isComptable())
           );
@@ -194,62 +223,80 @@ service cloud.firestore {
 
         /* Courier sessions (agency-scoped, Ticket-like lifecycle) */
         match /courierSessions/{sessionId} {
-          allow get, list: if isAuth();
-          allow create: if isAuth();
-          allow update: if isAuth();
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
         match /boardingClosures/{closureId} {
-          allow get, list: if isAuth();
-          allow create, update: if isBoardingOfficer() || isAgencyManager();
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create, update: if (isBoardingOfficer() || isAgencyManager()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
         match /boardingLogs/{logId} {
-          allow get, list: if isAuth();
-          allow create: if isBoardingOfficer() || isAgencyManager();
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if (isBoardingOfficer() || isAgencyManager()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow update, delete: if false;
         }
 
         match /boardingLocks/{lockId} {
-          allow get, list, create: if isBoardingOfficer() || isAgencyManager();
+          allow get, list, create: if (isBoardingOfficer() || isAgencyManager()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow update, delete: if false;
         }
 
         /* Phase 4.5 — Aggregated state (dailyStats, boardingStats, agencyLiveState) */
         match /dailyStats/{dateId} {
-          allow get, list: if isAuth();
-          allow create, update: if isAuth();
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
         match /boardingStats/{tripKey} {
-          allow get, list: if isAuth();
-          allow create, update: if isAuth();
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
         match /agencyLiveState/current {
-          allow get, list: if isAuth();
-          allow create, update: if isAuth();
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
         match /affectations/{affectationId} {
-          allow get, list: if isAuth();
-          allow create, update: if canModifyFleet() || isAgencyManager();
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create, update: if (canModifyFleet() || isAgencyManager()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
         /* Phase 3: Courier batches (lots) — agency-scoped. Create + DRAFT updates: any auth. DEPARTED/CLOSED: chefAgence or admin_compagnie only. */
         match /batches/{batchId} {
-          allow get, list: if isAuth();
-          allow create: if isAuth();
-          allow update: if isAuth() && (
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             resource.data.get('status', '') == 'DRAFT'
             || (request.resource.data.get('status', '') == 'READY' && resource.data.get('status', '') == 'DRAFT')
             || (request.resource.data.get('status', '') == 'DEPARTED' && isAgencyManager())
             || (request.resource.data.get('status', '') == 'CLOSED' && isAgencyManager())
           );
+          allow delete: if false;
+        }
+
+        /* Agency cash movements (comptabilité). Authenticated read/write. */
+        match /cashMovements/{movementId} {
+          allow get, list, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow delete: if false;
+        }
+
+        /* Agency personnel. Authenticated read/write. */
+        match /personnel/{personnelId} {
+          allow get, list, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow delete: if false;
+        }
+
+        /* Agency-level counters (e.g. agent courrier codes). Authenticated read/write. */
+        match /counters/{counterId} {
+          allow get, list, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
       }
@@ -265,13 +312,13 @@ service cloud.firestore {
          - Update: only allowed fields; forbid changing accountType, agencyId, companyId.
       ============================================================ */
       match /financialAccounts/{accountId} {
-        allow get, list: if isAuth();
-        allow create: if isAuth() && (
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           getUserRole() == 'admin_compagnie' ||
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'chefAgence'
         );
-        allow update: if isAuth() && (
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['accountName', 'isActive', 'description', 'updatedAt'])
           ||
@@ -282,42 +329,42 @@ service cloud.firestore {
       }
       /* Treasury — immutable ledger: no update/delete. Phase 6: reconciliationStatus update allowed for admin_compagnie | company_accountant only. */
       match /financialMovements/{movementId} {
-        allow get, list: if isAuth();
-        allow create: if isAuth();
-        allow update: if isAuth() && (getUserRole() == 'admin_compagnie' || getUserRole() == 'company_accountant')
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'company_accountant')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reconciliationStatus', 'updatedAt']);
         allow delete: if false;
       }
       match /expenses/{expenseId} {
-        allow get, list: if isAuth();
-        allow create: if isAuth();
-        allow update: if isAuth();
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
       /* Phase B1.5 — Trip costs: create/update by agency_manager (own agency), company_accountant, admin_compagnie. No delete. */
       match /tripCosts/{tripCostId} {
-        allow get, list: if isAuth();
-        allow create: if canWriteTripCosts(true);
-        allow update: if canWriteTripCosts(false);
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if canWriteTripCosts(true) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow update: if canWriteTripCosts(false) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
       /* Idempotency sentinels for financialMovements (Phase 6): prevent duplicate movements. Create/get only. */
       match /financialMovementIdempotency/{key} {
-        allow get, create: if isAuth();
+        allow get, create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow update, delete: if false;
       }
 
       /* Phase C — Payables (credit supplier). Create: agency_accountant, chefAgence, admin_compagnie. Update (approve/reject/payment): company_accountant, financial_director, admin_compagnie. */
       match /payables/{payableId} {
-        allow get, list: if isAuth();
-        allow create: if isAuth() && (
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           getUserRole() == 'agency_accountant' ||
           getUserRole() == 'chefAgence' ||
           getUserRole() == 'admin_compagnie' ||
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'financial_director'
         );
-        allow update: if isAuth() && (
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'financial_director' ||
           getUserRole() == 'admin_compagnie'
@@ -327,25 +374,25 @@ service cloud.firestore {
 
       /* Phase C1.1 — Financial settings. Read: authenticated. Update: admin_compagnie only. */
       match /financialSettings/current {
-        allow get: if isAuth();
-        allow create, update: if isAuth() && getUserRole() == 'admin_compagnie';
+        allow get: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && getUserRole() == 'admin_compagnie';
         allow delete: if false;
       }
       /* Phase C3 — Vehicle financial history. Client-side aggregation; read/write authenticated. No delete. */
       match /vehicleFinancialHistory/{docId} {
-        allow get, list: if isAuth();
-        allow create, update: if isAuth();
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
       /* Phase C1.1/C1.2 — Payment proposals. Create: agency_accountant, company_accountant, financial_director. Approve/reject (update): admin_compagnie only; allowed keys: approvalStatus, approvedBy, approvedAt, executedMovementId, rejectionReason, approvalHistory, expiresAt, approvedByRole. */
       match /paymentProposals/{proposalId} {
-        allow get, list: if isAuth();
-        allow create: if isAuth() && (
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           getUserRole() == 'agency_accountant' ||
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'financial_director'
         );
-        allow update: if isAuth() && getUserRole() == 'admin_compagnie'
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && getUserRole() == 'admin_compagnie'
           && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['approvalStatus', 'approvedBy', 'approvedAt', 'executedMovementId', 'rejectionReason', 'approvalHistory', 'expiresAt', 'approvedByRole']);
         allow delete: if false;
@@ -353,14 +400,14 @@ service cloud.firestore {
 
       /* Phase C — Fleet maintenance (Enterprise). */
       match /fleetMaintenance/{maintenanceId} {
-        allow get, list: if isAuth();
-        allow create: if isAuth() && (
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           getUserRole() == 'admin_compagnie' ||
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'financial_director' ||
           (getUserRole() == 'chefAgence' && request.resource.data.get('agencyId', '') == getUserAgencyId())
         );
-        allow update: if isAuth() && (
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           getUserRole() == 'admin_compagnie' ||
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'financial_director' ||
@@ -370,9 +417,9 @@ service cloud.firestore {
       }
 
       match /fleetVehicles/{vehicleId} {
-        allow get, list: if isAuth() && canReadFleet();
-        allow create: if isAuth() && canModifyFleet();
-        allow update: if isAuth() && (
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canReadFleet();
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           (canModifyFleet() && (
             resource.data.get('status', '') != 'in_transit' ||
             request.resource.data.diff(resource.data).changedKeys().hasOnly(['status', 'updatedAt', 'lastMovementAt', 'lastMovementBy', 'currentAgencyId', 'destinationAgencyId'])
@@ -384,9 +431,29 @@ service cloud.firestore {
       }
 
       match /fleetMovements/{movementId} {
-        allow get, list: if isAuth() && canReadFleet();
-        allow create: if isAuth() && (canModifyFleet() || isBoardingOfficer());
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canReadFleet();
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (canModifyFleet() || isBoardingOfficer());
         allow update, delete: if false;
+      }
+
+      /* Company-level personnel. Authenticated read/write. */
+      match /personnel/{personnelId} {
+        allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+      }
+
+      /* Plan change requests. Authenticated read/write. */
+      match /planRequests/{requestId} {
+        allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+      }
+
+      /* Billing requests. Authenticated read/write. */
+      match /billingRequests/{requestId} {
+        allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+      }
+
+      /* Company payments (subscription, etc.). Authenticated read/write. */
+      match /payments/{paymentId} {
+        allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
     }
 
@@ -402,17 +469,17 @@ service cloud.firestore {
     }
 
     /* =====================
-       LOGISTICS (Courrier)
+       LOGISTICS (Courrier) — company-scoped, same-tenant only
     ===================== */
     match /companies/{companyId}/logistics/{path=**} {
-      allow read, write: if isAuth();
+      allow read, write: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
     }
 
     /* =====================
-       REVENUE (events)
+       REVENUE (events) — company-scoped, same-tenant only
     ===================== */
     match /companies/{companyId}/revenue/{path=**} {
-      allow read, write: if isAuth();
+      allow read, write: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
     }
 
     /* =====================
@@ -435,17 +502,19 @@ service cloud.firestore {
     }
 
     /* =====================
-       COUNTERS (si utilisés)
+       COUNTERS (company-level, e.g. trip instance refs) — same-tenant only
     ===================== */
     match /companies/{companyId}/counters/byTrip/trips/{tripInstanceId} {
-      allow get, create, update: if true;
+      allow get, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+      allow delete: if false;
     }
 
     /* =====================
-       FALLBACK SÉCURITÉ
+       DENY BY DEFAULT — no fallback read/write
+       All collections used by the app must be declared above.
     ===================== */
     match /{path=**} {
-      allow get, list, create, update, delete: if isAuth();
+      allow get, list, create, update, delete: if false;
     }
   }
 }

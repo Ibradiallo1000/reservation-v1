@@ -136,6 +136,14 @@ export default function PaymentMethodPage() {
         return;
       }
 
+      const normDate = (v: unknown): string => {
+        if (typeof v === 'string') return v;
+        if (v && typeof v === 'object' && 'seconds' in v) return new Date((v as { seconds: number }).seconds * 1000).toISOString().slice(0, 10);
+        return '';
+      };
+      const normHeure = (v: unknown): string => (typeof v === 'string' ? v : '');
+      const dateStr: string = normDate(r.date);
+      const heureStr: string = normHeure(r.heure);
       setReservation({
         id: reservationId,
         companyId: cid,
@@ -144,8 +152,8 @@ export default function PaymentMethodPage() {
         telephone: (r.telephoneOriginal ?? r.telephone) ?? '',
         depart: (r.depart as string) ?? '',
         arrivee: (r.arrivee as string) ?? '',
-        date: (r.date as string) ?? '',
-        heure: (r.heure as string) ?? '',
+        date: dateStr,
+        heure: heureStr,
         montant: Number(r.montant ?? r.montant_total ?? 0),
         seatsGo: Number(r.seatsGo ?? 1),
         statut,

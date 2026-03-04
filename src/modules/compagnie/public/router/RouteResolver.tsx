@@ -37,6 +37,28 @@ const CompanyAboutPage = lazy(() => import("../pages/CompanyAboutPage"));
 import PublicBottomNav from "../components/PublicBottomNav";
 
 /** chemins qui ne doivent jamais être traités comme “slug compagnie” */
+/** Domaine public (subdomain = slug.teliya.app). Dev: slug.localhost */
+const PUBLIC_APP_DOMAIN = "teliya.app";
+const PUBLIC_APP_DOMAIN_LOCALHOST = "localhost";
+
+function getSlugFromSubdomain(): string | null {
+  if (typeof window === "undefined") return null;
+  const host = window.location.hostname;
+  if (host.endsWith("." + PUBLIC_APP_DOMAIN) && host !== PUBLIC_APP_DOMAIN) {
+    const sub = host.split(".")[0];
+    return sub && sub.length > 0 ? sub : null;
+  }
+  if (host.endsWith("." + PUBLIC_APP_DOMAIN_LOCALHOST) && host !== PUBLIC_APP_DOMAIN_LOCALHOST) {
+    const sub = host.split(".")[0];
+    return sub && sub.length > 0 ? sub : null;
+  }
+  return null;
+}
+
+export function isSubdomainMode(): boolean {
+  return getSlugFromSubdomain() != null;
+}
+
 const RESERVED = new Set([
   "login",
   "register",
@@ -48,7 +70,7 @@ const RESERVED = new Set([
   "compagnie",
 ]);
 
-/** cache mémoire par session (optimisation non bloquante) */
+/** cache mémoire par session — clé = slug (path ou subdomain) */
 const memoryCache = new Map<string, Company>();
 
 const PENDING_RESERVATION_KEY = "pendingReservation";
@@ -73,11 +95,23 @@ export default function RouteResolver() {
   const navigate = useNavigate();
   const parts = useMemo(() => pathname.split("/").filter(Boolean), [pathname]);
 
-  /** Dans AppRoutes, RouteResolver ne monte que sur `/:slug/*`. */
-  const slug = parts[0] ?? null;
-  const subPath = parts[1] ?? null;
-  /** Third segment (e.g. reservationId for /:slug/upload-preuve/:reservationId) */
-  const thirdSegment = parts[2] ?? null;
+  /** Slug et segments : sous-domaine (malitrans.teliya.app) ou path (teliya.app/malitrans). */
+  const slugFromSubdomain = useMemo(() => getSlugFromSubdomain(), [pathname]);
+  const slug = useMemo(() => {
+    if (slugFromSubdomain) return slugFromSubdomain;
+    return parts[0] ?? null;
+  }, [slugFromSubdomain, parts]);
+  const subPath = useMemo(() => {
+    if (slugFromSubdomain) return parts[0] ?? null;
+    return parts[1] ?? null;
+  }, [slugFromSubdomain, parts]);
+  const thirdSegment = useMemo(() => {
+    if (slugFromSubdomain) return parts[1] ?? null;
+    return parts[2] ?? null;
+  }, [slugFromSubdomain, parts]);
+
+  /** Base path pour les liens : sous-domaine = "" (/, /booking), path = /:slug */
+  const pathBase = slugFromSubdomain ? "" : (slug ?? "");
 
   const [company, setCompany] = useState<Company | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
@@ -361,7 +395,7 @@ export default function RouteResolver() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => navigate(`/${slug}/upload-preuve/${pendingRecovery.reservationId}`, { replace: true })}
+                  onClick={() => navigate(pathBase ? `/${pathBase}/upload-preuve/${pendingRecovery.reservationId}` : `/upload-preuve/${pendingRecovery.reservationId}`, { replace: true })}
                   className="mt-3 w-full rounded-lg py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
                   style={{
                     backgroundColor: company?.couleurPrimaire ?? "#3b82f6",

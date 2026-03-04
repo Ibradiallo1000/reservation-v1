@@ -57,11 +57,11 @@ export async function getUnsyncedBoardingQueue(): Promise<BoardingQueueRecord[]>
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
-    const index = store.index("synced");
-    const req = index.getAll(false);
+    const req = store.getAll();
     req.onerror = () => reject(req.error);
     req.onsuccess = () => {
-      resolve((req.result as BoardingQueueRecord[]) || []);
+      const all = (req.result as BoardingQueueRecord[]) || [];
+      resolve(all.filter((r) => r.synced === false));
     };
     tx.oncomplete = () => db.close();
   });

@@ -23,7 +23,16 @@
   to = "/screenshot-mobile.png"
   status = 200
 
-# ✅ SPA routing (doit rester à la fin)
+# ——— Support des sous-domaines SaaS dynamiques ———
+# Permet à l’app React d’être servie sur malitrans.teliya.app, sonef.teliya.app, etc.
+# Le RouteResolver détecte le slug depuis le hostname ; cette règle assure que toutes
+# les routes sous *.teliya.app renvoient index.html (SPA).
+[[redirects]]
+  from = "https://*.teliya.app/*"
+  to = "/index.html"
+  status = 200
+
+# ✅ SPA routing (domaine principal teliya.app et fallback)
 [[redirects]]
   from = "/*"
   to = "/index.html"

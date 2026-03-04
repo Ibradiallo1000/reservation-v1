@@ -25,7 +25,7 @@ const TABS: TabConfig[] = [
   { id: "aide", labelKey: "help", icon: <HelpCircle className="w-5 h-5" />, pathSuffix: "aide" },
 ];
 
-interface PublicBottomNavProps {
+export interface PublicBottomNavProps {
   slug: string | null;
   /** Couleur primaire compagnie (optionnel) */
   primaryColor?: string;
@@ -38,19 +38,24 @@ export default function PublicBottomNav({ slug, primaryColor = "#ea580c" }: Publ
   const pathname = location.pathname;
   const parts = pathname.split("/").filter(Boolean);
 
-  // slug = premier segment si on est sous /:slug/...
-  const currentSlug = slug ?? parts[0] ?? "";
-  const subPath = parts[1] ?? "";
+  const isSub = typeof window !== "undefined" && ((window.location.hostname.endsWith(".teliya.app") && window.location.hostname !== "teliya.app") || (window.location.hostname.endsWith(".localhost") && window.location.hostname !== "localhost"));
+  const base = isSub ? "" : (slug ?? parts[0] ?? "");
+  const currentSubPath = base === "" ? (parts[0] ?? "") : (parts[1] ?? "");
 
   const isActive = (tab: TabConfig): boolean => {
-    if (tab.id === "accueil") return !subPath || subPath === "";
-    return subPath === tab.pathSuffix;
+    if (tab.id === "accueil") return !currentSubPath || currentSubPath === "";
+    return currentSubPath === tab.pathSuffix;
   };
 
   const handlePress = (tab: TabConfig) => {
-    if (!currentSlug) return;
-    const path = tab.pathSuffix ? `/${currentSlug}/${tab.pathSuffix}` : `/${currentSlug}`;
-    navigate(path);
+    if (base === "" && !slug) return;
+    if (base !== "") {
+      const path = tab.pathSuffix ? `/${base}/${tab.pathSuffix}` : `/${base}`;
+      navigate(path);
+    } else {
+      const path = tab.pathSuffix ? `/${tab.pathSuffix}` : "/";
+      navigate(path);
+    }
   };
 
   return (
