@@ -28,6 +28,7 @@ import { PageLoadingState } from '@/shared/ui/PageStates';
 
 import TicketOnline from '@/modules/compagnie/public/components/ticket/TicketOnline';
 import { getEffectiveStatut } from '@/utils/reservationStatusUtils';
+import { getDisplayPhone } from '@/utils/phoneUtils';
 import type { ReservationStatus } from '@/types/reservation';
 
 interface Reservation {
@@ -123,7 +124,7 @@ const ReceiptEnLignePage: React.FC = () => {
             agencyId,
             companySlug: (data.companySlug as string) ?? '',
             nomClient: (data.nomClient as string) ?? (data.clientNom as string) ?? '',
-            telephone: (data.telephone as string) ?? '',
+            telephone: getDisplayPhone(data),
             depart: (data.depart as string) ?? (data.departure as string) ?? '',
             arrivee: (data.arrivee as string) ?? (data.arrival as string) ?? '',
             date: typeof data.date === 'string' ? data.date : (data.date as any)?.seconds ? new Date((data.date as any).seconds * 1000).toISOString().slice(0, 10) : '',

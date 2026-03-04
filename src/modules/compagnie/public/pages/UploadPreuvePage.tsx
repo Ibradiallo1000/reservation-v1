@@ -16,6 +16,7 @@ import { fr } from 'date-fns/locale';
 import { enUS } from 'date-fns/locale';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { getDisplayPhone } from '@/utils/phoneUtils';
 
 // ===================== DEBUG / LOGGER =====================
 const DEBUG = true;
@@ -163,7 +164,7 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
             companySlug,
             companyName: (companyData.nom as string) || (companyData.name as string) || 'Compagnie',
             nomClient: (resData.nomClient as string) || '',
-            telephone: (resData.telephone as string) || '',
+            telephone: getDisplayPhone(resData),
             depart: (resData.depart as string) || '',
             arrivee: (resData.arrivee as string) || '',
             date: (resData.date as string) || '',

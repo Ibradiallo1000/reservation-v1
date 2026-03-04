@@ -30,6 +30,7 @@ const ReceiptEnLignePage = lazy(() => import("../pages/ReceiptEnLignePage"));
 const UploadPreuvePage = lazy(() => import("../pages/UploadPreuvePage"));
 const PaymentMethodPage = lazy(() => import("../pages/PaymentMethodPage"));
 const ReservationDetailsPage = lazy(() => import("../pages/ReservationDetailsPage"));
+const FindReservationPage = lazy(() => import("../pages/FindReservationPage"));
 const AidePage = lazy(() => import("../pages/AidePage"));
 const CompanyAboutPage = lazy(() => import("../pages/CompanyAboutPage"));
 
@@ -281,7 +282,7 @@ export default function RouteResolver() {
 
   // Si la réservation en ligne est désactivée, on bloque les écrans de booking
   const blocksOnline = !company.onlineBookingEnabled;
-  const isOnlineRoute = subPath === "booking" || subPath === "receipt" || subPath === "confirmation" || subPath === "upload-preuve" || subPath === "payment" || subPath === "reservation" || subPath === "details";
+  const isOnlineRoute = subPath === "booking" || subPath === "receipt" || subPath === "confirmation" || subPath === "upload-preuve" || subPath === "payment" || subPath === "reservation" || subPath === "details" || subPath === "retrouver-reservation";
   if (blocksOnline && isOnlineRoute) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6">
@@ -309,6 +310,9 @@ export default function RouteResolver() {
       break;
     case "mes-reservations":
       content = <ClientMesReservationsPage />;
+      break;
+    case "retrouver-reservation":
+      content = <FindReservationPage company={company} />;
       break;
     case "mes-billets":
       content = <ClientMesBilletsPage />;

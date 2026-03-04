@@ -1,15 +1,15 @@
 // src/modules/compagnie/public/components/PublicBottomNav.tsx
-// Navigation basse fixe : Accueil, Mes billets, Réservations, Aide — mobile uniquement
+// Navigation basse fixe : Accueil, Mes billets, Retrouver réservation, Aide — mobile uniquement
 import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Home, Ticket, FileText, HelpCircle } from "lucide-react";
+import { Home, Ticket, Search, HelpCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 const NAV_HEIGHT = 64; // hauteur barre (px) pour padding-bottom du contenu
 
 export const PUBLIC_BOTTOM_NAV_HEIGHT_PX = NAV_HEIGHT;
 
-type TabId = "accueil" | "mes-billets" | "reservations" | "aide";
+type TabId = "accueil" | "mes-billets" | "retrouver-reservation" | "aide";
 
 interface TabConfig {
   id: TabId;
@@ -21,7 +21,7 @@ interface TabConfig {
 const TABS: TabConfig[] = [
   { id: "accueil", labelKey: "home", icon: <Home className="w-5 h-5" />, pathSuffix: "" },
   { id: "mes-billets", labelKey: "myTickets", icon: <Ticket className="w-5 h-5" />, pathSuffix: "mes-billets" },
-  { id: "reservations", labelKey: "reservations", icon: <FileText className="w-5 h-5" />, pathSuffix: "mes-reservations" },
+  { id: "retrouver-reservation", labelKey: "findReservation", icon: <Search className="w-5 h-5" />, pathSuffix: "retrouver-reservation" },
   { id: "aide", labelKey: "help", icon: <HelpCircle className="w-5 h-5" />, pathSuffix: "aide" },
 ];
 

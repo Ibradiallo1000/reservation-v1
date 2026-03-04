@@ -33,6 +33,7 @@ import {
 } from "@/utils/reservationStatusUtils";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageLoadingState } from "@/shared/ui/PageStates";
+import { normalizePhone, getDisplayPhone } from "@/utils/phoneUtils";
 
 dayjs.locale("fr");
 
@@ -210,7 +211,7 @@ const ClientMesBilletsPage: React.FC = () => {
       couleurPrimaire: companyData?.couleurPrimaire,
       couleurSecondaire: companyData?.couleurSecondaire,
       nomClient: r.nomClient || r.clientNom,
-      telephone: r.telephone,
+      telephone: getDisplayPhone(r),
       depart: r.depart || r.departure,
       arrivee: r.arrivee || r.arrival,
       arrival: r.arrival,
@@ -227,18 +228,17 @@ const ClientMesBilletsPage: React.FC = () => {
   };
 
   /**
-   * Double requête pour compatibilité legacy : E.164 + format national.
-   * Fusionne et déduplique par id pour ne pas casser l'historique (78950000, 78 95 00 00, +22378950000).
+   * Query by telephoneNormalized (primary) and telephone (backward compat).
+   * normalizePhone handles Mali 223 + 8 digits so all formats match.
    */
   const fetchForCompanyId = async (
     companyId: string,
-    companyData: DocumentData
+    companyData: DocumentData,
+    phoneNorm: string
   ) => {
     const agences = await getDocs(
       collection(db, "companies", companyId, "agences")
     );
-    const phoneE164 = toE164(selectedCountry.dialCode, phoneDigits);
-    const nationalOnly = phoneDigits.replace(/\D/g, "");
     const seen = new Set<string>();
     const out: Reservation[] = [];
 
@@ -252,11 +252,9 @@ const ClientMesBilletsPage: React.FC = () => {
         "reservations"
       );
 
-      const [snapE164, snapNational] = await Promise.all([
-        getDocs(query(base, where("telephone", "==", phoneE164))),
-        nationalOnly.length >= 8
-          ? getDocs(query(base, where("telephone", "==", nationalOnly)))
-          : Promise.resolve({ docs: [] } as unknown as QuerySnapshot),
+      const [snapNorm, snapLegacy] = await Promise.all([
+        getDocs(query(base, where("telephoneNormalized", "==", phoneNorm))),
+        getDocs(query(base, where("telephone", "==", phoneNorm))),
       ]);
 
       const addUnique = (d: QueryDocumentSnapshot) => {
@@ -266,8 +264,8 @@ const ClientMesBilletsPage: React.FC = () => {
         out.push(mapDoc(d, companyId, ag.id, companyData));
       };
 
-      snapE164.docs.forEach((d) => addUnique(d));
-      snapNational.docs.forEach((d) => addUnique(d));
+      snapNorm.docs.forEach((d) => addUnique(d));
+      snapLegacy.docs.forEach((d) => addUnique(d));
     }
 
     return out;
@@ -277,6 +275,11 @@ const ClientMesBilletsPage: React.FC = () => {
     const digits = phoneDigits.replace(/\D/g, "");
     if (digits.length < 8) {
       setError("Entrez un numéro valide (au moins 8 chiffres).");
+      return;
+    }
+    const phoneNorm = normalizePhone(phoneDigits);
+    if (!phoneNorm) {
+      setError("Entrez un numéro valide.");
       return;
     }
     setError("");
@@ -301,12 +304,12 @@ const ClientMesBilletsPage: React.FC = () => {
             primary: d?.couleurPrimaire || t.primary,
             secondary: d?.couleurSecondaire || t.secondary,
           }));
-          results = results.concat(await fetchForCompanyId(cdoc.id, d));
+          results = results.concat(await fetchForCompanyId(cdoc.id, d, phoneNorm));
         }
       } else {
         const companies = await getDocs(collection(db, "companies"));
         for (const c of companies.docs) {
-          results = results.concat(await fetchForCompanyId(c.id, c.data()));
+          results = results.concat(await fetchForCompanyId(c.id, c.data(), phoneNorm));
         }
       }
 

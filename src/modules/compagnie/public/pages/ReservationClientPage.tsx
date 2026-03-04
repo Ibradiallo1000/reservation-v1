@@ -11,6 +11,7 @@ import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, setDoc, serverTimestamp, getDoc,
 } from 'firebase/firestore';
 import { canonicalStatut } from '@/utils/reservationStatusUtils';
+import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
@@ -465,9 +466,12 @@ export default function ReservationClientPage() {
       });
 
       const now = new Date();
+      const telephoneInput = passenger.phone.trim();
       const reservation = {
         nomClient: passenger.fullName.trim(),
-        telephone: passenger.phone.trim(),
+        telephone: telephoneInput,
+        telephoneOriginal: telephoneInput,
+        telephoneNormalized: normalizePhone(telephoneInput),
         depart: selectedTrip.departure,
         arrivee: selectedTrip.arrival,
         date: selectedTrip.date,

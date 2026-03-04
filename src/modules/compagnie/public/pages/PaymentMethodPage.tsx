@@ -11,6 +11,7 @@ import PaymentInstructionsModal, { getPaymentInstructionsSeen } from '../compone
 import { enUS } from 'date-fns/locale';
 import { fr } from 'date-fns/locale';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { getDisplayPhone } from '@/utils/phoneUtils';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 
@@ -140,7 +141,7 @@ export default function PaymentMethodPage() {
         companyId: cid,
         agencyId: aid,
         nomClient: (r.nomClient as string) ?? '',
-        telephone: (r.telephone as string) ?? '',
+        telephone: (r.telephoneOriginal ?? r.telephone) ?? '',
         depart: (r.depart as string) ?? '',
         arrivee: (r.arrivee as string) ?? '',
         date: (r.date as string) ?? '',
@@ -212,7 +213,7 @@ export default function PaymentMethodPage() {
       companyName: company.name,
       companySlug: slug,
       nomClient: reservation.nomClient,
-      telephone: reservation.telephone,
+      telephone: getDisplayPhone(reservation),
       depart: reservation.depart,
       arrivee: reservation.arrivee,
       date: reservation.date,

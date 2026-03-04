@@ -28,5 +28,10 @@
   "ourCompany": "Our Company",
   "allRightsReserved": "All rights reserved",
   "legalMentions": "Legal mentions",
-  "privacyPolicy": "Privacy policy"
+  "privacyPolicy": "Privacy policy",
+  "noSuggestions": "No suggestions",
+  "home": "Home",
+  "myTickets": "My tickets",
+  "findReservation": "Find reservation",
+  "help": "Help"
 }

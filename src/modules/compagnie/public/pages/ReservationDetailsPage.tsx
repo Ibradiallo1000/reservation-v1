@@ -24,6 +24,7 @@ import { useWindowSize } from '@react-hook/window-size';
 import { hexToRgba, safeTextColor } from '@/utils/color';
 import type { ReservationStatus } from '@/types/reservation';
 import { showTicketDirect as showTicketDirectUtil, canViewReceiptPage } from '@/utils/reservationStatusUtils';
+import { getDisplayPhone } from '@/utils/phoneUtils';
 
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
@@ -31,6 +32,7 @@ interface Reservation {
   id: string;
   nomClient: string;
   telephone: string;
+  telephoneOriginal?: string;
   depart: string;
   arrivee: string;
   date: string;
@@ -814,7 +816,7 @@ const ReservationDetailsPage: React.FC = () => {
               receiptNumber={reservation.referenceCode || reservation.id}
               statut={reservation.statut}
               nomClient={reservation.nomClient}
-              telephone={reservation.telephone}
+              telephone={getDisplayPhone(reservation)}
               depart={reservation.depart}
               arrivee={reservation.arrivee}
               date={reservation.date}

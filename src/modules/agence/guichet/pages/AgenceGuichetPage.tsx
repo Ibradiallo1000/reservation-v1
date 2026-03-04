@@ -481,7 +481,10 @@ const AgenceGuichetPage: React.FC = () => {
         sessionId: activeShift!.id, userCode: sellerCodeCached || staffCodeForSale,
         trajetId: selectedTrip.id, date: selectedTrip.date, heure: selectedTrip.time,
         depart: selectedTrip.departure, arrivee: selectedTrip.arrival,
-        nomClient: normalizedName, telephone: rawPhoneMali(telephone) || null, seatsGo: placesAller,
+        nomClient: normalizedName,
+        telephone: rawPhoneMali(telephone) || null,
+        telephoneOriginal: telephone.trim() || null,
+        seatsGo: placesAller,
         seatsReturn: 0,
         montant: totalPrice, companySlug: companyMeta.slug,
         compagnieNom: companyMeta.name, agencyNom: agencyMeta.name,
@@ -560,12 +563,14 @@ const AgenceGuichetPage: React.FC = () => {
     setEditOpen(true);
   }, []);
 
-  const saveEdit = useCallback(async (payload: { id: string; nomClient: string; telephone?: string; seatsGo: number; seatsReturn?: number; montant: number; editReason?: string }) => {
+  const saveEdit = useCallback(async (payload: { id: string; nomClient: string; telephone?: string; telephoneOriginal?: string; seatsGo: number; seatsReturn?: number; montant: number; editReason?: string }) => {
     if (!user?.companyId || !user?.agencyId) return;
     setIsSavingEdit(true);
     try {
       await updateGuichetReservation(user.companyId, user.agencyId, payload.id, {
-        nomClient: payload.nomClient, telephone: payload.telephone ?? null,
+        nomClient: payload.nomClient,
+        telephone: payload.telephone ?? null,
+        telephoneOriginal: payload.telephoneOriginal ?? payload.telephone ?? null,
         seatsGo: payload.seatsGo ?? 1, seatsReturn: payload.seatsReturn ?? 0,
         montant: payload.montant ?? 0, editReason: payload.editReason ?? null,
       }, { id: user.uid, name: user.displayName || user.email || null });
@@ -1196,7 +1201,7 @@ const EditForm: React.FC<{
       <input className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm" placeholder="Motif (optionnel)" value={reason} onChange={(e) => setReason(e.target.value)} />
       <div className="flex justify-end gap-2 pt-2">
         <ActionButton variant="secondary" onClick={onClose}>Annuler</ActionButton>
-        <ActionButton disabled={saving || !nom} onClick={() => onSave({ id: target.id, nomClient: capitalizeFullName(nom), telephone: rawPhoneMali(tel) || tel, seatsGo: sGo, seatsReturn: sRet, montant: amt, editReason: reason || undefined })}>
+        <ActionButton disabled={saving || !nom} onClick={() => onSave({ id: target.id, nomClient: capitalizeFullName(nom), telephone: rawPhoneMali(tel) || tel, telephoneOriginal: tel.trim() || undefined, seatsGo: sGo, seatsReturn: sRet, montant: amt, editReason: reason || undefined })}>
           {saving ? "Enregistrement…" : "Enregistrer"}
         </ActionButton>
       </div>

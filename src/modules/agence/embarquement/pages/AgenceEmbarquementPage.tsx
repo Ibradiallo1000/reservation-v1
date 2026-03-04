@@ -39,7 +39,14 @@ import { getAffectationForBoarding } from "@/modules/compagnie/fleet/affectation
 import { getEffectiveStatut, canEmbarkWithScan, RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
-import { Plane } from "lucide-react";
+import { Plane, CheckCircle, AlertTriangle } from "lucide-react";
+import {
+  addToBoardingQueue,
+  getUnsyncedBoardingQueue,
+  markBoardingQueueSynced,
+} from "@/modules/agence/embarquement/boardingQueue";
+
+const FAST_BOARDING_OVERLAY_DURATION_MS = 1200;
 
 /* ===================== Types ===================== */
 type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
@@ -279,6 +286,61 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicle
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const lastScanRef = useRef<number>(0);
   const lastAlertRef = useRef<number>(0);
+  const offlineScannedIds = useRef<Set<string>>(new Set());
+
+  // Online status for offline boarding queue
+  const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" && navigator.onLine);
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  // Fast boarding overlay (success / error for 1.2s; success can show "Embarqué (hors ligne)")
+  const [fastBoardOverlay, setFastBoardOverlay] = useState<
+    { type: "success"; offline?: boolean } | { type: "error"; message: string } | null
+  >(null);
+  const overlayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showFastBoardSuccess = useCallback((offline?: boolean) => {
+    if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
+    setFastBoardOverlay({ type: "success", offline: !!offline });
+    try { navigator.vibrate(120); } catch {}
+    try { new Audio("/beep.mp3").play(); } catch {}
+    overlayTimeoutRef.current = setTimeout(() => {
+      overlayTimeoutRef.current = null;
+      setFastBoardOverlay(null);
+    }, FAST_BOARDING_OVERLAY_DURATION_MS);
+  }, []);
+
+  const showFastBoardError = useCallback((message: string) => {
+    if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
+    setFastBoardOverlay({ type: "error", message });
+    try { navigator.vibrate([100, 50, 100]); } catch {}
+    overlayTimeoutRef.current = setTimeout(() => {
+      overlayTimeoutRef.current = null;
+      setFastBoardOverlay(null);
+    }, FAST_BOARDING_OVERLAY_DURATION_MS);
+  }, []);
+
+  const normalizeOverlayMessage = useCallback((msg: string): string => {
+    if (msg.includes("Déjà embarqué")) return "Déjà embarqué";
+    if (msg.includes("Capacité véhicule atteinte") || msg.includes("Capacité atteinte")) return "Capacité atteinte";
+    if (msg.includes("non concordants") || msg.includes("autre départ")) return "Billet pour un autre trajet";
+    if (msg.includes("non valide")) return "Billet non valide";
+    return msg || "Erreur d'embarquement";
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
+    };
+  }, []);
 
   // Affectation (optionnelle) — véhicule / chauffeur / convoyeur depuis document affectation Phase 1
   const [assign, setAssign] = useState<{
@@ -404,7 +466,9 @@ useEffect(() => {
   }, [companyId, selectedAgencyId, selectedDate]); // eslint-disable-line
 
   /* ---------- Écoute temps réel réservations (inclut EMBARQUÉ/ABSENT) ---------- */
+  /* When scanOn is true, skip listener to improve scan performance (< 500ms goal). */
   useEffect(() => {
+    if (scanOn) return;
     if (!companyId || !selectedAgencyId) { setReservations([]); return; }
     if (!selectedTrip || !selectedTrip.departure || !selectedTrip.arrival || !selectedTrip.heure) {
       setReservations([]); return;
@@ -456,14 +520,15 @@ useEffect(() => {
     }
 
     return () => unsubs.forEach((u) => u());
-  }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
+  }, [companyId, selectedAgencyId, selectedTrip, selectedDate, scanOn]);
 
   /* ---------- Mise à jour Embarqué / Absent (verrou + concordance) ---------- */
   const updateStatut = useCallback(
     async (
       reservationId: string,
       statut: StatutEmbarquement,
-      agencyOverride?: string
+      agencyOverride?: string,
+      options?: { suppressAlert?: boolean }
     ) => {
       if (!companyId || !uid) return;
 
@@ -671,9 +736,15 @@ useEffect(() => {
           });
         });
 
-        try { new Audio("/beep.mp3").play(); } catch {}
+        if (!options?.suppressAlert) {
+          try { new Audio("/beep.mp3").play(); } catch {}
+        }
       } catch (e: any) {
         const msg = String(e?.message || e || "");
+        if (options?.suppressAlert) {
+          console.error("[EMBARK][ERROR]", e);
+          throw e;
+        }
         if (msg.includes("Déjà embarqué")) {
           alert("Billet déjà embarqué.");
         } else if (msg.includes("Capacité véhicule atteinte")) {
@@ -688,6 +759,33 @@ useEffect(() => {
     },
     [companyId, selectedAgencyId, uid, selectedTrip?.id, selectedTrip?.departure, selectedTrip?.arrival, selectedTrip?.heure, selectedDate, vehicleCapacity]
   );
+
+  /* ---------- Sync offline boarding queue when connection returns ---------- */
+  useEffect(() => {
+    if (!isOnline || !companyId) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const list = await getUnsyncedBoardingQueue();
+        for (const rec of list) {
+          if (cancelled) break;
+          try {
+            await updateStatut(rec.reservationId, "embarqué", rec.agencyId, { suppressAlert: true });
+            if (rec.id != null) await markBoardingQueueSynced(rec.id);
+          } catch (e: unknown) {
+            const msg = String((e as { message?: string })?.message ?? e ?? "");
+            if (msg.includes("Déjà embarqué") && rec.id != null) {
+              await markBoardingQueueSynced(rec.id);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[EMBARK][SYNC]", err);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [isOnline, companyId, updateStatut]);
 
   /* ---------- Utilitaire : prochain départ ---------- */
   async function computeNextDeparture(
@@ -1021,6 +1119,19 @@ useEffect(() => {
     }
   }, [companyId, selectedAgencyId, uid, selectedTrip, selectedDate, reservations, tripKey]);
 
+  /* ---------- Offline: resolve from cached list (no Firestore) ---------- */
+  const findFromCache = useCallback(
+    (code: string): { resId: string; agencyId: string } | null => {
+      if (!selectedAgencyId) return null;
+      const c = (code || "").trim();
+      const r = reservations.find(
+        (res) => (res.referenceCode || res.id || "").trim() === c
+      );
+      return r ? { resId: r.id, agencyId: selectedAgencyId } : null;
+    },
+    [reservations, selectedAgencyId]
+  );
+
   /* ---------- Saisie manuelle ---------- */
   const [scanCode, setScanCode] = useState("");
   const submitManual = useCallback(
@@ -1030,6 +1141,30 @@ useEffect(() => {
 
       const code = extractCode(scanCode);
       if (!code) return;
+
+      if (!isOnline) {
+        const found = findFromCache(code);
+        if (found) {
+          if (offlineScannedIds.current.has(found.resId)) {
+            showFastBoardError("Billet déjà scanné (hors ligne).");
+            return;
+          }
+          offlineScannedIds.current.add(found.resId);
+          await addToBoardingQueue({
+            reservationId: found.resId,
+            agencyId: found.agencyId,
+            companyId,
+            tripId: selectedTrip?.id ?? null,
+            date: selectedDate ?? "",
+            heure: selectedTrip?.heure ?? null,
+          });
+          showFastBoardSuccess(true);
+          setScanCode("");
+        } else {
+          showFastBoardError("Billet introuvable (hors ligne).");
+        }
+        return;
+      }
 
       try {
         const found = await findReservationByCode(
@@ -1045,17 +1180,18 @@ useEffect(() => {
           } : undefined
         );
         if (found) {
-          await updateStatut(found.resId, "embarqué", found.agencyId);
+          await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+          showFastBoardSuccess();
           setScanCode("");
         } else {
-          alert("Réservation introuvable.");
+          showFastBoardError("Réservation introuvable.");
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
-        alert("Erreur lors de la validation manuelle.");
+        showFastBoardError(normalizeOverlayMessage(err?.message ?? "Erreur lors de la validation manuelle."));
       }
     },
-    [scanCode, companyId, selectedAgencyId, updateStatut, selectedTrip, selectedDate]
+    [scanCode, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage]
   );
 
   /* ---------- Scanner caméra ---------- */
@@ -1086,6 +1222,28 @@ useEffect(() => {
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
+              if (!isOnline) {
+                const found = findFromCache(code);
+                if (found) {
+                  if (offlineScannedIds.current.has(found.resId)) {
+                    showFastBoardError("Billet déjà scanné (hors ligne).");
+                    return;
+                  }
+                  offlineScannedIds.current.add(found.resId);
+                  await addToBoardingQueue({
+                    reservationId: found.resId,
+                    agencyId: found.agencyId,
+                    companyId: companyId!,
+                    tripId: selectedTrip?.id ?? null,
+                    date: selectedDate ?? "",
+                    heure: selectedTrip?.heure ?? null,
+                  });
+                  showFastBoardSuccess(true);
+                } else {
+                  showFastBoardError("Billet introuvable (hors ligne).");
+                }
+                return;
+              }
               const found = await findReservationByCode(
                 companyId!,
                 selectedAgencyId,
@@ -1099,19 +1257,14 @@ useEffect(() => {
                 } : undefined
               );
               if (found) {
-                await updateStatut(found.resId, "embarqué", found.agencyId);
+                await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                showFastBoardSuccess();
               } else {
-                if (now - lastAlertRef.current > 2000) {
-                  lastAlertRef.current = now;
-                  alert("Billet introuvable.");
-                }
+                showFastBoardError("Billet introuvable.");
               }
-            } catch (e) {
+            } catch (e: any) {
               console.error(e);
-              if (now - lastAlertRef.current > 2000) {
-                lastAlertRef.current = now;
-                alert("Erreur lors du scan");
-              }
+              showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
             }
           }
         );
@@ -1129,6 +1282,28 @@ useEffect(() => {
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
+              if (!isOnline) {
+                const found = findFromCache(code);
+                if (found) {
+                  if (offlineScannedIds.current.has(found.resId)) {
+                    showFastBoardError("Billet déjà scanné (hors ligne).");
+                    return;
+                  }
+                  offlineScannedIds.current.add(found.resId);
+                  await addToBoardingQueue({
+                    reservationId: found.resId,
+                    agencyId: found.agencyId,
+                    companyId: companyId!,
+                    tripId: selectedTrip?.id ?? null,
+                    date: selectedDate ?? "",
+                    heure: selectedTrip?.heure ?? null,
+                  });
+                  showFastBoardSuccess(true);
+                } else {
+                  showFastBoardError("Billet introuvable (hors ligne).");
+                }
+                return;
+              }
               const found = await findReservationByCode(
                 companyId!,
                 selectedAgencyId,
@@ -1142,19 +1317,14 @@ useEffect(() => {
                 } : undefined
               );
               if (found) {
-                await updateStatut(found.resId, "embarqué", found.agencyId);
+                await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                showFastBoardSuccess();
               } else {
-                if (now - lastAlertRef.current > 2000) {
-                  lastAlertRef.current = now;
-                  alert("Billet introuvable.");
-                }
+                showFastBoardError("Billet introuvable.");
               }
-            } catch (e) {
+            } catch (e: any) {
               console.error(e);
-              if (now - lastAlertRef.current > 2000) {
-                lastAlertRef.current = now;
-                alert("Erreur lors du scan");
-              }
+              showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
             }
           }
         );
@@ -1162,6 +1332,7 @@ useEffect(() => {
     })();
 
     return () => {
+      offlineScannedIds.current.clear();
       readerRef.current?.reset?.();
       readerRef.current = null;
       if (videoRef.current?.srcObject) {
@@ -1169,7 +1340,7 @@ useEffect(() => {
         videoRef.current.srcObject = null;
       }
     };
-  }, [scanOn, companyId, selectedAgencyId, updateStatut, selectedTrip, selectedDate]);
+  }, [scanOn, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage]);
 
   /* ---------- Filtre & Totaux ---------- */
   const filtered = useMemo(() => {
@@ -1249,8 +1420,52 @@ useEffect(() => {
 
   return (
     <StandardLayoutWrapper>
-      <PageHeader title="Liste d'embarquement" subtitle={selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedDate} ${selectedTrip.heure}` : undefined} icon={Plane} />
-    <div className="agency-content-transition">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <PageHeader title="Liste d'embarquement" subtitle={selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedDate} ${selectedTrip.heure}` : undefined} icon={Plane} />
+        <div
+          className="flex items-center gap-2 shrink-0 rounded-full px-3 py-1.5 text-sm font-medium"
+          style={{
+            backgroundColor: isOnline ? "rgba(34, 197, 94, 0.15)" : "rgba(249, 115, 22, 0.2)",
+            color: isOnline ? "#16a34a" : "#ea580c",
+          }}
+          aria-live="polite"
+        >
+          <span
+            className="w-2 h-2 rounded-full shrink-0"
+            style={{ backgroundColor: isOnline ? "#16a34a" : "#ea580c" }}
+          />
+          {isOnline ? "En ligne" : "Mode hors ligne"}
+        </div>
+      </div>
+    <>
+      {/* Fast boarding overlay — full screen 1.2s feedback */}
+      {fastBoardOverlay && (
+        <div
+          className="fixed inset-0 z-[9999] flex flex-col items-center justify-center text-white"
+          style={{
+            backgroundColor: fastBoardOverlay.type === "success" ? "#16a34a" : "#dc2626",
+          }}
+          aria-live="polite"
+        >
+          {fastBoardOverlay.type === "success" ? (
+            <>
+              <CheckCircle className="w-24 h-24 mb-4" strokeWidth={2} />
+              <span className="text-2xl font-bold">
+                {fastBoardOverlay.offline ? "Embarqué (hors ligne)" : "Embarqué"}
+              </span>
+            </>
+          ) : (
+            <>
+              <AlertTriangle className="w-24 h-24 mb-4" strokeWidth={2} />
+              <span className="text-xl font-semibold text-center px-4">
+                {fastBoardOverlay.message}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="agency-content-transition">
       <style>{`
         .brand-logo{height:40px;width:auto;object-fit:contain}
         .case{display:inline-flex;align-items:center;justify-content:center;min-width:20px;min-height:20px;width:20px;height:20px;border:2px solid #0f172a;border-radius:6px;background:#fff;cursor:pointer;user-select:none}
@@ -1663,6 +1878,7 @@ useEffect(() => {
         </div>
       </div>
     </div>
+    </>
     </StandardLayoutWrapper>
   );
 };

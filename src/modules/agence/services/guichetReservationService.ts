@@ -15,6 +15,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { normalizePhone } from '@/utils/phoneUtils';
 import { SHIFT_STATUS, isShiftLocked } from '../constants/sessionLifecycle';
 import { updateDailyStatsOnReservationCreated } from '../aggregates/dailyStats';
 
@@ -31,6 +32,8 @@ export type CreateGuichetReservationParams = {
   arrivee: string;
   nomClient: string;
   telephone: string | null;
+  /** Raw input for display; if omitted, telephone is used */
+  telephoneOriginal?: string | null;
   seatsGo: number;
   seatsReturn: number;
   montant: number;
@@ -68,6 +71,8 @@ export async function createGuichetReservation(
   const newId = newRef.id;
   const now = Timestamp.now();
 
+  const phoneOriginal = params.telephoneOriginal ?? params.telephone;
+  const phoneNormalized = normalizePhone(phoneOriginal || params.telephone || '');
   const payload = {
     trajetId: params.trajetId,
     date: params.date,
@@ -76,6 +81,8 @@ export async function createGuichetReservation(
     arrivee: params.arrivee,
     nomClient: params.nomClient,
     telephone: params.telephone,
+    telephoneOriginal: phoneOriginal || null,
+    telephoneNormalized: phoneNormalized || null,
     email: null,
     seatsGo: params.seatsGo,
     seatsReturn: params.seatsReturn,
@@ -161,6 +168,8 @@ export async function updateGuichetReservation(
   updates: {
     nomClient?: string;
     telephone?: string | null;
+    telephoneOriginal?: string | null;
+    telephoneNormalized?: string | null;
     seatsGo?: number;
     seatsReturn?: number;
     montant?: number;
@@ -184,7 +193,14 @@ export async function updateGuichetReservation(
     },
   };
   if (updates.nomClient !== undefined) patch.nomClient = updates.nomClient;
-  if (updates.telephone !== undefined) patch.telephone = updates.telephone;
+  if (updates.telephone !== undefined) {
+    patch.telephone = updates.telephone;
+    const orig = updates.telephoneOriginal ?? updates.telephone;
+    patch.telephoneOriginal = orig ?? null;
+    patch.telephoneNormalized = normalizePhone(orig || '') || null;
+  }
+  if (updates.telephoneOriginal !== undefined) patch.telephoneOriginal = updates.telephoneOriginal;
+  if (updates.telephoneNormalized !== undefined) patch.telephoneNormalized = updates.telephoneNormalized;
   if (updates.seatsGo !== undefined) patch.seatsGo = Math.max(1, updates.seatsGo);
   if (updates.seatsReturn !== undefined) patch.seatsReturn = Math.max(0, updates.seatsReturn);
   if (updates.montant !== undefined) {

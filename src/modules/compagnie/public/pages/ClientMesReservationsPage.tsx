@@ -26,6 +26,7 @@ import {
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageLoadingState } from "@/shared/ui/PageStates";
+import { normalizePhone, getDisplayPhone } from "@/utils/phoneUtils";
 
 dayjs.locale("fr");
 
@@ -67,9 +68,6 @@ const toDayjs = (d: Reservation["date"]) => {
   if (typeof d === "object" && "seconds" in d) return dayjs(d.seconds * 1000);
   return null;
 };
-
-const normalizePhone = (raw: string) =>
-  (raw || "").replace(/[^\d+]/g, "").replace(/^00/, "+").trim();
 
 function statusToVariant(s?: string): StatusVariant {
   const v = (s || "").toLowerCase();
@@ -142,21 +140,21 @@ const ClientMesReservationsPage: React.FC = () => {
 
   const fetchForCompanyId = async (
     companyId: string,
-    companyData: DocumentData
+    companyData: DocumentData,
+    phoneNorm: string
   ) => {
     const agences = await getDocs(
       collection(db, "companies", companyId, "agences")
     );
     const out: Reservation[] = [];
+    const seenIds = new Set<string>();
 
     for (const ag of agences.docs) {
-      const qRef = query(
-        collection(db, "companies", companyId, "agences", ag.id, "reservations"),
-        where("telephone", "==", phone)
-      );
-      const snap = await getDocs(qRef);
-      snap.forEach((d) => {
-        const r = d.data() as any;
+      const colRef = collection(db, "companies", companyId, "agences", ag.id, "reservations");
+      const addDoc = (d: { id: string; data: () => any }) => {
+        if (seenIds.has(d.id)) return;
+        seenIds.add(d.id);
+        const r = d.data();
         out.push({
           id: d.id,
           companyId,
@@ -166,7 +164,7 @@ const ClientMesReservationsPage: React.FC = () => {
           couleurSecondaire: companyData?.couleurSecondaire,
 
           nomClient: r.nomClient || r.clientNom,
-          telephone: r.telephone,
+          telephone: getDisplayPhone(r),
           depart: r.depart || r.departure,
           arrivee: r.arrivee || r.arrival,
           arrival: r.arrival,
@@ -181,10 +179,13 @@ const ClientMesReservationsPage: React.FC = () => {
           statut: r.statut,
           lieu_depart: r.lieu_depart,
 
-          // 👇 NEW
           canal: r.canal || undefined,
         });
-      });
+      };
+      const snapNorm = await getDocs(query(colRef, where("telephoneNormalized", "==", phoneNorm)));
+      snapNorm.docs.forEach((d) => addDoc(d));
+      const snapLegacy = await getDocs(query(colRef, where("telephone", "==", phoneNorm)));
+      snapLegacy.docs.forEach((d) => addDoc(d));
     }
     return out;
   };
@@ -223,12 +224,12 @@ const ClientMesReservationsPage: React.FC = () => {
             primary: d?.couleurPrimaire || t.primary,
             secondary: d?.couleurSecondaire || t.secondary,
           }));
-          results = results.concat(await fetchForCompanyId(cdoc.id, d));
+          results = results.concat(await fetchForCompanyId(cdoc.id, d, phoneN));
         }
       } else {
         const companies = await getDocs(collection(db, "companies"));
         for (const c of companies.docs) {
-          results = results.concat(await fetchForCompanyId(c.id, c.data()));
+          results = results.concat(await fetchForCompanyId(c.id, c.data(), phoneN));
         }
       }
 

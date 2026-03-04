@@ -29,5 +29,9 @@
   "allRightsReserved": "Tous droits réservés",
   "legalMentions": "Mentions légales",
   "privacyPolicy": "Politique de confidentialité",
-  "noSuggestions": "Aucune suggestion"
+  "noSuggestions": "Aucune suggestion",
+  "home": "Accueil",
+  "myTickets": "Mes billets",
+  "findReservation": "Retrouver réservation",
+  "help": "Aide"
 }
