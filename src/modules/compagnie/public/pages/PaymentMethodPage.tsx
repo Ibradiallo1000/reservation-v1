@@ -227,7 +227,33 @@ export default function PaymentMethodPage() {
       slug: company.slug,
     };
 
-    navigate(`/${slug}/upload-preuve`, {
+    try {
+      sessionStorage.setItem('reservationDraft', JSON.stringify(draft));
+      sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
+    } catch { /* quota / private */ }
+
+    const ussd = method.ussdPattern
+      ?.replace('MERCHANT', method.merchantNumber || '')
+      .replace('AMOUNT', String(reservation.montant));
+
+    if (ussd) {
+      navigate(`/${slug}/ussd-payment`, {
+        replace: false,
+        state: {
+          ussdCode: ussd,
+          reservationId: reservation.id,
+          slug,
+          draft,
+          companyInfo,
+          paymentMethodKey: key,
+          depart: reservation.depart,
+          arrivee: reservation.arrivee,
+        },
+      });
+      return;
+    }
+
+    navigate(`/${slug}/upload-preuve/${reservation.id}`, {
       replace: false,
       state: {
         draft,
@@ -236,9 +262,6 @@ export default function PaymentMethodPage() {
       },
     });
 
-    const ussd = method.ussdPattern
-      ?.replace('MERCHANT', method.merchantNumber || '')
-      .replace('AMOUNT', String(reservation.montant));
     if (method.url) {
       try {
         new URL(method.url);
@@ -246,8 +269,6 @@ export default function PaymentMethodPage() {
       } catch {
         // ignore
       }
-    } else if (ussd) {
-      window.location.href = `tel:${encodeURIComponent(ussd)}`;
     }
   };
 

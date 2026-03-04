@@ -1,5 +1,5 @@
 // src/pages/RouteResolver.tsx
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import {
   collection,
@@ -29,6 +29,7 @@ const ConfidentialitePage = lazy(() => import("../pages/ConfidentialitePage"));
 const ReceiptEnLignePage = lazy(() => import("../pages/ReceiptEnLignePage"));
 const UploadPreuvePage = lazy(() => import("../pages/UploadPreuvePage"));
 const PaymentMethodPage = lazy(() => import("../pages/PaymentMethodPage"));
+const USSDPaymentInstructionsPage = lazy(() => import("../pages/USSDPaymentInstructionsPage"));
 const ReservationDetailsPage = lazy(() => import("../pages/ReservationDetailsPage"));
 const AidePage = lazy(() => import("../pages/AidePage"));
 const CompanyAboutPage = lazy(() => import("../pages/CompanyAboutPage"));
@@ -50,15 +51,33 @@ const RESERVED = new Set([
 /** cache mémoire par session (optimisation non bloquante) */
 const memoryCache = new Map<string, Company>();
 
+const PENDING_RESERVATION_KEY = "pendingReservation";
+
+/** Lit et parse pendingReservation depuis localStorage (sans effet de bord). */
+function readPendingReservation(): { slug: string; id: string; companyId?: string; agencyId?: string; status?: string } | null {
+  try {
+    const raw = localStorage.getItem(PENDING_RESERVATION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || typeof (parsed as any).id !== "string" || typeof (parsed as any).slug !== "string") return null;
+    return parsed as { slug: string; id: string; companyId?: string; agencyId?: string; status?: string };
+  } catch {
+    return null;
+  }
+}
+
 /* ---------------------------------------------------------------------------------- */
 
 export default function RouteResolver() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const parts = useMemo(() => pathname.split("/").filter(Boolean), [pathname]);
 
   /** Dans AppRoutes, RouteResolver ne monte que sur `/:slug/*`. */
   const slug = parts[0] ?? null;
   const subPath = parts[1] ?? null;
+  /** Third segment (e.g. reservationId for /:slug/upload-preuve/:reservationId) */
+  const thirdSegment = parts[2] ?? null;
 
   const [company, setCompany] = useState<Company | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
@@ -190,6 +209,58 @@ export default function RouteResolver() {
     };
   }, [slug]);
 
+  // Recovery: when on company homepage, if pendingReservation exists and is en_attente_paiement, show banner or redirect
+  const [recoveryChecked, setRecoveryChecked] = useState(false);
+  const [pendingRecovery, setPendingRecovery] = useState<{ reservationId: string } | null>(null);
+  useEffect(() => {
+    if (recoveryChecked || loading || notFound || error || subPath !== null || !slug || !company) return;
+    const pending = readPendingReservation();
+    if (!pending || !pending.id || !pending.slug) {
+      setRecoveryChecked(true);
+      return;
+    }
+    if (pending.slug !== slug) {
+      setRecoveryChecked(true);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const companyId = pending.companyId;
+        const agencyId = pending.agencyId;
+        if (!companyId || !agencyId) {
+          setRecoveryChecked(true);
+          return;
+        }
+        const resRef = doc(db, "companies", companyId, "agences", agencyId, "reservations", pending.id);
+        const snap = await getDoc(resRef);
+        if (!alive) return;
+        if (!snap.exists()) {
+          try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
+          setRecoveryChecked(true);
+          return;
+        }
+        const data = snap.data() as { statut?: string };
+        const status = (data?.statut ?? "").toLowerCase();
+        if (status !== "en_attente_paiement") {
+          try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
+          setRecoveryChecked(true);
+          return;
+        }
+        setPendingRecovery({ reservationId: pending.id });
+        setRecoveryChecked(true);
+      } catch {
+        if (alive) {
+          try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
+          setRecoveryChecked(true);
+        }
+      } finally {
+        if (alive) setRecoveryChecked(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, [loading, notFound, error, subPath, slug, company, navigate]);
+
   /* ---------- states ---------- */
   if (loading) return null;
   if (error) return <MobileErrorScreen error={error} />;
@@ -211,7 +282,7 @@ export default function RouteResolver() {
 
   // Si la réservation en ligne est désactivée, on bloque les écrans de booking
   const blocksOnline = !company.onlineBookingEnabled;
-  const isOnlineRoute = subPath === "booking" || subPath === "receipt" || subPath === "confirmation" || subPath === "upload-preuve" || subPath === "payment" || subPath === "reservation" || subPath === "details";
+  const isOnlineRoute = subPath === "booking" || subPath === "receipt" || subPath === "confirmation" || subPath === "upload-preuve" || subPath === "payment" || subPath === "ussd-payment" || subPath === "reservation" || subPath === "details";
   if (blocksOnline && isOnlineRoute) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6">
@@ -237,6 +308,9 @@ export default function RouteResolver() {
     case "payment":
       content = <PaymentMethodPage />;
       break;
+    case "ussd-payment":
+      content = <USSDPaymentInstructionsPage />;
+      break;
     case "mes-reservations":
       content = <ClientMesReservationsPage />;
       break;
@@ -254,7 +328,7 @@ export default function RouteResolver() {
       content = <ReceiptEnLignePage />;
       break;
     case "upload-preuve":
-      content = <UploadPreuvePage />;
+      content = <UploadPreuvePage reservationIdFromPath={thirdSegment ?? undefined} />;
       break;
     case "details":
     case "reservation":
@@ -267,7 +341,40 @@ export default function RouteResolver() {
       content = <CompanyAboutPage company={company} />;
       break;
     case null:
-      content = <PublicCompanyPage {...common} isMobile={isMobile} />;
+      content = (
+        <>
+          {pendingRecovery && slug && (
+            <div
+              className="mx-auto max-w-md px-4 pt-4 pb-2"
+              role="alert"
+              aria-live="polite"
+            >
+              <div
+                className="rounded-xl border p-4 shadow-sm"
+                style={{
+                  backgroundColor: `${company?.couleurPrimaire ?? "#3b82f6"}0D`,
+                  borderColor: `${company?.couleurPrimaire ?? "#3b82f6"}40`,
+                }}
+              >
+                <p className="text-sm font-medium text-gray-800">
+                  Vous avez une réservation en attente.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/${slug}/upload-preuve/${pendingRecovery.reservationId}`, { replace: true })}
+                  className="mt-3 w-full rounded-lg py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
+                  style={{
+                    backgroundColor: company?.couleurPrimaire ?? "#3b82f6",
+                  }}
+                >
+                  Continuer ma réservation
+                </button>
+              </div>
+            </div>
+          )}
+          <PublicCompanyPage {...common} isMobile={isMobile} />
+        </>
+      );
       break;
     default:
       content = <PageNotFound />;

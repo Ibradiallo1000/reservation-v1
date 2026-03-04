@@ -460,7 +460,7 @@ const AppRoutes = () => {
         <Route path="/:slug/reserver" element={<ReservationClientPage />} />
         <Route path="/:slug/reservation/:id" element={<ReservationDetailsPage />} />
         <Route path="/:slug/mon-billet" element={<ReservationDetailsPage />} />
-        <Route path="/:slug/upload-preuve/:id" element={<LegacyUploadRedirect />} />
+        {/* /:slug/upload-preuve/:id is handled by RouteResolver (recovery + upload flow) */}
         <Route path="/mes-reservations" element={<ClientMesReservationsPage />} />
         <Route path="/mes-billets" element={<ClientMesBilletsPage />} />
         {/* /:slug/mes-reservations et /:slug/mes-billets passent par RouteResolver (bottom nav) */}

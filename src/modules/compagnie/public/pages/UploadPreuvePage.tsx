@@ -70,17 +70,23 @@ interface CompanyInfo {
   slug?: string;
 }
 
-const UploadPreuvePage: React.FC = () => {
+interface UploadPreuvePageProps {
+  /** When user returns via recovery, RouteResolver passes reservationId from URL (e.g. /:slug/upload-preuve/:reservationId) */
+  reservationIdFromPath?: string;
+}
+
+const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPath }) => {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const money = useFormatCurrency();
   const language = i18n.language?.startsWith('en') ? 'en' : 'fr';
   const location = useLocation();
-  const { slug, id } = useParams<{ slug: string; id?: string }>();
+  const { slug } = useParams<{ slug: string; id?: string }>();
   const isOnline = useOnlineStatus();
 
   // Récup context navigation si présent (depuis PaymentMethodPage ou autre)
   const { draft: locationDraft, companyInfo: locationCompanyInfo, paymentMethodKey: statePaymentMethodKey } = (location.state as any) || {};
+  const reservationId = reservationIdFromPath;
 
   // States UI / data
   const [reservationDraft, setReservationDraft] = useState<ReservationDraft | null>(null);
@@ -91,11 +97,12 @@ const UploadPreuvePage: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ======= Chargement initial (sessionStorage + Firestore) =======
+  // ======= Chargement initial (location.state > sessionStorage > Firestore by reservationId) =======
   const loadInitialData = useCallback(async () => {
     log.group('loadInitialData');
     try {
       setLoadingData(true);
+      setError(null);
 
       let parsedCompanyInfo: CompanyInfo | null = null;
 
@@ -106,7 +113,7 @@ const UploadPreuvePage: React.FC = () => {
         setReservationDraft(locationDraft);
         if (statePaymentMethodKey) setPaymentMethod(statePaymentMethodKey);
       } else {
-        // 2) Depuis sessionStorage (cas de refresh page)
+        // 2) Depuis sessionStorage (cas de refresh page, tab restée ouverte)
         const savedDraft = sessionStorage.getItem('reservationDraft');
         const savedCompanyInfo = sessionStorage.getItem('companyInfo');
         log.info('Init from sessionStorage', { hasDraft: !!savedDraft, hasCompany: !!savedCompanyInfo });
@@ -114,11 +121,70 @@ const UploadPreuvePage: React.FC = () => {
         if (savedDraft && savedCompanyInfo) {
           const parsedDraft = JSON.parse(savedDraft) as ReservationDraft;
           parsedCompanyInfo = JSON.parse(savedCompanyInfo) as CompanyInfo;
-
           if (!parsedDraft?.depart || !parsedDraft?.arrivee) {
             throw new Error('Données de réservation incomplètes');
           }
           setReservationDraft(parsedDraft);
+        } else if (reservationId && slug) {
+          // 3) Depuis Firestore par reservationId (retour après USSD / reload)
+          log.info('Init from Firestore by reservationId', { reservationId });
+          const pubRef = doc(db, 'publicReservations', reservationId);
+          const pubSnap = await getDoc(pubRef);
+          if (!pubSnap.exists()) {
+            throw new Error('Réservation introuvable');
+          }
+          const pub = pubSnap.data() as { companyId?: string; agencyId?: string; slug?: string };
+          const companyId = pub.companyId;
+          const agencyId = pub.agencyId;
+          const companySlug = pub.slug || slug;
+          if (!companyId || !agencyId) {
+            throw new Error('Données de réservation incomplètes');
+          }
+          const resRef = doc(db, 'companies', companyId, 'agences', agencyId, 'reservations', reservationId);
+          const resSnap = await getDoc(resRef);
+          if (!resSnap.exists()) {
+            throw new Error('Réservation introuvable');
+          }
+          const resData = resSnap.data() as Record<string, unknown>;
+          const statut = ((resData.statut as string) || '').toLowerCase();
+          if (statut !== 'en_attente_paiement') {
+            throw new Error(statut === 'confirme' || statut === 'preuve_recue' ? 'Cette réservation a déjà été traitée.' : 'Cette réservation n\'est plus en attente de preuve.');
+          }
+          const companyRef = doc(db, 'companies', companyId);
+          const companySnap = await getDoc(companyRef);
+          if (!companySnap.exists()) {
+            throw new Error('Compagnie introuvable');
+          }
+          const companyData = companySnap.data() as Record<string, unknown>;
+          const draft: ReservationDraft = {
+            id: reservationId,
+            agencyId,
+            companyId,
+            companySlug,
+            companyName: (companyData.nom as string) || (companyData.name as string) || 'Compagnie',
+            nomClient: (resData.nomClient as string) || '',
+            telephone: (resData.telephone as string) || '',
+            depart: (resData.depart as string) || '',
+            arrivee: (resData.arrivee as string) || '',
+            date: (resData.date as string) || '',
+            heure: (resData.heure as string) || '',
+            seatsGo: typeof resData.seatsGo === 'number' ? resData.seatsGo : 1,
+            seatsReturn: 0,
+            tripType: 'aller_simple',
+            montant: typeof resData.montant === 'number' ? resData.montant : 0,
+            preuveMessage: '',
+          };
+          setReservationDraft(draft);
+          parsedCompanyInfo = {
+            id: companyId,
+            name: (companyData.nom as string) || (companyData.name as string) || 'Compagnie',
+            primaryColor: (companyData.primaryColor as string) || (companyData.couleurPrimaire as string),
+            secondaryColor: (companyData.couleurSecondaire as string),
+            couleurPrimaire: (companyData.couleurPrimaire as string),
+            couleurSecondaire: (companyData.couleurSecondaire as string),
+            logoUrl: (companyData.logoUrl as string) || '',
+            slug: (companyData.slug as string) || companySlug,
+          };
         } else {
           throw new Error('Aucune donnée de réservation valide trouvée');
         }
@@ -171,7 +237,7 @@ const UploadPreuvePage: React.FC = () => {
       setLoadingData(false);
       log.groupEnd();
     }
-  }, [locationDraft, locationCompanyInfo, statePaymentMethodKey, navigate, slug, id]);
+  }, [locationDraft, locationCompanyInfo, statePaymentMethodKey, reservationId, slug]);
 
   useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
@@ -221,6 +287,7 @@ const UploadPreuvePage: React.FC = () => {
 
       sessionStorage.removeItem('reservationDraft');
       sessionStorage.removeItem('companyInfo');
+      try { localStorage.removeItem('pendingReservation'); } catch {}
       log.info('Proof submitted → redirect to receipt');
       navigate(`/${reservationDraft.companySlug || slug}/receipt/${reservationDraft.id}`, { replace: true });
     } catch (err) {
@@ -306,6 +373,9 @@ const UploadPreuvePage: React.FC = () => {
       />
 
       <main className="max-w-4xl mx-auto px-4 py-6 pb-24 -mt-2 space-y-6">
+        <p className="text-sm text-gray-700 text-center px-2" style={{ color: themeConfig.colors.primary }}>
+          Si vous venez d&apos;effectuer le paiement, merci d&apos;envoyer votre preuve pour finaliser la réservation.
+        </p>
         {/* 3D floating route summary card */}
         <div
           className="relative bg-white rounded-2xl p-4 shadow-xl border"
