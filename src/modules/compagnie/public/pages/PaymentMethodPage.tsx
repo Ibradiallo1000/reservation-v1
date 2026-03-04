@@ -136,27 +136,26 @@ export default function PaymentMethodPage() {
         return;
       }
 
+      const toStr = (v: unknown): string => (typeof v === 'string' ? v : '');
       const normDate = (v: unknown): string => {
         if (typeof v === 'string') return v;
         if (v && typeof v === 'object' && 'seconds' in v) return new Date((v as { seconds: number }).seconds * 1000).toISOString().slice(0, 10);
         return '';
       };
-      const normHeure = (v: unknown): string => (typeof v === 'string' ? v : '');
-      const dateStr: string = normDate(r.date);
-      const heureStr: string = normHeure(r.heure);
+      const normHeure = (v: unknown): string => toStr(v);
       setReservation({
         id: reservationId,
         companyId: cid,
         agencyId: aid,
-        nomClient: (r.nomClient as string) ?? '',
-        telephone: (r.telephoneOriginal ?? r.telephone) ?? '',
-        depart: (r.depart as string) ?? '',
-        arrivee: (r.arrivee as string) ?? '',
-        date: dateStr,
-        heure: heureStr,
+        nomClient: toStr(r.nomClient),
+        telephone: toStr(r.telephoneOriginal ?? r.telephone),
+        depart: toStr(r.depart),
+        arrivee: toStr(r.arrivee),
+        date: normDate(r.date),
+        heure: normHeure(r.heure),
         montant: Number(r.montant ?? r.montant_total ?? 0),
         seatsGo: Number(r.seatsGo ?? 1),
-        statut,
+        statut: toStr(r.statut),
       });
 
       const compSnap = await getDoc(doc(db, 'companies', cid));
