@@ -7,6 +7,7 @@ import { db } from '@/firebaseConfig';
 import { Check, Phone } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import ReservationStepHeader from '../components/ReservationStepHeader';
+import PaymentInstructionsModal, { getPaymentInstructionsSeen } from '../components/PaymentInstructionsModal';
 import { enUS } from 'date-fns/locale';
 import { fr } from 'date-fns/locale';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
@@ -85,6 +86,7 @@ export default function PaymentMethodPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedMethodKey, setSelectedMethodKey] = useState<string | null>(null);
+  const [showInstructionsModal, setShowInstructionsModal] = useState(false);
 
   const load = useCallback(async () => {
     if (!slug || !reservationId) {
@@ -189,6 +191,12 @@ export default function PaymentMethodPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (!loading && reservation && company && !getPaymentInstructionsSeen()) {
+      setShowInstructionsModal(true);
+    }
+  }, [loading, reservation, company]);
+
   const primaryColor = company?.couleurPrimaire ?? '#2563eb';
   const secondaryColor = company?.couleurSecondaire ?? '#93c5fd';
 
@@ -237,29 +245,20 @@ export default function PaymentMethodPage() {
       .replace('AMOUNT', String(reservation.montant));
 
     if (ussd) {
-      navigate(`/${slug}/ussd-payment`, {
+      try {
+        sessionStorage.setItem('lastUssdCode', ussd);
+      } catch { /* ignore */ }
+      navigate(`/${slug}/upload-preuve/${reservation.id}`, {
         replace: false,
-        state: {
-          ussdCode: ussd,
-          reservationId: reservation.id,
-          slug,
-          draft,
-          companyInfo,
-          paymentMethodKey: key,
-          depart: reservation.depart,
-          arrivee: reservation.arrivee,
-        },
+        state: { draft, companyInfo, paymentMethodKey: key },
       });
+      window.location.href = `tel:${encodeURIComponent(ussd)}`;
       return;
     }
 
     navigate(`/${slug}/upload-preuve/${reservation.id}`, {
       replace: false,
-      state: {
-        draft,
-        companyInfo,
-        paymentMethodKey: key,
-      },
+      state: { draft, companyInfo, paymentMethodKey: key },
     });
 
     if (method.url) {
@@ -298,6 +297,13 @@ export default function PaymentMethodPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {showInstructionsModal && (
+        <PaymentInstructionsModal
+          primaryColor={primaryColor}
+          secondaryColor={secondaryColor}
+          onClose={() => setShowInstructionsModal(false)}
+        />
+      )}
       <ReservationStepHeader
         onBack={() => navigate(-1)}
         primaryColor={primaryColor}

@@ -4,7 +4,7 @@ import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db } from '@/firebaseConfig';
 import { doc, getDoc, updateDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { SectionCard } from '@/ui';
-import { XCircle, Loader2, Info } from 'lucide-react';
+import { XCircle, Loader2, Info, Phone } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import ReservationStepHeader from '../components/ReservationStepHeader';
 import 'react-lazy-load-image-component/src/effects/blur.css';
@@ -287,6 +287,7 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
 
       sessionStorage.removeItem('reservationDraft');
       sessionStorage.removeItem('companyInfo');
+      sessionStorage.removeItem('lastUssdCode');
       try { localStorage.removeItem('pendingReservation'); } catch {}
       log.info('Proof submitted → redirect to receipt');
       navigate(`/${reservationDraft.companySlug || slug}/receipt/${reservationDraft.id}`, { replace: true });
@@ -373,9 +374,25 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       />
 
       <main className="max-w-4xl mx-auto px-4 py-6 pb-24 -mt-2 space-y-6">
-        <p className="text-sm text-gray-700 text-center px-2" style={{ color: themeConfig.colors.primary }}>
+        <p className="text-sm text-center px-2" style={{ color: themeConfig.colors.primary }}>
           Si vous venez d&apos;effectuer le paiement, merci d&apos;envoyer votre preuve pour finaliser la réservation.
         </p>
+        {typeof window !== 'undefined' && sessionStorage.getItem('lastUssdCode') && (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => {
+                const code = sessionStorage.getItem('lastUssdCode');
+                if (code) window.location.href = `tel:${encodeURIComponent(code)}`;
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border-2 py-2 px-4 text-sm font-medium transition hover:bg-gray-50 active:scale-[0.98]"
+              style={{ borderColor: `${themeConfig.colors.secondary}99`, color: themeConfig.colors.primary }}
+            >
+              <Phone className="w-4 h-4" aria-hidden />
+              Recomposer le code USSD
+            </button>
+          </div>
+        )}
         {/* 3D floating route summary card */}
         <div
           className="relative bg-white rounded-2xl p-4 shadow-xl border"

@@ -29,7 +29,6 @@ const ConfidentialitePage = lazy(() => import("../pages/ConfidentialitePage"));
 const ReceiptEnLignePage = lazy(() => import("../pages/ReceiptEnLignePage"));
 const UploadPreuvePage = lazy(() => import("../pages/UploadPreuvePage"));
 const PaymentMethodPage = lazy(() => import("../pages/PaymentMethodPage"));
-const USSDPaymentInstructionsPage = lazy(() => import("../pages/USSDPaymentInstructionsPage"));
 const ReservationDetailsPage = lazy(() => import("../pages/ReservationDetailsPage"));
 const AidePage = lazy(() => import("../pages/AidePage"));
 const CompanyAboutPage = lazy(() => import("../pages/CompanyAboutPage"));
@@ -282,7 +281,7 @@ export default function RouteResolver() {
 
   // Si la réservation en ligne est désactivée, on bloque les écrans de booking
   const blocksOnline = !company.onlineBookingEnabled;
-  const isOnlineRoute = subPath === "booking" || subPath === "receipt" || subPath === "confirmation" || subPath === "upload-preuve" || subPath === "payment" || subPath === "ussd-payment" || subPath === "reservation" || subPath === "details";
+  const isOnlineRoute = subPath === "booking" || subPath === "receipt" || subPath === "confirmation" || subPath === "upload-preuve" || subPath === "payment" || subPath === "reservation" || subPath === "details";
   if (blocksOnline && isOnlineRoute) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6">
@@ -307,9 +306,6 @@ export default function RouteResolver() {
       break;
     case "payment":
       content = <PaymentMethodPage />;
-      break;
-    case "ussd-payment":
-      content = <USSDPaymentInstructionsPage />;
       break;
     case "mes-reservations":
       content = <ClientMesReservationsPage />;
