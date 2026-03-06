@@ -12,6 +12,7 @@ type Theme = "light" | "dark" | "system";
 
 const Header: React.FC = () => {
   const navigate = useNavigate();
+  const [scrolled, setScrolled] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(() => {
     try {
       return localStorage.getItem("teliya:lastLogoUrl");
@@ -53,6 +54,12 @@ const Header: React.FC = () => {
     return () => mq.removeEventListener?.("change", handler);
   }, [theme]);
 
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   // ---------- CHARGEMENT LOGO ----------
   useEffect(() => {
     let cancelled = false;
@@ -84,14 +91,15 @@ const Header: React.FC = () => {
 
   return (
     <header className="relative z-50 w-full">
-      {/* Barre principale orange */}
       <div
-        className="fixed top-0 inset-x-0 z-50 shadow-md border-b border-orange-700/30"
+        className="sticky top-0 z-50 shadow-md border-b border-orange-700/30 transition-all duration-200"
         style={{
           background: `linear-gradient(90deg, ${ORANGE}, ${ORANGE_DARK})`,
+          backdropFilter: scrolled ? "saturate(180%) blur(12px)" : undefined,
+          WebkitBackdropFilter: scrolled ? "saturate(180%) blur(12px)" : undefined,
         }}
       >
-        <div className="max-w-7xl mx-auto px-4 py-2 flex items-center gap-2 text-white">
+        <div className="max-w-[1200px] mx-auto px-6 py-2.5 flex items-center justify-between gap-4 md:gap-6 text-white">
           {/* Logo + nom */}
           <button
             onClick={goHome}

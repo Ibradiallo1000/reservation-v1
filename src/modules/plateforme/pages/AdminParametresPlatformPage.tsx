@@ -26,8 +26,13 @@ import {
   Plus,
   Link as LinkIcon,
   Globe,
+  LayoutGrid,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import {
+  DEFAULT_PRODUCT_PRESENTATION,
+  type ProductPresentationModule,
+} from "../types/productPresentation";
 
 type NavLink = {
   label: string;
@@ -68,6 +73,8 @@ type PlatformSettings = {
   legalLinks?: NavLink[];
   extraLinks?: NavLink[];
   worldMapBg?: boolean; // motif de fond du footer
+  footer?: { about?: string; mission?: string; contactPhone?: string; contactEmail?: string };
+  productPresentation?: ProductPresentationModule[];
 };
 
 const SETTINGS_REF = doc(db, "platform", "settings");
@@ -125,12 +132,15 @@ const AdminParametresPlatformPage: React.FC = () => {
         setSettings((prev) => ({
           ...prev,
           ...data,
-          // protège contre undefined sur objets imbriqués
           contact: { ...prev.contact, ...(data.contact || {}) },
           social: { ...prev.social, ...(data.social || {}) },
           legalLinks: data.legalLinks ?? prev.legalLinks,
           extraLinks: data.extraLinks ?? prev.extraLinks,
           worldMapBg: typeof data.worldMapBg === "boolean" ? data.worldMapBg : prev.worldMapBg,
+          footer: { ...prev.footer, ...(data.footer || {}) },
+          productPresentation: Array.isArray(data.productPresentation) && data.productPresentation.length > 0
+            ? data.productPresentation
+            : DEFAULT_PRODUCT_PRESENTATION,
         }));
       }
     })();
@@ -255,6 +265,30 @@ const AdminParametresPlatformPage: React.FC = () => {
                 placeholder="Texte court de présentation affiché dans le pied de page…"
               />
             </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm mb-1">Mission (footer landing)</label>
+              <textarea
+                className="w-full px-4 py-2 border rounded-lg"
+                rows={2}
+                value={settings.footer?.mission ?? ""}
+                onChange={(e) =>
+                  setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), mission: e.target.value } }))
+                }
+                placeholder="Notre mission est de moderniser et simplifier la gestion du transport…"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm mb-1">À propos (bloc footer landing, optionnel)</label>
+              <textarea
+                className="w-full px-4 py-2 border rounded-lg"
+                rows={2}
+                value={settings.footer?.about ?? ""}
+                onChange={(e) =>
+                  setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), about: e.target.value } }))
+                }
+                placeholder="Laissez vide pour utiliser « À propos (footer) » ci-dessus"
+              />
+            </div>
           </div>
         </div>
 
@@ -319,6 +353,34 @@ const AdminParametresPlatformPage: React.FC = () => {
                   placeholder="Lun–Sam : 8h–19h"
                 />
                 <Clock className="h-4 w-4 absolute right-3 top-3.5 text-gray-400" />
+              </div>
+            </div>
+            <div className="md:col-span-2 pt-2 border-t border-gray-100">
+              <p className="text-xs text-gray-500 mb-2">Override pour le footer landing (optionnel)</p>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm mb-1">Téléphone footer</label>
+                  <input
+                    className="w-full px-4 py-2 border rounded-lg"
+                    value={settings.footer?.contactPhone ?? ""}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), contactPhone: e.target.value } }))
+                    }
+                    placeholder="Laissez vide pour utiliser le contact ci-dessus"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Email footer</label>
+                  <input
+                    className="w-full px-4 py-2 border rounded-lg"
+                    type="email"
+                    value={settings.footer?.contactEmail ?? ""}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), contactEmail: e.target.value } }))
+                    }
+                    placeholder="Laissez vide pour utiliser le contact ci-dessus"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -449,6 +511,94 @@ const AdminParametresPlatformPage: React.FC = () => {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* ===================== Présentation produit (homepage) ===================== */}
+        <div className="bg-white rounded-lg shadow p-6 mb-6 dark:bg-slate-800 dark:border dark:border-slate-700">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 dark:text-white">
+            <LayoutGrid /> Présentation produit (homepage)
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-slate-300 mb-4">
+            Les modules affichés dans la section « Produit » de la page d&apos;accueil. Ordre, titres, descriptions et puces.
+          </p>
+          <div className="space-y-6">
+            {(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION).map((mod, idx) => (
+              <div key={mod.id} className="border border-gray-200 dark:border-slate-600 rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-800 dark:text-white">
+                    {mod.displayOrder}. {mod.title}
+                  </span>
+                  <label className="inline-flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={mod.enabled !== false}
+                      onChange={(e) => {
+                        const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                        list[idx] = { ...list[idx], enabled: e.target.checked };
+                        setSettings((s) => ({ ...s, productPresentation: list }));
+                      }}
+                    />
+                    Actif
+                  </label>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Titre</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm"
+                    value={mod.title}
+                    onChange={(e) => {
+                      const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                      list[idx] = { ...list[idx], title: e.target.value };
+                      setSettings((s) => ({ ...s, productPresentation: list }));
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Description</label>
+                  <textarea
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
+                    rows={2}
+                    value={mod.description}
+                    onChange={(e) => {
+                      const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                      list[idx] = { ...list[idx], description: e.target.value };
+                      setSettings((s) => ({ ...s, productPresentation: list }));
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Puces (une par ligne)</label>
+                  <textarea
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
+                    rows={3}
+                    value={(mod.features || []).join("\n")}
+                    onChange={(e) => {
+                      const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                      list[idx] = {
+                        ...list[idx],
+                        features: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
+                      };
+                      setSettings((s) => ({ ...s, productPresentation: list }));
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Image (URL optionnelle)</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm"
+                    type="url"
+                    placeholder="https://…"
+                    value={mod.imageUrl ?? ""}
+                    onChange={(e) => {
+                      const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                      list[idx] = { ...list[idx], imageUrl: e.target.value.trim() || undefined };
+                      setSettings((s) => ({ ...s, productPresentation: list }));
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 

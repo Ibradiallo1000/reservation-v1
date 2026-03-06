@@ -510,6 +510,20 @@ service cloud.firestore {
     }
 
     /* =====================
+       PLATFORM (landing, settings, leads)
+    ===================== */
+    match /platform/settings {
+      allow get: if true;
+      allow create, update, delete: if isAuth() && getUserRole() == 'admin_platforme';
+    }
+
+    match /platformLeads/{leadId} {
+      allow create: if true;
+      allow get, list: if isAuth() && getUserRole() == 'admin_platforme';
+      allow update, delete: if false;
+    }
+
+    /* =====================
        DENY BY DEFAULT — no fallback read/write
        All collections used by the app must be declared above.
     ===================== */
