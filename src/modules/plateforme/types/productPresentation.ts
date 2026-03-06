@@ -9,6 +9,12 @@ export interface ProductPresentationModule {
   title: string;
   description: string;
   features: string[];
+  /** Titre en anglais (paramètres plateforme) */
+  titleEn?: string;
+  /** Description en anglais */
+  descriptionEn?: string;
+  /** Puces en anglais (paramètres plateforme) */
+  featuresEn?: string[];
   imageId?: string;
   imageUrl?: string;
   displayOrder: number;

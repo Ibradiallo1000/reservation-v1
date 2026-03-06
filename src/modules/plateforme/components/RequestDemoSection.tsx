@@ -45,29 +45,29 @@ const RequestDemoSection: React.FC = () => {
         <div className="max-w-md mx-auto">
           {status === "success" ? (
             <div className="p-6 rounded-[18px] border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 text-center">
-              <p className="text-green-700 dark:text-green-300 font-medium">Merci. Nous vous recontacterons rapidement.</p>
+              <p className="text-green-700 dark:text-green-300 font-medium">{t("landing.requestDemoSuccess")}</p>
             </div>
           ) : (
             <form onSubmit={submit} className="p-6 rounded-[18px] border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">Nom</label>
-                <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white" placeholder="Votre nom" />
+                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">{t("landing.requestDemoLabelName")}</label>
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white" placeholder={t("landing.requestDemoPlaceholderName")} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">Email *</label>
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white" placeholder="email@exemple.com" />
+                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">{t("landing.requestDemoLabelEmail")}</label>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white" placeholder={t("landing.requestDemoPlaceholderEmail")} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">Compagnie</label>
-                <input type="text" value={company} onChange={(e) => setCompany(e.target.value)} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white" placeholder="Nom de la compagnie" />
+                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">{t("landing.requestDemoLabelCompany")}</label>
+                <input type="text" value={company} onChange={(e) => setCompany(e.target.value)} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white" placeholder={t("landing.requestDemoPlaceholderCompany")} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">Message</label>
-                <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white resize-none" placeholder="Optionnel" />
+                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1">{t("landing.requestDemoLabelMessage")}</label>
+                <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white resize-none" placeholder={t("landing.requestDemoPlaceholderMessage")} />
               </div>
-              {status === "error" && <p className="text-sm text-red-600">Erreur. Réessayez.</p>}
+              {status === "error" && <p className="text-sm text-red-600">{t("landing.requestDemoError")}</p>}
               <button type="submit" disabled={status === "sending"} className="w-full px-5 py-3 rounded-[10px] font-semibold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50">
-                {status === "sending" ? "Envoi..." : t("landing.ctaDemo")}
+                {status === "sending" ? t("landing.requestDemoSending") : t("landing.ctaDemo")}
               </button>
             </form>
           )}

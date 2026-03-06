@@ -27,30 +27,24 @@ export function usePlatformStats(): PlatformStats {
     let cancelled = false;
 
     const load = async () => {
-      try {
-        const [companiesSnap, agenciesSnap, reservationsSnap] = await Promise.all([
-          getCountFromServer(collection(db, "companies")),
-          getCountFromServer(collectionGroup(db, "agences")),
-          getCountFromServer(collectionGroup(db, "reservations")),
-        ]);
+      const results = await Promise.allSettled([
+        getCountFromServer(collection(db, "companies")),
+        getCountFromServer(collectionGroup(db, "agences")),
+        getCountFromServer(collectionGroup(db, "reservations")),
+      ]);
 
-        if (cancelled) return;
+      if (cancelled) return;
 
-        setState({
-          companies: companiesSnap.data().count,
-          agencies: agenciesSnap.data().count,
-          reservations: reservationsSnap.data().count,
-          loading: false,
-          error: null,
-        });
-      } catch (err) {
-        if (cancelled) return;
-        setState((prev) => ({
-          ...prev,
-          loading: false,
-          error: err instanceof Error ? err.message : "Erreur chargement stats",
-        }));
-      }
+      const companies = results[0].status === "fulfilled" ? results[0].value.data().count : 0;
+      const agencies = results[1].status === "fulfilled" ? results[1].value.data().count : 0;
+      const reservations = results[2].status === "fulfilled" ? results[2].value.data().count : 0;
+      setState({
+        companies,
+        agencies,
+        reservations,
+        loading: false,
+        error: null,
+      });
     };
 
     load();

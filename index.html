@@ -12,10 +12,9 @@
     <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
     <link rel="preconnect" href="https://www.googleapis.com" crossorigin />
 
-    <!-- Préchargement images critiques -->
-    <link rel="preload" as="image" href="/images/teliya-logo.svg" />
-    <link rel="preload" as="image" href="/images/hero-fallback.jpg" />
-    <link rel="preload" as="image" href="/images/partner-placeholder.png" />
+    <!-- Préchargement logo + image hero (affichage immédiat au refresh) -->
+    <link rel="preload" as="image" href="/images/teliya-logo.svg" fetchpriority="high" />
+    <link rel="preload" as="image" href="/images/hero-bus.jpg" fetchpriority="high" />
 
     <style>
       /* évite les sauts visuels */

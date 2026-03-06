@@ -36,6 +36,8 @@ import {
 
 type NavLink = {
   label: string;
+  /** Libellé en anglais (affiché quand la langue du site est EN) */
+  labelEn?: string;
   url: string;
   external?: boolean;
 };
@@ -55,8 +57,12 @@ type PlatformSettings = {
   // ==== NOUVEAU (footer dynamique) ====
   platformName?: string;
   slogan?: string;
+  /** Slogan en anglais (paramètres) */
+  sloganEn?: string;
   country?: string;
   about?: string;
+  /** À propos en anglais (paramètres) */
+  aboutEn?: string;
   contact?: {
     phone?: string;
     email?: string;
@@ -73,7 +79,16 @@ type PlatformSettings = {
   legalLinks?: NavLink[];
   extraLinks?: NavLink[];
   worldMapBg?: boolean; // motif de fond du footer
-  footer?: { about?: string; mission?: string; contactPhone?: string; contactEmail?: string };
+  footer?: {
+    about?: string;
+    mission?: string;
+    contactPhone?: string;
+    contactEmail?: string;
+    /** À propos (bloc footer) en anglais */
+    aboutEn?: string;
+    /** Mission en anglais */
+    missionEn?: string;
+  };
   productPresentation?: ProductPresentationModule[];
 };
 
@@ -247,7 +262,7 @@ const AdminParametresPlatformPage: React.FC = () => {
               </div>
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">Slogan</label>
+              <label className="block text-sm mb-1">Slogan (FR)</label>
               <input
                 className="w-full px-4 py-2 border rounded-lg"
                 value={settings.slogan || ""}
@@ -256,7 +271,16 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">À propos (footer)</label>
+              <label className="block text-sm mb-1">Slogan (EN)</label>
+              <input
+                className="w-full px-4 py-2 border rounded-lg"
+                value={settings.sloganEn ?? ""}
+                onChange={(e) => setSettings((s) => ({ ...s, sloganEn: e.target.value }))}
+                placeholder="Book simply, travel peacefully."
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm mb-1">À propos (FR)</label>
               <textarea
                 className="w-full px-4 py-2 border rounded-lg"
                 rows={3}
@@ -266,7 +290,17 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">Mission (footer landing)</label>
+              <label className="block text-sm mb-1">À propos (EN)</label>
+              <textarea
+                className="w-full px-4 py-2 border rounded-lg"
+                rows={3}
+                value={settings.aboutEn ?? ""}
+                onChange={(e) => setSettings((s) => ({ ...s, aboutEn: e.target.value }))}
+                placeholder="Short presentation text displayed in the footer…"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm mb-1">Mission (FR)</label>
               <textarea
                 className="w-full px-4 py-2 border rounded-lg"
                 rows={2}
@@ -278,7 +312,19 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">À propos (bloc footer landing, optionnel)</label>
+              <label className="block text-sm mb-1">Mission (EN)</label>
+              <textarea
+                className="w-full px-4 py-2 border rounded-lg"
+                rows={2}
+                value={settings.footer?.missionEn ?? ""}
+                onChange={(e) =>
+                  setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), missionEn: e.target.value } }))
+                }
+                placeholder="Our mission is to modernize and simplify transport management…"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm mb-1">À propos bloc footer (FR, optionnel)</label>
               <textarea
                 className="w-full px-4 py-2 border rounded-lg"
                 rows={2}
@@ -287,6 +333,18 @@ const AdminParametresPlatformPage: React.FC = () => {
                   setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), about: e.target.value } }))
                 }
                 placeholder="Laissez vide pour utiliser « À propos (footer) » ci-dessus"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm mb-1">À propos bloc footer (EN, optionnel)</label>
+              <textarea
+                className="w-full px-4 py-2 border rounded-lg"
+                rows={2}
+                value={settings.footer?.aboutEn ?? ""}
+                onChange={(e) =>
+                  setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), aboutEn: e.target.value } }))
+                }
+                placeholder="Leave empty to use the main About (EN) above"
               />
             </div>
           </div>
@@ -434,34 +492,42 @@ const AdminParametresPlatformPage: React.FC = () => {
             </div>
             <div className="space-y-2">
               {(settings.legalLinks || []).map((l, i) => (
-                <div key={`legal-${i}`} className="grid md:grid-cols-[1fr_1fr_auto_auto] grid-cols-1 gap-2 items-center">
-                  <input
-                    className="px-3 py-2 border rounded-lg"
-                    placeholder="Libellé (ex: Mentions légales)"
-                    value={l.label}
-                    onChange={(e) => updateLink("legalLinks", i, { label: e.target.value })}
-                  />
-                  <input
-                    className="px-3 py-2 border rounded-lg"
-                    placeholder="/mentions-legales ou https://…"
-                    value={l.url}
-                    onChange={(e) => updateLink("legalLinks", i, { url: e.target.value })}
-                  />
-                  <label className="inline-flex items-center gap-2 text-sm">
+                <div key={`legal-${i}`} className="grid grid-cols-1 gap-2">
+                  <div className="grid md:grid-cols-[1fr_1fr_1fr_auto_auto] grid-cols-1 gap-2 items-center">
                     <input
-                      type="checkbox"
-                      checked={!!l.external}
-                      onChange={(e) => updateLink("legalLinks", i, { external: e.target.checked })}
+                      className="px-3 py-2 border rounded-lg"
+                      placeholder="Libellé FR (ex: Mentions légales)"
+                      value={l.label}
+                      onChange={(e) => updateLink("legalLinks", i, { label: e.target.value })}
                     />
-                    externe
-                  </label>
-                  <button
-                    onClick={() => removeLink("legalLinks", i)}
-                    className="p-2 rounded border hover:bg-red-50 text-red-600"
-                    title="Supprimer"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                    <input
+                      className="px-3 py-2 border rounded-lg"
+                      placeholder="Libellé EN (ex: Legal notice)"
+                      value={l.labelEn ?? ""}
+                      onChange={(e) => updateLink("legalLinks", i, { labelEn: e.target.value })}
+                    />
+                    <input
+                      className="px-3 py-2 border rounded-lg"
+                      placeholder="/mentions-legales ou https://…"
+                      value={l.url}
+                      onChange={(e) => updateLink("legalLinks", i, { url: e.target.value })}
+                    />
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!l.external}
+                        onChange={(e) => updateLink("legalLinks", i, { external: e.target.checked })}
+                      />
+                      externe
+                    </label>
+                    <button
+                      onClick={() => removeLink("legalLinks", i)}
+                      className="p-2 rounded border hover:bg-red-50 text-red-600"
+                      title="Supprimer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -480,34 +546,42 @@ const AdminParametresPlatformPage: React.FC = () => {
             </div>
             <div className="space-y-2">
               {(settings.extraLinks || []).map((l, i) => (
-                <div key={`extra-${i}`} className="grid md:grid-cols-[1fr_1fr_auto_auto] grid-cols-1 gap-2 items-center">
-                  <input
-                    className="px-3 py-2 border rounded-lg"
-                    placeholder="Libellé (ex: À propos)"
-                    value={l.label}
-                    onChange={(e) => updateLink("extraLinks", i, { label: e.target.value })}
-                  />
-                  <input
-                    className="px-3 py-2 border rounded-lg"
-                    placeholder="/a-propos ou https://…"
-                    value={l.url}
-                    onChange={(e) => updateLink("extraLinks", i, { url: e.target.value })}
-                  />
-                  <label className="inline-flex items-center gap-2 text-sm">
+                <div key={`extra-${i}`} className="grid grid-cols-1 gap-2">
+                  <div className="grid md:grid-cols-[1fr_1fr_1fr_auto_auto] grid-cols-1 gap-2 items-center">
                     <input
-                      type="checkbox"
-                      checked={!!l.external}
-                      onChange={(e) => updateLink("extraLinks", i, { external: e.target.checked })}
+                      className="px-3 py-2 border rounded-lg"
+                      placeholder="Libellé FR (ex: À propos)"
+                      value={l.label}
+                      onChange={(e) => updateLink("extraLinks", i, { label: e.target.value })}
                     />
-                    externe
-                  </label>
-                  <button
-                    onClick={() => removeLink("extraLinks", i)}
-                    className="p-2 rounded border hover:bg-red-50 text-red-600"
-                    title="Supprimer"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                    <input
+                      className="px-3 py-2 border rounded-lg"
+                      placeholder="Libellé EN (ex: About)"
+                      value={l.labelEn ?? ""}
+                      onChange={(e) => updateLink("extraLinks", i, { labelEn: e.target.value })}
+                    />
+                    <input
+                      className="px-3 py-2 border rounded-lg"
+                      placeholder="/a-propos ou https://…"
+                      value={l.url}
+                      onChange={(e) => updateLink("extraLinks", i, { url: e.target.value })}
+                    />
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!l.external}
+                        onChange={(e) => updateLink("extraLinks", i, { external: e.target.checked })}
+                      />
+                      externe
+                    </label>
+                    <button
+                      onClick={() => removeLink("extraLinks", i)}
+                      className="p-2 rounded border hover:bg-red-50 text-red-600"
+                      title="Supprimer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -542,46 +616,93 @@ const AdminParametresPlatformPage: React.FC = () => {
                     Actif
                   </label>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Titre</label>
-                  <input
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm"
-                    value={mod.title}
-                    onChange={(e) => {
-                      const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
-                      list[idx] = { ...list[idx], title: e.target.value };
-                      setSettings((s) => ({ ...s, productPresentation: list }));
-                    }}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Titre (FR)</label>
+                    <input
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm"
+                      value={mod.title}
+                      onChange={(e) => {
+                        const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                        list[idx] = { ...list[idx], title: e.target.value };
+                        setSettings((s) => ({ ...s, productPresentation: list }));
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Titre (EN)</label>
+                    <input
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm"
+                      value={mod.titleEn ?? ""}
+                      onChange={(e) => {
+                        const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                        list[idx] = { ...list[idx], titleEn: e.target.value || undefined };
+                        setSettings((s) => ({ ...s, productPresentation: list }));
+                      }}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Description</label>
-                  <textarea
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
-                    rows={2}
-                    value={mod.description}
-                    onChange={(e) => {
-                      const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
-                      list[idx] = { ...list[idx], description: e.target.value };
-                      setSettings((s) => ({ ...s, productPresentation: list }));
-                    }}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Description (FR)</label>
+                    <textarea
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
+                      rows={2}
+                      value={mod.description}
+                      onChange={(e) => {
+                        const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                        list[idx] = { ...list[idx], description: e.target.value };
+                        setSettings((s) => ({ ...s, productPresentation: list }));
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Description (EN)</label>
+                    <textarea
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
+                      rows={2}
+                      value={mod.descriptionEn ?? ""}
+                      onChange={(e) => {
+                        const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                        list[idx] = { ...list[idx], descriptionEn: e.target.value || undefined };
+                        setSettings((s) => ({ ...s, productPresentation: list }));
+                      }}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Puces (une par ligne)</label>
-                  <textarea
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
-                    rows={3}
-                    value={(mod.features || []).join("\n")}
-                    onChange={(e) => {
-                      const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
-                      list[idx] = {
-                        ...list[idx],
-                        features: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
-                      };
-                      setSettings((s) => ({ ...s, productPresentation: list }));
-                    }}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Puces (FR, une par ligne)</label>
+                    <textarea
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
+                      rows={3}
+                      value={(mod.features || []).join("\n")}
+                      onChange={(e) => {
+                        const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                        list[idx] = {
+                          ...list[idx],
+                          features: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
+                        };
+                        setSettings((s) => ({ ...s, productPresentation: list }));
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Puces (EN, une par ligne)</label>
+                    <textarea
+                      className="w-full px-3 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white text-sm resize-none"
+                      rows={3}
+                      value={(mod.featuresEn || []).join("\n")}
+                      onChange={(e) => {
+                        const list = [...(settings.productPresentation ?? DEFAULT_PRODUCT_PRESENTATION)];
+                        list[idx] = {
+                          ...list[idx],
+                          featuresEn: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
+                        };
+                        setSettings((s) => ({ ...s, productPresentation: list }));
+                      }}
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">Image (URL optionnelle)</label>

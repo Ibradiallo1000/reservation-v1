@@ -9,27 +9,33 @@ import { doc, getDoc } from "firebase/firestore";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-const DEFAULT_ABOUT =
-  "TELIYA est une plateforme de gestion conçue pour les compagnies de transport. Elle permet de centraliser les réservations, connecter les agences, gérer l'embarquement des passagers et suivre les finances depuis une seule plateforme.";
-const DEFAULT_MISSION =
-  "Notre mission est de moderniser et simplifier la gestion du transport interurbain en Afrique grâce à des outils numériques fiables et accessibles.";
 
 type SocialLinks = { facebook?: string; linkedin?: string; twitter?: string };
-type NavLink = { label: string; url: string; external?: boolean };
+type NavLink = { label: string; labelEn?: string; url: string; external?: boolean };
 
 type PlatformSettings = {
   platformName?: string;
   slogan?: string;
+  sloganEn?: string;
   about?: string;
+  aboutEn?: string;
   contact?: { phone?: string; email?: string };
   social?: SocialLinks;
   legalLinks?: NavLink[];
-  footer?: { about?: string; mission?: string; contactPhone?: string; contactEmail?: string };
+  footer?: {
+    about?: string;
+    mission?: string;
+    contactPhone?: string;
+    contactEmail?: string;
+    aboutEn?: string;
+    missionEn?: string;
+  };
 };
 
 const Footer: React.FC = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [s, setS] = useState<PlatformSettings | null>(null);
+  const isEn = (i18n.language || "fr").toLowerCase().startsWith("en");
 
   useEffect(() => {
     let cancelled = false;
@@ -44,9 +50,20 @@ const Footer: React.FC = () => {
 
   const year = new Date().getFullYear();
   const platformName = s?.platformName || "TELIYA";
-  const slogan = s?.slogan || "Réserver simplement, voyager sereinement.";
-  const aboutText = (s?.footer?.about ?? s?.about ?? "").trim() || DEFAULT_ABOUT;
-  const missionText = (s?.footer?.mission ?? "").trim() || DEFAULT_MISSION;
+
+  const slogan =
+    (isEn && (s?.sloganEn ?? "").trim()
+      ? (s?.sloganEn ?? "").trim()
+      : (s?.slogan ?? "").trim()) || t("landing.footerSloganDefault");
+  const aboutText =
+    (isEn && (s?.footer?.aboutEn ?? s?.aboutEn ?? "").trim()
+      ? (s?.footer?.aboutEn ?? s?.aboutEn ?? "").trim()
+      : (s?.footer?.about ?? s?.about ?? "").trim()) || t("landing.footerAboutDefault");
+  const missionText =
+    (isEn && (s?.footer?.missionEn ?? "").trim()
+      ? (s?.footer?.missionEn ?? "").trim()
+      : (s?.footer?.mission ?? "").trim()) || t("landing.footerMissionDefault");
+
   const contactPhone = (s?.footer?.contactPhone ?? s?.contact?.phone ?? "").trim();
   const contactEmail = (s?.footer?.contactEmail ?? s?.contact?.email ?? "").trim();
   const social = s?.social || {};
@@ -55,16 +72,20 @@ const Footer: React.FC = () => {
   const linkClass =
     "text-sm text-slate-300 dark:text-slate-400 hover:text-orange-500 dark:hover:text-orange-400 transition";
 
-  const renderNavLink = (l: NavLink) =>
-    l.external ? (
-      <a key={l.label} href={l.url} target="_blank" rel="noopener noreferrer" className={linkClass}>
-        {l.label}
+  const linkLabel = (l: NavLink) => (isEn && l.labelEn?.trim() ? l.labelEn.trim() : l.label);
+
+  const renderNavLink = (l: NavLink) => {
+    const label = linkLabel(l);
+    return l.external ? (
+      <a key={label + l.url} href={l.url} target="_blank" rel="noopener noreferrer" className={linkClass}>
+        {label}
       </a>
     ) : (
-      <Link key={l.label} to={l.url} className={linkClass}>
-        {l.label}
+      <Link key={label + l.url} to={l.url} className={linkClass}>
+        {label}
       </Link>
     );
+  };
 
   const socialItems = [
     { key: "facebook", href: social.facebook, Icon: Facebook, label: "Facebook" },
@@ -116,7 +137,7 @@ const Footer: React.FC = () => {
                 </li>
               )}
               {!contactPhone && !contactEmail && (
-                <li className="text-slate-500 text-sm">{t("landing.footerSectionContact")} — à configurer</li>
+                <li className="text-slate-500 text-sm">{t("landing.footerSectionContact")} {t("landing.footerContactToConfigure")}</li>
               )}
             </ul>
           </div>
@@ -133,7 +154,7 @@ const Footer: React.FC = () => {
           {/* Colonne 4 : Réseaux sociaux */}
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-4">
-              Réseaux sociaux
+              {t("landing.footerSocial")}
             </h3>
             {socialItems.length > 0 ? (
               <div className="flex flex-wrap gap-3">
@@ -151,7 +172,7 @@ const Footer: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-slate-500">Liens à configurer</p>
+              <p className="text-sm text-slate-500">{t("landing.footerLinksToConfigure")}</p>
             )}
           </div>
         </div>

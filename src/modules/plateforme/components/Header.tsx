@@ -1,7 +1,8 @@
 // src/components/home/Header.tsx
 import React, { useEffect, useState } from "react";
-import { Ticket, Sun, Moon, User } from "lucide-react";
+import { Sun, Moon, User } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
@@ -12,7 +13,10 @@ type Theme = "light" | "dark" | "system";
 
 const Header: React.FC = () => {
   const navigate = useNavigate();
+  const { t, i18n } = useTranslation();
   const [scrolled, setScrolled] = useState(false);
+  const lang = (i18n.language || "fr").toLowerCase().split("-")[0];
+  const isFr = lang === "fr";
   const [logoUrl, setLogoUrl] = useState<string | null>(() => {
     try {
       return localStorage.getItem("teliya:lastLogoUrl");
@@ -81,7 +85,6 @@ const Header: React.FC = () => {
 
   const goHome = () => navigate("/");
   const goLogin = () => navigate("/login");
-  const goBookings = () => navigate("/mes-reservations");
 
   const cycleTheme = () => {
     setTheme((t) =>
@@ -128,31 +131,52 @@ const Header: React.FC = () => {
             </span>
           </button>
 
-          {/* Lien Mes Réservations */}
-          <button
-            onClick={goBookings}
-            className="ml-3 inline-flex items-center gap-1.5 text-sm md:text-base font-semibold text-white/90 hover:text-white transition"
-            aria-label="Voir mes réservations"
-            title="Voir mes réservations"
-          >
-            <Ticket className="h-5 w-5" />
-            <span>Mes réservations</span>
-          </button>
-
           <div className="flex-1" />
+
+          {/* Langue FR / EN — persistance dans localStorage pour survivre au rechargement */}
+          <div className="flex items-center rounded-lg overflow-hidden ring-1 ring-white/20">
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  localStorage.setItem("i18nextLng", "fr");
+                } catch {}
+                i18n.changeLanguage("fr");
+              }}
+              className={`px-2.5 py-1.5 text-sm font-medium transition ${isFr ? "bg-white/25 text-white" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
+              aria-label="Français"
+              title="Français"
+            >
+              FR
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  localStorage.setItem("i18nextLng", "en");
+                } catch {}
+                i18n.changeLanguage("en");
+              }}
+              className={`px-2.5 py-1.5 text-sm font-medium transition ${!isFr ? "bg-white/25 text-white" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
+              aria-label="English"
+              title="English"
+            >
+              EN
+            </button>
+          </div>
 
           {/* Actions à droite : thème + connexion */}
           <div className="flex items-center gap-2">
             <button
               onClick={cycleTheme}
               className="h-8 w-8 rounded-full grid place-items-center ring-1 ring-white/20 hover:bg-white/10"
-              aria-label={`Thème: ${theme}`}
+              aria-label={t("language")}
               title={
                 theme === "system"
-                  ? "Thème automatique"
+                  ? t("themeLight") + " / " + t("themeDark")
                   : isDark
-                  ? "Thème sombre"
-                  : "Thème clair"
+                  ? t("themeDark")
+                  : t("themeLight")
               }
             >
               {isDark ? (
@@ -165,8 +189,8 @@ const Header: React.FC = () => {
             <button
               onClick={goLogin}
               className="inline-flex items-center justify-center h-8 w-8 rounded-full bg-white text-orange-600 hover:scale-105 transition-transform"
-              aria-label="Connexion"
-              title="Connexion"
+              aria-label={t("login")}
+              title={t("login")}
             >
               <User className="h-5 w-5" />
             </button>

@@ -5,6 +5,9 @@ const LanguageSwitcher = () => {
   const { i18n } = useTranslation();
 
   const changeLanguage = (lng: string) => {
+    try {
+      localStorage.setItem('i18nextLng', lng);
+    } catch {}
     i18n.changeLanguage(lng);
   };
 

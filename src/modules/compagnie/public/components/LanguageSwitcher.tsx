@@ -32,9 +32,15 @@ const LanguageSwitcher: React.FC<LanguageSwitcherProps> = ({
   const buttonCls = variant === 'floating' ? 'px-2 py-1 rounded-md min-h-[36px] min-w-[36px]' : 'min-h-[44px] min-w-[44px] rounded-lg';
 
   const setFr = () => {
+    try {
+      localStorage.setItem('i18nextLng', 'fr');
+    } catch {}
     i18n.changeLanguage('fr');
   };
   const setEn = () => {
+    try {
+      localStorage.setItem('i18nextLng', 'en');
+    } catch {}
     i18n.changeLanguage('en');
   };
 

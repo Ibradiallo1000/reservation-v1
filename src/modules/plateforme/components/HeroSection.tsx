@@ -21,9 +21,17 @@ function scrollToHowItWorks() {
   document.getElementById(HOW_IT_WORKS_ID)?.scrollIntoView({ behavior: "smooth" });
 }
 
+const HERO_CACHE_KEY = "teliya:heroBannerUrl";
+
 const HeroSection: React.FC = () => {
   const { t } = useTranslation();
-  const [bannerImage, setBannerImage] = useState<string | null>(null);
+  const [bannerImage, setBannerImage] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(HERO_CACHE_KEY);
+    } catch {
+      return null;
+    }
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -35,7 +43,16 @@ const HeroSection: React.FC = () => {
           data?.hero?.bannerImage?.trim() ||
           data?.banniereUrl?.trim() ||
           null;
-        if (url) setBannerImage(url);
+        if (url) {
+          setBannerImage(url);
+          try {
+            localStorage.setItem(HERO_CACHE_KEY, url);
+          } catch {}
+        } else {
+          try {
+            localStorage.removeItem(HERO_CACHE_KEY);
+          } catch {}
+        }
       })
       .catch(() => {});
     return () => {
