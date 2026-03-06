@@ -12,12 +12,12 @@ const FinalCTASection: React.FC = () => {
   };
 
   return (
-    <section className="py-[40px] md:py-[70px] text-white" style={{ background: `linear-gradient(90deg, ${ORANGE}, ${ORANGE_DARK})` }}>
+    <section className="py-6 md:py-12 text-white" style={{ background: `linear-gradient(90deg, ${ORANGE}, ${ORANGE_DARK})` }}>
       <div className="max-w-[1200px] mx-auto px-6 text-center">
-        <h2 className="text-[32px] font-bold tracking-[-0.02em] mb-3">
+        <h2 className="text-3xl md:text-4xl font-bold tracking-[-0.02em] mb-2 md:mb-3">
           {t("landing.finalCtaTitle")}
         </h2>
-        <p className="text-base text-white/80 max-w-xl mx-auto mb-8">
+        <p className="text-base text-white/80 max-w-xl mx-auto mb-4 md:mb-6">
           {t("landing.finalCtaSubtitle")}
         </p>
         <button

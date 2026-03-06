@@ -37,22 +37,22 @@ const PlatformStatsSection: React.FC = () => {
     !stats.loading && stats.companies === 0 && stats.agencies === 0 && stats.reservations === 0;
 
   return (
-    <section className="py-[40px] md:py-[70px] bg-white dark:bg-slate-900 border-t border-b border-gray-200 dark:border-slate-700">
+    <section className="py-6 md:py-12 bg-white dark:bg-slate-900 border-t border-b border-gray-200 dark:border-slate-700">
       <div className="max-w-[1200px] mx-auto px-6">
-        <h2 className="text-[32px] font-bold tracking-[-0.02em] text-gray-900 dark:text-white text-center mb-3">
+        <h2 className="text-3xl md:text-4xl font-bold tracking-[-0.02em] text-gray-900 dark:text-white text-center mb-2 md:mb-3">
           {t("landing.statsTitle")}
         </h2>
         {stats.error && (
-          <p className="text-center text-sm text-amber-600 dark:text-amber-400 mb-4">
+          <p className="text-center text-sm text-amber-600 dark:text-amber-400 mb-3 md:mb-4">
             {stats.error}
           </p>
         )}
         {showLowStatsMessage && (
-          <p className="text-base text-[#6b7280] dark:text-slate-400 text-center mb-6">
+          <p className="text-base text-[#6b7280] dark:text-slate-400 text-center mb-4 md:mb-6">
             {t("landing.statsLowMessage")}
           </p>
         )}
-        <div className="grid grid-cols-3 gap-3 mt-6 md:mt-8">
+        <div className="grid grid-cols-3 gap-3 mt-4 md:mt-6">
           {blocks.map(({ key: blockKey, icon: Icon, labelKeyOne, labelKeyMany, getValue }) => {
             const value = getValue(stats);
             const label = value <= 1 ? t(labelKeyOne) : t(labelKeyMany);

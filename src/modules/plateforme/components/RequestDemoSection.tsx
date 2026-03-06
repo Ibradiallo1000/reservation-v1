@@ -34,12 +34,12 @@ const RequestDemoSection: React.FC = () => {
   };
 
   return (
-    <section id="lead-form" className="py-[40px] md:py-[70px] bg-[#f9fafb] dark:bg-slate-800/50">
+    <section id="lead-form" className="py-6 md:py-12 bg-[#f9fafb] dark:bg-slate-800/50">
       <div className="max-w-[1200px] mx-auto px-6">
-        <h2 className="text-[32px] font-bold text-gray-900 dark:text-white text-center mb-3">
+        <h2 className="text-3xl md:text-4xl font-bold tracking-[-0.02em] text-gray-900 dark:text-white text-center mb-2 md:mb-3">
           {t("landing.requestDemoTitle")}
         </h2>
-        <p className="text-base text-[#6b7280] dark:text-slate-400 text-center max-w-xl mx-auto mb-8">
+        <p className="text-base text-[#6b7280] dark:text-slate-400 text-center max-w-xl mx-auto mb-4 md:mb-6">
           {t("landing.requestDemoSubtitle")}
         </p>
         <div className="max-w-md mx-auto">
