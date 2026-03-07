@@ -1,8 +1,10 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
+import { motion, useInView } from "framer-motion";
+import { useRef } from "react";
 import { Database, ClipboardList, BarChart3 } from "lucide-react";
 
-const SECTION_PADDING = "py-6 md:py-12";
+const SECTION_PADDING = "py-20 md:py-28";
 const items = [
   { key: "1", icon: Database },
   { key: "2", icon: ClipboardList },
@@ -11,8 +13,17 @@ const items = [
 
 const ProblemSection: React.FC = () => {
   const { t } = useTranslation();
+  const ref = useRef(null);
+  const isInView = useInView(ref, { once: true, margin: "-80px" });
+
   return (
-    <section className={`${SECTION_PADDING} bg-white dark:bg-slate-900`}>
+    <motion.section
+      ref={ref}
+      initial={{ opacity: 0, y: 40 }}
+      animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 40 }}
+      transition={{ duration: 0.6, ease: "easeOut" }}
+      className={`${SECTION_PADDING} bg-white dark:bg-slate-900`}
+    >
       <div className="max-w-[1200px] mx-auto px-6">
         <h2 className="text-3xl md:text-4xl font-bold tracking-[-0.02em] text-gray-900 dark:text-white text-center mb-2 md:mb-3">
           {t("landing.problemTitle")}
@@ -24,7 +35,7 @@ const ProblemSection: React.FC = () => {
           {items.map(({ key, icon: Icon }) => (
             <li
               key={key}
-              className="flex items-start gap-3 p-4 md:p-5 rounded-[14px] md:rounded-[18px] border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 transition-all duration-200 ease-out hover:-translate-y-[3px] hover:shadow-[0_18px_40px_rgba(0,0,0,0.08)] dark:hover:shadow-xl"
+              className="flex items-start gap-3 p-4 md:p-5 rounded-[14px] md:rounded-[18px] border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-lg dark:hover:shadow-xl"
               style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.05)" }}
             >
               <span className="w-9 h-9 md:w-10 md:h-10 shrink-0 rounded-[10px] bg-[rgba(255,115,0,0.1)] dark:bg-orange-500/20 flex items-center justify-center text-orange-600 dark:text-orange-400">
@@ -42,7 +53,7 @@ const ProblemSection: React.FC = () => {
           ))}
         </ul>
       </div>
-    </section>
+    </motion.section>
   );
 };
 
