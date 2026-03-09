@@ -141,10 +141,10 @@ const DeleteAgencyModal: React.FC<{
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl bg-white shadow-lg">
-        <div className="px-5 py-4 border-b">
-          <h3 className="text-lg font-semibold">Supprimer l’agence</h3>
-          <p className="text-sm text-gray-500">
+      <div className="w-full max-w-lg rounded-xl bg-white dark:bg-slate-800 dark:border dark:border-slate-700 shadow-lg">
+        <div className="px-5 py-4 border-b border-gray-200 dark:border-slate-600">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Supprimer l’agence</h3>
+          <p className="text-sm text-gray-500 dark:text-slate-400">
             Choisissez quoi faire avec le personnel rattaché à cette agence.
           </p>
         </div>
@@ -450,6 +450,7 @@ const CompagnieAgencesPage: React.FC = () => {
         nomAgenceNorm: norm(formData.nomAgence),
         ville: formData.ville.trim(),
         villeNorm: norm(formData.ville),
+        city: formData.ville.trim(), // for network trip planning: departure city filter
         pays: formData.pays.trim(),
         paysNorm: norm(formData.pays),
         quartier: formData.quartier || "",
@@ -509,6 +510,7 @@ const CompagnieAgencesPage: React.FC = () => {
           nomAgenceNorm: norm(formData.nomAgence),
           ville: formData.ville,
           villeNorm: norm(formData.ville),
+          city: formData.ville.trim(),
           pays: formData.pays,
           paysNorm: norm(formData.pays),
           slug: slugify(formData.nomAgence),
@@ -642,7 +644,7 @@ const CompagnieAgencesPage: React.FC = () => {
       {showForm && (
         <form
           onSubmit={handleSubmit}
-          className="bg-white p-6 rounded-lg shadow-sm mb-8 border border-gray-200"
+          className="bg-white dark:bg-slate-800 p-6 rounded-lg shadow-sm mb-8 border border-gray-200 dark:border-slate-700"
         >
           <fieldset disabled={creating} className={creating ? "opacity-60" : ""}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: couleurPrincipale }}>
@@ -805,18 +807,18 @@ const CompagnieAgencesPage: React.FC = () => {
       )}
 
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-xl font-semibold">
+        <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
           {loading ? "Chargement…" : `Liste des agences (${agences.length})`}
         </h3>
         <div className="flex items-center">
-          <label className="mr-2 text-sm">Agences par page:</label>
+          <label className="mr-2 text-sm text-gray-700 dark:text-slate-300">Agences par page:</label>
           <select
             value={itemsPerPage}
             onChange={(e) => {
               setItemsPerPage(Number(e.target.value));
               setCurrentPage(1);
             }}
-            className="border rounded p-1 text-sm"
+            className="border border-gray-300 dark:border-slate-600 rounded p-1 text-sm bg-white dark:bg-slate-700 text-gray-900 dark:text-white"
           >
             <option value={6}>6</option>
             <option value={12}>12</option>
@@ -826,9 +828,9 @@ const CompagnieAgencesPage: React.FC = () => {
       </div>
 
       {agences.length === 0 && !loading ? (
-        <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 text-center">
+        <div className="bg-white dark:bg-slate-800 p-8 rounded-xl shadow-sm border border-gray-200 dark:border-slate-700 text-center">
           <svg
-            className="mx-auto h-12 w-12 text-gray-400"
+            className="mx-auto h-12 w-12 text-gray-400 dark:text-slate-500"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -840,8 +842,8 @@ const CompagnieAgencesPage: React.FC = () => {
               d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
             />
           </svg>
-          <h3 className="mt-2 text-lg font-medium text-gray-900">Aucune agence enregistrée</h3>
-          <p className="mt-1 text-sm text-gray-500">Commencez par ajouter votre première agence.</p>
+          <h3 className="mt-2 text-lg font-medium text-gray-900 dark:text-white">Aucune agence enregistrée</h3>
+          <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">Commencez par ajouter votre première agence.</p>
           <div className="mt-6">
             <Button
               onClick={() => setShowForm(true)}
@@ -860,26 +862,26 @@ const CompagnieAgencesPage: React.FC = () => {
             {currentAgences.map((ag) => (
               <div
                 key={ag.id}
-                className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200 hover:shadow-sm transition-shadow"
+                className="bg-white dark:bg-slate-800 rounded-xl shadow-sm overflow-hidden border border-gray-200 dark:border-slate-700 hover:shadow-sm transition-shadow"
               >
                 <div className="p-5">
                   <div className="flex justify-between items-start">
                     <div>
-                      <h3 className="text-lg font-medium text-gray-900 mb-1">{ag.nomAgence}</h3>
-                      <p className="text-sm text-gray-500">
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-1">{ag.nomAgence}</h3>
+                      <p className="text-sm text-gray-500 dark:text-slate-400">
                         {ag.ville}, {ag.pays}
                       </p>
                     </div>
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        ag.statut === "active" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                        ag.statut === "active" ? "bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300" : "bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300"
                       }`}
                     >
                       {ag.statut === "active" ? "Active" : "Inactive"}
                     </span>
                   </div>
 
-                  <div className="mt-4 border-t border-gray-200 pt-4">
+                  <div className="mt-4 border-t border-gray-200 dark:border-slate-600 pt-4">
                     <div className="flex items-center text-sm text-gray-500 mb-2">
                       <svg
                         className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400"
@@ -930,7 +932,7 @@ const CompagnieAgencesPage: React.FC = () => {
                   <div className="mt-5 flex justify-between space-x-2">
                     <button
                       onClick={() => goToDashboard(ag.id!)}
-                      className="flex-1 inline-flex justify-center items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                      className="flex-1 inline-flex justify-center items-center px-3 py-2 border border-gray-300 dark:border-slate-600 shadow-sm text-sm font-medium rounded-md text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600"
                     >
                       <svg
                         className="-ml-1 mr-2 h-5 w-5 text-gray-500"

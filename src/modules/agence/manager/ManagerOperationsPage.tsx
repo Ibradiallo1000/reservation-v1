@@ -14,11 +14,12 @@ import {
 import { listAffectationsByAgency } from "@/modules/compagnie/fleet/affectationService";
 import { AFFECTATION_STATUS } from "@/modules/compagnie/fleet/affectationTypes";
 import {
-  listVehicles,
+  listVehiclesAvailableInCity,
   assignVehicle,
   confirmDepartureAffectation,
   cancelAffectation,
 } from "@/modules/compagnie/fleet/vehiclesService";
+import { getAgencyCityFromDoc } from "@/modules/agence/utils/agencyCity";
 import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
 
 function toLocalISO(d: Date) {
@@ -74,7 +75,7 @@ export default function ManagerOperationsPage() {
   const [fleetStats, setFleetStats] = useState({ auGarage: 0, affectes: 0, enRoute: 0, enApproche: 0 });
   const [affectations, setAffectations] = useState<Array<{ id: string; agencyId: string; vehicleId: string; vehiclePlate: string; vehicleModel: string; status: string; departureCity: string; arrivalCity: string; departureTime: any; driverName?: string; driverPhone?: string; convoyeurName?: string; convoyeurPhone?: string }>>([]);
   const [loading, setLoading] = useState(true);
-  const [assignModalRow, setAssignModalRow] = useState<{ key: string; departure: string; arrival: string; heure: string } | null>(null);
+  const [assignModalRow, setAssignModalRow] = useState<{ key: string; tripId: string; departure: string; arrival: string; heure: string } | null>(null);
   const [assignVehicleId, setAssignVehicleId] = useState<string | null>(null);
   const [assignForm, setAssignForm] = useState({ tripId: "", driverName: "", driverPhone: "", convoyeurName: "", convoyeurPhone: "" });
   const [assignSaving, setAssignSaving] = useState(false);
@@ -112,9 +113,8 @@ export default function ManagerOperationsPage() {
     if (!companyId || !agencyId) return;
     getDoc(doc(db, `companies/${companyId}/agences/${agencyId}`))
       .then((snap) => {
-        const data = snap.exists() ? (snap.data() as { villeNorm?: string; ville?: string }) : null;
-        const city = (data?.villeNorm ?? data?.ville ?? "").trim();
-        setAgencyCity(city);
+        const data = snap.exists() ? (snap.data() as { city?: string; villeNorm?: string; ville?: string }) : null;
+        setAgencyCity(getAgencyCityFromDoc(data));
       })
       .catch(() => setAgencyCity(""));
   }, [companyId, agencyId]);
@@ -122,10 +122,11 @@ export default function ManagerOperationsPage() {
   const loadFleetStats = useCallback(async () => {
     if (!companyId || !agencyId || !agencyCity) return;
     try {
-      const [vehicles, affectationsList] = await Promise.all([
-        listVehicles(companyId),
+      const [vehiclesResult, affectationsList] = await Promise.all([
+        listVehiclesAvailableInCity(companyId, agencyCity),
         listAffectationsByAgency(companyId, agencyId),
       ]);
+      const vehicles = vehiclesResult.vehicles;
       const agencyCityNorm = agencyCity.trim().toLowerCase();
       const auGarage = vehicles.filter(
         (v: any) =>
@@ -170,7 +171,7 @@ export default function ManagerOperationsPage() {
 
   const departuresRaw = useMemo(() => {
     const list: Array<{
-      key: string; departure: string; arrival: string; heure: string;
+      key: string; tripId: string; departure: string; arrival: string; heure: string;
       booked: number; embarked: number; absent: number; capacity: number;
       closed: boolean; vehicle: string; driver: string; status: DepartureStatus;
     }> = [];
@@ -192,7 +193,7 @@ export default function ManagerOperationsPage() {
 
         const status = deriveDepartureStatus({ closed, embarked, booked, heure, delayThresholdMinutes: delayThreshold });
 
-        list.push({ key, departure: t.departure, arrival: t.arrival, heure, booked, embarked, absent, capacity: 50, closed, vehicle: vehiclePlate, driver: driverName, status });
+        list.push({ key, tripId: t.id, departure: t.departure, arrival: t.arrival, heure, booked, embarked, absent, capacity: 50, closed, vehicle: vehiclePlate, driver: driverName, status });
       });
     });
     return list.sort((a, b) => a.heure.localeCompare(b.heure));
@@ -260,17 +261,11 @@ export default function ManagerOperationsPage() {
     if (!companyId || !agencyCity) return;
     setAvailableVehiclesLoading(true);
     try {
-      const list = await listVehicles(companyId);
+      const { vehicles: list } = await listVehiclesAvailableInCity(companyId, agencyCity);
       const activeIds = new Set(
         affectations.filter((a) => a.status === AFFECTATION_STATUS.AFFECTE || a.status === AFFECTATION_STATUS.DEPART_CONFIRME).map((a) => a.vehicleId)
       );
-      const agencyCityNorm = agencyCity.trim().toLowerCase();
-      const filtered = list.filter((v: any) => {
-        const op = v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE;
-        const tech = v.technicalStatus ?? TECHNICAL_STATUS.NORMAL;
-        const cityMatch = (v.currentCity ?? "").trim().toLowerCase() === agencyCityNorm;
-        return op === OPERATIONAL_STATUS.GARAGE && tech === TECHNICAL_STATUS.NORMAL && cityMatch && !activeIds.has(v.id);
-      });
+      const filtered = list.filter((v: any) => !activeIds.has(v.id));
       setAvailableVehicles(filtered.map((v: any) => ({ id: v.id, plateNumber: v.plateNumber ?? "", model: v.model ?? "" })));
     } catch {
       setAvailableVehicles([]);
@@ -307,7 +302,8 @@ export default function ManagerOperationsPage() {
           assignedBy: (user as any)?.uid ?? "",
         },
         (user as any)?.uid ?? "",
-        (user as any)?.role ?? "chefAgence"
+        (user as any)?.role ?? "chefAgence",
+        { weeklyTripId: assignModalRow.tripId || null }
       );
       setAssignModalRow(null);
       setAssignVehicleId(null);
@@ -448,7 +444,7 @@ export default function ManagerOperationsPage() {
                         {!aff ? (
                           <button
                             type="button"
-                            onClick={() => setAssignModalRow({ key: d.key, departure: d.departure, arrival: d.arrival, heure: d.heure })}
+                            onClick={() => setAssignModalRow({ key: d.key, tripId: d.tripId, departure: d.departure, arrival: d.arrival, heure: d.heure })}
                             className="text-sm px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700"
                           >
                             Affecter un véhicule

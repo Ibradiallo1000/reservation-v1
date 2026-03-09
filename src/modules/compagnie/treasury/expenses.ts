@@ -1,4 +1,5 @@
 // Treasury — Expenses. When status → paid, record financialMovement transactionally.
+// Phase 1: Multi-level approval (pending_manager → pending_accountant → pending_ceo → approved).
 import {
   collection,
   doc,
@@ -17,11 +18,34 @@ import {
 import { db } from "@/firebaseConfig";
 import { recordMovementInTransaction } from "./financialMovements";
 import { financialAccountRef } from "./financialAccounts";
+import {
+  getExpenseApprovalThresholds,
+  getInitialExpenseStatus,
+} from "@/modules/compagnie/settings/expenseApprovalSettings";
+import { createCompanyNotification, notifyCompanyRoles } from "@/shared/services/companyNotifications";
 
 const EXPENSES_COLLECTION = "expenses";
 const EXPENSE_RESERVE_ACCOUNT_ID = "company_expense_reserve";
 
-export type ExpenseStatus = "pending" | "approved" | "paid";
+/** Pending states route to the correct approver; approved/rejected/paid are terminal. */
+export type ExpenseStatus =
+  | "pending"
+  | "pending_manager"
+  | "pending_accountant"
+  | "pending_ceo"
+  | "approved"
+  | "rejected"
+  | "paid";
+
+/** Legacy: "pending" is treated as pending_manager for backward compatibility. */
+export const PENDING_STATUSES: ExpenseStatus[] = [
+  "pending",
+  "pending_manager",
+  "pending_accountant",
+  "pending_ceo",
+];
+
+export type ExpenseType = "agency" | "company";
 
 /** Phase C3: standardized categories for analytics and profit injection. */
 export const EXPENSE_CATEGORIES = [
@@ -38,8 +62,9 @@ export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 export interface ExpenseDoc {
   companyId: string;
   agencyId: string | null;
+  /** Phase 1: agency = paid from agency_cash; company = paid from company bank/mobile. */
+  expenseType?: ExpenseType | null;
   category: string;
-  /** Phase C3: preferred category for analytics; falls back to category if absent. */
   expenseCategory?: ExpenseCategory | string | null;
   description: string;
   amount: number;
@@ -47,17 +72,21 @@ export interface ExpenseDoc {
   status: ExpenseStatus;
   approvedBy: string | null;
   approvedAt: Timestamp | null;
+  rejectedBy: string | null;
+  rejectedAt: Timestamp | null;
+  rejectionReason: string | null;
   paidAt: Timestamp | null;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
-  /** Phase C3: optional links for operational integration. */
   vehicleId?: string | null;
   tripId?: string | null;
   linkedMaintenanceId?: string | null;
   linkedPayableId?: string | null;
-  /** Optional date of expense (yyyy-MM-dd) for fuel/date aggregation. */
   expenseDate?: string | null;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  receiptUrls?: string[] | null;
 }
 
 function expensesRef(companyId: string) {
@@ -86,7 +115,17 @@ export async function ensureExpenseReserveAccount(companyId: string, currency: s
   });
 }
 
-/** Create expense (pending). Phase C3: optional expenseCategory, vehicleId, tripId, linkedMaintenanceId, linkedPayableId, expenseDate. */
+/** Resolve expenseType from account: agency_cash → agency, else company. */
+async function getExpenseTypeFromAccount(
+  companyId: string,
+  accountId: string
+): Promise<ExpenseType> {
+  const snap = await getDoc(financialAccountRef(companyId, accountId));
+  const accountType = snap.exists() ? (snap.data() as { accountType?: string }).accountType : "";
+  return accountType === "agency_cash" ? "agency" : "company";
+}
+
+/** Create expense (initial status from thresholds). agency_accountant submits → pending_manager / pending_accountant / pending_ceo. */
 export async function createExpense(params: {
   companyId: string;
   agencyId: string | null;
@@ -101,19 +140,30 @@ export async function createExpense(params: {
   linkedMaintenanceId?: string | null;
   linkedPayableId?: string | null;
   expenseDate?: string | null;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  receiptUrls?: string[] | null;
 }): Promise<string> {
+  const thresholds = await getExpenseApprovalThresholds(params.companyId);
+  const initialStatus = getInitialExpenseStatus(params.amount, thresholds);
+  const expenseType = await getExpenseTypeFromAccount(params.companyId, params.accountId);
+
   const ref = doc(expensesRef(params.companyId));
   const now = Timestamp.now();
   const data: Record<string, unknown> = {
     companyId: params.companyId,
     agencyId: params.agencyId ?? null,
+    expenseType,
     category: params.category,
     description: params.description,
     amount: params.amount,
     accountId: params.accountId,
-    status: "pending",
+    status: initialStatus,
     approvedBy: null,
     approvedAt: null,
+    rejectedBy: null,
+    rejectedAt: null,
+    rejectionReason: null,
     paidAt: null,
     createdBy: params.createdBy,
     createdAt: now,
@@ -125,14 +175,60 @@ export async function createExpense(params: {
   if (params.linkedMaintenanceId != null) data.linkedMaintenanceId = params.linkedMaintenanceId;
   if (params.linkedPayableId != null) data.linkedPayableId = params.linkedPayableId;
   if (params.expenseDate != null) data.expenseDate = params.expenseDate;
+  if (params.supplierId != null) data.supplierId = params.supplierId;
+  if (params.supplierName != null) data.supplierName = params.supplierName;
+  if (params.receiptUrls != null) data.receiptUrls = params.receiptUrls;
   await setDoc(ref, data);
+  const title = "Nouvelle dépense soumise";
+  const body = `${params.description.slice(0, 80)} — ${params.amount.toLocaleString("fr-FR")} en attente de validation.`;
+  try {
+    await createCompanyNotification({
+      companyId: params.companyId,
+      type: "expense_submitted",
+      entityType: "expense",
+      entityId: ref.id,
+      title,
+      body,
+      agencyId: params.agencyId,
+      expenseId: ref.id,
+      link: `/compagnie/${params.companyId}/accounting/expenses`,
+    });
+    await notifyCompanyRoles({
+      companyId: params.companyId,
+      roles: ["chefAgence", "company_accountant", "financial_director", "admin_compagnie"],
+      type: "expense_submitted",
+      entityType: "expense",
+      entityId: ref.id,
+      title,
+      body,
+      agencyId: params.agencyId,
+      expenseId: ref.id,
+      link: `/compagnie/${params.companyId}/accounting/expenses`,
+    });
+  } catch (_) {
+    // Notification failures must not block expense creation.
+  }
   return ref.id;
 }
 
-/** Phase C3: roles allowed to approve maintenance above threshold. */
-const MAINTENANCE_APPROVAL_ROLES = ["company_accountant", "admin_compagnie"];
+/** Roles that can approve at each level. */
+const AGENCY_MANAGER_ROLES = ["chefAgence", "admin_compagnie"];
+const ACCOUNTANT_ROLES = ["company_accountant", "financial_director", "admin_compagnie"];
+const CEO_ROLES = ["admin_compagnie"];
 
-/** Approve expense (agency manager or CEO). Phase C3: maintenance above threshold requires company_accountant or admin_compagnie. */
+/** Normalize legacy "pending" to pending_manager for workflow. */
+function effectiveStatus(data: ExpenseDoc): ExpenseStatus {
+  const s = data.status;
+  return s === "pending" ? "pending_manager" : s;
+}
+
+/**
+ * Multi-level approval:
+ * - pending_manager: agency_manager approves (if amount ≤ agencyManagerLimit → approved; else → pending_accountant).
+ * - pending_accountant: company_accountant approves (if amount ≤ accountantLimit → approved; else → pending_ceo).
+ * - pending_ceo: CEO approves → approved.
+ * financialMovements are only created when status becomes "paid" (in payExpense).
+ */
 export async function approveExpense(
   companyId: string,
   expenseId: string,
@@ -143,24 +239,186 @@ export async function approveExpense(
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("Dépense introuvable.");
   const data = snap.data() as ExpenseDoc;
-  const category = (data.expenseCategory ?? data.category ?? "").toString();
+  const status = effectiveStatus(data);
   const amount = Number(data.amount) ?? 0;
-  if (category === "maintenance" && approvedByRole != null) {
-    const { getFinancialSettings } = await import("@/modules/compagnie/finance/financialSettingsService");
-    const settings = await getFinancialSettings(companyId);
-    const threshold = Number(settings.maintenanceApprovalThreshold ?? 0) || 500_000;
-    if (amount > threshold && !MAINTENANCE_APPROVAL_ROLES.includes(approvedByRole)) {
-      throw new Error(
-        `Les dépenses de maintenance au-dessus de ${threshold.toLocaleString("fr-FR")} doivent être approuvées par le comptable compagnie ou le CEO.`
-      );
+
+  if (status === "approved" || status === "paid") throw new Error("Cette dépense est déjà approuvée ou payée.");
+  if (status === "rejected") throw new Error("Cette dépense a été refusée.");
+
+  const thresholds = await getExpenseApprovalThresholds(companyId);
+  const role = (approvedByRole ?? "").toString();
+
+  if (status === "pending_manager") {
+    if (!AGENCY_MANAGER_ROLES.includes(role)) {
+      throw new Error("Seul le chef d'agence (ou le CEO) peut approuver cette dépense.");
     }
+    if (amount <= thresholds.agencyManagerLimit) {
+      await updateDoc(ref, {
+        status: "approved",
+        approvedBy,
+        approvedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      try {
+        await notifyCompanyRoles({
+          companyId,
+          roles: ["company_accountant", "financial_director", "admin_compagnie"],
+          type: "expense_approved",
+          entityType: "expense",
+          entityId: expenseId,
+          title: "Dépense approuvée",
+          body: `Une dépense a été approuvée au niveau chef d'agence.`,
+          agencyId: data.agencyId,
+          expenseId,
+          link: `/compagnie/${companyId}/accounting/expenses`,
+        });
+      } catch (_) {}
+      return;
+    }
+    await updateDoc(ref, {
+      status: "pending_accountant",
+      updatedAt: serverTimestamp(),
+    });
+    try {
+      await notifyCompanyRoles({
+        companyId,
+        roles: ["company_accountant", "financial_director", "admin_compagnie"],
+        type: "expense_submitted",
+        entityType: "expense",
+        entityId: expenseId,
+        title: "Dépense en attente chef comptable",
+        body: `Une dépense requiert validation du chef comptable.`,
+        agencyId: data.agencyId,
+        expenseId,
+        link: `/compagnie/${companyId}/accounting/expenses`,
+      });
+    } catch (_) {}
+    return;
   }
+
+  if (status === "pending_accountant") {
+    if (!ACCOUNTANT_ROLES.includes(role)) {
+      throw new Error("Seul le chef comptable (ou le CEO) peut approuver cette dépense.");
+    }
+    if (amount <= thresholds.accountantLimit) {
+      await updateDoc(ref, {
+        status: "approved",
+        approvedBy,
+        approvedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      try {
+        await notifyCompanyRoles({
+          companyId,
+          roles: ["admin_compagnie"],
+          type: "expense_approved",
+          entityType: "expense",
+          entityId: expenseId,
+          title: "Dépense approuvée",
+          body: `Une dépense a été approuvée par le chef comptable.`,
+          agencyId: data.agencyId,
+          expenseId,
+          link: "/compagnie/" + companyId + "/ceo-expenses",
+        });
+      } catch (_) {}
+      return;
+    }
+    await updateDoc(ref, {
+      status: "pending_ceo",
+      updatedAt: serverTimestamp(),
+    });
+    try {
+      await notifyCompanyRoles({
+        companyId,
+        roles: ["admin_compagnie"],
+        type: "expense_submitted",
+        entityType: "expense",
+        entityId: expenseId,
+        title: "Dépense en attente CEO",
+        body: `Une dépense dépasse le seuil comptable et attend l'approbation CEO.`,
+        agencyId: data.agencyId,
+        expenseId,
+        link: "/compagnie/" + companyId + "/ceo-expenses",
+      });
+    } catch (_) {}
+    return;
+  }
+
+  if (status === "pending_ceo") {
+    if (!CEO_ROLES.includes(role)) {
+      throw new Error("Seul le CEO peut approuver cette dépense.");
+    }
+    await updateDoc(ref, {
+      status: "approved",
+      approvedBy,
+      approvedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    try {
+      await notifyCompanyRoles({
+        companyId,
+        roles: ["company_accountant", "financial_director", "chefAgence"],
+        type: "expense_approved",
+        entityType: "expense",
+        entityId: expenseId,
+        title: "Dépense approuvée par le CEO",
+        body: `Une dépense a été approuvée au niveau CEO.`,
+        agencyId: data.agencyId,
+        expenseId,
+        link: `/compagnie/${companyId}/accounting/expenses`,
+      });
+    } catch (_) {}
+  }
+}
+
+/** Reject expense (any approver for current step can reject). */
+export async function rejectExpense(
+  companyId: string,
+  expenseId: string,
+  rejectedBy: string,
+  rejectionReason: string,
+  rejectedByRole?: string | null
+): Promise<void> {
+  const ref = expenseRef(companyId, expenseId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Dépense introuvable.");
+  const data = snap.data() as ExpenseDoc;
+  const status = effectiveStatus(data);
+
+  if (status === "approved" || status === "paid") throw new Error("Impossible de refuser une dépense déjà approuvée ou payée.");
+  if (status === "rejected") throw new Error("Cette dépense a déjà été refusée.");
+
+  const role = (rejectedByRole ?? "").toString();
+  const canReject =
+    (status === "pending_manager" && AGENCY_MANAGER_ROLES.includes(role)) ||
+    (status === "pending_accountant" && ACCOUNTANT_ROLES.includes(role)) ||
+    (status === "pending_ceo" && CEO_ROLES.includes(role));
+
+  if (!canReject) {
+    throw new Error("Vous n'êtes pas autorisé à refuser cette dépense à ce stade.");
+  }
+
   await updateDoc(ref, {
-    status: "approved",
-    approvedBy,
-    approvedAt: serverTimestamp(),
+    status: "rejected",
+    rejectedBy,
+    rejectedAt: serverTimestamp(),
+    rejectionReason: rejectionReason?.trim()?.slice(0, 500) ?? "",
     updatedAt: serverTimestamp(),
   });
+  try {
+    await notifyCompanyRoles({
+      companyId,
+      roles: ["company_accountant", "financial_director", "chefAgence", "agency_accountant", "admin_compagnie"],
+      type: "expense_rejected",
+      entityType: "expense",
+      entityId: expenseId,
+      title: "Dépense refusée",
+      body: `Une dépense a été refusée: ${(rejectionReason || "").slice(0, 80)}`,
+      agencyId: data.agencyId,
+      expenseId,
+      link: `/compagnie/${companyId}/accounting/expenses`,
+    });
+  } catch (_) {}
 }
 
 /**
@@ -229,12 +487,34 @@ export async function payExpense(
       updatedAt: serverTimestamp(),
     });
   });
+  try {
+    const snap = await getDoc(ref);
+    const data = snap.exists() ? (snap.data() as ExpenseDoc) : null;
+    await notifyCompanyRoles({
+      companyId,
+      roles: ["company_accountant", "financial_director", "chefAgence", "agency_accountant", "admin_compagnie"],
+      type: "expense_paid",
+      entityType: "expense",
+      entityId: expenseId,
+      title: "Dépense payée",
+      body: `Une dépense a été payée et comptabilisée.`,
+      agencyId: data?.agencyId ?? null,
+      expenseId,
+      link: `/compagnie/${companyId}/accounting/expenses`,
+    });
+  } catch (_) {}
 }
 
-/** List expenses (optionally by agency or status). */
+/** List expenses (optionally by agency, status, or statusIn for multiple pending statuses). */
 export async function listExpenses(
   companyId: string,
-  options?: { agencyId?: string | null; status?: ExpenseStatus; limitCount?: number }
+  options?: {
+    agencyId?: string | null;
+    status?: ExpenseStatus;
+    /** Use to fetch all "pending" (e.g. pending_manager, pending_accountant, pending_ceo). Max 10. */
+    statusIn?: ExpenseStatus[];
+    limitCount?: number;
+  }
 ): Promise<(ExpenseDoc & { id: string })[]> {
   const ref = expensesRef(companyId);
   const constraints: ReturnType<typeof where>[] = [];
@@ -242,7 +522,11 @@ export async function listExpenses(
     if (options.agencyId === null) constraints.push(where("agencyId", "==", null));
     else constraints.push(where("agencyId", "==", options.agencyId));
   }
-  if (options?.status) constraints.push(where("status", "==", options.status));
+  if (options?.statusIn != null && options.statusIn.length > 0) {
+    constraints.push(where("status", "in", options.statusIn.slice(0, 10)));
+  } else if (options?.status) {
+    constraints.push(where("status", "==", options.status));
+  }
   const q = query(
     ref,
     ...constraints,

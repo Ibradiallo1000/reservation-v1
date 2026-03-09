@@ -62,7 +62,7 @@ export default function RevenusLiquiditesPage() {
   return (
     <StandardLayoutWrapper>
       <PageHeader title="Revenus & Liquidités" />
-      <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-3">
+      <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3">
         {tabs.map(({ key, label, icon: Icon, description }) => {
           const active = activeTab === key;
           return (
@@ -73,8 +73,8 @@ export default function RevenusLiquiditesPage() {
               className={[
                 "inline-flex items-center gap-2 px-4 py-2.5 rounded-t-lg text-sm font-medium transition-all",
                 active
-                  ? "bg-white border border-b-0 border-gray-200 shadow-sm -mb-px"
-                  : "text-gray-600 hover:bg-gray-50 border border-transparent",
+                  ? "bg-white dark:bg-slate-800 border border-b-0 border-gray-200 dark:border-slate-600 shadow-sm -mb-px"
+                  : "text-gray-600 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 border border-transparent",
               ].join(" ")}
               style={active ? { borderBottomColor: "white", color: theme.colors.primary } : {}}
             >
@@ -84,7 +84,7 @@ export default function RevenusLiquiditesPage() {
           );
         })}
       </div>
-      <p className="text-xs text-gray-500 -mt-2">
+      <p className="text-xs text-gray-500 dark:text-slate-400 -mt-2">
         {activeTab === TAB_REVENUS
           ? "Revenus = chiffre d'affaires et ventes (sessions validées). Les montants peuvent différer des encaissements réels."
           : "Liquidités = argent réellement disponible (caisses, banques, mobile money). Les entrées/sorties sont enregistrées au fil de l'eau."}

@@ -8,6 +8,7 @@ import {
   updateDoc,
   serverTimestamp,
   query,
+  where,
   limit,
   orderBy,
   startAfter,
@@ -17,7 +18,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { VehicleDoc, VehicleStatus } from "./vehicleTypes";
-import { VEHICLES_COLLECTION, VEHICLE_STATUS } from "./vehicleTypes";
+import { VEHICLES_COLLECTION, VEHICLE_STATUS, CANONICAL_VEHICLE_STATUS } from "./vehicleTypes";
 import { normalizePlate } from "./plateValidation";
 import { normalizeModel, ensureVehicleModel } from "./vehicleModelsService";
 import {
@@ -36,6 +37,13 @@ import {
   getAffectation,
 } from "./affectationService";
 import { AFFECTATION_STATUS } from "./affectationTypes";
+import {
+  findTripInstanceBySlot,
+  updateTripInstanceStatus,
+  assignVehicleToTripInstance,
+  getOrCreateTripInstanceForSlot,
+} from "../tripInstances/tripInstanceService";
+import { TRIP_INSTANCE_STATUS } from "../tripInstances/tripInstanceTypes";
 import type { AffectationDoc } from "./affectationTypes";
 
 export function vehiclesRef(companyId: string) {
@@ -79,7 +87,17 @@ function normalizeVehicleDoc(data: Record<string, unknown>): Record<string, unkn
     default:
       break;
   }
-  return { ...data, technicalStatus, operationalStatus };
+  const canonicalStatus =
+    technicalStatus === TECHNICAL_STATUS.MAINTENANCE
+      ? "MAINTENANCE"
+      : technicalStatus === TECHNICAL_STATUS.ACCIDENTE
+        ? "ACCIDENT"
+        : technicalStatus === TECHNICAL_STATUS.HORS_SERVICE
+          ? "OUT_OF_SERVICE"
+          : operationalStatus === OPERATIONAL_STATUS.EN_TRANSIT
+            ? "ON_TRIP"
+            : "AVAILABLE";
+  return { ...data, technicalStatus, operationalStatus, canonicalStatus };
 }
 
 export type ListVehiclesOrderBy = "plate" | "technicalStatus" | "updatedAt";
@@ -98,12 +116,12 @@ export async function listVehicles(companyId: string, max = 500): Promise<(Vehic
   return list;
 }
 
-/** Phase 1 Stabilization: list vehicles with pagination (20 per page), orderBy plaque | technicalStatus | updatedAt. Excludes archived (isArchived !== true). */
+/** Phase 1 Stabilization: list vehicles with pagination (default 50 per page), orderBy plaque | technicalStatus | updatedAt. Excludes archived (isArchived !== true). */
 export async function listVehiclesPaginated(
   companyId: string,
   options: { pageSize?: number; startAfterDoc?: DocumentSnapshot | null; orderByField?: ListVehiclesOrderBy }
 ): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
-  const pageSize = options.pageSize ?? 20;
+  const pageSize = options.pageSize ?? 50;
   const ref = vehiclesRef(companyId);
   const field = options.orderByField === "updatedAt" ? "updatedAt" : options.orderByField === "technicalStatus" ? "technicalStatus" : "plateNumber";
   const dir = options.orderByField === "updatedAt" ? "desc" : "asc";
@@ -121,6 +139,186 @@ export async function listVehiclesPaginated(
   const lastId = list.length > 0 ? list[list.length - 1].id : null;
   const lastDoc = lastId ? snap.docs.find((d) => d.id === lastId) ?? null : null;
   return { vehicles: list, lastDoc: hasMore ? lastDoc : null, hasMore };
+}
+
+const DEFAULT_PAGE_SIZE = 50;
+
+/** List vehicles in a city (canonical query). Requires Firestore index: vehicles (currentCity ASC, updatedAt DESC). */
+export async function listVehiclesByCity(
+  companyId: string,
+  currentCity: string,
+  options: { limitCount?: number; startAfterDoc?: DocumentSnapshot | null } = {}
+): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
+  const limitCount = options.limitCount ?? DEFAULT_PAGE_SIZE;
+  const ref = vehiclesRef(companyId);
+  let q = query(
+    ref,
+    where("currentCity", "==", currentCity),
+    orderBy("updatedAt", "desc"),
+    limit(limitCount + 1)
+  );
+  if (options.startAfterDoc) {
+    q = query(
+      ref,
+      where("currentCity", "==", currentCity),
+      orderBy("updatedAt", "desc"),
+      startAfter(options.startAfterDoc),
+      limit(limitCount + 1)
+    );
+  }
+  const snap = await getDocs(q);
+  const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
+  const list = docs.map((d) => {
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    return { id: d.id, ...normalized } as VehicleDoc & { id: string };
+  });
+  const hasMore = snap.docs.length > limitCount;
+  const lastDoc = docs.length > 0 ? snap.docs[docs.length - 1] ?? null : null;
+  return { vehicles: list, lastDoc: hasMore ? lastDoc : null, hasMore };
+}
+
+/** List vehicles assigned to an agency. Requires Firestore index: vehicles (currentAgencyId ASC, updatedAt DESC). */
+export async function listVehiclesByCurrentAgency(
+  companyId: string,
+  currentAgencyId: string,
+  options: { limitCount?: number; startAfterDoc?: DocumentSnapshot | null } = {}
+): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
+  const limitCount = options.limitCount ?? DEFAULT_PAGE_SIZE;
+  const ref = vehiclesRef(companyId);
+  let q = query(
+    ref,
+    where("currentAgencyId", "==", currentAgencyId),
+    orderBy("updatedAt", "desc"),
+    limit(limitCount + 1)
+  );
+  if (options.startAfterDoc) {
+    q = query(
+      ref,
+      where("currentAgencyId", "==", currentAgencyId),
+      orderBy("updatedAt", "desc"),
+      startAfter(options.startAfterDoc),
+      limit(limitCount + 1)
+    );
+  }
+  const snap = await getDocs(q);
+  const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
+  const list = docs.map((d) => {
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    return { id: d.id, ...normalized } as VehicleDoc & { id: string };
+  });
+  const hasMore = snap.docs.length > limitCount;
+  const lastDoc = docs.length > 0 ? snap.docs[docs.length - 1] ?? null : null;
+  return { vehicles: list, lastDoc: hasMore ? lastDoc : null, hasMore };
+}
+
+/** List vehicles available in a city (currentCity + GARAGE + NORMAL). Indexed query; no full-fleet load. Requires Firestore index: vehicles (currentCity ASC, operationalStatus ASC, technicalStatus ASC, updatedAt DESC). */
+export async function listVehiclesAvailableInCity(
+  companyId: string,
+  currentCity: string,
+  options: { limitCount?: number; startAfterDoc?: DocumentSnapshot | null } = {}
+): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
+  const limitCount = options.limitCount ?? DEFAULT_PAGE_SIZE;
+  const ref = vehiclesRef(companyId);
+  let q = query(
+    ref,
+    where("currentCity", "==", currentCity),
+    where("operationalStatus", "==", OPERATIONAL_STATUS.GARAGE),
+    where("technicalStatus", "==", TECHNICAL_STATUS.NORMAL),
+    orderBy("updatedAt", "desc"),
+    limit(limitCount + 1)
+  );
+  if (options.startAfterDoc) {
+    q = query(
+      ref,
+      where("currentCity", "==", currentCity),
+      where("operationalStatus", "==", OPERATIONAL_STATUS.GARAGE),
+      where("technicalStatus", "==", TECHNICAL_STATUS.NORMAL),
+      orderBy("updatedAt", "desc"),
+      startAfter(options.startAfterDoc),
+      limit(limitCount + 1)
+    );
+  }
+  const snap = await getDocs(q);
+  const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
+  const list = docs.map((d) => {
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    return { id: d.id, ...normalized } as VehicleDoc & { id: string };
+  });
+  const hasMore = snap.docs.length > limitCount;
+  const lastDoc = docs.length > 0 ? docs[docs.length - 1] ?? null : null;
+  return { vehicles: list, lastDoc: hasMore ? lastDoc : null, hasMore };
+}
+
+/** List vehicles in transit to a city (destinationCity + ON_TRIP / EN_TRANSIT). Uses legacy status for backward compatibility. Requires index: vehicles (destinationCity ASC, status ASC, updatedAt DESC). */
+export async function listVehiclesInTransitToCity(
+  companyId: string,
+  destinationCity: string,
+  options: { limitCount?: number; startAfterDoc?: DocumentSnapshot | null } = {}
+): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
+  const limitCount = options.limitCount ?? DEFAULT_PAGE_SIZE;
+  const ref = vehiclesRef(companyId);
+  let q = query(
+    ref,
+    where("destinationCity", "==", destinationCity),
+    where("status", "==", VEHICLE_STATUS.EN_TRANSIT),
+    orderBy("updatedAt", "desc"),
+    limit(limitCount + 1)
+  );
+  if (options.startAfterDoc) {
+    q = query(
+      ref,
+      where("destinationCity", "==", destinationCity),
+      where("status", "==", VEHICLE_STATUS.EN_TRANSIT),
+      orderBy("updatedAt", "desc"),
+      startAfter(options.startAfterDoc),
+      limit(limitCount + 1)
+    );
+  }
+  const snap = await getDocs(q);
+  const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
+  const list = docs.map((d) => {
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    return { id: d.id, ...normalized } as VehicleDoc & { id: string };
+  });
+  const hasMore = snap.docs.length > limitCount;
+  const lastDoc = docs.length > 0 ? snap.docs[docs.length - 1] ?? null : null;
+  return { vehicles: list, lastDoc: hasMore ? lastDoc : null, hasMore };
+}
+
+/** Canonical: when a trip starts, set vehicle to ON_TRIP, currentTripId, destinationCity. */
+export async function setVehicleOnTripStart(
+  companyId: string,
+  vehicleId: string,
+  tripId: string,
+  arrivalCity: string
+): Promise<void> {
+  await updateDoc(vehicleRef(companyId, vehicleId), {
+    canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
+    status: VEHICLE_STATUS.EN_TRANSIT,
+    operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
+    currentTripId: tripId,
+    destinationCity: arrivalCity || null,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Canonical: when a trip finishes, set vehicle to AVAILABLE, currentCity = arrivalCity, lastTripId = tripId, clear currentTripId. */
+export async function setVehicleOnTripEnd(
+  companyId: string,
+  vehicleId: string,
+  arrivalCity: string,
+  tripId: string
+): Promise<void> {
+  await updateDoc(vehicleRef(companyId, vehicleId), {
+    canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
+    status: VEHICLE_STATUS.GARAGE,
+    operationalStatus: OPERATIONAL_STATUS.GARAGE,
+    currentCity: arrivalCity || "",
+    destinationCity: null,
+    lastTripId: tripId,
+    currentTripId: null,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function getVehicle(companyId: string, vehicleId: string): Promise<(VehicleDoc & { id: string }) | null> {
@@ -183,7 +381,7 @@ export async function declareAccident(companyId: string, vehicleId: string): Pro
   });
 }
 
-/** Phase 1 Stabilization: assign vehicle (Chef Agence). Create affectation doc only; do NOT change operationalStatus yet. */
+/** Phase 1 Stabilization: assign vehicle (Chef Agence). Create affectation doc only; do NOT change operationalStatus yet. Optionally write vehicleId to weeklyTrip doc when weeklyTripId is provided. */
 export async function assignVehicle(
   companyId: string,
   agencyId: string,
@@ -191,7 +389,8 @@ export async function assignVehicle(
   agencyCity: string,
   payload: Omit<AffectationDoc, "vehicleId" | "vehiclePlate" | "vehicleModel" | "status" | "assignedBy" | "assignedAt"> & { assignedBy: string },
   userId: string,
-  role: string
+  role: string,
+  options?: { weeklyTripId?: string | null }
 ): Promise<string> {
   const v = await getVehicle(companyId, vehicleId);
   if (!v) throw new Error("Véhicule introuvable");
@@ -220,7 +419,28 @@ export async function assignVehicle(
     assignedBy: userId,
     assignedAt: now,
   };
-  return createAffectation(companyId, agencyId, affectationData);
+  const affectationId = await createAffectation(companyId, agencyId, affectationData);
+  if (options?.weeklyTripId?.trim()) {
+    const weeklyTripRef = doc(db, "companies", companyId, "agences", agencyId, "weeklyTrips", options.weeklyTripId.trim());
+    await updateDoc(weeklyTripRef, { vehicleId, updatedAt: serverTimestamp() });
+  }
+  const depTime = payload.departureTime ?? "";
+  const datePart = typeof depTime === "string" && depTime.length >= 10 ? depTime.slice(0, 10) : "";
+  const timePart = typeof depTime === "string" && depTime.length >= 16 ? depTime.slice(11, 16) : "";
+  if (datePart && timePart) {
+    try {
+      const ti = await getOrCreateTripInstanceForSlot(companyId, {
+        agencyId,
+        departureCity: payload.departureCity ?? "",
+        arrivalCity: payload.arrivalCity ?? "",
+        date: datePart,
+        departureTime: timePart,
+        seatCapacity: 50,
+      });
+      await assignVehicleToTripInstance(companyId, ti.id, vehicleId);
+    } catch (_) { /* optional: trip instance may not exist or assign may fail */ }
+  }
+  return affectationId;
 }
 
 /** Phase 1 Stabilization: cancel affectation. If status was AFFECTE, set vehicle back to GARAGE and log statusHistory. */
@@ -363,12 +583,25 @@ export async function confirmDepartureAffectation(
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
     status: VEHICLE_STATUS.EN_TRANSIT,
     destinationCity: aff.arrivalCity || null,
+    canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
+    currentTripId: affectationId,
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),
   });
   await updateAffectationStatus(companyId, agencyId, affectationId, AFFECTATION_STATUS.DEPART_CONFIRME, {
     departureConfirmedAt: now,
   });
+  const datePart = typeof aff.departureTime === "string" && aff.departureTime.length >= 10 ? aff.departureTime.slice(0, 10) : "";
+  const timePart = typeof aff.departureTime === "string" && aff.departureTime.length >= 16 ? aff.departureTime.slice(11, 16) : "";
+  if (datePart && timePart) {
+    try {
+      const ti = await findTripInstanceBySlot(companyId, agencyId, datePart, timePart, aff.departureCity || "", aff.arrivalCity || "");
+      if (ti) {
+        await updateTripInstanceStatus(companyId, ti.id, TRIP_INSTANCE_STATUS.DEPARTED);
+        await assignVehicleToTripInstance(companyId, ti.id, aff.vehicleId);
+      }
+    } catch (_) { /* optional: trip instance may not exist */ }
+  }
 }
 
 /** Phase 1 Affectation: confirm arrival (Chef Agence destination). Affectation DEPART_CONFIRME → vehicle GARAGE, affectation ARRIVE. */
@@ -410,12 +643,23 @@ export async function confirmArrivalAffectation(
     status: VEHICLE_STATUS.GARAGE,
     currentCity: agencyCity.trim(),
     destinationCity: null,
+    canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
+    currentTripId: null,
+    lastTripId: affectationId,
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),
   });
   await updateAffectationStatus(companyId, agencyId, affectationId, AFFECTATION_STATUS.ARRIVE, {
     arrivalConfirmedAt: now,
   });
+  const datePart = typeof aff.departureTime === "string" && aff.departureTime.length >= 10 ? aff.departureTime.slice(0, 10) : "";
+  const timePart = typeof aff.departureTime === "string" && aff.departureTime.length >= 16 ? aff.departureTime.slice(11, 16) : "";
+  if (datePart && timePart) {
+    try {
+      const ti = await findTripInstanceBySlot(companyId, agencyId, datePart, timePart, aff.departureCity || "", aff.arrivalCity || "");
+      if (ti) await updateTripInstanceStatus(companyId, ti.id, TRIP_INSTANCE_STATUS.ARRIVED);
+    } catch (_) { /* optional */ }
+  }
 }
 
 /** Phase 1 Operational: set technical status (Chef Garage). Validates transition and logs statusHistory. */

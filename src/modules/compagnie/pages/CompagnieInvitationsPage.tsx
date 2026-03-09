@@ -174,7 +174,7 @@ const CompagnieInvitationsPage: React.FC = () => {
       {/* Formulaire */}
       <form
         onSubmit={handleInvite}
-        className="bg-white rounded-xl shadow-sm p-6 space-y-4 border"
+        className="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6 space-y-4 border dark:border-slate-700"
       >
         <h3 className="text-lg font-semibold">Nouvelle invitation</h3>
 
@@ -229,7 +229,7 @@ const CompagnieInvitationsPage: React.FC = () => {
       </form>
 
       {/* Liste */}
-      <div className="bg-white rounded-xl shadow-sm border">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border dark:border-slate-700">
         <div className="px-6 py-4 border-b font-semibold">
           Invitations
         </div>

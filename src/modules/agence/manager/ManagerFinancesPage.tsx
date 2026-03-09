@@ -8,7 +8,7 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { listAccounts, ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { listExpenses } from "@/modules/compagnie/treasury/expenses";
+import { listExpenses, PENDING_STATUSES } from "@/modules/compagnie/treasury/expenses";
 import { chefApproveShift } from "@/modules/agence/services/chefApproveShift";
 import {
   Banknote, Wallet, TrendingDown, ArrowRightLeft,
@@ -82,7 +82,7 @@ export default function ManagerFinancesPage() {
         setTickets(s.size);
       });
 
-    listExpenses(companyId, { agencyId, status: "pending", limitCount: 200 }).then((list) => {
+    listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 200 }).then((list) => {
       const filtered = list.filter((e) => {
         const d = (e as any).createdAt?.toDate?.() ?? new Date();
         return d >= start && d <= end;
@@ -103,7 +103,7 @@ export default function ManagerFinancesPage() {
       where("createdAt", "<=", Timestamp.fromDate(todayEnd)), where("statut", "in", ["paye", "payé"])))
       .then((s) => setTodayRevenue(s.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0)));
 
-    listExpenses(companyId, { agencyId, status: "pending", limitCount: 200 }).then((list) => {
+    listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 200 }).then((list) => {
       const filtered = list.filter((e) => {
         const d = (e as any).createdAt?.toDate?.() ?? new Date();
         return d >= todayStart && d <= todayEnd;

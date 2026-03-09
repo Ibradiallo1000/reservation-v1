@@ -13,7 +13,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  addDoc, collection, doc, getDoc, getDocs, onSnapshot, orderBy, query,
+  collection, doc, getDoc, getDocs, onSnapshot, orderBy, query,
   runTransaction, Timestamp, updateDoc, where, writeBatch
 } from 'firebase/firestore';
 import { cn } from '@/lib/utils';
@@ -27,7 +27,7 @@ import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import {
   Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4,
-  Download, FileText, HandIcon, LogOut, MapPin, Package, Pause, Play, Plus, StopCircle,
+  Download, FileText, HandIcon, LogOut, MapPin, Package, Pause, Play, Plus, StopCircle, Bell,
   Ticket, Wallet, Info as InfoIcon, Shield, Receipt, BarChart3,
   RefreshCw, TrendingUp, CreditCard, Smartphone
 } from 'lucide-react';
@@ -36,11 +36,10 @@ import { toast } from 'sonner';
 import { StandardLayoutWrapper, SectionCard, ActionButton, MetricCard, StatusBadge, EmptyState as UIEmptyState } from '@/ui';
 import { typography } from '@/ui/foundation';
 import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
-import { useOnlineStatus, useAgencyDarkMode, AgencyHeaderExtras } from '@/modules/agence/shared';
-import { listCompanyBanks } from '@/modules/compagnie/treasury/companyBanks';
-import { recordMovement } from '@/modules/compagnie/treasury/financialMovements';
-import { agencyCashAccountId, companyBankAccountId } from '@/modules/compagnie/treasury/types';
-import { ensureDefaultAgencyAccounts } from '@/modules/compagnie/treasury/financialAccounts';
+import { useAgencyDarkMode } from '@/modules/agence/shared';
+import AgencyTreasuryNewOperationPage from '@/modules/agence/treasury/pages/AgencyTreasuryNewOperationPage';
+import AgencyTreasuryTransferPage from '@/modules/agence/treasury/pages/AgencyTreasuryTransferPage';
+import AgencyTreasuryNewPayablePage from '@/modules/agence/treasury/pages/AgencyTreasuryNewPayablePage';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -121,16 +120,7 @@ type ShiftAgg = {
    ============================================================================ */
 
 type CashDay = { dateISO: string; entrees: number; sorties: number; solde: number };
-type MovementKind = 'depense' | 'transfert_banque';
-
-type NewOutForm = {
-  kind: MovementKind;
-  montant: string;
-  libelle: string;
-  banque?: string;
-  companyBankId?: string;
-  note?: string;
-};
+type TreasuryModalView = 'new-operation' | 'transfer' | 'new-payable' | null;
 
 /* ============================================================================
    SECTION : TYPES RÉCONCILIATION
@@ -187,8 +177,7 @@ const AgenceComptabilitePage: React.FC = () => {
   const theme = useCompanyTheme(company) || { primary: '#EA580C', secondary: '#F97316' };
   const money = useFormatCurrency();
   const currencySymbol = useCurrencySymbol();
-  const isOnline = useOnlineStatus();
-  const [darkMode, toggleDarkMode] = useAgencyDarkMode();
+  const [darkMode] = useAgencyDarkMode();
 
   /* ============================================================================
      SECTION : ÉTATS REACT - HEADER ET BRANDING
@@ -197,9 +186,7 @@ const AgenceComptabilitePage: React.FC = () => {
   
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState<string>('Compagnie');
-  const [companyCurrency, setCompanyCurrency] = useState<string>('XOF');
   const [agencyName, setAgencyName] = useState<string>('Agence');
-  const [companyBanks, setCompanyBanks] = useState<{ id: string; name: string; iban?: string | null }[]>([]);
 
   /* ============================================================================
      SECTION : ÉTATS REACT - NAVIGATION ET UTILISATEUR
@@ -208,7 +195,7 @@ const AgenceComptabilitePage: React.FC = () => {
   
   const [tab, setTab] = useState<'controle' | 'receptions' | 'rapports' | 'caisse' | 'reconciliation' | 'courrier'>('controle');
   const [accountant, setAccountant] = useState<AccountantProfile | null>(null);
-  const [accountantCode, setAccountantCode] = useState<string>('ACCOUNT');
+  const [accountantCode, setAccountantCode] = useState<string>('Comptable');
   const [userRole, setUserRole] = useState<string>('');
   const prevCourierPendingCountRef = useRef(0);
 
@@ -287,6 +274,7 @@ const AgenceComptabilitePage: React.FC = () => {
   const [totIn, setTotIn] = useState(0);
   const [totOut, setTotOut] = useState(0);
   const [loadingCash, setLoadingCash] = useState(false);
+  const [treasuryModalView, setTreasuryModalView] = useState<TreasuryModalView>(null);
 
   /* ============================================================================
      SECTION : ÉTATS REACT - RÉCONCILIATION
@@ -300,13 +288,14 @@ const AgenceComptabilitePage: React.FC = () => {
     return today.toISOString().split('T')[0];
   });
 
-  /* ============================================================================
-     SECTION : ÉTATS REACT - MODALES
-     Description : Gestion des modales pour les sorties de caisse
-     ============================================================================ */
-  
-  const [showOutModal, setShowOutModal] = useState(false);
-  const [outForm, setOutForm] = useState<NewOutForm>({ kind: 'depense', montant: '', libelle: '', banque: '', companyBankId: '', note: '' });
+  useEffect(() => {
+    if (!treasuryModalView) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTreasuryModalView(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [treasuryModalView]);
 
   /* ============================================================================
      SECTION : INITIALISATION DU HEADER ET PROFIL COMPTABLE
@@ -329,7 +318,6 @@ const AgenceComptabilitePage: React.FC = () => {
           const c = compSnap.data() as any;
           setCompanyLogo(c.logoUrl || c.logo || null);
           setCompanyName(c.nom || c.name || 'Compagnie');
-          setCompanyCurrency(c.devise || 'XOF');
           console.log(`[AgenceCompta] Compagnie chargée: ${c.nom || c.name}`);
         }
 
@@ -341,10 +329,6 @@ const AgenceComptabilitePage: React.FC = () => {
           setAgencyName(a?.nomAgence || a?.nom || ville || 'Agence');
           console.log(`[AgenceCompta] Agence chargée: ${a?.nomAgence || a?.nom || ville}`);
         }
-
-        // Banques de la compagnie (pour transferts caisse → banque)
-        const banks = await listCompanyBanks(user.companyId);
-        setCompanyBanks(banks);
 
         // Chargement du profil comptable et du rôle (pour alertes Courrier)
         const uSnap = await getDoc(doc(db, 'users', user.uid));
@@ -358,7 +342,7 @@ const AgenceComptabilitePage: React.FC = () => {
             staffCode: u.staffCode, codeCourt: u.codeCourt, code: u.code,
           };
           setAccountant(prof);
-          setAccountantCode(u.staffCode || u.codeCourt || u.code || 'ACCOUNT');
+          setAccountantCode(u.staffCode || u.codeCourt || u.code || 'Comptable');
           console.log(`[AgenceCompta] Comptable identifié: ${prof.displayName} (${accountantCode})`);
         }
       } catch (error) {
@@ -422,14 +406,20 @@ const AgenceComptabilitePage: React.FC = () => {
       if (needed.length) {
         console.log(`[AgenceCompta] Chargement de ${needed.length} utilisateur(s) manquant(s)`);
         const entries = await Promise.all(needed.map(async uid => {
-          const us = await getDoc(doc(db, 'users', uid));
-          if (!us.exists()) return [uid, {}] as const;
-          const ud = us.data() as any;
-          return [uid, {
-            name: ud.displayName || ud.nom || ud.email || '',
-            email: ud.email || '',
-            code: ud.staffCode || ud.codeCourt || ud.code || '',
-          }] as const;
+          try {
+            const us = await getDoc(doc(db, 'users', uid));
+            if (!us.exists()) return [uid, {}] as const;
+            const ud = us.data() as any;
+            return [uid, {
+              name: ud.displayName || ud.nom || ud.email || '',
+              email: ud.email || '',
+              code: ud.staffCode || ud.codeCourt || ud.code || '',
+            }] as const;
+          } catch (error) {
+            // Some roles cannot read other users' profile docs; keep UI functional with empty fallback.
+            console.warn('[AgenceCompta] Profil utilisateur non lisible:', uid, error);
+            return [uid, {}] as const;
+          }
         }));
         setUsersCache(prev => Object.fromEntries([...Object.entries(prev), ...entries]));
       }
@@ -973,12 +963,30 @@ const AgenceComptabilitePage: React.FC = () => {
       const qR = query(rRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
       const qM = query(mRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
 
-      const [sr, sm] = await Promise.all([getDocs(qR), getDocs(qM)]);
+      const safeGetDocs = async (label: string, qRef: ReturnType<typeof query>) => {
+        try {
+          return await getDocs(qRef);
+        } catch (err) {
+          const code = (err as { code?: string } | null)?.code;
+          const message = String((err as { message?: string } | null)?.message ?? "");
+          const permissionDenied = code === "permission-denied" || message.includes("Missing or insufficient permissions");
+          if (permissionDenied) {
+            console.warn(`[AgenceCompta] Accès refusé à ${label}, fallback sans crash UI.`);
+            return null;
+          }
+          throw err;
+        }
+      };
+
+      const [sr, sm] = await Promise.all([
+        safeGetDocs("cashReceipts", qR),
+        safeGetDocs("cashMovements", qM),
+      ]);
 
       const map: Record<string, { in: number; out: number }> = {};
 
       // Agrégation des entrées (reçus de caisse)
-      sr.forEach(d => {
+      sr?.forEach(d => {
         const r = d.data() as any;
         const dt = r.createdAt?.toDate?.() ?? new Date();
         if (dt < currentRange.from || dt >= currentRange.to) return;
@@ -989,7 +997,7 @@ const AgenceComptabilitePage: React.FC = () => {
       });
 
       // Agrégation des sorties (dépenses et transferts)
-      sm.forEach(d => {
+      sm?.forEach(d => {
         const r = d.data() as any;
         const dt = r.createdAt?.toDate?.() ?? new Date();
         if (dt < currentRange.from || dt >= currentRange.to) return;
@@ -1136,77 +1144,6 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [tab, reconciliationDate, loadReconciliation]);
 
   /* ============================================================================
-     SECTION : GESTION DE LA CAISSE - NOUVELLES SORTIES
-     Description : Création de nouveaux mouvements de sortie (dépenses/transferts)
-     ============================================================================ */
-  
-  const createOutMovement = async () => {
-    console.log('[AgenceCompta] Création d\'un nouveau mouvement de sortie', outForm);
-    
-    if (!user?.companyId || !user?.agencyId) return;
-    
-    const amount = Number(outForm.montant || 0);
-    if (!Number.isFinite(amount) || amount <= 0) { 
-      console.warn('[AgenceCompta] Montant invalide pour le mouvement');
-      alert('Montant invalide'); 
-      return; 
-    }
-
-    const bankLabel = outForm.kind === 'transfert_banque'
-      ? (outForm.companyBankId ? companyBanks.find(b => b.id === outForm.companyBankId)?.name : null) || outForm.banque || ''
-      : '';
-
-    if (outForm.kind === 'transfert_banque' && !bankLabel) {
-      alert('Veuillez sélectionner une banque de la compagnie ou indiquer le nom du compte.');
-      return;
-    }
-    
-    try {
-      const payload = {
-        kind: outForm.kind,
-        amount,
-        label: outForm.libelle || (outForm.kind === 'transfert_banque' ? 'Transfert vers banque' : 'Dépense'),
-        bankName: bankLabel,
-        companyBankId: outForm.kind === 'transfert_banque' ? (outForm.companyBankId || null) : null,
-        note: outForm.note || '',
-        companyId: user.companyId,
-        agencyId: user.agencyId,
-        accountantId: accountant?.id || null,
-        accountantCode,
-        createdAt: Timestamp.now(),
-      };
-      
-      const movRef = await addDoc(collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`), payload);
-      const movementId = movRef.id;
-
-      if (outForm.kind === 'transfert_banque' && outForm.companyBankId) {
-        await ensureDefaultAgencyAccounts(user.companyId, user.agencyId, companyCurrency, agencyName);
-        await recordMovement({
-          companyId: user.companyId,
-          fromAccountId: agencyCashAccountId(user.agencyId),
-          toAccountId: companyBankAccountId(outForm.companyBankId),
-          amount,
-          currency: companyCurrency,
-          movementType: 'deposit_to_bank',
-          referenceType: 'transfer',
-          referenceId: movementId,
-          agencyId: user.agencyId,
-          performedBy: user.uid,
-          notes: `Transfert caisse → ${bankLabel}`,
-        });
-      }
-      
-      console.log('[AgenceCompta] Mouvement de sortie enregistré avec succès');
-      setShowOutModal(false);
-      setOutForm({ kind: 'depense', montant: '', libelle: '', banque: '', companyBankId: '', note: '' });
-      await reloadCash();
-    } catch (error) {
-      console.error('[AgenceCompta] Erreur lors de l\'enregistrement du mouvement:', error);
-      alert('Erreur lors de l\'enregistrement du mouvement');
-    }
-  };
-
-  /* ============================================================================
      SECTION : HELPER FUNCTIONS - RECHERCHE
      Description : Fonctions utilitaires pour la recherche de données
      ============================================================================ */
@@ -1228,125 +1165,124 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Logo, nom d'entreprise, onglets et informations comptable
          ============================================================================ */}
       
-      <div className="sticky top-0 z-10 border-b bg-white/95 backdrop-blur-sm supports-[backdrop-filter]:bg-white/90 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            {/* Branding */}
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-3">
-                {companyLogo ? (
-                  <div className="relative">
-                    <img 
-                      src={companyLogo} 
-                      alt="Logo compagnie" 
-                      className="h-12 w-12 rounded-xl object-contain border-2 border-white shadow-sm"
-                    />
-                    <div className="absolute -bottom-1 -right-1 h-5 w-5 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-full border border-white flex items-center justify-center">
-                      <Shield className="h-3 w-3 text-white" />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 border-2 border-white shadow-sm grid place-items-center">
-                    <Building2 className="h-6 w-6 text-gray-600"/>
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <div
-                    className="text-xl font-bold tracking-tight truncate bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent"
-                    title={companyName}
-                  >
-                    {companyName}
-                  </div>
-                  <div className="text-sm text-gray-600 flex items-center gap-1.5 truncate">
-                    <MapPin className="h-4 w-4 flex-shrink-0"/>
-                    <span className="truncate">{agencyName}</span>
-                    <span className="text-xs px-2 py-0.5 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 rounded-full">
-                      Comptabilité
-                    </span>
-                  </div>
+      <div className="sticky top-0 z-10 shadow-sm">
+        {/* Barre globale */}
+        <div className="h-16" style={{ backgroundColor: theme?.primary ?? '#EA580C' }}>
+          <div className="max-w-7xl mx-auto h-full px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              {companyLogo ? (
+                <img
+                  src={companyLogo}
+                  alt="Logo compagnie"
+                  className="h-10 w-10 rounded-lg object-contain border border-white/30 bg-white/10"
+                />
+              ) : (
+                <div className="h-10 w-10 rounded-lg border border-white/30 bg-white/10 grid place-items-center">
+                  <Building2 className="h-5 w-5 text-white" />
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="text-xs sm:text-sm font-semibold text-white truncate" title={companyName}>{companyName}</div>
+                <div className="hidden sm:flex text-xs text-white/85 items-center gap-1.5 truncate">
+                  <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="truncate">{agencyName}</span>
                 </div>
               </div>
             </div>
 
-            {/* Onglets */}
-            <div className="w-full sm:w-auto">
-              <div className="inline-flex rounded-xl p-1.5 bg-gradient-to-r from-slate-100 to-slate-50 shadow-inner w-full sm:w-auto">
-                <TabButton 
-                  active={tab==='controle'}   
-                  onClick={()=>setTab('controle')}   
-                  label="Contrôle" 
-                  icon={<Activity className="h-4 w-4" />}
-                  theme={theme}
-                />
-                <TabButton 
-                  active={tab==='receptions'} 
-                  onClick={()=>setTab('receptions')} 
-                  label="Réceptions" 
-                  icon={<HandIcon className="h-4 w-4" />}
-                  theme={theme}
-                />
-                <TabButton 
-                  active={tab==='rapports'}   
-                  onClick={()=>setTab('rapports')}   
-                  label="Rapports" 
-                  icon={<BarChart3 className="h-4 w-4" />}
-                  theme={theme}
-                />
-                <TabButton 
-                  active={tab==='caisse'}     
-                  onClick={()=>setTab('caisse')}     
-                  label="Caisse" 
-                  icon={<Banknote className="h-4 w-4" />}
-                  theme={theme}
-                />
-                <TabButton 
-                  active={tab==='reconciliation'}     
-                  onClick={()=>setTab('reconciliation')}     
-                  label="Réconciliation" 
-                  icon={<RefreshCw className="h-4 w-4" />}
-                  theme={theme}
-                />
-                <TabButton 
-                  active={tab==='courrier'} 
-                  onClick={()=>setTab('courrier')} 
-                  label="Courrier" 
-                  icon={<Package className="h-4 w-4" />}
-                  theme={theme}
-                  badgeCount={userRole === 'agency_accountant' ? pendingCourierSessions.length : 0}
-                />
-              </div>
-            </div>
+            <div className="flex items-center gap-1 sm:gap-2">
+              <button
+                type="button"
+                className="relative inline-flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-lg border border-white/30 bg-white/10 text-white hover:bg-white/20 transition-colors"
+                title="Notifications"
+              >
+                <Bell className="h-4 w-4" />
+                {userRole === 'agency_accountant' && pendingCourierSessions.length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[1rem] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-4 text-center">
+                    {pendingCourierSessions.length > 99 ? '99+' : pendingCourierSessions.length}
+                  </span>
+                )}
+              </button>
 
-            {/* Actions et profil — aligné guichet : réseau + mode sombre */}
-            <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-              <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
               {accountant && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-100 shadow-sm">
-                  <div className="h-7 w-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
+                <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-white/30 bg-white/10 text-white">
+                  <div className="h-7 w-7 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">
                     {accountant.displayName?.charAt(0) || 'C'}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-gray-900 truncate">
+                    <div className="text-xs font-medium truncate">
                       {(accountant.displayName || accountant.email || '—')}
                     </div>
-                    <div className="text-xs text-gray-600 truncate">
+                    <div className="text-[11px] text-white/80 truncate">
                       {accountantCode || '—'}
                     </div>
                   </div>
                 </div>
               )}
+
               <button
-                onClick={async () => { 
+                onClick={async () => {
                   console.log('[AgenceCompta] Déconnexion du comptable');
-                  await logout(); 
-                  navigate('/login'); 
+                  await logout();
+                  navigate('/login');
                 }}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50 shadow-sm transition-colors"
+                className="inline-flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-sm rounded-lg border border-white/30 bg-white/10 text-white hover:bg-white/20 transition-colors"
                 title="Déconnexion"
               >
-                <LogOut className="h-4 w-4"/> 
-                <span className="hidden sm:inline">Déconnexion</span>
+                <LogOut className="h-4 w-4" />
+                <span className="hidden lg:inline">Déconnexion</span>
               </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Barre de navigation module */}
+        <div className="border-b border-slate-200 bg-slate-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2">
+            <div className="flex gap-2 overflow-x-auto whitespace-nowrap pb-1">
+              <TabButton
+                active={tab==='controle'}
+                onClick={()=>setTab('controle')}
+                label="Contrôle"
+                icon={<Activity className="h-4 w-4" />}
+                theme={theme}
+              />
+              <TabButton
+                active={tab==='receptions'}
+                onClick={()=>setTab('receptions')}
+                label="Réceptions"
+                icon={<HandIcon className="h-4 w-4" />}
+                theme={theme}
+              />
+              <TabButton
+                active={tab==='rapports'}
+                onClick={()=>setTab('rapports')}
+                label="Rapports"
+                icon={<BarChart3 className="h-4 w-4" />}
+                theme={theme}
+              />
+              <TabButton
+                active={tab==='caisse'}
+                onClick={()=>setTab('caisse')}
+                label="Caisse"
+                icon={<Banknote className="h-4 w-4" />}
+                theme={theme}
+              />
+              <TabButton
+                active={tab==='reconciliation'}
+                onClick={()=>setTab('reconciliation')}
+                label="Réconciliation"
+                icon={<RefreshCw className="h-4 w-4" />}
+                theme={theme}
+              />
+              <TabButton
+                active={tab==='courrier'}
+                onClick={()=>setTab('courrier')}
+                label="Courrier"
+                icon={<Package className="h-4 w-4" />}
+                theme={theme}
+                badgeCount={userRole === 'agency_accountant' ? pendingCourierSessions.length : 0}
+              />
             </div>
           </div>
         </div>
@@ -1828,11 +1764,25 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                   <ActionButton 
-                    onClick={() => setShowOutModal(true)} 
+                    onClick={() => setTreasuryModalView('new-operation')}
                     className="whitespace-nowrap"
                   >
                     <Plus className="h-4 w-4 mr-2" /> 
                     Nouveau mouvement
+                  </ActionButton>
+                  <ActionButton
+                    variant="secondary"
+                    onClick={() => setTreasuryModalView('transfer')}
+                    className="whitespace-nowrap"
+                  >
+                    Transfert
+                  </ActionButton>
+                  <ActionButton
+                    variant="secondary"
+                    onClick={() => setTreasuryModalView('new-payable')}
+                    className="whitespace-nowrap"
+                  >
+                    Paiement fournisseur
                   </ActionButton>
                   <ActionButton
                     variant="secondary"
@@ -2412,150 +2362,32 @@ const AgenceComptabilitePage: React.FC = () => {
           </div>
         )}
 
-      {/* ============================================================================
-         MODALE : NOUVEAU MOUVEMENT DE SORTIE
-         Description : Formulaire pour enregistrer une dépense ou un transfert
-         ============================================================================ */}
-      
-      {showOutModal && (
-        <div className="fixed inset-0 bg-black/50 grid place-items-center z-50 p-4">
-          <div className="w-full max-w-md bg-white rounded-xl p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-6">
-              <div className="text-xl font-bold text-gray-900">Nouveau mouvement de sortie</div>
-              <button
-                onClick={() => setShowOutModal(false)}
-                className="h-8 w-8 rounded-full flex items-center justify-center hover:bg-gray-100"
-              >
-                <span className="text-gray-500">×</span>
-              </button>
-            </div>
-            
-            <div className="space-y-6">
-              {/* Type de mouvement */}
-              <div>
-                <div className="text-sm font-medium text-gray-700 mb-3">Type de mouvement</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    className={`p-4 rounded-xl border-2 text-center transition-all ${outForm.kind === 'depense' 
-                      ? 'border-blue-500 bg-blue-50 text-blue-700' 
-                      : 'border-gray-200 bg-gray-50 text-gray-700 hover:border-gray-300'}`}
-                    onClick={() => setOutForm(f => ({...f, kind: 'depense'}))}
-                  >
-                    <div className="font-medium">Dépense</div>
-                    <div className="text-xs text-gray-500 mt-1">Achat, frais, etc.</div>
-                  </button>
-                  <button
-                    type="button"
-                    className={`p-4 rounded-xl border-2 text-center transition-all ${outForm.kind === 'transfert_banque' 
-                      ? 'border-blue-500 bg-blue-50 text-blue-700' 
-                      : 'border-gray-200 bg-gray-50 text-gray-700 hover:border-gray-300'}`}
-                    onClick={() => setOutForm(f => ({...f, kind: 'transfert_banque'}))}
-                  >
-                    <div className="font-medium">Transfert banque</div>
-                    <div className="text-xs text-gray-500 mt-1">Vers compte bancaire</div>
-                  </button>
+        {treasuryModalView && (
+          <div className="fixed inset-0 z-50 bg-black/50 p-4 sm:p-6" role="dialog" aria-modal="true">
+            <div className="mx-auto h-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
+                <div className="text-sm sm:text-base font-semibold text-gray-900">
+                  {treasuryModalView === 'new-operation' && 'Nouveau mouvement'}
+                  {treasuryModalView === 'transfer' && 'Versement caisse vers banque'}
+                  {treasuryModalView === 'new-payable' && 'Paiement fournisseur'}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setTreasuryModalView(null)}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Fermer
+                </button>
               </div>
-
-              {/* Champs du formulaire */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Libellé <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                  style={{ outlineColor: theme.primary }}
-                  placeholder="Ex: Achat fournitures bureau"
-                  value={outForm.libelle}
-                  onChange={e => setOutForm(f => ({...f, libelle: e.target.value}))}
-                />
+              <div className="p-4 sm:p-6">
+                {treasuryModalView === 'new-operation' && <AgencyTreasuryNewOperationPage />}
+                {treasuryModalView === 'transfer' && <AgencyTreasuryTransferPage />}
+                {treasuryModalView === 'new-payable' && <AgencyTreasuryNewPayablePage />}
               </div>
-
-              {outForm.kind === 'transfert_banque' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Banque de la compagnie <span className="text-red-500">*</span>
-                  </label>
-                  {companyBanks.length > 0 ? (
-                    <select
-                      className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                      style={{ outlineColor: theme.primary }}
-                      value={outForm.companyBankId || ''}
-                      onChange={e => setOutForm(f => ({ ...f, companyBankId: e.target.value, banque: '' }))}
-                      required
-                    >
-                      <option value="">— Choisir une banque —</option>
-                      {companyBanks.map(b => (
-                        <option key={b.id} value={b.id}>{b.name}{b.iban ? ` (${b.iban})` : ''}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <>
-                      <p className="text-xs text-amber-700 mb-2">Aucune banque configurée par la compagnie. Indiquez le compte manuellement (la traçabilité trésorerie ne sera pas mise à jour).</p>
-                      <input
-                        type="text"
-                        className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
-                        style={{ outlineColor: theme.primary }}
-                        placeholder="Ex: BICIS - Compte principal"
-                        value={outForm.banque}
-                        onChange={e => setOutForm(f => ({ ...f, banque: e.target.value, companyBankId: '' }))}
-                      />
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant ({currencySymbol}) <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    min="0"
-                    inputMode="numeric"
-                    className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent text-lg font-medium"
-                    style={{ outlineColor: theme.primary }}
-                    placeholder="0"
-                    value={outForm.montant}
-                    onChange={e => setOutForm(f => ({...f, montant: e.target.value}))}
-                  />
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-medium">
-                    {currencySymbol}
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Note (facultatif)
-                </label>
-                <textarea
-                  className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent resize-none"
-                  style={{ outlineColor: theme.primary }}
-                  placeholder="Informations complémentaires..."
-                  rows={3}
-                  value={outForm.note}
-                  onChange={e => setOutForm(f => ({...f, note: e.target.value}))}
-                />
-              </div>
-            </div>
-
-            {/* Actions de la modale */}
-            <div className="mt-8 flex justify-end gap-3">
-              <ActionButton variant="secondary" onClick={() => setShowOutModal(false)}>
-                Annuler
-              </ActionButton>
-              <ActionButton onClick={createOutMovement}>
-                <Plus className="h-4 w-4 mr-2" />
-                Enregistrer le mouvement
-              </ActionButton>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
     </StandardLayoutWrapper>
     </div>
   );
@@ -2576,16 +2408,16 @@ const TabButton: React.FC<{
 }> = ({ active, onClick, label, icon, theme, badgeCount = 0 }) => (
   <button
     className={`
-      flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all relative
+      flex shrink-0 items-center gap-2 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all relative border
       ${active 
-        ? 'text-white shadow-sm transform scale-105' 
-        : 'text-gray-600 hover:text-gray-900 hover:bg-white/80'
+        ? 'text-gray-900 border-transparent' 
+        : 'text-gray-600 border-slate-200 hover:text-gray-900 hover:bg-white'
       }
     `}
     onClick={onClick}
-    style={active ? { 
-      background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
-      boxShadow: `0 4px 12px ${theme.primary}40`
+    style={active ? {
+      backgroundColor: theme.secondary,
+      borderColor: `${theme.primary}66`,
     } : {}}
   >
     {icon}

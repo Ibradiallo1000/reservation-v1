@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { getAgencyCityFromDoc } from "@/modules/agence/utils/agencyCity";
 import { affectationKey, type FleetVehicleDoc, type FleetVehicleStatus } from "./types";
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, StatusBadge, table, tableRowClassName, EmptyState } from "@/ui";
 import { Truck } from "lucide-react";
@@ -229,6 +230,7 @@ const FleetAssignmentPage: React.FC = () => {
   const [selectedTrip, setSelectedTrip] = useState<WeeklyTrip | null>(null);
   const [selectedHeure, setSelectedHeure] = useState<string>("");
   const [fleetVehicleIds, setFleetVehicleIds] = useState<string[]>([]);
+  const [agencyCity, setAgencyCity] = useState<string>("");
 
   useEffect(() => {
     if (!companyId) return;
@@ -241,6 +243,18 @@ const FleetAssignmentPage: React.FC = () => {
       if (!userAgencyId && list.length === 1) setSelectedAgencyId(list[0].id);
     });
   }, [companyId, userAgencyId]);
+
+  // Unified agency city (city ?? villeNorm ?? ville) for selected agency
+  const effectiveAgencyId = selectedAgencyId ?? userAgencyId;
+  useEffect(() => {
+    if (!companyId || !effectiveAgencyId) {
+      setAgencyCity("");
+      return;
+    }
+    getDoc(doc(db, `companies/${companyId}/agences/${effectiveAgencyId}`))
+      .then((snap) => setAgencyCity(getAgencyCityFromDoc(snap.exists() ? snap.data() : null)))
+      .catch(() => setAgencyCity(""));
+  }, [companyId, effectiveAgencyId]);
 
   useEffect(() => {
     if (!companyId) return;

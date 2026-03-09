@@ -4,7 +4,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { SectionCard, StatusBadge } from "@/ui";
 
 export type BlocksAtoEData = {
-  globalRevenue: number;
+  globalTicketRevenue: number;
+  globalCourierRevenue: number;
+  globalTotalRevenue: number;
   pendingRevenue: number;
   financialPosition: { netPosition: number };
   revenueVariationPercent: number;
@@ -23,7 +25,9 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
   data: BlocksAtoEData;
 }) {
   const {
-    globalRevenue,
+    globalTicketRevenue,
+    globalCourierRevenue,
+    globalTotalRevenue,
     pendingRevenue,
     financialPosition,
     revenueVariationPercent,
@@ -37,11 +41,19 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
       <SectionCard title="1. État global">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 sm:gap-3 md:gap-4 mb-4">
           <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="text-xs sm:text-sm text-gray-700">CA période actuelle</div>
-            <div className="text-lg sm:text-xl font-bold text-gray-900 truncate">{globalRevenue.toLocaleString("fr-FR")}</div>
+            <div className="text-xs sm:text-sm text-gray-700">CA total (période)</div>
+            <div className="text-lg sm:text-xl font-bold text-gray-900 truncate">{globalTotalRevenue.toLocaleString("fr-FR")}</div>
           </div>
           <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="text-xs sm:text-sm text-gray-700">Liquidités disponibles</div>
+            <div className="text-xs sm:text-sm text-gray-700">Billets</div>
+            <div className="text-lg sm:text-xl font-bold text-gray-800 truncate">{globalTicketRevenue.toLocaleString("fr-FR")}</div>
+          </div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
+            <div className="text-xs sm:text-sm text-gray-700">Courrier</div>
+            <div className="text-lg sm:text-xl font-bold text-gray-800 truncate">{globalCourierRevenue.toLocaleString("fr-FR")}</div>
+          </div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
+            <div className="text-xs sm:text-sm text-gray-700">Liquidités</div>
             <div className="text-lg sm:text-xl font-bold text-gray-900 truncate">{financialPosition.netPosition.toLocaleString("fr-FR")}</div>
           </div>
           <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">

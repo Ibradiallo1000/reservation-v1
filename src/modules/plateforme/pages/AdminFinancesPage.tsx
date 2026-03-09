@@ -122,56 +122,56 @@ const AdminFinancesPage: React.FC = () => {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       {!isOnline && (
         <PageOfflineState message="Connexion instable: les chiffres peuvent être incomplets." />
       )}
       {error && (
         <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
       )}
-      <h1 className="text-2xl font-bold mb-4">Finances Teliya – Revenus plateforme</h1>
-      <p className="text-gray-600 text-sm">
+      <h1 className="text-xl sm:text-2xl font-bold mb-4 text-gray-900 dark:text-white">Finances Teliya – Revenus plateforme</h1>
+      <p className="text-gray-600 dark:text-slate-400 text-sm">
         Commission et revenus d&apos;abonnement uniquement. Aucun détail par compagnie.
       </p>
 
       <div className="mb-6 flex flex-wrap gap-4 items-center">
-        <label className="flex items-center gap-2">
-          <span className="text-sm text-gray-600">Du</span>
+        <label className="flex items-center gap-2 text-gray-700 dark:text-slate-300">
+          <span className="text-sm text-gray-600 dark:text-slate-400">Du</span>
           <input
             type="date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
-            className="border rounded px-2 py-1 text-sm"
+            className="border border-gray-300 dark:border-slate-600 rounded px-2 py-1 text-sm bg-white dark:bg-slate-700 dark:text-white"
           />
         </label>
-        <label className="flex items-center gap-2">
-          <span className="text-sm text-gray-600">Au</span>
+        <label className="flex items-center gap-2 text-gray-700 dark:text-slate-300">
+          <span className="text-sm text-gray-600 dark:text-slate-400">Au</span>
           <input
             type="date"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
-            className="border rounded px-2 py-1 text-sm"
+            className="border border-gray-300 dark:border-slate-600 rounded px-2 py-1 text-sm bg-white dark:bg-slate-700 dark:text-white"
           />
         </label>
       </div>
 
       {/* KPIs revenus plateforme */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white border rounded-xl p-4 shadow-sm">
-          <p className="text-sm text-gray-500">Commissions</p>
-          <p className="text-xl font-bold text-orange-600">
+        <div className="bg-white dark:bg-slate-800 dark:border-slate-700 border rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-gray-500 dark:text-slate-400">Commissions</p>
+          <p className="text-xl font-bold text-orange-600 dark:text-orange-400">
             {formatCurrency(data.totalCommission)}
           </p>
         </div>
-        <div className="bg-white border rounded-xl p-4 shadow-sm">
-          <p className="text-sm text-gray-500">Revenus abonnements (MRR)</p>
-          <p className="text-xl font-bold text-blue-600">
+        <div className="bg-white dark:bg-slate-800 dark:border-slate-700 border rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-gray-500 dark:text-slate-400">Revenus abonnements (MRR)</p>
+          <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
             {formatCurrency(data.subscriptionRevenue)}
           </p>
         </div>
-        <div className="bg-white border rounded-xl p-4 shadow-sm">
-          <p className="text-sm text-gray-500">Revenus totaux plateforme</p>
-          <p className="text-xl font-bold text-green-600">
+        <div className="bg-white dark:bg-slate-800 dark:border-slate-700 border rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-gray-500 dark:text-slate-400">Revenus totaux plateforme</p>
+          <p className="text-xl font-bold text-green-600 dark:text-green-400">
             {formatCurrency(data.totalPlatformRevenue)}
           </p>
         </div>
@@ -179,8 +179,8 @@ const AdminFinancesPage: React.FC = () => {
 
       {/* Graphique commissions par mois */}
       {data.commissionByMonth.length > 0 && (
-        <div className="w-full h-[350px] bg-white p-4 rounded-xl shadow-sm border">
-          <h3 className="text-lg font-semibold mb-4">Commissions par mois</h3>
+        <div className="w-full h-[350px] bg-white dark:bg-slate-800 dark:border-slate-700 p-4 rounded-xl shadow-sm border">
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Commissions par mois</h3>
           <ResponsiveContainer width="100%" height="90%">
             <BarChart
               data={data.commissionByMonth.map((d) => ({

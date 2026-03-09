@@ -32,7 +32,7 @@ type Company = {
 type PlanLite = { id: string; name: string };
 
 const inputClass =
-  "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20";
+  "w-full rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm text-gray-900 dark:text-white focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20";
 
 export default function AdminCompanyDetail() {
   const isOnline = useOnlineStatus();
@@ -133,13 +133,13 @@ export default function AdminCompanyDetail() {
       {error && (
         <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
       )}
-      <h1 className="text-2xl font-bold text-gray-900">
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
         {c.nom || "Compagnie"} - Plan & Configuration
       </h1>
 
-      <form onSubmit={onSave} className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <form onSubmit={onSave} className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-xl border border-gray-200 shadow-sm p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="md:col-span-2">
-          <label className="text-sm font-medium text-gray-700">Plan</label>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Plan</label>
           <select
             className={`${inputClass} appearance-none mt-1`}
             value={c.plan || ""}
@@ -152,34 +152,34 @@ export default function AdminCompanyDetail() {
           </select>
         </div>
 
-        <div className="md:col-span-2 rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700">
+        <div className="md:col-span-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3 text-sm text-green-700 dark:text-green-300">
           <strong>Note :</strong> Tous les modules sont inclus dans tous les plans (page publique, reservation en ligne, guichet, dashboard).
         </div>
 
         <div>
-          <label className="text-sm font-medium text-gray-700">Frais canal digital (%)</label>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Frais canal digital (%)</label>
           <input type="number" step="0.1" min="0" className={`${inputClass} mt-1`}
             value={c.digitalFeePercent ?? 0}
             onChange={e => setC({ ...c, digitalFeePercent: Number(e.target.value) })}/>
-          <p className="text-xs text-gray-400 mt-1">Pourcentage preleve sur les reservations en ligne</p>
+          <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">Pourcentage preleve sur les reservations en ligne</p>
         </div>
         <div>
-          <label className="text-sm font-medium text-gray-700">Frais guichet ({getCurrencySymbol()} / billet)</label>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Frais guichet ({getCurrencySymbol()} / billet)</label>
           <input type="number" min="0" className={`${inputClass} mt-1`}
             value={c.feeGuichet ?? 0}
             onChange={e => setC({ ...c, feeGuichet: Number(e.target.value) })}/>
         </div>
 
         <div>
-          <label className="text-sm font-medium text-gray-700">Minimum mensuel ({getCurrencySymbol()})</label>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Minimum mensuel ({getCurrencySymbol()})</label>
           <input type="number" min="0" className={`${inputClass} mt-1`}
             value={c.minimumMonthly ?? 0}
             onChange={e => setC({ ...c, minimumMonthly: Number(e.target.value) })}/>
         </div>
 
         <div>
-          <label className="text-sm font-medium text-gray-700">
-            Max agences <span className="text-xs text-gray-400">(0 = illimite)</span>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
+            Max agences <span className="text-xs text-gray-400 dark:text-slate-500">(0 = illimite)</span>
           </label>
           <input type="number" min="0" className={`${inputClass} mt-1`}
             value={c.maxAgences ?? 0}
@@ -187,14 +187,14 @@ export default function AdminCompanyDetail() {
         </div>
 
         <div>
-          <label className="text-sm font-medium text-gray-700">Max utilisateurs</label>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Max utilisateurs</label>
           <input type="number" min="0" className={`${inputClass} mt-1`}
             value={c.maxUsers ?? 0}
             onChange={e => setC({ ...c, maxUsers: Number(e.target.value) })}/>
         </div>
 
         <div>
-          <label className="text-sm font-medium text-gray-700">Niveau de support</label>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Niveau de support</label>
           <select
             className={`${inputClass} appearance-none mt-1`}
             value={c.supportLevel || "basic"}

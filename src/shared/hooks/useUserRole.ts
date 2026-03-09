@@ -9,7 +9,7 @@ type AnyRole = keyof typeof permissionsByRole | string;
 
 const CANONICAL_ROLES = new Set([
   "admin_platforme", "admin_compagnie", "company_accountant", "agency_accountant",
-  "chef_garage", "chefagence", "chefembarquement", "guichetier",
+  "responsable_logistique", "chefagence", "chefembarquement", "guichetier",
   "agency_fleet_controller", "financial_director",
 ]);
 

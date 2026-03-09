@@ -202,9 +202,9 @@ const AdminModifierCompagniePage: React.FC = () => {
         </div>
       )}
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-orange-700">Modifier la compagnie</h1>
+        <h1 className="text-2xl font-bold text-orange-700 dark:text-orange-400">Modifier la compagnie</h1>
         <button
-          className="px-3 py-2 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+          className="px-3 py-2 rounded bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 text-gray-700 dark:text-slate-200"
           onClick={() => navigate("/admin/compagnies")}
         >
           ← Retour
@@ -212,7 +212,7 @@ const AdminModifierCompagniePage: React.FC = () => {
       </div>
 
       {message && (
-        <div className="mb-4 text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded p-3 flex items-center justify-between gap-3">
+        <div className="mb-4 text-sm text-blue-800 dark:text-blue-200 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-3 flex items-center justify-between gap-3">
           <span>{message}</span>
           {message.includes("Erreur") && (
             <button

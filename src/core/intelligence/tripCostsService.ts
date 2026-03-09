@@ -43,6 +43,7 @@ export async function createTripCost(
     tripId: data.tripId,
     agencyId: data.agencyId,
     date: data.date,
+    ...(data.vehicleId != null && { vehicleId: data.vehicleId }),
     fuelCost: Number(data.fuelCost) || 0,
     driverCost: Number(data.driverCost) || 0,
     assistantCost: Number(data.assistantCost) || 0,
@@ -74,14 +75,15 @@ export async function updateTripCost(
   await updateDoc(ref, updates);
 }
 
-/** List trip costs for a company, optionally by date and/or agencyId. */
+/** List trip costs for a company, optionally by date, agencyId and/or vehicleId. */
 export async function listTripCosts(
   companyId: string,
-  options?: { date?: string; agencyId?: string; limitCount?: number }
+  options?: { date?: string; agencyId?: string; vehicleId?: string; limitCount?: number }
 ): Promise<(TripCostDoc & { id: string })[]> {
   const constraints: ReturnType<typeof where>[] = [];
   if (options?.date) constraints.push(where("date", "==", options.date));
   if (options?.agencyId) constraints.push(where("agencyId", "==", options.agencyId));
+  if (options?.vehicleId) constraints.push(where("vehicleId", "==", options.vehicleId));
   const q = query(
     tripCostsRef(companyId),
     ...constraints,

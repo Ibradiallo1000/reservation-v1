@@ -17,8 +17,10 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { CourierSession, CourierSessionStatus } from "../domain/courierSession.types";
+import type { PaymentStatus } from "../domain/shipment.types";
 import { courierSessionsRef, courierSessionRef } from "../domain/courierSessionPaths";
 import { shipmentsRef } from "../domain/firestorePaths";
+import { updateDailyStatsOnCourierSessionValidated, formatDateForDailyStats } from "@/modules/agence/aggregates/dailyStats";
 
 const OPEN_STATUSES: CourierSessionStatus[] = ["PENDING", "ACTIVE"];
 
@@ -150,9 +152,16 @@ export async function closeCourierSession(params: {
   return { expectedAmount };
 }
 
+const PAID_PAYMENT_STATUSES: PaymentStatus[] = ["PAID_ORIGIN", "PAID_DESTINATION"];
+
+function isPaidPaymentStatus(status: string | undefined): boolean {
+  return status != null && PAID_PAYMENT_STATUSES.includes(status as PaymentStatus);
+}
+
 /**
  * Accountant validates session (with counted amount) → VALIDATED.
  * Sets validatedAmount, difference = validatedAmount - expectedAmount.
+ * Updates dailyStats with courier revenue (paid shipments only).
  */
 export async function validateCourierSession(params: {
   companyId: string;
@@ -171,6 +180,22 @@ export async function validateCourierSession(params: {
   const expectedAmount = Number(data.expectedAmount ?? 0);
   const difference = params.validatedAmount - expectedAmount;
 
+  // Aggregate courier revenue from paid shipments only (for dailyStats)
+  const shipQuery = query(
+    shipmentsRef(db, params.companyId),
+    where("sessionId", "==", params.sessionId)
+  );
+  const shipSnap = await getDocs(shipQuery);
+  let courierRevenue = 0;
+  shipSnap.docs.forEach((d) => {
+    const s = d.data() as { paymentStatus?: string; transportFee?: number; insuranceAmount?: number };
+    if (isPaidPaymentStatus(s.paymentStatus)) {
+      courierRevenue += Number(s.transportFee ?? 0) + Number(s.insuranceAmount ?? 0);
+    }
+  });
+
+  const statsDate = formatDateForDailyStats(data.closedAt ?? data.createdAt);
+
   await runTransaction(db, async (tx) => {
     const sSnap = await tx.get(sessionRef);
     if (!sSnap.exists()) throw new Error("Session courrier introuvable.");
@@ -188,6 +213,13 @@ export async function validateCourierSession(params: {
       },
       updatedAt: serverTimestamp(),
     });
+    updateDailyStatsOnCourierSessionValidated(
+      tx,
+      params.companyId,
+      params.agencyId,
+      statsDate,
+      courierRevenue
+    );
   });
 
   return { difference };

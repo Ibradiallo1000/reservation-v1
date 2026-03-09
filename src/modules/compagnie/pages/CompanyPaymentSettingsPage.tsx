@@ -250,7 +250,7 @@ const CompanyPaymentSettingsPage: React.FC<CompanyPaymentSettingsPageProps> = ({
                       className="w-12 h-12 object-contain rounded border"
                     />
                     <div className="min-w-0">
-                      <h3 className="font-medium text-gray-900 truncate">{method.name}</h3>
+                      <h3 className="font-medium text-gray-900 dark:text-white truncate">{method.name}</h3>
                       <p className="text-sm text-gray-500 truncate">
                         N° Marchand: {method.merchantNumber}
                       </p>

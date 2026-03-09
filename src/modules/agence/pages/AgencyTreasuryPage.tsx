@@ -1,6 +1,7 @@
 // Treasury dashboard — Agency: local accounts, cash position, recent movements, pending expenses.
 import React, { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 import {
   collection,
   query,
@@ -12,15 +13,34 @@ import {
 import { db } from "@/firebaseConfig";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { listExpenses, type ExpenseStatus } from "@/modules/compagnie/treasury/expenses";
+import {
+  listExpenses,
+  createExpense,
+  type ExpenseStatus,
+  EXPENSE_CATEGORIES,
+  PENDING_STATUSES,
+} from "@/modules/compagnie/treasury/expenses";
+import { listExpenseCategories, listSuppliers, type ExpenseCategoryDoc, type SupplierDoc } from "@/modules/compagnie/finance/expenseMetadataService";
 import { ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { Wallet, ArrowRightLeft, FileText } from "lucide-react";
+import { Wallet, ArrowRightLeft, FileText, Plus, Loader2 } from "lucide-react";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
-import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState, table, tableRowClassName } from "@/ui";
+import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState, table, tableRowClassName, ActionButton } from "@/ui";
+import { toast } from "sonner";
+
+const CATEGORY_LABELS: Record<string, string> = {
+  fuel: "Carburant",
+  maintenance: "Maintenance",
+  salary: "Salaires",
+  toll: "Péage",
+  operational: "Opérationnel",
+  supplier_payment: "Fournisseur",
+  other: "Autre",
+};
 
 export default function AgencyTreasuryPage() {
   const { user, company } = useAuth();
+  const navigate = useNavigate();
   const isOnline = useOnlineStatus();
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
@@ -31,6 +51,15 @@ export default function AgencyTreasuryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [formCategory, setFormCategory] = useState<string>("other");
+  const [formDescription, setFormDescription] = useState("");
+  const [formAmount, setFormAmount] = useState("");
+  const [formAccountId, setFormAccountId] = useState("");
+  const [formReceiptUrl, setFormReceiptUrl] = useState("");
+  const [formSupplierId, setFormSupplierId] = useState("");
+  const [suppliers, setSuppliers] = useState<SupplierDoc[]>([]);
+  const [customCategories, setCustomCategories] = useState<ExpenseCategoryDoc[]>([]);
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -51,6 +80,59 @@ export default function AgencyTreasuryPage() {
       })
       .finally(() => setLoading(false));
   }, [companyId, agencyId, company, isOnline, reloadKey]);
+
+  useEffect(() => {
+    if (accounts.length > 0 && !formAccountId) setFormAccountId(accounts[0].id);
+  }, [accounts, formAccountId]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    Promise.all([listSuppliers(companyId), listExpenseCategories(companyId)])
+      .then(([s, c]) => {
+        setSuppliers(s);
+        setCustomCategories(c);
+      })
+      .catch(() => {
+        // Optional metadata; keep default categories if unavailable.
+      });
+  }, [companyId]);
+
+  const handleSubmitExpense = async () => {
+    if (!companyId || !agencyId || !user?.uid) return;
+    const amount = Number(formAmount?.replace(/\s/g, "").replace(",", "."));
+    if (!formDescription.trim() || amount <= 0 || !formAccountId) {
+      toast.error("Renseignez la description, le montant et le compte.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await createExpense({
+        companyId,
+        agencyId,
+        category: formCategory,
+        description: formDescription.trim(),
+        amount,
+        accountId: formAccountId,
+        createdBy: user.uid,
+        expenseCategory: formCategory,
+        supplierId: formSupplierId || null,
+        supplierName: suppliers.find((s) => s.id === formSupplierId)?.name ?? null,
+        receiptUrls: formReceiptUrl.trim() ? [formReceiptUrl.trim()] : [],
+      });
+      toast.success("Dépense soumise. Elle sera validée selon le montant (chef agence, chef comptable ou CEO).");
+      setFormDescription("");
+      setFormAmount("");
+      setFormReceiptUrl("");
+      setReloadKey((k) => k + 1);
+      listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 20 }).then((list) =>
+        setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erreur lors de la soumission.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     if (!companyId) return;
@@ -84,7 +166,7 @@ export default function AgencyTreasuryPage() {
 
   useEffect(() => {
     if (!companyId) return;
-    listExpenses(companyId, { agencyId, status: "pending", limitCount: 20 })
+    listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 20 })
       .then((list) =>
         setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
       )
@@ -96,7 +178,7 @@ export default function AgencyTreasuryPage() {
         );
       });
     const interval = setInterval(() => {
-      listExpenses(companyId, { agencyId, status: "pending", limitCount: 20 }).then((list) =>
+      listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 20 }).then((list) =>
         setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
       ).catch(() => {});
     }, 30000);
@@ -129,6 +211,19 @@ export default function AgencyTreasuryPage() {
         title="Trésorerie agence"
         subtitle={formatDateLongFr(new Date())}
         icon={Wallet}
+        right={
+          <div className="flex items-center gap-2">
+            <ActionButton onClick={() => navigate("/agence/treasury/new-operation")}>
+              Nouvelle dépense
+            </ActionButton>
+            <ActionButton variant="secondary" onClick={() => navigate("/agence/treasury/transfer")}>
+              Transfert
+            </ActionButton>
+            <ActionButton variant="secondary" onClick={() => navigate("/agence/treasury/new-payable")}>
+              Paiement fournisseur
+            </ActionButton>
+          </div>
+        }
       />
 
       <SectionCard title="Position caisse" icon={Wallet}>
@@ -165,6 +260,96 @@ export default function AgencyTreasuryPage() {
               )}
             </tbody>
           </table>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Soumettre une dépense" icon={Plus}>
+        <p className="text-sm text-gray-600 mb-4">
+          La dépense sera envoyée au chef comptable pour approbation puis paiement.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
+            <select
+              value={formCategory}
+              onChange={(e) => setFormCategory(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              {customCategories.map((c) => (
+                <option key={`custom-${c.id}`} value={c.code}>
+                  {c.label}
+                </option>
+              ))}
+              {EXPENSE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Compte à débiter</label>
+            <select
+              value={formAccountId}
+              onChange={(e) => setFormAccountId(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.accountName} — {a.currentBalance.toLocaleString("fr-FR")} {a.currency}</option>
+              ))}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+            <input
+              type="text"
+              value={formDescription}
+              onChange={(e) => setFormDescription(e.target.value)}
+              placeholder="Ex. Carburant bus 12, Péage A1..."
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fournisseur (optionnel)</label>
+            <select
+              value={formSupplierId}
+              onChange={(e) => setFormSupplierId(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">— Aucun —</option>
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Montant</label>
+            <input
+              type="text"
+              value={formAmount}
+              onChange={(e) => setFormAmount(e.target.value)}
+              placeholder="0"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">URL justificatif (optionnel)</label>
+            <input
+              type="url"
+              value={formReceiptUrl}
+              onChange={(e) => setFormReceiptUrl(e.target.value)}
+              placeholder="https://..."
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="flex items-end">
+            <ActionButton
+              variant="primary"
+              onClick={handleSubmitExpense}
+              disabled={submitting || !formDescription.trim() || !formAmount.trim() || !formAccountId}
+            >
+              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              {" "}Soumettre la dépense
+            </ActionButton>
+          </div>
         </div>
       </SectionCard>
 

@@ -384,8 +384,8 @@ const AdminDashboard: React.FC = () => {
       )}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Vue d’ensemble plateforme</h2>
-          <p className="text-gray-600">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Vue d’ensemble plateforme</h2>
+          <p className="text-gray-600 dark:text-slate-400">
             Métriques SaaS Teliya et indicateurs macro agrégés (anonymisés).
           </p>
         </div>
@@ -399,7 +399,7 @@ const AdminDashboard: React.FC = () => {
                 className={`px-3 py-1 rounded-full text-sm font-medium transition ${
                   periode === p
                     ? "bg-[var(--btn-primary,#FF6600)] text-white shadow-sm"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    : "bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-slate-200 hover:bg-gray-200 dark:hover:bg-slate-600"
                 }`}
               >
                 {p === "7j" ? "7 jours" : "30 jours"}
@@ -423,22 +423,22 @@ const AdminDashboard: React.FC = () => {
             key={label}
             onClick={() => to && navigate(to)}
             disabled={!to}
-            className={`text-left bg-white p-4 rounded-xl border shadow-sm hover:shadow-md transition focus:outline-none focus:ring-2 focus:ring-orange-200 ${
+            className={`text-left bg-white dark:bg-slate-800 dark:border-slate-700 p-4 rounded-xl border shadow-sm hover:shadow-md transition focus:outline-none focus:ring-2 focus:ring-orange-200 dark:focus:ring-orange-500/50 ${
               to ? "cursor-pointer hover:translate-y-[-1px]" : "cursor-default"
             }`}
           >
             <Icon className={`h-6 w-6 mb-2 ${color}`} />
-            <p className="text-sm text-gray-500">{label}</p>
-            <p className="text-lg font-bold">{value}</p>
+            <p className="text-sm text-gray-500 dark:text-slate-400">{label}</p>
+            <p className="text-lg font-bold text-gray-900 dark:text-white">{value}</p>
           </button>
         ))}
       </div>
 
       {/* Tendances (macro) */}
-      <section className="bg-white p-6 rounded-xl shadow-sm border">
-        <h3 className="text-lg font-semibold mb-4">Tendances (macro agrégé)</h3>
+      <section className="bg-white dark:bg-slate-800 dark:border-slate-700 p-6 rounded-xl shadow-sm border">
+        <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Tendances (macro agrégé)</h3>
         {series.length === 0 ? (
-          <p className="text-gray-500 text-sm">Pas assez de données.</p>
+          <p className="text-gray-500 dark:text-slate-400 text-sm">Pas assez de données.</p>
         ) : (
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -479,12 +479,12 @@ const AdminDashboard: React.FC = () => {
       </section>
 
       {/* Répartition par pays (anonymisée) */}
-      <section className="bg-white p-6 rounded-xl shadow-sm border">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Globe className="h-5 w-5 text-gray-600" /> Répartition par pays (GMV agrégé)
+      <section className="bg-white dark:bg-slate-800 dark:border-slate-700 p-6 rounded-xl shadow-sm border">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
+          <Globe className="h-5 w-5 text-gray-600 dark:text-slate-400" /> Répartition par pays (GMV agrégé)
         </h3>
         {countryDistribution.length === 0 ? (
-          <p className="text-gray-500 text-sm">Aucune donnée par pays.</p>
+          <p className="text-gray-500 dark:text-slate-400 text-sm">Aucune donnée par pays.</p>
         ) : (
           <div className="h-64 w-full max-w-md">
             <ResponsiveContainer width="100%" height="100%">

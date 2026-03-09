@@ -9,6 +9,8 @@ export interface FleetMaintenanceDoc {
   agencyId: string;
   description: string;
   costType: MaintenanceCostType;
+  costAmount?: number | null;
+  accountId?: string | null;
   linkedExpenseId?: string | null;
   linkedPayableId?: string | null;
   createdBy: string;
@@ -20,6 +22,8 @@ export interface FleetMaintenanceDocCreate {
   agencyId: string;
   description: string;
   costType: MaintenanceCostType;
+  costAmount?: number | null;
+  accountId?: string | null;
   linkedExpenseId?: string | null;
   linkedPayableId?: string | null;
   createdBy: string;

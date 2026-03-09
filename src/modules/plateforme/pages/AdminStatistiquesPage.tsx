@@ -148,7 +148,7 @@ const AdminStatistiquesPage: React.FC = () => {
      Render
   ======================= */
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       {!isOnline && (
         <div className="mb-4">
           <PageOfflineState message="Connexion instable: les statistiques peuvent être incomplètes." />
@@ -159,17 +159,17 @@ const AdminStatistiquesPage: React.FC = () => {
           <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
         </div>
       )}
-      <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
-        <AlertTriangle className="h-6 w-6 text-amber-600 shrink-0 mt-0.5" />
+      <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl flex items-start gap-3">
+        <AlertTriangle className="h-6 w-6 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
         <div>
-          <p className="font-semibold text-amber-800">Page dépréciée</p>
-          <p className="text-sm text-amber-700 mt-1">
+          <p className="font-semibold text-amber-800 dark:text-amber-200">Page dépréciée</p>
+          <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
             Cette page mélange métriques SaaS et opérationnelles par compagnie. Les indicateurs
             plateforme (anonymisés) sont disponibles sur le tableau de bord admin.
           </p>
         </div>
       </div>
-      <h1 className="text-2xl font-bold mb-6">
+      <h1 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">
         Statistiques générales
       </h1>
 
@@ -228,15 +228,15 @@ const AdminStatistiquesPage: React.FC = () => {
    UI helpers
 ======================= */
 const StatBox = ({ label, value, color }: any) => (
-  <div className="bg-white rounded-xl border shadow-sm p-4 text-center">
-    <h2 className="text-lg font-semibold">{label}</h2>
+  <div className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-xl border shadow-sm p-4 text-center">
+    <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{label}</h2>
     <p className={`text-2xl font-bold ${color}`}>{value}</p>
   </div>
 );
 
 const Section = ({ title, children }: any) => (
   <div className="mb-10">
-    <h2 className="text-lg font-semibold mb-2">{title}</h2>
+    <h2 className="text-lg font-semibold mb-2 text-gray-900 dark:text-white">{title}</h2>
     {children}
   </div>
 );

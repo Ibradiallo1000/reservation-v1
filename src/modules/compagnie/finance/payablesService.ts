@@ -35,10 +35,14 @@ export async function createPayable(
   companyId: string,
   input: PayableDocCreate
 ): Promise<string> {
+  if (input.category === "other") {
+    throw new Error("La categorie 'Autre' doit passer par une depense directe, pas par un payable fournisseur.");
+  }
   const ref = doc(payablesRef(companyId));
   const totalAmount = Number(input.totalAmount) || 0;
   const now = Timestamp.now();
   const data: Omit<PayableDoc, "updatedAt"> & { updatedAt: ReturnType<typeof serverTimestamp> } = {
+    supplierId: input.supplierId ?? null,
     supplierName: input.supplierName,
     vehicleId: input.vehicleId ?? null,
     agencyId: input.agencyId,

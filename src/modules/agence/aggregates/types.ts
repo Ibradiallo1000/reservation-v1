@@ -4,9 +4,15 @@ import type { Timestamp } from "firebase/firestore";
 
 /**
  * companies/{companyId}/agences/{agencyId}/dailyStats/{YYYY-MM-DD}
+ * totalRevenue = ticketRevenue + courierRevenue (for global revenue).
  */
 export interface DailyStatsDoc {
   date: string;
+  /** Revenue from ticket reservations (guichet + online). */
+  ticketRevenue?: number;
+  /** Revenue from courier shipments (paid only). */
+  courierRevenue?: number;
+  /** Total revenue (ticketRevenue + courierRevenue). Legacy docs may only have totalRevenue. */
   totalRevenue: number;
   totalPassengers: number;
   totalSeats: number;
@@ -16,6 +22,24 @@ export interface DailyStatsDoc {
   boardingClosedCount: number;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+}
+
+/** Helper: ticket revenue from dailyStats (fallback to totalRevenue for legacy docs). */
+export function getTicketRevenue(d: DailyStatsDoc): number {
+  return Number(d.ticketRevenue ?? d.totalRevenue ?? 0);
+}
+
+/** Helper: courier revenue from dailyStats. */
+export function getCourierRevenue(d: DailyStatsDoc): number {
+  return Number(d.courierRevenue ?? 0);
+}
+
+/** Helper: total revenue (prefer explicit totalRevenue for consistency). */
+export function getTotalRevenue(d: DailyStatsDoc): number {
+  const ticket = getTicketRevenue(d);
+  const courier = getCourierRevenue(d);
+  const stored = Number(d.totalRevenue ?? 0);
+  return stored > 0 ? stored : ticket + courier;
 }
 
 /**

@@ -3,7 +3,8 @@ export const ROLES = {
     ADMIN_PLATFORME: 'admin_platforme',
     ADMIN_COMPAGNIE: 'admin_compagnie',
     CHEF_AGENCE: 'chefAgence',
-    CHEF_GARAGE: 'chef_garage',
+    /** Fleet & vehicle operations (ex chef_garage). */
+    RESPONSABLE_LOGISTIQUE: 'responsable_logistique',
     GUICHETIER: 'guichetier',
     GESTIONNAIRE: 'gestionnaire',
     COURRIER: 'agentCourrier',

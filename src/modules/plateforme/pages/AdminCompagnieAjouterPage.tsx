@@ -584,7 +584,7 @@ const AdminCompagnieAjouterPage: React.FC = () => {
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
       {/* ── Page Header ── */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
           {isEdit ? "Modifier la compagnie" : "Configuration initiale d'une compagnie"}
         </h1>
         <p className="text-sm text-gray-500 mt-1">

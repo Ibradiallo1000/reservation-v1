@@ -187,7 +187,7 @@ export default function GarageDashboardHomePage() {
             <SectionCard title="Alertes (expiration sous 30 jours)" icon={AlertTriangle}>
               <ul className="space-y-2">
                 {alerts.slice(0, 15).map((a, i) => (
-                  <li key={`${a.plateNumber}-${a.type}-${i}`} className="flex flex-wrap items-center gap-2 p-3 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-800">
+                  <li key={`${a.plateNumber}-${a.type}-${i}`} className="flex flex-wrap items-center gap-2 p-3 rounded-lg border border-gray-200 dark:border-slate-600 bg-gray-50 dark:bg-slate-700/50 text-sm text-gray-800 dark:text-slate-200">
                     <span className="font-medium">{a.plateNumber}</span>
                     <span>{a.label}</span>
                     <StatusBadge status={a.daysLeft <= 1 ? "danger" : "warning"}>

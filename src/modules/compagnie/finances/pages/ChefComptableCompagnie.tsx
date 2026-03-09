@@ -2,7 +2,7 @@
 // Refactored to use InternalLayout — aligned with agence/CEO (réseau, dark, F2).
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth } from "../../../../contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { db } from "@/firebaseConfig";
 import {
@@ -20,6 +20,8 @@ import {
   TrendingUp,
   FileText,
   Wallet,
+  BookOpen,
+  Receipt,
 } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
@@ -184,6 +186,8 @@ const ChefComptableCompagniePage: React.FC = () => {
       badge: pendingCount,
     },
     { label: "Finances", icon: TrendingUp, path: "/chef-comptable/finances" },
+    { label: "Compta", icon: BookOpen, path: "/chef-comptable/compta" },
+    { label: "Dépenses", icon: Receipt, path: "/chef-comptable/depenses" },
     { label: "Trésorerie", icon: Wallet, path: "/chef-comptable/treasury" },
     { label: "Rapports", icon: FileText, path: "/chef-comptable/rapports" },
   ];

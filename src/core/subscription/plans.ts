@@ -9,6 +9,7 @@ export type Plan = "starter" | "growth" | "enterprise";
 const STARTER_CAPABILITIES: readonly Capability[] = [
   "view_agency_dashboard",
   "manage_agency_finances",
+  "manage_company_finances", // CEO must always access Revenus & Liquidités
   "manage_reservations",
   "manage_guichet",
   "manage_boarding",

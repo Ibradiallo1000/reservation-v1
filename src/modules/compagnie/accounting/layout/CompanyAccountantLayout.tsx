@@ -10,6 +10,7 @@ import {
   FileText,
   Settings,
   Wallet,
+  Receipt,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
@@ -32,6 +33,8 @@ import {
   useAgencyKeyboardShortcuts,
   AgencyHeaderExtras,
 } from "@/modules/agence/shared";
+import { usePendingExpensesCount } from "@/shared/hooks/usePendingExpensesCount";
+import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
 
 interface Company {
   id: string;
@@ -88,6 +91,7 @@ const CompanyAccountantLayout: React.FC = () => {
 
   /* ===== Pending proof-of-payment badge ===== */
   const [pendingCount, setPendingCount] = useState(0);
+  const pendingExpensesCount = usePendingExpensesCount(currentCompanyId, user?.role);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playedIds = useRef(new Set<string>());
 
@@ -180,7 +184,23 @@ const CompanyAccountantLayout: React.FC = () => {
       badge: pendingCount,
     },
     { label: "Finances", icon: TrendingUp, path: `${basePath}/finances` },
-    { label: "Trésorerie", icon: Wallet, path: `${basePath}/treasury` },
+    {
+      label: "Dépenses",
+      icon: Receipt,
+      path: `${basePath}/expenses`,
+      badge: pendingExpensesCount || undefined,
+    },
+    {
+      label: "Trésorerie",
+      icon: Wallet,
+      path: `${basePath}/treasury`,
+      children: [
+        { label: "Nouvelle opération", path: `${basePath}/treasury/new-operation` },
+        { label: "Transfert", path: `${basePath}/treasury/transfer` },
+        { label: "Nouveau payable", path: `${basePath}/treasury/new-payable` },
+        { label: "Paiements fournisseurs", path: `${basePath}/supplier-payments` },
+      ],
+    },
     { label: "Rapports", icon: FileText, path: `${basePath}/rapports` },
     { label: "Paramètres", icon: Settings, path: `${basePath}/parametres` },
   ];
@@ -234,11 +254,18 @@ const CompanyAccountantLayout: React.FC = () => {
           onLogout={logout}
           banner={bannerContent}
           headerRight={
-            <AgencyHeaderExtras
-              isOnline={isOnline}
-              darkMode={darkMode}
-              onDarkModeToggle={toggleDarkMode}
-            />
+            <div className="flex items-center gap-2">
+              <NotificationsBell
+                companyId={currentCompanyId}
+                userId={user?.uid}
+                role={user?.role}
+              />
+              <AgencyHeaderExtras
+                isOnline={isOnline}
+                darkMode={darkMode}
+                onDarkModeToggle={toggleDarkMode}
+              />
+            </div>
           }
           mainClassName="agency-content-transition"
         />

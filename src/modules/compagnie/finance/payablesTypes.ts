@@ -11,6 +11,7 @@ export const APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
 export interface PayableDoc {
+  supplierId?: string | null;
   supplierName: string;
   vehicleId?: string | null;
   agencyId: string;
@@ -32,6 +33,7 @@ export interface PayableDoc {
 }
 
 export interface PayableDocCreate {
+  supplierId?: string | null;
   supplierName: string;
   vehicleId?: string | null;
   agencyId: string;

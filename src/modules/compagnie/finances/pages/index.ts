@@ -4,3 +4,5 @@ export { default as ReservationsEnLigne } from './ReservationsEnLignePage';
 export { default as Finances } from './Finances';
 export { default as Rapports } from './Rapports';
 export { default as Parametres } from './Parametres';
+export { default as DepensesPage } from './DepensesPage';
+export { default as ExpenseDashboard } from './ExpenseDashboard';

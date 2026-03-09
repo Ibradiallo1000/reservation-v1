@@ -207,7 +207,7 @@ const GridSkeleton = () => (
 const EmptyState: React.FC<{ isInspectionMode?: boolean }> = ({ 
   isInspectionMode 
 }) => (
-  <div className="border rounded-lg p-10 bg-white text-center text-gray-600">
+  <div className="border dark:border-slate-600 rounded-lg p-10 bg-white dark:bg-slate-800 text-center text-gray-600 dark:text-slate-400">
     <div className="flex items-center justify-center mb-3 text-gray-400">
       <ImageIcon size={32} />
     </div>
@@ -230,7 +230,7 @@ const ImageGrid: React.FC<{
     {items.map((img) => (
       <figure
         key={img.id}
-        className="relative rounded-lg overflow-hidden border bg-white hover:shadow-md transition group"
+        className="relative rounded-lg overflow-hidden border dark:border-slate-600 bg-white dark:bg-slate-800 hover:shadow-md transition group"
       >
         <img
           src={img.url}

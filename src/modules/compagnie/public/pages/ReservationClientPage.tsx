@@ -15,6 +15,7 @@ import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
+import { incrementReservedSeats, getOrCreateTripInstanceForSlot } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 
@@ -432,7 +433,22 @@ export default function ReservationClientPage() {
     setFieldErrors({});
     
     try {
-      const agSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId));
+      const companyId = selectedTrip.companyId;
+      let tripInstanceId = selectedTrip.id as string;
+      if (typeof tripInstanceId === 'string' && tripInstanceId.includes('_')) {
+        const ti = await getOrCreateTripInstanceForSlot(companyId, {
+          agencyId: selectedTrip.agencyId,
+          departureCity: selectedTrip.departure ?? '',
+          arrivalCity: selectedTrip.arrival ?? '',
+          date: selectedTrip.date ?? '',
+          departureTime: selectedTrip.time ?? '',
+          seatCapacity: selectedTrip.places ?? 30,
+          price: selectedTrip.price ?? null,
+        });
+        tripInstanceId = ti.id;
+      }
+
+      const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', selectedTrip.agencyId));
       const ag = agSnap.exists() ? (agSnap.data() as any) : {};
       const agencyName = ag.nomAgence || ag.nom || ag.name || 'Agence';
       const agencyCode = (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined;
@@ -462,7 +478,7 @@ export default function ReservationClientPage() {
         agencyId: selectedTrip.agencyId,
         agencyCode,
         agencyName,
-        tripInstanceId: selectedTrip.id
+        tripInstanceId
       });
 
       const now = new Date();
@@ -490,6 +506,7 @@ export default function ReservationClientPage() {
         nomAgence: agencyName,
         referenceCode,
         trajetId: selectedTrip.id,
+        tripInstanceId,
         holdUntil: addMin(now, 15),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -499,6 +516,12 @@ export default function ReservationClientPage() {
         collection(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations'),
         reservation
       );
+
+      try {
+        await incrementReservedSeats(companyId, tripInstanceId, seats);
+      } catch (e) {
+        console.error('Could not update trip instance reservedSeats:', e);
+      }
 
       const token = randomToken();
       const publicUrl = `${window.location.origin}/${slug}/mon-billet?r=${encodeURIComponent(token)}`;

@@ -372,7 +372,7 @@ const CompagnieReservationsPage: React.FC = () => {
                   placeholder="ex: Bamako"
                   value={filterDepart}
                   onChange={(e) => { setFilterDepart(e.target.value); setCurrentPage(1); }}
-                  className="w-full p-2 border rounded-md bg-white/70"
+                  className="w-full p-2 border dark:border-slate-600 rounded-md bg-white/70 dark:bg-slate-700/70 text-gray-900 dark:text-white"
                 />
               </div>
               <div>
@@ -381,7 +381,7 @@ const CompagnieReservationsPage: React.FC = () => {
                   placeholder="ex: Ségou"
                   value={filterArrivee}
                   onChange={(e) => { setFilterArrivee(e.target.value); setCurrentPage(1); }}
-                  className="w-full p-2 border rounded-md bg-white/70"
+                  className="w-full p-2 border dark:border-slate-600 rounded-md bg-white/70 dark:bg-slate-700/70 text-gray-900 dark:text-white"
                 />
               </div>
               <div>
@@ -389,7 +389,7 @@ const CompagnieReservationsPage: React.FC = () => {
                 <select
                   value={filterCanal}
                   onChange={(e) => { setFilterCanal(e.target.value as any); setCurrentPage(1); }}
-                  className="w-full p-2 border rounded-md bg-white/70"
+                  className="w-full p-2 border dark:border-slate-600 rounded-md bg-white/70 dark:bg-slate-700/70 text-gray-900 dark:text-white"
                 >
                   <option value="tous">Tous</option>
                   <option value="guichet">Guichet</option>
@@ -447,7 +447,7 @@ const CompagnieReservationsPage: React.FC = () => {
 
                     <div className="flex items-start justify-between">
                       <div>
-                        <h2 className="text-base font-semibold text-gray-900">
+                        <h2 className="text-base font-semibold text-gray-900 dark:text-white">
                           {a?.nom || "Agence"}
                         </h2>
                         <p className="text-xs text-gray-500">
@@ -508,7 +508,7 @@ const CompagnieReservationsPage: React.FC = () => {
                 <div className="p-6 border-b">
                   <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
                     <div>
-                      <h3 className="text-lg font-semibold text-gray-900">
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                         {findAgencyDisplay(selectedAgencyId)}
                       </h3>
                       <p className="text-sm text-gray-600">
@@ -520,7 +520,7 @@ const CompagnieReservationsPage: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={exportAggregatedCSV}
-                        className="flex items-center px-3 py-1 rounded-full text-sm border bg-white hover:bg-gray-50"
+                        className="flex items-center px-3 py-1 rounded-full text-sm border dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 text-gray-900 dark:text-white"
                       >
                         <FaDownload className="mr-2" />
                         Exporter (agrégé)
@@ -539,7 +539,7 @@ const CompagnieReservationsPage: React.FC = () => {
 
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-white/60 backdrop-blur">
+                    <thead className="bg-white/60 dark:bg-slate-700/60 backdrop-blur">
                       <tr>
                         <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wide">
                           Trajet
@@ -561,7 +561,7 @@ const CompagnieReservationsPage: React.FC = () => {
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white/40 backdrop-blur divide-y divide-gray-100">
+                    <tbody className="bg-white/40 dark:bg-slate-800/40 backdrop-blur divide-y divide-gray-100 dark:divide-slate-600">
                       {paginated.length === 0 ? (
                         <tr>
                           <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
@@ -570,8 +570,8 @@ const CompagnieReservationsPage: React.FC = () => {
                         </tr>
                       ) : (
                         paginated.map((r) => (
-                          <tr key={r.trajet} className="hover:bg-white/60">
-                            <td className="px-6 py-3 text-sm font-medium text-gray-900">
+                          <tr key={r.trajet} className="hover:bg-white/60 dark:hover:bg-slate-700/60">
+                            <td className="px-6 py-3 text-sm font-medium text-gray-900 dark:text-slate-200">
                               {r.trajet}
                             </td>
                             <td className="px-6 py-3 text-sm text-right">{r.billets}</td>
@@ -589,11 +589,11 @@ const CompagnieReservationsPage: React.FC = () => {
                 </div>
 
                 {aggregatedByTrajet.length > 10 && (
-                  <div className="px-6 py-4 border-t flex items-center justify-between bg-white/60 backdrop-blur">
+                  <div className="px-6 py-4 border-t dark:border-slate-600 flex items-center justify-between bg-white/60 dark:bg-slate-700/60 backdrop-blur">
                     <button
                       onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                       disabled={currentPage === 1}
-                      className="flex items-center px-3 py-1 border rounded-full text-sm bg-white hover:bg-gray-50 disabled:opacity-50"
+                      className="flex items-center px-3 py-1 border dark:border-slate-600 rounded-full text-sm bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 text-gray-900 dark:text-white disabled:opacity-50"
                     >
                       <FaChevronLeft className="mr-1" />
                       Précédent
@@ -604,7 +604,7 @@ const CompagnieReservationsPage: React.FC = () => {
                     <button
                       onClick={() => setCurrentPage((p) => p + 1)}
                       disabled={currentPage === totalPages}
-                      className="flex items-center px-3 py-1 border rounded-full text-sm bg-white hover:bg-gray-50 disabled:opacity-50"
+                      className="flex items-center px-3 py-1 border dark:border-slate-600 rounded-full text-sm bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 text-gray-900 dark:text-white disabled:opacity-50"
                     >
                       Suivant
                       <FaChevronRight className="ml-1" />

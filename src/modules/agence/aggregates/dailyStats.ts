@@ -22,6 +22,8 @@ function dailyStatsRef(companyId: string, agencyId: string, date: string) {
 function baseIncrements() {
   return {
     totalRevenue: increment(0),
+    ticketRevenue: increment(0),
+    courierRevenue: increment(0),
     totalPassengers: increment(0),
     totalSeats: increment(0),
     validatedSessions: increment(0),
@@ -78,15 +80,15 @@ export function updateDailyStatsOnSessionClosed(
 }
 
 /**
- * Call from within a transaction when a session becomes VALIDATED.
- * Adds totalRevenue from the shift/report.
+ * Call from within a transaction when a guichet session becomes VALIDATED.
+ * Adds ticket revenue and total revenue (ticketRevenue + courierRevenue over time).
  */
 export function updateDailyStatsOnSessionValidated(
   tx: Transaction,
   companyId: string,
   agencyId: string,
   date: string,
-  totalRevenue: number
+  ticketRevenue: number
 ): void {
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
@@ -94,11 +96,84 @@ export function updateDailyStatsOnSessionValidated(
     agencyId,
     date,
     ...baseIncrements(),
-    totalRevenue: increment(totalRevenue),
+    ticketRevenue: increment(ticketRevenue),
+    totalRevenue: increment(ticketRevenue),
     validatedSessions: increment(1),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }, { merge: true });
+}
+
+/**
+ * Call from within a transaction when a single reservation transitions to confirme/paye (online only).
+ * Increments ticketRevenue and totalRevenue by `amount`. Use for en_ligne reservations; guichet
+ * revenue is added via updateDailyStatsOnSessionValidated. Idempotency: call only once per
+ * reservation (caller must set ticketRevenueCountedInDailyStats on the reservation).
+ */
+export function addTicketRevenueToDailyStats(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  date: string,
+  amount: number
+): void {
+  if (amount <= 0) return;
+  const ref = dailyStatsRef(companyId, agencyId, date);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    date,
+    ...baseIncrements(),
+    ticketRevenue: increment(amount),
+    totalRevenue: increment(amount),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/**
+ * Call from within a transaction when a courier session becomes VALIDATED.
+ * Adds courier revenue (paid shipments only) and total revenue.
+ */
+export function updateDailyStatsOnCourierSessionValidated(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  date: string,
+  courierRevenue: number
+): void {
+  if (courierRevenue <= 0) return;
+  const ref = dailyStatsRef(companyId, agencyId, date);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    date,
+    ...baseIncrements(),
+    courierRevenue: increment(courierRevenue),
+    totalRevenue: increment(courierRevenue),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/** Format a date for dailyStats document ID (YYYY-MM-DD). Accepts Firestore Timestamp or Date. */
+export function formatDateForDailyStats(value: unknown): string {
+  let d: Date;
+  if (!value) {
+    d = new Date();
+  } else if (typeof (value as { toDate?: () => Date }).toDate === "function") {
+    d = (value as { toDate: () => Date }).toDate();
+  } else if (value instanceof Date) {
+    d = value;
+  } else if (typeof value === "string") {
+    d = new Date(value);
+  } else {
+    d = new Date();
+  }
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 /**

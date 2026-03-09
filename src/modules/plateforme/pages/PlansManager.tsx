@@ -66,11 +66,11 @@ const EMPTY: Plan = {
 const nf = new Intl.NumberFormat("fr-FR");
 
 const SUPPORT_LABELS: Record<SupportLevel, { label: string; color: string }> = {
-  basic: { label: "Basic", color: "bg-gray-100 text-gray-700" },
-  standard: { label: "Standard", color: "bg-blue-100 text-blue-700" },
-  priority: { label: "Prioritaire", color: "bg-amber-100 text-amber-700" },
-  premium: { label: "Premium", color: "bg-purple-100 text-purple-700" },
-  enterprise: { label: "Enterprise", color: "bg-indigo-100 text-indigo-700" },
+  basic: { label: "Basic", color: "bg-gray-100 dark:bg-slate-600 text-gray-700 dark:text-slate-200" },
+  standard: { label: "Standard", color: "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300" },
+  priority: { label: "Prioritaire", color: "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300" },
+  premium: { label: "Premium", color: "bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300" },
+  enterprise: { label: "Enterprise", color: "bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300" },
 };
 
 const SUPPORT_ICONS: Record<SupportLevel, React.ReactNode> = {
@@ -82,7 +82,7 @@ const SUPPORT_ICONS: Record<SupportLevel, React.ReactNode> = {
 };
 
 const inputClass =
-  "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20 disabled:opacity-50";
+  "w-full rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500 focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20 disabled:opacity-50";
 
 const selectClass = `${inputClass} appearance-none`;
 
@@ -199,8 +199,8 @@ export default function PlansManager() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Plans & Tarifs</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Plans & Tarifs</h1>
+          <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
             Modèle dual : abonnement mensuel + frais canal digital (% sur réservations en ligne)
           </p>
         </div>
@@ -216,26 +216,26 @@ export default function PlansManager() {
           return (
             <div
               key={p.id}
-              className="rounded-xl border border-gray-200 shadow-sm p-5 bg-white flex flex-col"
+              className="rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm p-5 bg-white dark:bg-slate-800 flex flex-col"
             >
               {/* Header */}
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-lg text-gray-900">{p.name}</h3>
+                    <h3 className="font-semibold text-lg text-gray-900 dark:text-white">{p.name}</h3>
                     {p.isTrial && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
                         Essai
                       </span>
                     )}
                   </div>
-                  <div className="text-2xl font-bold mt-1">
+                  <div className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
                     {p.priceMonthly === 0 ? (
-                      <span className="text-green-600">Gratuit</span>
+                      <span className="text-green-600 dark:text-green-400">Gratuit</span>
                     ) : (
                       <>
                         {formatCurrency(p.priceMonthly)}
-                        <span className="text-sm font-normal text-gray-500">/mois</span>
+                        <span className="text-sm font-normal text-gray-500 dark:text-slate-400">/mois</span>
                       </>
                     )}
                   </div>
@@ -247,7 +247,7 @@ export default function PlansManager() {
               </div>
 
               {/* Key metrics */}
-              <div className="space-y-2 text-sm text-gray-700 flex-1">
+              <div className="space-y-2 text-sm text-gray-700 dark:text-slate-300 flex-1">
                 <div className="flex justify-between">
                   <span>Agences max</span>
                   <strong>{p.maxAgences === 0 ? "Illimité" : p.maxAgences}</strong>
@@ -273,24 +273,24 @@ export default function PlansManager() {
                   </div>
                 )}
                 {p.brandingLocked && (
-                  <div className="text-xs text-amber-600 font-medium mt-1">
+                  <div className="text-xs text-amber-600 dark:text-amber-400 font-medium mt-1">
                     Branding Teliya verrouillé
                   </div>
                 )}
               </div>
 
               {/* Included features */}
-              <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100">
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+              <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100 dark:border-slate-600">
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
                   <CheckCircle2 className="h-3 w-3" /> Gestion interne
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
                   <CheckCircle2 className="h-3 w-3" /> Page publique
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
                   <CheckCircle2 className="h-3 w-3" /> Réservation en ligne
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
                   <CheckCircle2 className="h-3 w-3" /> Guichet
                 </span>
               </div>
@@ -308,7 +308,7 @@ export default function PlansManager() {
           );
         })}
         {plans.length === 0 && (
-          <div className="text-sm text-gray-500 col-span-full">
+          <div className="text-sm text-gray-500 dark:text-slate-400 col-span-full">
             Aucun plan créé pour le moment.
           </div>
         )}
@@ -317,17 +317,17 @@ export default function PlansManager() {
       {/* ── Plan Form ── */}
       <form
         onSubmit={onSave}
-        className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-6"
+        className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-xl border border-gray-200 shadow-sm p-6 space-y-6"
       >
-        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          <Building2 className="h-5 w-5 text-gray-600" />
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+          <Building2 className="h-5 w-5 text-gray-600 dark:text-slate-400" />
           {isEdit ? "Modifier le plan" : "Créer un plan"}
         </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Name */}
           <div>
-            <label className="text-sm font-medium text-gray-700">Nom du plan</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Nom du plan</label>
             <input
               className={inputClass}
               placeholder="Trial, Starter, Growth, Pro…"
@@ -338,7 +338,7 @@ export default function PlansManager() {
 
           {/* Price */}
           <div>
-            <label className="text-sm font-medium text-gray-700">Prix mensuel ({getCurrencySymbol()})</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Prix mensuel ({getCurrencySymbol()})</label>
             <input
               className={inputClass}
               type="number"
@@ -350,8 +350,8 @@ export default function PlansManager() {
 
           {/* Max agencies */}
           <div>
-            <label className="text-sm font-medium text-gray-700">
-              Agences maximum <span className="text-xs text-gray-400">(0 = illimité)</span>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
+              Agences maximum <span className="text-xs text-gray-400 dark:text-slate-500">(0 = illimité)</span>
             </label>
             <input
               className={inputClass}
@@ -364,8 +364,8 @@ export default function PlansManager() {
 
           {/* Quota */}
           <div>
-            <label className="text-sm font-medium text-gray-700">
-              Quota réservations / mois <span className="text-xs text-gray-400">(0 = illimité)</span>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
+              Quota réservations / mois <span className="text-xs text-gray-400 dark:text-slate-500">(0 = illimité)</span>
             </label>
             <input
               className={inputClass}
@@ -378,7 +378,7 @@ export default function PlansManager() {
 
           {/* Digital fee */}
           <div>
-            <label className="text-sm font-medium text-gray-700">
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
               Frais canal digital (%)
             </label>
             <input
@@ -390,12 +390,12 @@ export default function PlansManager() {
               value={editing.digitalFeePercent}
               onChange={(e) => setEditing({ ...editing, digitalFeePercent: Number(e.target.value) })}
             />
-            <p className="text-xs text-gray-400 mt-1">Pourcentage prélevé sur chaque réservation en ligne</p>
+            <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">Pourcentage prélevé sur chaque réservation en ligne</p>
           </div>
 
           {/* Guichet fee */}
           <div>
-            <label className="text-sm font-medium text-gray-700">Frais guichet ({getCurrencySymbol()} / billet)</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Frais guichet ({getCurrencySymbol()} / billet)</label>
             <input
               className={inputClass}
               type="number"
@@ -407,8 +407,8 @@ export default function PlansManager() {
 
           {/* Minimum monthly */}
           <div>
-            <label className="text-sm font-medium text-gray-700">
-              Minimum mensuel ({getCurrencySymbol()}) <span className="text-xs text-gray-400">(0 = aucun)</span>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
+              Minimum mensuel ({getCurrencySymbol()}) <span className="text-xs text-gray-400 dark:text-slate-500">(0 = aucun)</span>
             </label>
             <input
               className={inputClass}
@@ -421,7 +421,7 @@ export default function PlansManager() {
 
           {/* Support level */}
           <div>
-            <label className="text-sm font-medium text-gray-700">Niveau de support</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Niveau de support</label>
             <select
               className={selectClass}
               value={editing.supportLevel}
@@ -437,10 +437,10 @@ export default function PlansManager() {
 
           {/* Trial toggle + duration */}
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-slate-300">
               <input
                 type="checkbox"
-                className="rounded"
+                className="rounded border-gray-300 dark:border-slate-600 dark:bg-slate-700"
                 checked={editing.isTrial ?? false}
                 onChange={(e) => setEditing({
                   ...editing,
@@ -452,7 +452,7 @@ export default function PlansManager() {
             </label>
             {editing.isTrial && (
               <div>
-                <label className="text-xs text-gray-500">Durée (jours)</label>
+                <label className="text-xs text-gray-500 dark:text-slate-400">Durée (jours)</label>
                 <input
                   className={inputClass}
                   type="number"
@@ -466,10 +466,10 @@ export default function PlansManager() {
         </div>
 
         {/* Branding locked */}
-        <label className="flex items-center gap-2 text-sm text-gray-700">
+        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-slate-300">
           <input
             type="checkbox"
-            className="rounded"
+            className="rounded border-gray-300 dark:border-slate-600 dark:bg-slate-700"
             checked={editing.brandingLocked ?? false}
             onChange={(e) => setEditing({ ...editing, brandingLocked: e.target.checked })}
           />
@@ -477,7 +477,7 @@ export default function PlansManager() {
         </label>
 
         {/* All features included notice */}
-        <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700">
+        <div className="rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3 text-sm text-green-700 dark:text-green-300">
           <strong>Note :</strong> Tous les plans incluent désormais : gestion interne, page publique, réservation en ligne, guichet et tableau de bord.
           Les plans se différencient par le prix, les quotas et le frais canal digital.
         </div>

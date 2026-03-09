@@ -61,6 +61,7 @@ export const REFERENCE_TYPES = [
   "bank_withdrawal",
   "mobile_to_bank",
   "mobile_expense",
+  "cash_session",
 ] as const;
 
 export type ReferenceType = (typeof REFERENCE_TYPES)[number];

@@ -63,6 +63,7 @@ const AjouterAgenceForm: React.FC<AjouterAgenceFormProps> = ({ onAdd }) => {
         nomAgence,
         pays,
         ville,
+        city: ville.trim(), // for network trip planning: agency can only create trips departing from this city
         quartier: quartier || null,
         type: type || null,
         latitude,

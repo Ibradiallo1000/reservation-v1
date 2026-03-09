@@ -41,6 +41,8 @@ type ReservationWithProof = Reservation & { paymentReference?: string };
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { Button } from '@/shared/ui/button';
 import { MetricCard, SectionCard, StatusBadge, type StatusVariant } from '@/ui';
+import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
+import { transitionToConfirmedOrPaidWithDailyStats } from '@/modules/agence/services/reservationStatutService';
 
 /** Son Shopify (alarme / preuve reçue) : public/splash/son.mp3 */
 const NOTIFICATION_SOUND_URL = '/splash/son.mp3';
@@ -572,11 +574,26 @@ const ReservationsEnLigne: React.FC = () => {
         toast.error('Erreur', { description: 'Cette réservation ne peut plus être confirmée' });
         return;
       }
-      await updateDoc(reservationRef, {
-        statut: 'confirme',
-        validatedBy: user.uid ?? '',
-        validatedAt: serverTimestamp(),
-      });
+      await transitionToConfirmedOrPaidWithDailyStats(
+        reservationRef,
+        'confirme',
+        { userId: user.uid ?? '', userRole: (user as { role?: string }).role ?? '' },
+        { validatedBy: user.uid ?? '', validatedAt: serverTimestamp() }
+      );
+
+      // CRM: sync customer (create or update stats by phone)
+      const phone = (data?.telephone ?? data?.telephoneOriginal ?? reservation.telephone ?? '')?.toString() || '';
+      const departureDate = (data?.date ?? reservation.date ?? '')?.toString() || '';
+      if (phone) {
+        upsertCustomerFromReservation({
+          companyId: user.companyId,
+          name: (data?.nomClient ?? data?.clientNom ?? reservation.clientNom ?? '')?.toString() || '',
+          phone,
+          email: (data?.email ?? reservation.email) ?? null,
+          montant: Number(data?.montant ?? reservation.montant ?? 0),
+          departureDate: departureDate || new Date().toISOString().slice(0, 10),
+        }).catch(() => {});
+      }
       
       // Retirer de la liste des réservations à vérifier
       setVerificationReservations(prev => 

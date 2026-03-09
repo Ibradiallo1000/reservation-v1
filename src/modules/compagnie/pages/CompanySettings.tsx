@@ -276,21 +276,21 @@ const CompanySettingsPlan: React.FC = () => {
                 key={p.id}
                 className={`rounded-lg border p-4 ${
                   isCurrent
-                    ? "ring-2 ring-[var(--btn-primary,#FF6600)] border-orange-200"
-                    : "border-gray-200"
+                    ? "ring-2 ring-[var(--btn-primary,#FF6600)] border-orange-200 dark:border-orange-600"
+                    : "border-gray-200 dark:border-slate-600"
                 }`}
               >
                 <div className="flex items-baseline justify-between">
-                  <h4 className="font-semibold text-gray-900">{p.label}</h4>
+                  <h4 className="font-semibold text-gray-900 dark:text-white">{p.label}</h4>
                   <StatusBadge status={supportToVariant(p.supportLevel)}>
                     {SUPPORT_LABELS[p.supportLevel]}
                   </StatusBadge>
                 </div>
                 {p.description && (
-                  <p className="text-sm text-gray-600 mt-1">{p.description}</p>
+                  <p className="text-sm text-gray-600 dark:text-slate-400 mt-1">{p.description}</p>
                 )}
 
-                <ul className="mt-3 text-sm text-gray-700 space-y-1">
+                <ul className="mt-3 text-sm text-gray-700 dark:text-slate-300 space-y-1">
                   <li>Agences max : <b>{p.maxAgences === 0 ? "Illimité" : p.maxAgences}</b></li>
                   <li>Utilisateurs max : <b>{p.maxUsers}</b></li>
                   <li>

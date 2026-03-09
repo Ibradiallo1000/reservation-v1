@@ -8,6 +8,7 @@
 import { doc, runTransaction, serverTimestamp, Timestamp } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { PaymentType, PaymentStatus, ShipmentSender, ShipmentReceiver } from "../domain/shipment.types";
+import { addToExpectedBalance } from "@/modules/agence/cashControl/cashSessionService";
 import type { ShipmentEvent } from "../domain/logisticsEvents.types";
 import { shipmentRef, shipmentsRef, eventsRef } from "../domain/firestorePaths";
 import { courierSessionRef } from "../domain/courierSessionPaths";
@@ -39,6 +40,8 @@ export type CreateShipmentParams = {
   agencyCode?: string;
   /** If not provided, a new document id is used */
   shipmentId?: string;
+  /** Payment method for cash session expected balance when PAID_ORIGIN (default: cash). */
+  paymentMethod?: "cash" | "mobile_money" | "bank";
 };
 
 export type CreateShipmentResult = { shipmentId: string; shipmentNumber?: string };
@@ -126,6 +129,22 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     };
     tx.set(eventDoc, event);
   });
+
+  // Cash control: when paid at origin, add to open COURRIER cash session for this agent (if any)
+  if (params.paymentStatus === "PAID_ORIGIN") {
+    const amount = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
+    if (amount > 0 && params.createdBy) {
+      const paymentMethod = params.paymentMethod ?? "cash";
+      addToExpectedBalance(
+        params.companyId,
+        params.originAgencyId,
+        params.createdBy,
+        "COURRIER",
+        amount,
+        paymentMethod
+      ).catch(() => {});
+    }
+  }
 
   return { shipmentId, shipmentNumber };
 }

@@ -83,8 +83,8 @@ export default function DebugAuthPage() {
         <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md border">
           <h2 className="text-lg font-semibold mb-4 text-red-700">🧪 Tests de Navigation</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <a href="/chef-comptable" className="block p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition text-center">
-              <div className="font-medium text-blue-800">/chef-comptable</div>
+            <a href={user?.companyId ? `/compagnie/${user.companyId}/accounting` : "/role-landing"} className="block p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition text-center">
+              <div className="font-medium text-blue-800">/compagnie/:companyId/accounting</div>
               <div className="text-sm text-blue-600 mt-1">Espace Chef Comptable Compagnie</div>
               <div className="text-xs text-blue-500 mt-2">Rôles: company_accountant, financial_director</div>
             </a>

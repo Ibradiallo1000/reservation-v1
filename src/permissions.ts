@@ -21,7 +21,7 @@ export const permissionsByRole: Record<Role, ModuleKey[]> = {
   gestionnaire: ['trajets', 'reservations', 'finances'],
   agentCourrier: ['courriers'],
   support: ['parametres'],
-  chef_garage: ['dashboard', 'trajets'],
+  responsable_logistique: ['dashboard', 'trajets'],
   chefEmbarquement: ['trajets', 'reservations'],
   agency_fleet_controller: ['trajets'],
 };

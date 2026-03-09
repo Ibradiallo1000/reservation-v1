@@ -9,6 +9,8 @@ export interface TripCostDoc {
   tripId: string;
   agencyId: string;
   date: string;
+  /** Optional: link to vehicle for fleet finance (revenue/cost per vehicle). */
+  vehicleId?: string | null;
   fuelCost: number;
   driverCost: number;
   assistantCost: number;

@@ -11,6 +11,8 @@ import {
   Truck,
   TrendingUp,
   FileCheck,
+  Users,
+  ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -21,6 +23,7 @@ import {
   getDocs,
   doc,
   getDoc,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
@@ -32,6 +35,8 @@ import { SubscriptionBanner } from "@/shared/subscription";
 import type { SubscriptionStatus } from "@/shared/subscription";
 import { Timestamp } from "firebase/firestore";
 import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts, AgencyHeaderExtras } from "@/modules/agence/shared";
+import { listExpenses } from "@/modules/compagnie/treasury/expenses";
+import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
 
 interface Company {
   id: string;
@@ -44,13 +49,34 @@ interface Company {
 /* ================= LAYOUT ================= */
 const CompagnieLayout: React.FC = () => {
   const params = useParams();
-  const { user, logout, company, loading } = useAuth();
+  const { user, logout, company, loading, refreshUser } = useAuth();
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
 
   const urlCompanyId = params.companyId;
   const userCompanyId = user?.companyId;
   const currentCompanyId = urlCompanyId || userCompanyId;
+
+  // CEO sans companyId dans le profil : synchroniser depuis l’URL pour que les règles Firestore passent
+  React.useEffect(() => {
+    if (
+      !user?.uid ||
+      user.role !== "admin_compagnie" ||
+      user.companyId ||
+      !urlCompanyId
+    )
+      return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await updateDoc(doc(db, "users", user.uid), { companyId: urlCompanyId });
+        if (!cancelled) await refreshUser();
+      } catch (e) {
+        if (!cancelled) console.warn("CEO companyId sync:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid, user?.role, user?.companyId, urlCompanyId, refreshUser]);
 
   const isImpersonationMode = Boolean(
     user?.role === "admin_platforme" && urlCompanyId,
@@ -91,6 +117,7 @@ const CompagnieLayout: React.FC = () => {
   /* ===== BADGES ===== */
   const [onlineProofsCount, setOnlineProofsCount] = React.useState(0);
   const [pendingReviewsCount, setPendingReviewsCount] = React.useState(0);
+  const [pendingCeoExpensesCount, setPendingCeoExpensesCount] = React.useState(0);
 
   React.useEffect(() => {
     if (!currentCompanyId) return;
@@ -139,6 +166,28 @@ const CompagnieLayout: React.FC = () => {
     return () => unsub();
   }, [currentCompanyId]);
 
+  React.useEffect(() => {
+    if (!currentCompanyId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const list = await listExpenses(currentCompanyId, {
+          status: "pending_ceo",
+          limitCount: 300,
+        });
+        if (!cancelled) setPendingCeoExpensesCount(list.length);
+      } catch (_) {
+        if (!cancelled) setPendingCeoExpensesCount(0);
+      }
+    };
+    void load();
+    const interval = setInterval(() => void load(), 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [currentCompanyId]);
+
   // Navigation : Command Center, Revenue & Liquidity, Network Performance, Operations, Fleet, Control & Audit, Configuration
   const basePath = urlCompanyId
     ? `/compagnie/${urlCompanyId}`
@@ -150,7 +199,15 @@ const CompagnieLayout: React.FC = () => {
     { label: "Performance Réseau", icon: TrendingUp, path: `${basePath}/dashboard` },
     { label: "Opérations", icon: BarChart2, path: `${basePath}/operations-reseau`, badge: onlineProofsCount },
     { label: "Flotte", icon: Truck, path: `${basePath}/fleet` },
+    { label: "Finance Flotte", icon: DollarSign, path: `${basePath}/fleet-finance` },
     { label: "Contrôle & Audit", icon: FileCheck, path: `${basePath}/comptabilite` },
+    {
+      label: "Dépenses",
+      icon: ShieldCheck,
+      path: `${basePath}/ceo-expenses`,
+      badge: pendingCeoExpensesCount || undefined,
+    },
+    { label: "Clients", icon: Users, path: `${basePath}/customers` },
     { label: "Avis Clients", icon: MessageSquare, path: `${basePath}/avis-clients`, badge: pendingReviewsCount },
     { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },
   ];
@@ -235,7 +292,14 @@ const CompagnieLayout: React.FC = () => {
           onLogout={logout}
           banner={bannerContent}
           headerRight={
-            <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
+            <div className="flex items-center gap-2">
+              <NotificationsBell
+                companyId={currentCompanyId}
+                userId={user?.uid}
+                role={user?.role}
+              />
+              <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
+            </div>
           }
           mainClassName="agency-content-transition"
         />

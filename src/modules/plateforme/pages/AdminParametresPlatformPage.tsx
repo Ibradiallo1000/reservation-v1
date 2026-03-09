@@ -214,9 +214,9 @@ const AdminParametresPlatformPage: React.FC = () => {
     });
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="max-w-7xl mx-auto">
-        <h1 className="text-2xl font-bold mb-6 text-gray-800">Paramètres de la plateforme</h1>
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 py-6 sm:py-8 px-4 sm:px-6">
+      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-7xl mx-auto min-w-0">
+        <h1 className="text-xl sm:text-2xl font-bold mb-6 text-gray-800 dark:text-white">Paramètres de la plateforme</h1>
 
         <AnimatePresence>
           {message.text && (
@@ -225,7 +225,9 @@ const AdminParametresPlatformPage: React.FC = () => {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               className={`p-4 rounded-lg shadow mb-4 ${
-                message.type === "success" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                message.type === "success"
+                  ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300"
+                  : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300"
               }`}
             >
               {message.type === "success" ? <CheckCircle className="inline mr-2" /> : <AlertCircle className="inline mr-2" />}
@@ -235,54 +237,54 @@ const AdminParametresPlatformPage: React.FC = () => {
         </AnimatePresence>
 
         {/* ===================== Identité (pour footer) ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
             <Info /> Identité & contenu du footer
           </h3>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm mb-1">Nom de la plateforme</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Nom de la plateforme</label>
               <input
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 value={settings.platformName || ""}
                 onChange={(e) => setSettings((s) => ({ ...s, platformName: e.target.value }))}
                 placeholder="Teliya"
               />
             </div>
             <div>
-              <label className="block text-sm mb-1">Pays</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Pays</label>
               <div className="relative">
                 <input
-                  className="w-full px-4 py-2 border rounded-lg pr-9"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white pr-9 placeholder:text-gray-400 dark:placeholder:text-slate-500"
                   value={settings.country || ""}
                   onChange={(e) => setSettings((s) => ({ ...s, country: e.target.value }))}
                   placeholder="Mali"
                 />
-                <Globe className="h-4 w-4 absolute right-3 top-3.5 text-gray-400" />
+                <Globe className="h-4 w-4 absolute right-3 top-3.5 text-gray-400 dark:text-slate-500" />
               </div>
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">Slogan (FR)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Slogan (FR)</label>
               <input
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 value={settings.slogan || ""}
                 onChange={(e) => setSettings((s) => ({ ...s, slogan: e.target.value }))}
                 placeholder="Réserver simplement, voyager sereinement."
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">Slogan (EN)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Slogan (EN)</label>
               <input
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 value={settings.sloganEn ?? ""}
                 onChange={(e) => setSettings((s) => ({ ...s, sloganEn: e.target.value }))}
                 placeholder="Book simply, travel peacefully."
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">À propos (FR)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">À propos (FR)</label>
               <textarea
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 rows={3}
                 value={settings.about || ""}
                 onChange={(e) => setSettings((s) => ({ ...s, about: e.target.value }))}
@@ -290,9 +292,9 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">À propos (EN)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">À propos (EN)</label>
               <textarea
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 rows={3}
                 value={settings.aboutEn ?? ""}
                 onChange={(e) => setSettings((s) => ({ ...s, aboutEn: e.target.value }))}
@@ -300,9 +302,9 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">Mission (FR)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Mission (FR)</label>
               <textarea
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 rows={2}
                 value={settings.footer?.mission ?? ""}
                 onChange={(e) =>
@@ -312,9 +314,9 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">Mission (EN)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Mission (EN)</label>
               <textarea
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 rows={2}
                 value={settings.footer?.missionEn ?? ""}
                 onChange={(e) =>
@@ -324,9 +326,9 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">À propos bloc footer (FR, optionnel)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">À propos bloc footer (FR, optionnel)</label>
               <textarea
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 rows={2}
                 value={settings.footer?.about ?? ""}
                 onChange={(e) =>
@@ -336,9 +338,9 @@ const AdminParametresPlatformPage: React.FC = () => {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-sm mb-1">À propos bloc footer (EN, optionnel)</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">À propos bloc footer (EN, optionnel)</label>
               <textarea
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 rows={2}
                 value={settings.footer?.aboutEn ?? ""}
                 onChange={(e) =>
@@ -351,75 +353,75 @@ const AdminParametresPlatformPage: React.FC = () => {
         </div>
 
         {/* ===================== Textes principaux (déjà existants) ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4">Textes principaux</h3>
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Textes principaux</h3>
           <input
-            className="w-full mb-3 px-4 py-2 border rounded-lg"
+            className="w-full mb-3 px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
             value={settings.accroche}
             onChange={(e) => setSettings((s) => ({ ...s, accroche: e.target.value }))}
           />
           <input
-            className="w-full px-4 py-2 border rounded-lg"
+            className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
             value={settings.instructionRecherche}
             onChange={(e) => setSettings((s) => ({ ...s, instructionRecherche: e.target.value }))}
           />
         </div>
 
         {/* ===================== Contact (footer) ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
             <Phone /> Contact (footer)
           </h3>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm mb-1">Téléphone</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Téléphone</label>
               <input
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 value={settings.contact?.phone || ""}
                 onChange={(e) => updateContact("phone", e.target.value)}
                 placeholder="+223 70 00 00 00"
               />
             </div>
             <div>
-              <label className="block text-sm mb-1">E-mail</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">E-mail</label>
               <input
-                className="w-full px-4 py-2 border rounded-lg"
+                className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                 value={settings.contact?.email || ""}
                 onChange={(e) => updateContact("email", e.target.value)}
                 placeholder="contact@teliya.africa"
               />
             </div>
             <div>
-              <label className="block text-sm mb-1">Adresse</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Adresse</label>
               <div className="relative">
                 <input
-                  className="w-full px-4 py-2 border rounded-lg pr-9"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white pr-9 placeholder:text-gray-400 dark:placeholder:text-slate-500"
                   value={settings.contact?.address || ""}
                   onChange={(e) => updateContact("address", e.target.value)}
                   placeholder="Bamako, Mali"
                 />
-                <MapPin className="h-4 w-4 absolute right-3 top-3.5 text-gray-400" />
+                <MapPin className="h-4 w-4 absolute right-3 top-3.5 text-gray-400 dark:text-slate-500" />
               </div>
             </div>
             <div>
-              <label className="block text-sm mb-1">Horaires</label>
+              <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Horaires</label>
               <div className="relative">
                 <input
-                  className="w-full px-4 py-2 border rounded-lg pr-9"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white pr-9 placeholder:text-gray-400 dark:placeholder:text-slate-500"
                   value={settings.contact?.hours || ""}
                   onChange={(e) => updateContact("hours", e.target.value)}
                   placeholder="Lun–Sam : 8h–19h"
                 />
-                <Clock className="h-4 w-4 absolute right-3 top-3.5 text-gray-400" />
+                <Clock className="h-4 w-4 absolute right-3 top-3.5 text-gray-400 dark:text-slate-500" />
               </div>
             </div>
-            <div className="md:col-span-2 pt-2 border-t border-gray-100">
-              <p className="text-xs text-gray-500 mb-2">Override pour le footer landing (optionnel)</p>
+            <div className="md:col-span-2 pt-2 border-t border-gray-100 dark:border-slate-600">
+              <p className="text-xs text-gray-500 dark:text-slate-400 mb-2">Override pour le footer landing (optionnel)</p>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm mb-1">Téléphone footer</label>
+                  <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Téléphone footer</label>
                   <input
-                    className="w-full px-4 py-2 border rounded-lg"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                     value={settings.footer?.contactPhone ?? ""}
                     onChange={(e) =>
                       setSettings((s) => ({ ...s, footer: { ...(s.footer || {}), contactPhone: e.target.value } }))
@@ -428,9 +430,9 @@ const AdminParametresPlatformPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm mb-1">Email footer</label>
+                  <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">Email footer</label>
                   <input
-                    className="w-full px-4 py-2 border rounded-lg"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                     type="email"
                     value={settings.footer?.contactEmail ?? ""}
                     onChange={(e) =>
@@ -445,8 +447,8 @@ const AdminParametresPlatformPage: React.FC = () => {
         </div>
 
         {/* ===================== Réseaux sociaux (footer) ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
             <Instagram /> Réseaux sociaux (footer)
           </h3>
           <div className="grid md:grid-cols-2 gap-4">
@@ -458,15 +460,15 @@ const AdminParametresPlatformPage: React.FC = () => {
               { k: "youtube", label: "YouTube", Icon: Youtube, ph: "https://youtube.com/@…" },
             ].map(({ k, label, Icon, ph }) => (
               <div key={k}>
-                <label className="block text-sm mb-1">{label}</label>
+                <label className="block text-sm mb-1 text-gray-700 dark:text-slate-300">{label}</label>
                 <div className="relative">
                   <input
-                    className="w-full px-4 py-2 border rounded-lg pl-10"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white pl-10 placeholder:text-gray-400 dark:placeholder:text-slate-500"
                     value={(settings.social as any)?.[k] || ""}
                     onChange={(e) => updateSocial(k as any, e.target.value)}
                     placeholder={ph}
                   />
-                  <Icon className="h-4 w-4 absolute left-3 top-3.5 text-gray-400" />
+                  <Icon className="h-4 w-4 absolute left-3 top-3.5 text-gray-400 dark:text-slate-500" />
                 </div>
               </div>
             ))}
@@ -474,18 +476,18 @@ const AdminParametresPlatformPage: React.FC = () => {
         </div>
 
         {/* ===================== Liens (footer) ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
             <LinkIcon /> Liens du footer (légaux & utiles)
           </h3>
 
           {/* Légaux */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-2">
-              <h4 className="font-semibold">Liens légaux</h4>
+              <h4 className="font-semibold text-gray-900 dark:text-white">Liens légaux</h4>
               <button
                 onClick={() => addLink("legalLinks")}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded border hover:bg-gray-50"
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded border border-gray-300 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-600 dark:text-white"
               >
                 <Plus className="h-4 w-4" /> Ajouter
               </button>
@@ -495,24 +497,24 @@ const AdminParametresPlatformPage: React.FC = () => {
                 <div key={`legal-${i}`} className="grid grid-cols-1 gap-2">
                   <div className="grid md:grid-cols-[1fr_1fr_1fr_auto_auto] grid-cols-1 gap-2 items-center">
                     <input
-                      className="px-3 py-2 border rounded-lg"
+                      className="px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                       placeholder="Libellé FR (ex: Mentions légales)"
                       value={l.label}
                       onChange={(e) => updateLink("legalLinks", i, { label: e.target.value })}
                     />
                     <input
-                      className="px-3 py-2 border rounded-lg"
+                      className="px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                       placeholder="Libellé EN (ex: Legal notice)"
                       value={l.labelEn ?? ""}
                       onChange={(e) => updateLink("legalLinks", i, { labelEn: e.target.value })}
                     />
                     <input
-                      className="px-3 py-2 border rounded-lg"
+                      className="px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                       placeholder="/mentions-legales ou https://…"
                       value={l.url}
                       onChange={(e) => updateLink("legalLinks", i, { url: e.target.value })}
                     />
-                    <label className="inline-flex items-center gap-2 text-sm">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-slate-300">
                       <input
                         type="checkbox"
                         checked={!!l.external}
@@ -539,7 +541,7 @@ const AdminParametresPlatformPage: React.FC = () => {
               <h4 className="font-semibold">Liens utiles</h4>
               <button
                 onClick={() => addLink("extraLinks")}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded border hover:bg-gray-50"
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded border border-gray-300 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-600 dark:text-white"
               >
                 <Plus className="h-4 w-4" /> Ajouter
               </button>
@@ -549,24 +551,24 @@ const AdminParametresPlatformPage: React.FC = () => {
                 <div key={`extra-${i}`} className="grid grid-cols-1 gap-2">
                   <div className="grid md:grid-cols-[1fr_1fr_1fr_auto_auto] grid-cols-1 gap-2 items-center">
                     <input
-                      className="px-3 py-2 border rounded-lg"
+                      className="px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                       placeholder="Libellé FR (ex: À propos)"
                       value={l.label}
                       onChange={(e) => updateLink("extraLinks", i, { label: e.target.value })}
                     />
                     <input
-                      className="px-3 py-2 border rounded-lg"
+                      className="px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                       placeholder="Libellé EN (ex: About)"
                       value={l.labelEn ?? ""}
                       onChange={(e) => updateLink("extraLinks", i, { labelEn: e.target.value })}
                     />
                     <input
-                      className="px-3 py-2 border rounded-lg"
+                      className="px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500"
                       placeholder="/a-propos ou https://…"
                       value={l.url}
                       onChange={(e) => updateLink("extraLinks", i, { url: e.target.value })}
                     />
-                    <label className="inline-flex items-center gap-2 text-sm">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-slate-300">
                       <input
                         type="checkbox"
                         checked={!!l.external}
@@ -603,7 +605,7 @@ const AdminParametresPlatformPage: React.FC = () => {
                   <span className="font-medium text-gray-800 dark:text-white">
                     {mod.displayOrder}. {mod.title}
                   </span>
-                  <label className="inline-flex items-center gap-2 text-sm">
+                  <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-slate-300">
                     <input
                       type="checkbox"
                       checked={mod.enabled !== false}
@@ -724,8 +726,8 @@ const AdminParametresPlatformPage: React.FC = () => {
         </div>
 
         {/* ===================== Options d'arrière-plan du footer ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
             <ImageIcon /> Arrière-plan du footer
           </h3>
           <label className="inline-flex items-center gap-2">
@@ -739,8 +741,8 @@ const AdminParametresPlatformPage: React.FC = () => {
         </div>
 
         {/* ===================== Couleurs (existant) ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
             <Palette /> Couleurs
           </h3>
           <div className="flex gap-6">
@@ -749,9 +751,9 @@ const AdminParametresPlatformPage: React.FC = () => {
               { key: "couleurSecondaire", name: "Secondaire", pick: "secondary" as const },
             ].map((c) => (
               <div key={c.key}>
-                <label className="block text-sm mb-2">{c.name}</label>
+                <label className="block text-sm mb-2 text-gray-700 dark:text-slate-300">{c.name}</label>
                 <div
-                  className="h-12 w-12 rounded-full border cursor-pointer"
+                  className="h-12 w-12 rounded-full border-2 border-gray-300 dark:border-slate-600 cursor-pointer"
                   style={{ backgroundColor: (settings as any)[c.key] }}
                   onClick={() => setShowColorPicker(c.pick)}
                   title="Changer la couleur"
@@ -770,23 +772,23 @@ const AdminParametresPlatformPage: React.FC = () => {
         </div>
 
         {/* ===================== Images (existant) ===================== */}
-        <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-800 dark:border dark:border-slate-700 rounded-lg shadow p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
             <ImageIcon /> Images
           </h3>
 
           {/* Logo */}
           <div className="mb-4">
-            <label className="block text-sm mb-2">Logo</label>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-slate-300">Logo</label>
             {settings.logoUrl ? (
               <div className="flex items-center gap-4">
                 <img src={settings.logoUrl} className="h-16 w-16 object-contain" />
-                <button onClick={() => setPickerFor("logo")} className="bg-gray-100 px-3 py-1 rounded">
+                <button onClick={() => setPickerFor("logo")} className="bg-gray-100 dark:bg-slate-600 dark:text-white px-3 py-1 rounded">
                   Changer
                 </button>
               </div>
             ) : (
-              <button onClick={() => setPickerFor("logo")} className="px-4 py-2 border rounded-lg">
+              <button onClick={() => setPickerFor("logo")} className="px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white">
                 Ajouter un logo
               </button>
             )}
@@ -794,16 +796,16 @@ const AdminParametresPlatformPage: React.FC = () => {
 
           {/* Favicon */}
           <div className="mb-4">
-            <label className="block text-sm mb-2">Favicon</label>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-slate-300">Favicon</label>
             {settings.faviconUrl ? (
               <div className="flex items-center gap-4">
                 <img src={settings.faviconUrl} className="h-10 w-10 object-contain" />
-                <button onClick={() => setPickerFor("favicon")} className="bg-gray-100 px-3 py-1 rounded">
+                <button onClick={() => setPickerFor("favicon")} className="bg-gray-100 dark:bg-slate-600 dark:text-white px-3 py-1 rounded">
                   Changer
                 </button>
               </div>
             ) : (
-              <button onClick={() => setPickerFor("favicon")} className="px-4 py-2 border rounded-lg">
+              <button onClick={() => setPickerFor("favicon")} className="px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white">
                 Ajouter un favicon
               </button>
             )}
@@ -811,16 +813,16 @@ const AdminParametresPlatformPage: React.FC = () => {
 
           {/* Bannière */}
           <div className="mb-4">
-            <label className="block text-sm mb-2">Bannière</label>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-slate-300">Bannière</label>
             {settings.banniereUrl ? (
               <div>
                 <img src={settings.banniereUrl} className="h-32 w-full object-cover rounded-lg" />
-                <button onClick={() => setPickerFor("banniere")} className="mt-2 bg-gray-100 px-3 py-1 rounded">
+                <button onClick={() => setPickerFor("banniere")} className="mt-2 bg-gray-100 dark:bg-slate-600 dark:text-white px-3 py-1 rounded">
                   Changer
                 </button>
               </div>
             ) : (
-              <button onClick={() => setPickerFor("banniere")} className="px-4 py-2 border rounded-lg">
+              <button onClick={() => setPickerFor("banniere")} className="px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 dark:text-white">
                 Ajouter une bannière
               </button>
             )}
@@ -828,7 +830,7 @@ const AdminParametresPlatformPage: React.FC = () => {
 
           {/* Slider */}
           <div>
-            <label className="block text-sm mb-2">Images du slider ({settings.imagesSlider.length})</label>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-slate-300">Images du slider ({settings.imagesSlider.length})</label>
             <div className="grid grid-cols-3 gap-3">
               {settings.imagesSlider.map((url, i) => (
                 <div key={i} className="relative group">
@@ -842,7 +844,7 @@ const AdminParametresPlatformPage: React.FC = () => {
                 </div>
               ))}
             </div>
-            <button onClick={() => setPickerFor("slider")} className="mt-2 text-blue-600 flex items-center gap-2">
+            <button onClick={() => setPickerFor("slider")} className="mt-2 text-blue-600 dark:text-blue-400 flex items-center gap-2">
               <Upload size={16} /> Ajouter des images
             </button>
           </div>

@@ -7,3 +7,4 @@ export * from "./paymentProposalsTypes";
 export * from "./paymentProposalsService";
 export * from "./fleetMaintenanceTypes";
 export * from "./fleetMaintenanceService";
+export * from "./expenseMetadataService";

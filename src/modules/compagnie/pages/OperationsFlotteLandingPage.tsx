@@ -134,35 +134,35 @@ export default function OperationsFlotteLandingPage() {
           <button
             type="button"
             onClick={() => navigate(`${basePath}/reservations`)}
-            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50/50 transition text-left group"
+            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 hover:bg-gray-50/50 dark:hover:bg-slate-700/50 transition text-left group"
           >
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center">
-                <ClipboardList className="w-6 h-6 text-gray-600" />
+              <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center">
+                <ClipboardList className="w-6 h-6 text-gray-600 dark:text-slate-400" />
               </div>
               <div>
-                <div className="font-semibold text-gray-900">Réservations</div>
-                <div className="text-sm text-gray-500">Voir et gérer toutes les réservations</div>
+                <div className="font-semibold text-gray-900 dark:text-white">Réservations</div>
+                <div className="text-sm text-gray-500 dark:text-slate-400">Voir et gérer toutes les réservations</div>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-gray-600" />
+            <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-600 dark:group-hover:text-slate-300" />
           </button>
 
           <button
             type="button"
             onClick={() => navigate(`${basePath}/fleet`)}
-            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50/50 transition text-left group"
+            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 hover:bg-gray-50/50 dark:hover:bg-slate-700/50 transition text-left group"
           >
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center">
-                <Truck className="w-6 h-6 text-gray-600" />
+              <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center">
+                <Truck className="w-6 h-6 text-gray-600 dark:text-slate-400" />
               </div>
               <div>
-                <div className="font-semibold text-gray-900">Flotte</div>
-                <div className="text-sm text-gray-500">Supervision des véhicules et affectations</div>
+                <div className="font-semibold text-gray-900 dark:text-white">Flotte</div>
+                <div className="text-sm text-gray-500 dark:text-slate-400">Supervision des véhicules et affectations</div>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-gray-600" />
+            <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-600 dark:group-hover:text-slate-300" />
           </button>
         </div>
       </SectionCard>

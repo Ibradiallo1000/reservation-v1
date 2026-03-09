@@ -2,9 +2,9 @@
 // Layout dédié Chef Garage : uniquement Flotte + Configuration (pas d’accès CEO).
 import React from "react";
 import { useParams } from "react-router-dom";
-import { LayoutDashboard, List, Wrench, MapPin, AlertTriangle, Moon, Sun } from "lucide-react";
+import { LayoutDashboard, List, Wrench, MapPin, AlertTriangle, Moon, Sun, Package } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
@@ -16,10 +16,33 @@ import { GarageThemeProvider } from "./GarageThemeContext";
 
 const GarageLayout: React.FC = () => {
   const params = useParams();
-  const { user, logout, company, loading } = useAuth();
+  const { user, logout, company, loading, refreshUser } = useAuth();
   const urlCompanyId = params.companyId;
   const userCompanyId = user?.companyId;
   const currentCompanyId = urlCompanyId || userCompanyId;
+
+  const [syncingCompanyId, setSyncingCompanyId] = React.useState(false);
+  const role = user?.role;
+  const isGarageOrCeo = role === "admin_compagnie" || role === "responsable_logistique" || role === "chef_garage";
+  const needsCompanyIdSync = Boolean(user?.uid && isGarageOrCeo && !user.companyId && urlCompanyId);
+
+  // Sans companyId : synchroniser depuis l’URL pour que les règles Firestore passent (CEO + responsable_logistique)
+  React.useEffect(() => {
+    if (!needsCompanyIdSync) return;
+    let cancelled = false;
+    setSyncingCompanyId(true);
+    (async () => {
+      try {
+        await updateDoc(doc(db, "users", user!.uid), { companyId: urlCompanyId });
+        if (!cancelled) await refreshUser();
+      } catch (e) {
+        if (!cancelled) console.warn("Garage companyId sync:", e);
+      } finally {
+        if (!cancelled) setSyncingCompanyId(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [needsCompanyIdSync, user?.uid, urlCompanyId, refreshUser]);
 
   const [currentCompany, setCurrentCompany] = React.useState<Company | null>(
     (company ?? null) as Company | null
@@ -76,6 +99,7 @@ const GarageLayout: React.FC = () => {
 
   const sections: NavSection[] = [
     { label: "Tableau de bord", icon: LayoutDashboard, path: `${basePath}/dashboard`, end: true },
+    { label: "Logistique", icon: Package, path: `${basePath}/logistics`, end: true },
     { label: "Liste flotte", icon: List, path: `${basePath}/fleet`, end: true },
     { label: "Maintenance", icon: Wrench, path: `${basePath}/maintenance`, end: true },
     { label: "Transit", icon: MapPin, path: `${basePath}/transit`, end: true },
@@ -93,12 +117,12 @@ const GarageLayout: React.FC = () => {
     </button>
   );
 
-  if (loading) {
+  if (loading || (needsCompanyIdSync && syncingCompanyId)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-slate-300 border-t-slate-600 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-sm text-slate-600">Chargement...</p>
+          <p className="text-sm text-slate-600">{syncingCompanyId ? "Configuration de l’accès…" : "Chargement..."}</p>
         </div>
       </div>
     );
@@ -110,7 +134,7 @@ const GarageLayout: React.FC = () => {
         <GarageThemeProvider value={garageTheme}>
           <InternalLayout
             sections={sections}
-            role={(user as any)?.role || "chef_garage"}
+            role={(user as any)?.role || "responsable_logistique"}
             userName={user?.displayName || undefined}
             userEmail={user?.email || undefined}
             brandName={currentCompany?.nom || "Garage"}

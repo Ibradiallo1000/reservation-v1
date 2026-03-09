@@ -2,12 +2,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   collection, 
+  collectionGroup,
   query, 
   where, 
   getDocs, 
   Timestamp,
   doc,
-  getDoc
+  getDoc,
+  limit
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
@@ -65,6 +67,8 @@ interface FinancialData {
   };
   revenue: {
     total: number;
+    ticketRevenue: number;
+    courierRevenue: number;
     guichet: number;
     online: number;
     byAgency: AgencyRevenue[];
@@ -197,7 +201,32 @@ const Finances: React.FC = () => {
         ville: doc.data().ville || ''
       }));
       
-      // 2. Calculer le chiffre d'affaires par canal et par agence
+      // 2. Charger dailyStats pour revenus globaux (billets + courrier)
+      const startStr = dateRange.start.toISOString().slice(0, 10);
+      const endStr = dateRange.end.toISOString().slice(0, 10);
+      let ticketRevenueFromStats = 0;
+      let courierRevenueFromStats = 0;
+      try {
+        const qDaily = query(
+          collectionGroup(db, 'dailyStats'),
+          where('companyId', '==', user.companyId),
+          where('date', '>=', startStr),
+          where('date', '<=', endStr),
+          limit(2000)
+        );
+        const dailySnap = await getDocs(qDaily);
+        dailySnap.docs.forEach(d => {
+          const data = d.data();
+          const ticket = Number(data.ticketRevenue ?? data.totalRevenue ?? 0);
+          const courier = Number(data.courierRevenue ?? 0);
+          ticketRevenueFromStats += ticket;
+          courierRevenueFromStats += courier;
+        });
+      } catch (_) {
+        // fallback: use reservation-based total only
+      }
+
+      // 3. Calculer le chiffre d'affaires par canal et par agence (réservations)
       const agencyRevenues: AgencyRevenue[] = [];
       let totalRevenue = 0;
       let guichetRevenue = 0;
@@ -259,7 +288,7 @@ const Finances: React.FC = () => {
         });
       }
       
-      // 3. Charger les dépenses par agence
+      // 4. Charger les dépenses par agence
       const agencyExpenses: AgencyExpenses[] = [];
       let totalExpenses: number | null = null;
       let expensesDetail = null;
@@ -312,7 +341,7 @@ const Finances: React.FC = () => {
         console.warn('Aucune donnée de dépenses disponible');
       }
       
-      // 4. Calculer les bénéfices par agence (si dépenses disponibles)
+      // 5. Calculer les bénéfices par agence (si dépenses disponibles)
       const agenciesWithProfit = agencyRevenues.map(agencyRev => {
         const agencyExp = agencyExpenses.find(e => e.id === agencyRev.id);
         const expenses = agencyExp?.total || null;
@@ -331,11 +360,16 @@ const Finances: React.FC = () => {
         };
       }).sort((a, b) => b.revenue - a.revenue);
       
-      // 5. Préparer les données finales
+      // 6. Préparer les données finales (total = billets + courrier depuis dailyStats si dispo)
+      const globalTotal = (ticketRevenueFromStats + courierRevenueFromStats) > 0
+        ? ticketRevenueFromStats + courierRevenueFromStats
+        : totalRevenue;
       const data: FinancialData = {
         period: dateRange,
         revenue: {
-          total: totalRevenue,
+          total: globalTotal,
+          ticketRevenue: ticketRevenueFromStats > 0 ? ticketRevenueFromStats : totalRevenue,
+          courierRevenue: courierRevenueFromStats,
           guichet: guichetRevenue,
           online: onlineRevenue,
           byAgency: agencyRevenues.sort((a, b) => b.revenue - a.revenue)
@@ -583,10 +617,20 @@ const Finances: React.FC = () => {
       {/* ================= KPIs FINANCIERS ================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <MetricCard
-          label="Chiffre d'affaires"
+          label="Chiffre d'affaires total"
           value={fmtMoney(financialData.revenue.total)}
           icon={DollarSign}
           valueColorVar={theme.primary}
+        />
+        <MetricCard
+          label="Revenus billets"
+          value={fmtMoney(financialData.revenue.ticketRevenue ?? financialData.revenue.total)}
+          icon={DollarSign}
+        />
+        <MetricCard
+          label="Revenus courrier"
+          value={fmtMoney(financialData.revenue.courierRevenue ?? 0)}
+          icon={DollarSign}
         />
         {hasExpensesData ? (
           <MetricCard

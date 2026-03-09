@@ -58,7 +58,7 @@ const CANONICAL_ROLES: ReadonlySet<string> = new Set([
   "admin_compagnie",
   "company_accountant",
   "agency_accountant",
-  "chef_garage",
+  "responsable_logistique",
   "chefagence",
   "chefembarquement",
   "guichetier",
@@ -73,8 +73,9 @@ const normalizeRole = (r?: string): Role => {
   switch (role) {
     case "chefagence":
       return "chefAgence";
+    case "chef_garage":
     case "chefgarage":
-      return "chef_garage";
+      return "responsable_logistique";
     case "chefembarquement":
       return "chefEmbarquement";
     case "company_ceo":
@@ -112,11 +113,11 @@ export const landingTargetForRoles = (roles: unknown): string => {
 
   // company_ceo / admin_compagnie → /compagnie/command-center (Phase 5)
   if (hasAny(rolesArray, ["admin_compagnie", "company_ceo"])) return "/compagnie/command-center";
-  // chef_garage → garage layout (Flotte uniquement) ; redirect avec companyId dans LoginPage/RoleLanding
-  if (hasAny(rolesArray, ["chef_garage"])) return "/compagnie/garage/dashboard";
+  // responsable_logistique → logistics/garage (flotte, véhicules) ; redirect avec companyId dans LoginPage/RoleLanding
+  if (hasAny(rolesArray, ["responsable_logistique", "chef_garage"])) return "/compagnie/garage/dashboard";
 
-  // company_accountant / financial_director → /chef-comptable
-  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) return "/chef-comptable";
+  // company_accountant / financial_director → accounting area (companyId resolved in role landing)
+  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) return "/role-landing";
 
   // agency_accountant → /agence/comptabilite
   if (hasAny(rolesArray, ["agency_accountant"])) return "/agence/comptabilite";
@@ -247,14 +248,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       const data: any = snap.data();
       // Legacy: resolve "comptable" from Firestore before normalization (until migration runs)
-      const rawRole = data.role;
+      let rawRole = data.role;
       const resolvedRole =
         rawRole === "comptable" && data.agencyId
           ? "agency_accountant"
           : rawRole === "comptable"
             ? "company_accountant"
             : rawRole;
-      const role = normalizeRole(resolvedRole);
+      // Migrate chef_garage → responsable_logistique (once; then use new role)
+      if (resolvedRole === "chef_garage") {
+        try {
+          await updateDoc(userRef, { role: "responsable_logistique" });
+        } catch (_) {
+          /* non-blocking */
+        }
+      }
+      const role = normalizeRole(resolvedRole === "chef_garage" ? "responsable_logistique" : resolvedRole);
 
       const permissions = Array.from(
         new Set([

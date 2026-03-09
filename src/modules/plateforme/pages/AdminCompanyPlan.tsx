@@ -188,17 +188,17 @@ export default function AdminCompanyPlan() {
       {loadError && (
         <PageErrorState message={loadError} onRetry={() => setReloadKey((v) => v + 1)} />
       )}
-      <h1 className="text-2xl font-bold text-gray-900">
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
         Plan & options — {company.nom || "Compagnie"}
       </h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label className="text-sm font-medium text-gray-700">Plan (modèle)</label>
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Plan (modèle)</label>
           <select
             value={chosenPlanId}
             onChange={(e) => setChosenPlanId(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20"
+            className="mt-1 w-full rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm text-gray-900 dark:text-white focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20"
           >
             <option value="">— Sélectionner —</option>
             {plans.map((p) => (
@@ -210,8 +210,8 @@ export default function AdminCompanyPlan() {
         </div>
 
         <div>
-          <label className="text-sm font-medium text-gray-700">Plan actuel</label>
-          <div className="mt-1 px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+          <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Plan actuel</label>
+          <div className="mt-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-gray-50 dark:bg-slate-700 text-sm text-gray-900 dark:text-slate-200">
             {company.plan ? company.plan : "—"}
           </div>
         </div>
@@ -219,69 +219,69 @@ export default function AdminCompanyPlan() {
 
       {/* Plan preview */}
       {chosenPlan && (
-        <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-white space-y-4">
+        <div className="rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm p-5 bg-white dark:bg-slate-800 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-gray-900">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
               Aperçu : {chosenPlan.name}
             </h3>
             <div className="flex items-center gap-2">
               {chosenPlan.isTrial && (
-                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                <span className="inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
                   Essai
                 </span>
               )}
-              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 capitalize">
+              <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-slate-600 px-2 py-0.5 text-xs font-medium text-gray-700 dark:text-slate-200 capitalize">
                 {SUPPORT_LABELS[chosenPlan.supportLevel] ?? "Basic"}
               </span>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            <div className="rounded-lg border border-gray-200 p-3">
-              <div className="text-gray-500">Prix mensuel</div>
-              <div className="text-xl font-bold">
+            <div className="rounded-lg border border-gray-200 dark:border-slate-600 p-3 bg-white dark:bg-slate-800/50">
+              <div className="text-gray-500 dark:text-slate-400">Prix mensuel</div>
+              <div className="text-xl font-bold text-gray-900 dark:text-white">
                 {chosenPlan.priceMonthly === 0 ? (
-                  <span className="text-green-600">Gratuit</span>
+                  <span className="text-green-600 dark:text-green-400">Gratuit</span>
                 ) : (
                   <>{formatCurrency(chosenPlan.priceMonthly)}</>
                 )}
               </div>
             </div>
-            <div className="rounded-lg border border-gray-200 p-3">
-              <div className="text-gray-500">Agences max</div>
-              <div className="font-bold text-lg">
+            <div className="rounded-lg border border-gray-200 dark:border-slate-600 p-3 bg-white dark:bg-slate-800/50">
+              <div className="text-gray-500 dark:text-slate-400">Agences max</div>
+              <div className="font-bold text-lg text-gray-900 dark:text-white">
                 {(chosenPlan.maxAgences ?? 0) === 0 ? "Illimité" : chosenPlan.maxAgences}
               </div>
-              <div className="text-gray-500 mt-2">Quota réservations</div>
-              <div className="font-bold">
+              <div className="text-gray-500 dark:text-slate-400 mt-2">Quota réservations</div>
+              <div className="font-bold text-gray-900 dark:text-white">
                 {(chosenPlan.quotaReservations ?? 0) === 0
                   ? "Illimité"
                   : nf.format(chosenPlan.quotaReservations ?? 0)}
               </div>
             </div>
-            <div className="rounded-lg border border-gray-200 p-3">
-              <div className="text-gray-500">Frais canal digital</div>
+            <div className="rounded-lg border border-gray-200 dark:border-slate-600 p-3 bg-white dark:bg-slate-800/50">
+              <div className="text-gray-500 dark:text-slate-400">Frais canal digital</div>
               <div className="font-bold text-lg text-[var(--btn-primary,#FF6600)]">
                 {chosenPlan.digitalFeePercent ?? 0}%
               </div>
               {(chosenPlan.feeGuichet ?? 0) > 0 && (
                 <>
-                  <div className="text-gray-500 mt-2">Frais guichet</div>
-                  <div className="font-bold">{formatCurrency(chosenPlan.feeGuichet)}/billet</div>
+                  <div className="text-gray-500 dark:text-slate-400 mt-2">Frais guichet</div>
+                  <div className="font-bold text-gray-900 dark:text-white">{formatCurrency(chosenPlan.feeGuichet)}/billet</div>
                 </>
               )}
             </div>
           </div>
 
           {/* All features included */}
-          <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
-            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100 dark:border-slate-600">
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
               <CheckCircle2 className="h-3 w-3" /> Page publique
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
               <CheckCircle2 className="h-3 w-3" /> Réservation en ligne
             </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
               <CheckCircle2 className="h-3 w-3" /> Guichet
             </span>
           </div>

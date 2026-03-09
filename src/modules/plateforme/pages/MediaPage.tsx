@@ -139,7 +139,7 @@ const MediaPage: React.FC = () => {
   /* ---------- UI ---------- */
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
-      <div className="bg-white p-4 rounded-xl shadow-sm border mb-6">
+      <div className="bg-white dark:bg-slate-800 dark:border-slate-700 p-4 rounded-xl shadow-sm border mb-6">
         <UploadImageCloudinary
           label="Ajouter une image à la bibliothèque plateforme"
           dossier="platform"
@@ -148,21 +148,21 @@ const MediaPage: React.FC = () => {
         />
       </div>
 
-      {err && <div className="bg-red-50 text-red-700 p-4 rounded mb-4">{err}</div>}
+      {err && <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 p-4 rounded mb-4 border border-red-200 dark:border-red-800">{err}</div>}
 
       {loading ? (
-        <p>Chargement…</p>
+        <p className="text-gray-900 dark:text-slate-200">Chargement…</p>
       ) : items.length === 0 ? (
-        <div className="bg-orange-50 p-6 rounded">Aucun média de plateforme.</div>
+        <div className="bg-orange-50 dark:bg-orange-900/20 dark:border dark:border-orange-800 p-6 rounded text-gray-900 dark:text-slate-200">Aucun média de plateforme.</div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {items.map((img) => (
-            <div key={`${img.source}-${img.id ?? img.url}`} className="border rounded overflow-hidden">
+            <div key={`${img.source}-${img.id ?? img.url}`} className="border border-gray-200 dark:border-slate-600 rounded overflow-hidden bg-white dark:bg-slate-800">
               <img src={img.url} alt={img.nom} className="h-40 w-full object-cover" />
-              <div className="p-2 text-sm flex justify-between">
+              <div className="p-2 text-sm flex justify-between text-gray-900 dark:text-slate-200">
                 <span>{img.nom}</span>
                 {img.source === "collection" && (
-                  <button onClick={() => remove(img)} className="text-red-600">
+                  <button onClick={() => remove(img)} className="text-red-600 dark:text-red-400 hover:underline">
                     Supprimer
                   </button>
                 )}

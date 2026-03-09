@@ -222,7 +222,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     if (!companyId || !user?.uid) return;
     setActioningId(vehicleId);
     try {
-      await setTechnicalStatus(companyId, vehicleId, technicalStatus, user.uid, (user as any).role ?? "chef_garage");
+      await setTechnicalStatus(companyId, vehicleId, technicalStatus, user.uid, (user as any).role ?? "responsable_logistique");
       await load(currentPage);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur mise à jour statut technique.");
@@ -267,7 +267,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
           notes: editForm.notes.trim() || null,
         },
         user.uid,
-        (user as any).role ?? "chef_garage"
+        (user as any).role ?? "responsable_logistique"
       );
       setEditVehicleId(null);
       await load(currentPage);
@@ -297,7 +297,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
         setArchiveConfirmVehicle(null);
         return;
       }
-      await archiveVehicle(companyId, archiveConfirmVehicle.id, user.uid, (user as any).role ?? "chef_garage");
+      await archiveVehicle(companyId, archiveConfirmVehicle.id, user.uid, (user as any).role ?? "responsable_logistique");
       setArchiveConfirmVehicle(null);
       await load(currentPage);
     } catch (e) {
@@ -431,7 +431,10 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     });
   }, [filteredByStatus, searchText, cityFilter, sortBy]);
 
-  const isChefGarage = user?.role === "chef_garage";
+  const canManageFleet =
+    user?.role === "admin_compagnie" ||
+    user?.role === "chef_garage" ||
+    user?.role === "admin_platforme";
 
   if (!companyId) {
     return (
@@ -448,7 +451,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
         title={pageTitle}
         icon={Truck}
         right={
-          isChefGarage ? (
+          canManageFleet ? (
             <button
               type="button"
               onClick={() => {
@@ -481,7 +484,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
         <select
           value={cityFilter}
           onChange={(e) => setCityFilter(e.target.value)}
-          className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+          className="border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
         >
           <option value="">Toutes les villes</option>
           {cities.map((c) => (
@@ -496,7 +499,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
             setOrderByField(sortToOrderBy(v));
             nextPageCursorRef.current = null;
           }}
-          className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+          className="border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
         >
           <option value="plate">Trier par plaque</option>
           <option value="status">Trier par statut technique</option>
@@ -507,12 +510,12 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
       {/* Cartes récap : Total, Disponibles, En transit, Maintenance, Accidentés, Hors service */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-6">
         {[
-          { key: "all" as ViewFilter, count: total, label: "Total véhicules", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
-          { key: "available" as ViewFilter, count: available, label: "Disponibles", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
-          { key: "transit" as ViewFilter, count: inTransit, label: "En transit", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
-          { key: "maintenance" as ViewFilter, count: maintenance, label: "Maintenance", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
-          { key: "accidented" as ViewFilter, count: accidented, label: "Accidentés", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
-          { key: "hors_service" as ViewFilter, count: horsService, label: "Hors service", className: "bg-gray-50 hover:bg-gray-100 border border-gray-200" },
+          { key: "all" as ViewFilter, count: total, label: "Total véhicules", className: "bg-gray-50 dark:bg-slate-700/50 hover:bg-gray-100 dark:hover:bg-slate-600 border border-gray-200 dark:border-slate-600" },
+          { key: "available" as ViewFilter, count: available, label: "Disponibles", className: "bg-gray-50 dark:bg-slate-700/50 hover:bg-gray-100 dark:hover:bg-slate-600 border border-gray-200 dark:border-slate-600" },
+          { key: "transit" as ViewFilter, count: inTransit, label: "En transit", className: "bg-gray-50 dark:bg-slate-700/50 hover:bg-gray-100 dark:hover:bg-slate-600 border border-gray-200 dark:border-slate-600" },
+          { key: "maintenance" as ViewFilter, count: maintenance, label: "Maintenance", className: "bg-gray-50 dark:bg-slate-700/50 hover:bg-gray-100 dark:hover:bg-slate-600 border border-gray-200 dark:border-slate-600" },
+          { key: "accidented" as ViewFilter, count: accidented, label: "Accidentés", className: "bg-gray-50 dark:bg-slate-700/50 hover:bg-gray-100 dark:hover:bg-slate-600 border border-gray-200 dark:border-slate-600" },
+          { key: "hors_service" as ViewFilter, count: horsService, label: "Hors service", className: "bg-gray-50 dark:bg-slate-700/50 hover:bg-gray-100 dark:hover:bg-slate-600 border border-gray-200 dark:border-slate-600" },
         ].map(({ key, count, label, className }) => (
           <button
             key={key}
@@ -550,8 +553,8 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                   <th className="p-3 font-medium text-slate-700">Ville actuelle</th>
                   <th className="p-3 font-medium text-slate-700">Destination</th>
                   <th className="p-3 font-medium text-slate-700">Dernière MAJ</th>
-                  {isChefGarage && <th className="p-3 font-medium text-slate-700">Statut technique</th>}
-                  {isChefGarage && <th className="p-3 font-medium text-slate-700">Actions</th>}
+                  {canManageFleet && <th className="p-3 font-medium text-slate-700">Statut technique</th>}
+                  {canManageFleet && <th className="p-3 font-medium text-slate-700">Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -572,7 +575,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                       <td className="p-3">{v.currentCity}</td>
                       <td className="p-3">{v.destinationCity ?? "—"}</td>
                       <td className="p-3 text-slate-600">{formatUpdatedAt(v.updatedAt)}</td>
-                      {isChefGarage && (
+                      {canManageFleet && (
                         <td className="p-3">
                           <select
                             value={v.technicalStatus}
@@ -586,7 +589,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                           </select>
                         </td>
                       )}
-                      {isChefGarage && (
+                      {canManageFleet && (
                         <td className="p-3 flex items-center gap-1">
                           <button
                             type="button"

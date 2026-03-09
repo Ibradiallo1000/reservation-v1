@@ -1,8 +1,9 @@
 // src/pages/DashboardAgencePage.tsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { collection, onSnapshot, query, where, Timestamp, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, Timestamp, orderBy, getDocs } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { shipmentsRef } from '@/modules/logistics/domain/firestorePaths';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
@@ -36,6 +37,8 @@ type TopRoute = { id: string; name: string; count: number; revenue: number };
 type DashboardStats = {
   sales: number;
   totalRevenue: number;
+  ticketRevenue: number;
+  courierRevenue: number;
   dailyStats: DailyStat[];
   nextDeparture: string;
   destinations: DestinationStat[];
@@ -85,9 +88,10 @@ const DashboardAgencePage: React.FC = () => {
 
   // Données
   const [stats, setStats] = useState<DashboardStats>({
-    sales: 0, totalRevenue: 0, dailyStats: [],
+    sales: 0, totalRevenue: 0, ticketRevenue: 0, courierRevenue: 0, dailyStats: [],
     nextDeparture: '—', destinations: [], channels: [], topRoutes: []
   });
+  const [courierRevenuePeriod, setCourierRevenuePeriod] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -171,15 +175,18 @@ const DashboardAgencePage: React.FC = () => {
         .map(([name,count]) => ({ name, count }))
         .sort((a,b)=> b.count - a.count);
 
-      setStats({
+      setStats((prev) => ({
+        ...prev,
         sales: rows.length,
         totalRevenue,
+        ticketRevenue: totalRevenue,
+        courierRevenue: prev.courierRevenue,
         dailyStats,
         nextDeparture: '—',
         destinations,
         channels: channelData,
         topRoutes
-      });
+      }));
       setIsLoading(false);
     }, (e)=>{
       console.error(e);
@@ -193,6 +200,34 @@ const DashboardAgencePage: React.FC = () => {
 
     unsubscribeRef.current = unsub;
   }, [user?.companyId, user?.agencyId, agencyIdFromRoute]);
+
+  // Courier revenue for period (paid shipments only)
+  useEffect(() => {
+    const companyId = user?.companyId;
+    const agencyId = agencyIdFromRoute || user?.agencyId;
+    if (!companyId || !agencyId) return;
+    const [startDate, endDate] = dateRange;
+    const q = query(
+      shipmentsRef(db, companyId),
+      where('originAgencyId', '==', agencyId),
+      where('createdAt', '>=', Timestamp.fromDate(startDate)),
+      where('createdAt', '<=', Timestamp.fromDate(endDate))
+    );
+    getDocs(q).then((snap) => {
+      let sum = 0;
+      snap.docs.forEach((d) => {
+        const s = d.data() as { paymentStatus?: string; transportFee?: number; insuranceAmount?: number };
+        if (s.paymentStatus === 'PAID_ORIGIN' || s.paymentStatus === 'PAID_DESTINATION') {
+          sum += Number(s.transportFee ?? 0) + Number(s.insuranceAmount ?? 0);
+        }
+      });
+      setCourierRevenuePeriod(sum);
+      setStats((prev) => ({ ...prev, courierRevenue: sum }));
+    }).catch(() => {
+      setCourierRevenuePeriod(0);
+      setStats((prev) => ({ ...prev, courierRevenue: 0 }));
+    });
+  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, dateRange]);
 
   useEffect(() => {
     fetchStats(dateRange[0], dateRange[1]);
@@ -292,8 +327,20 @@ const DashboardAgencePage: React.FC = () => {
             valueColorVar={theme.colors.secondary}
           />
           <UIMetricCard
+            label="Revenus billets"
+            value={isLoading ? "—" : money(stats.ticketRevenue)}
+            icon={DollarSign}
+            valueColorVar={theme.colors.primary}
+          />
+          <UIMetricCard
+            label="Revenus courrier"
+            value={isLoading ? "—" : money(stats.courierRevenue)}
+            icon={DollarSign}
+            valueColorVar={theme.colors.secondary}
+          />
+          <UIMetricCard
             label="Revenus totaux"
-            value={isLoading ? "—" : money(stats.totalRevenue)}
+            value={isLoading ? "—" : money(stats.ticketRevenue + stats.courierRevenue)}
             icon={DollarSign}
             valueColorVar={theme.colors.primary}
           />

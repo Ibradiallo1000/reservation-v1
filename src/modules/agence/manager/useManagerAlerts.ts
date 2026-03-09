@@ -6,7 +6,7 @@ import { db } from "@/firebaseConfig";
 import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
 import { listAccounts, ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { listExpenses } from "@/modules/compagnie/treasury/expenses";
+import { listExpenses, PENDING_STATUSES } from "@/modules/compagnie/treasury/expenses";
 
 /* ────────────────────────────────────────────────────────
    ALERT TYPES — designed for future extensibility.
@@ -127,7 +127,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
 
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-    listExpenses(companyId, { agencyId, status: "pending", limitCount: 200 }).then((list) => {
+    listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 200 }).then((list) => {
       const filtered = list.filter((e) => {
         const d = (e as any).createdAt?.toDate?.() ?? new Date();
         return d >= todayStart && d <= todayEnd;

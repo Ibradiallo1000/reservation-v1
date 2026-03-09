@@ -22,7 +22,7 @@ type CompanyRoleCreate =
   | "admin_compagnie"        // CEO (technique)
   | "financial_director"     // DAF
   | "company_accountant"     // Comptable compagnie
-  | "chef_garage";          // Chef garage (flotte compagnie)
+  | "responsable_logistique"; // Responsable logistique (flotte, véhicules)
 
 
 type AnyRole =
@@ -30,7 +30,7 @@ type AnyRole =
   | "admin_compagnie"
   | "financial_director"
   | "company_accountant"
-  | "chef_garage"
+  | "responsable_logistique"
   | "chef_agence"
   | "agency_accountant"
   | "guichetier"
@@ -64,7 +64,7 @@ const ROLE_LABELS: Record<string, string> = {
   admin_compagnie: "CEO / Propriétaire",
   financial_director: "Directeur financier (DAF)",
   company_accountant: "Comptable (compagnie)",
-  chef_garage: "Chef garage (flotte)",
+  responsable_logistique: "Responsable logistique (flotte)",
   chef_agence: "Chef d’agence",
   agency_accountant: "Comptable (agence)",
   guichetier: "Guichetier",
@@ -373,7 +373,7 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
           >
            <option value="company_accountant">Comptable (compagnie)</option>
            <option value="financial_director">Directeur financier (DAF)</option>
-           <option value="chef_garage">Chef garage (flotte)</option>
+           <option value="responsable_logistique">Responsable logistique (flotte)</option>
           </select>
         </div>
 
@@ -438,7 +438,7 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
                            <option value="company_accountant">Comptable (compagnie)</option>
                            <option value="financial_director">Directeur financier (DAF)</option>
                            <option value="chef_agence">Chef d’agence</option>
-                           <option value="chef_garage">Chef garage (flotte)</option>
+                           <option value="responsable_logistique">Responsable logistique (flotte)</option>
                            <option value="agency_accountant">Comptable (agence)</option>
                            <option value="guichetier">Guichetier</option>
                            <option value="agent_courrier">Agent de courrier</option>

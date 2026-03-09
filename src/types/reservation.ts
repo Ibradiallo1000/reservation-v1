@@ -54,4 +54,8 @@ export interface Reservation {
   validatedAt?: any;
   refusedAt?: any;
   createdAt?: any;
+  /** Optional reference to daily trip instance (companies/{companyId}/tripInstances/{id}). When set, reservedSeats is updated on instance. */
+  tripInstanceId?: string | null;
+  /** Set when this reservation's montant has been added to dailyStats.ticketRevenue (prevents duplicate increments). */
+  ticketRevenueCountedInDailyStats?: boolean;
 }

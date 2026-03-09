@@ -168,7 +168,7 @@ const AvisModerationPage: React.FC = () => {
         {filteredAvis.map((avis) => (
           <li
             key={avis.id}
-            className="border p-4 rounded-xl shadow-sm bg-white flex flex-col gap-2"
+            className="border dark:border-slate-600 p-4 rounded-xl shadow-sm bg-white dark:bg-slate-800 flex flex-col gap-2"
           >
             <div className="flex justify-between items-center">
               <h4 className="font-semibold">

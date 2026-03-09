@@ -1,9 +1,11 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { collection, getDocs, query, where, Timestamp } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { enUS } from 'date-fns/locale';
 import ReservationStepHeader from '../components/ReservationStepHeader';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { Phone, Calendar, MapPin } from 'lucide-react';
@@ -36,35 +38,37 @@ function getCreatedAtMs(r: ReservationRow): number {
   return 0;
 }
 
-function formatDateHour(dateStr?: string, heureStr?: string): string {
+function formatDateHour(dateStr?: string, heureStr?: string, language: string = 'fr'): string {
   if (!dateStr) return '—';
   try {
     const d = heureStr ? parseISO(`${dateStr}T${heureStr}:00`) : parseISO(dateStr);
-    return format(d, "d MMM yyyy à HH:mm", { locale: fr });
+    const isFr = language === 'fr';
+    if (isFr) return format(d, "d MMM yyyy à HH:mm", { locale: fr });
+    return format(d, "MMM d, yyyy 'at' HH:mm", { locale: enUS });
   } catch {
     return `${dateStr} ${heureStr || ''}`.trim();
   }
 }
 
-function StatusBadge({ statut }: { statut?: string }) {
+function StatusBadge({ statut, t }: { statut?: string; t: (key: string) => string }) {
   const s = (statut || '').toLowerCase();
   let bg = 'bg-gray-100 text-gray-800';
   let text = statut || '—';
   if (s === 'en_attente_paiement') {
     bg = 'bg-orange-100 text-orange-800';
-    text = 'Paiement en attente';
+    text = t('ticketStatusAwaitingPayment');
   } else if (s === 'preuve_recue') {
     bg = 'bg-blue-100 text-blue-800';
-    text = 'Preuve envoyée';
+    text = t('ticketStatusProofSent');
   } else if (s === 'paye' || s === 'confirme') {
     bg = 'bg-green-100 text-green-800';
-    text = 'Billet confirmé';
+    text = t('ticketStatusPaymentValidated');
   } else if (s === 'embarqué') {
     bg = 'bg-emerald-700 text-white';
-    text = 'Voyage effectué';
+    text = t('ticketStatusBoarded');
   } else if (s === 'annule' || s === 'refuse') {
     bg = 'bg-red-100 text-red-800';
-    text = s === 'annule' ? 'Annulée' : 'Refusée';
+    text = s === 'annule' ? t('ticketStatusCancelled') : t('ticketStatusRefused');
   }
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${bg}`}>
@@ -78,6 +82,8 @@ interface FindReservationPageProps {
 }
 
 export default function FindReservationPage({ company }: FindReservationPageProps) {
+  const { t, i18n } = useTranslation();
+  const language = (i18n.language || 'fr').toLowerCase().startsWith('en') ? 'en' : 'fr';
   const navigate = useNavigate();
   const money = useFormatCurrency();
   const slug = company.slug || company.id;
@@ -230,14 +236,14 @@ export default function FindReservationPage({ company }: FindReservationPageProp
                     </div>
                     <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
                       <Calendar className="w-3.5 h-3.5" aria-hidden />
-                      {formatDateHour(r.date, r.heure)}
+                      {formatDateHour(r.date, r.heure, language)}
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-bold" style={{ color: primaryColor }}>
                       {money(r.montant ?? 0)}
                     </div>
-                    <StatusBadge statut={r.statut} />
+                    <StatusBadge statut={r.statut} t={t} />
                   </div>
                 </div>
 

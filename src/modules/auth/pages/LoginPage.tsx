@@ -29,7 +29,7 @@ const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 /** Canonical roles only. agency_boarding_officer / embarquement → chefEmbarquement. */
 const CANONICAL_ROLES = new Set([
   "admin_platforme", "admin_compagnie", "company_accountant", "agency_accountant",
-  "chef_garage", "chefagence", "chefembarquement", "guichetier",
+  "responsable_logistique", "chefagence", "chefembarquement", "guichetier",
   "agency_fleet_controller", "financial_director", "agentcourrier",
 ]);
 
@@ -40,6 +40,7 @@ const normalizeRole = (r?: string): string => {
   if (raw === "agentcourrier") return "agentCourrier";
   if (raw === "chefembarquement") return "chefEmbarquement";
   if (raw === "agency_boarding_officer" || raw === "embarquement") return "chefEmbarquement";
+  if (raw === "chef_garage" || raw === "chefgarage") return "responsable_logistique";
   return CANONICAL_ROLES.has(raw) ? (raw === "chefagence" ? "chefAgence" : raw) : "unauthenticated";
 };
 
@@ -50,8 +51,8 @@ const routeForRole = (role: string): string => {
     case "admin_compagnie":
       return "/compagnie/command-center";
     case "company_accountant":
-      return "/chef-comptable";
-    case "chef_garage":
+      return "/role-landing";
+    case "responsable_logistique":
       return "/compagnie/garage/dashboard";
     case "chefAgence":
       return "/agence/dashboard";
@@ -161,14 +162,14 @@ const LoginPage: React.FC = () => {
       } else if (role === "admin_compagnie" && !companyId) {
         console.warn("[LoginPage] admin_compagnie without companyId, redirecting to /login");
         path = "/login";
-      } else if (role === "chef_garage" && companyId) {
+      } else if (role === "responsable_logistique" && companyId) {
         path = `/compagnie/${companyId}/garage/dashboard`;
-      } else if (role === "chef_garage" && !companyId) {
-        console.warn("[LoginPage] chef_garage without companyId, redirecting to /login");
+      } else if (role === "responsable_logistique" && !companyId) {
+        console.warn("[LoginPage] responsable_logistique without companyId, redirecting to /login");
         path = "/login";
       }
-      if (role === "company_accountant" && companyId) {
-        path = `/compagnie/${companyId}/finances`;
+      if ((role === "company_accountant" || role === "financial_director") && companyId) {
+        path = `/compagnie/${companyId}/accounting`;
       }
 
       if (!path || path === "") {

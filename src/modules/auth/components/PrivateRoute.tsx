@@ -19,7 +19,7 @@ const CANONICAL_ROLES: ReadonlySet<string> = new Set([
   "admin_compagnie",
   "company_accountant",
   "agency_accountant",
-  "chef_garage",
+  "responsable_logistique",
   "chefagence",
   "chefembarquement",
   "superviseur",
@@ -45,7 +45,7 @@ const defaultLandingByRole: Partial<Record<Role, string>> = {
   admin_compagnie: "/role-landing",
   company_accountant: "/role-landing",
   financial_director: "/role-landing",
-  chef_garage: "/compagnie/garage/dashboard",
+  responsable_logistique: "/compagnie/garage/dashboard",
   chefAgence: "/agence/dashboard",
   superviseur: "/agence/dashboard",
   agentCourrier: "/agence/courrier",
@@ -88,7 +88,7 @@ const PrivateRoute: React.FC<PrivateRouteProps> = ({
 
   if (!isAllowed) {
     const role = userRoles[0];
-    if (role === "chef_garage" && user?.companyId) {
+    if (role === "responsable_logistique" && user?.companyId) {
       return <Navigate to={`/compagnie/${user.companyId}/garage/dashboard`} replace />;
     }
     const fallback =

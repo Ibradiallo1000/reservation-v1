@@ -9,7 +9,7 @@ export type Role =
   | 'admin_compagnie'        // CEO (technique / propriétaire)
   | 'financial_director'     // DAF (superviseur comptable)
   | 'company_accountant'     // Comptable compagnie (opérationnel)
-  | 'chef_garage'            // Chef garage (flotte compagnie)
+  | 'responsable_logistique' // Responsable logistique (flotte, véhicules, maintenance)
 
   /** ============ AGENCE ============ */
   | 'chefAgence'
@@ -88,8 +88,8 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'statistiques',
   ],
 
-  // Chef garage → flotte compagnie
-  chef_garage: [
+  // Responsable logistique → flotte, véhicules, maintenance (pas comptabilité / revenus)
+  responsable_logistique: [
     'dashboard',
     'fleet',
   ],

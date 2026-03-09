@@ -18,6 +18,9 @@ import { db } from '@/firebaseConfig';
 import { normalizePhone } from '@/utils/phoneUtils';
 import { SHIFT_STATUS, isShiftLocked } from '../constants/sessionLifecycle';
 import { updateDailyStatsOnReservationCreated } from '../aggregates/dailyStats';
+import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
+import { addToExpectedBalance } from '@/modules/agence/cashControl/cashSessionService';
+import type { CashPaymentMethod } from '@/modules/agence/cashControl/cashSessionTypes';
 
 export type CreateGuichetReservationParams = {
   companyId: string;
@@ -43,6 +46,8 @@ export type CreateGuichetReservationParams = {
   agencyTelephone?: string | null;
   referenceCode: string;
   tripType: string;
+  /** Payment method for cash session expected balance (default: cash). */
+  paymentMethod?: CashPaymentMethod;
 };
 
 function isOfflineError(e: unknown): boolean {
@@ -99,7 +104,8 @@ export async function createGuichetReservation(
     agencyNom: params.agencyNom,
     agencyTelephone: params.agencyTelephone ?? null,
     canal: 'guichet',
-    paiement: 'espèces',
+    paiement: params.paymentMethod === 'mobile_money' ? 'mobile_money' : params.paymentMethod === 'bank' ? 'virement' : 'espèces',
+    paymentMethod: params.paymentMethod ?? 'cash',
     paiementSource: 'encaisse_guichet',
     guichetierId: params.userId,
     guichetierCode: params.userCode,
@@ -136,6 +142,26 @@ export async function createGuichetReservation(
     } else {
       throw e;
     }
+  }
+
+  // Cash control: add ticket amount to open GUICHET cash session for this agent (if any)
+  const montant = Number(params.montant ?? 0);
+  if (montant > 0) {
+    const paymentMethod = params.paymentMethod ?? 'cash';
+    addToExpectedBalance(params.companyId, params.agencyId, params.userId, 'GUICHET', montant, paymentMethod).catch(() => {});
+  }
+
+  // CRM: sync customer (find by phone, create or update stats) — non-blocking, no breaking change
+  const phoneForCrm = phoneOriginal || params.telephone || '';
+  if (phoneForCrm) {
+    upsertCustomerFromReservation({
+      companyId: params.companyId,
+      name: params.nomClient || '',
+      phone: phoneForCrm,
+      email: null,
+      montant: params.montant ?? 0,
+      departureDate: params.date || '',
+    }).catch(() => {});
   }
 
   return newId;

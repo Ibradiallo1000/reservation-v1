@@ -8,12 +8,14 @@ import {
   orderBy,
   limit,
   setDoc,
+  updateDoc,
   serverTimestamp,
   Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { FleetMaintenanceDoc, FleetMaintenanceDocCreate } from "./fleetMaintenanceTypes";
 import { FLEET_MAINTENANCE_COLLECTION } from "./fleetMaintenanceTypes";
+import { createExpense } from "@/modules/compagnie/treasury/expenses";
 
 function fleetMaintenanceRef(companyId: string) {
   return collection(db, `companies/${companyId}/${FLEET_MAINTENANCE_COLLECTION}`);
@@ -28,6 +30,12 @@ export async function createFleetMaintenance(
   companyId: string,
   input: FleetMaintenanceDocCreate
 ): Promise<string> {
+  const amount = Number(input.costAmount ?? 0);
+  const shouldCreateExpense = Number.isFinite(amount) && amount > 0;
+  if (shouldCreateExpense && !input.accountId) {
+    throw new Error("accountId est requis pour créer la dépense de maintenance.");
+  }
+
   const ref = doc(fleetMaintenanceRef(companyId));
   const now = Timestamp.now();
   await setDoc(ref, {
@@ -35,11 +43,33 @@ export async function createFleetMaintenance(
     agencyId: input.agencyId,
     description: input.description,
     costType: input.costType,
+    costAmount: shouldCreateExpense ? amount : null,
+    accountId: input.accountId ?? null,
     linkedExpenseId: input.linkedExpenseId ?? null,
     linkedPayableId: input.linkedPayableId ?? null,
     createdBy: input.createdBy,
     createdAt: now,
   });
+
+  if (shouldCreateExpense) {
+    const expenseId = await createExpense({
+      companyId,
+      agencyId: input.agencyId,
+      category: "maintenance",
+      expenseCategory: "maintenance",
+      description: `Maintenance véhicule ${input.vehicleId}: ${input.description}`,
+      amount,
+      accountId: input.accountId as string,
+      createdBy: input.createdBy,
+      vehicleId: input.vehicleId,
+      linkedMaintenanceId: ref.id,
+    });
+    await updateDoc(ref, {
+      linkedExpenseId: expenseId,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
   return ref.id;
 }
 

@@ -12,6 +12,7 @@ import {
   MapPinned,
   Wallet,
   Package,
+  Receipt,
 } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection, NavSectionChild } from "@/shared/layout/InternalLayout";
@@ -22,6 +23,7 @@ import { Timestamp } from "firebase/firestore";
 import { DateFilterProvider } from "./DateFilterContext";
 import { useManagerAlerts } from "./useManagerAlerts";
 import { NotificationBell } from "./ui";
+import { listExpenses } from "@/modules/compagnie/treasury/expenses";
 import {
   useOnlineStatus,
   useAgencyDarkMode,
@@ -38,12 +40,19 @@ const COURRIER_CHILDREN: NavSectionChild[] = [
   { label: "Rapports courrier", path: "/agence/courrier/rapport" },
 ];
 
+const TREASURY_CHILDREN: NavSectionChild[] = [
+  { label: "Vue générale", path: "/agence/treasury", end: true },
+  { label: "Nouvelle opération", path: "/agence/treasury/new-operation" },
+  { label: "Transfert", path: "/agence/treasury/transfer" },
+  { label: "Nouveau payable", path: "/agence/treasury/new-payable" },
+];
+
 const BASE_SECTIONS: Array<NavSection & { moduleKey: string }> = [
   { label: "Dashboard",   icon: LayoutDashboard, path: "/agence/dashboard",   end: true, moduleKey: "dashboard" },
   { label: "Opérations",  icon: Activity,        path: "/agence/operations",             moduleKey: "operations" },
   { label: "Trajets",     icon: MapPinned,       path: "/agence/trajets",                moduleKey: "trajets" },
   { label: "Finances",    icon: Banknote,        path: "/agence/finances",               moduleKey: "finances" },
-  { label: "Trésorerie",  icon: Wallet,          path: "/agence/treasury",               moduleKey: "treasury" },
+  { label: "Trésorerie",  icon: Wallet,          path: "/agence/treasury",               moduleKey: "treasury", children: TREASURY_CHILDREN },
   { label: "Équipe",      icon: Users,           path: "/agence/team",                   moduleKey: "team" },
   { label: "Rapports",    icon: FileBarChart2,   path: "/agence/reports",                moduleKey: "reports" },
 ];
@@ -56,10 +65,38 @@ const ManagerShellInner: React.FC = () => {
   const { alerts, totalAlertCount, badgeByModule } = useManagerAlerts();
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
+  const [pendingManagerExpensesCount, setPendingManagerExpensesCount] = React.useState(0);
 
   const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
   const roles = new Set(rolesArr);
   const has = (r: string) => roles.has(r);
+  const companyId = user?.companyId ?? "";
+  const agencyId = user?.agencyId ?? "";
+
+  React.useEffect(() => {
+    if (!companyId || !agencyId) return;
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const list = await listExpenses(companyId, {
+          agencyId,
+          statusIn: ["pending_manager"],
+          limitCount: 200,
+        });
+        if (!cancelled) setPendingManagerExpensesCount(list.length);
+      } catch (_) {
+        if (!cancelled) setPendingManagerExpensesCount(0);
+      }
+    };
+
+    void load();
+    const interval = setInterval(() => void load(), 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [companyId, agencyId]);
 
   const sections: NavSection[] = useMemo(() => {
     const list: NavSection[] = BASE_SECTIONS.map((s) => ({
@@ -69,6 +106,14 @@ const ManagerShellInner: React.FC = () => {
       end: s.end,
       badge: badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined,
     }));
+    if (has("chefAgence") || has("superviseur") || has("admin_compagnie")) {
+      list.push({
+        label: "Dépenses",
+        icon: Receipt,
+        path: "/agence/expenses-approval",
+        badge: pendingManagerExpensesCount || undefined,
+      });
+    }
     if (has("chefAgence") || has("admin_compagnie") || has("agentCourrier")) {
       list.push({
         label: "Courrier",
@@ -80,11 +125,11 @@ const ManagerShellInner: React.FC = () => {
       });
     }
     return list;
-  }, [badgeByModule, rolesArr]);
+  }, [badgeByModule, rolesArr, pendingManagerExpensesCount]);
 
   useAgencyKeyboardShortcuts(sections);
 
-  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier");
+  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier") || has("agency_accountant");
 
   if (has("agentCourrier") && !pathname.startsWith("/agence/courrier")) {
     return <Navigate to="/agence/courrier" replace />;

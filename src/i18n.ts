@@ -5,10 +5,13 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 
 const STORAGE_LANG_KEY = 'i18nextLng';
 
+const defaultLanguage = 'fr';
+
 i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
+    lng: defaultLanguage,
     fallbackLng: 'fr',
     debug: false,
     interpolation: {
@@ -118,6 +121,10 @@ i18n
           ticketStatusAwaitingPayment: 'En attente de paiement',
           ticketStatusAwaitingValidation: 'En attente de validation',
           ticketStatusPaymentValidated: 'Paiement validé',
+          ticketStatusProofSent: 'Preuve envoyée',
+          ticketStatusBoarded: 'Voyage effectué',
+          ticketStatusCancelled: 'Annulée',
+          ticketStatusRefused: 'Refusée',
 
           paymentStepTitle: 'Mode de paiement',
           paymentChooseMethod: 'Choisissez votre moyen de paiement',
@@ -131,6 +138,34 @@ i18n
           sendPaymentProof: 'Envoyer la preuve',
           departureDate: 'Date de départ',
           sendingProof: 'Envoi en cours...',
+
+          // Reservation details page
+          reservationStepAwaitingValidation: 'En attente de validation',
+          reservationStepConfirmed: 'Réservation confirmée',
+          reservationStepConfirmedDesc: 'Réservation confirmée. Votre billet est disponible.',
+          reservationPaymentTracking: 'Suivi de paiement',
+          reservationStatus: 'Statut',
+          reservationStatusConfirmed: 'Réservation confirmée',
+          reservationStatusRefused: 'Refusée',
+          reservationStatusCancelled: 'Annulée',
+          reservationStatusValidation: 'En attente de validation',
+          reservationStatusAwaitingPayment: 'En attente de paiement',
+          reservationStepDescPending: 'Veuillez envoyer votre justificatif de paiement.',
+          reservationStepDescVerification: 'En attente de validation.',
+          reservationStepDescConfirmed: 'Réservation confirmée. Votre billet est disponible.',
+          reservationStepDescRefused: 'Cette réservation a été refusée par la compagnie.',
+          reservationStepDescCancelled: 'Cette réservation a été annulée.',
+          reservationReason: 'Raison',
+          reservationViewTicket: 'Voir mon billet',
+          reservationViewReceipt: 'Voir mon reçu (QR après confirmation)',
+          reservationWaitingConfirmation: 'En attente de confirmation',
+          reservationNewReservation: 'Créer une nouvelle réservation',
+          reservationRefusedTitle: 'Réservation refusée',
+          reservationCancelledTitle: 'Réservation annulée',
+          reservationContactCompany: 'Pour toute question, contactez la compagnie.',
+          reservationCreateNewDesc: 'Vous pouvez créer une nouvelle réservation.',
+          reservationThanksTrust: 'Merci pour votre confiance',
+          reservationYourCompany: 'Votre compagnie',
 
           // Landing marketing (TELIYA homepage)
           'landing.heroTitle': 'Gérez votre compagnie de transport depuis une seule plateforme',
@@ -354,6 +389,10 @@ i18n
           ticketStatusAwaitingPayment: 'Awaiting Payment',
           ticketStatusAwaitingValidation: 'Awaiting Validation',
           ticketStatusPaymentValidated: 'Payment Validated',
+          ticketStatusProofSent: 'Proof sent',
+          ticketStatusBoarded: 'Trip completed',
+          ticketStatusCancelled: 'Cancelled',
+          ticketStatusRefused: 'Refused',
 
           paymentStepTitle: 'Payment method',
           paymentChooseMethod: 'Choose your payment method',
@@ -367,6 +406,34 @@ i18n
           sendPaymentProof: 'Send payment proof',
           departureDate: 'Departure date',
           sendingProof: 'Sending...',
+
+          // Reservation details page
+          reservationStepAwaitingValidation: 'Awaiting Validation',
+          reservationStepConfirmed: 'Reservation confirmed',
+          reservationStepConfirmedDesc: 'Reservation confirmed. Your ticket is available.',
+          reservationPaymentTracking: 'Payment tracking',
+          reservationStatus: 'Status',
+          reservationStatusConfirmed: 'Reservation confirmed',
+          reservationStatusRefused: 'Refused',
+          reservationStatusCancelled: 'Cancelled',
+          reservationStatusValidation: 'Awaiting validation',
+          reservationStatusAwaitingPayment: 'Awaiting payment',
+          reservationStepDescPending: 'Please send your payment proof.',
+          reservationStepDescVerification: 'Awaiting validation.',
+          reservationStepDescConfirmed: 'Reservation confirmed. Your ticket is available.',
+          reservationStepDescRefused: 'This reservation was refused by the company.',
+          reservationStepDescCancelled: 'This reservation was cancelled.',
+          reservationReason: 'Reason',
+          reservationViewTicket: 'View my ticket',
+          reservationViewReceipt: 'View my receipt (QR after confirmation)',
+          reservationWaitingConfirmation: 'Awaiting confirmation',
+          reservationNewReservation: 'Create a new reservation',
+          reservationRefusedTitle: 'Reservation refused',
+          reservationCancelledTitle: 'Reservation cancelled',
+          reservationContactCompany: 'For any question, contact the company.',
+          reservationCreateNewDesc: 'You can create a new reservation.',
+          reservationThanksTrust: 'Thank you for your trust',
+          reservationYourCompany: 'Your company',
 
           // Landing marketing (TELIYA homepage)
           'landing.heroTitle': 'Manage your transport company from a single platform',

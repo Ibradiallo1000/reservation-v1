@@ -23,6 +23,8 @@ type DailyStatsDoc = {
   companyId?: string;
   agencyId?: string;
   date?: string;
+  ticketRevenue?: number;
+  courierRevenue?: number;
   totalRevenue?: number;
   totalPassengers?: number;
   validatedSessions?: number;
@@ -124,38 +126,54 @@ export default function CompanyFinancesPage() {
 
   const agencyNames = useMemo(() => new Map(agencies.map((a) => [a.id, a.nom])), [agencies]);
 
+  const sumTicket = (list: DailyStatsDoc[]) =>
+    list.reduce((s, d) => s + (Number(d.ticketRevenue ?? d.totalRevenue) || 0), 0);
+  const sumCourier = (list: DailyStatsDoc[]) =>
+    list.reduce((s, d) => s + (Number(d.courierRevenue) || 0), 0);
+  const sumTotal = (list: DailyStatsDoc[]) =>
+    list.reduce((s, d) => {
+      const tot = Number(d.totalRevenue) || 0;
+      const ticket = Number(d.ticketRevenue ?? d.totalRevenue) || 0;
+      const courier = Number(d.courierRevenue) || 0;
+      return s + (tot > 0 ? tot : ticket + courier);
+    }, 0);
+
   const revenueToday = useMemo(() => {
     const today = toDateKey(new Date());
-    return dailyStats
-      .filter((d) => d.date === today)
-      .reduce((s, d) => s + (Number(d.totalRevenue) || 0), 0);
+    const list = dailyStats.filter((d) => d.date === today);
+    return { ticket: sumTicket(list), courier: sumCourier(list), total: sumTotal(list) };
   }, [dailyStats]);
 
   const revenueWeek = useMemo(() => {
     const today = new Date();
     const weekStart = subDays(today, 6);
-    return dailyStats
-      .filter((d) => {
-        if (!d.date) return false;
-        const dt = new Date(d.date);
-        return dt >= startOfDay(weekStart) && dt <= endOfDay(today);
-      })
-      .reduce((s, d) => s + (Number(d.totalRevenue) || 0), 0);
+    const list = dailyStats.filter((d) => {
+      if (!d.date) return false;
+      const dt = new Date(d.date);
+      return dt >= startOfDay(weekStart) && dt <= endOfDay(today);
+    });
+    return { ticket: sumTicket(list), courier: sumCourier(list), total: sumTotal(list) };
   }, [dailyStats]);
 
-  const revenueMonth = useMemo(() => {
-    return dailyStats.reduce((s, d) => s + (Number(d.totalRevenue) || 0), 0);
-  }, [dailyStats]);
+  const revenueMonth = useMemo(() => ({
+    ticket: sumTicket(dailyStats),
+    courier: sumCourier(dailyStats),
+    total: sumTotal(dailyStats),
+  }), [dailyStats]);
 
   const byAgency = useMemo(() => {
     const today = toDateKey(new Date());
-    const map = new Map<string, { today: number; week: number; month: number }>();
+    const map = new Map<string, { today: number; week: number; month: number; ticket: number; courier: number }>();
     dailyStats.forEach((d) => {
       const aid = d.agencyId ?? "";
       if (!aid) return;
-      const cur = map.get(aid) ?? { today: 0, week: 0, month: 0 };
-      const rev = Number(d.totalRevenue) || 0;
+      const cur = map.get(aid) ?? { today: 0, week: 0, month: 0, ticket: 0, courier: 0 };
+      const ticket = Number(d.ticketRevenue ?? d.totalRevenue) || 0;
+      const courier = Number(d.courierRevenue) || 0;
+      const rev = Number(d.totalRevenue) || 0 || ticket + courier;
       cur.month += rev;
+      cur.ticket += ticket;
+      cur.courier += courier;
       if (d.date === today) cur.today += rev;
       const dDate = d.date ? new Date(d.date) : null;
       if (dDate && dDate >= subDays(new Date(), 6)) cur.week += rev;
@@ -229,14 +247,17 @@ export default function CompanyFinancesPage() {
     <StandardLayoutWrapper>
       <PageHeader title="Finances compagnie" />
       {/* Consolidated Revenue */}
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
+      <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <DollarSign className="w-5 h-5" /> Revenus consolidés (sessions validées)
+          <DollarSign className="w-5 h-5" /> Revenus consolidés (billets + courrier)
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MetricCard label="Aujourd'hui" value={revenueToday.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#4338ca" />
-          <MetricCard label="7 derniers jours" value={revenueWeek.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#7c3aed" />
-          <MetricCard label="30 derniers jours" value={revenueMonth.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#0f766e" />
+          <MetricCard label="Aujourd'hui (total)" value={revenueToday.total.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#4338ca" />
+          <MetricCard label="7 derniers jours (total)" value={revenueWeek.total.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#7c3aed" />
+          <MetricCard label="30 derniers jours (total)" value={revenueMonth.total.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#0f766e" />
+        </div>
+        <div className="mt-3 text-sm text-gray-600 dark:text-gray-400">
+          <span className="font-medium">30j :</span> Billets {revenueMonth.ticket.toLocaleString("fr-FR")} · Courrier {revenueMonth.courier.toLocaleString("fr-FR")}
         </div>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-sm">
@@ -263,7 +284,7 @@ export default function CompanyFinancesPage() {
       </section>
 
       {/* Discrepancy Monitoring */}
-      <section className="bg-white rounded-xl border p-4 shadow-sm">
+      <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
           <AlertTriangle className="w-5 h-5" /> Écarts comptables (computedDifference ≠ 0)
         </h2>

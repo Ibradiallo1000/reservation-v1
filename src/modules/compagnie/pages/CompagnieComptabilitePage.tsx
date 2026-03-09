@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { 
   Building2, BarChart3, Wallet, TrendingUp, AlertTriangle,
   CheckCircle2, ChevronRight, Download, Filter, RefreshCw,
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/shared/ui/button';
 import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard, StatusBadge } from '@/ui';
-import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
+import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -1176,16 +1176,7 @@ const MovementsTab: React.FC<{
   userRole: CompanyRole;
 }> = ({ movements, userRole }) => {
   const money = useFormatCurrency();
-  const currencySymbol = useCurrencySymbol();
-  const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({
-    type: 'depense' as 'depense' | 'entree',
-    category: '',
-    amount: '',
-    label: '',
-    method: 'cash' as 'cash' | 'bank' | 'cheque' | 'mobile_money',
-    note: ''
-  });
+  const { companyId } = useParams<{ companyId: string }>();
   
   const canEdit = ['ceo', 'financial_director', 'company_accountant'].includes(userRole);
   
@@ -1197,103 +1188,19 @@ const MovementsTab: React.FC<{
           right={
             <Button
               variant="primary"
-              onClick={() => setShowForm(!showForm)}
+              onClick={() => {
+                window.location.href = `/compagnie/${companyId}/accounting/treasury/new-operation`;
+              }}
               className="text-sm"
             >
-              {showForm ? 'Annuler' : 'Ajouter un mouvement'}
+              Ouvrir la page operation
             </Button>
           }
         >
-          {showForm && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
-                  <select
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={formData.type}
-                    onChange={e => setFormData({...formData, type: e.target.value as any})}
-                  >
-                    <option value="depense">Dépense</option>
-                    <option value="entree">Entrée</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Moyen de paiement</label>
-                  <select
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={formData.method}
-                    onChange={e => setFormData({...formData, method: e.target.value as any})}
-                  >
-                    <option value="cash">Espèces</option>
-                    <option value="bank">Virement bancaire</option>
-                    <option value="cheque">Chèque</option>
-                    <option value="mobile_money">Mobile Money</option>
-                  </select>
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Libellé</label>
-                <input
-                  type="text"
-                  className="w-full border rounded-lg px-3 py-2"
-                  placeholder="Ex: Achat fournitures bureau"
-                  value={formData.label}
-                  onChange={e => setFormData({...formData, label: e.target.value})}
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Montant ({currencySymbol})</label>
-                <input
-                  type="number"
-                  className="w-full border rounded-lg px-3 py-2"
-                  placeholder="0"
-                  value={formData.amount}
-                  onChange={e => setFormData({...formData, amount: e.target.value})}
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Note (facultatif)</label>
-                <textarea
-                  className="w-full border rounded-lg px-3 py-2"
-                  rows={3}
-                  placeholder="Informations complémentaires..."
-                  value={formData.note}
-                  onChange={e => setFormData({...formData, note: e.target.value})}
-                />
-              </div>
-              
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setShowForm(false)}
-                  className="px-4 py-2 border rounded-lg text-gray-700 hover:bg-gray-50"
-                >
-                  Annuler
-                </button>
-                <Button
-                  variant="primary"
-                  onClick={() => {
-                    // TODO: Sauvegarder le mouvement
-                    setShowForm(false);
-                    setFormData({
-                      type: 'depense',
-                      category: '',
-                      amount: '',
-                      label: '',
-                      method: 'cash',
-                      note: ''
-                    });
-                  }}
-                >
-                  Enregistrer
-                </Button>
-              </div>
-            </div>
-          )}
+          <p className="text-sm text-gray-600">
+            Le formulaire modal est remplace par une page dediee: <code>/compagnie/:companyId/accounting/treasury/new-operation</code>.
+            Cette page centralise les operations depense, transfert et paiement fournisseur.
+          </p>
         </SectionCard>
       )}
       

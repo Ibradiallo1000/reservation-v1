@@ -25,6 +25,7 @@ import { hexToRgba, safeTextColor } from '@/utils/color';
 import type { ReservationStatus } from '@/types/reservation';
 import { showTicketDirect as showTicketDirectUtil, canViewReceiptPage } from '@/utils/reservationStatusUtils';
 import { getDisplayPhone } from '@/utils/phoneUtils';
+import { useTranslation } from 'react-i18next';
 
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
@@ -127,28 +128,27 @@ const getPaymentChip = (label?: string) =>
   label ? { text: label, icon: <CreditCard className="h-4 w-4" /> }
         : { text: 'Non précisé', icon: <CreditCard className="h-4 w-4" /> };
 
-const formatCompactDate = (dateString: string) =>
-  new Date(dateString).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+const getDateLocale = (language: string) => (language === 'en' ? 'en-US' : 'fr-FR');
 
-/* ====== Configuration des étapes ====== */
-const STEPS_CONFIG = [
-  {
-    key: 'verification',
-    label: 'En attente de validation',
-    description: 'En attente de validation.',
-    icon: <Upload className="h-4 w-4" />,
-    isFinal: false
-  },
-  {
-    key: 'confirme',
-    label: 'Réservation confirmée',
-    description: 'Réservation confirmée. Votre billet est disponible.',
-    icon: <ShieldCheck className="h-4 w-4" />,
-    isFinal: true
-  }
+function formatCompactDate(dateString: string, locale: string) {
+  return new Date(dateString).toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function formatEmissionDate(locale: string) {
+  return new Date().toLocaleDateString(locale, { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+/* ====== Configuration des étapes (labels come from t() in component) ====== */
+const STEPS_KEYS = [
+  { key: 'verification', labelKey: 'reservationStepAwaitingValidation', descKey: 'reservationStepDescVerification', icon: <Upload className="h-4 w-4" />, isFinal: false },
+  { key: 'confirme', labelKey: 'reservationStepConfirmed', descKey: 'reservationStepDescConfirmed', icon: <ShieldCheck className="h-4 w-4" />, isFinal: true }
 ] as const;
 
 const ReservationDetailsPage: React.FC = () => {
+  const { t, i18n } = useTranslation();
+  const language = (i18n.language || 'fr').toLowerCase().startsWith('en') ? 'en' : 'fr';
+  const locale = getDateLocale(language);
+
   const navigate = useNavigate();
   const { slug = '', id } = useParams<{ slug: string; id?: string }>();
   const location = useLocation();
@@ -416,15 +416,15 @@ const ReservationDetailsPage: React.FC = () => {
 
   /* ===== Configuration de la timeline ===== */
   const currentStepIndex = reservation 
-    ? Math.max(0, STEPS_CONFIG.findIndex(step => step.key === reservation.statut))
+    ? Math.max(0, STEPS_KEYS.findIndex(step => step.key === reservation.statut))
     : -1;
 
   const stepDescriptions: Record<string, string> = {
-    en_attente: 'Veuillez envoyer votre justificatif de paiement.',
-    verification: 'En attente de validation.',
-    confirme: 'Réservation confirmée. Votre billet est disponible.',
-    refuse: 'Cette réservation a été refusée par la compagnie.',
-    annule: 'Cette réservation a été annulée.'
+    en_attente: t('reservationStepDescPending'),
+    verification: t('reservationStepDescVerification'),
+    confirme: t('reservationStepDescConfirmed'),
+    refuse: t('reservationStepDescRefused'),
+    annule: t('reservationStepDescCancelled')
   };
 
   /* 🚀 Redirection automatique si billet disponible (URL seule, pas de state) */
@@ -549,7 +549,7 @@ const ReservationDetailsPage: React.FC = () => {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.05 }}
           >
-            <SectionCard title="Suivi de paiement" icon={Upload} right={lastUpdated ? <span className="text-xs text-gray-500">{lastUpdated}</span> : undefined} className="shadow-md">
+            <SectionCard title={t('reservationPaymentTracking')} icon={Upload} right={lastUpdated ? <span className="text-xs text-gray-500">{lastUpdated}</span> : undefined} className="shadow-md">
 
             <div className="relative">
               <div className="absolute top-3 left-0 right-0 h-1 bg-gray-200 rounded-full z-0" />
@@ -558,12 +558,12 @@ const ReservationDetailsPage: React.FC = () => {
                 style={{ backgroundColor: primaryColor }}
                 initial={{ width: 0 }}
                 animate={{ 
-                  width: `${Math.max(0, ((currentStepIndex + 1) / STEPS_CONFIG.length) * 100)}%` 
+                  width: `${Math.max(0, ((currentStepIndex + 1) / STEPS_KEYS.length) * 100)}%` 
                 }}
                 transition={{ type: 'spring', stiffness: 120, damping: 18 }}
               />
               <div className="relative z-10 flex justify-between">
-                {STEPS_CONFIG.map((step, idx) => {
+                {STEPS_KEYS.map((step, idx) => {
                   const isActive = idx <= currentStepIndex;
                   const isCurrent = idx === currentStepIndex && reservation.statut !== 'confirme';
                   const IconComponent = step.icon;
@@ -597,7 +597,7 @@ const ReservationDetailsPage: React.FC = () => {
                         )}
                       </div>
                       <span className={`text-xs text-center ${isActive ? 'font-medium text-gray-900' : 'text-gray-500'}`}>
-                        {step.label}
+                        {t(step.labelKey)}
                       </span>
                     </div>
                   );
@@ -614,7 +614,7 @@ const ReservationDetailsPage: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
         >
-          <SectionCard title="Statut" icon={CheckCircle} className="shadow-md">
+          <SectionCard title={t('reservationStatus')} icon={CheckCircle} className="shadow-md">
           <div className="flex items-start gap-3">
           <div
             className="p-2 rounded-lg flex-shrink-0"
@@ -639,17 +639,17 @@ const ReservationDetailsPage: React.FC = () => {
           </div>
           <div className="flex-1">
             <p className="font-medium text-sm mb-1">
-              {reservation.statut === 'confirme' ? 'Réservation confirmée' :
-               reservation.statut === 'refuse' ? 'Refusée' :
-               reservation.statut === 'annule' ? 'Annulée' :
-               reservation.statut === 'verification' ? 'En attente de validation' :
-               'En attente de paiement'}
+              {reservation.statut === 'confirme' ? t('reservationStatusConfirmed') :
+               reservation.statut === 'refuse' ? t('reservationStatusRefused') :
+               reservation.statut === 'annule' ? t('reservationStatusCancelled') :
+               reservation.statut === 'verification' ? t('reservationStatusValidation') :
+               t('reservationStatusAwaitingPayment')}
             </p>
             <p className="text-xs text-gray-600">
               {stepDescriptions[reservation.statut] || stepDescriptions.en_attente}
               {(reservation.refusalReason || reservation.reason) && reservation.statut === 'refuse' && (
                 <span className="block mt-1 text-red-600 font-medium">
-                  Raison : {reservation.refusalReason || reservation.reason}
+                  {t('reservationReason')} : {reservation.refusalReason || reservation.reason}
                 </span>
               )}
             </p>
@@ -760,7 +760,7 @@ const ReservationDetailsPage: React.FC = () => {
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Date</p>
                   <p className="text-sm font-medium text-gray-900">
-                    {formatCompactDate(reservation.date)}
+                    {formatCompactDate(reservation.date, locale)}
                   </p>
                 </div>
               </div>
@@ -825,7 +825,7 @@ const ReservationDetailsPage: React.FC = () => {
               canal={reservation.canal}
               montant={reservation.montant}
               qrValue={`${typeof window !== 'undefined' ? window.location.origin : ''}/r/${encodeURIComponent(reservation.referenceCode || reservation.id)}`}
-              emissionDate={new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+              emissionDate={formatEmissionDate(locale)}
               paymentMethod={paymentLabel}
               agencyLatitude={agencyLatitude}
               agencyLongitude={agencyLongitude}
@@ -841,10 +841,10 @@ const ReservationDetailsPage: React.FC = () => {
         >
           <div className="flex items-center justify-center gap-1 text-sm text-gray-600">
             <Heart className="h-3.5 w-3.5 text-rose-400 fill-rose-400" />
-            <span>Merci pour votre confiance</span>
+            <span>{t('reservationThanksTrust')}</span>
           </div>
           <p className="text-sm font-medium mt-1" style={{ color: primaryColor }}>
-            {reservation.companyName || companyInfo?.name || 'Votre compagnie'}
+            {reservation.companyName || companyInfo?.name || t('reservationYourCompany')}
           </p>
         </motion.div>
       </main>
@@ -875,10 +875,10 @@ const ReservationDetailsPage: React.FC = () => {
               >
                 <CheckCircle className="h-4 w-4" />
                 {isTicketAvailable
-                  ? 'Voir mon billet'
+                  ? t('reservationViewTicket')
                   : canViewReceipt
-                    ? 'Voir mon reçu (QR après confirmation)'
-                    : 'En attente de confirmation'
+                    ? t('reservationViewReceipt')
+                    : t('reservationWaitingConfirmation')
                 }
               </button>
               
@@ -886,19 +886,19 @@ const ReservationDetailsPage: React.FC = () => {
                 onClick={handleNewReservation}
                 className="w-full mt-3 py-2.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
               >
-                Créer une nouvelle réservation
+                {t('reservationNewReservation')}
               </button>
             </>
           ) : (
             <div className="space-y-3">
               <div className="text-center py-3 text-gray-600">
                 <p className="font-medium mb-1">
-                  {reservation.statut === 'refuse' ? 'Réservation refusée' : 'Réservation annulée'}
+                  {reservation.statut === 'refuse' ? t('reservationRefusedTitle') : t('reservationCancelledTitle')}
                 </p>
                 <p className="text-sm">
                   {reservation.statut === 'refuse' 
-                    ? 'Pour toute question, contactez la compagnie.' 
-                    : 'Vous pouvez créer une nouvelle réservation.'}
+                    ? t('reservationContactCompany') 
+                    : t('reservationCreateNewDesc')}
                 </p>
               </div>
               
@@ -910,7 +910,7 @@ const ReservationDetailsPage: React.FC = () => {
                   color: safeTextColor(primaryColor) 
                 }}
               >
-                Créer une nouvelle réservation
+                {t('reservationNewReservation')}
               </button>
             </div>
           )}

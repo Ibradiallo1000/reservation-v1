@@ -42,6 +42,14 @@
       ]
     },
     {
+      "collectionId": "tripCosts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "vehicleId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "reservations",
       "queryScope": "COLLECTION",
       "fields": [
@@ -179,6 +187,13 @@
       "collectionGroup": "financialMovements",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
+        { "fieldPath": "performedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "financialMovements",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
         { "fieldPath": "agencyId", "order": "ASCENDING" },
         { "fieldPath": "performedAt", "order": "DESCENDING" }
       ]
@@ -221,6 +236,15 @@
       "fields": [
         { "fieldPath": "agencyId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "expenses",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "agencyId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     },
     {
@@ -308,6 +332,133 @@
       "queryScope": "COLLECTION_GROUP",
       "fields": [
         { "fieldPath": "originAgencyId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "shipments",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "originAgencyId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionId": "fleetCosts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "vehicleId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "fleetCosts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "fuelLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "fuelLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "vehicleId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "vehicles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "currentCity", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "vehicles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "currentAgencyId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "vehicles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "destinationCity", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "vehicles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "currentCity", "order": "ASCENDING" },
+        { "fieldPath": "operationalStatus", "order": "ASCENDING" },
+        { "fieldPath": "technicalStatus", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "routes",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "departureCity", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionId": "tripInstances",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "departureCity", "order": "ASCENDING" },
+        { "fieldPath": "arrivalCity", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "departureTime", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionId": "tripInstances",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agencyId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "departureTime", "order": "ASCENDING" },
+        { "fieldPath": "departureCity", "order": "ASCENDING" },
+        { "fieldPath": "arrivalCity", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionId": "cashSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionId": "cashSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "openedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionId": "cashSessionExpenses",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sessionId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     }
   ],

@@ -7,7 +7,7 @@ import {
   Outlet,
   useLocation,
 } from "react-router-dom";
-import { LogOut, Menu, X, User, PanelLeftClose, PanelLeftOpen, ChevronDown, ChevronRight } from "lucide-react";
+import { LogOut, Menu, X, User, PanelLeftClose, PanelLeftOpen, ChevronDown, ChevronRight, Sun, Moon } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DESIGN } from "@/app/design-system";
@@ -71,7 +71,7 @@ export interface InternalLayoutProps {
 const ROLE_LABELS: Record<string, string> = {
   admin_platforme: "Admin Plateforme",
   admin_compagnie: "CEO",
-  chef_garage: "Chef garage",
+  responsable_logistique: "Responsable logistique",
   chefAgence: "Chef d'agence",
   superviseur: "Superviseur",
   guichetier: "Guichetier",
@@ -179,6 +179,44 @@ function isSectionOrChildActive(pathname: string, section: { path: string; child
   });
 }
 
+type ThemeMode = "light" | "dark" | "system";
+const THEME_STORAGE_KEY = "teliya:theme";
+
+function useTheme() {
+  const [theme, setThemeState] = useState<ThemeMode>(() => {
+    try {
+      return (localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode) || "system";
+    } catch {
+      return "system";
+    }
+  });
+  const prefersDark =
+    typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+  const isDark = theme === "system" ? prefersDark : theme === "dark";
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDark);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {}
+  }, [theme, isDark]);
+
+  useEffect(() => {
+    const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const handler = () => {
+      if (theme === "system") document.documentElement.classList.toggle("dark", mq.matches);
+    };
+    mq?.addEventListener?.("change", handler);
+    return () => mq?.removeEventListener?.("change", handler);
+  }, [theme]);
+
+  const cycleTheme = () => {
+    setThemeState((t) => (t === "system" ? "dark" : t === "dark" ? "light" : "system"));
+  };
+
+  return { theme, isDark, cycleTheme };
+}
+
 const SidebarLayout: React.FC<LayoutVariantProps> = ({
   sections,
   role,
@@ -197,6 +235,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { isDark, cycleTheme } = useTheme();
   const location = useLocation();
   const pathname = location.pathname;
 
@@ -403,7 +442,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   );
 
   return (
-    <div className="h-screen overflow-hidden bg-gray-50">
+    <div className="h-screen overflow-hidden bg-gray-50 dark:bg-slate-900">
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
@@ -453,37 +492,46 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
           {/* Header */}
           <header
             className={cn(
-              "sticky top-0 bg-white border-b shadow-sm flex items-center px-4 md:px-6 gap-4",
+              "sticky top-0 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 shadow-sm flex items-center px-3 sm:px-4 md:px-6 gap-2 sm:gap-4 min-w-0",
               DESIGN.zIndex.header,
               DESIGN.layout.headerHeight,
             )}
           >
             <button
               onClick={() => setMobileOpen(true)}
-              className="md:hidden p-2 -ml-2 rounded-lg hover:bg-gray-100"
+              className="md:hidden p-2 -ml-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 flex-shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
 
-            <div className="flex-1 min-w-0">{headerLeft}</div>
+            <div className="flex-1 min-w-0 overflow-hidden">{headerLeft}</div>
 
             {/* Top-right */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
               {!headerLeft && (
                 <div className="hidden sm:block text-right mr-1">
-                  <p className="text-sm font-medium text-gray-900 leading-tight">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white leading-tight">
                     {displayName}
                   </p>
-                  <p className="text-xs text-gray-500 leading-tight">{role}</p>
+                  <p className="text-xs text-gray-500 dark:text-slate-400 leading-tight">{role}</p>
                 </div>
               )}
               {headerRight}
               <button
+                type="button"
+                onClick={cycleTheme}
+                className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
+                title={isDark ? "Mode clair" : "Mode sombre"}
+                aria-label={isDark ? "Mode clair" : "Mode sombre"}
+              >
+                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+              <button
                 onClick={onLogout}
-                className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 transition"
+                className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
                 title="Se déconnecter"
               >
-                <LogOut className="w-4 h-4 text-gray-600" />
+                <LogOut className="w-4 h-4" />
               </button>
             </div>
           </header>
@@ -492,8 +540,8 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
           {banner}
 
           {/* Page content */}
-          <main className={cn("flex-1 overflow-y-auto", DESIGN.pagePadding)}>
-            <div className={cn(DESIGN.pageWidth, mainClassName)}>
+          <main className={cn("flex-1 overflow-y-auto overflow-x-hidden min-w-0", DESIGN.pagePadding)}>
+            <div className={cn("w-full min-w-0", DESIGN.pageWidth, mainClassName)}>
               {children ?? <Outlet />}
             </div>
           </main>
@@ -522,35 +570,37 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
   children,
   mainClassName,
 }) => {
+  const { isDark, cycleTheme } = useTheme();
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
       {/* Header */}
       <header
         className={cn(
-          "sticky top-0 border-b bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/70",
+          "sticky top-0 border-b border-gray-200 dark:border-slate-700 bg-white/90 dark:bg-slate-800/90 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:supports-[backdrop-filter]:bg-slate-800/70",
           DESIGN.zIndex.header,
         )}
       >
-        <div className={cn(DESIGN.pageWidth, "px-4 md:px-6 py-3 flex items-center justify-between gap-4")}>
+        <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3")}>
           {/* Brand */}
           <div className="flex items-center gap-3 min-w-0">
             {logoUrl ? (
               <img
                 src={logoUrl}
                 alt={brandName}
-                className="w-9 h-9 rounded-full object-cover border bg-white p-0.5 shrink-0"
+                className="w-9 h-9 rounded-full object-cover border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 p-0.5 shrink-0"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).style.display = "none";
                 }}
               />
             ) : (
-              <div className="w-9 h-9 rounded-full bg-gray-100 grid place-items-center shrink-0">
-                <User className="w-5 h-5 text-gray-500" />
+              <div className="w-9 h-9 rounded-full bg-gray-100 dark:bg-slate-700 grid place-items-center shrink-0">
+                <User className="w-5 h-5 text-gray-500 dark:text-slate-400" />
               </div>
             )}
             <div className="min-w-0">
               <div
-                className="font-bold tracking-tight truncate text-base"
+                className="font-bold tracking-tight truncate text-base text-gray-900 dark:text-white"
                 style={{ color: primary }}
               >
                 {brandName}
@@ -560,7 +610,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
 
           {/* Profile — top right */}
           <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 border">
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600">
               <div
                 className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
                 style={{ backgroundColor: primary }}
@@ -568,26 +618,35 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                 {userInitial}
               </div>
               <div className="min-w-0">
-                <div className="text-xs font-medium text-gray-900 truncate">
+                <div className="text-xs font-medium text-gray-900 dark:text-white truncate">
                   {displayName}
                 </div>
-                <div className="text-xs text-gray-500 truncate">{role}</div>
+                <div className="text-xs text-gray-500 dark:text-slate-400 truncate">{role}</div>
               </div>
             </div>
             <button
+              type="button"
+              onClick={cycleTheme}
+              className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
+              title={isDark ? "Mode clair" : "Mode sombre"}
+              aria-label={isDark ? "Mode clair" : "Mode sombre"}
+            >
+              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+            <button
               onClick={onLogout}
-              className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 transition"
+              className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
               title="Logout"
             >
-              <LogOut className="w-4 h-4 text-gray-600" />
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
 
         {/* Tab navigation */}
-        <div className="border-t bg-white">
-          <div className={cn(DESIGN.pageWidth, "px-4 md:px-6 py-2")}>
-            <div className="flex flex-wrap gap-2 overflow-x-auto">
+        <div className="border-t border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+          <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-2")}>
+            <div className="flex flex-wrap gap-2 overflow-x-auto pb-1 -mb-1 scrollbar-thin">
               {sections.map(({ label, icon: Icon, path, badge, end }) => (
                 <NavLink
                   key={path}
@@ -598,7 +657,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                       "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition",
                       active
                         ? "text-white shadow-sm"
-                        : "text-gray-600 bg-white border hover:bg-gray-50",
+                        : "text-gray-600 dark:text-slate-300 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-600",
                     )
                   }
                   style={({ isActive: active }) =>
@@ -625,8 +684,8 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
       {banner}
 
       {/* Page content */}
-      <main className={cn(DESIGN.pagePadding, "pb-8")}>
-        <div className={cn(DESIGN.pageWidth, mainClassName)}>
+      <main className={cn(DESIGN.pagePadding, "pb-8 overflow-x-hidden min-w-0")}>
+        <div className={cn("w-full min-w-0", DESIGN.pageWidth, mainClassName)}>
           {children ?? <Outlet />}
         </div>
       </main>

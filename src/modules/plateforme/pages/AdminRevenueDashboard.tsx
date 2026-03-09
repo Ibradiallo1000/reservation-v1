@@ -138,8 +138,8 @@ export default function AdminRevenueDashboard() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Revenus Teliya</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Revenus Teliya</h1>
+          <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
             Vue consolidée des revenus de la plateforme
           </p>
         </div>
@@ -293,7 +293,7 @@ export default function AdminRevenueDashboard() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b text-left text-gray-500">
+                <tr className="border-b border-gray-200 dark:border-slate-600 text-left text-gray-500 dark:text-slate-400">
                   <th className="py-2 pr-4 font-medium">Compagnie</th>
                   <th className="py-2 pr-4 font-medium">Plan</th>
                   <th className="py-2 pr-4 font-medium">Statut</th>
@@ -307,9 +307,9 @@ export default function AdminRevenueDashboard() {
                 {companies.map((c) => {
                   const colors = STATUS_COLORS[c.subscriptionStatus] ?? "";
                   return (
-                    <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="py-2.5 pr-4 font-medium text-gray-900">{c.nom}</td>
-                      <td className="py-2.5 pr-4 text-gray-600">{c.plan}</td>
+                    <tr key={c.id} className="border-b border-gray-50 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700/50">
+                      <td className="py-2.5 pr-4 font-medium text-gray-900 dark:text-white">{c.nom}</td>
+                      <td className="py-2.5 pr-4 text-gray-600 dark:text-slate-400">{c.plan}</td>
                       <td className="py-2.5 pr-4">
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colors}`}>
                           {STATUS_LABELS[c.subscriptionStatus]}

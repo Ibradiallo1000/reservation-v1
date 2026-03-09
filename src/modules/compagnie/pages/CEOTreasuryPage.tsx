@@ -1,6 +1,6 @@
 // Treasury dashboard — CEO: liquid cash, by agency, bank, mobile money, reserves, cash flow, timeline.
 import React, { useEffect, useState, useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   collection,
   query,
@@ -14,7 +14,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard } from "@/ui";
+import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard, ActionButton } from "@/ui";
 import { listExpenses } from "@/modules/compagnie/treasury/expenses";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { getDateRangeForPeriod, isInRange, type PeriodKind } from "@/shared/date/periodUtils";
@@ -27,6 +27,7 @@ const LOW_BALANCE_THRESHOLD = 50000;
 export default function CEOTreasuryPage() {
   const { user, company } = useAuth() as { user?: { companyId?: string }; company?: { nom?: string } };
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
+  const navigate = useNavigate();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const [accounts, setAccounts] = useState<{ id: string; agencyId: string | null; accountType: string; accountName: string; currentBalance: number; currency: string }[]>([]);
   const [movements, setMovements] = useState<{ id: string; amount: number; movementType: string; performedAt: unknown; referenceId: string; agencyId: string }[]>([]);
@@ -200,16 +201,27 @@ export default function CEOTreasuryPage() {
         title="Trésorerie"
         subtitle={formatDateLongFr(new Date())}
         right={
-          <PeriodFilterBar
-            period={period}
-            customStart={customStart || undefined}
-            customEnd={customEnd || undefined}
-            onPeriodChange={(kind, start, end) => {
-              setPeriod(kind);
-              setCustomStart(start ?? "");
-              setCustomEnd(end ?? "");
-            }}
-          />
+          <div className="flex items-center gap-2">
+            <ActionButton onClick={() => navigate(`/compagnie/${companyId}/accounting/treasury/new-operation`)}>
+              Nouvelle dépense
+            </ActionButton>
+            <ActionButton variant="secondary" onClick={() => navigate(`/compagnie/${companyId}/accounting/treasury/transfer`)}>
+              Transfert
+            </ActionButton>
+            <ActionButton variant="secondary" onClick={() => navigate(`/compagnie/${companyId}/accounting/supplier-payments`)}>
+              Paiement fournisseur
+            </ActionButton>
+            <PeriodFilterBar
+              period={period}
+              customStart={customStart || undefined}
+              customEnd={customEnd || undefined}
+              onPeriodChange={(kind, start, end) => {
+                setPeriod(kind);
+                setCustomStart(start ?? "");
+                setCustomEnd(end ?? "");
+              }}
+            />
+          </div>
         }
       />
 

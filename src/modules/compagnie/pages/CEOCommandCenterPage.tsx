@@ -21,7 +21,9 @@ import { formatDateLongFr } from "@/utils/dateFmt";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { getDateRangeForPeriod, type PeriodKind } from "@/shared/date/periodUtils";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
-import { Truck, AlertTriangle, Wallet } from "lucide-react";
+import { Truck, AlertTriangle, Wallet, CircleDollarSign } from "lucide-react";
+import { listClosedCashSessionsWithDiscrepancy } from "@/modules/agence/cashControl/cashSessionService";
+import type { CashSessionDocWithId } from "@/modules/agence/cashControl/cashSessionTypes";
 import {
   calculateAgencyProfit,
   getRiskSettings,
@@ -48,6 +50,8 @@ type DailyStatsDoc = {
   companyId?: string;
   agencyId?: string;
   date?: string;
+  ticketRevenue?: number;
+  courierRevenue?: number;
   totalRevenue?: number;
   totalPassengers?: number;
   totalSeats?: number;
@@ -148,6 +152,7 @@ export default function CEOCommandCenterPage() {
   const [period, setPeriod] = useState<PeriodKind>("month");
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
+  const [cashDiscrepancyList, setCashDiscrepancyList] = useState<{ agencyId: string; session: CashSessionDocWithId }[]>([]);
 
   const periodRange = React.useMemo(() => {
     const range = getDateRangeForPeriod(period, new Date(), customStart || undefined, customEnd || undefined);
@@ -363,6 +368,15 @@ export default function CEOCommandCenterPage() {
       if (loadRunIdRef.current !== runId) return;
       setAgencies(ags);
       setDailyStatsList(dailyList);
+      try {
+        const cashList = await listClosedCashSessionsWithDiscrepancy(
+          companyId,
+          ags.map((a) => a.id)
+        );
+        if (loadRunIdRef.current === runId) setCashDiscrepancyList(cashList);
+      } catch {
+        if (loadRunIdRef.current === runId) setCashDiscrepancyList([]);
+      }
       setLiveStateList(liveList);
       setExpensesList(expensesListResult);
       setDiscrepancyReports(discList);
@@ -408,10 +422,24 @@ export default function CEOCommandCenterPage() {
     return (id: string) => m.get(id) ?? id;
   }, [agencies]);
 
-  const globalRevenue = useMemo(
-    () => dailyStatsList.reduce((s, d) => s + (Number(d.totalRevenue) || 0), 0),
-    [dailyStatsList]
-  );
+  const { globalTicketRevenue, globalCourierRevenue, globalTotalRevenue } = useMemo(() => {
+    let ticket = 0;
+    let courier = 0;
+    let total = 0;
+    dailyStatsList.forEach((d) => {
+      const tr = Number(d.ticketRevenue ?? d.totalRevenue ?? 0);
+      const cr = Number(d.courierRevenue ?? 0);
+      const tot = Number(d.totalRevenue ?? 0) || tr + cr;
+      ticket += tr;
+      courier += cr;
+      total += tot;
+    });
+    return {
+      globalTicketRevenue: ticket,
+      globalCourierRevenue: courier,
+      globalTotalRevenue: total > 0 ? total : ticket + courier,
+    };
+  }, [dailyStatsList]);
 
   const alerts = useMemo(() => {
     const list: { type: string; message: string; level: "error" | "warning" | "info" }[] = [];
@@ -431,11 +459,16 @@ export default function CEOCommandCenterPage() {
 
   const topAgenciesByRevenue = useMemo(() => {
     return [...dailyStatsList]
-      .map((d) => ({
-        agencyId: d.agencyId ?? "",
-        nom: agencyNames(d.agencyId ?? ""),
-        revenue: Number(d.totalRevenue) || 0,
-      }))
+      .map((d) => {
+        const ticket = Number(d.ticketRevenue ?? d.totalRevenue ?? 0);
+        const courier = Number(d.courierRevenue ?? 0);
+        const revenue = Number(d.totalRevenue ?? 0) || ticket + courier;
+        return {
+          agencyId: d.agencyId ?? "",
+          nom: agencyNames(d.agencyId ?? ""),
+          revenue,
+        };
+      })
       .filter((a) => a.revenue > 0)
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
@@ -469,8 +502,10 @@ export default function CEOCommandCenterPage() {
       ...tripCostsByAgency.keys(),
     ]);
     return Array.from(agencyIds).map((agencyId) => {
+      const ds = dailyStatsList.find((d) => d.agencyId === agencyId);
       const revenueFromDailyStats =
-        dailyStatsList.find((d) => d.agencyId === agencyId)?.totalRevenue ?? 0;
+        Number(ds?.totalRevenue ?? 0) ||
+        (Number(ds?.ticketRevenue ?? 0) + Number(ds?.courierRevenue ?? 0));
       const expensesTotal = expensesByAgency.get(agencyId) ?? 0;
       const tripCostsTotal = tripCostsByAgency.get(agencyId) ?? 0;
       const discrepancyDeduction = discrepancyDeductionByAgency.get(agencyId) ?? 0;
@@ -557,7 +592,9 @@ export default function CEOCommandCenterPage() {
 
   const blocksAtoEData = useMemo<BlocksAtoEData>(
     () => ({
-      globalRevenue,
+      globalTicketRevenue,
+      globalCourierRevenue,
+      globalTotalRevenue,
       pendingRevenue,
       financialPosition,
       revenueVariationPercent,
@@ -565,7 +602,7 @@ export default function CEOCommandCenterPage() {
       prioritizedRisks,
       top3Agencies: topAgenciesByRevenue.slice(0, 3),
     }),
-    [globalRevenue, pendingRevenue, financialPosition, revenueVariationPercent, healthStatus, prioritizedRisks, topAgenciesByRevenue]
+    [globalTicketRevenue, globalCourierRevenue, globalTotalRevenue, pendingRevenue, financialPosition, revenueVariationPercent, healthStatus, prioritizedRisks, topAgenciesByRevenue]
   );
 
   if (!companyId) {
@@ -608,35 +645,63 @@ export default function CEOCommandCenterPage() {
       {/* ——— CEO Cockpit V2 — 8 blocs exécutifs (frozen) ——— */}
       <CommandCenterBlocksAtoE companyId={companyId} navigate={navigate} data={blocksAtoEData} />
 
+      {/* Cash control: total agency cash + discrepancy alerts */}
+      <SectionCard title="Contrôle caisse agences" icon={CircleDollarSign} className="mt-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div className="p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600">
+            <div className="text-sm font-medium text-gray-600 dark:text-slate-400">Total caisse agences</div>
+            <div className="text-lg font-bold text-gray-900 dark:text-white">
+              {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(
+                financialAccounts
+                  .filter((a) => a.accountType === "agency_cash")
+                  .reduce((s, a) => s + (a.currentBalance ?? 0), 0)
+              )}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600">
+            <div className="text-sm font-medium text-gray-600 dark:text-slate-400">Sessions avec écart</div>
+            <div className="text-lg font-bold text-gray-900 dark:text-white">{cashDiscrepancyList.length}</div>
+          </div>
+          <div className="p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600">
+            <div className="text-sm font-medium text-gray-600 dark:text-slate-400">Total écarts</div>
+            <div className={`text-lg font-bold ${cashDiscrepancyList.reduce((s, { session }) => s + (Number(session.discrepancy) ?? 0), 0) !== 0 ? "text-amber-600" : "text-gray-900 dark:text-white"}`}>
+              {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(
+                cashDiscrepancyList.reduce((s, { session }) => s + (Number(session.discrepancy) ?? 0), 0)
+              )}
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
       {/* 3. Network Operational Status (read-only, company-level) */}
       <SectionCard title="3. Network Operational Status" icon={Truck}>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="font-bold">{fleetOverviewCounts.total}</div>
-            <div className="text-xs text-gray-600">Total véhicules</div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
+            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.total}</div>
+            <div className="text-xs text-gray-600 dark:text-slate-400">Total véhicules</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="font-bold">{fleetOverviewCounts.enService}</div>
-            <div className="text-xs text-gray-600">Disponibles (Garage + Normal)</div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
+            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.enService}</div>
+            <div className="text-xs text-gray-600 dark:text-slate-400">Disponibles (Garage + Normal)</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="font-bold">{fleetOverviewCounts.enTransit}</div>
-            <div className="text-xs text-gray-600">En transit</div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
+            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.enTransit}</div>
+            <div className="text-xs text-gray-600 dark:text-slate-400">En transit</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="font-bold">{fleetOverviewCounts.maintenance}</div>
-            <div className="text-xs text-gray-600">Maintenance</div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
+            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.maintenance}</div>
+            <div className="text-xs text-gray-600 dark:text-slate-400">Maintenance</div>
           </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="font-bold">{fleetOverviewCounts.accidente}</div>
-            <div className="text-xs text-gray-600">Accidentés</div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
+            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.accidente}</div>
+            <div className="text-xs text-gray-600 dark:text-slate-400">Accidentés</div>
           </div>
         </div>
         <div className="mt-3">
           <button
             type="button"
             onClick={() => navigate(`/compagnie/${companyId}/garage/fleet`)}
-            className="px-4 py-2 rounded-lg border border-gray-200 bg-white font-medium text-sm hover:bg-gray-50 transition"
+            className="px-4 py-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 font-medium text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-slate-600 transition"
           >
             Voir la flotte
           </button>
@@ -646,15 +711,15 @@ export default function CEOCommandCenterPage() {
       {/* 4. Alertes (short list) */}
       <SectionCard title="4. Alertes" icon={AlertTriangle}>
         {alerts.length === 0 ? (
-          <p className="text-sm text-gray-500">Aucune alerte.</p>
+          <p className="text-sm text-gray-500 dark:text-slate-400">Aucune alerte.</p>
         ) : (
           <ul className="space-y-2">
             {alerts.slice(0, 7).map((a, i) => (
-              <li key={i} className="flex items-center gap-2 text-xs sm:text-sm p-2 rounded-lg border border-gray-200 bg-gray-50/50 break-words min-w-0">
+              <li key={i} className="flex items-center gap-2 text-xs sm:text-sm p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-gray-50/50 dark:bg-slate-700/50 break-words min-w-0">
                 <StatusBadge status={a.level === "error" ? "danger" : a.level === "warning" ? "warning" : "neutral"}>
                   {a.level === "error" ? "Erreur" : a.level === "warning" ? "Avertissement" : "Info"}
                 </StatusBadge>
-                <span className="text-gray-700">{a.message}</span>
+                <span className="text-gray-700 dark:text-slate-300">{a.message}</span>
               </li>
             ))}
           </ul>
@@ -664,9 +729,9 @@ export default function CEOCommandCenterPage() {
       {/* 5. Position financière (summary only) */}
       <SectionCard title="5. Position financière" icon={Wallet}>
         <div className="flex flex-wrap items-center gap-3 sm:gap-4 min-w-0">
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 border border-gray-200 min-w-0">
-            <div className="text-lg sm:text-xl font-bold text-gray-900 truncate">{financialPosition.netPosition.toLocaleString("fr-FR")}</div>
-            <div className="text-xs text-gray-600">Position nette</div>
+          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
+            <div className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white truncate">{financialPosition.netPosition.toLocaleString("fr-FR")}</div>
+            <div className="text-xs text-gray-600 dark:text-slate-400">Position nette</div>
           </div>
         </div>
       </SectionCard>

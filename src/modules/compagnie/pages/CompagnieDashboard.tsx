@@ -184,7 +184,7 @@ export default function CompagnieDashboard() {
 
       {kpis.caDeltaPercent != null && (
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-gray-600">Variation vs période précédente :</span>
+          <span className="text-gray-600 dark:text-slate-400">Variation vs période précédente :</span>
           <span
             className={`font-semibold ${kpis.caDeltaPercent >= 0 ? "text-emerald-600" : "text-red-600"}`}
           >
@@ -213,25 +213,25 @@ export default function CompagnieDashboard() {
         </CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-sm text-gray-500">Chargement…</p>
+            <p className="text-sm text-gray-500 dark:text-slate-400">Chargement…</p>
           ) : rankingByCa.length === 0 ? (
-            <p className="text-sm text-gray-500">Aucune donnée pour la période.</p>
+            <p className="text-sm text-gray-500 dark:text-slate-400">Aucune donnée pour la période.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-2">Rang</th>
-                    <th className="text-left py-2">Agence</th>
-                    <th className="text-right py-2">CA</th>
+                  <tr className="border-b border-gray-200 dark:border-slate-600">
+                    <th className="text-left py-2 text-gray-900 dark:text-white">Rang</th>
+                    <th className="text-left py-2 text-gray-900 dark:text-white">Agence</th>
+                    <th className="text-right py-2 text-gray-900 dark:text-white">CA</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rankingByCa.map((a, i) => (
-                    <tr key={a.id ?? i} className="border-b">
-                      <td className="py-2 font-medium">{i + 1}</td>
-                      <td className="py-2">{a.nom || "Agence inconnue"}</td>
-                      <td className="py-2 text-right">{money((a.revenus ?? 0) as number)}</td>
+                    <tr key={a.id ?? i} className="border-b border-gray-100 dark:border-slate-700">
+                      <td className="py-2 font-medium text-gray-900 dark:text-slate-200">{i + 1}</td>
+                      <td className="py-2 text-gray-900 dark:text-slate-200">{a.nom || "Agence inconnue"}</td>
+                      <td className="py-2 text-right text-gray-900 dark:text-slate-200">{money((a.revenus ?? 0) as number)}</td>
                     </tr>
                   ))}
                 </tbody>

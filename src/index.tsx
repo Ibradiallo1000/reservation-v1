@@ -66,14 +66,22 @@ type RouterFuture = Partial<{
   v7_relativeSplatPath: boolean;
 }>;
 
-const THEME_STORAGE_KEY = "public-theme-dark";
+const THEME_STORAGE_KEY = "teliya:theme";
 
-/** Apply saved theme before paint (no flash). Default = light; never use system preference. */
+/** Apply saved theme before paint (no flash). Uses same key as Header/InternalLayout. */
 function applySavedTheme() {
   try {
+    let isDark = false;
     const saved = localStorage.getItem(THEME_STORAGE_KEY);
-    if (saved === "true") document.documentElement.classList.add("dark");
-    else document.documentElement.classList.remove("dark");
+    if (saved === "dark") isDark = true;
+    else if (saved === "light") isDark = false;
+    else if (saved === "system" || !saved) {
+      const legacy = localStorage.getItem("public-theme-dark");
+      if (legacy === "true") isDark = true;
+      else if (legacy === "false") isDark = false;
+      else isDark = typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+    }
+    document.documentElement.classList.toggle("dark", isDark);
   } catch (_) {}
 }
 

@@ -49,7 +49,7 @@ const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     "view_company_stats",
   ],
 
-  chef_garage: [
+  responsable_logistique: [
     "manage_global_fleet",
     "view_company_stats",
   ],

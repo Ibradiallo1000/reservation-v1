@@ -24,7 +24,7 @@ type PageOfflineStateProps = {
 export const PageOfflineState: React.FC<PageOfflineStateProps> = ({
   message = "Connexion instable: certaines données peuvent être incomplètes.",
 }) => (
-  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+  <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg text-sm text-amber-800 dark:text-amber-200">
     {message}
   </div>
 );
@@ -40,12 +40,12 @@ export const PageErrorState: React.FC<PageErrorStateProps> = ({
   onRetry,
   retryLabel = "Réessayer",
 }) => (
-  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center justify-between gap-3">
+  <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300 flex items-center justify-between gap-3">
     <span>{message}</span>
     <button
       type="button"
       onClick={onRetry}
-      className="px-3 py-1.5 rounded border border-red-300 hover:bg-red-100"
+      className="px-3 py-1.5 rounded border border-red-300 dark:border-red-700 hover:bg-red-100 dark:hover:bg-red-900/40"
     >
       {retryLabel}
     </button>
