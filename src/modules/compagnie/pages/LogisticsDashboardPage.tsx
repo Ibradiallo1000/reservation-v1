@@ -32,6 +32,9 @@ export default function LogisticsDashboardPage() {
     plateNumber: string;
     technicalStatus: string;
     operationalStatus: string;
+    currentCity?: string;
+    currentTripId?: string | null;
+    canonicalStatus?: string;
   }>>([]);
   const [shipmentsCount, setShipmentsCount] = useState<{ today: number; inTransit: number }>({ today: 0, inTransit: 0 });
   const [weeklyTripsCount, setWeeklyTripsCount] = useState(0);
@@ -55,6 +58,9 @@ export default function LogisticsDashboardPage() {
         plateNumber: v.plateNumber ?? "",
         technicalStatus: v.technicalStatus ?? TECHNICAL_STATUS.NORMAL,
         operationalStatus: v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE,
+        currentCity: v.currentCity ?? "",
+        currentTripId: (v as any).currentTripId ?? null,
+        canonicalStatus: (v as any).canonicalStatus ?? "",
       }));
       setVehicles(list);
 
@@ -152,11 +158,11 @@ export default function LogisticsDashboardPage() {
           {/* Fleet overview */}
           <SectionCard title="Résumé flotte">
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-              <MetricCard title="Total véhicules" value={String(totalVehicles)} icon={Car} />
-              <MetricCard title="Disponibles" value={String(available)} icon={Car} />
-              <MetricCard title="En trajet" value={String(onTrip)} icon={MapPin} />
-              <MetricCard title="En maintenance" value={String(inMaintenance)} icon={Wrench} />
-              <MetricCard title="Accident" value={String(inAccident)} icon={AlertTriangle} />
+              <MetricCard label="Total véhicules" value={String(totalVehicles)} icon={Car} />
+              <MetricCard label="Disponibles" value={String(available)} icon={Car} />
+              <MetricCard label="En trajet" value={String(onTrip)} icon={MapPin} />
+              <MetricCard label="En maintenance" value={String(inMaintenance)} icon={Wrench} />
+              <MetricCard label="Accident" value={String(inAccident)} icon={AlertTriangle} />
             </div>
             {(outOfService > 0) && (
               <p className="mt-2 text-sm text-gray-500">Hors service : {outOfService}</p>

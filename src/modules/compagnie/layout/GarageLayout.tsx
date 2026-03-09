@@ -22,7 +22,7 @@ const GarageLayout: React.FC = () => {
   const currentCompanyId = urlCompanyId || userCompanyId;
 
   const [syncingCompanyId, setSyncingCompanyId] = React.useState(false);
-  const role = user?.role;
+  const role = String(user?.role ?? "");
   const isGarageOrCeo = role === "admin_compagnie" || role === "responsable_logistique" || role === "chef_garage";
   const needsCompanyIdSync = Boolean(user?.uid && isGarageOrCeo && !user.companyId && urlCompanyId);
 

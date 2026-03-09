@@ -125,7 +125,8 @@ export default function CompanyRoutesPage() {
         icon={MapPin}
         primaryColorVar={primaryColor}
         right={
-          <ActionButton onClick={openCreate} icon={Plus}>
+          <ActionButton onClick={openCreate}>
+            <Plus className="w-4 h-4" />
             Nouvelle route
           </ActionButton>
         }
@@ -138,11 +139,15 @@ export default function CompanyRoutesPage() {
             Chargement…
           </div>
         ) : routes.length === 0 ? (
-          <EmptyState
-            message="Aucune route. Ajoutez des liaisons (ex. Bamako → Ségou) pour que les agences puissent configurer les trajets."
-            actionLabel="Nouvelle route"
-            onAction={openCreate}
-          />
+          <div className="p-6">
+            <EmptyState message="Aucune route. Ajoutez des liaisons (ex. Bamako → Ségou) pour que les agences puissent configurer les trajets." />
+            <div className="mt-3 flex justify-center">
+              <ActionButton onClick={openCreate}>
+                <Plus className="w-4 h-4" />
+                Nouvelle route
+              </ActionButton>
+            </div>
+          </div>
         ) : (
           <div className={table.wrapper}>
             <table className={table.base}>

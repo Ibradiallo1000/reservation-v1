@@ -194,7 +194,7 @@ export async function getRouteProfitability(
     const agencyId = String(t.agencyId ?? "");
     const tripId = String(t.tripId ?? "");
     const tripKey = `${agencyId}|${date}|${tripId}`;
-    const routeKey = routeByTripKey.get(tripKey) ?? tripId || "Route inconnue";
+    const routeKey = routeByTripKey.get(tripKey) ?? (tripId || "Route inconnue");
 
     const listKey = `${vehicleId}|${date}`;
     const existing = tripKeysByVehicleDay.get(listKey) ?? [];

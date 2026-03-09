@@ -3,7 +3,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, Button } from "@/ui";
+import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, ActionButton } from "@/ui";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import {
   Wallet,
@@ -22,9 +22,14 @@ import {
   validateCashSession,
   rejectCashSession,
   listCashSessions,
-  type CashSessionDocWithId,
 } from "./cashSessionService";
-import { CASH_SESSION_TYPE, CASH_SESSION_STATUS, getTotalExpected, getTotalCounted } from "./cashSessionTypes";
+import {
+  CASH_SESSION_TYPE,
+  CASH_SESSION_STATUS,
+  getTotalExpected,
+  getTotalCounted,
+  type CashSessionDocWithId,
+} from "./cashSessionTypes";
 
 export default function CashSessionsPage() {
   const { user } = useAuth();
@@ -162,17 +167,17 @@ export default function CashSessionsPage() {
 
       <div className="grid gap-4 md:grid-cols-3 mb-6">
         <MetricCard
-          title="Sessions ouvertes"
+          label="Sessions ouvertes"
           value={String(openSessions.length)}
           icon={Clock}
         />
         <MetricCard
-          title="En attente validation"
+          label="En attente validation"
           value={String(closedSessions.length)}
           icon={Wallet}
         />
         <MetricCard
-          title="Écart total (clôturées)"
+          label="Écart total (clôturées)"
           value={money(totalDiscrepancy)}
           icon={totalDiscrepancy !== 0 ? AlertTriangle : Banknote}
         />
@@ -184,13 +189,13 @@ export default function CashSessionsPage() {
         ) : (
           <>
             <div className="flex flex-wrap gap-2 mb-4">
-              <Button
+              <ActionButton
                 onClick={() => setOpenModal("open")}
                 disabled={processing}
               >
                 <Plus className="w-4 h-4 mr-2" />
                 Ouvrir une session
-              </Button>
+              </ActionButton>
             </div>
 
             {openModal === "open" && (
@@ -206,15 +211,15 @@ export default function CashSessionsPage() {
                   placeholder="0"
                 />
                 <div className="flex gap-2 mt-3">
-                  <Button
+                  <ActionButton
                     size="sm"
                     onClick={() => handleOpenSession(CASH_SESSION_TYPE.GUICHET)}
                     disabled={processing}
                   >
                     <Banknote className="w-4 h-4 mr-1" />
                     Guichet
-                  </Button>
-                  <Button
+                  </ActionButton>
+                  <ActionButton
                     size="sm"
                     variant="secondary"
                     onClick={() => handleOpenSession(CASH_SESSION_TYPE.COURRIER)}
@@ -222,8 +227,8 @@ export default function CashSessionsPage() {
                   >
                     <Package className="w-4 h-4 mr-1" />
                     Courrier
-                  </Button>
-                  <Button
+                  </ActionButton>
+                  <ActionButton
                     size="sm"
                     variant="ghost"
                     onClick={() => {
@@ -232,7 +237,7 @@ export default function CashSessionsPage() {
                     }}
                   >
                     Annuler
-                  </Button>
+                  </ActionButton>
                 </div>
               </div>
             )}
@@ -286,7 +291,7 @@ export default function CashSessionsPage() {
                       <td className="p-2">{s.status}</td>
                       <td className="p-2 text-right">
                         {s.status === CASH_SESSION_STATUS.OPEN && canClose(s) && (
-                          <Button
+                          <ActionButton
                             size="sm"
                             variant="secondary"
                             onClick={() => {
@@ -297,19 +302,19 @@ export default function CashSessionsPage() {
                             disabled={processing}
                           >
                             Clôturer
-                          </Button>
+                          </ActionButton>
                         )}
                         {s.status === CASH_SESSION_STATUS.CLOSED && isAccountant && (
                           <span className="flex gap-1 justify-end">
-                            <Button
+                            <ActionButton
                               size="sm"
                               onClick={() => handleValidate(s.id)}
                               disabled={processing}
                             >
                               <CheckCircle className="w-4 h-4 mr-1" />
                               Valider
-                            </Button>
-                            <Button
+                            </ActionButton>
+                            <ActionButton
                               size="sm"
                               variant="danger"
                               onClick={() => setRejectingId(s.id)}
@@ -317,7 +322,7 @@ export default function CashSessionsPage() {
                             >
                               <XCircle className="w-4 h-4 mr-1" />
                               Rejeter
-                            </Button>
+                            </ActionButton>
                           </span>
                         )}
                       </td>
@@ -338,14 +343,14 @@ export default function CashSessionsPage() {
                   className="border rounded px-3 py-2 w-40"
                 />
                 <div className="flex gap-2 mt-3">
-                  <Button
+                  <ActionButton
                     size="sm"
                     onClick={() => handleCloseSession(closingSessionId)}
                     disabled={processing}
                   >
                     Confirmer clôture
-                  </Button>
-                  <Button
+                  </ActionButton>
+                  <ActionButton
                     size="sm"
                     variant="ghost"
                     onClick={() => {
@@ -355,7 +360,7 @@ export default function CashSessionsPage() {
                     }}
                   >
                     Annuler
-                  </Button>
+                  </ActionButton>
                 </div>
               </div>
             )}
@@ -371,15 +376,15 @@ export default function CashSessionsPage() {
                   placeholder="Raison du rejet"
                 />
                 <div className="flex gap-2 mt-3">
-                  <Button
+                  <ActionButton
                     size="sm"
                     variant="danger"
                     onClick={() => handleReject(rejectingId)}
                     disabled={processing}
                   >
                     Rejeter
-                  </Button>
-                  <Button
+                  </ActionButton>
+                  <ActionButton
                     size="sm"
                     variant="ghost"
                     onClick={() => {
@@ -388,7 +393,7 @@ export default function CashSessionsPage() {
                     }}
                   >
                     Annuler
-                  </Button>
+                  </ActionButton>
                 </div>
               </div>
             )}

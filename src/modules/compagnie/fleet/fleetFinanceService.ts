@@ -68,7 +68,7 @@ export async function getVehicleFinancialStats(
   companyId: string,
   options?: { dateFrom?: string; dateTo?: string }
 ): Promise<VehicleFinancialStats[]> {
-  const { dateFrom, dateTo } = options ?? defaultDateRange();
+  const { dateFrom, dateTo } = { ...defaultDateRange(), ...(options ?? {}) };
   const [vehicles, fleetCostsList, tripCostsList, tripRevenueMap] = await Promise.all([
     listVehicles(companyId, 500),
     listFleetCosts(companyId, { dateFrom, dateTo, limitCount: 5000 }),

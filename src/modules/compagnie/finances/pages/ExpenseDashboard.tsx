@@ -87,7 +87,7 @@ export default function ExpenseDashboard() {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const next = snap.docs.map((d) => ({ id: d.id, ...(d.data() as ExpenseRow) }));
+        const next = snap.docs.map((d) => ({ ...(d.data() as ExpenseRow), id: d.id }));
         setRows(next);
         setLoading(false);
         setError(null);

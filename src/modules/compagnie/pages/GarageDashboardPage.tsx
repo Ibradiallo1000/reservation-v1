@@ -431,10 +431,11 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     });
   }, [filteredByStatus, searchText, cityFilter, sortBy]);
 
+  const userRole = String(user?.role ?? "");
   const canManageFleet =
-    user?.role === "admin_compagnie" ||
-    user?.role === "chef_garage" ||
-    user?.role === "admin_platforme";
+    userRole === "admin_compagnie" ||
+    userRole === "chef_garage" ||
+    userRole === "admin_platforme";
 
   if (!companyId) {
     return (
