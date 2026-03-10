@@ -727,7 +727,7 @@ export async function emergencyReplaceVehicleOnTrip(
     throw new Error("Aucune affectation active trouvee pour le vehicule en panne.");
   }
   const replacement = await getVehicle(companyId, replacementVehicleId);
-  if (!replacement) throw new Error("Vehicule de remplacement introuvable.");
+  if (!replacement) throw new Error("Véhicule de remplacement introuvable.");
 
   const replacementOp = (replacement.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
   const replacementTech = (replacement.technicalStatus ?? TECHNICAL_STATUS.NORMAL) as TechnicalStatus;

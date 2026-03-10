@@ -15,13 +15,13 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge } from "@/ui";
+import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { format } from "date-fns";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { getDateRangeForPeriod, type PeriodKind } from "@/shared/date/periodUtils";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
-import { Truck, AlertTriangle, Wallet, CircleDollarSign } from "lucide-react";
+import { Gauge } from "lucide-react";
 import { listClosedCashSessionsWithDiscrepancy } from "@/modules/agence/cashControl/cashSessionService";
 import type { CashSessionDocWithId } from "@/modules/agence/cashControl/cashSessionTypes";
 import {
@@ -37,13 +37,12 @@ import { listUnpaidPayables } from "@/modules/compagnie/finance/payablesService"
 import { listVehicles } from "@/modules/compagnie/fleet/vehiclesService";
 import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
 import {
-  REVENUE_CRITICAL_DROP,
-  REVENUE_WARNING_DROP,
   ACCOUNT_CRITICAL_THRESHOLD,
   ACCOUNT_WARNING_THRESHOLD,
   AGENCIES_AT_RISK_CRITICAL_COUNT,
 } from "@/modules/compagnie/commandCenter/strategicThresholds";
 import CommandCenterBlocksAtoE, { type BlocksAtoEData } from "@/modules/compagnie/commandCenter/CEOCommandCenterBlocks";
+import { computeCeoGlobalStatus } from "@/modules/compagnie/commandCenter/ceoRiskRules";
 const TODAY = format(new Date(), "yyyy-MM-dd");
 
 type DailyStatsDoc = {
@@ -89,8 +88,16 @@ type ExpenseRow = {
   vehicleId?: string | null;
   expenseCategory?: string | null;
   status?: string;
+  date?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  performedAt?: unknown;
 };
-type ShiftReportRow = { agencyId?: string; validationAudit?: { computedDifference?: number } };
+type ShiftReportRow = {
+  agencyId?: string;
+  startAt?: unknown;
+  validationAudit?: { computedDifference?: number; validatedAt?: unknown };
+};
 type ReservationRow = {
   trajetId?: string;
   montant?: number;
@@ -98,6 +105,7 @@ type ReservationRow = {
   statut?: string;
   shiftId?: string;
   createdInSessionId?: string;
+  createdAt?: unknown;
 };
 type TripCostRow = {
   tripId?: string;
@@ -121,6 +129,26 @@ function tripCostPerDoc(r: TripCostRow): number {
     (Number(r.maintenanceCost) || 0) +
     (Number(r.otherOperationalCost) || 0)
   );
+}
+
+function toMillis(value: unknown): number | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? null : ms;
+  }
+  if (typeof value === "object") {
+    const maybeToDate = (value as { toDate?: () => Date }).toDate;
+    if (typeof maybeToDate === "function") {
+      const d = maybeToDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    const seconds = (value as { seconds?: number }).seconds;
+    if (typeof seconds === "number" && Number.isFinite(seconds)) return seconds * 1000;
+  }
+  return null;
 }
 
 export default function CEOCommandCenterPage() {
@@ -164,11 +192,14 @@ export default function CEOCommandCenterPage() {
 
   const loadRunIdRef = useRef(0);
 
-  // PendingRevenue : calcul isolé, sans collectionGroup, sans filtre période
+  // PendingRevenue: aligner le calcul sur la periode selectionnee.
   useEffect(() => {
     if (!companyId) return;
 
     let cancelled = false;
+    const { startStr, endStr } = periodRange;
+    const startMs = new Date(`${startStr}T00:00:00.000`).getTime();
+    const endMs = new Date(`${endStr}T23:59:59.999`).getTime();
 
     const load = async () => {
       const agencesSnap = await getDocs(collection(db, "companies", companyId, "agences"));
@@ -196,11 +227,15 @@ export default function CEOCommandCenterPage() {
       let total = 0;
       reservationsSnaps.forEach((snap) => {
         snap.docs.forEach((d) => {
-          const r = d.data() as { statut?: string; shiftId?: string; createdInSessionId?: string; montant?: number };
+          const r = d.data() as ReservationRow;
           const shiftId = r.shiftId ?? r.createdInSessionId;
-          if (canonicalStatut(r.statut) === "paye" && shiftId && nonValidatedShiftIds.has(shiftId)) {
-            total += Number(r.montant) || 0;
-          }
+          if (!(canonicalStatut(r.statut) === "paye" && shiftId && nonValidatedShiftIds.has(shiftId))) return;
+          const inPeriodByDateKey = typeof r.date === "string" && r.date >= startStr && r.date <= endStr;
+          const createdAtMs = toMillis(r.createdAt);
+          const inPeriodByCreatedAt =
+            createdAtMs != null ? createdAtMs >= startMs && createdAtMs <= endMs : false;
+          if (!inPeriodByDateKey && !inPeriodByCreatedAt) return;
+          total += Number(r.montant) || 0;
         });
       });
 
@@ -211,7 +246,7 @@ export default function CEOCommandCenterPage() {
     return () => {
       cancelled = true;
     };
-  }, [companyId]);
+  }, [companyId, periodRange.startStr, periodRange.endStr]);
 
   // Load dailyStats, agencyLiveState, expenses, discrepancies, trip revenues; agencies loaded here too
   useEffect(() => {
@@ -222,6 +257,8 @@ export default function CEOCommandCenterPage() {
 
     const runId = ++loadRunIdRef.current;
     const { startStr, endStr } = periodRange;
+    const startMs = new Date(`${startStr}T00:00:00.000`).getTime();
+    const endMs = new Date(`${endStr}T23:59:59.999`).getTime();
 
     const load = async () => {
       setLoading(true);
@@ -280,10 +317,21 @@ export default function CEOCommandCenterPage() {
         dailyList = dailySnap.docs.map((d) => ({ ...d.data(), agencyId: d.data().agencyId } as DailyStatsDoc));
         liveList = liveSnap.docs.map((d) => d.data() as AgencyLiveStateDoc);
         expensesListResult = expSnap.docs.map((d) => d.data() as ExpenseRow);
+        expensesListResult = expensesListResult.filter((e) => {
+          if (typeof e.date === "string" && e.date >= startStr && e.date <= endStr) return true;
+          const bestEffortMs =
+            toMillis(e.performedAt) ??
+            toMillis(e.updatedAt) ??
+            toMillis(e.createdAt);
+          if (bestEffortMs == null) return false;
+          return bestEffortMs >= startMs && bestEffortMs <= endMs;
+        });
         tripCostsListResult = tcSnap.docs.map((d) => d.data() as TripCostRow);
         riskSettingsResult = settingsSnap;
         shiftReportsSnap.docs.forEach((d) => {
           const data = d.data() as ShiftReportRow & { agencyId?: string };
+          const reportMs = toMillis(data.validationAudit?.validatedAt) ?? toMillis(data.startAt);
+          if (reportMs == null || reportMs < startMs || reportMs > endMs) return;
           discList.push({ ...data, agencyId: data.agencyId ?? "" });
         });
         // Shifts et réservations par agence (sans collectionGroup)
@@ -346,6 +394,15 @@ export default function CEOCommandCenterPage() {
         try {
           const expSnap = await getDocs(qExp);
           expensesListResult = expSnap.docs.map((d) => d.data() as ExpenseRow);
+          expensesListResult = expensesListResult.filter((e) => {
+            if (typeof e.date === "string" && e.date >= startStr && e.date <= endStr) return true;
+            const bestEffortMs =
+              toMillis(e.performedAt) ??
+              toMillis(e.updatedAt) ??
+              toMillis(e.createdAt);
+            if (bestEffortMs == null) return false;
+            return bestEffortMs >= startMs && bestEffortMs <= endMs;
+          });
         } catch {
           expensesListResult = [];
         }
@@ -538,6 +595,71 @@ export default function CEOCommandCenterPage() {
       ),
     [financialAccounts, unpaidPayables]
   );
+  const pendingPayablesAmount = useMemo(
+    () => unpaidPayables.reduce((sum, p) => sum + (Number(p.remainingAmount) || 0), 0),
+    [unpaidPayables]
+  );
+  const pendingPayablesCount = unpaidPayables.length;
+  const periodDays = useMemo(() => {
+    const start = new Date(periodRange.startStr);
+    const end = new Date(periodRange.endStr);
+    const diffMs = Math.max(0, end.getTime() - start.getTime());
+    return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
+  }, [periodRange.startStr, periodRange.endStr]);
+  const estimatedMonthlyBurn = useMemo(() => {
+    const periodExpenses = expensesList.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+    return periodDays > 0 ? (periodExpenses / periodDays) * 30 : 0;
+  }, [expensesList, periodDays]);
+  const estimatedRunwayMonths = useMemo(() => {
+    if (estimatedMonthlyBurn <= 0) return null;
+    const availableCash = Number(financialPosition.netPosition) || 0;
+    if (availableCash <= 0) return 0;
+    return availableCash / estimatedMonthlyBurn;
+  }, [estimatedMonthlyBurn, financialPosition.netPosition]);
+  const realizedRevenue = useMemo(
+    () => agencyProfits.reduce((sum, p) => sum + (Number(p.revenue) || 0), 0),
+    [agencyProfits]
+  );
+  const realizedCosts = useMemo(
+    () => agencyProfits.reduce((sum, p) => sum + (Number(p.cost) || 0), 0),
+    [agencyProfits]
+  );
+  const realizedProfit = useMemo(() => realizedRevenue - realizedCosts, [realizedRevenue, realizedCosts]);
+  const targetMarginPercent = Number(riskSettings.minimumMarginPercent) || 0;
+  const budgetGapTop3 = useMemo(() => {
+    return [...agencyProfits]
+      .map((p) => {
+        const targetProfit = (Number(p.revenue) || 0) * (targetMarginPercent / 100);
+        const gap = (Number(p.profit) || 0) - targetProfit;
+        return { agencyId: p.agencyId, nom: p.nom, gap };
+      })
+      .sort((a, b) => a.gap - b.gap)
+      .slice(0, 3);
+  }, [agencyProfits, targetMarginPercent]);
+  const liveOperationsMetrics = useMemo(() => {
+    const activeSessionsCount = liveStateList.reduce((sum, s) => sum + (Number(s.activeSessionsCount) || 0), 0);
+    const pendingValidationSessionsCount = liveStateList.reduce(
+      (sum, s) => sum + (Number(s.closedPendingValidationCount) || 0),
+      0
+    );
+    const vehiclesInTransitCount = liveStateList.reduce((sum, s) => sum + (Number(s.vehiclesInTransitCount) || 0), 0);
+    const boardingOpenCount = liveStateList.reduce((sum, s) => sum + (Number(s.boardingOpenCount) || 0), 0);
+    const criticalCashDiscrepanciesCount = cashDiscrepancyList.filter(
+      (x) => Math.abs(Number(x.session.discrepancy ?? 0)) >= Number(riskSettings.maxCashDiscrepancy || 0)
+    ).length;
+    const fleetUnavailableCount =
+      Number(fleetOverviewCounts.maintenance || 0) +
+      Number(fleetOverviewCounts.accidente || 0) +
+      Number(fleetOverviewCounts.horsService || 0);
+    return {
+      activeSessionsCount,
+      pendingValidationSessionsCount,
+      vehiclesInTransitCount,
+      boardingOpenCount,
+      criticalCashDiscrepanciesCount,
+      fleetUnavailableCount,
+    };
+  }, [liveStateList, cashDiscrepancyList, riskSettings.maxCashDiscrepancy, fleetOverviewCounts]);
 
   const revenueVariationPercent = 0; // V2: no trend engine
   const revenueDropPercent = 0;
@@ -553,31 +675,39 @@ export default function CEOCommandCenterPage() {
   const { accountsBelowCritical, accountsBelowWarning, agenciesAtRiskCount } = accountAndAgencyRisks;
 
   const healthAndRisks = useMemo(() => {
-    const healthStatus: "stable" | "attention" | "critical" =
-      revenueDropPercent >= REVENUE_CRITICAL_DROP ||
-      accountsBelowCritical > 0 ||
-      agenciesAtRiskCount >= AGENCIES_AT_RISK_CRITICAL_COUNT
-        ? "critical"
-        : (revenueDropPercent >= REVENUE_WARNING_DROP && revenueDropPercent < REVENUE_CRITICAL_DROP) ||
-            accountsBelowWarning > 0
-          ? "attention"
-          : "stable";
-    const prioritizedRisks: { id: string; label: string; level: "critical" | "warning"; actionRoute: string }[] = [];
+    const healthStatus = computeCeoGlobalStatus({
+      revenueDropPercent,
+      accountsBelowCritical,
+      accountsBelowWarning,
+      agenciesAtRiskCount,
+    });
+    const prioritizedRisks: {
+      id: string;
+      label: string;
+      level: "danger" | "warning";
+      actionRoute: string;
+      impactText?: string;
+      actionText?: string;
+    }[] = [];
     const zeroRev = agencyProfits.filter((p) => p.revenue === 0);
     if (zeroRev.length > 0) {
       prioritizedRisks.push({
         id: "agencies-drop",
         label: `Agences en baisse / sans revenu (${zeroRev.length})`,
-        level: zeroRev.length >= AGENCIES_AT_RISK_CRITICAL_COUNT ? "critical" : "warning",
+        level: zeroRev.length >= AGENCIES_AT_RISK_CRITICAL_COUNT ? "danger" : "warning",
         actionRoute: "dashboard",
+        impactText: `${zeroRev.length} agence(s) impactée(s)`,
+        actionText: "Analyser",
       });
     }
     if (accountsBelowCritical > 0) {
       prioritizedRisks.push({
         id: "accounts-critical",
-        label: `Comptes sous seuil critique (${accountsBelowCritical})`,
-        level: "critical",
+        label: `Comptes sous seuil danger (${accountsBelowCritical})`,
+        level: "danger",
         actionRoute: "revenus-liquidites",
+        impactText: `${accountsBelowCritical} compte(s) sous seuil`,
+        actionText: "Voir trésorerie",
       });
     }
     return { healthStatus, prioritizedRisks };
@@ -597,18 +727,53 @@ export default function CEOCommandCenterPage() {
       globalTotalRevenue,
       pendingRevenue,
       financialPosition,
+      pendingPayablesAmount,
+      pendingPayablesCount,
+      estimatedMonthlyBurn,
+      estimatedRunwayMonths,
+      realizedRevenue,
+      realizedCosts,
+      realizedProfit,
+      targetMarginPercent,
+      budgetGapTop3,
+      activeSessionsCount: liveOperationsMetrics.activeSessionsCount,
+      pendingValidationSessionsCount: liveOperationsMetrics.pendingValidationSessionsCount,
+      vehiclesInTransitCount: liveOperationsMetrics.vehiclesInTransitCount,
+      boardingOpenCount: liveOperationsMetrics.boardingOpenCount,
+      criticalCashDiscrepanciesCount: liveOperationsMetrics.criticalCashDiscrepanciesCount,
+      fleetUnavailableCount: liveOperationsMetrics.fleetUnavailableCount,
       revenueVariationPercent,
       healthStatus,
       prioritizedRisks,
       top3Agencies: topAgenciesByRevenue.slice(0, 3),
     }),
-    [globalTicketRevenue, globalCourierRevenue, globalTotalRevenue, pendingRevenue, financialPosition, revenueVariationPercent, healthStatus, prioritizedRisks, topAgenciesByRevenue]
+    [
+      globalTicketRevenue,
+      globalCourierRevenue,
+      globalTotalRevenue,
+      pendingRevenue,
+      financialPosition,
+      pendingPayablesAmount,
+      pendingPayablesCount,
+      estimatedMonthlyBurn,
+      estimatedRunwayMonths,
+      realizedRevenue,
+      realizedCosts,
+      realizedProfit,
+      targetMarginPercent,
+      budgetGapTop3,
+      liveOperationsMetrics,
+      revenueVariationPercent,
+      healthStatus,
+      prioritizedRisks,
+      topAgenciesByRevenue,
+    ]
   );
 
   if (!companyId) {
     return (
-      <StandardLayoutWrapper>
-        <PageHeader title="Centre de commande" />
+      <StandardLayoutWrapper noVerticalPadding className="px-4 md:px-6 pt-2 md:pt-3 pb-4 md:pb-5 space-y-4">
+        <PageHeader title="Poste de pilotage" className="mb-2" />
         <p className="text-gray-500">Compagnie introuvable.</p>
       </StandardLayoutWrapper>
     );
@@ -616,18 +781,20 @@ export default function CEOCommandCenterPage() {
 
   if (loading) {
     return (
-      <StandardLayoutWrapper>
-        <PageHeader title="Centre de commande" />
-        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement du centre de commande…</div>
+      <StandardLayoutWrapper noVerticalPadding className="px-4 md:px-6 pt-2 md:pt-3 pb-4 md:pb-5 space-y-4">
+        <PageHeader title="Poste de pilotage" className="mb-2" />
+        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement du poste de pilotage…</div>
       </StandardLayoutWrapper>
     );
   }
 
   return (
-    <StandardLayoutWrapper>
+    <StandardLayoutWrapper noVerticalPadding className="px-4 md:px-6 pt-2 md:pt-3 pb-4 md:pb-5 space-y-4">
       <PageHeader
-        title="Centre de commande"
+        title="Poste de pilotage"
         subtitle={formatDateLongFr(new Date())}
+        icon={Gauge}
+        className="mb-2"
         right={
           <PeriodFilterBar
             period={period}
@@ -644,97 +811,6 @@ export default function CEOCommandCenterPage() {
 
       {/* ——— CEO Cockpit V2 — 8 blocs exécutifs (frozen) ——— */}
       <CommandCenterBlocksAtoE companyId={companyId} navigate={navigate} data={blocksAtoEData} />
-
-      {/* Cash control: total agency cash + discrepancy alerts */}
-      <SectionCard title="Contrôle caisse agences" icon={CircleDollarSign} className="mt-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <div className="p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600">
-            <div className="text-sm font-medium text-gray-600 dark:text-slate-400">Total caisse agences</div>
-            <div className="text-lg font-bold text-gray-900 dark:text-white">
-              {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(
-                financialAccounts
-                  .filter((a) => a.accountType === "agency_cash")
-                  .reduce((s, a) => s + (a.currentBalance ?? 0), 0)
-              )}
-            </div>
-          </div>
-          <div className="p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600">
-            <div className="text-sm font-medium text-gray-600 dark:text-slate-400">Sessions avec écart</div>
-            <div className="text-lg font-bold text-gray-900 dark:text-white">{cashDiscrepancyList.length}</div>
-          </div>
-          <div className="p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600">
-            <div className="text-sm font-medium text-gray-600 dark:text-slate-400">Total écarts</div>
-            <div className={`text-lg font-bold ${cashDiscrepancyList.reduce((s, { session }) => s + (Number(session.discrepancy) ?? 0), 0) !== 0 ? "text-amber-600" : "text-gray-900 dark:text-white"}`}>
-              {new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(
-                cashDiscrepancyList.reduce((s, { session }) => s + (Number(session.discrepancy) ?? 0), 0)
-              )}
-            </div>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* 3. Network Operational Status (read-only, company-level) */}
-      <SectionCard title="3. Network Operational Status" icon={Truck}>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
-            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.total}</div>
-            <div className="text-xs text-gray-600 dark:text-slate-400">Total véhicules</div>
-          </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
-            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.enService}</div>
-            <div className="text-xs text-gray-600 dark:text-slate-400">Disponibles (Garage + Normal)</div>
-          </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
-            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.enTransit}</div>
-            <div className="text-xs text-gray-600 dark:text-slate-400">En transit</div>
-          </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
-            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.maintenance}</div>
-            <div className="text-xs text-gray-600 dark:text-slate-400">Maintenance</div>
-          </div>
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
-            <div className="font-bold text-gray-900 dark:text-white">{fleetOverviewCounts.accidente}</div>
-            <div className="text-xs text-gray-600 dark:text-slate-400">Accidentés</div>
-          </div>
-        </div>
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() => navigate(`/compagnie/${companyId}/garage/fleet`)}
-            className="px-4 py-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 font-medium text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-slate-600 transition"
-          >
-            Voir la flotte
-          </button>
-        </div>
-      </SectionCard>
-
-      {/* 4. Alertes (short list) */}
-      <SectionCard title="4. Alertes" icon={AlertTriangle}>
-        {alerts.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-slate-400">Aucune alerte.</p>
-        ) : (
-          <ul className="space-y-2">
-            {alerts.slice(0, 7).map((a, i) => (
-              <li key={i} className="flex items-center gap-2 text-xs sm:text-sm p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-gray-50/50 dark:bg-slate-700/50 break-words min-w-0">
-                <StatusBadge status={a.level === "error" ? "danger" : a.level === "warning" ? "warning" : "neutral"}>
-                  {a.level === "error" ? "Erreur" : a.level === "warning" ? "Avertissement" : "Info"}
-                </StatusBadge>
-                <span className="text-gray-700 dark:text-slate-300">{a.message}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </SectionCard>
-
-      {/* 5. Position financière (summary only) */}
-      <SectionCard title="5. Position financière" icon={Wallet}>
-        <div className="flex flex-wrap items-center gap-3 sm:gap-4 min-w-0">
-          <div className="p-2 sm:p-3 rounded-lg bg-gray-50 dark:bg-slate-700/50 border border-gray-200 dark:border-slate-600 min-w-0">
-            <div className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white truncate">{financialPosition.netPosition.toLocaleString("fr-FR")}</div>
-            <div className="text-xs text-gray-600 dark:text-slate-400">Position nette</div>
-          </div>
-        </div>
-      </SectionCard>
     </StandardLayoutWrapper>
   );
 }

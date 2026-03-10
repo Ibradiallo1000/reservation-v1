@@ -6,11 +6,13 @@ import { listExpenses, approveExpense, rejectExpense, type ExpenseDoc } from "@/
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, StatusBadge, EmptyState, table, tableRowClassName } from "@/ui";
 import { CheckCircle2, Loader2, XCircle, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 type ExpenseRow = ExpenseDoc & { id: string };
 
 export default function CEOExpensesPage() {
   const { user } = useAuth() as any;
+  const money = useFormatCurrency();
   const companyId = user?.companyId ?? "";
   const [rows, setRows] = useState<ExpenseRow[]>([]);
   const [agencies, setAgencies] = useState<Record<string, string>>({});
@@ -73,7 +75,11 @@ export default function CEOExpensesPage() {
 
   return (
     <StandardLayoutWrapper>
-      <PageHeader title="Approbations CEO — Dépenses" icon={ShieldCheck} />
+      <PageHeader
+        title="Dépenses"
+        subtitle="Validation des dépenses stratégiques en attente de décision CEO."
+        icon={ShieldCheck}
+      />
       <SectionCard title="Dépenses en attente CEO" icon={ShieldCheck}>
         {loading ? (
           <div className="py-8 text-center text-gray-500">Chargement...</div>
@@ -100,7 +106,7 @@ export default function CEOExpensesPage() {
                     </td>
                     <td className={table.td}>{r.agencyId ? agencies[r.agencyId] ?? r.agencyId : "Siège"}</td>
                     <td className={table.td}>{r.description}</td>
-                    <td className={table.tdRight}>{Number(r.amount).toLocaleString("fr-FR")}</td>
+                    <td className={table.tdRight}>{money(Number(r.amount))}</td>
                     <td className={table.td}>
                       <StatusBadge status="warning">Attente CEO</StatusBadge>
                     </td>

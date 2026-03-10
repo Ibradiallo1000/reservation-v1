@@ -3,13 +3,18 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useParams, useSearchParams } from "react-router-dom";
 import { SectionCard, ActionButton } from "@/ui";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
+import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
 import { listUnpaidPayables } from "@/modules/compagnie/finance/payablesService";
 import { payPayable } from "@/modules/compagnie/finance/paymentsService";
 import { Receipt } from "lucide-react";
 import { toast } from "sonner";
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "@/firebaseConfig";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 type AccountRow = {
   id: string;
+  agencyId: string | null;
   accountName: string;
   accountType: string;
   currentBalance: number;
@@ -36,6 +41,8 @@ export default function TreasurySupplierPaymentPage() {
   const companyId = params.companyId ?? searchParams.get("companyId") ?? user?.companyId ?? "";
 
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [agencyNameById, setAgencyNameById] = useState<Record<string, string>>({});
+  const [companyBanksById, setCompanyBanksById] = useState<Record<string, string>>({});
   const [payables, setPayables] = useState<PayableRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -49,9 +56,27 @@ export default function TreasurySupplierPaymentPage() {
       return;
     }
     setLoading(true);
-    Promise.all([listAccounts(companyId), listUnpaidPayables(companyId)])
-      .then(([accountRows, payableRows]) => {
+    Promise.all([
+      listAccounts(companyId),
+      listUnpaidPayables(companyId),
+      getDocs(collection(db, "companies", companyId, "agences")),
+      getDocs(collection(db, "companies", companyId, "companyBanks")),
+    ])
+      .then(([accountRows, payableRows, agencySnap, banksSnap]) => {
         setAccounts(accountRows);
+        const agenciesMap: Record<string, string> = {};
+        agencySnap.docs.forEach((d) => {
+          const data = d.data() as { nom?: string; nomAgence?: string; name?: string };
+          agenciesMap[d.id] = data.nom ?? data.nomAgence ?? data.name ?? d.id;
+        });
+        setAgencyNameById(agenciesMap);
+        const banksMap: Record<string, string> = {};
+        banksSnap.docs.forEach((d) => {
+          const data = d.data() as { name?: string; isActive?: boolean };
+          if (data.isActive === false) return;
+          banksMap[d.id] = data.name ?? d.id;
+        });
+        setCompanyBanksById(banksMap);
         const approved = payableRows
           .filter((p) => String((p as any).approvalStatus ?? "") === "approved")
           .map((p) => ({
@@ -139,33 +164,33 @@ export default function TreasurySupplierPaymentPage() {
                   if (p) setAmount(String(p.remainingAmount));
                 }}
               >
-                <option value="">Selectionner</option>
+                <option value="">Sélectionner</option>
                 {payables.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.supplierName} - {p.description} (reste: {p.remainingAmount.toLocaleString("fr-FR")} {currency})
+                    {p.supplierName} - {p.description} (reste: {formatCurrency(p.remainingAmount, currency)})
                   </option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Compte a debiter</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Compte à débiter</label>
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 value={fromAccountId}
                 onChange={(e) => setFromAccountId(e.target.value)}
               >
-                <option value="">Selectionner</option>
+                <option value="">Sélectionner</option>
                 {accounts.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.accountName} ({a.accountType}) - {a.currentBalance.toLocaleString("fr-FR")} {a.currency}
+                    {getFinancialAccountDisplayName(a, { agencyNameById, companyBankNameById: companyBanksById })} ({a.accountType}) - {formatCurrency(a.currentBalance, a.currency)}
                   </option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Montant a payer</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Montant à payer</label>
               <input
                 type="number"
                 min={0}
@@ -175,7 +200,7 @@ export default function TreasurySupplierPaymentPage() {
               />
               {selectedPayable && (
                 <p className="text-xs text-gray-500 mt-1">
-                  Solde restant: {selectedPayable.remainingAmount.toLocaleString("fr-FR")} {currency}
+                  Solde restant: {formatCurrency(selectedPayable.remainingAmount, currency)}
                 </p>
               )}
             </div>

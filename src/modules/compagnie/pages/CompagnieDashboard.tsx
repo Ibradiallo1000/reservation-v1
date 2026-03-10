@@ -79,7 +79,7 @@ export default function CompagnieDashboard() {
       <StandardLayoutWrapper>
         <PageHeader title="Performance Réseau" />
         <p className="text-sm text-muted-foreground">
-          Company ID introuvable.
+          Identifiant de compagnie introuvable.
         </p>
       </StandardLayoutWrapper>
     );
@@ -131,7 +131,7 @@ export default function CompagnieDashboard() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Performance Réseau"
-        subtitle={`CA par agence, classement et alertes — Période : ${periodLabel}`}
+        subtitle={`Performance des agences : CA comparé, classement et alertes réseau — Période : ${periodLabel}`}
         right={
           <TimeFilterBar
             range={range}

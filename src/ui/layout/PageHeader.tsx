@@ -38,7 +38,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
 }) => (
   <header
     className={cn(
-      "mb-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
+      "mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between",
       className
     )}
   >
@@ -63,9 +63,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
         >
           {title}
         </h1>
-        {subtitle && (
-          <p className={cn("mt-2", typography.subtitle)}>{subtitle}</p>
-        )}
+        {subtitle && <p className={cn("mt-1", typography.subtitle)}>{subtitle}</p>}
       </div>
     </div>
     {right && <div className="shrink-0">{right}</div>}

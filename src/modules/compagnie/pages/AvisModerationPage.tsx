@@ -133,7 +133,7 @@ const AvisModerationPage: React.FC = () => {
     <StandardLayoutWrapper>
       <PageHeader
         title="Avis clients"
-        subtitle={avisList.length ? `${avisList.length} avis en attente` : "Aucun avis en attente"}
+        subtitle={avisList.length ? `${avisList.length} avis en attente de modération qualité.` : "Aucun avis en attente de modération."}
       />
       {agencies.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2">

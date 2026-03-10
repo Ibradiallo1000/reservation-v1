@@ -10,13 +10,13 @@ import { radius, shadows, typography } from "@/ui/foundation";
 import type { LucideIcon } from "lucide-react";
 
 const cardBase = cn(
-  "flex min-h-[110px] flex-col justify-between border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900",
+  "flex min-h-[110px] flex-col justify-between border border-gray-200 bg-white p-4 sm:p-5 dark:border-gray-700 dark:bg-gray-900",
   radius.lg,
   shadows.sm
 );
 
 const cardCritical = cn(
-  "flex min-h-[110px] flex-col justify-between border-2 border-red-400 bg-red-50/50 p-5 dark:border-red-500 dark:bg-red-900/20",
+  "flex min-h-[110px] flex-col justify-between border-2 border-red-400 bg-red-50/50 p-4 sm:p-5 dark:border-red-500 dark:bg-red-900/20",
   radius.lg,
   shadows.sm
 );
@@ -51,8 +51,8 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   className,
 }) => (
   <div className={cn(critical ? cardCritical : cardBase, className)}>
-    <div className="flex items-center justify-between">
-      <p className={cn(typography.kpiLabel, "flex items-center")}>
+    <div className="flex items-start justify-between gap-2">
+      <p className={cn(typography.kpiLabel, "min-w-0 pr-1 leading-snug")}>
         {label}
         {help}
       </p>
@@ -66,7 +66,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({
     </div>
     <p
       className={cn(
-        "mt-3",
+        "mt-2 overflow-hidden text-ellipsis whitespace-nowrap text-xl sm:text-2xl",
         typography.valueLarge,
         critical ? "text-red-700 dark:text-red-300" : ""
       )}

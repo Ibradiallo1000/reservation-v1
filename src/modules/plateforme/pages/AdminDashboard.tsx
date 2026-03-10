@@ -391,21 +391,14 @@ const AdminDashboard: React.FC = () => {
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-          <div className="flex gap-2">
-            {(["7j", "30j"] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriode(p)}
-                className={`px-3 py-1 rounded-full text-sm font-medium transition ${
-                  periode === p
-                    ? "bg-[var(--btn-primary,#FF6600)] text-white shadow-sm"
-                    : "bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-slate-200 hover:bg-gray-200 dark:hover:bg-slate-600"
-                }`}
-              >
-                {p === "7j" ? "7 jours" : "30 jours"}
-              </button>
-            ))}
-          </div>
+          <select
+            value={periode}
+            onChange={(e) => setPeriode(e.target.value as "7j" | "30j")}
+            className="h-9 min-w-[130px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+          >
+            <option value="7j">7 jours</option>
+            <option value="30j">30 jours</option>
+          </select>
           <Button
             onClick={handleExportCSV}
             variant="primary"

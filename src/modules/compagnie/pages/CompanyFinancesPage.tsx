@@ -7,15 +7,19 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
+  doc,
   limit,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, PageHeader, MetricCard } from "@/ui";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
-import { DollarSign, AlertTriangle, Building2, Download } from "lucide-react";
+import { DollarSign, AlertTriangle, Building2, Download, Info, Siren } from "lucide-react";
 import { useCapabilities } from "@/core/hooks/useCapabilities";
 import AccessDenied from "@/core/ui/AccessDenied";
+import { canonicalStatut } from "@/utils/reservationStatusUtils";
 
 const SHIFT_REPORTS_COLLECTION = "shiftReports";
 
@@ -40,11 +44,63 @@ type ShiftReportDoc = {
   startAt?: { toDate?: () => Date };
 };
 
+type ShiftDoc = {
+  status?: string;
+};
+
+type ReservationDoc = {
+  statut?: string;
+  shiftId?: string;
+  createdInSessionId?: string;
+  montant?: number;
+  date?: string;
+};
+
 function toDateKey(d: Date) {
   return format(d, "yyyy-MM-dd");
 }
 
-export default function CompanyFinancesPage() {
+function toMillis(value: unknown): number | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? null : ms;
+  }
+  if (typeof value === "object") {
+    const maybeToDate = (value as { toDate?: () => Date }).toDate;
+    if (typeof maybeToDate === "function") {
+      const d = maybeToDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    const seconds = (value as { seconds?: number }).seconds;
+    if (typeof seconds === "number" && Number.isFinite(seconds)) return seconds * 1000;
+  }
+  return null;
+}
+
+type CompanyFinancesPageProps = {
+  embedded?: boolean;
+};
+
+const WARNING_GAP_THRESHOLD = 50000;
+const CRITICAL_GAP_THRESHOLD = 150000;
+
+function InfoHint({ text }: { text: string }) {
+  return (
+    <button
+      type="button"
+      title={text}
+      aria-label={text}
+      className="inline-flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:text-slate-400 dark:hover:text-slate-200"
+    >
+      <Info className="w-4 h-4" />
+    </button>
+  );
+}
+
+export default function CompanyFinancesPage({ embedded = false }: CompanyFinancesPageProps) {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
@@ -55,6 +111,11 @@ export default function CompanyFinancesPage() {
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
   const [agencyFilter, setAgencyFilter] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [liveSalesByAgency, setLiveSalesByAgency] = useState<
+    { agencyId: string; liveAmount: number; liveTickets: number; openSessions: number }[]
+  >([]);
+  const [liveUpdatedAt, setLiveUpdatedAt] = useState<Date | null>(null);
+  const [currency, setCurrency] = useState("XOF");
 
   useEffect(() => {
     if (!companyId) {
@@ -65,14 +126,28 @@ export default function CompanyFinancesPage() {
     const today = toDateKey(new Date());
     const weekStart = toDateKey(subDays(new Date(), 6));
     const monthStart = toDateKey(subDays(new Date(), 29));
+    const monthStartMs = new Date(`${monthStart}T00:00:00.000`).getTime();
+    const todayEndMs = new Date(`${today}T23:59:59.999`).getTime();
 
     (async () => {
       setLoading(true);
       try {
-        const agencesSnap = await getDocs(collection(db, "companies", companyId, "agences"));
+        const [agencesSnap, companySnap] = await Promise.all([
+          getDocs(collection(db, "companies", companyId, "agences")),
+          getDoc(doc(db, "companies", companyId)),
+        ]);
+        const companyData =
+          (companySnap.data() as { currency?: string; devise?: string; defaultCurrency?: string } | undefined) ??
+          {};
+        const currencyCandidate = companyData.currency ?? companyData.devise ?? companyData.defaultCurrency;
+        setCurrency(typeof currencyCandidate === "string" && currencyCandidate.length > 0 ? currencyCandidate : "XOF");
         const ags = agencesSnap.docs.map((d) => ({
           id: d.id,
-          nom: (d.data() as { nom?: string }).nom ?? d.id,
+          nom:
+            (d.data() as { nom?: string; nomAgence?: string; name?: string }).nom ??
+            (d.data() as { nom?: string; nomAgence?: string; name?: string }).nomAgence ??
+            (d.data() as { nom?: string; nomAgence?: string; name?: string }).name ??
+            d.id,
         }));
         setAgencies(ags);
 
@@ -99,7 +174,10 @@ export default function CompanyFinancesPage() {
             snap.docs.forEach((d) => {
               const data = d.data() as ShiftReportDoc;
               const diff = data.validationAudit?.computedDifference ?? 0;
-              if (diff !== 0) {
+              const reportMs = toMillis(data.validationAudit?.validatedAt) ?? toMillis(data.startAt);
+              const inCurrentWindow =
+                reportMs != null && reportMs >= monthStartMs && reportMs <= todayEndMs;
+              if (diff !== 0 && inCurrentWindow) {
                 disc.push({ ...data, agencyId: a.id });
               }
             });
@@ -109,7 +187,10 @@ export default function CompanyFinancesPage() {
             snap.docs.forEach((d) => {
               const data = d.data() as ShiftReportDoc;
               const diff = data.validationAudit?.computedDifference ?? 0;
-              if (diff !== 0) {
+              const reportMs = toMillis(data.validationAudit?.validatedAt) ?? toMillis(data.startAt);
+              const inCurrentWindow =
+                reportMs != null && reportMs >= monthStartMs && reportMs <= todayEndMs;
+              if (diff !== 0 && inCurrentWindow) {
                 disc.push({ ...data, agencyId: a.id });
               }
             });
@@ -124,7 +205,80 @@ export default function CompanyFinancesPage() {
     })();
   }, [companyId]);
 
+  useEffect(() => {
+    if (!companyId || agencies.length === 0) {
+      setLiveSalesByAgency([]);
+      return;
+    }
+
+    const shiftsByAgency = new Map<string, ShiftDoc[]>();
+    const reservationsByAgency = new Map<string, ReservationDoc[]>();
+    const todayKey = toDateKey(new Date());
+    const unsubs: Array<() => void> = [];
+
+    const recompute = () => {
+      const rows = agencies.map((agency) => {
+        const shiftDocs = shiftsByAgency.get(agency.id) ?? [];
+        const reservationDocs = reservationsByAgency.get(agency.id) ?? [];
+
+        const nonValidatedShiftIds = new Set<string>();
+        shiftDocs.forEach((s: ShiftDoc & { __id?: string }) => {
+          if (s.__id && s.status !== "validated") {
+            nonValidatedShiftIds.add(s.__id);
+          }
+        });
+
+        let liveAmount = 0;
+        let liveTickets = 0;
+        reservationDocs.forEach((r) => {
+          const shiftRef = r.shiftId ?? r.createdInSessionId;
+          if (!shiftRef || !nonValidatedShiftIds.has(shiftRef)) return;
+          if (canonicalStatut(r.statut) !== "paye") return;
+          if (r.date && r.date !== todayKey) return;
+          liveAmount += Number(r.montant) || 0;
+          liveTickets += 1;
+        });
+
+        return {
+          agencyId: agency.id,
+          liveAmount,
+          liveTickets,
+          openSessions: nonValidatedShiftIds.size,
+        };
+      });
+
+      setLiveSalesByAgency(rows);
+      setLiveUpdatedAt(new Date());
+    };
+
+    agencies.forEach((agency) => {
+      const shiftsRef = collection(db, "companies", companyId, "agences", agency.id, "shifts");
+      const reservationsRef = collection(db, "companies", companyId, "agences", agency.id, "reservations");
+
+      const unsubShifts = onSnapshot(query(shiftsRef, limit(1000)), (snap) => {
+        const rows = snap.docs.map((d) => ({ __id: d.id, ...(d.data() as ShiftDoc) }));
+        shiftsByAgency.set(agency.id, rows);
+        recompute();
+      });
+
+      const unsubReservations = onSnapshot(query(reservationsRef, limit(4000)), (snap) => {
+        reservationsByAgency.set(agency.id, snap.docs.map((d) => d.data() as ReservationDoc));
+        recompute();
+      });
+
+      unsubs.push(unsubShifts, unsubReservations);
+    });
+
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [companyId, agencies]);
+
   const agencyNames = useMemo(() => new Map(agencies.map((a) => [a.id, a.nom])), [agencies]);
+  const getAgencyDisplayName = (agencyId: string) => {
+    const name = agencyNames.get(agencyId);
+    return name && name !== agencyId ? name : "Agence inconnue";
+  };
 
   const sumTicket = (list: DailyStatsDoc[]) =>
     list.reduce((s, d) => s + (Number(d.ticketRevenue ?? d.totalRevenue) || 0), 0);
@@ -164,6 +318,12 @@ export default function CompanyFinancesPage() {
   const byAgency = useMemo(() => {
     const today = toDateKey(new Date());
     const map = new Map<string, { today: number; week: number; month: number; ticket: number; courier: number }>();
+
+    // Initialize all known agencies so they always appear (even with zero activity)
+    agencies.forEach((a) => {
+      map.set(a.id, { today: 0, week: 0, month: 0, ticket: 0, courier: 0 });
+    });
+
     dailyStats.forEach((d) => {
       const aid = d.agencyId ?? "";
       if (!aid) return;
@@ -179,17 +339,85 @@ export default function CompanyFinancesPage() {
       if (dDate && dDate >= subDays(new Date(), 6)) cur.week += rev;
       map.set(aid, cur);
     });
+
     return Array.from(map.entries()).map(([agencyId, v]) => ({
       agencyId,
-      nom: agencyNames.get(agencyId) ?? agencyId,
+      nom: getAgencyDisplayName(agencyId),
       ...v,
     }));
-  }, [dailyStats, agencyNames]);
+  }, [dailyStats, agencies, agencyNames]);
 
   const filteredDiscrepancies = useMemo(() => {
     if (!agencyFilter) return discrepancies;
     return discrepancies.filter((d) => d.agencyId === agencyFilter);
   }, [discrepancies, agencyFilter]);
+
+  const liveByAgencyMap = useMemo(
+    () => new Map(liveSalesByAgency.map((l) => [l.agencyId, l])),
+    [liveSalesByAgency]
+  );
+  const liveSalesTotal = useMemo(
+    () => liveSalesByAgency.reduce((sum, row) => sum + row.liveAmount, 0),
+    [liveSalesByAgency]
+  );
+  const liveTicketsTotal = useMemo(
+    () => liveSalesByAgency.reduce((sum, row) => sum + row.liveTickets, 0),
+    [liveSalesByAgency]
+  );
+  const openSessionsTotal = useMemo(
+    () => liveSalesByAgency.reduce((sum, row) => sum + row.openSessions, 0),
+    [liveSalesByAgency]
+  );
+  const globalGap = useMemo(
+    () => liveSalesTotal - revenueToday.total,
+    [liveSalesTotal, revenueToday.total]
+  );
+
+  const moneyFormatter = useMemo(() => {
+    try {
+      return new Intl.NumberFormat("fr-FR", {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 0,
+      });
+    } catch {
+      return new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 });
+    }
+  }, [currency]);
+  const money = (value: number) => moneyFormatter.format(Number(value) || 0);
+
+  const surveillanceRows = useMemo(
+    () =>
+      agencies
+        .map((a) => {
+          const live = liveByAgencyMap.get(a.id);
+          const consolidated = byAgency.find((x) => x.agencyId === a.id)?.today ?? 0;
+          const gap = (live?.liveAmount ?? 0) - consolidated;
+          return {
+            agencyId: a.id,
+            name: a.nom,
+            liveAmount: live?.liveAmount ?? 0,
+            consolidated,
+            gap,
+            openSessions: live?.openSessions ?? 0,
+            liveTickets: live?.liveTickets ?? 0,
+          };
+        })
+        .sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap)),
+    [agencies, liveByAgencyMap, byAgency]
+  );
+
+  const criticalAlerts = useMemo(
+    () => surveillanceRows.filter((r) => Math.abs(r.gap) >= CRITICAL_GAP_THRESHOLD),
+    [surveillanceRows]
+  );
+  const warningAlerts = useMemo(
+    () =>
+      surveillanceRows.filter(
+        (r) => Math.abs(r.gap) >= WARNING_GAP_THRESHOLD && Math.abs(r.gap) < CRITICAL_GAP_THRESHOLD
+      ),
+    [surveillanceRows]
+  );
 
   const exportCsv = () => {
     const rows = [
@@ -212,12 +440,15 @@ export default function CompanyFinancesPage() {
     URL.revokeObjectURL(url);
   };
 
+  const wrap = (node: React.ReactNode) =>
+    embedded ? <>{node}</> : <StandardLayoutWrapper>{node}</StandardLayoutWrapper>;
+
   if (capLoading) {
-    return (
-      <StandardLayoutWrapper>
-        <PageHeader title="Finances compagnie" />
+    return wrap(
+      <>
+        {!embedded && <PageHeader title="Finances compagnie" />}
         <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement…</div>
-      </StandardLayoutWrapper>
+      </>
     );
   }
 
@@ -226,56 +457,146 @@ export default function CompanyFinancesPage() {
   }
 
   if (!companyId) {
-    return (
-      <StandardLayoutWrapper>
-        <PageHeader title="Finances compagnie" />
+    return wrap(
+      <>
+        {!embedded && <PageHeader title="Finances compagnie" />}
         <p className="text-gray-500">Compagnie introuvable.</p>
-      </StandardLayoutWrapper>
+      </>
     );
   }
 
   if (loading) {
-    return (
-      <StandardLayoutWrapper>
-        <PageHeader title="Finances compagnie" />
+    return wrap(
+      <>
+        {!embedded && <PageHeader title="Finances compagnie" />}
         <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement…</div>
-      </StandardLayoutWrapper>
+      </>
     );
   }
 
-  return (
-    <StandardLayoutWrapper>
-      <PageHeader title="Finances compagnie" />
+  return wrap(
+    <>
+      {!embedded && <PageHeader title="Finances compagnie" />}
+      <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3 mb-3">
+          <h2 className="text-lg font-semibold">Surveillance financière</h2>
+          <InfoHint text="Temps réel: ventes des sessions non validées du jour. Consolidé: ventes validées comptablement." />
+        </div>
+
+        {(criticalAlerts.length > 0 || warningAlerts.length > 0) && (
+          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm">
+            <div className="inline-flex items-center gap-2 font-semibold text-amber-700 dark:text-amber-300">
+              <Siren className="w-4 h-4" />
+              Alertes automatiques d&apos;écart
+            </div>
+            <div className="mt-1 text-amber-700/90 dark:text-amber-200">
+              {criticalAlerts.length} critique(s) (≥ {money(CRITICAL_GAP_THRESHOLD)}) · {warningAlerts.length} avertissement(s) (≥ {money(WARNING_GAP_THRESHOLD)})
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">
+              <span>Temps réel</span>
+              <InfoHint text="Montant des ventes en cours provenant des sessions non validées." />
+            </div>
+            <div className="mt-1 text-xl font-bold text-primary">{money(liveSalesTotal)}</div>
+          </div>
+          <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">
+              <span>Consolidé validé</span>
+              <InfoHint text="Montant validé après contrôle comptable sur la journée en cours." />
+            </div>
+            <div className="mt-1 text-xl font-bold text-primary">{money(revenueToday.total)}</div>
+          </div>
+          <div className="rounded-xl border border-primary/30 bg-primary/10 dark:bg-primary/20 p-4">
+            <div className="text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">Écart à investiguer</div>
+            <div className={`mt-1 text-xl font-bold ${globalGap === 0 ? "text-primary" : globalGap > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+              {globalGap > 0 ? "+" : ""}
+              {money(globalGap)}
+            </div>
+          </div>
+          <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
+            <div className="text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">Sessions / billets live</div>
+            <div className="mt-1 text-xl font-bold text-primary">
+              {openSessionsTotal} / {liveTicketsTotal}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 overflow-auto max-h-[420px] rounded-xl border border-gray-200 dark:border-slate-700">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-white dark:bg-slate-800 border-b dark:border-slate-700">
+              <tr>
+                <th className="text-left py-2 px-3">Agence</th>
+                <th className="text-right py-2 px-3">Temps réel</th>
+                <th className="text-right py-2 px-3">Consolidé</th>
+                <th className="text-right py-2 px-3">Écart</th>
+                <th className="text-right py-2 px-3">Sessions</th>
+                <th className="text-right py-2 px-3">Billets</th>
+              </tr>
+            </thead>
+            <tbody>
+              {surveillanceRows.map((row) => {
+                const absGap = Math.abs(row.gap);
+                const rowClass =
+                  absGap >= CRITICAL_GAP_THRESHOLD
+                    ? "bg-red-50/60 dark:bg-red-900/20"
+                    : absGap >= WARNING_GAP_THRESHOLD
+                      ? "bg-amber-50/60 dark:bg-amber-900/20"
+                      : "";
+                return (
+                  <tr key={row.agencyId} className={`border-b dark:border-slate-700 ${rowClass}`}>
+                    <td className="py-2 px-3 font-medium text-primary">{row.name}</td>
+                    <td className="py-2 px-3 text-right">{money(row.liveAmount)}</td>
+                    <td className="py-2 px-3 text-right">{money(row.consolidated)}</td>
+                    <td className={`py-2 px-3 text-right font-semibold ${row.gap === 0 ? "text-primary" : row.gap > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                      {row.gap > 0 ? "+" : ""}
+                      {money(row.gap)}
+                    </td>
+                    <td className="py-2 px-3 text-right">{row.openSessions}</td>
+                    <td className="py-2 px-3 text-right">{row.liveTickets}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-3 text-xs text-gray-500 dark:text-slate-400">
+          Dernière mise à jour live: {liveUpdatedAt ? liveUpdatedAt.toLocaleTimeString("fr-FR") : "—"} · Devise: {currency}
+        </p>
+      </section>
       {/* Consolidated Revenue */}
       <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
           <DollarSign className="w-5 h-5" /> Revenus consolidés (billets + courrier)
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MetricCard label="Aujourd'hui (total)" value={revenueToday.total.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#4338ca" />
-          <MetricCard label="7 derniers jours (total)" value={revenueWeek.total.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#7c3aed" />
-          <MetricCard label="30 derniers jours (total)" value={revenueMonth.total.toLocaleString("fr-FR")} icon={DollarSign} valueColorVar="#0f766e" />
+          <MetricCard label="Aujourd'hui (total)" value={money(revenueToday.total)} icon={DollarSign} valueColorVar="#4338ca" />
+          <MetricCard label="7 derniers jours (total)" value={money(revenueWeek.total)} icon={DollarSign} valueColorVar="#7c3aed" />
+          <MetricCard label="30 derniers jours (total)" value={money(revenueMonth.total)} icon={DollarSign} valueColorVar="#0f766e" />
         </div>
         <div className="mt-3 text-sm text-gray-600 dark:text-gray-400">
-          <span className="font-medium">30j :</span> Billets {revenueMonth.ticket.toLocaleString("fr-FR")} · Courrier {revenueMonth.courier.toLocaleString("fr-FR")}
+          <span className="font-medium">30j :</span> Billets {money(revenueMonth.ticket)} · Courrier {money(revenueMonth.courier)}
         </div>
-        <div className="mt-4 overflow-x-auto">
+        <div className="mt-4 overflow-auto max-h-[380px] rounded-xl border border-gray-200 dark:border-slate-700">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="text-left py-2">Agence</th>
-                <th className="text-right py-2">Aujourd&apos;hui</th>
-                <th className="text-right py-2">7 jours</th>
-                <th className="text-right py-2">30 jours</th>
+            <thead className="sticky top-0 bg-white dark:bg-slate-800 border-b dark:border-slate-700">
+              <tr>
+                <th className="text-left py-2 px-3">Agence</th>
+                <th className="text-right py-2 px-3">Aujourd&apos;hui</th>
+                <th className="text-right py-2 px-3">7 jours</th>
+                <th className="text-right py-2 px-3">30 jours</th>
               </tr>
             </thead>
             <tbody>
               {byAgency.map((a) => (
-                <tr key={a.agencyId} className="border-b">
-                  <td className="py-2">{a.nom}</td>
-                  <td className="py-2 text-right">{a.today.toLocaleString("fr-FR")}</td>
-                  <td className="py-2 text-right">{a.week.toLocaleString("fr-FR")}</td>
-                  <td className="py-2 text-right">{a.month.toLocaleString("fr-FR")}</td>
+                <tr key={a.agencyId} className="border-b dark:border-slate-700">
+                  <td className="py-2 px-3 font-medium text-primary">{a.nom}</td>
+                  <td className="py-2 px-3 text-right">{money(a.today)}</td>
+                  <td className="py-2 px-3 text-right">{money(a.week)}</td>
+                  <td className="py-2 px-3 text-right font-semibold">{money(a.month)}</td>
                 </tr>
               ))}
             </tbody>
@@ -322,11 +643,11 @@ export default function CompanyFinancesPage() {
               <tbody>
                 {filteredDiscrepancies.map((d, i) => (
                   <tr key={i} className="border-b">
-                    <td className="py-2">{agencyNames.get(d.agencyId ?? "") ?? d.agencyId}</td>
+                    <td className="py-2">{getAgencyDisplayName(d.agencyId ?? "")}</td>
                     <td className="py-2">{d.shiftId ?? "—"}</td>
                     <td className="py-2 text-right">
                       {(d.validationAudit?.computedDifference ?? 0) >= 0 ? "+" : ""}
-                      {(d.validationAudit?.computedDifference ?? 0).toLocaleString("fr-FR")}
+                      {money(d.validationAudit?.computedDifference ?? 0)}
                     </td>
                   </tr>
                 ))}
@@ -339,6 +660,6 @@ export default function CompanyFinancesPage() {
       <p className="text-xs text-gray-500">
         Accès : CEO (admin_compagnie) et comptable compagnie (company_accountant). Aucune validation ni modification des sessions depuis cette page.
       </p>
-    </StandardLayoutWrapper>
+    </>
   );
 }

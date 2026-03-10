@@ -13,7 +13,14 @@ import {
   type VehicleCostBreakdown,
 } from "@/modules/compagnie/profitability/operationalProfitabilityService";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
-import { Truck, TrendingUp, TrendingDown, DollarSign } from "lucide-react";
+import { Truck, TrendingUp, TrendingDown, DollarSign, ExternalLink } from "lucide-react";
+
+function extractFirestoreIndexUrl(errorText: string): string | null {
+  const match = errorText.match(/https?:\/\/[^\s"]*indexes[^\s"]*/i);
+  if (!match?.[0]) return null;
+  // Firebase appends punctuation in some messages.
+  return match[0].replace(/[)\].,;]+$/g, "");
+}
 
 export default function FleetFinancePage() {
   const { user } = useAuth();
@@ -27,6 +34,7 @@ export default function FleetFinancePage() {
   const [routeProfitability, setRouteProfitability] = useState<RouteProfitability[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const indexUrl = error ? extractFirestoreIndexUrl(error) : null;
 
   useEffect(() => {
     if (!companyId) {
@@ -48,7 +56,7 @@ export default function FleetFinancePage() {
         setRouteProfitability(profitability.routes);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Erreur chargement");
+        if (!cancelled) setError(e instanceof Error ? e.message : "Erreur de chargement.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -72,14 +80,25 @@ export default function FleetFinancePage() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Finance Flotte"
-        subtitle="Revenus, coûts et marge par véhicule (fleetCosts + tripCosts liés)"
+        subtitle="Rentabilité de la flotte : revenus, coûts et marge par véhicule et par trajet."
         icon={Truck}
         primaryColorVar={theme?.colors?.primary ? "var(--teliya-primary)" : undefined}
       />
 
       {error && (
-        <div className="mb-4 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 text-sm">
-          {error}
+        <div className="mb-4 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 text-sm space-y-2">
+          <p className="break-words">{error}</p>
+          {indexUrl && (
+            <a
+              href={indexUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-md border border-red-200 bg-white px-3 py-1.5 text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-red-900/30 dark:text-red-100"
+            >
+              Créer l'index Firestore
+              <ExternalLink className="h-4 w-4" />
+            </a>
+          )}
         </div>
       )}
 
@@ -169,7 +188,7 @@ export default function FleetFinancePage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4">
-              <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Fuel cost per vehicle</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Coût carburant par véhicule</h3>
               <ul className="space-y-2 text-sm">
                 {vehicleCosts.length === 0 ? (
                   <li className="text-gray-500">Aucune donnée.</li>
@@ -188,7 +207,7 @@ export default function FleetFinancePage() {
             </div>
 
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4">
-              <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Maintenance cost per vehicle</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Coût maintenance par véhicule</h3>
               <ul className="space-y-2 text-sm">
                 {vehicleCosts.length === 0 ? (
                   <li className="text-gray-500">Aucune donnée.</li>
@@ -207,7 +226,7 @@ export default function FleetFinancePage() {
             </div>
 
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4">
-              <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Profit per route</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Profit par trajet</h3>
               <ul className="space-y-2 text-sm">
                 {routeProfitability.length === 0 ? (
                   <li className="text-gray-500">Aucune donnée.</li>

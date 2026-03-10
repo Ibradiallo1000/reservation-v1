@@ -23,6 +23,7 @@ import {
   getInitialExpenseStatus,
 } from "@/modules/compagnie/settings/expenseApprovalSettings";
 import { createCompanyNotification, notifyCompanyRoles } from "@/shared/services/companyNotifications";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 const EXPENSES_COLLECTION = "expenses";
 const EXPENSE_RESERVE_ACCOUNT_ID = "company_expense_reserve";
@@ -180,7 +181,7 @@ export async function createExpense(params: {
   if (params.receiptUrls != null) data.receiptUrls = params.receiptUrls;
   await setDoc(ref, data);
   const title = "Nouvelle dépense soumise";
-  const body = `${params.description.slice(0, 80)} — ${params.amount.toLocaleString("fr-FR")} en attente de validation.`;
+  const body = `${params.description.slice(0, 80)} — ${formatCurrency(params.amount)} en attente de validation.`;
   try {
     await createCompanyNotification({
       companyId: params.companyId,

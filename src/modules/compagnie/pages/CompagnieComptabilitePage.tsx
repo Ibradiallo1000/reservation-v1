@@ -154,7 +154,7 @@ const CompagnieComptabilitePage: React.FC = () => {
   // ÉTATS & CONFIGURATION
   // ==========================================================================
   
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reconciliation' | 'agencies' | 'movements' | 'reports' | 'audit'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'reconciliation' | 'movements' | 'audit'>('reconciliation');
   const [range, setRange] = useState<RangeKey>('mois');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -575,8 +575,8 @@ const CompagnieComptabilitePage: React.FC = () => {
   return (
     <StandardLayoutWrapper className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <PageHeader
-        title="Comptabilité"
-        subtitle={`Sessions · Réconciliations · Validations CEO · Anomalies — ${label}`}
+        title="Contrôle & Audit"
+        subtitle={`Réconciliation · Validations · Journal d'audit — ${label}`}
         right={
           <div className="flex items-center gap-3 flex-wrap">
             <div className="px-3 py-1 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100">
@@ -584,47 +584,35 @@ const CompagnieComptabilitePage: React.FC = () => {
                 {userRole.replace('_', ' ')}
               </span>
             </div>
-            <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
-              <button
-                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'jour' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => setRange('jour')}
-              >
-                Jour
-              </button>
-              <button
-                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'semaine' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => setRange('semaine')}
-              >
-                Semaine
-              </button>
-              <button
-                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'mois' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => setRange('mois')}
-              >
-                Mois
-              </button>
-              <button
-                className={`px-3 py-1.5 rounded text-sm font-medium ${range === 'custom' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}
-                onClick={() => setRange('custom')}
-              >
-                Perso
-              </button>
-            </div>
+            <select
+              value={range}
+              onChange={(e) => setRange(e.target.value as RangeKey)}
+              className="h-9 min-w-[150px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
+            >
+              <option value="jour">Jour</option>
+              <option value="semaine">Semaine</option>
+              <option value="mois">Mois</option>
+              <option value="custom">Personnalisé</option>
+            </select>
             {range === 'custom' && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="date"
-                  className="border rounded-lg px-3 py-1.5 text-sm"
-                  value={customStart}
-                  onChange={e => setCustomStart(e.target.value)}
-                />
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center rounded-lg border border-gray-300 bg-white px-2">
+                  <input
+                    type="date"
+                    className="h-9 text-sm text-gray-700 outline-none"
+                    value={customStart}
+                    onChange={e => setCustomStart(e.target.value)}
+                  />
+                </div>
                 <span className="text-gray-400">→</span>
-                <input
-                  type="date"
-                  className="border rounded-lg px-3 py-1.5 text-sm"
-                  value={customEnd}
-                  onChange={e => setCustomEnd(e.target.value)}
-                />
+                <div className="flex items-center rounded-lg border border-gray-300 bg-white px-2">
+                  <input
+                    type="date"
+                    className="h-9 text-sm text-gray-700 outline-none"
+                    value={customEnd}
+                    onChange={e => setCustomEnd(e.target.value)}
+                  />
+                </div>
               </div>
             )}
             <button
@@ -643,22 +631,10 @@ const CompagnieComptabilitePage: React.FC = () => {
         <div className="flex overflow-x-auto pb-2">
           <nav className="flex space-x-1">
             <TabButton
-              active={activeTab === 'dashboard'}
-              onClick={() => setActiveTab('dashboard')}
-              icon={<BarChart3 className="h-4 w-4" />}
-              label="Tableau de bord"
-            />
-            <TabButton
               active={activeTab === 'reconciliation'}
               onClick={() => setActiveTab('reconciliation')}
               icon={<CheckCircle2 className="h-4 w-4" />}
               label="Réconciliation"
-            />
-            <TabButton
-              active={activeTab === 'agencies'}
-              onClick={() => setActiveTab('agencies')}
-              icon={<Building2 className="h-4 w-4" />}
-              label="Agences"
             />
             {['ceo', 'financial_director', 'company_accountant'].includes(userRole) && (
               <TabButton
@@ -668,12 +644,6 @@ const CompagnieComptabilitePage: React.FC = () => {
                 label="Mouvements"
               />
             )}
-            <TabButton
-              active={activeTab === 'reports'}
-              onClick={() => setActiveTab('reports')}
-              icon={<FileText className="h-4 w-4" />}
-              label="Rapports"
-            />
             {['ceo', 'financial_director'].includes(userRole) && (
               <TabButton
                 active={activeTab === 'audit'}
@@ -688,17 +658,6 @@ const CompagnieComptabilitePage: React.FC = () => {
       
       {/* Contenu principal */}
       <div className="pb-8">
-        {activeTab === 'dashboard' && (
-          <DashboardTab 
-            totals={totals}
-            performanceData={performanceData}
-            alerts={alerts}
-            loading={loading}
-            userRole={userRole}
-            onSelectAgency={loadAgencyDetails}
-          />
-        )}
-        
         {activeTab === 'reconciliation' && (
           <ReconciliationTab 
             performanceData={performanceData}
@@ -707,30 +666,10 @@ const CompagnieComptabilitePage: React.FC = () => {
           />
         )}
         
-        {activeTab === 'agencies' && (
-          <AgenciesTab 
-            agencies={agencies}
-            performanceData={performanceData}
-            loading={loading}
-            onSelectAgency={loadAgencyDetails}
-          />
-        )}
-        
         {activeTab === 'movements' && (
           <MovementsTab 
             movements={companyMovements}
             userRole={userRole}
-          />
-        )}
-        
-        {activeTab === 'reports' && (
-          <ReportsTab 
-            performanceData={performanceData}
-            totals={totals}
-            range={range}
-            from={from}
-            to={to}
-            label={label}
           />
         )}
         
@@ -1199,7 +1138,7 @@ const MovementsTab: React.FC<{
         >
           <p className="text-sm text-gray-600">
             Le formulaire modal est remplace par une page dediee: <code>/compagnie/:companyId/accounting/treasury/new-operation</code>.
-            Cette page centralise les operations depense, transfert et paiement fournisseur.
+            Cette page centralise les opérations de dépense, transfert et paiement fournisseur.
           </p>
         </SectionCard>
       )}

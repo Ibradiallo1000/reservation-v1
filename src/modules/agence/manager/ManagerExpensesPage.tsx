@@ -4,11 +4,13 @@ import { listExpenses, approveExpense, rejectExpense, type ExpenseDoc } from "@/
 import { SectionCard, ActionButton, StatusBadge, EmptyState, table, tableRowClassName } from "@/ui";
 import { CheckCircle2, XCircle, Loader2, Receipt } from "lucide-react";
 import { toast } from "sonner";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 type ExpenseRow = ExpenseDoc & { id: string };
 
 export default function ManagerExpensesPage() {
   const { user } = useAuth() as any;
+  const money = useFormatCurrency();
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
   const [rows, setRows] = useState<ExpenseRow[]>([]);
@@ -66,11 +68,11 @@ export default function ManagerExpensesPage() {
 
   return (
     <div className="space-y-6">
-      <SectionCard title="Dépenses à approuver (chef d'agence)" icon={Receipt}>
+      <SectionCard title="Validation des demandes de dépenses" icon={Receipt}>
         {loading ? (
           <div className="py-8 text-center text-gray-500">Chargement...</div>
         ) : rows.length === 0 ? (
-          <EmptyState message="Aucune dépense en attente chef d'agence." />
+          <EmptyState message="Aucune demande en attente côté chef d'agence." />
         ) : (
           <div className="overflow-x-auto">
             <table className={table.base}>
@@ -92,7 +94,7 @@ export default function ManagerExpensesPage() {
                     </td>
                     <td className={table.td}>{r.expenseCategory ?? r.category}</td>
                     <td className={table.td}>{r.description}</td>
-                    <td className={table.tdRight}>{Number(r.amount).toLocaleString("fr-FR")}</td>
+                    <td className={table.tdRight}>{money(Number(r.amount))}</td>
                     <td className={table.td}>
                       <StatusBadge status="warning">Attente chef agence</StatusBadge>
                     </td>

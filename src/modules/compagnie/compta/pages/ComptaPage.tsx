@@ -26,7 +26,10 @@ import {
   getCompteDeResultat,
 } from "../comptaService";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
+import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
 import type { ComptaMovementRow, BalanceLine, CompteDeResultatData } from "../comptaTypes";
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "@/firebaseConfig";
 
 type TabId = "grand-livre" | "balance" | "compte-resultat";
 
@@ -78,7 +81,9 @@ const ComptaPage: React.FC = () => {
   const [customStart, setCustomStart] = useState<Date | null>(null);
   const [customEnd, setCustomEnd] = useState<Date | null>(null);
   const [accountId, setAccountId] = useState<string>("");
-  const [accounts, setAccounts] = useState<{ id: string; accountName: string; accountType: string }[]>([]);
+  const [accounts, setAccounts] = useState<{ id: string; agencyId: string | null; accountName: string; accountType: string }[]>([]);
+  const [agencyNameById, setAgencyNameById] = useState<Record<string, string>>({});
+  const [companyBanksById, setCompanyBanksById] = useState<Record<string, string>>({});
   const [movements, setMovements] = useState<ComptaMovementRow[]>([]);
   const [balanceLines, setBalanceLines] = useState<BalanceLine[]>([]);
   const [compteResultat, setCompteResultat] = useState<CompteDeResultatData | null>(null);
@@ -93,9 +98,26 @@ const ComptaPage: React.FC = () => {
 
   useEffect(() => {
     if (!companyId) return;
-    listAccounts(companyId).then((list) => {
-      setAccounts(list.map((a) => ({ id: a.id, accountName: a.accountName, accountType: a.accountType })));
+    Promise.all([
+      listAccounts(companyId),
+      getDocs(collection(db, "companies", companyId, "agences")),
+      getDocs(collection(db, "companies", companyId, "companyBanks")),
+    ]).then(([list, agencySnap, banksSnap]) => {
+      setAccounts(list.map((a) => ({ id: a.id, agencyId: a.agencyId ?? null, accountName: a.accountName, accountType: a.accountType })));
       if (list.length && !accountId) setAccountId(list[0].id);
+      const agenciesMap: Record<string, string> = {};
+      agencySnap.docs.forEach((d) => {
+        const data = d.data() as { nom?: string; nomAgence?: string; name?: string };
+        agenciesMap[d.id] = data.nom ?? data.nomAgence ?? data.name ?? d.id;
+      });
+      setAgencyNameById(agenciesMap);
+      const banksMap: Record<string, string> = {};
+      banksSnap.docs.forEach((d) => {
+        const data = d.data() as { name?: string; isActive?: boolean };
+        if (data.isActive === false) return;
+        banksMap[d.id] = data.name ?? d.id;
+      });
+      setCompanyBanksById(banksMap);
     });
   }, [companyId]);
 
@@ -140,7 +162,7 @@ const ComptaPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <SectionCard
-        title="Comptabilité"
+        title="Comptabilité centrale"
         icon={BookOpen}
         help="Grand livre, balance des comptes et compte de résultat à partir de la trésorerie."
         right={
@@ -148,7 +170,7 @@ const ComptaPage: React.FC = () => {
             <select
               value={period}
               onChange={(e) => setPeriod(e.target.value as typeof period)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              className="h-9 min-w-[170px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
             >
               <option value="week">7 derniers jours</option>
               <option value="month">Mois en cours</option>
@@ -156,20 +178,25 @@ const ComptaPage: React.FC = () => {
               <option value="custom">Personnalisé</option>
             </select>
             {period === "custom" && (
-              <>
-                <input
-                  type="date"
-                  value={customStart?.toISOString().slice(0, 10) ?? ""}
-                  onChange={(e) => setCustomStart(e.target.value ? new Date(e.target.value) : null)}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-                <input
-                  type="date"
-                  value={customEnd?.toISOString().slice(0, 10) ?? ""}
-                  onChange={(e) => setCustomEnd(e.target.value ? new Date(e.target.value) : null)}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center rounded-lg border border-gray-300 bg-white px-2">
+                  <input
+                    type="date"
+                    value={customStart?.toISOString().slice(0, 10) ?? ""}
+                    onChange={(e) => setCustomStart(e.target.value ? new Date(e.target.value) : null)}
+                    className="h-9 text-sm text-gray-700 outline-none"
+                  />
+                </div>
+                <span className="text-gray-400">→</span>
+                <div className="flex items-center rounded-lg border border-gray-300 bg-white px-2">
+                  <input
+                    type="date"
+                    value={customEnd?.toISOString().slice(0, 10) ?? ""}
+                    onChange={(e) => setCustomEnd(e.target.value ? new Date(e.target.value) : null)}
+                    className="h-9 text-sm text-gray-700 outline-none"
+                  />
+                </div>
+              </div>
             )}
             <button
               type="button"
@@ -209,7 +236,7 @@ const ComptaPage: React.FC = () => {
               <option value="">Tous les comptes</option>
               {accounts.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.accountName} ({a.accountType})
+                  {getFinancialAccountDisplayName(a, { agencyNameById, companyBankNameById: companyBanksById })} ({a.accountType})
                 </option>
               ))}
             </select>
@@ -234,7 +261,12 @@ const ComptaPage: React.FC = () => {
         <SectionCard title="Grand livre" icon={BookOpen} noPad>
           <p className="px-4 py-2 text-sm text-gray-600">
             Période : {dateRange.start.toLocaleDateString("fr-FR")} → {dateRange.end.toLocaleDateString("fr-FR")}
-            {accountId ? ` • Compte : ${accounts.find((a) => a.id === accountId)?.accountName ?? accountId}` : ""}
+            {accountId
+              ? ` • Compte : ${getFinancialAccountDisplayName(
+                  accounts.find((a) => a.id === accountId) ?? { id: accountId, accountType: "", accountName: accountId, agencyId: null },
+                  { agencyNameById, companyBankNameById: companyBanksById }
+                )}`
+              : ""}
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

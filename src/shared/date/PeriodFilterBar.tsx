@@ -36,50 +36,42 @@ export const PeriodFilterBar: React.FC<PeriodFilterBarProps> = ({
   const periodLabel = getPeriodLabel(period, range, customStart, customEnd);
 
   return (
-    <div className={`flex flex-wrap items-center gap-3 ${className}`}>
-      <div className="flex flex-wrap gap-1">
+    <div className={`flex flex-wrap items-center gap-2 ${className}`}>
+      <select
+        value={period}
+        onChange={(e) => onPeriodChange(e.target.value as PeriodKind, customStart, customEnd)}
+        className="h-9 min-w-[170px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
+      >
         {PERIOD_OPTIONS.map((opt) => (
-          <button
-            key={opt.kind}
-            type="button"
-            onClick={() => {
-              if (opt.kind === "custom") {
-                const end = new Date();
-                const start = new Date(end);
-                start.setDate(start.getDate() - 30);
-                onPeriodChange("custom", start.toISOString().slice(0, 10), end.toISOString().slice(0, 10));
-              } else {
-                onPeriodChange(opt.kind);
-              }
-            }}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-              period === opt.kind
-                ? "bg-indigo-600 text-white"
-                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-            }`}
-          >
+          <option key={opt.kind} value={opt.kind}>
             {opt.label}
-          </button>
+          </option>
         ))}
-      </div>
+      </select>
       {period === "custom" && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <input
-            type="date"
-            value={customStart ?? ""}
-            onChange={(e) => onPeriodChange("custom", e.target.value || undefined, customEnd)}
-            className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2">
+            <input
+              type="date"
+              value={customStart ?? ""}
+              onChange={(e) => onPeriodChange("custom", e.target.value || undefined, customEnd)}
+              className="h-9 text-sm text-gray-700 outline-none"
+            />
+          </div>
           <span className="text-gray-500 text-sm">→</span>
-          <input
-            type="date"
-            value={customEnd ?? ""}
-            onChange={(e) => onPeriodChange("custom", customStart, e.target.value || undefined)}
-            className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
-          />
+          <div className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2">
+            <input
+              type="date"
+              value={customEnd ?? ""}
+              onChange={(e) => onPeriodChange("custom", customStart, e.target.value || undefined)}
+              className="h-9 text-sm text-gray-700 outline-none"
+            />
+          </div>
         </div>
       )}
-      <span className="text-sm text-gray-500">{periodLabel}</span>
+      {period === "custom" && customStart && customEnd && (
+        <span className="text-sm text-gray-500">{periodLabel}</span>
+      )}
     </div>
   );
 };

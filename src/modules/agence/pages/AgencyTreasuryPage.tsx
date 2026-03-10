@@ -27,6 +27,8 @@ import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState, table, tableRowClassName, ActionButton } from "@/ui";
 import { toast } from "sonner";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 const CATEGORY_LABELS: Record<string, string> = {
   fuel: "Carburant",
@@ -40,6 +42,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export default function AgencyTreasuryPage() {
   const { user, company } = useAuth();
+  const money = useFormatCurrency();
   const navigate = useNavigate();
   const isOnline = useOnlineStatus();
   const companyId = user?.companyId ?? "";
@@ -81,9 +84,14 @@ export default function AgencyTreasuryPage() {
       .finally(() => setLoading(false));
   }, [companyId, agencyId, company, isOnline, reloadKey]);
 
+  const agencyCashAccounts = accounts.filter((a) => a.accountType === "agency_cash");
+
   useEffect(() => {
-    if (accounts.length > 0 && !formAccountId) setFormAccountId(accounts[0].id);
-  }, [accounts, formAccountId]);
+    if (agencyCashAccounts.length > 0 && !formAccountId) setFormAccountId(agencyCashAccounts[0].id);
+    if (formAccountId && !agencyCashAccounts.some((a) => a.id === formAccountId)) {
+      setFormAccountId(agencyCashAccounts[0]?.id ?? "");
+    }
+  }, [agencyCashAccounts, formAccountId]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -185,7 +193,7 @@ export default function AgencyTreasuryPage() {
     return () => clearInterval(interval);
   }, [companyId, agencyId, isOnline]);
 
-  const totalCash = accounts.reduce((s, a) => s + a.currentBalance, 0);
+  const totalAgencyCash = agencyCashAccounts.reduce((s, a) => s + a.currentBalance, 0);
 
   if (!companyId || !agencyId) {
     return (
@@ -214,10 +222,10 @@ export default function AgencyTreasuryPage() {
         right={
           <div className="flex items-center gap-2">
             <ActionButton onClick={() => navigate("/agence/treasury/new-operation")}>
-              Nouvelle dépense
+              Soumettre dépense
             </ActionButton>
             <ActionButton variant="secondary" onClick={() => navigate("/agence/treasury/transfer")}>
-              Transfert
+              Versement banque compagnie
             </ActionButton>
             <ActionButton variant="secondary" onClick={() => navigate("/agence/treasury/new-payable")}>
               Paiement fournisseur
@@ -226,13 +234,13 @@ export default function AgencyTreasuryPage() {
         }
       />
 
-      <SectionCard title="Position caisse" icon={Wallet}>
-        <div className="text-2xl font-bold text-indigo-700 dark:text-indigo-300">{totalCash.toLocaleString("fr-FR")}</div>
+      <SectionCard title="Position caisse agence" icon={Wallet}>
+        <div className="text-2xl font-bold text-indigo-700 dark:text-indigo-300">{money(totalAgencyCash)}</div>
         <ul className="mt-3 space-y-2 text-sm">
-          {accounts.map((a) => (
+          {agencyCashAccounts.map((a) => (
             <li key={a.id} className="flex justify-between">
-              <span>{a.accountName}</span>
-              <span className="font-medium">{a.currentBalance.toLocaleString("fr-FR")} {a.currency}</span>
+              <span>Caisse agence</span>
+              <span className="font-medium">{formatCurrency(a.currentBalance, a.currency)}</span>
             </li>
           ))}
         </ul>
@@ -254,7 +262,7 @@ export default function AgencyTreasuryPage() {
                 movements.slice(0, 25).map((m) => (
                   <tr key={m.id} className={tableRowClassName()}>
                     <td className={table.td}>{m.movementType}</td>
-                    <td className={table.tdRight}>+{m.amount.toLocaleString("fr-FR")}</td>
+                    <td className={table.tdRight}>{m.amount > 0 ? `+${money(m.amount)}` : money(m.amount)}</td>
                   </tr>
                 ))
               )}
@@ -263,9 +271,9 @@ export default function AgencyTreasuryPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="Soumettre une dépense" icon={Plus}>
+      <SectionCard title="Nouvelle demande de dépense (caisse)" icon={Plus}>
         <p className="text-sm text-gray-600 mb-4">
-          La dépense sera envoyée au chef comptable pour approbation puis paiement.
+          Cette demande débite uniquement la caisse agence. Aucun débit banque n'est autorisé à ce niveau.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -292,8 +300,8 @@ export default function AgencyTreasuryPage() {
               onChange={(e) => setFormAccountId(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
             >
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.accountName} — {a.currentBalance.toLocaleString("fr-FR")} {a.currency}</option>
+              {agencyCashAccounts.map((a) => (
+                <option key={a.id} value={a.id}>Caisse agence — {formatCurrency(a.currentBalance, a.currency)}</option>
               ))}
             </select>
           </div>
@@ -353,7 +361,7 @@ export default function AgencyTreasuryPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="Dépenses en attente" icon={FileText}>
+      <SectionCard title="Demandes en attente de validation" icon={FileText}>
         {pendingExpenses.length === 0 ? (
           <EmptyState message="Aucune dépense en attente." />
         ) : (
@@ -361,7 +369,7 @@ export default function AgencyTreasuryPage() {
             {pendingExpenses.map((e) => (
               <li key={e.id} className="flex justify-between">
                 <span>{e.category}</span>
-                <span>{e.amount.toLocaleString("fr-FR")} — {e.status}</span>
+                <span>{money(e.amount)} — {e.status}</span>
               </li>
             ))}
           </ul>

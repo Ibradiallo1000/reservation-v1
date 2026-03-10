@@ -1,6 +1,6 @@
 // Banques de la compagnie — configurées par le CEO. Les comptables d'agence vireront la caisse vers l'une de ces banques (traçabilité).
 import React, { useEffect, useState } from "react";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { useAuth } from "@/contexts/AuthContext";
@@ -11,10 +11,23 @@ import {
   deactivateCompanyBank,
   type CompanyBankDoc,
 } from "@/modules/compagnie/treasury/companyBanks";
-import { Building2, Plus, Pencil, Trash2 } from "lucide-react";
+import { Building2, Plus, Pencil, Trash2, KeyRound } from "lucide-react";
 
 interface ParametresBanquesProps {
   companyId: string;
+}
+
+const BANK_PIN_FIELD = "bankPinHash";
+
+async function sha256Hex(value: string): Promise<string> {
+  if (typeof window !== "undefined" && window.crypto?.subtle) {
+    const data = new TextEncoder().encode(value);
+    const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  return value;
 }
 
 const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
@@ -32,6 +45,8 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
     iban: "",
     description: "",
   });
+  const [pin, setPin] = useState("");
+  const [pinConfirm, setPinConfirm] = useState("");
 
   const loadCompanyAndBanks = async () => {
     if (!companyId) return;
@@ -62,6 +77,8 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
   const openAdd = () => {
     setEditingId(null);
     setForm({ name: "", iban: "", description: "" });
+    setPin("");
+    setPinConfirm("");
     setModalOpen(true);
   };
 
@@ -72,12 +89,25 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
       iban: bank.iban || "",
       description: bank.description || "",
     });
+    setPin("");
+    setPinConfirm("");
     setModalOpen(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim()) return;
+    const needsPin = !editingId || pin.length > 0 || pinConfirm.length > 0;
+    if (needsPin) {
+      if (!/^\d{4}$/.test(pin)) {
+        setError("Le PIN banque doit contenir exactement 4 chiffres.");
+        return;
+      }
+      if (pin !== pinConfirm) {
+        setError("La confirmation PIN ne correspond pas.");
+        return;
+      }
+    }
     setError(null);
     setSuccess(null);
     try {
@@ -87,15 +117,37 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
           iban: form.iban.trim() || null,
           description: form.description.trim() || null,
         });
+        if (needsPin) {
+          const pinHash = await sha256Hex(pin);
+          await setDoc(
+            doc(db, "companies", companyId, "companyBanks", editingId),
+            {
+              [BANK_PIN_FIELD]: pinHash,
+              pinUpdatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+        }
         setSuccess("Banque mise à jour.");
       } else {
-        await addCompanyBank(companyId, {
+        const createdBankId = await addCompanyBank(companyId, {
           name: form.name.trim(),
           iban: form.iban.trim() || null,
           description: form.description.trim() || null,
           currency: companyCurrency,
           isActive: true,
         });
+        if (needsPin) {
+          const pinHash = await sha256Hex(pin);
+          await setDoc(
+            doc(db, "companies", companyId, "companyBanks", createdBankId),
+            {
+              [BANK_PIN_FIELD]: pinHash,
+              pinUpdatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+        }
         setSuccess("Banque ajoutée.");
       }
       setModalOpen(false);
@@ -116,6 +168,27 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
     } catch (err) {
       console.error(err);
       setError("Erreur lors de la désactivation.");
+    }
+  };
+
+  const handleResetBankPin = async (bankId: string, bankName: string) => {
+    if (!window.confirm(`Réinitialiser le PIN de la banque « ${bankName} » ?`)) return;
+    setError(null);
+    setSuccess(null);
+    try {
+      await setDoc(
+        doc(db, "companies", companyId, "companyBanks", bankId),
+        {
+          [BANK_PIN_FIELD]: null,
+          pinUpdatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+      setSuccess("PIN banque réinitialisé. Définissez un nouveau PIN dans Modifier.");
+      await loadCompanyAndBanks();
+    } catch (err) {
+      console.error(err);
+      setError("Erreur lors de la réinitialisation du PIN.");
     }
   };
 
@@ -148,6 +221,7 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
           Ajouter une banque
         </button>
       </div>
+      <p className="text-xs text-gray-500 -mt-2 mb-4">Chaque banque a son propre PIN (4 chiffres) pour déverrouiller ses soldes dans Trésorerie.</p>
 
       {loading ? (
         <div className="py-8 text-center text-gray-500">Chargement…</div>
@@ -173,6 +247,9 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
                   <div className="font-medium text-gray-900">{bank.name}</div>
                   {bank.iban && <div className="text-sm text-gray-500">{bank.iban}</div>}
                   {bank.description && <div className="text-sm text-gray-400">{bank.description}</div>}
+                  <div className="text-xs text-gray-500 mt-1">
+                    PIN: {(bank as any).bankPinHash ? "configuré" : "non configuré"}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -183,6 +260,14 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
                   title="Modifier"
                 >
                   <Pencil className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleResetBankPin(bank.id!, bank.name)}
+                  className="p-2 rounded-lg text-gray-500 hover:bg-amber-50 hover:text-amber-700"
+                  title="Réinitialiser PIN"
+                >
+                  <KeyRound className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
@@ -238,6 +323,38 @@ const ParametresBanques: React.FC<ParametresBanquesProps> = ({ companyId }) => {
                   style={{ outlineColor: theme.colors.primary }}
                   placeholder="Ex: Compte principal siège"
                 />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    PIN banque (4 chiffres) {editingId ? "(laisser vide pour conserver)" : "*"}
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-offset-0"
+                    style={{ outlineColor: theme.colors.primary }}
+                    placeholder="0000"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Confirmer PIN {editingId ? "(laisser vide pour conserver)" : "*"}
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={pinConfirm}
+                    onChange={(e) => setPinConfirm(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-offset-0"
+                    style={{ outlineColor: theme.colors.primary }}
+                    placeholder="0000"
+                  />
+                </div>
               </div>
               <div className="flex gap-3 pt-2">
                 <button

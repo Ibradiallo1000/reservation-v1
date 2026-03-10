@@ -159,7 +159,10 @@ const CompagnieParametresTabsPage: React.FC = () => {
 
   return (
     <StandardLayoutWrapper>
-      <PageHeader title="Paramètres de la compagnie" />
+      <PageHeader
+        title="Configuration"
+        subtitle="Réglages structurels de la compagnie : organisation, vitrine, sécurité, paiements et conformité."
+      />
       <div className="flex flex-wrap gap-2 md:gap-3 mb-6">
         {TABS.map(tab => {
           const active = selectedTab === tab.key;

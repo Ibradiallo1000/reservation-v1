@@ -3,6 +3,7 @@
 // No Firestore, no side effects.
 
 import type { RiskSettingsDoc } from "./riskSettings";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 export type AnomalySeverity = "low" | "medium" | "high";
 
@@ -100,6 +101,8 @@ export interface AnomalyEngineInput {
   fuelExpenseAnomalyLimit?: number;
   /** Phase C3: recent fuel expenses (amount only) to check vs limit. */
   recentFuelExpenseAmounts?: number[];
+  /** Optional ISO currency code for anomaly messages. */
+  currency?: string;
 }
 
 /**
@@ -122,7 +125,9 @@ export function detectAnomalies(input: AnomalyEngineInput): Anomaly[] {
     tripProfitsWithFuel,
     fuelExpenseAnomalyLimit,
     recentFuelExpenseAmounts,
+    currency,
   } = input;
+  const money = (value: number) => formatCurrency(value, currency);
 
   const minMargin = (settings.minimumMarginPercent ?? 10) / 100;
   const maxDiscrepancy = settings.maxCashDiscrepancy ?? 5000;
@@ -134,7 +139,7 @@ export function detectAnomalies(input: AnomalyEngineInput): Anomaly[] {
     out.push({
       severity: "high",
       type: "trip_negative_profit",
-      message: `Trajet ${t.tripId} en perte (profit: ${t.profit.toLocaleString("fr-FR")})`,
+      message: `Trajet ${t.tripId} en perte (profit: ${money(t.profit)})`,
       referenceId: t.tripId,
     });
   });
@@ -170,7 +175,7 @@ export function detectAnomalies(input: AnomalyEngineInput): Anomaly[] {
           out.push({
             severity: "medium",
             type: "agency_below_rolling_avg",
-            message: `Agence ${a.agencyId} : profit du jour (${a.profit.toLocaleString("fr-FR")}) sous la moyenne glissante (${rollingAvg.toLocaleString("fr-FR")})`,
+            message: `Agence ${a.agencyId} : profit du jour (${money(a.profit)}) sous la moyenne glissante (${money(rollingAvg)})`,
             referenceId: a.agencyId,
           });
         }
@@ -185,7 +190,7 @@ export function detectAnomalies(input: AnomalyEngineInput): Anomaly[] {
       out.push({
         severity: "high",
         type: "cash_discrepancy_high",
-        message: `Écart de caisse agence ${d.agencyId} : ${d.amount.toLocaleString("fr-FR")} > seuil ${maxDiscrepancy.toLocaleString("fr-FR")}`,
+        message: `Écart de caisse agence ${d.agencyId} : ${money(d.amount)} > seuil ${money(maxDiscrepancy)}`,
         referenceId: d.agencyId,
       });
     });
@@ -275,7 +280,7 @@ export function detectAnomalies(input: AnomalyEngineInput): Anomaly[] {
         out.push({
           severity: "high",
           type: "vehicle_negative_lifetime_profit",
-          message: `Véhicule ${v.vehicleId} : rentabilité globale négative (${v.totalProfitGenerated.toLocaleString("fr-FR")})`,
+          message: `Véhicule ${v.vehicleId} : rentabilité globale négative (${money(v.totalProfitGenerated)})`,
           referenceId: v.vehicleId,
         });
       });
@@ -289,7 +294,7 @@ export function detectAnomalies(input: AnomalyEngineInput): Anomaly[] {
         out.push({
           severity: "medium",
           type: "fuel_expense_above_limit",
-          message: `Dépense carburant ${amt.toLocaleString("fr-FR")} > seuil ${fuelExpenseAnomalyLimit.toLocaleString("fr-FR")}`,
+          message: `Dépense carburant ${money(amt)} > seuil ${money(fuelExpenseAnomalyLimit)}`,
         });
       });
   }

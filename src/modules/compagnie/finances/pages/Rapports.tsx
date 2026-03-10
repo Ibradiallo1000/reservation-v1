@@ -307,7 +307,7 @@ const Rapports: React.FC = () => {
     <div className="space-y-6">
       {/* ================= EN-TÊTE ================= */}
       <SectionCard
-        title="Rapports comptables"
+        title="Rapports officiels"
         icon={FileText}
         help={<span className="text-sm font-normal text-gray-500">Génération de documents officiels pour la direction</span>}
         right={
@@ -362,7 +362,7 @@ const Rapports: React.FC = () => {
             <select 
               value={period}
               onChange={(e) => setPeriod(e.target.value as any)}
-              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+              className="h-9 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:border-transparent"
               style={{ outlineColor: theme.primary }}
             >
               <option value="monthly">Mensuel (mois en cours)</option>
@@ -388,12 +388,12 @@ const Rapports: React.FC = () => {
         
         {/* Période personnalisée (uniquement si sélectionnée) */}
         {period === 'custom' && (
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-lg border border-blue-200 bg-blue-50">
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg border border-blue-200 bg-blue-50">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Date de début</label>
               <input
                 type="date"
-                className="w-full border border-gray-300 rounded-lg px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                className="h-9 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:border-transparent"
                 style={{ outlineColor: theme.primary }}
                 value={customDateRange.start}
                 onChange={(e) => setCustomDateRange(prev => ({ ...prev, start: e.target.value }))}
@@ -403,7 +403,7 @@ const Rapports: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-2">Date de fin</label>
               <input
                 type="date"
-                className="w-full border border-gray-300 rounded-lg px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                className="h-9 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:border-transparent"
                 style={{ outlineColor: theme.primary }}
                 value={customDateRange.end}
                 onChange={(e) => setCustomDateRange(prev => ({ ...prev, end: e.target.value }))}

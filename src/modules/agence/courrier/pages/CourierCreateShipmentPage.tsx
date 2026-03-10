@@ -12,7 +12,7 @@ import { makeShortCode } from "@/utils/brand";
 import { recordLogisticsLedgerEntry } from "@/modules/logistics/services/recordLogisticsLedgerEntry";
 import type { CourierSession } from "@/modules/logistics/domain/courierSession.types";
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
-import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { useFormatCurrency, useCurrencySymbol } from "@/shared/currency/CurrencyContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import type { Company } from "@/types/companyTypes";
 import { Package, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
@@ -33,6 +33,7 @@ export default function CourierCreateShipmentPage() {
     company: { nom?: string; logoUrl?: string; code?: string } | null;
   };
   const money = useFormatCurrency();
+  const currencySymbol = useCurrencySymbol();
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
   const agentId = user?.uid ?? "";
@@ -425,12 +426,12 @@ export default function CourierCreateShipmentPage() {
               </div>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Valeur déclarée (FCFA) <span className="text-red-500">*</span></label>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Valeur déclarée ({currencySymbol}) <span className="text-red-500">*</span></label>
                   <input required type="number" min="0" step="1" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="0" />
                   <p className="mt-1 text-xs text-gray-500">N&apos;affecte pas le total.</p>
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Frais de transport (FCFA) <span className="text-red-500">*</span></label>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">Frais de transport ({currencySymbol}) <span className="text-red-500">*</span></label>
                   <input required type="number" min="0" step="1" value={transportFee} onChange={(e) => setTransportFee(e.target.value)} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="0" />
                 </div>
               </div>

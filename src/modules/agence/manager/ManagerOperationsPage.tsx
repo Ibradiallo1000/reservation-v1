@@ -359,7 +359,7 @@ export default function ManagerOperationsPage() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Opérations"
-        subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — Vue lecture seule`}
+        subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — pilotage des départs et de la flotte en temps réel`}
       />
 
       {/* Fleet overview — synchronisé véhicules + affectations */}
@@ -371,7 +371,7 @@ export default function ManagerOperationsPage() {
       </div>
 
       {/* Date controls + Departures table */}
-      <SectionCard title="Départs du jour" icon={Bus} noPad>
+      <SectionCard title="Plan de départs (temps réel)" icon={Bus} noPad>
         <div className="flex flex-wrap items-center gap-2 p-4 border-b border-slate-200">
           <span className="text-sm text-slate-600">Date :</span>
           <button

@@ -4,8 +4,12 @@ import { SectionCard, ActionButton } from "@/ui";
 import { getAccount, listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import { agencyDepositToBank } from "@/modules/compagnie/treasury/treasuryTransferService";
 import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
+import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "@/firebaseConfig";
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 type AccountRow = {
   id: string;
@@ -37,6 +41,7 @@ export default function AgencyTreasuryTransferPage() {
   const [toAccountId, setToAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
+  const [companyBankNameById, setCompanyBankNameById] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -54,10 +59,28 @@ export default function AgencyTreasuryTransferPage() {
       .finally(() => setLoading(false));
   }, [companyId, agencyId]);
 
+  useEffect(() => {
+    if (!companyId) return;
+    getDocs(collection(db, "companies", companyId, "companyBanks"))
+      .then((snap) => {
+        const names: Record<string, string> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data() as { name?: string; isActive?: boolean };
+          if (data.isActive === false) return;
+          names[d.id] = data.name ?? d.id;
+        });
+        setCompanyBankNameById(names);
+      })
+      .catch(() => setCompanyBankNameById({}));
+  }, [companyId]);
+
   const availableAgencyCash = useMemo(
     () => agencyCashAccount?.currentBalance ?? 0,
     [agencyCashAccount],
   );
+  const canInitiateTransfer =
+    user?.role === "agency_accountant" ||
+    user?.role === "admin_compagnie";
 
   useEffect(() => {
     if (!toAccountId && companyBankAccounts.length > 0) {
@@ -68,7 +91,7 @@ export default function AgencyTreasuryTransferPage() {
   const handleSubmit = async () => {
     if (!companyId || !user?.uid) return;
     if (!agencyId) {
-      toast.error("Aucune agence associee a ce compte.");
+      toast.error("Aucune agence associée à ce compte.");
       return;
     }
     const numericAmount = Number(amount.replace(",", "."));
@@ -77,15 +100,15 @@ export default function AgencyTreasuryTransferPage() {
       return;
     }
     if (!agencyCashAccount) {
-      toast.error("Aucune caisse agence configuree.");
+      toast.error("Aucune caisse agence configurée.");
       return;
     }
     if (!toAccountId) {
-      toast.error("Selectionnez la banque compagnie destination.");
+      toast.error("Sélectionnez la banque compagnie de destination.");
       return;
     }
     if (numericAmount > availableAgencyCash) {
-      toast.error("Montant superieur au cash disponible en caisse.");
+      toast.error("Montant supérieur au cash disponible en caisse.");
       return;
     }
     const selectedTo = companyBankAccounts.find((a) => a.id === toAccountId);
@@ -102,9 +125,9 @@ export default function AgencyTreasuryTransferPage() {
         performedBy: user.uid,
         performedByRole: user.role ?? null,
         idempotencyKey: makeIdempotencyKey(),
-        description: description.trim() || "Depot caisse agence vers banque compagnie",
+        description: description.trim() || "Dépôt caisse agence vers banque compagnie",
       });
-      toast.success("Versement vers la banque compagnie enregistre.");
+      toast.success("Versement vers la banque compagnie enregistré.");
       setAmount("");
       setDescription("");
     } catch (error) {
@@ -125,17 +148,19 @@ export default function AgencyTreasuryTransferPage() {
           <div className="py-8 text-center text-gray-500">Chargement des comptes...</div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-800">
-              A l&apos;agence, le mouvement autorise est uniquement: caisse agence vers banque compagnie.
-            </div>
+            {!canInitiateTransfer && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Mode consultation: seul le comptable agence peut initier ce versement.
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Caisse agence (automatique)</label>
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
                   {agencyCashAccount
-                    ? `Caisse agence - ${agencyCashAccount.currentBalance.toLocaleString("fr-FR")} ${agencyCashAccount.currency}`
-                    : "Aucune caisse agence configuree"}
+                    ? `Caisse agence - ${formatCurrency(agencyCashAccount.currentBalance, agencyCashAccount.currency)}`
+                    : "Aucune caisse agence configurée"}
                 </div>
               </div>
               <div>
@@ -145,10 +170,10 @@ export default function AgencyTreasuryTransferPage() {
                   value={toAccountId}
                   onChange={(e) => setToAccountId(e.target.value)}
                 >
-                  <option value="">Selectionner</option>
+                  <option value="">Sélectionner</option>
                   {companyBankAccounts.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.accountName} ({a.accountType})
+                      {getFinancialAccountDisplayName(a, { companyBankNameById })}
                     </option>
                   ))}
                 </select>
@@ -166,8 +191,7 @@ export default function AgencyTreasuryTransferPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Disponible en caisse: {availableAgencyCash.toLocaleString("fr-FR")}{" "}
-                  {agencyCashAccount?.currency ?? "XOF"}
+                  Disponible en caisse: {formatCurrency(availableAgencyCash, agencyCashAccount?.currency ?? "XOF")}
                 </p>
               </div>
               <div>
@@ -182,8 +206,8 @@ export default function AgencyTreasuryTransferPage() {
               </div>
             </div>
 
-            <ActionButton onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Traitement..." : "Valider le transfert"}
+            <ActionButton onClick={handleSubmit} disabled={submitting || !canInitiateTransfer}>
+              {submitting ? "Traitement..." : "Initier le versement"}
             </ActionButton>
           </div>
         )}

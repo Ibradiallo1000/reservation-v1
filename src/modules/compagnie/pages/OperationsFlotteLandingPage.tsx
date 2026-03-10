@@ -112,7 +112,7 @@ export default function OperationsFlotteLandingPage() {
 
   return (
     <StandardLayoutWrapper maxWidthClass="max-w-4xl">
-      <PageHeader title="Opérations & Flotte" subtitle="Vue d'ensemble opérationnelle. Accédez aux réservations et à la flotte ci-dessous." />
+      <PageHeader title="Opérations Réseau" subtitle="Supervision opérationnelle du réseau. Accédez aux réservations et à l'exploitation flotte." />
       {!isOnline && (
         <PageOfflineState message="Connexion instable: certaines métriques peuvent être incomplètes." />
       )}

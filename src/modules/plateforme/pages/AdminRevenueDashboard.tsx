@@ -1,13 +1,13 @@
 /**
- * Teliya SaaS – Platform Revenue Dashboard
+ * Teliya SaaS – Tableau de bord revenus plateforme
  *
- * Aggregated view of platform SaaS revenue:
- *   - Total digital revenue generated (all companies)
- *   - Total digital fees collected (Teliya's revenue)
- *   - Total subscription payments received
- *   - Top companies by revenue and fees
+ * Vue consolidée des revenus SaaS de la plateforme :
+ *   - Revenus digitaux générés (toutes compagnies)
+ *   - Frais digitaux collectés (revenu Teliya)
+ *   - Paiements d'abonnement reçus
+ *   - Classement des compagnies par revenus/frais
  *
- * 100% Spark-compatible — reads Firestore directly.
+ * 100% compatible Spark — lecture directe Firestore.
  */
 import React, { useEffect, useState } from "react";
 import {
@@ -217,9 +217,9 @@ export default function AdminRevenueDashboard() {
         </Card>
       </div>
 
-      {/* Top companies */}
+      {/* Top compagnies */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Top by digital revenue */}
+        {/* Top par revenus digitaux */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -251,7 +251,7 @@ export default function AdminRevenueDashboard() {
           </CardContent>
         </Card>
 
-        {/* Top by fees collected */}
+        {/* Top par frais collectés */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -284,7 +284,7 @@ export default function AdminRevenueDashboard() {
         </Card>
       </div>
 
-      {/* Full company revenue table */}
+      {/* Tableau détaillé par compagnie */}
       <Card>
         <CardHeader>
           <CardTitle>Détail par compagnie</CardTitle>
@@ -298,7 +298,7 @@ export default function AdminRevenueDashboard() {
                   <th className="py-2 pr-4 font-medium">Plan</th>
                   <th className="py-2 pr-4 font-medium">Statut</th>
                   <th className="py-2 pr-4 font-medium text-right">Frais %</th>
-                  <th className="py-2 pr-4 font-medium text-right">Rev. digital</th>
+                  <th className="py-2 pr-4 font-medium text-right">Revenus digitaux</th>
                   <th className="py-2 pr-4 font-medium text-right">Frais collectés</th>
                   <th className="py-2 font-medium text-right">Paiements</th>
                 </tr>

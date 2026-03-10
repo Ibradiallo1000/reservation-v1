@@ -110,7 +110,7 @@ export default function AdminCompanyDetail() {
         updatedAt: serverTimestamp(),
       };
       await setDoc(doc(db, "companies", companyId), patch, { merge: true });
-      alert("Modifications enregistrees.");
+      alert("Modifications enregistrées.");
     } finally {
       setSaving(false);
     }
@@ -134,7 +134,7 @@ export default function AdminCompanyDetail() {
         <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
       )}
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-        {c.nom || "Compagnie"} - Plan & Configuration
+        {c.nom || "Compagnie"} - Plan et configuration
       </h1>
 
       <form onSubmit={onSave} className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-xl border border-gray-200 shadow-sm p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -145,7 +145,7 @@ export default function AdminCompanyDetail() {
             value={c.plan || ""}
             onChange={(e) => setC({ ...c, plan: e.target.value })}
           >
-            <option value="">- Selectionner -</option>
+            <option value="">- Sélectionner -</option>
             {planOptions.map(p => (
               <option key={p.id} value={p.name}>{p.name}</option>
             ))}
@@ -153,7 +153,7 @@ export default function AdminCompanyDetail() {
         </div>
 
         <div className="md:col-span-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3 text-sm text-green-700 dark:text-green-300">
-          <strong>Note :</strong> Tous les modules sont inclus dans tous les plans (page publique, reservation en ligne, guichet, dashboard).
+          <strong>Note :</strong> Tous les modules sont inclus dans tous les plans (page publique, réservation en ligne, guichet, tableau de bord).
         </div>
 
         <div>
@@ -161,7 +161,7 @@ export default function AdminCompanyDetail() {
           <input type="number" step="0.1" min="0" className={`${inputClass} mt-1`}
             value={c.digitalFeePercent ?? 0}
             onChange={e => setC({ ...c, digitalFeePercent: Number(e.target.value) })}/>
-          <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">Pourcentage preleve sur les reservations en ligne</p>
+          <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">Pourcentage prélevé sur les réservations en ligne</p>
         </div>
         <div>
           <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Frais guichet ({getCurrencySymbol()} / billet)</label>
@@ -179,7 +179,7 @@ export default function AdminCompanyDetail() {
 
         <div>
           <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
-            Max agences <span className="text-xs text-gray-400 dark:text-slate-500">(0 = illimite)</span>
+            Max agences <span className="text-xs text-gray-400 dark:text-slate-500">(0 = illimité)</span>
           </label>
           <input type="number" min="0" className={`${inputClass} mt-1`}
             value={c.maxAgences ?? 0}

@@ -61,7 +61,10 @@ export default function RevenusLiquiditesPage() {
 
   return (
     <StandardLayoutWrapper>
-      <PageHeader title="Revenus & Liquidités" />
+      <PageHeader
+        title="Revenus & Liquidités"
+        subtitle="Pilotage financier : chiffre d'affaires, encaissements réels et trésorerie nette."
+      />
       <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3">
         {tabs.map(({ key, label, icon: Icon, description }) => {
           const active = activeTab === key;
@@ -84,14 +87,8 @@ export default function RevenusLiquiditesPage() {
           );
         })}
       </div>
-      <p className="text-xs text-gray-500 dark:text-slate-400 -mt-2">
-        {activeTab === TAB_REVENUS
-          ? "Revenus = chiffre d'affaires et ventes (sessions validées). Les montants peuvent différer des encaissements réels."
-          : "Liquidités = argent réellement disponible (caisses, banques, mobile money). Les entrées/sorties sont enregistrées au fil de l'eau."}
-      </p>
-
-      {activeTab === TAB_REVENUS && <CompanyFinancesPage />}
-      {activeTab === TAB_LIQUIDITES && <CEOTreasuryPage />}
+      {activeTab === TAB_REVENUS && <CompanyFinancesPage embedded />}
+      {activeTab === TAB_LIQUIDITES && <CEOTreasuryPage embedded />}
     </StandardLayoutWrapper>
   );
 }

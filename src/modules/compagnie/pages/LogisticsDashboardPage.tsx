@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { toast } from "sonner";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 type DateLike = Date | { toDate?: () => Date } | null | undefined;
 
@@ -53,6 +54,7 @@ function daysUntil(dateValue: DateLike): number | null {
 
 export default function LogisticsDashboardPage() {
   const { user } = useAuth();
+  const money = useFormatCurrency();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const location = useLocation();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
@@ -478,13 +480,13 @@ export default function LogisticsDashboardPage() {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Vehicule en incident (en transit)</label>
+                <label className="block text-xs text-gray-500 mb-1">Véhicule en incident (en transit)</label>
                 <select
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   value={emergencyIncidentVehicleId}
                   onChange={(e) => setEmergencyIncidentVehicleId(e.target.value)}
                 >
-                  <option value="">Selectionner</option>
+                  <option value="">Sélectionner</option>
                   {incidentTransitVehicles.map((v) => (
                     <option key={v.id} value={v.id}>
                       {(v.busNumber ? `#${v.busNumber} - ` : "") + (v.plateNumber || v.id)} ({v.currentCity || "Ville inconnue"})
@@ -493,13 +495,13 @@ export default function LogisticsDashboardPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Vehicule de remplacement (disponible)</label>
+                <label className="block text-xs text-gray-500 mb-1">Véhicule de remplacement (disponible)</label>
                 <select
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   value={emergencyReplacementVehicleId}
                   onChange={(e) => setEmergencyReplacementVehicleId(e.target.value)}
                 >
-                  <option value="">Selectionner</option>
+                  <option value="">Sélectionner</option>
                   {replacementCandidates.map((v) => (
                     <option key={v.id} value={v.id}>
                       {(v.busNumber ? `#${v.busNumber} - ` : "") + (v.plateNumber || v.id)} ({v.currentCity || "Ville inconnue"})
@@ -545,19 +547,19 @@ export default function LogisticsDashboardPage() {
                     {topCostVehicles.map((v) => (
                       <li key={v.vehicleId} className="flex items-center justify-between text-sm">
                         <span className="text-gray-700 dark:text-gray-300">{v.plateNumber || v.vehicleId}</span>
-                        <span className="font-semibold text-gray-900 dark:text-white">{Math.round(v.vehicleCosts).toLocaleString("fr-FR")} XOF</span>
+                        <span className="font-semibold text-gray-900 dark:text-white">{money(Math.round(v.vehicleCosts))}</span>
                       </li>
                     ))}
                   </ul>
                 </div>
                 <div className="p-4 rounded-lg border border-gray-200 dark:border-gray-700">
-                  <p className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Vehicules faible rentabilite</p>
+                  <p className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Véhicules à faible rentabilité</p>
                   <ul className="space-y-2">
                     {lowProfitVehicles.map((v) => (
                       <li key={v.vehicleId} className="flex items-center justify-between text-sm">
                         <span className="text-gray-700 dark:text-gray-300">{v.plateNumber || v.vehicleId}</span>
                         <span className={`font-semibold ${v.vehicleProfit < 0 ? "text-red-600" : "text-amber-600"}`}>
-                          {Math.round(v.vehicleProfit).toLocaleString("fr-FR")} XOF
+                          {money(Math.round(v.vehicleProfit))}
                         </span>
                       </li>
                     ))}

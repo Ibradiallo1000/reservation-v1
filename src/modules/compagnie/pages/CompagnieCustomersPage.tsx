@@ -44,7 +44,7 @@ const CompagnieCustomersPage: React.FC = () => {
     <StandardLayoutWrapper>
       <PageHeader
         title="Clients"
-        subtitle="Historique des voyages et dépenses par client"
+        subtitle="Base clients consolidée : historique des voyages, fréquence et valeur par client."
         icon={Users}
         primaryColorVar={theme?.colors?.primary ? `var(--teliya-primary)` : undefined}
       />

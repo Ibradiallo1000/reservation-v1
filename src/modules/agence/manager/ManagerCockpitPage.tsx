@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   collection, doc, query, where, onSnapshot, getDocs, limit, Timestamp,
 } from "firebase/firestore";
@@ -11,15 +12,16 @@ import { fr } from "date-fns/locale";
 import { listAccounts, ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import {
   Banknote, Ticket, Gauge, Wallet, Bus,
-  AlertTriangle, CheckCircle2, Clock, Monitor,
+  AlertTriangle, CheckCircle2, Clock, Monitor, Package,
 } from "lucide-react";
 import { DateFilterBar } from "./DateFilterBar";
 import {
-  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, AlertMessage, table, tableRowClassName, typography,
+  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, AlertMessage, ActionButton, table, tableRowClassName, typography,
 } from "@/ui";
 import { useDateFilterContext } from "./DateFilterContext";
 import { useManagerAlerts } from "./useManagerAlerts";
 import type { DailyStatsDoc, AgencyLiveStateDoc } from "../aggregates/types";
+import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 
 const SESSION_WARN_H = 8;
 
@@ -43,6 +45,11 @@ type ReservationDoc = {
   statut?: string; statutEmbarquement?: string; createdAt?: any;
 };
 
+type ShipmentRow = {
+  createdAt?: { toDate?: () => Date };
+  currentStatus?: string;
+};
+
 export default function ManagerCockpitPage() {
   const { user, company } = useAuth() as any;
   const money = useFormatCurrency();
@@ -50,6 +57,7 @@ export default function ManagerCockpitPage() {
   const agencyId = user?.agencyId ?? "";
   const today = useMemo(() => toLocalISO(new Date()), []);
   const dayName = useMemo(() => weekdayFR(new Date()), []);
+  const navigate = useNavigate();
 
   const dateFilter = useDateFilterContext();
   const { alerts: managerAlerts } = useManagerAlerts();
@@ -63,6 +71,8 @@ export default function ManagerCockpitPage() {
   const [cashPosition, setCashPosition] = useState(0);
   const [weeklyTrips, setWeeklyTrips] = useState<Array<{ id: string; departure: string; arrival: string; horaires?: Record<string, string[]> }>>([]);
   const [boardingClosures, setBoardingClosures] = useState<Set<string>>(new Set());
+  const [courierTodayCount, setCourierTodayCount] = useState(0);
+  const [courierInTransitCount, setCourierInTransitCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -83,6 +93,25 @@ export default function ManagerCockpitPage() {
       (s) => setReservationsToday(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))));
     unsubs.push(onSnapshot(collection(db, `companies/${companyId}/agences/${agencyId}/boardingClosures`),
       (s) => setBoardingClosures(new Set(s.docs.map((d) => d.id)))));
+    unsubs.push(
+      onSnapshot(
+        query(shipmentsRef(db, companyId), where("originAgencyId", "==", agencyId), limit(1000)),
+        (snap) => {
+          const rows = snap.docs.map((d) => d.data() as ShipmentRow);
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const todayEnd = new Date();
+          todayEnd.setHours(23, 59, 59, 999);
+          const createdToday = rows.filter((r) => {
+            const created = r.createdAt?.toDate?.();
+            return created ? created >= todayStart && created <= todayEnd : false;
+          }).length;
+          const inTransit = rows.filter((r) => r.currentStatus === "IN_TRANSIT").length;
+          setCourierTodayCount(createdToday);
+          setCourierInTransitCount(inTransit);
+        }
+      )
+    );
 
     getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/weeklyTrips`)).then((s) => {
       setWeeklyTrips(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })).filter((t: any) => (t.horaires?.[dayName]?.length ?? 0) > 0));
@@ -157,7 +186,7 @@ export default function ManagerCockpitPage() {
   return (
     <StandardLayoutWrapper>
       <PageHeader
-        title="Dashboard"
+        title="Poste de pilotage agence"
         subtitle={format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
         right={
           <DateFilterBar
@@ -168,13 +197,24 @@ export default function ManagerCockpitPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <MetricCard label="Revenu" value={money(filteredRevenue)} icon={Banknote} valueColorVar="#059669" />
-        <MetricCard label="Billets vendus" value={filteredTickets} icon={Ticket} valueColorVar="#1d4ed8" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        <MetricCard label="CA période" value={money(filteredRevenue)} icon={Banknote} valueColorVar="#059669" />
+        <MetricCard label="Billets période" value={filteredTickets} icon={Ticket} valueColorVar="#1d4ed8" />
         <MetricCard label="Taux de remplissage" value={`${avgOccupancy}%`} icon={Gauge} valueColorVar="#7c3aed" />
-        <MetricCard label="Position caisse" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
+        <MetricCard label="Trésorerie agence" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
+        <MetricCard label="Colis créés (jour)" value={courierTodayCount} icon={Package} valueColorVar="#c2410c" />
+        <MetricCard label="Colis en transit" value={courierInTransitCount} icon={Package} valueColorVar="#0f766e" />
         <MetricCard label="Départs restants" value={departuresRemaining} icon={Bus} valueColorVar="#c2410c" />
       </div>
+
+      <SectionCard title="Actions manager">
+        <div className="flex flex-wrap gap-2">
+          <ActionButton size="sm" onClick={() => navigate("/agence/operations")}>Suivre opérations</ActionButton>
+          <ActionButton size="sm" onClick={() => navigate("/agence/finances")}>Arbitrer finances</ActionButton>
+          <ActionButton size="sm" onClick={() => navigate("/agence/treasury")}>Voir trésorerie</ActionButton>
+          <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/reports")}>Consulter rapports</ActionButton>
+        </div>
+      </SectionCard>
 
       <SectionCard title="Guichets actifs" icon={Monitor}
         right={<StatusBadge status="success">{activeCounters.length} actif{activeCounters.length > 1 ? "s" : ""}</StatusBadge>}
@@ -208,6 +248,27 @@ export default function ManagerCockpitPage() {
           </div>
         )}
       </SectionCard>
+
+      {activeCounters.length > 0 && (
+        <SectionCard title="Postes actifs en temps réel">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {activeCounters.map((c) => (
+              <div key={`card_${c.id}`} className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-gray-900 truncate">{c.name}</div>
+                  {c.status === "active" ? (
+                    <StatusBadge status="active">Actif</StatusBadge>
+                  ) : (
+                    <StatusBadge status="pending">Pause</StatusBadge>
+                  )}
+                </div>
+                <div className="mt-2 text-xs text-gray-600">Billets session: {c.tickets}</div>
+                <div className="text-sm font-medium text-gray-800">Revenu session: {money(c.revenue)}</div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
 
       {alertItems.length > 0 && (
         <SectionCard title="Alertes" icon={AlertTriangle}>

@@ -9,7 +9,7 @@ import { shipmentRef, shipmentsRef } from "@/modules/logistics/domain/firestoreP
 import { confirmPickup } from "@/modules/logistics/services/confirmPickup";
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
 import type { Company } from "@/types/companyTypes";
-import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { useFormatCurrency, useCurrencySymbol } from "@/shared/currency/CurrencyContext";
 import { Package, Truck, Search, Loader2, CheckCircle } from "lucide-react";
 import { PageHeader, StandardLayoutWrapper, SectionCard } from "@/ui";
 
@@ -21,6 +21,7 @@ export default function CourierPickupPage() {
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
   const money = useFormatCurrency();
+  const currencySymbol = useCurrencySymbol();
   const [searchBy, setSearchBy] = useState<"phone" | "code">("code");
   const [searchValue, setSearchValue] = useState("");
   const [shipment, setShipment] = useState<Shipment | null>(null);
@@ -79,7 +80,7 @@ export default function CourierPickupPage() {
     if (shipment.paymentType === "DESTINATION") {
       const amount = destinationAmount.trim() ? Number(destinationAmount) : NaN;
       if (Number.isNaN(amount) || amount < 0) {
-        setError("Paiement à destination : saisissez le montant perçu (FCFA).");
+        setError(`Paiement à destination : saisissez le montant perçu (${currencySymbol}).`);
         return;
       }
     }
@@ -177,7 +178,7 @@ export default function CourierPickupPage() {
           </dl>
           {shipment.paymentType === "DESTINATION" && (
             <div className="mt-4">
-              <label className="mb-2 block text-sm font-medium text-gray-700">Montant à percevoir (destination) FCFA</label>
+              <label className="mb-2 block text-sm font-medium text-gray-700">Montant à percevoir (destination) {currencySymbol}</label>
               <input
                 type="number"
                 min="0"

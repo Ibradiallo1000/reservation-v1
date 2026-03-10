@@ -197,8 +197,8 @@ const CompagnieLayout: React.FC = () => {
     { label: "Poste de Pilotage", icon: Gauge, path: `${basePath}/command-center` },
     { label: "Revenus & Liquidités", icon: DollarSign, path: `${basePath}/revenus-liquidites` },
     { label: "Performance Réseau", icon: TrendingUp, path: `${basePath}/dashboard` },
-    { label: "Opérations", icon: BarChart2, path: `${basePath}/operations-reseau`, badge: onlineProofsCount },
-    { label: "Flotte", icon: Truck, path: `${basePath}/fleet` },
+    { label: "Opérations Réseau", icon: BarChart2, path: `${basePath}/operations-reseau`, badge: onlineProofsCount },
+    { label: "Exploitation Flotte", icon: Truck, path: `${basePath}/fleet` },
     { label: "Finance Flotte", icon: DollarSign, path: `${basePath}/fleet-finance` },
     { label: "Contrôle & Audit", icon: FileCheck, path: `${basePath}/comptabilite` },
     {

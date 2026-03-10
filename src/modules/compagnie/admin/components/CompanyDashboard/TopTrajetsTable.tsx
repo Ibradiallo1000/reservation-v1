@@ -3,8 +3,10 @@
 // =============================================
 import React from "react";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 export function TopTrajetsTable({ rows, loading }: { rows: { trajet: string; reservations: number; revenus: number }[]; loading: boolean }) {
+  const money = useFormatCurrency();
   if (loading) return <Skeleton className="h-64 w-full rounded-xl" />;
   return (
     <div className="overflow-x-auto">
@@ -21,7 +23,7 @@ export function TopTrajetsTable({ rows, loading }: { rows: { trajet: string; res
             <tr key={i} className="border-b last:border-none">
               <td className="py-2">{r.trajet}</td>
               <td className="py-2 text-right">{r.reservations}</td>
-              <td className="py-2 text-right">{new Intl.NumberFormat("fr-FR", { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(r.revenus)}</td>
+              <td className="py-2 text-right">{money(r.revenus)}</td>
             </tr>
           ))}
         </tbody>

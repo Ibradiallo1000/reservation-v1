@@ -182,7 +182,7 @@ export default function DepensesPage() {
   return (
     <div className="space-y-6">
       <SectionCard
-        title="Validation et paiement des dépenses"
+        title="Dépenses — validation et paiement"
         icon={Receipt}
         help="Dépenses soumises par les agences. Approuvez puis payez pour enregistrer le mouvement en trésorerie."
         right={

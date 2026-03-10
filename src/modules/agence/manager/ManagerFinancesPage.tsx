@@ -12,7 +12,7 @@ import { listExpenses, PENDING_STATUSES } from "@/modules/compagnie/treasury/exp
 import { chefApproveShift } from "@/modules/agence/services/chefApproveShift";
 import {
   Banknote, Wallet, TrendingDown, ArrowRightLeft,
-  CheckCircle2, Loader2,
+  CheckCircle2, Loader2, Ticket,
 } from "lucide-react";
 import { DateFilterBar } from "./DateFilterBar";
 import {
@@ -143,8 +143,8 @@ export default function ManagerFinancesPage() {
   return (
     <StandardLayoutWrapper>
       <PageHeader
-        title="Finances"
-        subtitle={format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
+        title="Pilotage financier agence"
+        subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — validation des postes et contrôle de caisse`}
         right={
           <DateFilterBar
             preset={dateFilter.preset} onPresetChange={dateFilter.setPreset}
@@ -154,9 +154,9 @@ export default function ManagerFinancesPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <MetricCard label="Revenu" value={money(revenue)} icon={Banknote} valueColorVar="#059669" />
-        <MetricCard label="Billets" value={tickets} icon={Banknote} valueColorVar="#1d4ed8" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+        <MetricCard label="CA période" value={money(revenue)} icon={Banknote} valueColorVar="#059669" />
+        <MetricCard label="Billets période" value={tickets} icon={Ticket} valueColorVar="#1d4ed8" />
         <MetricCard label="Dépenses" value={money(expenses)} icon={TrendingDown} valueColorVar="#b91c1c" />
         <MetricCard label="Position caisse" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
         <MetricCard
@@ -169,7 +169,7 @@ export default function ManagerFinancesPage() {
         />
       </div>
 
-      <SectionCard title="Rapports à valider" icon={CheckCircle2} noPad>
+      <SectionCard title="Arbitrages de validation" icon={CheckCircle2} noPad>
         {pendingApproval.length === 0 && closedShifts.length === 0 ? (
           <EmptyState message="Aucun rapport en attente de validation." />
         ) : (

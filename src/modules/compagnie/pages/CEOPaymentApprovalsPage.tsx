@@ -17,6 +17,7 @@ import { payableRef } from "@/modules/compagnie/finance/payablesService";
 import type { PaymentProposalDoc } from "@/modules/compagnie/finance/paymentProposalsTypes";
 import type { PayableDoc } from "@/modules/compagnie/finance/payablesTypes";
 import { Check, X, Loader2, ShieldAlert, ArrowLeft } from "lucide-react";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 type ProposalRow = {
   id: string;
@@ -29,6 +30,7 @@ type ProposalRow = {
 
 function CEOPaymentApprovalsContent() {
   const { user } = useAuth();
+  const money = useFormatCurrency();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const [rows, setRows] = useState<ProposalRow[]>([]);
@@ -190,10 +192,10 @@ function CEOPaymentApprovalsContent() {
                   <th className="p-3 font-medium text-slate-700">Devise</th>
                   <th className="p-3 font-medium text-slate-700">Proposé par</th>
                   <th className="p-3 font-medium text-slate-700">Date</th>
-                  <th className="p-3 font-medium text-slate-700">Payable ID</th>
-                  <th className="p-3 font-medium text-slate-700">Cumul 24h</th>
+                  <th className="p-3 font-medium text-slate-700">ID payable</th>
+                  <th className="p-3 font-medium text-slate-700">Cumul 24 h</th>
                   <th className="p-3 font-medium text-slate-700">Seuil</th>
-                  <th className="p-3 font-medium text-slate-700">Indicateur</th>
+                  <th className="p-3 font-medium text-slate-700">Alerte</th>
                   <th className="p-3 font-medium text-slate-700">Actions</th>
                 </tr>
               </thead>
@@ -206,7 +208,7 @@ function CEOPaymentApprovalsContent() {
                     <tr key={row.id} className="border-b hover:bg-slate-50/50">
                       <td className="p-3">{row.supplierName}</td>
                       <td className="p-3 font-mono text-xs">{p.agencyId}</td>
-                      <td className="p-3 font-medium">{Number(p.amount).toLocaleString("fr-FR")}</td>
+                      <td className="p-3 font-medium">{money(Number(p.amount))}</td>
                       <td className="p-3">{p.currency}</td>
                       <td className="p-3">{p.proposedBy}</td>
                       <td className="p-3">
@@ -215,12 +217,12 @@ function CEOPaymentApprovalsContent() {
                       <td className="p-3 font-mono text-xs truncate max-w-[120px]" title={p.payableId}>
                         {p.payableId}
                       </td>
-                      <td className="p-3">{row.cumulativeAmountLast24h.toLocaleString("fr-FR")}</td>
-                      <td className="p-3">{row.threshold.toLocaleString("fr-FR")}</td>
+                      <td className="p-3">{money(row.cumulativeAmountLast24h)}</td>
+                      <td className="p-3">{money(row.threshold)}</td>
                       <td className="p-3">
                         <StatusBadge status={row.statusIndicator === "Threshold exceeded" ? "warning" : "neutral"}>
                           {row.statusIndicator === "Threshold exceeded" && <ShieldAlert className="w-3 h-3 inline mr-1" />}
-                          {row.statusIndicator}
+                          {row.statusIndicator === "Threshold exceeded" ? "Seuil dépassé" : "Normal"}
                         </StatusBadge>
                       </td>
                       <td className="p-3">

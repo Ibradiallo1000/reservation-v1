@@ -14,6 +14,7 @@ import {
 import { ArrowLeft, Plus, Pencil } from "lucide-react";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 const TODAY = format(new Date(), "yyyy-MM-dd");
 
@@ -22,6 +23,7 @@ type TripCostWithId = TripCostDoc & { id: string };
 export default function TripCostsPage() {
   const isOnline = useOnlineStatus();
   const { user } = useAuth();
+  const money = useFormatCurrency();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const navigate = useNavigate();
@@ -294,13 +296,13 @@ export default function TripCostsPage() {
                     <td className="py-2">{row.tripId}</td>
                     <td className="py-2">{row.agencyId}</td>
                     <td className="py-2">{row.date}</td>
-                    <td className="py-2 text-right">{Number(row.fuelCost || 0).toLocaleString("fr-FR")}</td>
-                    <td className="py-2 text-right">{Number(row.driverCost || 0).toLocaleString("fr-FR")}</td>
-                    <td className="py-2 text-right">{Number(row.assistantCost || 0).toLocaleString("fr-FR")}</td>
-                    <td className="py-2 text-right">{Number(row.tollCost || 0).toLocaleString("fr-FR")}</td>
-                    <td className="py-2 text-right">{Number(row.maintenanceCost || 0).toLocaleString("fr-FR")}</td>
-                    <td className="py-2 text-right">{Number(row.otherOperationalCost || 0).toLocaleString("fr-FR")}</td>
-                    <td className="py-2 text-right font-medium">{totalOperationalCost(row).toLocaleString("fr-FR")}</td>
+                    <td className="py-2 text-right">{money(Number(row.fuelCost || 0))}</td>
+                    <td className="py-2 text-right">{money(Number(row.driverCost || 0))}</td>
+                    <td className="py-2 text-right">{money(Number(row.assistantCost || 0))}</td>
+                    <td className="py-2 text-right">{money(Number(row.tollCost || 0))}</td>
+                    <td className="py-2 text-right">{money(Number(row.maintenanceCost || 0))}</td>
+                    <td className="py-2 text-right">{money(Number(row.otherOperationalCost || 0))}</td>
+                    <td className="py-2 text-right font-medium">{money(totalOperationalCost(row))}</td>
                     <td className="py-2">
                       {canEditSameDay(row.date) ? (
                         <button type="button" onClick={() => startEdit(row)} className="text-orange-600 hover:underline inline-flex items-center gap-0.5">

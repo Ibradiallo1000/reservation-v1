@@ -53,10 +53,16 @@ const AgenceFinancesPage: React.FC = () => {
     <StandardLayoutWrapper>
       <PageHeader title="État financier de l'agence" icon={Wallet} />
       <SectionCard title="Période">
-        <div className="flex flex-wrap gap-2 mb-4">
-          <ActionButton variant={periode === 'jour' ? 'primary' : 'secondary'} onClick={() => setPeriode('jour')}>Aujourd'hui</ActionButton>
-          <ActionButton variant={periode === 'semaine' ? 'primary' : 'secondary'} onClick={() => setPeriode('semaine')}>7 derniers jours</ActionButton>
-          <ActionButton variant={periode === 'mois' ? 'primary' : 'secondary'} onClick={() => setPeriode('mois')}>Ce mois-ci</ActionButton>
+        <div className="mb-4">
+          <select
+            value={periode}
+            onChange={(e) => setPeriode(e.target.value as typeof periode)}
+            className="h-9 min-w-[190px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
+          >
+            <option value="jour">Aujourd'hui</option>
+            <option value="semaine">7 derniers jours</option>
+            <option value="mois">Ce mois-ci</option>
+          </select>
         </div>
       </SectionCard>
       <SectionCard title="Résumé">

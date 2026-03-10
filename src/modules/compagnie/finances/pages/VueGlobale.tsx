@@ -347,17 +347,16 @@ const VueGlobale: React.FC = () => {
         help={<span className="text-sm font-normal text-gray-500">Tableau de bord financier multi-agences</span>}
         right={
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex rounded-lg border border-gray-300 p-1 bg-gray-50">
-              {(['today', 'week', 'month', 'all'] as const).map((p) => (
-                <button
-                  key={p}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${period === p ? 'bg-white border border-gray-200 shadow-sm text-gray-900' : 'text-gray-600 hover:bg-gray-100'}`}
-                  onClick={() => setPeriod(p)}
-                >
-                  {p === 'today' ? 'Aujourd\'hui' : p === 'week' ? '7 jours' : p === 'month' ? '30 jours' : 'Toutes'}
-                </button>
-              ))}
-            </div>
+            <select
+              value={period}
+              onChange={(e) => setPeriod(e.target.value as typeof period)}
+              className="h-9 min-w-[160px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
+            >
+              <option value="today">Aujourd'hui</option>
+              <option value="week">7 jours</option>
+              <option value="month">30 jours</option>
+              <option value="all">Toutes</option>
+            </select>
             <button
               onClick={loadGlobalData}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium"

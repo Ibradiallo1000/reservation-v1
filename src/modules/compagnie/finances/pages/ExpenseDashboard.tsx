@@ -183,6 +183,12 @@ export default function ExpenseDashboard() {
         </div>
       )}
 
+      <SectionCard title="Analyse des dépenses" icon={BarChart3}>
+        <p className="text-sm text-gray-600">
+          Vue analytique des coûts consolidés (catégories, agences, tendances). La validation et le paiement se font dans le module Dépenses.
+        </p>
+      </SectionCard>
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <MetricCard label="Dépenses totales" value={formatCurrency(totalExpenses)} icon={BarChart3} />
         <MetricCard label="Nombre de dépenses" value={acceptedRows.length} icon={PieChart} />

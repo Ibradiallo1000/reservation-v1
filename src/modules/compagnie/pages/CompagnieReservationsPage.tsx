@@ -27,6 +27,7 @@ import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { getDateRangeForPeriod, getPeriodLabel, type PeriodKind } from "@/shared/date/periodUtils";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 /* ----------------------------- Types ----------------------------------- */
 interface Reservation {
@@ -49,20 +50,13 @@ interface Agence {
   pays?: string;
 }
 
-/* ------------------------- Helpers / format ----------------------------- */
-const fmtXOF = (n: number) =>
-  new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "XOF",
-    maximumFractionDigits: 0,
-  }).format(n);
-
 const cx = (...xs: (string | false | null | undefined)[]) =>
   xs.filter(Boolean).join(" ");
 
 /* ------------------------------ Page ----------------------------------- */
 const CompagnieReservationsPage: React.FC = () => {
   const { user, company } = useAuth();
+  const money = useFormatCurrency();
   const { companyId: companyIdFromUrl } = useParams();
 
   // 🔥 LOGIQUE UNIFIÉE
@@ -466,7 +460,7 @@ const CompagnieReservationsPage: React.FC = () => {
                     </div>
 
                     <div className="mt-4">
-                      <div className="text-2xl font-bold">{fmtXOF(ca)}</div>
+                      <div className="text-2xl font-bold">{money(ca)}</div>
                       <p className="text-xs text-gray-500">CA sur la période</p>
                     </div>
 
@@ -513,7 +507,7 @@ const CompagnieReservationsPage: React.FC = () => {
                       </h3>
                       <p className="text-sm text-gray-600">
                         {totalsSelected.billets} billets ·{" "}
-                        <span className="font-medium">{fmtXOF(totalsSelected.ca)}</span>{" "}
+                        <span className="font-medium">{money(totalsSelected.ca)}</span>{" "}
                         · Guichet {totalsSelected.guichet} — En ligne {totalsSelected.enLigne}
                       </p>
                     </div>
@@ -577,7 +571,7 @@ const CompagnieReservationsPage: React.FC = () => {
                             <td className="px-6 py-3 text-sm text-right">{r.billets}</td>
                             <td className="px-6 py-3 text-sm text-right">{r.guichet}</td>
                             <td className="px-6 py-3 text-sm text-right">{r.enLigne}</td>
-                            <td className="px-6 py-3 text-sm text-right">{fmtXOF(r.ca)}</td>
+                            <td className="px-6 py-3 text-sm text-right">{money(r.ca)}</td>
                             <td className="px-6 py-3 text-sm text-right text-gray-600">
                               {r.lastSale ? r.lastSale.toLocaleDateString("fr-FR") : "—"}
                             </td>

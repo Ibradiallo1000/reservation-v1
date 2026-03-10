@@ -1,5 +1,5 @@
 import React from "react";
-import { Calendar, Filter } from "lucide-react";
+import { Calendar } from "lucide-react";
 
 export type RangeKey = "day" | "month" | "prev_month" | "ytd" | "12m" | "custom";
 
@@ -20,50 +20,48 @@ export const TimeFilterBar: React.FC<Props> = ({
   customEnd,
   setCustomEnd,
 }) => {
-  return (
-    <div className="flex flex-wrap gap-2 items-center">
-      {/* Filtres rapides */}
-      {([
-        { key: "day", label: "Jour" },
-        { key: "month", label: "Mois en cours" },
-        { key: "prev_month", label: "Mois précédent" },
-        { key: "ytd", label: "Depuis janvier" },
-        { key: "12m", label: "12 derniers mois" },
-        { key: "custom", label: "Personnalisé" },
-      ] as { key: RangeKey; label: string }[]).map((opt) => (
-        <button
-          key={opt.key}
-          onClick={() => setRange(opt.key)}
-          className={`px-3 py-1 text-sm rounded-full border transition ${
-            range === opt.key
-              ? "bg-[var(--btn-primary,#FF6600)] text-white border-[var(--btn-primary,#FF6600)]"
-              : "bg-white text-gray-700 hover:bg-gray-100 border-gray-300"
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
+  const options: { key: RangeKey; label: string }[] = [
+    { key: "day", label: "Jour" },
+    { key: "month", label: "Mois en cours" },
+    { key: "prev_month", label: "Mois précédent" },
+    { key: "ytd", label: "Depuis janvier" },
+    { key: "12m", label: "12 derniers mois" },
+    { key: "custom", label: "Personnalisé" },
+  ];
 
-      {/* Filtres de date personnalisée */}
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        value={range}
+        onChange={(e) => setRange(e.target.value as RangeKey)}
+        className="h-9 min-w-[190px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
+      >
+        {options.map((opt) => (
+          <option key={opt.key} value={opt.key}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+
       {range === "custom" && (
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2">
             <Calendar className="h-4 w-4 text-gray-500" />
             <input
               type="date"
               value={customStart || ""}
               onChange={(e) => setCustomStart(e.target.value || null)}
-              className="border rounded px-2 py-1 text-sm"
+              className="h-9 text-sm text-gray-700 outline-none"
             />
           </div>
           <span className="text-gray-500">→</span>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2">
             <Calendar className="h-4 w-4 text-gray-500" />
             <input
               type="date"
               value={customEnd || ""}
               onChange={(e) => setCustomEnd(e.target.value || null)}
-              className="border rounded px-2 py-1 text-sm"
+              className="h-9 text-sm text-gray-700 outline-none"
             />
           </div>
         </div>

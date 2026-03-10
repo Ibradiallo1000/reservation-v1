@@ -119,7 +119,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? "";
   const { user } = useAuth();
-  const pageTitle = view === "maintenance" ? "Maintenance" : view === "transit" ? "Transit" : view === "incidents" ? "Incidents" : "Flotte — Chef Garage";
+  const pageTitle = view === "maintenance" ? "Maintenance" : view === "transit" ? "Transit" : view === "incidents" ? "Incidents" : "Exploitation Flotte";
   const theme = useGarageTheme();
 
   const [vehicles, setVehicles] = useState<VehicleRow[]>([]);

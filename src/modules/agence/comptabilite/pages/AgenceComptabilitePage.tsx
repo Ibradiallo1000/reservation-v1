@@ -1768,21 +1768,21 @@ const AgenceComptabilitePage: React.FC = () => {
                     className="whitespace-nowrap"
                   >
                     <Plus className="h-4 w-4 mr-2" /> 
-                    Nouveau mouvement
+                    Initier dépense caisse
                   </ActionButton>
                   <ActionButton
                     variant="secondary"
                     onClick={() => setTreasuryModalView('transfer')}
                     className="whitespace-nowrap"
                   >
-                    Transfert
+                    Initier versement compagnie
                   </ActionButton>
                   <ActionButton
                     variant="secondary"
                     onClick={() => setTreasuryModalView('new-payable')}
                     className="whitespace-nowrap"
                   >
-                    Paiement fournisseur
+                    Créer payable fournisseur
                   </ActionButton>
                   <ActionButton
                     variant="secondary"
@@ -2367,9 +2367,9 @@ const AgenceComptabilitePage: React.FC = () => {
             <div className="mx-auto h-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
               <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
                 <div className="text-sm sm:text-base font-semibold text-gray-900">
-                  {treasuryModalView === 'new-operation' && 'Nouveau mouvement'}
-                  {treasuryModalView === 'transfer' && 'Versement caisse vers banque'}
-                  {treasuryModalView === 'new-payable' && 'Paiement fournisseur'}
+                  {treasuryModalView === 'new-operation' && 'Initiation dépense caisse'}
+                  {treasuryModalView === 'transfer' && 'Initiation versement caisse vers banque compagnie'}
+                  {treasuryModalView === 'new-payable' && 'Création payable fournisseur'}
                 </div>
                 <button
                   type="button"

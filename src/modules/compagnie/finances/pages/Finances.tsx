@@ -15,6 +15,7 @@ import { db } from '@/firebaseConfig';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
+import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import {
   TrendingUp,
   BarChart3,
@@ -238,10 +239,10 @@ const Finances: React.FC = () => {
         const reservationsRef = collection(db, 
           `companies/${user.companyId}/agences/${agency.id}/reservations`);
         
-        // Filtrer uniquement les réservations confirmées de la période
+        // Récupérer les réservations de la période puis filtrer localement
+        // pour accepter les variantes métier de statut (confirmé / payé).
         const q = query(
           reservationsRef,
-          where('statut', '==', 'confirme'),
           where('createdAt', '>=', Timestamp.fromDate(dateRange.start)),
           where('createdAt', '<=', Timestamp.fromDate(dateRange.end))
         );
@@ -254,6 +255,9 @@ const Finances: React.FC = () => {
         
         snap.forEach(doc => {
           const data = doc.data();
+          const statut = String(data.statut ?? '').toLowerCase();
+          const normalized = canonicalStatut(statut);
+          if (normalized !== 'paye' && statut !== 'confirme') return;
           const montant = data.montant || 0;
           agencyTotalRevenue += montant;
           
@@ -470,7 +474,7 @@ const Finances: React.FC = () => {
     <div className="space-y-6">
       {/* ================= EN-TÊTE ================= */}
       <SectionCard
-        title="Finances Compagnie"
+        title="Finances consolidées"
         icon={TrendingUp}
         help={<span className="text-sm font-normal text-gray-500">Données consolidées pour la prise de décision</span>}
         right={
@@ -509,65 +513,29 @@ const Finances: React.FC = () => {
         
         <div className="space-y-4">
           {/* Sélecteur rapide */}
-          <div className="flex flex-wrap gap-2">
-            <button
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                periodType === 'day' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-600 hover:bg-gray-100 border border-gray-200'
-              }`}
-              onClick={() => setPeriodType('day')}
+          <div>
+            <select
+              value={periodType}
+              onChange={(e) => setPeriodType(e.target.value as typeof periodType)}
+              className="h-9 min-w-[210px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
             >
-              Aujourd'hui
-            </button>
-            <button
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                periodType === 'week' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-600 hover:bg-gray-100 border border-gray-200'
-              }`}
-              onClick={() => setPeriodType('week')}
-            >
-              7 derniers jours
-            </button>
-            <button
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                periodType === 'month' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-600 hover:bg-gray-100 border border-gray-200'
-              }`}
-              onClick={() => setPeriodType('month')}
-            >
-              Mois en cours
-            </button>
-            <button
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                periodType === 'quarter' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-600 hover:bg-gray-100 border border-gray-200'
-              }`}
-              onClick={() => setPeriodType('quarter')}
-            >
-              Trimestre
-            </button>
-            <button
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                periodType === 'year' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-600 hover:bg-gray-100 border border-gray-200'
-              }`}
-              onClick={() => setPeriodType('year')}
-            >
-              Année
-            </button>
-            <button
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                periodType === 'custom' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-600 hover:bg-gray-100 border border-gray-200'
-              }`}
-              onClick={() => setPeriodType('custom')}
-            >
-              Période personnalisée
-            </button>
+              <option value="day">Aujourd'hui</option>
+              <option value="week">7 derniers jours</option>
+              <option value="month">Mois en cours</option>
+              <option value="quarter">Trimestre</option>
+              <option value="year">Année</option>
+              <option value="custom">Période personnalisée</option>
+            </select>
           </div>
           
           {/* Période personnalisée */}
           {periodType === 'custom' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-lg border border-blue-200 bg-blue-50">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg border border-blue-200 bg-blue-50">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Date de début</label>
                 <input
                   type="date"
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                  className="w-full h-9 border border-gray-300 rounded-lg px-3 bg-white text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ outlineColor: theme.primary }}
                   value={customDateRange.start?.toISOString().split('T')[0] || ''}
                   onChange={(e) => handleCustomDateChange('start', e.target.value)}
@@ -577,7 +545,7 @@ const Finances: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">Date de fin</label>
                 <input
                   type="date"
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:border-transparent"
+                  className="w-full h-9 border border-gray-300 rounded-lg px-3 bg-white text-sm focus:outline-none focus:ring-2 focus:border-transparent"
                   style={{ outlineColor: theme.primary }}
                   value={customDateRange.end?.toISOString().split('T')[0] || ''}
                   onChange={(e) => handleCustomDateChange('end', e.target.value)}

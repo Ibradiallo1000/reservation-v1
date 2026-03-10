@@ -9,6 +9,7 @@ import { db } from "@/firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
 import { PlusCircle } from "lucide-react";
 import { toast } from "sonner";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 type OperationKind = "expense" | "transfer" | "supplier_payment";
 const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
@@ -95,11 +96,11 @@ export default function AgencyTreasuryNewOperationPage() {
   const submitExpense = async () => {
     if (!companyId || !user?.uid) return;
     if (!defaultAgencyId) {
-      toast.error("Aucune agence associee a ce compte.");
+      toast.error("Aucune agence associée à ce compte.");
       return;
     }
     if (!agencyCashAccount) {
-      toast.error("Aucune caisse agence configuree.");
+      toast.error("Aucune caisse agence configurée.");
       return;
     }
     const numericAmount = Number(amount.replace(",", "."));
@@ -108,7 +109,7 @@ export default function AgencyTreasuryNewOperationPage() {
       return;
     }
     if (numericAmount > agencyCashAccount.currentBalance) {
-      toast.error("Montant superieur au cash disponible en caisse.");
+      toast.error("Montant supérieur au cash disponible en caisse.");
       return;
     }
     setSubmitting(true);
@@ -123,7 +124,7 @@ export default function AgencyTreasuryNewOperationPage() {
         createdBy: user.uid,
         expenseCategory: category,
       });
-      toast.success("Demande de depense soumise.");
+      toast.success("Demande de dépense soumise.");
       setDescription("");
       setAmount("");
     } catch (error) {
@@ -139,14 +140,14 @@ export default function AgencyTreasuryNewOperationPage() {
 
   return (
     <div className="space-y-6">
-      <SectionCard title="Nouvelle operation de tresorerie agence" icon={PlusCircle}>
+      <SectionCard title="Nouvelle opération de trésorerie agence" icon={PlusCircle}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <button
             type="button"
             onClick={() => setOperation("expense")}
             className={`rounded-lg border px-3 py-2 text-sm ${operation === "expense" ? "border-indigo-500 bg-indigo-50" : "border-gray-300"}`}
           >
-            Depense
+            Dépense
           </button>
           <button
             type="button"
@@ -167,12 +168,12 @@ export default function AgencyTreasuryNewOperationPage() {
 
       {loading ? (
         <SectionCard title="Chargement">
-          <div className="py-8 text-center text-gray-500">Chargement des donnees...</div>
+          <div className="py-8 text-center text-gray-500">Chargement des données...</div>
         </SectionCard>
       ) : null}
 
       {!loading && operation === "expense" && (
-        <SectionCard title="Soumettre une depense">
+        <SectionCard title="Soumettre une dépense">
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -185,15 +186,15 @@ export default function AgencyTreasuryNewOperationPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Source (caisse agence)</label>
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
                   {agencyCashAccount
-                    ? `Caisse agence - ${agencyCashAccount.currentBalance.toLocaleString("fr-FR")} ${agencyCashAccount.currency}`
-                    : "Aucune caisse agence configuree"}
+                    ? `Caisse agence - ${formatCurrency(agencyCashAccount.currentBalance, agencyCashAccount.currency)}`
+                    : "Aucune caisse agence configurée"}
                 </div>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Categorie</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
                 <select
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   value={category}
@@ -216,8 +217,7 @@ export default function AgencyTreasuryNewOperationPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Disponible en caisse: {(agencyCashAccount?.currentBalance ?? 0).toLocaleString("fr-FR")}{" "}
-                  {agencyCashAccount?.currency ?? "XOF"}
+                  Disponible en caisse: {formatCurrency(agencyCashAccount?.currentBalance ?? 0, agencyCashAccount?.currency ?? "XOF")}
                 </p>
               </div>
             </div>
@@ -229,12 +229,12 @@ export default function AgencyTreasuryNewOperationPage() {
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="Motif de la depense"
+                placeholder="Motif de la dépense"
               />
             </div>
 
             <ActionButton onClick={submitExpense} disabled={submitting}>
-              {submitting ? "Soumission..." : "Soumettre la depense"}
+              {submitting ? "Soumission..." : "Soumettre la dépense"}
             </ActionButton>
           </div>
         </SectionCard>
@@ -243,7 +243,7 @@ export default function AgencyTreasuryNewOperationPage() {
       {!loading && operation === "transfer" && (
         <SectionCard title="Transferts">
           <p className="text-sm text-gray-600 mb-3">
-            Cette operation reutilise les services de tresorerie existants.
+            Cette opération réutilise les services de trésorerie existants.
           </p>
           <ActionButton onClick={openTransferPage}>Ouvrir la page de transfert</ActionButton>
         </SectionCard>
@@ -252,7 +252,7 @@ export default function AgencyTreasuryNewOperationPage() {
       {!loading && operation === "supplier_payment" && (
         <SectionCard title="Comptes fournisseurs">
           <p className="text-sm text-gray-600 mb-3">
-            Creer un payable fournisseur avant paiement.
+            Créer un payable fournisseur avant paiement.
           </p>
           <ActionButton onClick={openSupplierPayablePage}>Ouvrir la page nouveau payable</ActionButton>
         </SectionCard>

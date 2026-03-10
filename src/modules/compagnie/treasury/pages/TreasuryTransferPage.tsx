@@ -3,13 +3,17 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams, useParams } from "react-router-dom";
 import { SectionCard, ActionButton } from "@/ui";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
+import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
 import {
   transferBetweenAccounts,
   agencyDepositToBank,
   mobileToBankTransfer,
 } from "@/modules/compagnie/treasury/treasuryTransferService";
+import { collection, getDocs } from "firebase/firestore";
+import { db } from "@/firebaseConfig";
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
 
 type TransferMode = "internal_transfer" | "agency_deposit" | "mobile_to_bank";
 
@@ -34,6 +38,8 @@ export default function TreasuryTransferPage() {
   const companyId = params.companyId ?? searchParams.get("companyId") ?? user?.companyId ?? "";
 
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [agencyNameById, setAgencyNameById] = useState<Record<string, string>>({});
+  const [companyBanksById, setCompanyBanksById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [mode, setMode] = useState<TransferMode>("internal_transfer");
@@ -47,9 +53,26 @@ export default function TreasuryTransferPage() {
       setLoading(false);
       return;
     }
-    listAccounts(companyId)
-      .then((rows) => {
+    Promise.all([
+      listAccounts(companyId),
+      getDocs(collection(db, "companies", companyId, "agences")),
+      getDocs(collection(db, "companies", companyId, "companyBanks")),
+    ])
+      .then(([rows, agencySnap, banksSnap]) => {
         setAccounts(rows);
+        const agenciesMap: Record<string, string> = {};
+        agencySnap.docs.forEach((d) => {
+          const data = d.data() as { nom?: string; nomAgence?: string; name?: string };
+          agenciesMap[d.id] = data.nom ?? data.nomAgence ?? data.name ?? d.id;
+        });
+        setAgencyNameById(agenciesMap);
+        const banksMap: Record<string, string> = {};
+        banksSnap.docs.forEach((d) => {
+          const data = d.data() as { name?: string; isActive?: boolean };
+          if (data.isActive === false) return;
+          banksMap[d.id] = data.name ?? d.id;
+        });
+        setCompanyBanksById(banksMap);
         if (rows.length > 1) {
           setFromAccountId(rows[0].id);
           setToAccountId(rows[1].id);
@@ -123,7 +146,7 @@ export default function TreasuryTransferPage() {
           performedBy: user.uid,
           performedByRole: user.role ?? null,
           idempotencyKey: makeIdempotencyKey(),
-          description: description.trim() || "Depot caisse vers banque",
+          description: description.trim() || "Dépôt caisse vers banque",
         });
       } else {
         if (!fromAccountId || !toAccountId) {
@@ -158,7 +181,7 @@ export default function TreasuryTransferPage() {
 
   return (
     <div className="space-y-6">
-      <SectionCard title="Transfert de tresorerie" icon={ArrowRightLeft}>
+      <SectionCard title="Transfert de trésorerie" icon={ArrowRightLeft}>
         {loading ? (
           <div className="py-8 text-center text-gray-500">Chargement des comptes...</div>
         ) : (
@@ -184,7 +207,7 @@ export default function TreasuryTransferPage() {
                   setToAccountId(companyBankAccounts[0]?.id ?? "");
                 }}
               >
-                Depot agence vers banque
+                Dépôt agence vers banque
               </button>
               <button
                 type="button"
@@ -207,10 +230,10 @@ export default function TreasuryTransferPage() {
                   value={fromAccountId}
                   onChange={(e) => setFromAccountId(e.target.value)}
                 >
-                  <option value="">Selectionner</option>
+                  <option value="">Sélectionner</option>
                   {(mode === "agency_deposit" ? agencyCashAccounts : mode === "mobile_to_bank" ? mobileAccounts : accounts).map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.accountName} ({a.accountType}) - {a.currentBalance.toLocaleString("fr-FR")} {a.currency}
+                      {getFinancialAccountDisplayName(a, { agencyNameById, companyBankNameById: companyBanksById })} ({a.accountType}) - {formatCurrency(a.currentBalance, a.currency)}
                     </option>
                   ))}
                 </select>
@@ -222,10 +245,10 @@ export default function TreasuryTransferPage() {
                   value={toAccountId}
                   onChange={(e) => setToAccountId(e.target.value)}
                 >
-                  <option value="">Selectionner</option>
+                  <option value="">Sélectionner</option>
                   {(mode === "internal_transfer" ? accounts : companyBankAccounts).map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.accountName} ({a.accountType})
+                      {getFinancialAccountDisplayName(a, { agencyNameById, companyBankNameById: companyBanksById })} ({a.accountType})
                     </option>
                   ))}
                 </select>

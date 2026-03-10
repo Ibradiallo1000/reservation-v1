@@ -1,10 +1,9 @@
 import React, { useEffect, useState, useMemo } from "react";
 import {
-  collection, query, where, getDocs, Timestamp,
+  collection, query, where, getDocs,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { FileBarChart2, Download } from "lucide-react";
@@ -24,15 +23,12 @@ type ShiftDoc = {
 
 export default function ManagerReportsPage() {
   const { user } = useAuth() as any;
-  const money = useFormatCurrency();
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
 
   const dateFilter = useDateFilterContext();
 
   const [shifts, setShifts] = useState<ShiftDoc[]>([]);
-  const [revenue, setRevenue] = useState(0);
-  const [tickets, setTickets] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -42,17 +38,23 @@ export default function ManagerReportsPage() {
       setLoading(true);
       const { start, end } = dateFilter.range;
 
-      const [shiftSnap, resSnap] = await Promise.all([
-        getDocs(query(collection(db, `companies/${companyId}/agences/${agencyId}/shifts`), where("status", "==", "validated"))),
-        getDocs(query(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
-          where("createdAt", ">=", Timestamp.fromDate(start)),
-          where("createdAt", "<=", Timestamp.fromDate(end)),
-          where("statut", "in", ["paye", "payé"]))),
-      ]);
-
-      setShifts(shiftSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
-      setRevenue(resSnap.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0));
-      setTickets(resSnap.size);
+      const shiftSnap = await getDocs(
+        query(
+          collection(db, `companies/${companyId}/agences/${agencyId}/shifts`),
+          where("status", "in", ["closed", "validated"])
+        )
+      );
+      const inPeriod = shiftSnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .filter((s) => {
+          const t =
+            s.startTime?.toDate?.()?.getTime?.() ??
+            s.createdAt?.toDate?.()?.getTime?.() ??
+            null;
+          if (t == null) return false;
+          return t >= start.getTime() && t <= end.getTime();
+        });
+      setShifts(inPeriod);
       setLoading(false);
     };
 
@@ -60,6 +62,12 @@ export default function ManagerReportsPage() {
   }, [companyId, agencyId, dateFilter.range.start.getTime(), dateFilter.range.end.getTime()]);
 
   const fullyApproved = useMemo(() => shifts.filter((s) => s.lockedChef), [shifts]);
+  const pendingChefApproval = useMemo(
+    () => shifts.filter((s) => s.lockedComptable && !s.lockedChef),
+    [shifts]
+  );
+  const validationBase = fullyApproved.length + pendingChefApproval.length;
+  const validationRate = validationBase > 0 ? Math.round((fullyApproved.length / validationBase) * 100) : 100;
 
   const handleExportCSV = () => {
     const header = "Guichetier,Code,Début,Fin,Validé Compta,Validé Chef\n";
@@ -83,7 +91,7 @@ export default function ManagerReportsPage() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Rapports"
-        subtitle={format(new Date(), "EEEE d MMMM yyyy", { locale: fr })}
+        subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — synthèse de conformité des postes`}
         right={
           <div className="flex flex-wrap items-center gap-2">
             <DateFilterBar
@@ -100,9 +108,9 @@ export default function ManagerReportsPage() {
       />
 
       <div className="grid grid-cols-3 gap-4">
-        <MetricCard label="Revenu" value={money(revenue)} valueColorVar="#059669" />
-        <MetricCard label="Billets" value={tickets} valueColorVar="#1d4ed8" />
-        <MetricCard label="Rapports validés" value={fullyApproved.length} valueColorVar="#4f46e5" />
+        <MetricCard label="Rapports validés chef" value={fullyApproved.length} valueColorVar="#4f46e5" />
+        <MetricCard label="Rapports en attente chef" value={pendingChefApproval.length} valueColorVar="#b45309" />
+        <MetricCard label="Taux validation chef" value={`${validationRate}%`} valueColorVar="#059669" />
       </div>
 
       <SectionCard title="Rapports validés (comptable + chef)" icon={FileBarChart2} noPad>

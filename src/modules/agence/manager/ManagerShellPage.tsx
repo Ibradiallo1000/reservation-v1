@@ -32,7 +32,6 @@ import {
 } from "@/modules/agence/shared";
 
 const COURRIER_CHILDREN: NavSectionChild[] = [
-  { label: "Vue générale", path: "/agence/courrier", end: true },
   { label: "Nouvel envoi", path: "/agence/courrier/nouveau" },
   { label: "Lots", path: "/agence/courrier/lots" },
   { label: "Réception", path: "/agence/courrier/reception" },
@@ -42,19 +41,19 @@ const COURRIER_CHILDREN: NavSectionChild[] = [
 
 const TREASURY_CHILDREN: NavSectionChild[] = [
   { label: "Vue générale", path: "/agence/treasury", end: true },
-  { label: "Nouvelle opération", path: "/agence/treasury/new-operation" },
-  { label: "Transfert", path: "/agence/treasury/transfer" },
-  { label: "Nouveau payable", path: "/agence/treasury/new-payable" },
+  { label: "Soumettre dépense", path: "/agence/treasury/new-operation" },
+  { label: "Versement compagnie", path: "/agence/treasury/transfer" },
+  { label: "Nouveau payable fournisseur", path: "/agence/treasury/new-payable" },
 ];
 
 const BASE_SECTIONS: Array<NavSection & { moduleKey: string }> = [
-  { label: "Dashboard",   icon: LayoutDashboard, path: "/agence/dashboard",   end: true, moduleKey: "dashboard" },
+  { label: "Poste de pilotage", icon: LayoutDashboard, path: "/agence/dashboard", end: true, moduleKey: "dashboard" },
   { label: "Opérations",  icon: Activity,        path: "/agence/operations",             moduleKey: "operations" },
-  { label: "Trajets",     icon: MapPinned,       path: "/agence/trajets",                moduleKey: "trajets" },
   { label: "Finances",    icon: Banknote,        path: "/agence/finances",               moduleKey: "finances" },
   { label: "Trésorerie",  icon: Wallet,          path: "/agence/treasury",               moduleKey: "treasury", children: TREASURY_CHILDREN },
-  { label: "Équipe",      icon: Users,           path: "/agence/team",                   moduleKey: "team" },
   { label: "Rapports",    icon: FileBarChart2,   path: "/agence/reports",                moduleKey: "reports" },
+  { label: "Trajets",     icon: MapPinned,       path: "/agence/trajets",                moduleKey: "trajets" },
+  { label: "Équipe",      icon: Users,           path: "/agence/team",                   moduleKey: "team" },
 ];
 
 const ManagerShellInner: React.FC = () => {
@@ -66,6 +65,17 @@ const ManagerShellInner: React.FC = () => {
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
   const [pendingManagerExpensesCount, setPendingManagerExpensesCount] = React.useState(0);
+  const sectionOrder: Record<string, number> = {
+    "Poste de pilotage": 1,
+    "Opérations": 2,
+    "Finances": 3,
+    "Trésorerie": 4,
+    "Validation dépenses": 5,
+    "Courrier": 6,
+    "Rapports": 7,
+    "Trajets": 8,
+    "Équipe": 9,
+  };
 
   const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
   const roles = new Set(rolesArr);
@@ -108,7 +118,7 @@ const ManagerShellInner: React.FC = () => {
     }));
     if (has("chefAgence") || has("superviseur") || has("admin_compagnie")) {
       list.push({
-        label: "Dépenses",
+        label: "Validation dépenses",
         icon: Receipt,
         path: "/agence/expenses-approval",
         badge: pendingManagerExpensesCount || undefined,
@@ -124,12 +134,12 @@ const ManagerShellInner: React.FC = () => {
         children: COURRIER_CHILDREN,
       });
     }
-    return list;
+    return list.sort((a, b) => (sectionOrder[a.label] ?? 99) - (sectionOrder[b.label] ?? 99));
   }, [badgeByModule, rolesArr, pendingManagerExpensesCount]);
 
   useAgencyKeyboardShortcuts(sections);
 
-  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier") || has("agency_accountant");
+  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier");
 
   if (has("agentCourrier") && !pathname.startsWith("/agence/courrier")) {
     return <Navigate to="/agence/courrier" replace />;

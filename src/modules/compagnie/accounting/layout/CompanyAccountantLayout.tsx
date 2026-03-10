@@ -11,6 +11,7 @@ import {
   Settings,
   Wallet,
   Receipt,
+  BookOpen,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
@@ -176,19 +177,24 @@ const CompanyAccountantLayout: React.FC = () => {
   const basePath = `/compagnie/${currentCompanyId}/accounting`;
 
   const sections: NavSection[] = [
-    { label: "Vue Globale", icon: Globe, path: basePath, end: true },
+    { label: "Pilotage consolidé", icon: Globe, path: basePath, end: true },
     {
       label: "Réservations",
       icon: CreditCard,
       path: `${basePath}/reservations-en-ligne`,
       badge: pendingCount,
     },
-    { label: "Finances", icon: TrendingUp, path: `${basePath}/finances` },
+    { label: "Finances consolidées", icon: TrendingUp, path: `${basePath}/finances` },
+    { label: "Comptabilité", icon: BookOpen, path: `${basePath}/compta` },
     {
       label: "Dépenses",
       icon: Receipt,
       path: `${basePath}/expenses`,
       badge: pendingExpensesCount || undefined,
+      children: [
+        { label: "Validation & paiement", path: `${basePath}/expenses`, end: true },
+        { label: "Analyse des dépenses", path: `${basePath}/expenses-dashboard` },
+      ],
     },
     {
       label: "Trésorerie",
@@ -266,6 +272,13 @@ const CompanyAccountantLayout: React.FC = () => {
                 onDarkModeToggle={toggleDarkMode}
                 showThemeToggle={false}
               />
+            </div>
+          }
+          headerLeft={
+            <div className="hidden sm:flex items-center gap-2 text-sm min-w-0">
+              <span className="font-semibold text-gray-900 truncate">{currentCompany?.nom || "Compagnie"}</span>
+              <span className="text-gray-300">/</span>
+              <span className="text-gray-600 truncate">Comptabilité centrale</span>
             </div>
           }
           mainClassName="agency-content-transition"
