@@ -208,7 +208,7 @@ const ChefComptableCompagniePage: React.FC = () => {
           secondaryColor={(theme as any)?.colors?.secondary || (theme as any)?.secondary}
           onLogout={handleLogout}
           headerRight={
-            <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
+            <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} showThemeToggle={false} />
           }
           mainClassName="agency-content-transition"
         />

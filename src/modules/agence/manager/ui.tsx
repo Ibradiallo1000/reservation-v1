@@ -145,7 +145,9 @@ export const NotificationBell: React.FC<{
     link: string;
   }>;
   totalCount: number;
-}> = ({ alerts, totalCount }) => {
+  onAlertRead?: (alertId: string) => void;
+  onMarkAllRead?: () => void;
+}> = ({ alerts, totalCount, onAlertRead, onMarkAllRead }) => {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -161,7 +163,13 @@ export const NotificationBell: React.FC<{
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() =>
+          setOpen((v) => {
+            const next = !v;
+            if (next) onMarkAllRead?.();
+            return next;
+          })
+        }
         className="relative p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 transition"
         title="Notifications"
       >
@@ -201,7 +209,10 @@ export const NotificationBell: React.FC<{
                 <a
                   key={a.id}
                   href={a.link}
-                  onClick={() => setOpen(false)}
+                  onClick={() => {
+                    onAlertRead?.(a.id);
+                    setOpen(false);
+                  }}
                   className="block px-4 py-3 hover:bg-gray-50 transition-colors"
                 >
                   <div className="flex items-start gap-2">

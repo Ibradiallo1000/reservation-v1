@@ -52,12 +52,20 @@ if (!w.__teliya_boot_patched) {
 
 /** Désactivation forcée des anciens Service Workers */
 if ("serviceWorker" in navigator) {
-  const FORCE_UNREGISTER_SW = true;
+  const FORCE_UNREGISTER_SW = import.meta?.env?.VITE_FORCE_UNREGISTER_SW === "true";
   if (FORCE_UNREGISTER_SW) {
     navigator.serviceWorker.getRegistrations().then((regs) => {
       regs.forEach((r) => r.unregister());
     });
   }
+
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const data = (event as MessageEvent)?.data as { type?: string; link?: string } | undefined;
+    if (!data || data.type !== "PUSH_NAVIGATE" || !data.link) return;
+    if (window.location.pathname !== data.link) {
+      window.location.href = data.link;
+    }
+  });
 }
 
 /** Typage Router v7 */

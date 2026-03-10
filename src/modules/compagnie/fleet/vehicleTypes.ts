@@ -28,6 +28,14 @@ export const CANONICAL_VEHICLE_STATUS = {
 export type CanonicalVehicleStatus = (typeof CANONICAL_VEHICLE_STATUS)[keyof typeof CANONICAL_VEHICLE_STATUS];
 
 export interface VehicleDoc {
+  /** Numero bus interne (001 a 999). */
+  busNumber?: string;
+  /** Cle normalisee pour recherche/unicite du numero bus. */
+  busNumberNormalized?: string;
+  /** Legacy compatibility (ancien nom). */
+  fleetNumber?: string;
+  /** Legacy compatibility (ancien nom). */
+  fleetNumberNormalized?: string;
   /** Code pays ISO (ex. "ML"). Obligatoire. */
   country: string;
   /** Plaque normalisée : majuscules, sans espaces ni tirets. Obligatoire. */

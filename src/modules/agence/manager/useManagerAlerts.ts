@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import {
   collection, query, where, onSnapshot, getDocs, limit,
 } from "firebase/firestore";
@@ -43,6 +43,8 @@ export interface ManagerAlertsResult {
   totalAlertCount: number;
   alertsByModule: Record<AlertModule, ManagerAlert[]>;
   badgeByModule: Record<AlertModule, number>;
+  dismissAlert: (alertId: string) => void;
+  markAllAlertsRead: () => void;
   loading: boolean;
 }
 
@@ -57,6 +59,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
   const { user, company } = useAuth() as any;
   const companyId: string = user?.companyId ?? "";
   const agencyId: string = user?.agencyId ?? "";
+  const userId: string = user?.uid ?? "";
 
   const [shifts, setShifts] = useState<any[]>([]);
   const [cashPosition, setCashPosition] = useState(0);
@@ -69,6 +72,31 @@ export function useManagerAlerts(): ManagerAlertsResult {
   const [loading, setLoading] = useState(true);
 
   const tripsRef = useRef<any[]>([]);
+  const [dismissedAlertIds, setDismissedAlertIds] = useState<Set<string>>(new Set());
+  const alertStorageKey = useMemo(
+    () => `teliya:manager-alerts:dismissed:${companyId}:${agencyId}:${userId}`,
+    [companyId, agencyId, userId]
+  );
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(alertStorageKey);
+      if (!raw) {
+        setDismissedAlertIds(new Set());
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      setDismissedAlertIds(new Set(Array.isArray(parsed) ? parsed : []));
+    } catch {
+      setDismissedAlertIds(new Set());
+    }
+  }, [alertStorageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(alertStorageKey, JSON.stringify(Array.from(dismissedAlertIds)));
+    } catch {}
+  }, [alertStorageKey, dismissedAlertIds]);
 
   useEffect(() => {
     if (!companyId || !agencyId) { setLoading(false); return; }
@@ -263,25 +291,55 @@ export function useManagerAlerts(): ManagerAlertsResult {
     return list;
   }, [shifts, cashPosition, todayRevenue, todayExpenses, departures, company]);
 
+  const visibleAlerts = useMemo(
+    () => alerts.filter((a) => !dismissedAlertIds.has(a.id)),
+    [alerts, dismissedAlertIds]
+  );
+
+  useEffect(() => {
+    // Keep storage small and consistent with current alert universe
+    const currentIds = new Set(alerts.map((a) => a.id));
+    setDismissedAlertIds((prev) => {
+      const next = new Set(Array.from(prev).filter((id) => currentIds.has(id)));
+      if (next.size === prev.size) return prev;
+      return next;
+    });
+  }, [alerts]);
+
+  const dismissAlert = useCallback((alertId: string) => {
+    setDismissedAlertIds((prev) => {
+      if (prev.has(alertId)) return prev;
+      const next = new Set(prev);
+      next.add(alertId);
+      return next;
+    });
+  }, []);
+
+  const markAllAlertsRead = useCallback(() => {
+    setDismissedAlertIds(new Set(alerts.map((a) => a.id)));
+  }, [alerts]);
+
   const alertsByModule = useMemo(() => {
     const grouped: Record<AlertModule, ManagerAlert[]> = {
       dashboard: [], operations: [], finances: [], team: [], reports: [],
     };
-    alerts.forEach((a) => grouped[a.module].push(a));
+    visibleAlerts.forEach((a) => grouped[a.module].push(a));
     return grouped;
-  }, [alerts]);
+  }, [visibleAlerts]);
 
   const badgeByModule = useMemo(() => {
     const counts: Record<AlertModule, number> = { dashboard: 0, operations: 0, finances: 0, team: 0, reports: 0 };
-    alerts.forEach((a) => counts[a.module]++);
+    visibleAlerts.forEach((a) => counts[a.module]++);
     return counts;
-  }, [alerts]);
+  }, [visibleAlerts]);
 
   return {
-    alerts,
-    totalAlertCount: alerts.length,
+    alerts: visibleAlerts,
+    totalAlertCount: visibleAlerts.length,
     alertsByModule,
     badgeByModule,
+    dismissAlert,
+    markAllAlertsRead,
     loading,
   };
 }

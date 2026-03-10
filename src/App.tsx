@@ -4,6 +4,7 @@ import { AuthProvider } from "./contexts/AuthContext";
 import AppRoutes from "./AppRoutes";
 import UpdateBanner from "./UpdateBanner";
 import GlobalConnectionBanner from "@/shared/ui/GlobalConnectionBanner";
+import PushNotificationsBootstrap from "@/shared/push/PushNotificationsBootstrap";
 
 const App: React.FC = () => {
   const [needRefresh, setNeedRefresh] = useState(false);
@@ -29,6 +30,7 @@ const App: React.FC = () => {
 
   return (
     <AuthProvider>
+      <PushNotificationsBootstrap />
       <AppRoutes />
 
       <UpdateBanner

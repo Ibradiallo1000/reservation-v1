@@ -298,7 +298,7 @@ const CompagnieLayout: React.FC = () => {
                 userId={user?.uid}
                 role={user?.role}
               />
-              <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
+              <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} showThemeToggle={false} />
             </div>
           }
           mainClassName="agency-content-transition"

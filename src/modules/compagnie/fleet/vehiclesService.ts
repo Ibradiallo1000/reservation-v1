@@ -15,6 +15,7 @@ import {
   Timestamp,
   arrayUnion,
   type DocumentSnapshot,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { VehicleDoc, VehicleStatus } from "./vehicleTypes";
@@ -52,6 +53,38 @@ export function vehiclesRef(companyId: string) {
 
 export function vehicleRef(companyId: string, vehicleId: string) {
   return doc(db, "companies", companyId, VEHICLES_COLLECTION, vehicleId);
+}
+
+function canonicalStatusFromStates(technicalStatus: TechnicalStatus, operationalStatus: OperationalStatus) {
+  if (technicalStatus === TECHNICAL_STATUS.MAINTENANCE) return CANONICAL_VEHICLE_STATUS.MAINTENANCE;
+  if (technicalStatus === TECHNICAL_STATUS.ACCIDENTE) return CANONICAL_VEHICLE_STATUS.ACCIDENT;
+  if (technicalStatus === TECHNICAL_STATUS.HORS_SERVICE) return CANONICAL_VEHICLE_STATUS.OUT_OF_SERVICE;
+  if (operationalStatus === OPERATIONAL_STATUS.EN_TRANSIT) return CANONICAL_VEHICLE_STATUS.ON_TRIP;
+  return CANONICAL_VEHICLE_STATUS.AVAILABLE;
+}
+
+function normalizeBusNumber(raw: string): string {
+  const digits = String(raw ?? "").replace(/\D+/g, "");
+  if (!digits) return "";
+  const asNumber = Number(digits);
+  if (!Number.isFinite(asNumber) || asNumber < 1 || asNumber > 999) return "";
+  return String(asNumber).padStart(3, "0");
+}
+
+async function assertBusNumberAvailable(
+  companyId: string,
+  busNumberNormalized: string,
+  excludeVehicleId?: string
+): Promise<void> {
+  const ref = vehiclesRef(companyId);
+  const [busSnap, legacyFleetSnap] = await Promise.all([
+    getDocs(query(ref, where("busNumberNormalized", "==", busNumberNormalized), limit(5))),
+    getDocs(query(ref, where("fleetNumberNormalized", "==", busNumberNormalized), limit(5))),
+  ]);
+  const conflict = [...busSnap.docs, ...legacyFleetSnap.docs].find((d) => d.id !== excludeVehicleId);
+  if (conflict) {
+    throw new Error(`Numero bus deja utilise: ${busNumberNormalized}.`);
+  }
 }
 
 /** Derive technicalStatus/operationalStatus from legacy status for backward compatibility. */
@@ -103,17 +136,29 @@ function normalizeVehicleDoc(data: Record<string, unknown>): Record<string, unkn
 export type ListVehiclesOrderBy = "plate" | "technicalStatus" | "updatedAt";
 
 export async function listVehicles(companyId: string, max = 500): Promise<(VehicleDoc & { id: string })[]> {
-  const ref = vehiclesRef(companyId);
-  const q = query(ref, orderBy("plateNumber"), limit(Math.min(max * 3, 1500)));
-  const snap = await getDocs(q);
-  const list = snap.docs
-    .filter((d) => (d.data() as any).isArchived !== true)
-    .slice(0, max)
-    .map((d) => {
-      const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
-      return { id: d.id, ...normalized } as VehicleDoc & { id: string };
-    });
-  return list;
+  const pageSize = Math.min(max * 3, 1500);
+  const mapDocs = (docs: Array<{ id: string; data: () => unknown }>) =>
+    docs
+      .filter((d) => (d.data() as any).isArchived !== true)
+      .slice(0, max)
+      .map((d) => {
+        const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+        return { id: d.id, ...normalized } as VehicleDoc & { id: string };
+      });
+
+  try {
+    const ref = vehiclesRef(companyId);
+    const q = query(ref, orderBy("plateNumber"), limit(pageSize));
+    const snap = await getDocs(q);
+    return mapDocs(snap.docs as Array<{ id: string; data: () => unknown }>);
+  } catch (error: any) {
+    // Production safety: if canonical collection is denied or unavailable, fallback to legacy fleetVehicles.
+    if (String(error?.code ?? "") !== "permission-denied") throw error;
+    const legacyRef = collection(db, "companies", companyId, "fleetVehicles");
+    const legacyQ = query(legacyRef, orderBy("plateNumber"), limit(pageSize));
+    const legacySnap = await getDocs(legacyQ);
+    return mapDocs(legacySnap.docs as Array<{ id: string; data: () => unknown }>);
+  }
 }
 
 /** Phase 1 Stabilization: list vehicles with pagination (default 50 per page), orderBy plaque | technicalStatus | updatedAt. Excludes archived (isArchived !== true). */
@@ -662,6 +707,81 @@ export async function confirmArrivalAffectation(
   }
 }
 
+/** Emergency operation (HQ logistics): replace a broken in-transit vehicle by another available vehicle. */
+export async function emergencyReplaceVehicleOnTrip(
+  companyId: string,
+  brokenVehicleId: string,
+  replacementVehicleId: string,
+  userId: string,
+  role: string
+): Promise<string> {
+  if (!companyId || !brokenVehicleId || !replacementVehicleId) {
+    throw new Error("Parametres invalides pour le remplacement d'urgence.");
+  }
+  if (brokenVehicleId === replacementVehicleId) {
+    throw new Error("Le vehicule de remplacement doit etre different du vehicule en panne.");
+  }
+
+  const active = await getActiveAffectationByVehicle(companyId, brokenVehicleId);
+  if (!active) {
+    throw new Error("Aucune affectation active trouvee pour le vehicule en panne.");
+  }
+  const replacement = await getVehicle(companyId, replacementVehicleId);
+  if (!replacement) throw new Error("Vehicule de remplacement introuvable.");
+
+  const replacementOp = (replacement.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
+  const replacementTech = (replacement.technicalStatus ?? TECHNICAL_STATUS.NORMAL) as TechnicalStatus;
+  if (replacementOp !== OPERATIONAL_STATUS.GARAGE || replacementTech !== TECHNICAL_STATUS.NORMAL) {
+    throw new Error("Le vehicule de remplacement doit etre GARAGE et NORMAL.");
+  }
+  const alreadyAssigned = await getActiveAffectationByVehicle(companyId, replacementVehicleId);
+  if (alreadyAssigned) {
+    throw new Error("Ce vehicule de remplacement est deja affecte.");
+  }
+
+  const now = Timestamp.now();
+  const replacementAffectation: AffectationDoc = {
+    vehicleId: replacementVehicleId,
+    vehiclePlate: replacement.plateNumber ?? "",
+    vehicleModel: replacement.model ?? "",
+    tripId: active.data.tripId ?? "",
+    departureCity: active.data.departureCity ?? replacement.currentCity ?? "",
+    arrivalCity: active.data.arrivalCity ?? "",
+    departureTime: active.data.departureTime ?? now.toDate().toISOString(),
+    driverName: active.data.driverName ?? "",
+    driverPhone: active.data.driverPhone ?? "",
+    convoyeurName: active.data.convoyeurName ?? "",
+    convoyeurPhone: active.data.convoyeurPhone ?? "",
+    status: AFFECTATION_STATUS.DEPART_CONFIRME,
+    assignedBy: userId,
+    assignedAt: now,
+    departureConfirmedAt: now,
+    arrivalConfirmedAt: null,
+  };
+
+  const newAffectationId = await createAffectation(companyId, active.agencyId, replacementAffectation);
+
+  const entry: StatusHistoryEntry = {
+    field: "operationalStatus",
+    from: replacementOp,
+    to: OPERATIONAL_STATUS.EN_TRANSIT,
+    changedBy: userId,
+    role,
+    timestamp: now,
+  };
+  await updateDoc(vehicleRef(companyId, replacementVehicleId), {
+    operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
+    status: VEHICLE_STATUS.EN_TRANSIT,
+    canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
+    currentTripId: newAffectationId,
+    destinationCity: active.data.arrivalCity || null,
+    statusHistory: arrayUnion(entry),
+    updatedAt: serverTimestamp(),
+  });
+
+  return newAffectationId;
+}
+
 /** Phase 1 Operational: set technical status (Chef Garage). Validates transition and logs statusHistory. */
 export async function setTechnicalStatus(
   companyId: string,
@@ -692,8 +812,10 @@ export async function setTechnicalStatus(
         : technicalStatus === TECHNICAL_STATUS.HORS_SERVICE
           ? VEHICLE_STATUS.HORS_SERVICE
           : VEHICLE_STATUS.GARAGE;
+  const nextOperational = (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
   await updateDoc(vehicleRef(companyId, vehicleId), {
     technicalStatus,
+    canonicalStatus: canonicalStatusFromStates(technicalStatus, nextOperational),
     status: legacyStatus,
     ...(technicalStatus !== TECHNICAL_STATUS.NORMAL ? { destinationCity: null } : {}),
     statusHistory: arrayUnion(entry),
@@ -703,8 +825,17 @@ export async function setTechnicalStatus(
 
 export async function createVehicle(
   companyId: string,
-  data: Omit<VehicleDoc, "createdAt" | "updatedAt">
+  data: Omit<VehicleDoc, "createdAt" | "updatedAt">,
+  meta?: { createdBy?: string; createdByRole?: string; sourceModule?: string }
 ): Promise<string> {
+  if (!data.insuranceExpiryDate || !data.inspectionExpiryDate || !data.vignetteExpiryDate) {
+    throw new Error("Les dates d'expiration assurance, contrôle technique et vignette sont obligatoires.");
+  }
+  const busNumber = normalizeBusNumber(String((data as any).busNumber ?? (data as any).fleetNumber ?? ""));
+  if (!busNumber) {
+    throw new Error("Le numero bus est obligatoire (001 a 999).");
+  }
+  await assertBusNumberAvailable(companyId, busNumber);
   const ref = doc(vehiclesRef(companyId));
   const now = Timestamp.now();
   const legacyStatus = data.status ?? VEHICLE_STATUS.GARAGE;
@@ -716,15 +847,30 @@ export async function createVehicle(
   else if (legacyStatus === VEHICLE_STATUS.EN_TRANSIT) operationalStatus = OPERATIONAL_STATUS.EN_TRANSIT;
   else if (legacyStatus === VEHICLE_STATUS.EN_SERVICE) operationalStatus = OPERATIONAL_STATUS.AFFECTE;
   const plateStored = (data.plateNumber ?? "").trim();
-  const modelLabel = await ensureVehicleModel(companyId, data.model ?? "");
+  const modelLabel = await ensureVehicleModel(companyId, data.model ?? "", {
+    createdBy: meta?.createdBy,
+    createdByRole: meta?.createdByRole,
+  });
+  const plateNormalized = normalizePlate(data.plateNumber ?? "");
   const payload = {
     ...data,
+    busNumber,
+    busNumberNormalized: busNumber,
+    // Legacy compatibility for existing queries/data.
+    fleetNumber: busNumber,
+    fleetNumberNormalized: busNumber,
     country: data.country ?? "ML",
-    plateNumber: plateStored || normalizePlate(data.plateNumber ?? ""),
+    plateNumber: plateStored || plateNormalized,
+    plateNumberNormalized: plateNormalized,
     model: modelLabel,
+    modelNormalized: normalizeModel(modelLabel),
+    companyId,
     status: legacyStatus,
     technicalStatus,
     operationalStatus,
+    createdBy: meta?.createdBy ?? null,
+    createdByRole: meta?.createdByRole ?? null,
+    sourceModule: meta?.sourceModule ?? "garage_dashboard",
     statusHistory: [],
     isArchived: false,
     createdAt: now,
@@ -739,6 +885,7 @@ export async function updateVehicle(
   companyId: string,
   vehicleId: string,
   payload: {
+    busNumber?: string;
     model?: string;
     technicalStatus?: TechnicalStatus;
     insuranceExpiryDate?: Timestamp | null;
@@ -751,42 +898,204 @@ export async function updateVehicle(
 ): Promise<void> {
   const v = await getVehicle(companyId, vehicleId);
   if (!v) throw new Error("Véhicule introuvable.");
-  const op = (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
-  const updates: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  const finalInsurance =
+    payload.insuranceExpiryDate !== undefined ? payload.insuranceExpiryDate : ((v as any).insuranceExpiryDate ?? null);
+  const finalInspection =
+    payload.inspectionExpiryDate !== undefined ? payload.inspectionExpiryDate : ((v as any).inspectionExpiryDate ?? null);
+  const finalVignette =
+    payload.vignetteExpiryDate !== undefined ? payload.vignetteExpiryDate : ((v as any).vignetteExpiryDate ?? null);
+
+  if (!finalInsurance || !finalInspection || !finalVignette) {
+    throw new Error("Assurance, contrôle technique et vignette doivent être renseignés pour ce véhicule.");
+  }
+
+  const updates: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+    updatedBy: userId,
+    updatedByRole: role,
+    companyId,
+  };
+  const currentBusNumber = normalizeBusNumber(String((v as any).busNumber ?? (v as any).fleetNumber ?? ""));
+  if (
+    currentBusNumber &&
+    (String((v as any).busNumber ?? "") !== currentBusNumber ||
+      String((v as any).fleetNumber ?? "") !== currentBusNumber)
+  ) {
+    updates.busNumber = currentBusNumber;
+    updates.busNumberNormalized = currentBusNumber;
+    updates.fleetNumber = currentBusNumber;
+    updates.fleetNumberNormalized = currentBusNumber;
+  }
+  if (payload.busNumber !== undefined) {
+    const busNumber = normalizeBusNumber(payload.busNumber);
+    if (!busNumber) {
+      throw new Error("Le numero bus est obligatoire (001 a 999).");
+    }
+    await assertBusNumberAvailable(companyId, busNumber, vehicleId);
+    updates.busNumber = busNumber;
+    updates.busNumberNormalized = busNumber;
+    updates.fleetNumber = busNumber;
+    updates.fleetNumberNormalized = busNumber;
+  }
   if (payload.model !== undefined) {
-    updates.model = await ensureVehicleModel(companyId, payload.model);
+    updates.model = await ensureVehicleModel(companyId, payload.model, { createdBy: userId, createdByRole: role });
   }
   if (payload.technicalStatus !== undefined) {
     const current = (v.technicalStatus ?? TECHNICAL_STATUS.NORMAL) as TechnicalStatus;
-    if (!canChangeTechnicalStatus(current, payload.technicalStatus)) {
-      throw new Error(`Transition technique non autorisée : ${current} → ${payload.technicalStatus}`);
+    if (payload.technicalStatus !== current) {
+      if (!canChangeTechnicalStatus(current, payload.technicalStatus)) {
+        throw new Error(`Transition technique non autorisée : ${current} → ${payload.technicalStatus}`);
+      }
+      const entry: StatusHistoryEntry = {
+        field: "technicalStatus",
+        from: current,
+        to: payload.technicalStatus,
+        changedBy: userId,
+        role,
+        timestamp: Timestamp.now(),
+      };
+      updates.technicalStatus = payload.technicalStatus;
+      const nextOperational = (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
+      updates.canonicalStatus = canonicalStatusFromStates(payload.technicalStatus, nextOperational);
+      updates.statusHistory = arrayUnion(entry);
+      const legacyStatus =
+        payload.technicalStatus === TECHNICAL_STATUS.MAINTENANCE
+          ? VEHICLE_STATUS.EN_MAINTENANCE
+          : payload.technicalStatus === TECHNICAL_STATUS.ACCIDENTE
+            ? VEHICLE_STATUS.ACCIDENTE
+            : payload.technicalStatus === TECHNICAL_STATUS.HORS_SERVICE
+              ? VEHICLE_STATUS.HORS_SERVICE
+              : VEHICLE_STATUS.GARAGE;
+      updates.status = legacyStatus;
+      if (payload.technicalStatus !== TECHNICAL_STATUS.NORMAL) updates.destinationCity = null;
     }
-    const entry: StatusHistoryEntry = {
-      field: "technicalStatus",
-      from: current,
-      to: payload.technicalStatus,
-      changedBy: userId,
-      role,
-      timestamp: Timestamp.now(),
-    };
-    updates.technicalStatus = payload.technicalStatus;
-    updates.statusHistory = arrayUnion(entry);
-    const legacyStatus =
-      payload.technicalStatus === TECHNICAL_STATUS.MAINTENANCE
-        ? VEHICLE_STATUS.EN_MAINTENANCE
-        : payload.technicalStatus === TECHNICAL_STATUS.ACCIDENTE
-          ? VEHICLE_STATUS.ACCIDENTE
-          : payload.technicalStatus === TECHNICAL_STATUS.HORS_SERVICE
-            ? VEHICLE_STATUS.HORS_SERVICE
-            : VEHICLE_STATUS.GARAGE;
-    updates.status = legacyStatus;
-    if (payload.technicalStatus !== TECHNICAL_STATUS.NORMAL) updates.destinationCity = null;
   }
-  if (payload.insuranceExpiryDate !== undefined) updates.insuranceExpiryDate = payload.insuranceExpiryDate ?? null;
-  if (payload.inspectionExpiryDate !== undefined) updates.inspectionExpiryDate = payload.inspectionExpiryDate ?? null;
-  if (payload.vignetteExpiryDate !== undefined) updates.vignetteExpiryDate = payload.vignetteExpiryDate ?? null;
+  updates.insuranceExpiryDate = finalInsurance;
+  updates.inspectionExpiryDate = finalInspection;
+  updates.vignetteExpiryDate = finalVignette;
   if (payload.notes !== undefined) updates.notes = payload.notes ?? null;
+  if (!(v as any).createdAt) updates.createdAt = Timestamp.now();
+  if (!(v as any).createdBy) updates.createdBy = userId;
+  if (!(v as any).createdByRole) updates.createdByRole = role;
+  if (!(v as any).sourceModule) updates.sourceModule = "garage_dashboard";
+  if (!(v as any).plateNumberNormalized) updates.plateNumberNormalized = normalizePlate(String((v as any).plateNumber ?? ""));
+  updates.modelNormalized = normalizeModel(String((updates.model ?? (v as any).model ?? "") as string));
   await updateDoc(vehicleRef(companyId, vehicleId), updates);
+}
+
+export async function suggestNextBusNumber(companyId: string): Promise<string> {
+  const vehicles = await listVehicles(companyId, 2000);
+  let maxNumber = 0;
+  for (const v of vehicles) {
+    const raw = String((v as any).busNumber ?? (v as any).fleetNumber ?? "");
+    const normalized = normalizeBusNumber(raw);
+    const n = Number(normalized);
+    if (Number.isFinite(n) && n > maxNumber) maxNumber = n;
+  }
+  return String(Math.min(maxNumber + 1, 999)).padStart(3, "0");
+}
+
+export type VehiclesMetadataBackfillResult = {
+  scanned: number;
+  updated: number;
+  skipped: number;
+};
+
+/** One-shot backfill: complete metadata/compliance fields on existing vehicles without recreating docs. */
+export async function backfillVehiclesMetadata(
+  companyId: string,
+  userId: string,
+  role: string
+): Promise<VehiclesMetadataBackfillResult> {
+  const vehicles = await listVehicles(companyId, 2000);
+  let updated = 0;
+  let skipped = 0;
+  let scanned = 0;
+
+  const now = Timestamp.now();
+  let batch = writeBatch(db);
+  let batchOps = 0;
+  const usedBusNumbers = new Set<number>();
+
+  for (const vehicle of vehicles) {
+    const existing = normalizeBusNumber(String((vehicle as any).busNumber ?? (vehicle as any).fleetNumber ?? ""));
+    if (!existing) continue;
+    const n = Number(existing);
+    if (Number.isFinite(n) && n >= 1 && n <= 999) usedBusNumbers.add(n);
+  }
+
+  const nextAvailableBusNumber = () => {
+    for (let i = 1; i <= 999; i += 1) {
+      if (!usedBusNumbers.has(i)) {
+        usedBusNumbers.add(i);
+        return String(i).padStart(3, "0");
+      }
+    }
+    return "";
+  };
+
+  for (const vehicle of vehicles) {
+    scanned += 1;
+    const patch: Record<string, unknown> = {};
+
+    const plate = normalizePlate(String((vehicle as any).plateNumber ?? ""));
+    const model = normalizeModel(String((vehicle as any).model ?? ""));
+    const missingComplianceFields: string[] = [];
+    if (!(vehicle as any).insuranceExpiryDate) missingComplianceFields.push("insuranceExpiryDate");
+    if (!(vehicle as any).inspectionExpiryDate) missingComplianceFields.push("inspectionExpiryDate");
+    if (!(vehicle as any).vignetteExpiryDate) missingComplianceFields.push("vignetteExpiryDate");
+
+    if (!(vehicle as any).companyId) patch.companyId = companyId;
+    if (!(vehicle as any).createdAt) patch.createdAt = now;
+    if (!(vehicle as any).createdBy) patch.createdBy = userId;
+    if (!(vehicle as any).createdByRole) patch.createdByRole = role;
+    if (!(vehicle as any).sourceModule) patch.sourceModule = "garage_dashboard";
+    let busNumber = normalizeBusNumber(String((vehicle as any).busNumber ?? (vehicle as any).fleetNumber ?? ""));
+    if (!busNumber) {
+      busNumber = nextAvailableBusNumber();
+    }
+    if (busNumber) {
+      if (String((vehicle as any).busNumber ?? "") !== busNumber) patch.busNumber = busNumber;
+      if (String((vehicle as any).busNumberNormalized ?? "") !== busNumber) patch.busNumberNormalized = busNumber;
+      // Legacy mirrors
+      if (String((vehicle as any).fleetNumber ?? "") !== busNumber) patch.fleetNumber = busNumber;
+      if (String((vehicle as any).fleetNumberNormalized ?? "") !== busNumber) patch.fleetNumberNormalized = busNumber;
+    }
+    if (!(vehicle as any).plateNumberNormalized) patch.plateNumberNormalized = plate;
+    if (!(vehicle as any).modelNormalized) patch.modelNormalized = model;
+    const technical = ((vehicle as any).technicalStatus ?? TECHNICAL_STATUS.NORMAL) as TechnicalStatus;
+    const operational = ((vehicle as any).operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
+    const expectedCanonical = canonicalStatusFromStates(technical, operational);
+    if (String((vehicle as any).canonicalStatus ?? "") !== expectedCanonical) {
+      patch.canonicalStatus = expectedCanonical;
+    }
+    patch.complianceComplete = missingComplianceFields.length === 0;
+    patch.missingComplianceFields = missingComplianceFields;
+    patch.updatedAt = now;
+    patch.updatedBy = userId;
+    patch.updatedByRole = role;
+
+    if (Object.keys(patch).length === 0) {
+      skipped += 1;
+      continue;
+    }
+
+    batch.update(vehicleRef(companyId, vehicle.id), patch);
+    batchOps += 1;
+    updated += 1;
+
+    if (batchOps >= 450) {
+      await batch.commit();
+      batch = writeBatch(db);
+      batchOps = 0;
+    }
+  }
+
+  if (batchOps > 0) {
+    await batch.commit();
+  }
+
+  return { scanned, updated, skipped };
 }
 
 /** Phase 1 Soft Delete: archive vehicle (no document deletion). Only if operationalStatus === GARAGE and no active affectation. Sets isArchived=true, archivedAt, archivedBy, appends statusHistory. */

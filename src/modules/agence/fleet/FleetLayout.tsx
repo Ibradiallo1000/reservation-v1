@@ -65,7 +65,7 @@ const FleetLayout: React.FC = () => {
         secondaryColor={theme?.colors?.secondary}
         onLogout={handleLogout}
         headerRight={
-          <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} />
+          <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} showThemeToggle={false} />
         }
         mainClassName="agency-content-transition"
       >

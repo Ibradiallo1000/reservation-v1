@@ -288,7 +288,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         </div>
         <button
           onClick={() => setCollapsed((v) => !v)}
-          className="p-2 rounded-lg bg-white/10 hover:bg-white/20 hidden md:block"
+          className="p-2 rounded-lg bg-white/10 hover:bg-white/20 hidden lg:block"
           title={collapsed ? "Expand" : "Collapse"}
         >
           {collapsed ? (
@@ -455,7 +455,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         {/* Sidebar — desktop */}
         <aside
           className={cn(
-            "hidden md:flex fixed inset-y-0 left-0 flex-col text-white transition-all duration-300",
+            "hidden lg:flex fixed inset-y-0 left-0 flex-col text-white transition-all duration-300",
             DESIGN.zIndex.sidebar,
             collapsed ? DESIGN.layout.sidebarWidthCollapsed : DESIGN.layout.sidebarWidth,
           )}
@@ -467,7 +467,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         {/* Sidebar — mobile drawer */}
         <aside
           className={cn(
-            "md:hidden fixed inset-y-0 left-0 w-64 flex flex-col text-white transition-transform duration-300",
+            "lg:hidden fixed inset-y-0 left-0 w-[85vw] max-w-xs flex flex-col text-white transition-transform duration-300",
             DESIGN.zIndex.sidebar,
             mobileOpen ? "translate-x-0" : "-translate-x-full",
           )}
@@ -486,7 +486,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         <div
           className={cn(
             "flex-1 flex flex-col min-w-0 transition-all duration-300",
-            collapsed ? "md:ml-20" : "md:ml-64",
+            collapsed ? "lg:ml-20" : "lg:ml-64",
           )}
         >
           {/* Header */}
@@ -499,7 +499,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
           >
             <button
               onClick={() => setMobileOpen(true)}
-              className="md:hidden p-2 -ml-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 flex-shrink-0"
+              className="lg:hidden p-2 -ml-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 flex-shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>

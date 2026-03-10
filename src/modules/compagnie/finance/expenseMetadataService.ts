@@ -33,14 +33,23 @@ function categoriesRef(companyId: string) {
 }
 
 export async function listSuppliers(companyId: string): Promise<SupplierDoc[]> {
-  const snap = await getDocs(
-    query(
-      suppliersRef(companyId),
-      where("isActive", "==", true),
-      orderBy("name", "asc")
-    )
-  );
-  return snap.docs.map((d) => {
+  let docs: Array<{ id: string; data: () => Record<string, unknown> }> = [];
+  try {
+    const snap = await getDocs(
+      query(
+        suppliersRef(companyId),
+        where("isActive", "==", true),
+        orderBy("name", "asc")
+      )
+    );
+    docs = snap.docs as Array<{ id: string; data: () => Record<string, unknown> }>;
+  } catch {
+    // Fallback without composite index dependency.
+    const snap = await getDocs(suppliersRef(companyId));
+    docs = snap.docs as Array<{ id: string; data: () => Record<string, unknown> }>;
+  }
+
+  return docs.map((d) => {
     const data = d.data() as Record<string, unknown>;
     return {
       id: d.id,
@@ -49,7 +58,9 @@ export async function listSuppliers(companyId: string): Promise<SupplierDoc[]> {
       email: (data.email as string | null) ?? null,
       isActive: Boolean(data.isActive ?? true),
     };
-  });
+  })
+    .filter((s) => s.isActive)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function createSupplier(params: {

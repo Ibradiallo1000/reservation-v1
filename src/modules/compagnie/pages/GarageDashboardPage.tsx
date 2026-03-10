@@ -11,6 +11,8 @@ import {
   setTechnicalStatus,
   updateVehicle,
   archiveVehicle,
+  backfillVehiclesMetadata,
+  suggestNextBusNumber,
 } from "@/modules/compagnie/fleet/vehiclesService";
 import type { ListVehiclesOrderBy } from "@/modules/compagnie/fleet/vehiclesService";
 import { getActiveAffectationByVehicle } from "@/modules/compagnie/fleet/affectationService";
@@ -27,9 +29,11 @@ import { useVilles } from "@/shared/hooks/useVilles";
 import { Truck, Loader2, Plus, X, Pencil, Archive } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
+import { toast } from "sonner";
 
 type VehicleRow = {
   id: string;
+  busNumber?: string;
   country: string;
   plateNumber: string;
   model: string;
@@ -39,6 +43,7 @@ type VehicleRow = {
   operationalStatus: string;
   currentCity: string;
   destinationCity?: string | null;
+  createdAt?: { toDate?: () => Date } | Date | null;
   updatedAt?: { toDate?: () => Date } | Date | null;
   insuranceExpiryDate?: { toDate?: () => Date } | Date | null;
   inspectionExpiryDate?: { toDate?: () => Date } | Date | null;
@@ -83,6 +88,25 @@ function formatUpdatedAt(updatedAt: VehicleRow["updatedAt"]): string {
   return d ? format(d, "dd/MM/yyyy HH:mm", { locale: fr }) : "—";
 }
 
+function formatCreatedAt(createdAt: VehicleRow["createdAt"]): string {
+  if (!createdAt) return "—";
+  const d =
+    typeof createdAt === "object" && "toDate" in createdAt
+      ? (createdAt as { toDate(): Date }).toDate()
+      : createdAt instanceof Date
+        ? createdAt
+        : null;
+  return d ? format(d, "dd/MM/yyyy HH:mm", { locale: fr }) : "—";
+}
+
+function normalizeBusNumberUi(raw: string): string {
+  const digits = String(raw ?? "").replace(/\D+/g, "");
+  if (!digits) return "";
+  const n = Number(digits);
+  if (!Number.isFinite(n) || n < 1 || n > 999) return "";
+  return String(n).padStart(3, "0");
+}
+
 export type GarageView = "maintenance" | "transit" | "incidents";
 
 type ViewFilter = "all" | "available" | "transit" | "maintenance" | "accidented" | "hors_service";
@@ -111,6 +135,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
   const sortToOrderBy = (s: "plate" | "status" | "updatedAt"): ListVehiclesOrderBy =>
     s === "status" ? "technicalStatus" : s === "updatedAt" ? "updatedAt" : "plate";
   const [addForm, setAddForm] = useState<{
+    busNumber: string;
     country: string;
     platePart1: string;
     platePart2: string;
@@ -124,6 +149,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     vignetteExpiryDate: string;
     notes: string;
   }>({
+    busNumber: "",
     country: "ML",
     platePart1: "",
     platePart2: "",
@@ -142,13 +168,14 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
   const { villes } = useVilles();
   const [editVehicleId, setEditVehicleId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{
+    busNumber: string;
     model: string;
     technicalStatus: TechnicalStatus;
     insuranceExpiryDate: string;
     inspectionExpiryDate: string;
     vignetteExpiryDate: string;
     notes: string;
-  }>({ model: "", technicalStatus: TECHNICAL_STATUS.NORMAL, insuranceExpiryDate: "", inspectionExpiryDate: "", vignetteExpiryDate: "", notes: "" });
+  }>({ busNumber: "", model: "", technicalStatus: TECHNICAL_STATUS.NORMAL, insuranceExpiryDate: "", inspectionExpiryDate: "", vignetteExpiryDate: "", notes: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [orderByField, setOrderByField] = useState<ListVehiclesOrderBy>("plate");
@@ -183,6 +210,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
       setVehicles(
         list.map((v) => ({
           id: v.id,
+          busNumber: normalizeBusNumberUi(String((v as any).busNumber ?? (v as any).fleetNumber ?? "")),
           country: (v as any).country ?? "ML",
           plateNumber: (v as any).plateNumber ?? "",
           model: v.model ?? "",
@@ -239,6 +267,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     };
     setEditVehicleId(v.id);
     setEditForm({
+      busNumber: normalizeBusNumberUi(String((v as any).busNumber ?? (v as any).fleetNumber ?? "")),
       model: v.model ?? "",
       technicalStatus: (v.technicalStatus as TechnicalStatus) ?? TECHNICAL_STATUS.NORMAL,
       insuranceExpiryDate: toDateStr(v.insuranceExpiryDate),
@@ -251,19 +280,37 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
   const handleEditSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!companyId || !editVehicleId || !user?.uid) return;
+    if (!editForm.insuranceExpiryDate || !editForm.inspectionExpiryDate || !editForm.vignetteExpiryDate) {
+      setError("Assurance, contrôle technique et vignette sont obligatoires.");
+      return;
+    }
     setEditSaving(true);
     setError(null);
     try {
-      const toTs = (s: string) => (!s?.trim() ? null : Timestamp.fromDate(new Date(s.trim())));
+      const toTs = (s: string) => {
+        const value = s?.trim();
+        if (!value) return null;
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return Timestamp.fromDate(parsed);
+      };
+      const insuranceTs = toTs(editForm.insuranceExpiryDate);
+      const inspectionTs = toTs(editForm.inspectionExpiryDate);
+      const vignetteTs = toTs(editForm.vignetteExpiryDate);
+      if (!insuranceTs || !inspectionTs || !vignetteTs) {
+        setError("Format de date invalide pour assurance, contrôle technique ou vignette.");
+        return;
+      }
       await updateVehicle(
         companyId,
         editVehicleId,
         {
+          busNumber: editForm.busNumber,
           model: editForm.model.trim() || undefined,
           technicalStatus: editForm.technicalStatus,
-          insuranceExpiryDate: toTs(editForm.insuranceExpiryDate),
-          inspectionExpiryDate: toTs(editForm.inspectionExpiryDate),
-          vignetteExpiryDate: toTs(editForm.vignetteExpiryDate),
+          insuranceExpiryDate: insuranceTs,
+          inspectionExpiryDate: inspectionTs,
+          vignetteExpiryDate: vignetteTs,
           notes: editForm.notes.trim() || null,
         },
         user.uid,
@@ -280,6 +327,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
 
   const [archiveConfirmVehicle, setArchiveConfirmVehicle] = useState<VehicleRow | null>(null);
   const [archiveSaving, setArchiveSaving] = useState(false);
+  const [backfillRunning, setBackfillRunning] = useState(false);
 
   const handleArchiveClick = (v: VehicleRow) => {
     if (v.operationalStatus !== OPERATIONAL_STATUS.GARAGE) return;
@@ -307,6 +355,37 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     }
   };
 
+  const handleBackfillVehicles = async () => {
+    if (!companyId || !user?.uid || backfillRunning) return;
+    setBackfillRunning(true);
+    setError(null);
+    try {
+      const result = await backfillVehiclesMetadata(companyId, user.uid, String((user as any)?.role ?? ""));
+      toast.success(
+        `Backfill termine: ${result.updated} vehicule(s) mis a jour sur ${result.scanned} scanne(s).`
+      );
+      await load(currentPage);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Erreur durant le backfill des vehicules.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setBackfillRunning(false);
+    }
+  };
+
+  const openAddVehicleModal = async () => {
+    setPlateError(null);
+    setAddModalOpen(true);
+    if (!companyId || addForm.busNumber.trim()) return;
+    try {
+      const next = await suggestNextBusNumber(companyId);
+      setAddForm((f) => ({ ...f, busNumber: next }));
+    } catch {
+      // Manual entry remains available.
+    }
+  };
+
   const toTimestamp = (dateStr: string) => {
     if (!dateStr?.trim()) return undefined;
     const d = new Date(dateStr.trim());
@@ -318,6 +397,10 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     setPlateError(null);
     const plateNumber = formatPlateFromParts(addForm.platePart1, addForm.platePart2, addForm.platePart3);
     if (!companyId || !plateNumber || !addForm.model.trim() || !addForm.currentCity.trim()) return;
+    if (!addForm.busNumber.trim()) {
+      setError("Numero bus obligatoire (001 a 999).");
+      return;
+    }
     if (!addForm.country?.trim()) {
       setError("Veuillez sélectionner un pays.");
       return;
@@ -331,10 +414,15 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
       setError("Veuillez sélectionner une ville dans la liste (pas de saisie libre).");
       return;
     }
+    if (!addForm.insuranceExpiryDate || !addForm.inspectionExpiryDate || !addForm.vignetteExpiryDate) {
+      setError("Les dates d'expiration assurance, contrôle technique et vignette sont obligatoires.");
+      return;
+    }
     setAddSaving(true);
     setError(null);
     try {
       const payload: Parameters<typeof createVehicle>[1] = {
+        busNumber: addForm.busNumber,
         country: addForm.country.trim(),
         plateNumber,
         model: addForm.model.trim(),
@@ -345,12 +433,21 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
       const ins = toTimestamp(addForm.insuranceExpiryDate);
       const insp = toTimestamp(addForm.inspectionExpiryDate);
       const vig = toTimestamp(addForm.vignetteExpiryDate);
-      if (ins) payload.insuranceExpiryDate = ins;
-      if (insp) payload.inspectionExpiryDate = insp;
-      if (vig) payload.vignetteExpiryDate = vig;
+      if (!ins || !insp || !vig) {
+        setError("Format de date invalide pour assurance, contrôle technique ou vignette.");
+        return;
+      }
+      payload.insuranceExpiryDate = ins;
+      payload.inspectionExpiryDate = insp;
+      payload.vignetteExpiryDate = vig;
       if (addForm.notes?.trim()) payload.notes = addForm.notes.trim();
-      await createVehicle(companyId, payload);
+      await createVehicle(companyId, payload, {
+        createdBy: user?.uid,
+        createdByRole: String((user as any)?.role ?? ""),
+        sourceModule: "garage_dashboard",
+      });
       setAddForm({
+        busNumber: "",
         country: "ML",
         platePart1: "",
         platePart2: "",
@@ -410,6 +507,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
       const q = searchText.trim().toLowerCase();
       list = list.filter(
         (v) =>
+          String((v as any).busNumber ?? (v as any).fleetNumber ?? "").toLowerCase().includes(q) ||
           (v.plateNumber ?? "").toLowerCase().includes(q) ||
           (v.model ?? "").toLowerCase().includes(q)
       );
@@ -434,6 +532,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
   const userRole = String(user?.role ?? "");
   const canManageFleet =
     userRole === "admin_compagnie" ||
+    userRole === "responsable_logistique" ||
     userRole === "chef_garage" ||
     userRole === "admin_platforme";
 
@@ -455,10 +554,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
           canManageFleet ? (
             <button
               type="button"
-              onClick={() => {
-                setPlateError(null);
-                setAddModalOpen(true);
-              }}
+              onClick={openAddVehicleModal}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition hover:opacity-90"
               style={{ backgroundColor: theme.secondary }}
             >
@@ -475,9 +571,19 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
 
       {/* Recherche, filtre ville, tri */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
+        {canManageFleet && (
+          <button
+            type="button"
+            onClick={handleBackfillVehicles}
+            disabled={backfillRunning}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+          >
+            {backfillRunning ? "Mise a jour en cours..." : "Completer vehicules existants"}
+          </button>
+        )}
         <input
           type="text"
-          placeholder="Rechercher (plaque, modèle)"
+          placeholder="Rechercher (numero bus, plaque, modele)"
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-48 max-w-full"
@@ -545,6 +651,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left" style={{ backgroundColor: theme.primaryLight ?? "#f1f5f9" }}>
+                  <th className="p-3 font-medium text-slate-700">N° bus</th>
                   <th className="p-3 font-medium text-slate-700">Pays</th>
                   <th className="p-3 font-medium text-slate-700">Plaque</th>
                   <th className="p-3 font-medium text-slate-700">Modèle</th>
@@ -553,6 +660,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                   <th className="p-3 font-medium text-slate-700">Technique</th>
                   <th className="p-3 font-medium text-slate-700">Ville actuelle</th>
                   <th className="p-3 font-medium text-slate-700">Destination</th>
+                  <th className="p-3 font-medium text-slate-700">Date ajout</th>
                   <th className="p-3 font-medium text-slate-700">Dernière MAJ</th>
                   {canManageFleet && <th className="p-3 font-medium text-slate-700">Statut technique</th>}
                   {canManageFleet && <th className="p-3 font-medium text-slate-700">Actions</th>}
@@ -563,6 +671,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                   const isActioning = actioningId === v.id;
                   return (
                     <tr key={v.id} className="border-b hover:bg-slate-50/50">
+                      <td className="p-3 font-semibold text-slate-700">{(v as any).busNumber ?? (v as any).fleetNumber ?? "—"}</td>
                       <td className="p-3 text-slate-600">{v.country}</td>
                       <td className="p-3 font-medium">{v.plateNumber}</td>
                       <td className="p-3">{v.model}</td>
@@ -575,6 +684,7 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                       </td>
                       <td className="p-3">{v.currentCity}</td>
                       <td className="p-3">{v.destinationCity ?? "—"}</td>
+                      <td className="p-3 text-slate-600">{formatCreatedAt(v.createdAt)}</td>
                       <td className="p-3 text-slate-600">{formatUpdatedAt(v.updatedAt)}</td>
                       {canManageFleet && (
                         <td className="p-3">
@@ -654,6 +764,23 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
             </div>
             <form onSubmit={handleAddVehicle} className="flex flex-col flex-1 min-h-0">
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Numero bus *</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={3}
+                    value={addForm.busNumber}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D+/g, "");
+                      const normalized = digits ? String(Math.min(Number(digits), 999)).padStart(3, "0") : "";
+                      setAddForm((f) => ({ ...f, busNumber: normalized }));
+                    }}
+                    placeholder="001"
+                    required
+                    className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                  />
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Pays</label>
                   <select
@@ -736,30 +863,33 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration assurance (optionnel)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration assurance *</label>
                   <input
                     type="date"
                     value={addForm.insuranceExpiryDate}
                     onChange={(e) => setAddForm((f) => ({ ...f, insuranceExpiryDate: e.target.value }))}
                     className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                    required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration contrôle technique (optionnel)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration contrôle technique *</label>
                   <input
                     type="date"
                     value={addForm.inspectionExpiryDate}
                     onChange={(e) => setAddForm((f) => ({ ...f, inspectionExpiryDate: e.target.value }))}
                     className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                    required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration vignette (optionnel)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration vignette *</label>
                   <input
                     type="date"
                     value={addForm.vignetteExpiryDate}
                     onChange={(e) => setAddForm((f) => ({ ...f, vignetteExpiryDate: e.target.value }))}
                     className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                    required
                   />
                 </div>
                 <div>
@@ -837,6 +967,22 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
             <form onSubmit={handleEditSave} className="flex flex-col flex-1 min-h-0">
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Numero bus *</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={3}
+                    value={editForm.busNumber}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D+/g, "");
+                      const normalized = digits ? String(Math.min(Number(digits), 999)).padStart(3, "0") : "";
+                      setEditForm((f) => ({ ...f, busNumber: normalized }));
+                    }}
+                    className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                    required
+                  />
+                </div>
+                <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Modèle</label>
                   <input
                     type="text"
@@ -865,30 +1011,33 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration assurance (optionnel)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration assurance *</label>
                   <input
                     type="date"
                     value={editForm.insuranceExpiryDate}
                     onChange={(e) => setEditForm((f) => ({ ...f, insuranceExpiryDate: e.target.value }))}
                     className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                    required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration contrôle technique (optionnel)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration contrôle technique *</label>
                   <input
                     type="date"
                     value={editForm.inspectionExpiryDate}
                     onChange={(e) => setEditForm((f) => ({ ...f, inspectionExpiryDate: e.target.value }))}
                     className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                    required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration vignette (optionnel)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Expiration vignette *</label>
                   <input
                     type="date"
                     value={editForm.vignetteExpiryDate}
                     onChange={(e) => setEditForm((f) => ({ ...f, vignetteExpiryDate: e.target.value }))}
                     className="w-full border border-slate-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                    required
                   />
                 </div>
                 <div>

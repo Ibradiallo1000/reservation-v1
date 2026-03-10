@@ -62,7 +62,7 @@ const ManagerShellInner: React.FC = () => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const theme = useCompanyTheme(company);
-  const { alerts, totalAlertCount, badgeByModule } = useManagerAlerts();
+  const { alerts, totalAlertCount, badgeByModule, dismissAlert, markAllAlertsRead } = useManagerAlerts();
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
   const [pendingManagerExpensesCount, setPendingManagerExpensesCount] = React.useState(0);
@@ -192,11 +192,17 @@ const ManagerShellInner: React.FC = () => {
       }
       headerRight={
         <>
-          <NotificationBell alerts={alerts} totalCount={totalAlertCount} />
+          <NotificationBell
+            alerts={alerts}
+            totalCount={totalAlertCount}
+            onAlertRead={dismissAlert}
+            onMarkAllRead={markAllAlertsRead}
+          />
           <AgencyHeaderExtras
             isOnline={isOnline}
             darkMode={darkMode}
             onDarkModeToggle={toggleDarkMode}
+            showThemeToggle={false}
           />
         </>
       }

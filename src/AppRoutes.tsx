@@ -368,6 +368,16 @@ const AppRoutes = () => {
               <LogisticsDashboardPage />
             </PrivateRoute>
           } />
+          <Route path="logistics/compliance" element={
+            <PrivateRoute allowedRoles={routePermissions.logisticsDashboard}>
+              <LogisticsDashboardPage />
+            </PrivateRoute>
+          } />
+          <Route path="logistics/emergency" element={
+            <PrivateRoute allowedRoles={routePermissions.logisticsDashboard}>
+              <LogisticsDashboardPage />
+            </PrivateRoute>
+          } />
           <Route path="fleet" element={<GarageDashboardPage />} />
           <Route path="maintenance" element={<GarageDashboardPage view="maintenance" />} />
           <Route path="transit" element={<GarageDashboardPage view="transit" />} />

@@ -90,7 +90,7 @@ service cloud.firestore {
       return isFleetController() || isAgencyManager() || isBoardingOfficer() || isResponsableLogistique();
     }
     /* Read access for company data: same company, platform admin, or responsable_logistique (same company). */
-    function canReadCompanyData() {
+    function canReadCompanyData(companyId) {
       return isAuth() && (
         userCompanyId() == companyId ||
         getUserRole() == 'admin_platforme' ||
@@ -334,7 +334,7 @@ service cloud.firestore {
 
         match /affectations/{affectationId} {
           allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-          allow create, update: if (canModifyFleet() || isAgencyManager()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create, update: if (canModifyFleet() || isAgencyManager() || isResponsableLogistique()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
@@ -529,19 +529,25 @@ service cloud.firestore {
 
       /* Vehicles (company-level). Read: company, platform, responsable_logistique. Write: fleet roles only (not responsable_logistique). */
       match /vehicles/{vehicleId} {
-        allow get, list: if canReadCompanyData();
-        allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
+        allow get, list: if canReadCompanyData(companyId);
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          canModifyFleet() || isResponsableLogistique()
+        );
+        allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
       }
 
       /* Vehicle models catalog (autocomplete). Read for same company/logistics visibility; write for fleet managers only. */
       match /vehicleModels/{modelId} {
-        allow get, list: if canReadCompanyData();
-        allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
+        allow get, list: if canReadCompanyData(companyId);
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          canModifyFleet() || isResponsableLogistique()
+        );
+        allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
       }
 
       /* Fleet costs — read for logistics/CEO; write excluded for responsable_logistique. */
       match /fleetCosts/{costId} {
-        allow get, list: if canReadCompanyData();
+        allow get, list: if canReadCompanyData(companyId);
         allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && !isResponsableLogistique();
         allow delete: if false;
       }
@@ -565,7 +571,7 @@ service cloud.firestore {
       }
 
       match /fleetVehicles/{vehicleId} {
-        allow get, list: if canReadCompanyData();
+        allow get, list: if canReadCompanyData(companyId);
         allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           (canModifyFleet() && (
@@ -579,7 +585,7 @@ service cloud.firestore {
       }
 
       match /fleetMovements/{movementId} {
-        allow get, list: if canReadCompanyData();
+        allow get, list: if canReadCompanyData(companyId);
         allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (canModifyFleet() || isBoardingOfficer());
         allow update, delete: if false;
       }

@@ -3,13 +3,13 @@
  */
 export const routePermissions = {
   compagnieLayout: ["admin_compagnie", "admin_platforme"] as const,
-  garageLayout: ["responsable_logistique", "admin_compagnie", "admin_platforme"] as const,
-  logisticsDashboard: ["responsable_logistique", "admin_compagnie", "admin_platforme"] as const,
+  garageLayout: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
+  logisticsDashboard: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
   companyAccountantLayout: ["company_accountant", "financial_director", "admin_compagnie", "admin_platforme"] as const,
   agenceShell: ["chefAgence", "superviseur", "agentCourrier", "agency_accountant", "admin_compagnie"] as const,
   boarding: ["chefEmbarquement", "chefAgence", "admin_compagnie"] as const,
   fleet: ["agency_fleet_controller", "chefAgence", "admin_compagnie"] as const,
-  companyFleet: ["responsable_logistique", "admin_compagnie", "admin_platforme"] as const,
+  companyFleet: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
   guichet: ["guichetier", "chefAgence", "admin_compagnie"] as const,
   comptabilite: ["agency_accountant", "admin_compagnie"] as const,
   validationsAgence: ["chefAgence", "superviseur", "admin_compagnie"] as const,

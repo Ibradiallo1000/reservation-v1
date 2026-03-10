@@ -915,3 +915,100 @@ export const updateCompanyRevenue = functions.https.onCall(async (data, context)
 
   return { success: true, feeAmount, digitalFeePercent };
 });
+
+/* =======================================================
+   PUSH: send mobile/web push on new company notifications
+======================================================= */
+export const onCompanyNotificationCreated = functions
+  .region("europe-west1")
+  .firestore.document("companies/{companyId}/notifications/{notificationId}")
+  .onCreate(async (snap, context) => {
+    const companyId = String(context.params.companyId || "");
+    const notificationId = String(context.params.notificationId || "");
+    const data = (snap.data() || {}) as Record<string, any>;
+
+    const targetUserId = String(data.targetUserId || "").trim();
+    const targetRole = String(data.targetRole || "").trim();
+
+    // Prevent wide broadcast unless explicitly targeted.
+    if (!targetUserId && !targetRole) return null;
+
+    const recipientDocs: FirebaseFirestore.DocumentSnapshot[] = [];
+    if (targetUserId) {
+      const userSnap = await db.collection("users").doc(targetUserId).get();
+      if (userSnap.exists && String(userSnap.data()?.companyId || "") === companyId) {
+        recipientDocs.push(userSnap);
+      }
+    } else if (targetRole) {
+      const usersSnap = await db
+        .collection("users")
+        .where("companyId", "==", companyId)
+        .where("role", "==", targetRole)
+        .get();
+      recipientDocs.push(...usersSnap.docs);
+    }
+
+    const tokenToUser = new Map<string, string>();
+    for (const docSnap of recipientDocs) {
+      const userData = (docSnap.data() || {}) as Record<string, any>;
+      const tokensRaw = Array.isArray(userData.fcmTokens) ? userData.fcmTokens : [];
+      const tokens = tokensRaw.map((t) => String(t || "").trim()).filter(Boolean);
+      for (const token of tokens) tokenToUser.set(token, docSnap.id);
+    }
+
+    const tokens = Array.from(tokenToUser.keys());
+    if (tokens.length === 0) return null;
+
+    const relLink = String(data.link || "/");
+    const absoluteLink = relLink.startsWith("http")
+      ? relLink
+      : `${FRONTEND_URL}${relLink.startsWith("/") ? "" : "/"}${relLink}`;
+
+    const response = await admin.messaging().sendEachForMulticast({
+      tokens,
+      notification: {
+        title: String(data.title || "Nouvelle notification"),
+        body: String(data.body || ""),
+      },
+      data: {
+        link: relLink,
+        notificationId,
+        companyId,
+        type: String(data.type || "notification"),
+      },
+      webpush: {
+        fcmOptions: { link: absoluteLink },
+        notification: {
+          icon: "/icons/icon-192.png",
+          badge: "/icons/icon-192.png",
+        },
+      },
+    });
+
+    const staleTokenRemovals: Array<Promise<unknown>> = [];
+    response.responses.forEach((res, idx) => {
+      if (res.success) return;
+      const token = tokens[idx];
+      const errCode = res.error?.code || "";
+      const isInvalid =
+        errCode.includes("registration-token-not-registered") ||
+        errCode.includes("invalid-argument");
+      if (!isInvalid) return;
+
+      const uid = tokenToUser.get(token);
+      if (!uid) return;
+      staleTokenRemovals.push(
+        db
+          .collection("users")
+          .doc(uid)
+          .update({
+            fcmTokens: admin.firestore.FieldValue.arrayRemove(token),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          })
+          .catch(() => undefined)
+      );
+    });
+
+    if (staleTokenRemovals.length) await Promise.all(staleTokenRemovals);
+    return null;
+  });

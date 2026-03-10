@@ -5,6 +5,7 @@ interface Props {
   isOnline: boolean;
   darkMode: boolean;
   onDarkModeToggle: () => void;
+  showThemeToggle?: boolean;
 }
 
 /** Bloc réseau + mode sombre pour header (Manager, Boarding, Fleet, Compta). Aligné avec le guichet. */
@@ -12,6 +13,7 @@ export const AgencyHeaderExtras: React.FC<Props> = ({
   isOnline,
   darkMode,
   onDarkModeToggle,
+  showThemeToggle = true,
 }) => (
   <>
     {!isOnline && (
@@ -23,13 +25,15 @@ export const AgencyHeaderExtras: React.FC<Props> = ({
         <span className="hidden sm:inline">Hors-ligne</span>
       </div>
     )}
-    <button
-      type="button"
-      onClick={onDarkModeToggle}
-      className="flex items-center justify-center w-9 h-9 rounded-full border-2 border-slate-300 dark:border-slate-500 bg-white dark:bg-slate-700 text-slate-700 dark:text-gray-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
-      title={darkMode ? "Mode jour (☀️)" : "Mode nuit (🌙)"}
-    >
-      {darkMode ? <span className="text-base" aria-hidden>☀️</span> : <span className="text-base" aria-hidden>🌙</span>}
-    </button>
+    {showThemeToggle && (
+      <button
+        type="button"
+        onClick={onDarkModeToggle}
+        className="flex items-center justify-center w-9 h-9 rounded-full border-2 border-slate-300 dark:border-slate-500 bg-white dark:bg-slate-700 text-slate-700 dark:text-gray-200 hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors"
+        title={darkMode ? "Mode jour (☀️)" : "Mode nuit (🌙)"}
+      >
+        {darkMode ? <span className="text-base" aria-hidden>☀️</span> : <span className="text-base" aria-hidden>🌙</span>}
+      </button>
+    )}
   </>
 );

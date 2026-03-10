@@ -20,6 +20,7 @@ const CANONICAL_ROLES: ReadonlySet<string> = new Set([
   "company_accountant",
   "agency_accountant",
   "responsable_logistique",
+  "chef_garage",
   "chefagence",
   "chefembarquement",
   "superviseur",
@@ -33,6 +34,7 @@ const normalizeRole = (r?: unknown): Role => {
   if (!r) return "unauthenticated";
   const raw = String(r).trim().toLowerCase();
   if (raw === "company_ceo") return "admin_compagnie";
+  if (raw === "chef_garage" || raw === "chefgarage") return "responsable_logistique";
   if (raw === "chefagence") return "chefAgence";
   if (raw === "agentcourrier") return "agentCourrier";
   if (raw === "chefembarquement") return "chefEmbarquement";

@@ -264,6 +264,7 @@ const CompanyAccountantLayout: React.FC = () => {
                 isOnline={isOnline}
                 darkMode={darkMode}
                 onDarkModeToggle={toggleDarkMode}
+                showThemeToggle={false}
               />
             </div>
           }
