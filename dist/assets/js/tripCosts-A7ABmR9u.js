@@ -1,0 +1,1 @@
+const e="tripCosts";function r(t){return(Number(t.fuelCost)||0)+(Number(t.driverCost)||0)+(Number(t.assistantCost)||0)+(Number(t.tollCost)||0)+(Number(t.maintenanceCost)||0)+(Number(t.otherOperationalCost)||0)}export{e as T,r as t};
