@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { SectionCard, ActionButton } from "@/ui";
 import { getAccount, listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { agencyDepositToBank } from "@/modules/compagnie/treasury/treasuryTransferService";
 import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
 import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
 import { collection, getDocs } from "firebase/firestore";
@@ -10,6 +9,13 @@ import { db } from "@/firebaseConfig";
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
+import {
+  approveTransferRequest,
+  createTransferRequest,
+  listTransferRequests,
+  rejectTransferRequest,
+  type TransferRequestDoc,
+} from "@/modules/agence/treasury/transferRequestsService";
 
 type AccountRow = {
   id: string;
@@ -20,15 +26,21 @@ type AccountRow = {
   currency: string;
 };
 
-const makeIdempotencyKey = () =>
-  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+type TransferRequestRow = TransferRequestDoc & { id: string };
+
+const TRANSFER_STATUS_LABELS: Record<string, string> = {
+  pending_manager: "En attente chef d'agence",
+  approved: "Validée",
+  rejected: "Refusée",
+  executed: "Exécutée",
+};
 
 export default function AgencyTreasuryTransferPage() {
   const { user } = useAuth() as any;
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
+  const roles: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
+  const hasRole = (role: string) => roles.includes(role);
 
   const [companyBankAccounts, setCompanyBankAccounts] = useState<AccountRow[]>([]);
   const [agencyCashAccount, setAgencyCashAccount] = useState<{
@@ -42,6 +54,9 @@ export default function AgencyTreasuryTransferPage() {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [companyBankNameById, setCompanyBankNameById] = useState<Record<string, string>>({});
+  const [requests, setRequests] = useState<TransferRequestRow[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -78,15 +93,38 @@ export default function AgencyTreasuryTransferPage() {
     () => agencyCashAccount?.currentBalance ?? 0,
     [agencyCashAccount],
   );
-  const canInitiateTransfer =
-    user?.role === "agency_accountant" ||
-    user?.role === "admin_compagnie";
+  const canInitiateTransfer = hasRole("agency_accountant") || hasRole("admin_compagnie");
+  const canValidateTransfer = hasRole("chefAgence") || hasRole("superviseur") || hasRole("admin_compagnie");
 
   useEffect(() => {
     if (!toAccountId && companyBankAccounts.length > 0) {
       setToAccountId(companyBankAccounts[0].id);
     }
   }, [toAccountId, companyBankAccounts]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    let cancelled = false;
+
+    const load = async () => {
+      setRequestsLoading(true);
+      try {
+        const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
+        if (!cancelled) setRequests(list);
+      } catch {
+        if (!cancelled) setRequests([]);
+      } finally {
+        if (!cancelled) setRequestsLoading(false);
+      }
+    };
+
+    void load();
+    const interval = setInterval(() => void load(), 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [companyId, agencyId]);
 
   const handleSubmit = async () => {
     if (!companyId || !user?.uid) return;
@@ -116,26 +154,76 @@ export default function AgencyTreasuryTransferPage() {
 
     setSubmitting(true);
     try {
-      await agencyDepositToBank({
+      await createTransferRequest({
         companyId,
-        agencyCashAccountId: agencyCashAccount.id,
-        companyBankAccountId: toAccountId,
+        agencyId,
+        fromAccountId: agencyCashAccount.id,
+        toAccountId,
         amount: numericAmount,
         currency,
-        performedBy: user.uid,
-        performedByRole: user.role ?? null,
-        idempotencyKey: makeIdempotencyKey(),
-        description: description.trim() || "Dépôt caisse agence vers banque compagnie",
+        initiatedBy: user.uid,
+        initiatedByRole: Array.isArray(user?.role) ? user.role[0] ?? null : user?.role ?? null,
+        description: description.trim() || "Versement caisse agence vers banque compagnie",
       });
-      toast.success("Versement vers la banque compagnie enregistré.");
+      toast.success("Demande de versement créée. En attente de validation chef d'agence.");
       setAmount("");
       setDescription("");
+      const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
+      setRequests(list);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Erreur lors du versement.");
+      toast.error(error instanceof Error ? error.message : "Erreur lors de la création de la demande.");
     } finally {
       setSubmitting(false);
     }
   };
+
+  const handleApprove = async (requestId: string) => {
+    if (!companyId || !user?.uid) return;
+    setBusyRequestId(requestId);
+    try {
+      await approveTransferRequest({
+        companyId,
+        requestId,
+        managerId: user.uid,
+        managerRole: Array.isArray(user?.role) ? user.role[0] ?? null : user?.role ?? null,
+      });
+      toast.success("Versement validé et exécuté.");
+      const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
+      setRequests(list);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erreur lors de la validation.");
+    } finally {
+      setBusyRequestId(null);
+    }
+  };
+
+  const handleReject = async (requestId: string) => {
+    if (!companyId || !user?.uid) return;
+    const reason = window.prompt("Motif du refus (optionnel) :") ?? "";
+    setBusyRequestId(requestId);
+    try {
+      await rejectTransferRequest({
+        companyId,
+        requestId,
+        managerId: user.uid,
+        managerRole: Array.isArray(user?.role) ? user.role[0] ?? null : user?.role ?? null,
+        reason,
+      });
+      toast.success("Demande de versement refusée.");
+      const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
+      setRequests(list);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Erreur lors du refus.");
+    } finally {
+      setBusyRequestId(null);
+    }
+  };
+
+  const pendingForValidation = useMemo(
+    () => requests.filter((r) => r.status === "pending_manager"),
+    [requests]
+  );
+  const recentRequests = useMemo(() => requests.slice(0, 12), [requests]);
 
   if (!companyId) {
     return <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
@@ -206,10 +294,80 @@ export default function AgencyTreasuryTransferPage() {
               </div>
             </div>
 
-            <ActionButton onClick={handleSubmit} disabled={submitting || !canInitiateTransfer}>
-              {submitting ? "Traitement..." : "Initier le versement"}
-            </ActionButton>
+            {canInitiateTransfer ? (
+              <ActionButton onClick={handleSubmit} disabled={submitting}>
+                {submitting ? "Traitement..." : "Initier le versement"}
+              </ActionButton>
+            ) : null}
           </div>
+        )}
+      </SectionCard>
+
+      {canValidateTransfer && (
+        <SectionCard title="Demandes en attente de validation">
+          {requestsLoading ? (
+            <div className="py-4 text-sm text-gray-500">Chargement des demandes...</div>
+          ) : pendingForValidation.length === 0 ? (
+            <div className="py-4 text-sm text-gray-500">Aucune demande en attente.</div>
+          ) : (
+            <div className="space-y-2">
+              {pendingForValidation.map((r) => (
+                <div key={r.id} className="rounded-lg border border-gray-200 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm text-gray-700">
+                      <span className="font-medium">{formatCurrency(r.amount, r.currency)}</span>
+                      {" · "}
+                      <span>{companyBankNameById[r.toAccountId.replace("company_bank_", "")] ?? "Banque compagnie"}</span>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {r.createdAt?.toDate?.()?.toLocaleString?.("fr-FR") ?? "—"}
+                    </div>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-500">
+                    Initié par: {r.initiatedBy} {r.description ? `· ${r.description}` : ""}
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <ActionButton
+                      size="sm"
+                      onClick={() => handleApprove(r.id)}
+                      disabled={busyRequestId === r.id}
+                    >
+                      Valider
+                    </ActionButton>
+                    <ActionButton
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => handleReject(r.id)}
+                      disabled={busyRequestId === r.id}
+                    >
+                      Refuser
+                    </ActionButton>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      )}
+
+      <SectionCard title="Historique des demandes de versement">
+        {requestsLoading ? (
+          <div className="py-4 text-sm text-gray-500">Chargement...</div>
+        ) : recentRequests.length === 0 ? (
+          <div className="py-4 text-sm text-gray-500">Aucune demande enregistrée.</div>
+        ) : (
+          <ul className="space-y-2 text-sm">
+            {recentRequests.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-gray-200 px-3 py-2">
+                <span>
+                  {formatCurrency(r.amount, r.currency)} · {TRANSFER_STATUS_LABELS[r.status] ?? r.status}
+                </span>
+                <span className="text-xs text-gray-500">
+                  {r.createdAt?.toDate?.()?.toLocaleString?.("fr-FR") ?? "—"}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
       </SectionCard>
     </div>

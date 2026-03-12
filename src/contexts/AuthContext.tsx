@@ -131,6 +131,8 @@ export const landingTargetForRoles = (roles: unknown): string => {
 
   // guichetier → /agence/guichet
   if (hasAny(rolesArray, ["guichetier"])) return "/agence/guichet";
+  // agentCourrier → espace courrier
+  if (hasAny(rolesArray, ["agentCourrier", "agentcourrier"])) return "/agence/courrier";
 
   // unauthenticated / user / unknown → /login
   return "/login";

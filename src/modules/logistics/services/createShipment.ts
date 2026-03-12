@@ -12,6 +12,7 @@ import { addToExpectedBalance } from "@/modules/agence/cashControl/cashSessionSe
 import type { ShipmentEvent } from "../domain/logisticsEvents.types";
 import { shipmentRef, shipmentsRef, eventsRef } from "../domain/firestorePaths";
 import { courierSessionRef } from "../domain/courierSessionPaths";
+import { incrementParcelCount } from "@/modules/compagnie/tripInstances/tripInstanceService";
 
 const SHIPMENT_SEQ_PAD = 5;
 
@@ -42,6 +43,8 @@ export type CreateShipmentParams = {
   shipmentId?: string;
   /** Payment method for cash session expected balance when PAID_ORIGIN (default: cash). */
   paymentMethod?: "cash" | "mobile_money" | "bank";
+  /** Optional link to trip instance. When set, shipment is attached to that instance and parcelCount is incremented. */
+  tripInstanceId?: string | null;
 };
 
 export type CreateShipmentResult = { shipmentId: string; shipmentNumber?: string };
@@ -53,6 +56,12 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
   let shipmentNumber: string | undefined;
 
   await runTransaction(db, async (tx) => {
+    const sRef = shipmentRef(db, params.companyId, shipmentId);
+    const sSnap = await tx.get(sRef);
+    if (sSnap.exists()) throw new Error("Un envoi existe déjà avec cet id.");
+
+    let counterRef: ReturnType<typeof doc> | null = null;
+    let nextSeq: number | null = null;
     if (params.sessionId) {
       const sessionRef = courierSessionRef(
         db,
@@ -69,7 +78,7 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     }
 
     if (params.companyCode != null && params.agencyCode != null && params.agentCode != null) {
-      const counterRef = doc(
+      counterRef = doc(
         db,
         "companies",
         params.companyId,
@@ -80,18 +89,13 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       );
       const counterSnap = await tx.get(counterRef);
       const last = counterSnap.exists() ? (counterSnap.data()?.lastSeq ?? 0) : 0;
-      const nextSeq = last + 1;
-      tx.set(
-        counterRef,
-        { lastSeq: nextSeq, updatedAt: Timestamp.now() },
-        { merge: true }
-      );
+      nextSeq = last + 1;
       shipmentNumber = `${params.companyCode}-${params.agencyCode}-${params.agentCode}-${String(nextSeq).padStart(SHIPMENT_SEQ_PAD, "0")}`;
     }
 
-    const sRef = shipmentRef(db, params.companyId, shipmentId);
-    const snap = await tx.get(sRef);
-    if (snap.exists()) throw new Error("Un envoi existe déjà avec cet id.");
+    if (counterRef && nextSeq != null) {
+      tx.set(counterRef, { lastSeq: nextSeq, updatedAt: Timestamp.now() }, { merge: true });
+    }
 
     tx.set(sRef, {
       shipmentId,
@@ -116,6 +120,7 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       createdBy: params.createdBy,
       ...(params.sessionId != null && { sessionId: params.sessionId }),
       ...(params.agentCode != null && { agentCode: params.agentCode }),
+      ...(params.tripInstanceId != null && { tripInstanceId: params.tripInstanceId }),
     });
 
     const eventsCol = eventsRef(db, params.companyId);
@@ -144,6 +149,11 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
         paymentMethod
       ).catch(() => {});
     }
+  }
+
+  // Trip instance aggregation: increment parcelCount when shipment is attached to an instance
+  if (params.tripInstanceId) {
+    incrementParcelCount(params.companyId, params.tripInstanceId, 1).catch(() => {});
   }
 
   return { shipmentId, shipmentNumber };

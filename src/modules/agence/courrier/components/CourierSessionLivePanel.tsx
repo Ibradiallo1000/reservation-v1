@@ -58,15 +58,15 @@ export default function CourierSessionLivePanel({
 
   return (
     <SectionCard title="Session en direct" className="mb-6 print:hidden">
-      <div className="grid grid-cols-1 gap-4 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        <MetricCard label="Statut" value={statusLabel} icon={Activity} valueColorVar={primaryVar} />
-        <MetricCard label="Code agent" value={session?.agentCode ?? "—"} icon={User} valueColorVar={primaryVar} className="font-mono" />
-        <MetricCard label="Ouverture" value={openingTime} icon={Clock} valueColorVar={primaryVar} />
-        <MetricCard label="Envois créés" value={createdInSession.length} icon={Package} valueColorVar={primaryVar} />
-        <MetricCard label="Total encaissé origine" value={money(originTotal)} icon={Banknote} valueColorVar={primaryVar} className="teliya-monetary" />
-        <MetricCard label="Envois livrés" value={deliveredFromSession.length} icon={Truck} valueColorVar={secondaryVar} />
-        <MetricCard label="Total encaissé destination" value={money(destinationTotal)} icon={Wallet} valueColorVar={secondaryVar} className="teliya-monetary" />
-        <MetricCard label="Total global" value={money(globalTotal)} icon={Wallet} valueColorVar={primaryVar} className="teliya-monetary" />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricCard label="Statut" value={statusLabel} icon={Activity} valueColorVar={primaryVar} decorative />
+        <MetricCard label="Code agent" value={session?.agentCode ?? "—"} icon={User} valueColorVar={primaryVar} className="font-mono" decorative />
+        <MetricCard label="Ouverture" value={openingTime} icon={Clock} valueColorVar={primaryVar} decorative />
+        <MetricCard label="Envois créés" value={createdInSession.length} icon={Package} valueColorVar={primaryVar} decorative />
+        <MetricCard label="Total encaissé origine" value={money(originTotal)} icon={Banknote} valueColorVar={primaryVar} className="teliya-monetary" decorative />
+        <MetricCard label="Envois livrés" value={deliveredFromSession.length} icon={Truck} valueColorVar={secondaryVar} decorative />
+        <MetricCard label="Total encaissé destination" value={money(destinationTotal)} icon={Wallet} valueColorVar={secondaryVar} className="teliya-monetary" decorative />
+        <MetricCard label="Total global" value={money(globalTotal)} icon={Wallet} valueColorVar={primaryVar} className="teliya-monetary" decorative />
       </div>
       {agencyName && (
         <p className="mt-4 flex items-center gap-1.5 text-xs text-gray-500">

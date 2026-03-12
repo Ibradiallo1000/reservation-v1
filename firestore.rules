@@ -174,11 +174,11 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      /* Trip instances (daily departures). Read: public. Create: public only when initial state (lazy creation on search). Update: (1) same company or platform for full updates; (2) unauthenticated allowed only to increment reservedSeats + updatedAt (public reservation flow). */
+      /* Trip instances (daily departures). Read: public. Create: public only when initial state (lazy creation on search). Update: (1) same company or platform for full updates; (2) unauthenticated allowed only to increment reservedSeats + updatedAt (public reservation flow). Status: code uses lowercase 'scheduled'. */
       match /tripInstances/{tripInstanceId} {
         allow get, list: if true;
         allow create: if request.resource.data.get('reservedSeats', 0) == 0
-          && request.resource.data.get('status', '') == 'SCHEDULED'
+          && (request.resource.data.get('status', '') == 'scheduled' || request.resource.data.get('status', '') == 'SCHEDULED')
           && request.resource.data.get('agencyId', '') != ''
           && request.resource.data.get('date', '') != ''
           && request.resource.data.get('departureTime', '') != ''
@@ -186,7 +186,7 @@ service cloud.firestore {
           && request.resource.data.get('arrivalCity', '') != '';
         allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
           || (request.auth == null
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservedSeats', 'updatedAt'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservedSeats', 'passengerCount', 'updatedAt'])
             && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0));
         allow delete: if false;
       }
@@ -221,37 +221,31 @@ service cloud.firestore {
 
           /* =============================
              UPDATE 1 — APRÈS CRÉATION
-             (publicToken / publicUrl)
+             (publicToken / publicUrl ; updatedAt optionnel pour conformité)
           ============================= */
           allow update: if (
             request.auth == null &&
             resource.data.canal == "en_ligne" &&
             resource.data.statut == "en_attente_paiement" &&
-            request.resource.data.diff(resource.data).changedKeys()
-              .hasOnly([
-                "publicToken",
-                "publicUrl",
-                "updatedAt"
-              ])
+            (
+              request.resource.data.diff(resource.data).changedKeys().hasOnly(["publicToken", "publicUrl"])
+              || request.resource.data.diff(resource.data).changedKeys().hasOnly(["publicToken", "publicUrl", "updatedAt"])
+            )
           );
 
           /* =============================
              UPDATE 2 — SOUMISSION PREUVE (public)
-             Passage en_attente_paiement → preuve_recue ; champs limités.
+             Passage en_attente_paiement → preuve_recue. UploadPreuvePage envoie toujours ces 7 champs.
           ============================= */
           allow update: if (
             request.auth == null &&
-            resource.data.canal == "en_ligne" &&
-            resource.data.statut == "en_attente_paiement" &&
-            request.resource.data.statut == "preuve_recue" &&
-            request.resource.data.diff(resource.data).changedKeys()
-              .hasOnly([
-                "statut",
-                "paymentReference",
-                "proofMessage",
-                "proofSubmittedAt",
-                "updatedAt"
-              ])
+            resource.data.get('canal', '') == "en_ligne" &&
+            resource.data.get('statut', '') == "en_attente_paiement" &&
+            request.resource.data.get('statut', '') == "preuve_recue" &&
+            request.resource.data.diff(resource.data).changedKeys().hasOnly([
+              "statut", "paymentReference", "preuveMessage", "transactionReference",
+              "proofSubmittedAt", "updatedAt", "preuveVia"
+            ])
           );
 
           /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ; contrôleur embarquement : champs restreints */

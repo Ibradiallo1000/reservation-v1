@@ -27,6 +27,7 @@ const FleetVehiclesPage: React.FC = () => {
 
   const [vehicles, setVehicles] = useState<FleetVehicle[]>([]);
   const [agencies, setAgencies] = useState<Record<string, string>>({});
+  const [crewByVehicle, setCrewByVehicle] = useState<Record<string, { drivers: string[]; convoyeurs: string[] }>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -39,9 +40,10 @@ const FleetVehiclesPage: React.FC = () => {
     (async () => {
       setLoading(true);
       try {
-        const [fleetSnap, agencesSnap] = await Promise.all([
+        const [fleetSnap, agencesSnap, personnelSnap] = await Promise.all([
           getDocs(collection(db, `companies/${companyId}/fleetVehicles`)),
           getDocs(collection(db, `companies/${companyId}/agences`)),
+          getDocs(collection(db, `companies/${companyId}/personnel`)),
         ]);
         const agencyMap: Record<string, string> = {};
         agencesSnap.docs.forEach((d) => {
@@ -49,6 +51,29 @@ const FleetVehiclesPage: React.FC = () => {
           agencyMap[d.id] = data?.nom ?? data?.name ?? d.id;
         });
         setAgencies(agencyMap);
+
+        const crewMap: Record<string, { drivers: string[]; convoyeurs: string[] }> = {};
+        personnelSnap.docs.forEach((d) => {
+          const data = d.data() as {
+            lastName?: string;
+            firstName?: string;
+            fullName?: string;
+            role?: string;
+            crewRole?: "driver" | "convoyeur";
+            assignedVehicleId?: string;
+            active?: boolean;
+          };
+          if (data.active === false) return;
+          const vehicleId = String(data.assignedVehicleId ?? "").trim();
+          if (!vehicleId) return;
+          const fullName = [data.lastName, data.firstName].filter(Boolean).join(" ").trim() || String(data.fullName ?? "").trim() || d.id;
+          const crewRole = data.crewRole ?? (data.role === "agentCourrier" ? "convoyeur" : data.role === "agency_fleet_controller" ? "driver" : null);
+          if (!crewRole) return;
+          if (!crewMap[vehicleId]) crewMap[vehicleId] = { drivers: [], convoyeurs: [] };
+          if (crewRole === "driver") crewMap[vehicleId].drivers.push(fullName);
+          if (crewRole === "convoyeur") crewMap[vehicleId].convoyeurs.push(fullName);
+        });
+        setCrewByVehicle(crewMap);
 
         let list: FleetVehicle[] = fleetSnap.docs.map((d) => ({
           id: d.id,
@@ -145,7 +170,18 @@ const FleetVehiclesPage: React.FC = () => {
                     {v.currentAgencyId ? agencies[v.currentAgencyId] ?? v.currentAgencyId : "—"}
                     {v.currentTripId && ` • ${v.currentDate ?? ""} ${v.currentHeure ?? ""}`}
                   </td>
-                  <td className={table.td}>{v.chauffeurName || "—"} / {v.convoyeurName || "—"}</td>
+                  <td className={table.td}>
+                    <div className="text-xs">
+                      <div>
+                        <span className="font-medium">Chauffeur(s): </span>
+                        {crewByVehicle[v.id]?.drivers?.slice(0, 2).join(", ") || v.chauffeurName || "—"}
+                      </div>
+                      <div>
+                        <span className="font-medium">Convoyeur(s): </span>
+                        {crewByVehicle[v.id]?.convoyeurs?.join(", ") || v.convoyeurName || "—"}
+                      </div>
+                    </div>
+                  </td>
                   <td className={table.td}>
                     {updatingId === v.id ? (
                       <span className="text-xs text-gray-500">…</span>

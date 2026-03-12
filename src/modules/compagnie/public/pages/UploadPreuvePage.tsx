@@ -281,7 +281,7 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         preuveMessage: trimmed,
         paymentReference: trimmed,
         transactionReference: trimmed,
-        ...(paymentMethod ? { preuveVia: paymentMethod } : {}),
+        preuveVia: paymentMethod || '',
         proofSubmittedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });

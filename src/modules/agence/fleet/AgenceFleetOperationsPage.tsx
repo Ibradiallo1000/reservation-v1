@@ -213,7 +213,7 @@ const AgenceFleetOperationsPage: React.FC = () => {
     setActioningId(affectationId);
     setError(null);
     try {
-      await confirmArrivalAffectation(companyId, affectationAgencyId, affectationId, agencyCity, userId, role);
+      await confirmArrivalAffectation(companyId, affectationAgencyId, affectationId, agencyCity, userId, role, agencyId);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur confirmation arrivée.");

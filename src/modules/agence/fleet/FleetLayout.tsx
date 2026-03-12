@@ -4,7 +4,7 @@ import React from "react";
 import { Navigate, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
-import { LayoutDashboard, Truck, ClipboardList, History, MapPin } from "lucide-react";
+import { LayoutDashboard, Truck, ClipboardList, History, MapPin, Users } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
 import type { Company } from "@/types/companyTypes";
@@ -15,6 +15,7 @@ const FLEET_SECTIONS: NavSection[] = [
   { label: "Exploitation", icon: MapPin, path: "/agence/fleet/operations", end: true },
   { label: "Affectation", icon: ClipboardList, path: "/agence/fleet/assignment" },
   { label: "Véhicules", icon: Truck, path: "/agence/fleet/vehicles" },
+  { label: "Équipage", icon: Users, path: "/agence/fleet/crew" },
   { label: "Mouvements", icon: History, path: "/agence/fleet/movements" },
 ];
 

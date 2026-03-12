@@ -27,6 +27,8 @@ export type BlocksAtoEData = {
   budgetGapTop3: { agencyId: string; nom: string; gap: number }[];
   activeSessionsCount: number;
   pendingValidationSessionsCount: number;
+  activeCourierSessionsCount: number;
+  pendingCourierValidationCount: number;
   vehiclesInTransitCount: number;
   boardingOpenCount: number;
   criticalCashDiscrepanciesCount: number;
@@ -70,6 +72,8 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
     budgetGapTop3,
     activeSessionsCount,
     pendingValidationSessionsCount,
+    activeCourierSessionsCount,
+    pendingCourierValidationCount,
     vehiclesInTransitCount,
     boardingOpenCount,
     criticalCashDiscrepanciesCount,
@@ -216,6 +220,14 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
             <div className="text-xs text-gray-700">Sessions à valider</div>
             <div className="text-base font-bold text-amber-700">{pendingValidationSessionsCount}</div>
+          </div>
+          <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
+            <div className="text-xs text-gray-700">Sessions courrier actives</div>
+            <div className="text-base font-bold text-gray-900">{activeCourierSessionsCount}</div>
+          </div>
+          <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
+            <div className="text-xs text-gray-700">Courrier en attente validation</div>
+            <div className="text-base font-bold text-amber-700">{pendingCourierValidationCount}</div>
           </div>
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
             <div className="text-xs text-gray-700">Véhicules en transit</div>

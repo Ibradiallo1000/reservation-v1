@@ -15,6 +15,7 @@ import {
   orderBy,
   serverTimestamp,
   increment,
+  Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import {
@@ -36,14 +37,22 @@ function tripInstanceRef(companyId: string, tripInstanceId: string) {
 export interface CreateTripInstanceParams {
   routeId?: string | null;
   agencyId: string;
+  /** All agencies involved on this trip (e.g. [Bamako, Sikasso, Bouaké]). Optional; when absent, agencyId is used as single agency. */
+  agenciesInvolved?: string[];
   departureCity: string;
   arrivalCity: string;
   date: string;
   departureTime: string;
-  seatCapacity: number;
+  seatCapacity?: number;
+  /** Bus seat capacity for fill-rate (passengerCount / capacitySeats). Falls back to seatCapacity if not set. */
+  capacitySeats?: number;
+  /** Parcel capacity for fill-rate (parcelCount / capacityParcels). */
+  capacityParcels?: number;
   price?: number | null;
   weeklyTripId?: string | null;
   vehicleId?: string | null;
+  /** User id creating the instance (operational audit). */
+  createdBy?: string;
 }
 
 /** Create a single trip instance. Returns the new document id. */
@@ -53,21 +62,43 @@ export async function createTripInstance(
 ): Promise<string> {
   const ref = doc(tripInstancesRef(companyId));
   const now = serverTimestamp();
-  const data: TripInstanceDoc & { createdAt?: unknown; updatedAt?: unknown; price?: number | null } = {
-    routeId: params.routeId ?? null,
+  const dep = (params.departureCity || "").trim();
+  const arr = (params.arrivalCity || "").trim();
+  const departureDate = Timestamp.fromDate(new Date(`${params.date}T00:00:00.000Z`));
+  const capacitySeats = params.capacitySeats ?? params.seatCapacity ?? 0;
+  const data: TripInstanceDoc & {
+    createdAt?: unknown;
+    updatedAt?: unknown;
+    price?: number | null;
+    departureCity?: string;
+    arrivalCity?: string;
+    seatCapacity?: number;
+    reservedSeats?: number;
+  } = {
+    companyId,
     agencyId: params.agencyId,
-    departureCity: (params.departureCity || "").trim(),
-    arrivalCity: (params.arrivalCity || "").trim(),
-    date: params.date,
-    departureTime: params.departureTime,
-    vehicleId: params.vehicleId ?? null,
-    seatCapacity: params.seatCapacity,
-    reservedSeats: 0,
-    status: TRIP_INSTANCE_STATUS.SCHEDULED,
+    ...(params.agenciesInvolved != null && params.agenciesInvolved.length > 0 && { agenciesInvolved: params.agenciesInvolved }),
+    routeDeparture: dep,
+    routeArrival: arr,
     weeklyTripId: params.weeklyTripId ?? null,
-    price: params.price ?? null,
+    vehicleId: params.vehicleId ?? null,
+    date: params.date,
+    departureDate,
+    departureTime: params.departureTime,
+    status: TRIP_INSTANCE_STATUS.SCHEDULED,
+    passengerCount: 0,
+    parcelCount: 0,
+    ...(capacitySeats > 0 && { capacitySeats }),
+    ...(params.capacityParcels != null && params.capacityParcels > 0 && { capacityParcels: params.capacityParcels }),
     createdAt: now,
+    createdBy: params.createdBy ?? "",
     updatedAt: now,
+    departureCity: dep,
+    arrivalCity: arr,
+    seatCapacity: capacitySeats,
+    reservedSeats: 0,
+    routeId: params.routeId ?? null,
+    price: params.price ?? null,
   };
   await setDoc(ref, data);
   return ref.id;
@@ -155,7 +186,7 @@ export async function updateTripInstanceStatus(
   });
 }
 
-/** Increment reservedSeats (e.g. when a reservation is created). Uses FieldValue.increment for safety. */
+/** Increment reservedSeats and passengerCount (e.g. when a reservation is created). */
 export async function incrementReservedSeats(
   companyId: string,
   tripInstanceId: string,
@@ -164,11 +195,12 @@ export async function incrementReservedSeats(
   if (seats <= 0) return;
   await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
     reservedSeats: increment(seats),
+    passengerCount: increment(seats),
     updatedAt: serverTimestamp(),
   });
 }
 
-/** Decrement reservedSeats (e.g. when a reservation is cancelled). */
+/** Decrement reservedSeats and passengerCount (e.g. when a reservation is cancelled). */
 export async function decrementReservedSeats(
   companyId: string,
   tripInstanceId: string,
@@ -177,6 +209,33 @@ export async function decrementReservedSeats(
   if (seats <= 0) return;
   await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
     reservedSeats: increment(-seats),
+    passengerCount: increment(-seats),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Increment parcelCount (e.g. when a shipment is assigned to this trip instance). */
+export async function incrementParcelCount(
+  companyId: string,
+  tripInstanceId: string,
+  count: number = 1
+): Promise<void> {
+  if (count <= 0) return;
+  await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
+    parcelCount: increment(count),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Decrement parcelCount (e.g. when a shipment is unassigned). */
+export async function decrementParcelCount(
+  companyId: string,
+  tripInstanceId: string,
+  count: number = 1
+): Promise<void> {
+  if (count <= 0) return;
+  await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
+    parcelCount: increment(-count),
     updatedAt: serverTimestamp(),
   });
 }

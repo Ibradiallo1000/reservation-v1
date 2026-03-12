@@ -80,6 +80,7 @@ const OperationsFlotteLandingPage = lazy(() => import("./modules/compagnie/pages
 const TripCostsPage = lazy(() => import("./modules/compagnie/pages/TripCostsPage"));
 const FleetFinancePage = lazy(() => import("./modules/compagnie/pages/FleetFinancePage"));
 const LogisticsDashboardPage = lazy(() => import("./modules/compagnie/pages/LogisticsDashboardPage"));
+const LogisticsCrewPage = lazy(() => import("./modules/compagnie/pages/LogisticsCrewPage"));
 const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 const FinancialSettingsPage = lazy(() => import("./modules/compagnie/settings/FinancialSettingsPage"));
 const NotificationsPage = lazy(() => import("./modules/compagnie/notifications/NotificationsPage"));
@@ -114,6 +115,7 @@ const FleetLayout = lazy(() => import("./modules/agence/fleet/FleetLayout"));
 const FleetDashboardPage = lazy(() => import("./modules/agence/fleet/FleetDashboardPage"));
 const FleetAssignmentPage = lazy(() => import("./modules/agence/fleet/FleetAssignmentPage"));
 const FleetVehiclesPage = lazy(() => import("./modules/agence/fleet/FleetVehiclesPage"));
+const FleetCrewPage = lazy(() => import("./modules/agence/fleet/FleetCrewPage"));
 const FleetMovementLogPage = lazy(() => import("./modules/agence/fleet/FleetMovementLogPage"));
 const AgenceFleetOperationsPage = lazy(() => import("./modules/agence/fleet/AgenceFleetOperationsPage"));
 const CourierLayout = lazy(() => import("./modules/agence/courrier/layout/CourierLayout"));
@@ -368,6 +370,11 @@ const AppRoutes = () => {
               <LogisticsDashboardPage />
             </PrivateRoute>
           } />
+          <Route path="logistics/crew" element={
+            <PrivateRoute allowedRoles={routePermissions.logisticsDashboard}>
+              <LogisticsCrewPage />
+            </PrivateRoute>
+          } />
           <Route path="logistics/compliance" element={
             <PrivateRoute allowedRoles={routePermissions.logisticsDashboard}>
               <LogisticsDashboardPage />
@@ -446,6 +453,7 @@ const AppRoutes = () => {
             }
           >
             <Route index element={<CourierSessionPage />} />
+            <Route path="session" element={<CourierSessionPage />} />
             <Route path="nouveau" element={<CourierCreateShipmentPage />} />
             <Route path="lots" element={<CourierBatchesPage />} />
             <Route path="reception" element={<CourierReceptionPage />} />
@@ -480,6 +488,7 @@ const AppRoutes = () => {
           <Route path="operations" element={<AgenceFleetOperationsPage />} />
           <Route path="assignment" element={<FleetAssignmentPage />} />
           <Route path="vehicles" element={<FleetVehiclesPage />} />
+          <Route path="crew" element={<FleetCrewPage />} />
           <Route path="movements" element={<FleetMovementLogPage />} />
         </Route>
 

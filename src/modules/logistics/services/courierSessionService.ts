@@ -15,12 +15,25 @@ import {
   serverTimestamp,
   getDoc,
 } from "firebase/firestore";
+import { Timestamp } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { CourierSession, CourierSessionStatus } from "../domain/courierSession.types";
 import type { PaymentStatus } from "../domain/shipment.types";
 import { courierSessionsRef, courierSessionRef } from "../domain/courierSessionPaths";
 import { shipmentsRef } from "../domain/firestorePaths";
 import { updateDailyStatsOnCourierSessionValidated, formatDateForDailyStats } from "@/modules/agence/aggregates/dailyStats";
+import {
+  updateAgencyLiveStateOnCourierSessionActivated,
+  updateAgencyLiveStateOnCourierSessionClosed,
+  updateAgencyLiveStateOnCourierSessionValidated,
+} from "@/modules/agence/aggregates/agencyLiveState";
+import {
+  recordMovementInTransaction,
+  uniqueReferenceKey,
+  ensureUniqueReferenceKeyInTransaction,
+} from "@/modules/compagnie/treasury/financialMovements";
+import { financialAccountRef } from "@/modules/compagnie/treasury/financialAccounts";
+import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
 
 const OPEN_STATUSES: CourierSessionStatus[] = ["PENDING", "ACTIVE"];
 
@@ -112,6 +125,7 @@ export async function activateCourierSession(params: {
       },
       updatedAt: now,
     });
+    updateAgencyLiveStateOnCourierSessionActivated(tx, params.companyId, params.agencyId);
   });
 }
 
@@ -147,6 +161,7 @@ export async function closeCourierSession(params: {
       expectedAmount,
       updatedAt: serverTimestamp(),
     });
+    updateAgencyLiveStateOnCourierSessionClosed(tx, params.companyId, params.agencyId);
   });
 
   return { expectedAmount };
@@ -220,7 +235,63 @@ export async function validateCourierSession(params: {
       statsDate,
       courierRevenue
     );
+    updateAgencyLiveStateOnCourierSessionValidated(tx, params.companyId, params.agencyId);
+
+    // Treasury: same as ticket validation — credit agency_cash with validated (counted) amount
+    if (params.validatedAmount > 0) {
+      const key = uniqueReferenceKey("courier_session", params.sessionId);
+      await ensureUniqueReferenceKeyInTransaction(tx, params.companyId, key);
+      const cashId = agencyCashAccountId(params.agencyId);
+      const cashRef = financialAccountRef(params.companyId, cashId);
+      const accountSnap = await tx.get(cashRef);
+      if (accountSnap.exists()) {
+        const currency = (accountSnap.data() as { currency?: string }).currency ?? "XOF";
+        await recordMovementInTransaction(tx, {
+          companyId: params.companyId,
+          fromAccountId: null,
+          toAccountId: cashId,
+          amount: params.validatedAmount,
+          currency,
+          movementType: "revenue_cash",
+          referenceType: "courier_session",
+          referenceId: params.sessionId,
+          agencyId: params.agencyId,
+          performedBy: params.validatedBy.id,
+          performedAt: Timestamp.now(),
+          notes: `Validation session courrier (agent: ${(sSnap.data() as CourierSession).agentId ?? ""})`,
+        });
+      }
+    }
   });
 
   return { difference };
+}
+
+export type CourierSessionWithId = CourierSession & { id: string };
+
+/**
+ * List validated courier sessions with non-zero discrepancy per agency (for CEO / financial monitoring).
+ * Same pattern as listClosedCashSessionsWithDiscrepancy — courier discrepancies feed into the same governance.
+ */
+export async function listCourierSessionsWithDiscrepancy(
+  companyId: string,
+  agencyIds: string[]
+): Promise<{ agencyId: string; session: CourierSessionWithId }[]> {
+  const results: { agencyId: string; session: CourierSessionWithId }[] = [];
+  await Promise.all(
+    agencyIds.map(async (agencyId) => {
+      const col = courierSessionsRef(db, companyId, agencyId);
+      const snap = await getDocs(
+        query(col, where("status", "==", "VALIDATED"), limit(200))
+      );
+      snap.docs.forEach((d) => {
+        const data = d.data() as CourierSession;
+        const diff = Number(data.difference ?? 0);
+        if (diff !== 0) {
+          results.push({ agencyId, session: { id: d.id, ...data } });
+        }
+      });
+    })
+  );
+  return results;
 }

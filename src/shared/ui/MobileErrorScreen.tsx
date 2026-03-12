@@ -1,13 +1,10 @@
 import { Button } from '@/shared/ui/button';
-import { useNavigate } from 'react-router-dom';
 
 interface Props {
   error?: Error;
 }
 
 export default function MobileErrorScreen({ error }: Props) {
-  const navigate = useNavigate();
-
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
       <h2 className="text-2xl font-bold mb-4">Erreur Technique</h2>
@@ -16,7 +13,7 @@ export default function MobileErrorScreen({ error }: Props) {
         <Button onClick={() => window.location.reload()}>
           Réessayer
         </Button>
-        <Button variant="secondary" onClick={() => navigate('/')}>
+        <Button variant="secondary" onClick={() => { window.location.href = '/'; }}>
           Retour à l'accueil
         </Button>
       </div>

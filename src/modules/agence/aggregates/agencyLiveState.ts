@@ -22,6 +22,8 @@ export function updateAgencyLiveStateOnSessionOpened(
     agencyId,
     activeSessionsCount: increment(1),
     closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(0),
     vehiclesInTransitCount: increment(0),
     boardingOpenCount: increment(0),
     lastUpdatedAt: serverTimestamp(),
@@ -40,6 +42,8 @@ export function updateAgencyLiveStateOnSessionClosed(
     agencyId,
     activeSessionsCount: increment(-1),
     closedPendingValidationCount: increment(1),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(0),
     vehiclesInTransitCount: increment(0),
     boardingOpenCount: increment(0),
     lastUpdatedAt: serverTimestamp(),
@@ -58,6 +62,8 @@ export function updateAgencyLiveStateOnSessionValidated(
     agencyId,
     activeSessionsCount: increment(0),
     closedPendingValidationCount: increment(-1),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(0),
     vehiclesInTransitCount: increment(0),
     boardingOpenCount: increment(0),
     lastUpdatedAt: serverTimestamp(),
@@ -76,6 +82,8 @@ export function updateAgencyLiveStateOnBoardingOpened(
     agencyId,
     activeSessionsCount: increment(0),
     closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(0),
     vehiclesInTransitCount: increment(0),
     boardingOpenCount: increment(1),
     lastUpdatedAt: serverTimestamp(),
@@ -94,6 +102,8 @@ export function updateAgencyLiveStateOnBoardingClosed(
     agencyId,
     activeSessionsCount: increment(0),
     closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(0),
     vehiclesInTransitCount: increment(0),
     boardingOpenCount: increment(-1),
     lastUpdatedAt: serverTimestamp(),
@@ -114,7 +124,69 @@ export function updateAgencyLiveStateOnVehicleInTransit(
     agencyId,
     activeSessionsCount: increment(0),
     closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(0),
     vehiclesInTransitCount: increment(delta),
+    boardingOpenCount: increment(0),
+    lastUpdatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/** Call inside transaction when a courier session becomes ACTIVE (accountant activated). */
+export function updateAgencyLiveStateOnCourierSessionActivated(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string
+): void {
+  const ref = agencyLiveStateRef(companyId, agencyId);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    activeSessionsCount: increment(0),
+    closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(1),
+    closedCourierPendingValidationCount: increment(0),
+    vehiclesInTransitCount: increment(0),
+    boardingOpenCount: increment(0),
+    lastUpdatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/** Call inside transaction when a courier session moves to CLOSED. */
+export function updateAgencyLiveStateOnCourierSessionClosed(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string
+): void {
+  const ref = agencyLiveStateRef(companyId, agencyId);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    activeSessionsCount: increment(0),
+    closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(-1),
+    closedCourierPendingValidationCount: increment(1),
+    vehiclesInTransitCount: increment(0),
+    boardingOpenCount: increment(0),
+    lastUpdatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/** Call inside transaction when a courier session is VALIDATED. */
+export function updateAgencyLiveStateOnCourierSessionValidated(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string
+): void {
+  const ref = agencyLiveStateRef(companyId, agencyId);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    activeSessionsCount: increment(0),
+    closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(-1),
+    vehiclesInTransitCount: increment(0),
     boardingOpenCount: increment(0),
     lastUpdatedAt: serverTimestamp(),
   }, { merge: true });

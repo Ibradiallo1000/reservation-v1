@@ -31,13 +31,8 @@ import {
   type CashSessionType,
   type CashPaymentMethod,
 } from "./cashSessionTypes";
-import { financialAccountRef } from "@/modules/compagnie/treasury/financialAccounts";
-import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
-import {
-  recordMovementInTransaction,
-  uniqueReferenceKey,
-  ensureUniqueReferenceKeyInTransaction,
-} from "@/modules/compagnie/treasury/financialMovements";
+// Cash sessions are reconciliation-only. Revenue and treasury movements come ONLY from
+// operational session validation (validateSessionByAccountant, validateCourierSession).
 function cashSessionsRef(companyId: string, agencyId: string) {
   return collection(db, "companies", companyId, "agences", agencyId, CASH_SESSION_COLLECTION);
 }
@@ -158,7 +153,11 @@ export async function closeCashSession(
   await updateDoc(ref, updatePayload);
 }
 
-/** Validate session (accountant): credit agency_cash with countedBalance, create financialMovement, set status VALIDATED. */
+/**
+ * Validate session (accountant): set status VALIDATED for reconciliation audit only.
+ * Cash sessions are NOT a financial source of truth. No treasury movement, no dailyStats update.
+ * Revenue is recorded only when operational sessions are validated (ticket shift or courier session).
+ */
 export async function validateCashSession(
   companyId: string,
   agencyId: string,
@@ -174,35 +173,6 @@ export async function validateCashSession(
     if (data.status !== CASH_SESSION_STATUS.CLOSED) {
       throw new Error("Seule une session clôturée peut être validée.");
     }
-    const counted = getTotalCounted(data);
-    if (counted <= 0) return;
-
-    const key = uniqueReferenceKey("cash_session", sessionId);
-    await ensureUniqueReferenceKeyInTransaction(tx, companyId, key);
-
-    const cashId = agencyCashAccountId(agencyId);
-    const cashRef = financialAccountRef(companyId, cashId);
-    const accountSnap = await tx.get(cashRef);
-    if (!accountSnap.exists()) {
-      throw new Error("Compte caisse agence introuvable. Créez-le depuis la trésorerie.");
-    }
-    const currency = (accountSnap.data() as { currency?: string }).currency ?? "XOF";
-
-    await recordMovementInTransaction(tx, {
-      companyId,
-      fromAccountId: null,
-      toAccountId: cashId,
-      amount: counted,
-      currency,
-      movementType: "revenue_cash",
-      referenceType: "cash_session",
-      referenceId: sessionId,
-      agencyId,
-      performedBy: userId,
-      performedAt: Timestamp.now(),
-      notes: `Validation session caisse ${data.type} (agent: ${data.agentId})`,
-      performedByRole: userRole,
-    });
 
     tx.update(ref, {
       status: CASH_SESSION_STATUS.VALIDATED,

@@ -32,6 +32,7 @@ import {
 } from "@/modules/agence/shared";
 
 const COURRIER_CHILDREN: NavSectionChild[] = [
+  { label: "Session", path: "/agence/courrier/session" },
   { label: "Nouvel envoi", path: "/agence/courrier/nouveau" },
   { label: "Lots", path: "/agence/courrier/lots" },
   { label: "Réception", path: "/agence/courrier/reception" },
@@ -74,7 +75,8 @@ const ManagerShellInner: React.FC = () => {
     "Courrier": 6,
     "Rapports": 7,
     "Trajets": 8,
-    "Équipe": 9,
+    "Équipage flotte": 9,
+    "Équipe": 10,
   };
 
   const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
@@ -109,13 +111,23 @@ const ManagerShellInner: React.FC = () => {
   }, [companyId, agencyId]);
 
   const sections: NavSection[] = useMemo(() => {
-    const list: NavSection[] = BASE_SECTIONS.map((s) => ({
-      label: s.label,
-      icon: s.icon,
-      path: s.path,
-      end: s.end,
-      badge: badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined,
-    }));
+    const isCourierOnly = has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie");
+    const list: NavSection[] = isCourierOnly
+      ? [
+          { label: "Session", icon: Package, path: "/agence/courrier/session", end: true },
+          { label: "Nouvel envoi", icon: Package, path: "/agence/courrier/nouveau", end: true },
+          { label: "Lots", icon: Package, path: "/agence/courrier/lots", end: true },
+          { label: "Réception", icon: Package, path: "/agence/courrier/reception", end: true },
+          { label: "Remise", icon: Package, path: "/agence/courrier/remise", end: true },
+          { label: "Rapports courrier", icon: Package, path: "/agence/courrier/rapport", end: true },
+        ]
+      : BASE_SECTIONS.map((s) => ({
+          label: s.label,
+          icon: s.icon,
+          path: s.path,
+          end: s.end,
+          badge: badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined,
+        }));
     if (has("chefAgence") || has("superviseur") || has("admin_compagnie")) {
       list.push({
         label: "Validation dépenses",
@@ -124,7 +136,7 @@ const ManagerShellInner: React.FC = () => {
         badge: pendingManagerExpensesCount || undefined,
       });
     }
-    if (has("chefAgence") || has("admin_compagnie") || has("agentCourrier")) {
+    if (!isCourierOnly && has("agentCourrier")) {
       list.push({
         label: "Courrier",
         icon: Package,
@@ -134,7 +146,14 @@ const ManagerShellInner: React.FC = () => {
         children: COURRIER_CHILDREN,
       });
     }
-    return list.sort((a, b) => (sectionOrder[a.label] ?? 99) - (sectionOrder[b.label] ?? 99));
+    if (has("chefAgence") || has("admin_compagnie")) {
+      list.push({
+        label: "Équipage flotte",
+        icon: Users,
+        path: "/agence/fleet/crew",
+      });
+    }
+    return isCourierOnly ? list : list.sort((a, b) => (sectionOrder[a.label] ?? 99) - (sectionOrder[b.label] ?? 99));
   }, [badgeByModule, rolesArr, pendingManagerExpensesCount]);
 
   useAgencyKeyboardShortcuts(sections);
@@ -164,6 +183,9 @@ const ManagerShellInner: React.FC = () => {
 
   const companyName = company?.nom || "Compagnie";
   const agencyName = user?.agencyNom || user?.agencyName || "Agence";
+  const roleLabel = has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie")
+    ? "Agent courrier"
+    : "Chef d'agence";
   const primary = (theme?.colors?.primary ?? "#FF6600").trim();
   const secondary = (theme?.colors?.secondary ?? "#FFFFFF").trim();
   const cssVars = useMemo(() => {
@@ -197,7 +219,7 @@ const ManagerShellInner: React.FC = () => {
           <span className="text-gray-300">/</span>
           <span className="text-gray-600 truncate">{agencyName}</span>
           <span className="text-gray-300">/</span>
-          <span className="text-gray-500">Chef d&apos;agence</span>
+          <span className="text-gray-500">{roleLabel}</span>
         </div>
       }
       headerRight={

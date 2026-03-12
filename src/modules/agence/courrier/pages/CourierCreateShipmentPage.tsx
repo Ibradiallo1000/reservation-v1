@@ -21,11 +21,21 @@ import CourierReceipt from "../components/CourierReceipt";
 import CourierPackageLabel from "../components/CourierPackageLabel";
 import AgencySearchSelect from "../components/AgencySearchSelect";
 import { PageHeader, StandardLayoutWrapper, ActionButton, SectionCard } from "@/ui";
+import { getPhoneRuleFromCountry, isValidLocalPhone, sanitizeLocalPhone } from "@/utils/phoneCountryRules";
 
 const MAX_PHONE_SUGGESTIONS = 5;
 const RECENT_SHIPMENTS_LIMIT = 50;
 const FREQUENT_SENDERS_TOP = 3;
 const FREQUENT_DESTINATIONS_TOP = 3;
+
+function toNameCase(value: string): string {
+  return String(value ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
 
 export default function CourierCreateShipmentPage() {
   const { user, company } = useAuth() as {
@@ -44,6 +54,10 @@ export default function CourierCreateShipmentPage() {
   const theme = useCompanyTheme(company as Company | null);
   const primaryColor = theme?.colors?.primary ?? "#ea580c";
   const secondaryColor = theme?.colors?.secondary ?? "#f97316";
+  const phoneRule = useMemo(
+    () => getPhoneRuleFromCountry((company as { pays?: string } | null | undefined)?.pays),
+    [company]
+  );
   const agentCode = (user as { staffCode?: string; codeCourt?: string; code?: string })?.staffCode
     ?? (user as { codeCourt?: string; code?: string })?.codeCourt
     ?? (user as { code?: string })?.code
@@ -198,7 +212,9 @@ export default function CourierCreateShipmentPage() {
     Number(declaredValue) >= 0 &&
     transportFee.trim() !== "" &&
     !Number.isNaN(Number(transportFee)) &&
-    Number(transportFee) >= 0;
+    Number(transportFee) >= 0 &&
+    isValidLocalPhone(senderPhone, phoneRule) &&
+    isValidLocalPhone(receiverPhone, phoneRule);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -208,6 +224,15 @@ export default function CourierCreateShipmentPage() {
     try {
       const fee = Number(transportFee);
       const decl = Number(declaredValue);
+      const senderNameFinal = toNameCase(senderName);
+      const receiverNameFinal = toNameCase(receiverName);
+      const senderPhoneLocal = sanitizeLocalPhone(senderPhone, phoneRule);
+      const receiverPhoneLocal = sanitizeLocalPhone(receiverPhone, phoneRule);
+      if (!isValidLocalPhone(senderPhoneLocal, phoneRule) || !isValidLocalPhone(receiverPhoneLocal, phoneRule)) {
+        throw new Error(`Numéro invalide. Format attendu: +${phoneRule.callingCode} (${phoneRule.localLength} chiffres).`);
+      }
+      const senderPhoneFull = `+${phoneRule.callingCode}${senderPhoneLocal}`;
+      const receiverPhoneFull = `+${phoneRule.callingCode}${receiverPhoneLocal}`;
       const originAgency = agencies.find((a) => a.id === agencyId);
       const companyCode = makeShortCode(company?.nom, company?.code);
       const agencyCode = makeShortCode(originAgency?.nomAgence ?? originAgency?.nom, originAgency?.code);
@@ -216,8 +241,8 @@ export default function CourierCreateShipmentPage() {
         companyId,
         originAgencyId: agencyId,
         destinationAgencyId: destinationAgencyId || agencyId,
-        sender: { name: senderName.trim(), phone: senderPhone.trim() },
-        receiver: { name: receiverName.trim(), phone: receiverPhone.trim() },
+        sender: { name: senderNameFinal, phone: senderPhoneFull },
+        receiver: { name: receiverNameFinal, phone: receiverPhoneFull },
         nature: nature.trim(),
         declaredValue: Number.isNaN(decl) ? 0 : decl,
         insuranceRate: 0,
@@ -247,8 +272,8 @@ export default function CourierCreateShipmentPage() {
         shipmentNumber,
         originAgencyId: agencyId,
         destinationAgencyId: destinationAgencyId || agencyId,
-        sender: { name: senderName.trim(), phone: senderPhone.trim() },
-        receiver: { name: receiverName.trim(), phone: receiverPhone.trim() },
+        sender: { name: senderNameFinal, phone: senderPhoneFull },
+        receiver: { name: receiverNameFinal, phone: receiverPhoneFull },
         nature: nature.trim(),
         declaredValue: Number.isNaN(decl) ? 0 : decl,
         insuranceRate: 0,
@@ -318,6 +343,9 @@ export default function CourierCreateShipmentPage() {
       {session?.status === "ACTIVE" && (
         <SectionCard title="Créer un envoi">
           <form onSubmit={handleSubmit} className="space-y-6" style={{ ["--focus-ring" as string]: secondaryColor }}>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            Workflow courrier: Session active → Creation envoi → Lot bus → Depart confirme (chef agence) → Arrivee → Remise → Validation comptable.
+          </div>
           {frequentSenders.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wider text-gray-500">Expéditeurs fréquents</p>
@@ -343,11 +371,15 @@ export default function CourierCreateShipmentPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Nom <span className="text-red-500">*</span></label>
-                <input required value={senderName} onChange={(e) => setSenderName(e.target.value)} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="Nom expéditeur" />
+                <input required value={senderName} onChange={(e) => setSenderName(e.target.value)} onBlur={(e) => setSenderName(toNameCase(e.target.value))} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="Nom expéditeur" />
               </div>
               <div className="relative">
                 <label className="mb-1 block text-sm font-medium text-gray-700">Téléphone <span className="text-red-500">*</span></label>
-                <input required type="tel" value={senderPhone} onChange={(e) => setSenderPhone(e.target.value)} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="Tél. expéditeur" />
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">+{phoneRule.callingCode}</span>
+                  <input required type="tel" inputMode="numeric" maxLength={phoneRule.localLength} value={senderPhone} onChange={(e) => setSenderPhone(sanitizeLocalPhone(e.target.value, phoneRule))} className="min-h-[44px] w-full rounded-lg border border-gray-300 pl-14 pr-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder={`${phoneRule.localLength} chiffres`} />
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">Indicatif agence: +{phoneRule.callingCode} ({phoneRule.label})</p>
                 {senderPhoneSuggestions.length > 0 && (
                   <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white py-1 shadow-lg">
                     {senderPhoneSuggestions.map(({ phone, name }) => (
@@ -367,11 +399,15 @@ export default function CourierCreateShipmentPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Nom <span className="text-red-500">*</span></label>
-                <input required value={receiverName} onChange={(e) => setReceiverName(e.target.value)} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="Nom destinataire" />
+                <input required value={receiverName} onChange={(e) => setReceiverName(e.target.value)} onBlur={(e) => setReceiverName(toNameCase(e.target.value))} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="Nom destinataire" />
               </div>
               <div className="relative">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Téléphone <span className="text-red-500">*</span></label>
-                <input required type="tel" value={receiverPhone} onChange={(e) => setReceiverPhone(e.target.value)} className="min-h-[44px] w-full rounded-lg border border-gray-300 px-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder="Tél. destinataire" />
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">+{phoneRule.callingCode}</span>
+                  <input required type="tel" inputMode="numeric" maxLength={phoneRule.localLength} value={receiverPhone} onChange={(e) => setReceiverPhone(sanitizeLocalPhone(e.target.value, phoneRule))} className="min-h-[44px] w-full rounded-lg border border-gray-300 pl-14 pr-3 py-2.5 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] focus:ring-offset-0" placeholder={`${phoneRule.localLength} chiffres`} />
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">Indicatif agence: +{phoneRule.callingCode} ({phoneRule.label})</p>
                 {receiverPhoneSuggestions.length > 0 && (
                   <ul className="absolute z-10 mt-1 w-full rounded-lg border bg-white shadow-lg py-1 max-h-48 overflow-auto">
                     {receiverPhoneSuggestions.map(({ phone, name }) => (

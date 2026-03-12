@@ -146,7 +146,7 @@ export async function updateAffectationStatus(
   agencyId: string,
   affectationId: string,
   status: AffectationStatus,
-  extra?: { departureConfirmedAt?: Timestamp; arrivalConfirmedAt?: Timestamp }
+  extra?: Record<string, unknown>
 ): Promise<void> {
   const ref = affectationRef(companyId, agencyId, affectationId);
   const payload: Record<string, unknown> = { status, ...extra };

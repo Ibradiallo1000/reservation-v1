@@ -56,6 +56,8 @@ export interface Shipment {
   currentLocationAgencyId?: string;
   batchId?: string;
   vehicleId?: string;
+  /** Optional link to trip instance (real execution of the trip). When set, shipment is attached to that instance. */
+  tripInstanceId?: string | null;
   createdAt: unknown;
   createdBy: string;
   /** Courier session id (agency-scoped); required when creating from courrier module */

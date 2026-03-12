@@ -48,6 +48,8 @@ export type CreateGuichetReservationParams = {
   tripType: string;
   /** Payment method for cash session expected balance (default: cash). */
   paymentMethod?: CashPaymentMethod;
+  /** Optional link to trip instance (real execution of the trip). When set, reservation is attached to that instance. */
+  tripInstanceId?: string | null;
 };
 
 function isOfflineError(e: unknown): boolean {
@@ -116,6 +118,7 @@ export async function createGuichetReservation(
     createdAt: now,
     createdInSessionId: params.sessionId,
     createdByUid: params.userId,
+    ...(params.tripInstanceId != null && { tripInstanceId: params.tripInstanceId }),
   };
 
   try {

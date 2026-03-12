@@ -25,6 +25,10 @@ import { Gauge } from "lucide-react";
 import { listClosedCashSessionsWithDiscrepancy } from "@/modules/agence/cashControl/cashSessionService";
 import type { CashSessionDocWithId } from "@/modules/agence/cashControl/cashSessionTypes";
 import {
+  listCourierSessionsWithDiscrepancy,
+  type CourierSessionWithId,
+} from "@/modules/logistics/services/courierSessionService";
+import {
   calculateAgencyProfit,
   getRiskSettings,
   DEFAULT_RISK_SETTINGS,
@@ -181,6 +185,7 @@ export default function CEOCommandCenterPage() {
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
   const [cashDiscrepancyList, setCashDiscrepancyList] = useState<{ agencyId: string; session: CashSessionDocWithId }[]>([]);
+  const [courierDiscrepancyList, setCourierDiscrepancyList] = useState<{ agencyId: string; session: CourierSessionWithId }[]>([]);
 
   const periodRange = React.useMemo(() => {
     const range = getDateRangeForPeriod(period, new Date(), customStart || undefined, customEnd || undefined);
@@ -434,6 +439,15 @@ export default function CEOCommandCenterPage() {
       } catch {
         if (loadRunIdRef.current === runId) setCashDiscrepancyList([]);
       }
+      try {
+        const courierList = await listCourierSessionsWithDiscrepancy(
+          companyId,
+          ags.map((a) => a.id)
+        );
+        if (loadRunIdRef.current === runId) setCourierDiscrepancyList(courierList);
+      } catch {
+        if (loadRunIdRef.current === runId) setCourierDiscrepancyList([]);
+      }
       setLiveStateList(liveList);
       setExpensesList(expensesListResult);
       setDiscrepancyReports(discList);
@@ -542,18 +556,24 @@ export default function CEOCommandCenterPage() {
       const diff = Number(r.validationAudit?.computedDifference) ?? 0;
       if (diff < 0) discrepancyDeductionByAgency.set(aid, (discrepancyDeductionByAgency.get(aid) ?? 0) + Math.abs(diff));
     });
+    courierDiscrepancyList.forEach(({ agencyId, session }) => {
+      const diff = Number(session.difference ?? 0);
+      if (diff < 0) {
+        discrepancyDeductionByAgency.set(agencyId, (discrepancyDeductionByAgency.get(agencyId) ?? 0) + Math.abs(diff));
+      }
+    });
     const tripCostsByAgency = new Map<string, number>();
     tripCostsList.forEach((r) => {
       const aid = r.agencyId ?? "";
       tripCostsByAgency.set(aid, (tripCostsByAgency.get(aid) ?? 0) + tripCostPerDoc(r));
     });
     return { expensesByAgency, discrepancyDeductionByAgency, tripCostsByAgency };
-  }, [expensesList, discrepancyReports, tripCostsList]);
+  }, [expensesList, discrepancyReports, courierDiscrepancyList, tripCostsList]);
 
   const agencyProfits = useMemo((): (ProfitResult & { agencyId: string; nom: string })[] => {
     const { expensesByAgency, discrepancyDeductionByAgency, tripCostsByAgency } = agencyMaps;
     const agencyIds = new Set<string>([
-      ...dailyStatsList.map((d) => d.agencyId).filter(Boolean) as string[],
+      ...(dailyStatsList.map((d) => d.agencyId).filter(Boolean) as string[]),
       ...expensesByAgency.keys(),
       ...discrepancyDeductionByAgency.keys(),
       ...tripCostsByAgency.keys(),
@@ -642,11 +662,24 @@ export default function CEOCommandCenterPage() {
       (sum, s) => sum + (Number(s.closedPendingValidationCount) || 0),
       0
     );
+    const activeCourierSessionsCount = liveStateList.reduce(
+      (sum, s) => sum + (Number((s as { activeCourierSessionsCount?: number }).activeCourierSessionsCount) || 0),
+      0
+    );
+    const pendingCourierValidationCount = liveStateList.reduce(
+      (sum, s) => sum + (Number((s as { closedCourierPendingValidationCount?: number }).closedCourierPendingValidationCount) || 0),
+      0
+    );
     const vehiclesInTransitCount = liveStateList.reduce((sum, s) => sum + (Number(s.vehiclesInTransitCount) || 0), 0);
     const boardingOpenCount = liveStateList.reduce((sum, s) => sum + (Number(s.boardingOpenCount) || 0), 0);
-    const criticalCashDiscrepanciesCount = cashDiscrepancyList.filter(
-      (x) => Math.abs(Number(x.session.discrepancy ?? 0)) >= Number(riskSettings.maxCashDiscrepancy || 0)
+    const threshold = Number(riskSettings.maxCashDiscrepancy || 0);
+    const criticalCashCount = cashDiscrepancyList.filter(
+      (x) => Math.abs(Number(x.session.discrepancy ?? 0)) >= threshold
     ).length;
+    const criticalCourierCount = courierDiscrepancyList.filter(
+      (x) => Math.abs(Number(x.session.difference ?? 0)) >= threshold
+    ).length;
+    const criticalCashDiscrepanciesCount = criticalCashCount + criticalCourierCount;
     const fleetUnavailableCount =
       Number(fleetOverviewCounts.maintenance || 0) +
       Number(fleetOverviewCounts.accidente || 0) +
@@ -654,12 +687,14 @@ export default function CEOCommandCenterPage() {
     return {
       activeSessionsCount,
       pendingValidationSessionsCount,
+      activeCourierSessionsCount,
+      pendingCourierValidationCount,
       vehiclesInTransitCount,
       boardingOpenCount,
       criticalCashDiscrepanciesCount,
       fleetUnavailableCount,
     };
-  }, [liveStateList, cashDiscrepancyList, riskSettings.maxCashDiscrepancy, fleetOverviewCounts]);
+  }, [liveStateList, cashDiscrepancyList, courierDiscrepancyList, riskSettings.maxCashDiscrepancy, fleetOverviewCounts]);
 
   const revenueVariationPercent = 0; // V2: no trend engine
   const revenueDropPercent = 0;
@@ -738,6 +773,8 @@ export default function CEOCommandCenterPage() {
       budgetGapTop3,
       activeSessionsCount: liveOperationsMetrics.activeSessionsCount,
       pendingValidationSessionsCount: liveOperationsMetrics.pendingValidationSessionsCount,
+      activeCourierSessionsCount: liveOperationsMetrics.activeCourierSessionsCount,
+      pendingCourierValidationCount: liveOperationsMetrics.pendingCourierValidationCount,
       vehiclesInTransitCount: liveOperationsMetrics.vehiclesInTransitCount,
       boardingOpenCount: liveOperationsMetrics.boardingOpenCount,
       criticalCashDiscrepanciesCount: liveOperationsMetrics.criticalCashDiscrepanciesCount,

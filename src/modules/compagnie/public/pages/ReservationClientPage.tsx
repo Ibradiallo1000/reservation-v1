@@ -527,7 +527,7 @@ export default function ReservationClientPage() {
       const publicUrl = `${window.location.origin}/${slug}/mon-billet?r=${encodeURIComponent(token)}`;
       await updateDoc(
         doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations', refDoc.id),
-        { publicToken: token, publicUrl }
+        { publicToken: token, publicUrl, updatedAt: serverTimestamp() }
       );
 
       await setDoc(doc(db, 'publicReservations', refDoc.id), {

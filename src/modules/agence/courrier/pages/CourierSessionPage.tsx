@@ -164,6 +164,9 @@ export default function CourierSessionPage() {
         primaryColor={primaryColor}
         secondaryColor={secondaryColor}
       />
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+        Logique guichet appliquee: creation session (agent) → activation comptable → operations courrier → cloture session (agent) → validation comptable → rapports.
+      </div>
 
       {error && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-red-800 border border-red-200">

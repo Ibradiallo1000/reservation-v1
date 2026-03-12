@@ -30,6 +30,8 @@ export interface MetricCardProps {
   icon?: LucideIcon;
   /** Optional help tooltip node */
   help?: React.ReactNode;
+  /** Optional small in-card hint under label */
+  hint?: string;
   /** If true, show critical state (red border, danger styling) */
   critical?: boolean;
   /** Optional critical message (e.g. "Écart de caisse détecté") */
@@ -38,6 +40,8 @@ export interface MetricCardProps {
   valueColorVar?: string;
   /** Extra class for wrapper */
   className?: string;
+  /** Decorative mode (soft gradient + icon badge) */
+  decorative?: boolean;
 }
 
 export const MetricCard: React.FC<MetricCardProps> = ({
@@ -45,22 +49,46 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   value,
   icon: Icon,
   help,
+  hint,
   critical = false,
   criticalMessage,
   valueColorVar,
   className,
+  decorative = false,
 }) => (
-  <div className={cn(critical ? cardCritical : cardBase, className)}>
+  <div
+    className={cn(
+      critical ? cardCritical : cardBase,
+      decorative && !critical && "bg-gradient-to-br from-white via-slate-50 to-indigo-50/40",
+      className
+    )}
+  >
     <div className="flex items-start justify-between gap-2">
-      <p className={cn(typography.kpiLabel, "min-w-0 pr-1 leading-snug")}>
-        {label}
-        {help}
-      </p>
+      <div className="min-w-0 pr-1">
+        <p className={cn(typography.kpiLabel, "leading-snug")}>
+          {label}
+          {help}
+        </p>
+        {hint && (
+          <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+            {hint}
+          </p>
+        )}
+      </div>
       {critical ? (
         <AlertTriangle className="h-5 w-5 text-red-500 dark:text-red-400" aria-hidden />
       ) : (
         Icon && (
-          <Icon className="h-5 w-5 text-gray-400 dark:text-gray-500" aria-hidden />
+          <span
+            className={cn(
+              "inline-flex h-7 w-7 items-center justify-center rounded-full",
+              decorative
+                ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                : "text-gray-400 dark:text-gray-500"
+            )}
+          >
+            <Icon className="h-4 w-4" aria-hidden />
+          </span>
         )
       )}
     </div>

@@ -63,6 +63,10 @@ export interface BoardingStatsDoc {
 export interface AgencyLiveStateDoc {
   activeSessionsCount: number;
   closedPendingValidationCount: number;
+  /** Active courier sessions (ACTIVE status). */
+  activeCourierSessionsCount?: number;
+  /** Courier sessions CLOSED and not yet VALIDATED. */
+  closedCourierPendingValidationCount?: number;
   vehiclesInTransitCount: number;
   boardingOpenCount: number;
   lastUpdatedAt: Timestamp;
