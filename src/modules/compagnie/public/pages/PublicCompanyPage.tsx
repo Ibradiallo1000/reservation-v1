@@ -23,6 +23,8 @@ import { getCompanyFromCache } from "@/utils/companyCache";
 
 interface PublicCompanyPageProps {
   company?: Company;
+  /** Slug de la compagnie (passé par RouteResolver en mode sous-domaine, sinon depuis l’URL). Évite "//booking" si useParams est vide. */
+  slug?: string;
   isMobile?: boolean;
 }
 
@@ -59,8 +61,10 @@ function writeSuggestionsCache(companyId: string, trips: TripSuggestion[]) {
 
 const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   company: propCompany,
+  slug: slugProp,
 }) => {
-  const { slug = "" } = useParams<{ slug: string }>();
+  const { slug: slugFromParams = "" } = useParams<{ slug: string }>();
+  const slug = slugProp ?? slugFromParams;
   const navigate = useNavigate();
   const { t } = useTranslation();
   const isOnline = useOnlineStatus();
@@ -258,11 +262,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               secondaryColor={colors.secondary}
               heroImageUrl={company?.banniereUrl ?? company?.imagesSlider?.[0]}
               onSearch={(departure, arrival) => {
-                const effectiveSlug = (company?.slug ?? slug).trim();
+                const effectiveSlug = (slug || company?.slug || "").trim();
                 if (!effectiveSlug) return;
-                navigate(
-                  `/${effectiveSlug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
-                );
+                const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
+                navigate(`/${effectiveSlug}/booking?${q}`);
               }}
             />
 
@@ -272,11 +275,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               offline={!isOnline}
               company={company}
               onSelect={(departure, arrival) => {
-                const effectiveSlug = (company?.slug ?? slug).trim();
+                const effectiveSlug = (slug || company?.slug || "").trim();
                 if (!effectiveSlug) return;
-                navigate(
-                  `/${effectiveSlug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
-                );
+                const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
+                navigate(`/${effectiveSlug}/booking?${q}`);
               }}
             />
           </>

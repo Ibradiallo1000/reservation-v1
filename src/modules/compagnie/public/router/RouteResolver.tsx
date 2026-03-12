@@ -329,7 +329,7 @@ export default function RouteResolver() {
     );
   }
 
-  const common = { company };
+  const common = { company, slug: slug ?? undefined };
   let content: JSX.Element;
 
   switch (subPath) {
@@ -340,13 +340,13 @@ export default function RouteResolver() {
       content = <ReservationClientPage />;
       break;
     case "payment":
-      content = <PaymentMethodPage />;
+      content = <PaymentMethodPage slug={slug ?? undefined} />;
       break;
     case "mes-reservations":
       content = <ClientMesReservationsPage />;
       break;
     case "retrouver-reservation":
-      content = <FindReservationPage company={company} />;
+      content = <FindReservationPage company={company} slug={slug ?? undefined} />;
       break;
     case "mes-billets":
       content = <ClientMesBilletsPage />;

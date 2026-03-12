@@ -62,9 +62,15 @@ function formatSummaryDate(dateStr: string, heureStr: string, language: string) 
   }
 }
 
-export default function PaymentMethodPage() {
+interface PaymentMethodPageProps {
+  /** Slug passé par RouteResolver en mode sous-domaine (évite "//booking" si useParams est vide). */
+  slug?: string;
+}
+
+export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageProps = {}) {
   const { t, i18n } = useTranslation();
-  const { slug } = useParams<{ slug: string }>();
+  const { slug: slugFromParams } = useParams<{ slug: string }>();
+  const slug = slugProp ?? slugFromParams ?? '';
   const location = useLocation();
   const navigate = useNavigate();
   const money = useFormatCurrency();
@@ -293,7 +299,7 @@ export default function PaymentMethodPage() {
         <p className="text-red-600 text-sm mb-4">{error || 'Réservation introuvable.'}</p>
         <button
           type="button"
-          onClick={() => navigate(`/${slug || ''}/booking`, { replace: true })}
+          onClick={() => { const s = (slug || company?.slug || '').trim(); if (s) navigate(`/${s}/booking`, { replace: true }); }}
           className="px-4 py-2 rounded-lg font-medium text-white"
           style={{ backgroundColor: primaryColor }}
         >

@@ -79,14 +79,16 @@ function StatusBadge({ statut, t }: { statut?: string; t: (key: string) => strin
 
 interface FindReservationPageProps {
   company: Company;
+  /** Slug passé par RouteResolver en mode sous-domaine. */
+  slug?: string;
 }
 
-export default function FindReservationPage({ company }: FindReservationPageProps) {
+export default function FindReservationPage({ company, slug: slugProp }: FindReservationPageProps) {
   const { t, i18n } = useTranslation();
   const language = (i18n.language || 'fr').toLowerCase().startsWith('en') ? 'en' : 'fr';
   const navigate = useNavigate();
   const money = useFormatCurrency();
-  const slug = company.slug || company.id;
+  const slug = (slugProp ?? company.slug ?? company.id) || '';
   const primaryColor = company.couleurPrimaire ?? '#2563eb';
   const secondaryColor = company.couleurSecondaire ?? '#93c5fd';
 
