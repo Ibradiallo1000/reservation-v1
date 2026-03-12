@@ -294,6 +294,17 @@ img.hero, img.logo {
 .public-booking div {
   color: inherit;
 }
+/* Hero compagnie : titre et sous-titre toujours blancs sur l’image */
+.public-booking .public-hero-titles,
+.public-booking .public-hero-titles h1,
+.public-booking .public-hero-titles h2 {
+  color: #ffffff !important;
+}
+/* Header fixe : la couleur vient du composant (inline style), ne pas forcer le texte */
+.public-booking .public-site-header,
+.public-booking .public-site-header * {
+  color: inherit !important;
+}
 .public-booking .text-gray-500 { color: #6b7280 !important; }
 .public-booking .text-gray-600 { color: #4b5563 !important; }
 .public-booking .text-gray-700 { color: #374151 !important; }
@@ -320,6 +331,11 @@ html.dark .public-booking h2,
 html.dark .public-booking h3,
 html.dark .public-booking h4 {
   color: #111827 !important;
+}
+html.dark .public-booking .public-hero-titles,
+html.dark .public-booking .public-hero-titles h1,
+html.dark .public-booking .public-hero-titles h2 {
+  color: #ffffff !important;
 }
 /* Champs de formulaire : fond clair, texte foncé */
 .public-booking input,

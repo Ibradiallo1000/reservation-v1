@@ -52,11 +52,11 @@ const HeroSection: React.FC<HeroSectionProps> = ({
         <div className="absolute inset-0 bg-neutral-900" aria-hidden />
       )}
 
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-10 md:py-16 text-center">
-        <h1 className="text-2xl sm:text-3xl font-bold text-white">
+      <div className="public-hero-titles relative z-10 max-w-5xl mx-auto px-4 sm:px-6 py-10 md:py-16 text-center">
+        <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.5)]">
           {t("heroTitleWith")}
         </h1>
-        <h2 className="mt-1 text-3xl sm:text-4xl font-extrabold truncate text-white">
+        <h2 className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl md:text-4xl font-extrabold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)]">
           {companyName}
         </h2>
 

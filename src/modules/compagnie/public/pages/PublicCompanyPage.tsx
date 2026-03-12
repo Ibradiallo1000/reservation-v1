@@ -239,7 +239,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
 
   return (
     <div
-      className={`min-h-screen flex flex-col ${config.typography}`}
+      className={`min-h-screen flex flex-col w-full min-w-0 overflow-x-hidden ${config.typography}`}
       style={{
         backgroundColor: colors.background || "#ffffff",
         color: colors.text,
@@ -253,9 +253,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         t={t}
       />
 
-      {/* Hero full-bleed from top; no compensatory padding — header is floating */}
-      <div className="pt-0 flex flex-col flex-grow min-h-0">
-      <main className="flex-grow">
+      {/* Hero full-bleed from top; header is fixed transparent */}
+      <div className="pt-0 flex flex-col flex-grow min-h-0 w-full min-w-0">
+      <main className="flex-grow w-full min-w-0">
 
         {allowOnline && (
           <>

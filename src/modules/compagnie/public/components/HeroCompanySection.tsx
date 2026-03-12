@@ -41,9 +41,9 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
   const hasBgImage = Boolean(heroImageUrl);
 
   return (
-    <section className="relative w-full">
-      {/* Image full bleed top, overlay, content on top */}
-      <div className="relative h-[390px] sm:h-[560px] md:h-[600px] overflow-hidden">
+    <section className="relative w-full min-w-0">
+      {/* Image full bleed top, overlay, content on top — responsive heights */}
+      <div className="relative h-[380px] sm:h-[480px] md:h-[560px] lg:h-[600px] overflow-hidden">
 
         {/* Image absolute inset-0 bg-cover bg-center */}
         {hasBgImage ? (
@@ -63,23 +63,21 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
           />
         )}
 
-        {/* Contenu relative z-10 — pt-24 pour ne pas coller au header */}
-        <div className="relative z-10 max-w-4xl mx-auto text-center px-4 pt-24">
+        {/* Contenu relative z-10 — pt-20 sm:pt-24 pour ne pas coller au header fixe */}
+        <div className="public-hero-titles relative z-10 max-w-4xl mx-auto text-center px-4 sm:px-6 pt-20 sm:pt-24">
 
-          {/* Ligne 1 — toujours blanc sur la page publique */}
-          <h1 className="text-2xl sm:text-3xl font-medium text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
+          {/* Phrase "Réservez votre billet avec" + nom compagnie — toujours blanc (forcé en CSS .public-hero-titles) */}
+          <h1 className="text-xl sm:text-2xl md:text-3xl font-medium text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.5)]">
             {t("heroTitleWith")}
           </h1>
-
-          {/* Ligne 2 — nom compagnie, toujours blanc */}
-          <h2 className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight truncate text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
+          <h2 className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)]">
             {companyName || t("ourCompany")}
           </h2>
 
           {/* Formulaire */}
           <form
             onSubmit={handleSubmit}
-            className="mt-8 mx-auto max-w-3xl rounded-2xl bg-white/15 backdrop-blur-xl border border-white/20 shadow-2xl p-4 sm:p-5 md:p-6"
+            className="mt-6 sm:mt-8 mx-auto max-w-3xl rounded-2xl bg-white/15 backdrop-blur-xl border border-white/20 shadow-2xl p-4 sm:p-5 md:p-6"
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
 
