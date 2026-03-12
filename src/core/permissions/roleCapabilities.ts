@@ -54,6 +54,11 @@ const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     "view_company_stats",
   ],
 
+  chef_garage: [
+    "manage_global_fleet",
+    "view_company_stats",
+  ],
+
   chefAgence: [
     "view_agency_dashboard",
     "manage_agency_finances",
