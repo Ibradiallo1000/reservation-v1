@@ -568,7 +568,7 @@ export default function ManagerOperationsPage() {
               firstName,
               phone: (data.phone ?? "").trim(),
               crewRole: mappedCrewRole,
-              isAvailable: data.isAvailable !== false,
+              isAvailable: (data.isAvailable ?? true) === true,
               assignedVehicleId: data.assignedVehicleId ?? "",
             } as CrewOption;
           })

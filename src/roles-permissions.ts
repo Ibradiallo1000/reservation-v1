@@ -10,6 +10,7 @@ export type Role =
   | 'financial_director'     // DAF (superviseur comptable)
   | 'company_accountant'     // Comptable compagnie (opérationnel)
   | 'responsable_logistique' // Responsable logistique (flotte, véhicules, maintenance)
+  | 'chef_garage'            // Alias garage (compat Firestore / routePermissions)
 
   /** ============ AGENCE ============ */
   | 'chefAgence'
@@ -90,6 +91,11 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
 
   // Responsable logistique → flotte, véhicules, maintenance (pas comptabilité / revenus)
   responsable_logistique: [
+    'dashboard',
+    'fleet',
+  ],
+
+  chef_garage: [
     'dashboard',
     'fleet',
   ],

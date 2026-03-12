@@ -160,16 +160,16 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
         instances = await listTripInstancesByRouteAndDate(company.id, depNorm, arrNorm, dateStr);
       }
       const list: Trip[] = instances
-        .filter(ti => ti.status !== 'CANCELLED' && (ti.seatCapacity - ti.reservedSeats) > 0)
+        .filter(ti => ti.status !== 'cancelled' && ((ti.seatCapacity ?? 0) - (ti.reservedSeats ?? 0)) > 0)
         .map(ti => ({
           id: ti.id,
           date: ti.date,
           time: ti.departureTime,
-          departure: ti.departureCity,
-          arrival: ti.arrivalCity,
+          departure: ti.departureCity ?? '',
+          arrival: ti.arrivalCity ?? '',
           price: (ti as any).price ?? 0,
-          places: ti.seatCapacity,
-          remainingSeats: ti.seatCapacity - ti.reservedSeats,
+          places: ti.seatCapacity ?? 0,
+          remainingSeats: (ti.seatCapacity ?? 0) - (ti.reservedSeats ?? 0),
           agencyId: ti.agencyId,
         }));
       setTrips(list);

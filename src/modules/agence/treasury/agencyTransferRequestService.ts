@@ -119,16 +119,13 @@ export async function approveAgencyTransferRequest(params: {
   approvedByRole?: string | null;
 }): Promise<void> {
   const ref = transferRequestRef(params.companyId, params.requestId);
-  let reqData: AgencyTransferRequestDoc | null = null;
-
-  await runTransaction(db, async (tx) => {
+  const reqData = await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Demande de versement introuvable.");
     const data = snap.data() as AgencyTransferRequestDoc;
     if (data.status !== "pending_manager") {
       throw new Error("Cette demande n'est plus en attente de validation.");
     }
-    reqData = data;
     tx.update(ref, {
       status: "processing",
       approvedBy: params.approvedBy,
@@ -136,9 +133,8 @@ export async function approveAgencyTransferRequest(params: {
       updatedAt: serverTimestamp(),
       executionError: null,
     });
+    return data;
   });
-
-  if (!reqData) throw new Error("Impossible de charger la demande.");
 
   try {
     await agencyDepositToBank({
