@@ -18,6 +18,7 @@ import { generateWebReferenceCode } from '@/utils/tickets';
 import { incrementReservedSeats, getOrCreateTripInstanceForSlot } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
+import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
 
 /* ============== Anti-spam: mémoire locale ============== */
 const PENDING_KEY = 'pendingReservation';
@@ -82,7 +83,11 @@ const isValidMaliPhone = (value: string) => {
 };
 
 export default function ReservationClientPage() {
-  const { slug, id: reservationRouteId } = useParams<{ slug: string; id?: string }>();
+  const { slug: slugParam, id: reservationRouteId } = useParams<{ slug: string; id?: string }>();
+  /** En sous-domaine (mali-trans.teliya.app/booking), useParams renvoie slug="booking". On utilise le slug du sous-domaine pour charger la compagnie. */
+  const slug = getSlugFromSubdomain() ?? slugParam ?? '';
+  const pathBase = getPublicPathBase(slug);
+
   const location = useLocation();
   const navigate = useNavigate();
   const money = useFormatCurrency();
@@ -144,17 +149,17 @@ export default function ReservationClientPage() {
     if (!existing || !slug || !existing.id) return;
     const statut = String(existing.statut || '').toLowerCase();
     if (statut === 'en_attente_paiement') {
-      navigate(`/${slug}/payment/${existing.id}`, {
+      navigate(pathBase ? `/${pathBase}/payment/${existing.id}` : `/payment/${existing.id}`, {
         replace: true,
         state: { companyId: existing.companyId, agencyId: existing.agencyId }
       });
       return;
     }
     if (statut === 'preuve_recue' || statut === 'confirme') {
-      navigate(`/${slug}/receipt/${existing.id}`, { replace: true });
+      navigate(pathBase ? `/${pathBase}/receipt/${existing.id}` : `/receipt/${existing.id}`, { replace: true });
       return;
     }
-  }, [existing, slug, navigate]);
+  }, [existing, slug, navigate, pathBase]);
 
   // Mode consultation (load existing for redirect)
   useEffect(() => {
@@ -524,7 +529,7 @@ export default function ReservationClientPage() {
       }
 
       const token = randomToken();
-      const publicUrl = `${window.location.origin}/${slug}/mon-billet?r=${encodeURIComponent(token)}`;
+      const publicUrl = pathBase ? `${window.location.origin}/${pathBase}/mon-billet?r=${encodeURIComponent(token)}` : `${window.location.origin}/mon-billet?r=${encodeURIComponent(token)}`;
       await updateDoc(
         doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations', refDoc.id),
         { publicToken: token, publicUrl, updatedAt: serverTimestamp() }
@@ -552,7 +557,7 @@ export default function ReservationClientPage() {
         agencyId: selectedTrip.agencyId
       });
 
-      navigate(`/${slug}/payment/${refDoc.id}`, {
+      navigate(pathBase ? `/${pathBase}/payment/${refDoc.id}` : `/payment/${refDoc.id}`, {
         replace: true,
         state: { companyId: selectedTrip.companyId, agencyId: selectedTrip.agencyId }
       });
@@ -561,7 +566,7 @@ export default function ReservationClientPage() {
     } finally { 
       setCreating(false); 
     }
-  }, [selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo]);
+  }, [selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo, pathBase]);
 
   // ---------- UI components ----------
   const RouteCard = (titleRight?: string) => (
