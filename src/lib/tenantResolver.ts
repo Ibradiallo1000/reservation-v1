@@ -95,23 +95,21 @@ function normalizeCompanyDoc(
   slug: string,
   raw: Record<string, unknown>
 ): Company {
+  const footer = raw.footerConfig as { customLinks?: unknown[] } | undefined;
+  const customLinks = Array.isArray(footer?.customLinks)
+    ? footer.customLinks.map((l: unknown) => ({
+        label: (l as { label?: string })?.label ?? "Lien",
+        url: (l as { url?: string })?.url ?? "#",
+        external: !!(l as { external?: boolean })?.external,
+      }))
+    : [];
   return {
     id,
     slug,
     nom: (raw.nom as string) ?? "Compagnie",
     themeStyle: (raw.themeStyle as string) ?? "clair",
     imagesSlider: Array.isArray(raw.imagesSlider) ? raw.imagesSlider : [],
-    footerConfig: {
-      customLinks: Array.isArray(raw.footerConfig?.customLinks)
-        ? (raw.footerConfig as { customLinks: unknown[] }).customLinks.map(
-            (l: unknown) => ({
-              label: (l as { label?: string })?.label ?? "Lien",
-              url: (l as { url?: string })?.url ?? "#",
-              external: !!(l as { external?: boolean })?.external,
-            })
-          )
-        : [],
-    },
+    footerConfig: { customLinks },
     ...raw,
   } as Company;
 }
