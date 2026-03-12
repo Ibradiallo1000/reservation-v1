@@ -11,6 +11,7 @@ import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { Phone, Calendar, MapPin } from 'lucide-react';
 import type { Company } from '@/types/companyTypes';
 import { normalizePhone } from '@/utils/phoneUtils';
+import { getPublicPathBase } from '../utils/subdomain';
 
 const formatCity = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s);
 
@@ -79,7 +80,6 @@ function StatusBadge({ statut, t }: { statut?: string; t: (key: string) => strin
 
 interface FindReservationPageProps {
   company: Company;
-  /** Slug passé par RouteResolver en mode sous-domaine. */
   slug?: string;
 }
 
@@ -89,6 +89,7 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
   const navigate = useNavigate();
   const money = useFormatCurrency();
   const slug = (slugProp ?? company.slug ?? company.id) || '';
+  const pathBase = getPublicPathBase(slug);
   const primaryColor = company.couleurPrimaire ?? '#2563eb';
   const secondaryColor = company.couleurSecondaire ?? '#93c5fd';
 
@@ -164,7 +165,7 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
   return (
     <div className="min-h-screen bg-gray-50">
       <ReservationStepHeader
-        onBack={() => navigate(`/${slug}`)}
+        onBack={() => navigate(pathBase ? `/${pathBase}` : '/')}
         primaryColor={primaryColor}
         secondaryColor={secondaryColor}
         title="Retrouver ma réservation"
@@ -253,7 +254,7 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
                   {(r.statut || '').toLowerCase() === 'en_attente_paiement' && (
                     <button
                       type="button"
-                      onClick={() => navigate(`/${slug}/upload-preuve/${r.id}`, { replace: false })}
+                      onClick={() => navigate(pathBase ? `/${pathBase}/upload-preuve/${r.id}` : `/upload-preuve/${r.id}`, { replace: false })}
                       className="w-full rounded-xl py-2.5 text-sm font-semibold text-white transition hover:opacity-95"
                       style={{
                         background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`,
@@ -268,7 +269,7 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
                   {['paye', 'confirme', 'embarqué'].includes((r.statut || '').toLowerCase()) && (
                     <button
                       type="button"
-                      onClick={() => navigate(`/${slug}/receipt/${r.id}`, { replace: false })}
+                      onClick={() => navigate(pathBase ? `/${pathBase}/receipt/${r.id}` : `/receipt/${r.id}`, { replace: false })}
                       className="w-full rounded-xl py-2.5 text-sm font-semibold text-white transition hover:opacity-95"
                       style={{
                         background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`,
@@ -292,7 +293,7 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
             <p className="text-gray-700 font-medium">{error || 'Aucune réservation trouvée pour ce numéro.'}</p>
             <button
               type="button"
-              onClick={() => navigate(`/${slug}/booking`, { replace: false })}
+              onClick={() => navigate(pathBase ? `/${pathBase}/booking` : '/booking', { replace: false })}
               className="mt-4 rounded-xl py-3 px-5 text-sm font-semibold text-white transition hover:opacity-95"
               style={{
                 background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`,

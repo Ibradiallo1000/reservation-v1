@@ -12,6 +12,7 @@ import { enUS } from 'date-fns/locale';
 import { fr } from 'date-fns/locale';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { getDisplayPhone } from '@/utils/phoneUtils';
+import { getPublicPathBase } from '../utils/subdomain';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 
@@ -63,7 +64,6 @@ function formatSummaryDate(dateStr: string, heureStr: string, language: string) 
 }
 
 interface PaymentMethodPageProps {
-  /** Slug passé par RouteResolver en mode sous-domaine (évite "//booking" si useParams est vide). */
   slug?: string;
 }
 
@@ -71,6 +71,7 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const { t, i18n } = useTranslation();
   const { slug: slugFromParams } = useParams<{ slug: string }>();
   const slug = slugProp ?? slugFromParams ?? '';
+  const pathBase = getPublicPathBase(slug);
   const location = useLocation();
   const navigate = useNavigate();
   const money = useFormatCurrency();
@@ -299,7 +300,7 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         <p className="text-red-600 text-sm mb-4">{error || 'Réservation introuvable.'}</p>
         <button
           type="button"
-          onClick={() => { const s = (slug || company?.slug || '').trim(); if (s) navigate(`/${s}/booking`, { replace: true }); }}
+          onClick={() => navigate(pathBase ? `/${pathBase}/booking` : '/booking', { replace: true })}
           className="px-4 py-2 rounded-lg font-medium text-white"
           style={{ backgroundColor: primaryColor }}
         >

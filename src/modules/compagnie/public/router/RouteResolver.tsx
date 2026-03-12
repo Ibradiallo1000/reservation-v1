@@ -329,7 +329,7 @@ export default function RouteResolver() {
     );
   }
 
-  const common = { company, slug: slug ?? undefined };
+  const common = { company, slug: slug ?? undefined, pathBase };
   let content: JSX.Element;
 
   switch (subPath) {

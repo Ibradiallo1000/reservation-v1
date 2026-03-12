@@ -25,6 +25,8 @@ interface PublicCompanyPageProps {
   company?: Company;
   /** Slug de la compagnie (passé par RouteResolver en mode sous-domaine, sinon depuis l’URL). Évite "//booking" si useParams est vide. */
   slug?: string;
+  /** Sous-domaine : "" (lien = /booking). Sinon slug (lien = /slug/booking). */
+  pathBase?: string;
   isMobile?: boolean;
 }
 
@@ -62,6 +64,7 @@ function writeSuggestionsCache(companyId: string, trips: TripSuggestion[]) {
 const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
   company: propCompany,
   slug: slugProp,
+  pathBase = "",
 }) => {
   const { slug: slugFromParams = "" } = useParams<{ slug: string }>();
   const slug = slugProp ?? slugFromParams;
@@ -262,10 +265,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               secondaryColor={colors.secondary}
               heroImageUrl={company?.banniereUrl ?? company?.imagesSlider?.[0]}
               onSearch={(departure, arrival) => {
-                const effectiveSlug = (slug || company?.slug || "").trim();
-                if (!effectiveSlug) return;
                 const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
-                navigate(`/${effectiveSlug}/booking?${q}`);
+                const path = pathBase ? `/${pathBase}/booking?${q}` : `/booking?${q}`;
+                navigate(path);
               }}
             />
 
@@ -275,10 +277,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               offline={!isOnline}
               company={company}
               onSelect={(departure, arrival) => {
-                const effectiveSlug = (slug || company?.slug || "").trim();
-                if (!effectiveSlug) return;
                 const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
-                navigate(`/${effectiveSlug}/booking?${q}`);
+                const path = pathBase ? `/${pathBase}/booking?${q}` : `/booking?${q}`;
+                navigate(path);
               }}
             />
           </>
