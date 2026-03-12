@@ -4,6 +4,7 @@ import { Routes, Route, Navigate, useParams, useLocation } from "react-router-do
 import { useAuth } from "./contexts/AuthContext";
 import PrivateRoute from "./modules/auth/components/PrivateRoute";
 import ProtectedRoute from "./modules/auth/components/ProtectedRoute";
+import TenantGuard from "./modules/auth/components/TenantGuard";
 import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 import { AuthCurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { routePermissions } from "@/constants/routePermissions";
@@ -307,7 +308,9 @@ const AppRoutes = () => {
           path="/compagnie/:companyId/trip-costs"
           element={
             <PrivateRoute allowedRoles={routePermissions.tripCosts}>
-              <TripCostsPage />
+              <TenantGuard>
+                <TripCostsPage />
+              </TenantGuard>
             </PrivateRoute>
           }
         />
@@ -316,7 +319,9 @@ const AppRoutes = () => {
           path="/compagnie/:companyId/notifications"
           element={
             <PrivateRoute allowedRoles={["admin_compagnie", "company_accountant", "financial_director", "admin_platforme"] as const}>
-              <NotificationsPage />
+              <TenantGuard>
+                <NotificationsPage />
+              </TenantGuard>
             </PrivateRoute>
           }
         />
@@ -326,7 +331,9 @@ const AppRoutes = () => {
           path="/compagnie/:companyId"
           element={
             <PrivateRoute allowedRoles={routePermissions.compagnieLayout}>
-              <CompagnieLayout />
+              <TenantGuard>
+                <CompagnieLayout />
+              </TenantGuard>
             </PrivateRoute>
           }
         >
@@ -359,7 +366,9 @@ const AppRoutes = () => {
           path="/compagnie/:companyId/garage"
           element={
             <PrivateRoute allowedRoles={routePermissions.garageLayout}>
-              <GarageLayout />
+              <TenantGuard>
+                <GarageLayout />
+              </TenantGuard>
             </PrivateRoute>
           }
         >
@@ -396,7 +405,9 @@ const AppRoutes = () => {
           path="/compagnie/:companyId/accounting"
           element={
             <PrivateRoute allowedRoles={routePermissions.companyAccountantLayout}>
-              <CompanyAccountantLayout />
+              <TenantGuard>
+                <CompanyAccountantLayout />
+              </TenantGuard>
             </PrivateRoute>
           }
         >
@@ -420,7 +431,9 @@ const AppRoutes = () => {
           path="/agence"
           element={
             <PrivateRoute allowedRoles={routePermissions.agenceShell}>
-              <ManagerShellPage />
+              <TenantGuard>
+                <ManagerShellPage />
+              </TenantGuard>
             </PrivateRoute>
           }
         >
@@ -528,7 +541,9 @@ const AppRoutes = () => {
           path="/compagnie/:companyId/financial-settings"
           element={
             <PrivateRoute allowedRoles={["admin_compagnie", "company_accountant", "financial_director", "admin_platforme"] as const}>
-              <FinancialSettingsPage />
+              <TenantGuard>
+                <FinancialSettingsPage />
+              </TenantGuard>
             </PrivateRoute>
           }
         />

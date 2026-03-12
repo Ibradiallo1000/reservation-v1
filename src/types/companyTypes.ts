@@ -132,6 +132,9 @@ export interface Company {
   nom: string;
   slug: string;
 
+  /** Custom domain (e.g. "malitrans.com"). Resolved when hostname is not *.teliya.app */
+  customDomain?: string;
+
   /* --- Flags plan --- */
   publicPageEnabled?: boolean;
   onlineBookingEnabled?: boolean;

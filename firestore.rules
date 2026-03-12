@@ -38,7 +38,7 @@ service cloud.firestore {
         || (isAgencyManager() && oldS == 'annulation_en_attente' && newS == 'annule')
         || (isComptable() && oldS == 'annule' && newS == 'rembourse')
         || (isBoardingOfficer() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'embarque')
-        || ((getUserRole() == 'admin_compagnie' || isAgencyManager() || isComptable()) && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
+        || ((getUserRole() == 'admin_compagnie' || getUserRole() == 'company_accountant' || isAgencyManager() || isComptable()) && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
     }
     /* Phase B — contrôleur embarquement : ne peut modifier que statut, statutEmbarquement, controleurId, checkInTime, auditLog, updatedAt */
     function boardingOfficerAllowedKeysOnly() {

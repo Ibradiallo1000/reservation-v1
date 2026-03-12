@@ -12,7 +12,8 @@ import {
   checkFirebaseAuthConnectivity,
 } from "@/firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
+import { TENANT_MISMATCH_ERROR } from "../components/TenantGuard";
 import {
   Mail,
   Lock,
@@ -71,13 +72,20 @@ const routeForRole = (role: string): string => {
 
 const LoginPage: React.FC = () => {
   const nav = useNavigate();
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const urlError = searchParams.get("error");
 
   const [step, setStep] = useState<"email" | "password">("email");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
 
-  const [error, setError] = useState("");
+  const [error, setError] = useState(
+    urlError === TENANT_MISMATCH_ERROR
+      ? "Vous n'avez pas accès à cet espace. Connectez-vous avec un compte de cette compagnie."
+      : ""
+  );
   const [loading, setLoading] = useState(false);
 
   const hasNavigated = useRef(false);

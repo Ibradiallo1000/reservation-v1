@@ -5,10 +5,16 @@ import AppRoutes from "./AppRoutes";
 import UpdateBanner from "./UpdateBanner";
 import GlobalConnectionBanner from "@/shared/ui/GlobalConnectionBanner";
 import PushNotificationsBootstrap from "@/shared/push/PushNotificationsBootstrap";
+import { redirectToCanonicalIfNeeded } from "@/lib/canonicalRedirect";
 
 const App: React.FC = () => {
   const [needRefresh, setNeedRefresh] = useState(false);
   const updateSWRef = useRef<(() => void) | null>(null);
+
+  // Canonical URL: teliya.app/:slug → :slug.teliya.app (client-side fallback; edge does it in prod)
+  useEffect(() => {
+    if (redirectToCanonicalIfNeeded()) return;
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

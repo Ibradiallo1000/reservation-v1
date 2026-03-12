@@ -66,16 +66,13 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
         {/* Contenu relative z-10 — pt-24 pour ne pas coller au header */}
         <div className="relative z-10 max-w-4xl mx-auto text-center px-4 pt-24">
 
-          {/* Ligne 1 */}
-          <h1 className="text-2xl sm:text-3xl font-medium text-white/90 drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
+          {/* Ligne 1 — toujours blanc sur la page publique */}
+          <h1 className="text-2xl sm:text-3xl font-medium text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
             {t("heroTitleWith")}
           </h1>
 
-          {/* Ligne 2 — nom compagnie */}
-          <h2
-            className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight truncate drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]"
-            style={{ color: secondaryColor }}
-          >
+          {/* Ligne 2 — nom compagnie, toujours blanc */}
+          <h2 className="mt-2 text-3xl sm:text-4xl font-bold tracking-tight truncate text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.45)]">
             {companyName || t("ourCompany")}
           </h2>
 

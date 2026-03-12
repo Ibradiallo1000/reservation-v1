@@ -5,6 +5,13 @@
 [functions]
   directory = "netlify/functions"
 
+# ——— www.<slug>.teliya.app → <slug>.teliya.app (301) ———
+# Edge function runs first on every request; redirects www.*.teliya.app to non-www.
+# DNS: ensure www.*.teliya.app resolves to Netlify (e.g. CNAME *.*.teliya.app or wildcard at DNS provider).
+[[edge_functions]]
+  function = "redirect-www-subdomain"
+  path = "/*"
+
 # ✅ Redirection explicite pour manifest statique
 [[redirects]]
   from = "/manifest.webmanifest"

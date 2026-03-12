@@ -56,14 +56,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
         <h1 className="text-2xl sm:text-3xl font-bold text-white">
           {t("heroTitleWith")}
         </h1>
-        <h2
-          className="mt-1 text-3xl sm:text-4xl font-extrabold truncate text-[var(--teliya-secondary)]"
-          style={
-            {
-              ["--teliya-secondary" as string]: secondaryColor,
-            } as React.CSSProperties
-          }
-        >
+        <h2 className="mt-1 text-3xl sm:text-4xl font-extrabold truncate text-white">
           {companyName}
         </h2>
 
