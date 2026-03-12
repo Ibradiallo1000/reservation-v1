@@ -9,6 +9,7 @@ import {
   updateDoc,
   arrayUnion,
   serverTimestamp,
+  Timestamp,
   runTransaction,
   type DocumentReference,
 } from "firebase/firestore";
@@ -24,19 +25,19 @@ export type StatutTransitionMeta = {
 /** Statuts that count as "revenue" for dailyStats (online only; guichet uses session validation). */
 const REVENUE_STATUTS = new Set(["confirme", "paye"]);
 
-/** Entrée à pousser dans auditLog (arrayUnion). */
+/** Entrée à pousser dans auditLog (arrayUnion). date doit être une valeur sérialisable (Timestamp), pas serverTimestamp(). */
 export type AuditLogEntry = {
   action: "transition_statut";
   ancienStatut: string;
   nouveauStatut: string;
   effectuePar: string;
   role: string;
-  date: ReturnType<typeof serverTimestamp>;
+  date: Timestamp;
 };
 
 /**
  * Construit l'entrée auditLog pour une transition (à merger avec arrayUnion dans un update).
- * À utiliser dans un runTransaction ou updateDoc.
+ * Utilise Timestamp.now() car serverTimestamp() ne peut pas être passé à arrayUnion().
  */
 export function buildStatutTransitionPayload(
   oldStatut: string,
@@ -49,7 +50,7 @@ export function buildStatutTransitionPayload(
     nouveauStatut: newStatut,
     effectuePar: meta.userId,
     role: meta.userRole,
-    date: serverTimestamp(),
+    date: Timestamp.now(),
   };
 }
 

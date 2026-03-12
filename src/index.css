@@ -261,7 +261,67 @@ img.hero, img.logo {
 /* Inputs dark : bg-slate-900, text-white, border-slate-600 */
 .agency-dark input, .agency-dark select { background-color: #0f172a !important; color: #ffffff !important; border-color: #475569 !important; }
 
-/* Réservation en ligne : champs toujours lisibles (fond clair, texte foncé), même en mode sombre */
+/* ===== RÉSERVATION PUBLIQUE : TOUJOURS MODE JOUR, TOUS LES TEXTES LISIBLES =====
+   De la page compagnie jusqu'au billet : fond clair, texte foncé, pas de mode nuit. */
+.public-booking {
+  color-scheme: light !important;
+  background-color: #f9fafb !important;
+  color: #111827 !important;
+}
+/* Conteneurs et cartes */
+.public-booking,
+.public-booking body,
+.public-booking .min-h-screen,
+.public-booking .bg-gray-50,
+.public-booking .bg-white {
+  background-color: #f9fafb !important;
+}
+.public-booking .bg-white {
+  background-color: #ffffff !important;
+}
+.public-booking .bg-gray-50 {
+  background-color: #f9fafb !important;
+}
+/* Texte : toujours lisible (foncé sur clair) */
+.public-booking,
+.public-booking p,
+.public-booking span,
+.public-booking label,
+.public-booking h1,
+.public-booking h2,
+.public-booking h3,
+.public-booking h4,
+.public-booking div {
+  color: inherit;
+}
+.public-booking .text-gray-500 { color: #6b7280 !important; }
+.public-booking .text-gray-600 { color: #4b5563 !important; }
+.public-booking .text-gray-700 { color: #374151 !important; }
+.public-booking .text-gray-800,
+.public-booking .text-gray-900 { color: #111827 !important; }
+.public-booking .text-slate-500,
+.public-booking .text-slate-600,
+.public-booking .text-slate-700 { color: #475569 !important; }
+/* Override mode sombre si html.dark est actif */
+html.dark .public-booking,
+html.dark .public-booking .bg-white,
+html.dark .public-booking .bg-gray-50 {
+  background-color: #f9fafb !important;
+}
+html.dark .public-booking .bg-white {
+  background-color: #ffffff !important;
+}
+html.dark .public-booking,
+html.dark .public-booking p,
+html.dark .public-booking span,
+html.dark .public-booking label,
+html.dark .public-booking h1,
+html.dark .public-booking h2,
+html.dark .public-booking h3,
+html.dark .public-booking h4 {
+  color: #111827 !important;
+}
+/* Champs de formulaire : fond clair, texte foncé */
 .public-booking input,
 .public-booking textarea,
 .public-booking select {
@@ -277,6 +337,13 @@ img.hero, img.logo {
 .public-booking textarea:-webkit-autofill {
   -webkit-text-fill-color: #111827 !important;
 }
+/* Bordures et séparateurs visibles */
+.public-booking .border-gray-200 { border-color: #e5e7eb !important; }
+.public-booking .border-gray-300 { border-color: #d1d5db !important; }
+/* Messages d'erreur et alertes restent lisibles */
+.public-booking .text-red-600,
+.public-booking .text-red-700 { color: #b91c1c !important; }
+.public-booking .text-red-500 { color: #ef4444 !important; }
 /* Lignes tableau : hover bg-slate-700, bordures claires */
 .agency-dark table tbody tr:hover { background-color: #334155 !important; }
 .agency-dark .hover\:bg-gray-50:hover { background-color: #334155 !important; }

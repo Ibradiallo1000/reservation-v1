@@ -130,6 +130,15 @@ export default function RouteResolver() {
     []
   );
 
+  /* Forcer mode jour sur tout le parcours réservation publique (page compagnie → billet). Toujours lisible. */
+  useEffect(() => {
+    document.documentElement.classList.remove("dark");
+    document.documentElement.setAttribute("data-public-booking", "light");
+    return () => {
+      document.documentElement.removeAttribute("data-public-booking");
+    };
+  }, []);
+
   // 1) Résolution du slug -> id de compagnie (avec cache) puis abonnement live
   useEffect(() => {
     let alive = true;
@@ -420,11 +429,11 @@ export default function RouteResolver() {
         <Suspense fallback={null}>
           <div className="public-booking min-h-screen pb-20 md:pb-0">
             {content}
+            <PublicBottomNav
+              slug={slug}
+              primaryColor={company?.couleurPrimaire ?? undefined}
+            />
           </div>
-          <PublicBottomNav
-            slug={slug}
-            primaryColor={company?.couleurPrimaire ?? undefined}
-          />
         </Suspense>
       </ErrorBoundary>
     </CurrencyProvider>
