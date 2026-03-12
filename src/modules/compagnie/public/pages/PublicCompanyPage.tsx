@@ -258,8 +258,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               secondaryColor={colors.secondary}
               heroImageUrl={company?.banniereUrl ?? company?.imagesSlider?.[0]}
               onSearch={(departure, arrival) => {
+                const effectiveSlug = (company?.slug ?? slug).trim();
+                if (!effectiveSlug) return;
                 navigate(
-                  `/${slug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
+                  `/${effectiveSlug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
                 );
               }}
             />
@@ -270,10 +272,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               offline={!isOnline}
               company={company}
               onSelect={(departure, arrival) => {
+                const effectiveSlug = (company?.slug ?? slug).trim();
+                if (!effectiveSlug) return;
                 navigate(
-                  `/${slug}/booking?departure=${encodeURIComponent(
-                    departure
-                  )}&arrival=${encodeURIComponent(arrival)}`
+                  `/${effectiveSlug}/booking?departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`
                 );
               }}
             />

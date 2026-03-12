@@ -260,6 +260,23 @@ img.hero, img.logo {
 .agency-dark .hover\:text-gray-900:hover { color: #f3f4f6 !important; }
 /* Inputs dark : bg-slate-900, text-white, border-slate-600 */
 .agency-dark input, .agency-dark select { background-color: #0f172a !important; color: #ffffff !important; border-color: #475569 !important; }
+
+/* Réservation en ligne : champs toujours lisibles (fond clair, texte foncé), même en mode sombre */
+.public-booking input,
+.public-booking textarea,
+.public-booking select {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border-color: #d1d5db !important;
+}
+.public-booking input::placeholder,
+.public-booking textarea::placeholder {
+  color: #6b7280 !important;
+}
+.public-booking input:-webkit-autofill,
+.public-booking textarea:-webkit-autofill {
+  -webkit-text-fill-color: #111827 !important;
+}
 /* Lignes tableau : hover bg-slate-700, bordures claires */
 .agency-dark table tbody tr:hover { background-color: #334155 !important; }
 .agency-dark .hover\:bg-gray-50:hover { background-color: #334155 !important; }

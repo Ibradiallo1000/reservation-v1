@@ -746,7 +746,7 @@ export default function ReservationClientPage() {
                     </div>
                     <input
                       ref={nameInputRef}
-                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none ${
+                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none bg-white text-gray-900 placeholder-gray-500 ${
                         fieldErrors.fullName ? 'border-red-300' : 'border-gray-200'
                       }`}
                       placeholder="Nom complet *"
@@ -775,7 +775,7 @@ export default function ReservationClientPage() {
                       inputMode="numeric"
                       autoComplete="tel"
                       maxLength={11} // 8 chiffres + 3 espaces
-                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none ${
+                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none bg-white text-gray-900 placeholder-gray-500 ${
                         fieldErrors.phone ? 'border-red-300' : 'border-gray-200'
                       }`}
                       placeholder="Téléphone * (ex: 22 22 22 22)"

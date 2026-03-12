@@ -298,7 +298,7 @@ const ClientMesReservationsPage: React.FC = () => {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="70 00 00 00"
-                className="w-full h-11 pl-9 pr-3 border rounded-lg focus:ring-2 focus:ring-orange-200 outline-none"
+                className="w-full h-11 pl-9 pr-3 border rounded-lg focus:ring-2 focus:ring-orange-200 outline-none bg-white text-gray-900 placeholder-gray-500"
                 onKeyDown={(e) => e.key === "Enter" && search()}
               />
             </div>

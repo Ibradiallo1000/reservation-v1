@@ -193,7 +193,7 @@ export default function FindReservationPage({ company }: FindReservationPageProp
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="Ex: 76499222"
-                className="w-full h-12 pl-10 pr-3 border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none border-gray-200"
+                className="w-full h-12 pl-10 pr-3 border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none border-gray-200 bg-white text-gray-900 placeholder-gray-500"
                 style={{ ['--tw-ring-color' as string]: `${primaryColor}40` }}
                 onKeyDown={(e) => e.key === 'Enter' && search()}
               />

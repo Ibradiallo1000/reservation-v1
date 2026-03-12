@@ -418,7 +418,7 @@ export default function RouteResolver() {
     <CurrencyProvider currency={company?.devise}>
       <ErrorBoundary fallback={<MobileErrorScreen />}>
         <Suspense fallback={null}>
-          <div className="min-h-screen pb-20 md:pb-0">
+          <div className="public-booking min-h-screen pb-20 md:pb-0">
             {content}
           </div>
           <PublicBottomNav

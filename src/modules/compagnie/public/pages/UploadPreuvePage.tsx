@@ -440,7 +440,7 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
             placeholder="Paiement MTN Mobile Money - Réf : SX8T9K - 05/07/2024"
             value={transactionReference}
             onChange={(e) => setTransactionReference(e.target.value)}
-            className="w-full mt-3 rounded-xl border p-4 focus:ring-2 focus:outline-none min-h-[120px] shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)]"
+            className="w-full mt-3 rounded-xl border p-4 focus:ring-2 focus:outline-none min-h-[120px] shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)] bg-white text-gray-900 placeholder-gray-500"
             style={{
               borderColor: `${themeConfig.colors.secondary}66`,
             }}

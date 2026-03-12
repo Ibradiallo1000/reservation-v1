@@ -671,10 +671,20 @@ service cloud.firestore {
     }
 
     /* =====================
-       COUNTERS (company-level, e.g. trip instance refs) — same-tenant only
+       COUNTERS (company-level, e.g. trip instance refs)
+       - Auth: same-tenant only.
+       - Public: get + create/update with only lastSeq/updatedAt (résa en ligne generateWebReferenceCode).
     ===================== */
     match /companies/{companyId}/counters/byTrip/trips/{tripInstanceId} {
-      allow get, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+      allow get: if true;
+      allow create: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+        || (request.auth == null
+          && request.resource.data.keys().hasOnly(['lastSeq', 'updatedAt'])
+          && request.resource.data.get('lastSeq', 0) is int);
+      allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+        || (request.auth == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeq', 'updatedAt'])
+          && request.resource.data.get('lastSeq', 0) is int);
       allow delete: if false;
     }
 

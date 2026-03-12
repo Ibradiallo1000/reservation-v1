@@ -714,7 +714,7 @@ const ReservationDetailsPage: React.FC = () => {
                   value={proofMessage}
                   onChange={(e) => setProofMessage(e.target.value)}
                   placeholder="Ex. 12345678"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 placeholder-gray-500"
                 />
                 <button
                   type="button"
