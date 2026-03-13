@@ -1,0 +1,1 @@
+import{p as r,n as i}from"./vendor-DxqN5neT.js";const n="courierSessions";function t(e,o,s){return r(e,"companies",o,"agences",s,n)}function u(e,o,s,c){return i(e,"companies",o,"agences",s,n,c)}export{u as a,t as c};
