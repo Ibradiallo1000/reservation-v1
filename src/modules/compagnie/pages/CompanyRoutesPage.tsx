@@ -9,6 +9,7 @@ import { getRouteStops, addStop, updateStop, deleteStop } from "@/modules/compag
 import { ROUTE_STATUS, type RouteDocWithId, type RouteStopDocWithId } from "@/modules/compagnie/routes/routesTypes";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { MapPin, Plus, Pencil, Power, Loader2, Trash2, ListOrdered } from "lucide-react";
+import { toast } from "sonner";
 
 export default function CompanyRoutesPage() {
   const { user } = useAuth();
@@ -143,15 +144,21 @@ export default function CompanyRoutesPage() {
   };
 
   const handleDeleteRoute = async (routeId: string) => {
-    if (!companyId) return;
+    if (!companyId) {
+      toast.error("Compagnie non identifiée. Rechargez la page ou accédez via le menu Logistique.");
+      return;
+    }
     if (!window.confirm("Supprimer cette route et toutes ses escales ?")) return;
     setActioningId(routeId);
+    setRoutes((prev) => prev.filter((r) => r.id !== routeId));
+    if (stopsModalRouteId === routeId) setStopsModalRouteId(null);
     try {
       await deleteRoute(companyId, routeId);
-      if (stopsModalRouteId === routeId) setStopsModalRouteId(null);
-      await loadRoutes();
+      toast.success("Route supprimée.");
     } catch (e: any) {
-      alert(e?.message ?? "Erreur lors de la suppression.");
+      const msg = e?.message ?? "Erreur lors de la suppression.";
+      toast.error("Suppression impossible", { description: msg });
+      await loadRoutes();
     } finally {
       setActioningId(null);
     }

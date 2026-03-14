@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { SectionCard } from '@/ui';
-import { ChevronLeft, Phone, Plus, Minus, CheckCircle, User, AlertCircle, ArrowRight, Clock, Calendar } from 'lucide-react';
+import { ChevronLeft, Phone, Plus, Minus, CheckCircle, User, AlertCircle, ArrowRight, Clock, Calendar, Loader2 } from 'lucide-react';
 import ReservationStepHeader from '../components/ReservationStepHeader';
 import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, setDoc, serverTimestamp, getDoc,
@@ -95,7 +95,7 @@ export default function ReservationClientPage() {
   const nameInputRef = useRef<HTMLInputElement>(null);
   const phoneInputRef = useRef<HTMLInputElement>(null);
 
-  const routeState = (location.state || {}) as { companyId?: string; agencyId?: string };
+  const routeState = (location.state || {}) as { companyId?: string; agencyId?: string; companyFromSearch?: { id?: string; nom?: string; logoUrl?: string; couleurPrimaire?: string; couleurSecondaire?: string } };
 
   const search = new URLSearchParams(location.search);
   const departureQ = normalize(search.get('departure') || '');
@@ -620,24 +620,47 @@ export default function ReservationClientPage() {
     </div>
   );
 
-  // ---------- Rendu en-tête ----------
+  // ---------- Rendu chargement (recherche trajets) : logo, animation, message "Soyez patient" ----------
+  const companyForLoading = routeState?.companyFromSearch || company;
+  const loadingLogoUrl = companyForLoading?.logoUrl || company.logoUrl;
+  const loadingPrimary = companyForLoading?.couleurPrimaire || company.couleurPrimaire || '#f43f5e';
+
   if (loading) {
     return (
-      <div className="min-h-screen grid place-items-center bg-gray-50">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }} 
-          animate={{ opacity: 1, scale: 1 }} 
-          className="bg-white/70 backdrop-blur rounded-2xl p-6 shadow-sm"
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-gray-50 to-white px-4">
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="flex flex-col items-center max-w-sm w-full text-center"
         >
-          <div className="flex items-center gap-3">
-            {company.logoUrl && (
-              <img src={company.logoUrl} alt="" className="h-10 w-10 rounded-full object-cover ring-1 ring-gray-200" />
+          <motion.div
+            animate={{ scale: [1, 1.05, 1] }}
+            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+            className="mb-6"
+          >
+            {loadingLogoUrl ? (
+              <img
+                src={loadingLogoUrl}
+                alt=""
+                className="h-20 w-20 sm:h-24 sm:w-24 rounded-2xl object-contain shadow-lg ring-2 ring-gray-100"
+              />
+            ) : (
+              <div
+                className="h-20 w-20 sm:h-24 sm:w-24 rounded-2xl flex items-center justify-center shadow-lg"
+                style={{ backgroundColor: `${loadingPrimary}20` }}
+              >
+                <Loader2 className="h-10 w-10 sm:h-12 sm:w-12 animate-spin" style={{ color: loadingPrimary }} />
+              </div>
             )}
-            <div>
-              <div className="h-4 w-40 bg-gray-200 rounded mb-2" />
-              <div className="h-3 w-24 bg-gray-200 rounded" />
-            </div>
+          </motion.div>
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <Loader2 className="h-5 w-5 animate-spin text-gray-500" aria-hidden />
+            <span className="text-sm font-medium text-gray-600">Recherche en cours…</span>
           </div>
+          <p className="text-gray-500 text-sm">
+            Soyez patient, nous recherchons vos trajets.
+          </p>
         </motion.div>
       </div>
     );

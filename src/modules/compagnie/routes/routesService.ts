@@ -175,13 +175,14 @@ export async function listRoutes(
   return list;
 }
 
-/** List ACTIVE routes where departureCity equals the given city (for agency trip config). */
+/** List ACTIVE routes where departureCity equals the given city (for agency trip config).
+ *  Normalizes the city with capitalizeCityName so agency city (e.g. "bamako") matches route departureCity ("Bamako"). */
 export async function listRoutesByDepartureCity(
   companyId: string,
   departureCity: string,
   options?: { limitCount?: number }
 ): Promise<(RouteDoc & { id: string })[]> {
-  const cityNorm = (departureCity || "").trim();
+  const cityNorm = capitalizeCityName((departureCity || "").trim());
   if (!cityNorm) return [];
   const q = query(
     routesRef(companyId),

@@ -28,6 +28,8 @@ const CANONICAL_ROLES: ReadonlySet<string> = new Set([
   "guichetier",
   "agency_fleet_controller",
   "financial_director",
+  "escale_agent",
+  "escale_manager",
 ]);
 
 const normalizeRole = (r?: unknown): Role => {
@@ -55,6 +57,8 @@ const defaultLandingByRole: Partial<Record<Role, string>> = {
   guichetier: "/agence/guichet",
   chefEmbarquement: "/agence/boarding",
   agency_fleet_controller: "/agence/fleet",
+  escale_agent: "/agence/escale",
+  escale_manager: "/agence/escale",
   unauthenticated: "/login",
   user: "/login",
 };

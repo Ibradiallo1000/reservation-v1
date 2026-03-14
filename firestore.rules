@@ -217,6 +217,11 @@ service cloud.firestore {
 
         match /weeklyTrips/{tripId} {
           allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId);
+          allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+            getUserRole() == 'admin_compagnie' ||
+            getUserRole() == 'admin_platforme' ||
+            (getUserRole() == 'chefAgence' && getUserAgencyId() == agencyId)
+          );
         }
 
         match /reservations/{reservationId} {

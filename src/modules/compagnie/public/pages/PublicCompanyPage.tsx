@@ -267,7 +267,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               onSearch={(departure, arrival) => {
                 const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
                 const path = pathBase ? `/${pathBase}/booking?${q}` : `/booking?${q}`;
-                navigate(path);
+                navigate(path, { state: { companyFromSearch: company } });
               }}
             />
 
@@ -279,7 +279,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
               onSelect={(departure, arrival) => {
                 const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
                 const path = pathBase ? `/${pathBase}/booking?${q}` : `/booking?${q}`;
-                navigate(path);
+                navigate(path, { state: { companyFromSearch: company } });
               }}
             />
           </>

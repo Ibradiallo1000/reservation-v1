@@ -144,8 +144,8 @@ const landingTargetForRoles = (roles: unknown): string => {
     return "/agence/comptabilite";
   }
 
-  // AGENCE — escale_agent → tableau de bord escale
-  if (hasAny(rolesArray, routePermissions.escaleDashboard) && rolesArray.includes("escale_agent")) {
+  // AGENCE — escale_agent / escale_manager → tableau de bord escale
+  if (hasAny(rolesArray, routePermissions.escaleDashboard) && (rolesArray.includes("escale_agent") || rolesArray.includes("escale_manager"))) {
     return "/agence/escale";
   }
   if (hasAny(rolesArray, routePermissions.guichet)) {
@@ -183,6 +183,7 @@ const ROLE_LANDING: Record<string, string> = {
   guichetier: "/agence/guichet",
   agentCourrier: "/agence/courrier",
   escale_agent: "/agence/escale",
+  escale_manager: "/agence/escale",
 };
 
 function RoleLanding() {

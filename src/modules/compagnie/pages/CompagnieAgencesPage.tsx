@@ -24,6 +24,8 @@ import { canCompanyPerformAction } from "@/shared/subscription/restrictions";
 import type { SubscriptionStatus } from "@/shared/subscription/types";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 import { listRoutes } from "@/modules/compagnie/routes/routesService";
+import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import type { RouteStopDocWithId } from "@/modules/compagnie/routes/routesTypes";
 
 // Leaflet assets
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -284,6 +286,9 @@ const CompagnieAgencesPage: React.FC = () => {
     longitude: "",
   });
   const [routesList, setRoutesList] = useState<{ id: string; origin?: string; destination?: string; departureCity?: string; arrivalCity?: string }[]>([]);
+  const [routeStops, setRouteStops] = useState<RouteStopDocWithId[]>([]);
+  const [routeStopsLoading, setRouteStopsLoading] = useState(false);
+  const [escaleCityWarning, setEscaleCityWarning] = useState(false);
 
   const [emailError, setEmailError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -360,6 +365,35 @@ const CompagnieAgencesPage: React.FC = () => {
       .catch(() => setRoutesList([]));
   }, [companyId]);
 
+  useEffect(() => {
+    if (formData.type !== "escale" || !formData.routeId || !companyId) {
+      setRouteStops([]);
+      return;
+    }
+    setRouteStopsLoading(true);
+    getRouteStops(companyId, formData.routeId)
+      .then((stops) => setRouteStops(stops))
+      .catch(() => setRouteStops([]))
+      .finally(() => setRouteStopsLoading(false));
+  }, [companyId, formData.type, formData.routeId]);
+
+  const selectedStop = useMemo(() => {
+    if (formData.type !== "escale" || !formData.stopOrder || routeStops.length === 0) return null;
+    const order = parseInt(formData.stopOrder, 10);
+    if (Number.isNaN(order)) return null;
+    return routeStops.find((s) => s.order === order) ?? null;
+  }, [formData.type, formData.stopOrder, routeStops]);
+
+  useEffect(() => {
+    if (!selectedStop || formData.type !== "escale") {
+      setEscaleCityWarning(false);
+      return;
+    }
+    const agencyCity = (formData.ville ?? "").trim().toLowerCase();
+    const stopCity = (selectedStop.city ?? "").trim().toLowerCase();
+    setEscaleCityWarning(agencyCity !== "" && stopCity !== "" && agencyCity !== stopCity);
+  }, [selectedStop, formData.ville, formData.type]);
+
   // Pagination calculations
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
@@ -416,6 +450,8 @@ const CompagnieAgencesPage: React.FC = () => {
       latitude: "",
       longitude: "",
     });
+    setRouteStops([]);
+    setEscaleCityWarning(false);
     setEditingId(null);
     setShowForm(false);
     setEmailError("");
@@ -443,6 +479,22 @@ const CompagnieAgencesPage: React.FC = () => {
   if (!formData.nomAgence.trim()) {
     alert("Nom de l'agence requis");
     return;
+  }
+
+  if (formData.type === "escale") {
+    if (!formData.routeId?.trim()) {
+      alert("Veuillez sélectionner une route pour l'escale.");
+      return;
+    }
+    const order = parseInt(formData.stopOrder, 10);
+    if (Number.isNaN(order) || formData.stopOrder === "") {
+      alert("Veuillez sélectionner l'escale (stop) sur la route.");
+      return;
+    }
+    if (routeStops.length > 0 && !routeStops.some((s) => s.order === order)) {
+      alert("L'ordre sélectionné n'existe pas sur cette route. Veuillez choisir un stop dans la liste.");
+      return;
+    }
   }
 
   if (!isValidEmailFormat(formData.emailGerant)) {
@@ -521,6 +573,21 @@ const CompagnieAgencesPage: React.FC = () => {
     if (editingId) {
       // update existing agency (client-side update)
       if (!companyId || !editingId) return;
+      if (formData.type === "escale") {
+        if (!formData.routeId?.trim()) {
+          alert("Veuillez sélectionner une route pour l'escale.");
+          return;
+        }
+        const order = parseInt(formData.stopOrder, 10);
+        if (Number.isNaN(order) || formData.stopOrder === "") {
+          alert("Veuillez sélectionner l'escale (stop) sur la route.");
+          return;
+        }
+        if (routeStops.length > 0 && !routeStops.some((s) => s.order === order)) {
+          alert("L'ordre sélectionné n'existe pas sur cette route. Veuillez choisir un stop dans la liste.");
+          return;
+        }
+      }
       try {
         const agenceRef = doc(db, "companies", companyId, "agences", editingId);
         await updateDoc(agenceRef, {
@@ -738,7 +805,7 @@ const CompagnieAgencesPage: React.FC = () => {
                       <select
                         name="routeId"
                         value={formData.routeId}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, routeId: e.target.value }))}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, routeId: e.target.value, stopOrder: "" }))}
                         className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
                         <option value="">— Choisir une route —</option>
@@ -750,17 +817,37 @@ const CompagnieAgencesPage: React.FC = () => {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-1">Ordre de l'escale sur la route</label>
-                      <input
+                      <label className="block text-sm font-medium mb-1">Escale (stop) sur la route</label>
+                      <select
                         name="stopOrder"
-                        type="number"
-                        min={1}
                         value={formData.stopOrder}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, stopOrder: e.target.value }))}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const stop = routeStops.find((s) => s.order === parseInt(val, 10));
+                          setFormData((prev) => ({
+                            ...prev,
+                            stopOrder: val,
+                            ...(stop?.city ? { ville: stop.city } : {}),
+                          }));
+                        }}
+                        disabled={routeStopsLoading || routeStops.length === 0}
                         className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="1 = origine, 2+ = escales"
-                      />
+                      >
+                        <option value="">
+                          {routeStopsLoading ? "Chargement…" : !formData.routeId ? "Choisir une route d'abord" : routeStops.length === 0 ? "Aucun stop sur cette route" : "— Choisir l'escale —"}
+                        </option>
+                        {routeStops.map((s) => (
+                          <option key={s.id} value={s.order}>
+                            {s.order} {s.city}
+                          </option>
+                        ))}
+                      </select>
                     </div>
+                    {escaleCityWarning && (
+                      <p className="text-amber-600 dark:text-amber-400 text-sm col-span-full">
+                        La ville de l&apos;agence ne correspond pas au stop sélectionné.
+                      </p>
+                    )}
                   </>
                 )}
               </div>

@@ -115,6 +115,14 @@ const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     "manage_boarding",
   ],
 
+  escale_manager: [
+    "view_agency_dashboard",
+    "manage_guichet",
+    "manage_reservations",
+    "manage_boarding",
+    "manage_personnel",
+  ],
+
   unauthenticated: [],
   user: [],
 };

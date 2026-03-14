@@ -12,7 +12,7 @@ import {
 import { db } from '@/firebaseConfig';
 import { getAgencyCityFromDoc } from '@/modules/agence/utils/agencyCity';
 import { generateWeeklyTrips } from '@/modules/agence/services/generateWeeklyTrips';
-import { listRoutesByDepartureCity } from '@/modules/compagnie/routes/routesService';
+import { listRoutesByDepartureCity, capitalizeCityName } from '@/modules/compagnie/routes/routesService';
 import type { RouteDocWithId } from '@/modules/compagnie/routes/routesTypes';
 import { useAuth } from '@/contexts/AuthContext';
 import jsPDF from 'jspdf';
@@ -21,6 +21,7 @@ import { ajouterVillesDepuisTrajet } from '@/modules/agence/utils/updateVilles';
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
 import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 import { Route, FileDown } from 'lucide-react';
+import { toast } from 'sonner';
 
 const joursDeLaSemaine = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 
@@ -131,17 +132,26 @@ const AgenceTrajetsPage: React.FC = () => {
   const supprimerTrajet = async (id: string) => {
     if (!user?.companyId || !user?.agencyId) return;
     if (!confirm('Voulez-vous vraiment supprimer ce trajet ?')) return;
-    
+
+    const deleted = trajets.find((t) => t.id === id);
+    const label = deleted ? `${deleted.departureCity ?? deleted.departure} → ${deleted.arrivalCity ?? deleted.arrival}` : 'Trajet';
+
     setLoading(true);
+    setMessage('');
+    setTrajets((prev) => prev.filter((t) => t.id !== id));
     try {
       await deleteDoc(
         doc(db, 'companies', user.companyId, 'agences', user.agencyId, 'weeklyTrips', id)
       );
-      fetchTrajets();
-      setMessage('🗑️ Trajet supprimé avec succès.');
+      toast.success('Trajet supprimé', {
+        description: `${label} a bien été effacé.`,
+      });
     } catch (err) {
       console.error(err);
-      setMessage("❌ Erreur lors de la suppression du trajet.");
+      toast.error('Suppression impossible', {
+        description: 'Erreur lors de la suppression du trajet. Réessayez ou vérifiez vos droits.',
+      });
+      fetchTrajets();
     } finally {
       setLoading(false);
     }
@@ -299,30 +309,33 @@ const AgenceTrajetsPage: React.FC = () => {
         <SectionCard title={modifierId ? "Modifier le trajet" : "Ajouter un trajet"}>
           {agencyCity && (
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-              Départs autorisés : <strong>{agencyCity}</strong> (ville de votre agence)
+              Départs autorisés : <strong>{capitalizeCityName(agencyCity)}</strong> (ville de votre agence)
             </p>
           )}
-          {!modifierId && allowedRoutes.length === 0 && agencyCity && (
-            <p className="mb-3 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
-              Aucune route au départ de <strong>{agencyCity}</strong>. Le responsable logistique doit ajouter des routes (Garage → Routes réseau) pour que vous puissiez créer des trajets.
-            </p>
-          )}
-          {!modifierId && allowedRoutes.length > 0 && (
+          {!modifierId && (
             <div className="mb-3">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Route <span className="text-red-500">*</span></label>
               <select
                 value={selectedRouteId}
                 onChange={(e) => setSelectedRouteId(e.target.value)}
-                className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600"
+                disabled={allowedRoutes.length === 0}
+                className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <option value="">— Choisir une route —</option>
+                <option value="">
+                  {allowedRoutes.length === 0 ? "— Aucune route disponible —" : "— Choisir une route —"}
+                </option>
                 {allowedRoutes.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.departureCity} → {r.arrivalCity}
-                    {r.distance != null ? ` (${r.distance} km)` : ''}
+                    {r.departureCity ?? r.origin} → {r.arrivalCity ?? r.destination}
+                    {r.distanceKm != null ? ` (${r.distanceKm} km)` : r.distance != null ? ` (${r.distance} km)` : ""}
                   </option>
                 ))}
               </select>
+              {allowedRoutes.length === 0 && agencyCity && (
+                <p className="mt-2 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
+                  Aucune route au départ de <strong>{capitalizeCityName(agencyCity)}</strong>. Le responsable logistique doit ajouter des routes (Garage → Routes réseau) pour que vous puissiez créer des trajets.
+                </p>
+              )}
             </div>
           )}
           {modifierId && editingTrip && (

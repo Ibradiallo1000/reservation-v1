@@ -32,6 +32,7 @@ const CANONICAL_ROLES = new Set([
   "admin_platforme", "admin_compagnie", "company_accountant", "agency_accountant",
   "responsable_logistique", "chefagence", "chefembarquement", "guichetier",
   "agency_fleet_controller", "financial_director", "agentcourrier",
+  "escale_agent", "escale_manager",
 ]);
 
 const normalizeRole = (r?: string): string => {

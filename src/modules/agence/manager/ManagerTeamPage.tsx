@@ -26,9 +26,11 @@ const ROLE_LABELS: Record<string, string> = {
   agency_accountant: "Comptable",
   chefEmbarquement: "Chef embarquement",
   agentCourrier: "Agent courrier",
+  escale_agent: "Agent d'escale",
+  escale_manager: "Chef d'escale",
 };
 
-type Role = "guichetier" | "controleur" | "agency_accountant" | "chefAgence" | "chefEmbarquement" | "agentCourrier";
+type Role = "guichetier" | "controleur" | "agency_accountant" | "chefAgence" | "chefEmbarquement" | "agentCourrier" | "escale_agent" | "escale_manager";
 
 const ALL_ASSIGNABLE_ROLES: { value: Role; label: string }[] = [
   { value: "guichetier", label: "Guichetier" },
@@ -37,6 +39,8 @@ const ALL_ASSIGNABLE_ROLES: { value: Role; label: string }[] = [
   { value: "chefAgence", label: "Chef d'agence" },
   { value: "chefEmbarquement", label: "Chef embarquement" },
   { value: "agentCourrier", label: "Agent courrier" },
+  { value: "escale_agent", label: "Agent d'escale" },
+  { value: "escale_manager", label: "Chef d'escale" },
 ];
 
 type Agent = {
@@ -92,6 +96,7 @@ export default function ManagerTeamPage() {
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
 
+  const [agencyType, setAgencyType] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -113,14 +118,27 @@ export default function ManagerTeamPage() {
   const [confirmResetAgent, setConfirmResetAgent] = useState<Agent | null>(null);
 
   const isChefAgence = user?.role === "chefAgence";
-  const assignableRoles = useMemo(() =>
-    isChefAgence ? ALL_ASSIGNABLE_ROLES.filter((r) => r.value !== "chefAgence") : ALL_ASSIGNABLE_ROLES,
-  [isChefAgence]);
+  const isEscaleAgency = (agencyType ?? "").toLowerCase() === "escale";
+  const assignableRoles = useMemo(() => {
+    let list = ALL_ASSIGNABLE_ROLES;
+    if (isChefAgence) list = list.filter((r) => r.value !== "chefAgence");
+    if (!isEscaleAgency) list = list.filter((r) => r.value !== "escale_agent" && r.value !== "escale_manager");
+    return list;
+  }, [isChefAgence, isEscaleAgency]);
 
   const loadAgents = async () => {
     if (!companyId || !agencyId) return;
     setLoading(true);
     try {
+      const agencyRef = doc(db, "companies", companyId, "agences", agencyId);
+      const agencySnap = await getDoc(agencyRef);
+      if (agencySnap.exists()) {
+        const ad = agencySnap.data() as { type?: string };
+        setAgencyType(ad.type ?? "principale");
+      } else {
+        setAgencyType(null);
+      }
+
       const ref = collection(db, "companies", companyId, "agences", agencyId, "users");
       let snap = await getDocs(ref);
 

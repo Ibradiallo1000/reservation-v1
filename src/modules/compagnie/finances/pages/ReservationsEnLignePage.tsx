@@ -29,7 +29,9 @@ import {
   ChevronUp,
   Bell,
   Calendar,
-  Receipt
+  Receipt,
+  MessageCircle,
+  Copy
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -149,6 +151,36 @@ const getStatusConfig = (status?: ReservationStatus): { label: string; statusVar
 };
 
 /* ================= COMPOSANT PRINCIPAL ================= */
+/** Construit l'URL publique du billet pour une réservation */
+const getBilletUrl = (r: Reservation, companySlugFallback?: string) => {
+  const slug = r.companySlug || companySlugFallback || '';
+  if (!slug || !r.id) return '';
+  return `${typeof window !== 'undefined' ? window.location.origin : ''}/${slug}/reservation/${r.id}`;
+};
+
+/** Message de confirmation pour WhatsApp / copie (sauts de ligne pour lisibilité) */
+const getBilletConfirmationMessage = (r: Reservation, billetUrl: string) => {
+  const trajet = [r.depart, r.arrivee].filter(Boolean).join(' → ') || 'Trajet';
+  const date = r.date || '';
+  const lines = [
+    'Bonjour,',
+    '',
+    'Votre billet a été validé.',
+    '',
+    `Trajet : ${trajet}`,
+    ...(date ? [`Date : ${date}`] : []),
+    '',
+    'Voir votre billet :',
+    billetUrl,
+    '',
+    'Merci.',
+  ];
+  return lines.join('\n');
+};
+
+/** Numéro au format wa.me (chiffres uniquement, sans +) */
+const toWhatsAppPhone = (phone: string) => (phone || '').replace(/\D/g, '');
+
 const ReservationsEnLigne: React.FC = () => {
   const { user, company } = useAuth() as any;
   const navigate = useNavigate();
@@ -157,6 +189,8 @@ const ReservationsEnLigne: React.FC = () => {
   const { initializeAudio, playNotification, resetNotification, playSoundNow, isAudioReady } = useNotificationSound();
 
   const [verificationReservations, setVerificationReservations] = useState<Reservation[]>([]);
+  /** Réservations venant d'être validées : on garde la carte visible avec "Billet validé" + actions */
+  const [recentlyValidatedReservations, setRecentlyValidatedReservations] = useState<Reservation[]>([]);
   const [otherReservations, setOtherReservations] = useState<Reservation[]>([]);
   const [agencies, setAgencies] = useState<Record<string, {name: string, ville: string}>>({});
   const [loading, setLoading] = useState(true);
@@ -625,7 +659,25 @@ const ReservationsEnLigne: React.FC = () => {
         }).catch(() => {});
       }
       
-      // Retirer de la liste des réservations à vérifier
+      // Garder la carte visible avec état "Billet validé" + boutons (PDF, WhatsApp, Copier)
+      const validatedRow: Reservation = {
+        ...reservation,
+        ...data,
+        id: reservation.id,
+        agencyId: reservation.agencyId,
+        companyId: reservation.companyId ?? user.companyId,
+        statut: 'confirme',
+        companySlug: reservation.companySlug || data?.companySlug || (company as { slug?: string })?.slug,
+        clientNom: data?.nomClient ?? data?.clientNom ?? reservation.clientNom,
+        telephone: data?.telephone ?? reservation.telephone,
+        depart: data?.depart ?? reservation.depart,
+        arrivee: data?.arrivee ?? reservation.arrivee,
+        date: data?.date ?? reservation.date,
+        montant: Number(data?.montant ?? reservation.montant ?? 0),
+      };
+      setRecentlyValidatedReservations(prev => [validatedRow, ...prev]);
+
+      // Retirer de la liste des réservations à vérifier (le snapshot le fera aussi)
       setVerificationReservations(prev => 
         prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
       );
@@ -633,8 +685,7 @@ const ReservationsEnLigne: React.FC = () => {
       // Réinitialiser la notification pour cette réservation
       resetNotification(`${reservation.agencyId}_${reservation.id}`);
       
-      // 🔧 CORRECTION : Recharger les autres réservations pour inclure celle-ci dans la liste confirmée
-      // Forcer le rechargement pour voir immédiatement le changement
+      // Recharger les autres réservations pour l'historique
       setTimeout(() => {
         loadOtherReservations(otherPage);
       }, 500);
@@ -1002,15 +1053,27 @@ const ReservationsEnLigne: React.FC = () => {
         </>
       )}
 
-      {/* ================= LISTE DES RÉSERVATIONS À VÉRIFIER (PRIORITÉ ABSOLUE) ================= */}
-      {verificationReservations.length > 0 && (!filterStatus || filterStatus === 'verification') && (
+      {/* ================= LISTE DES RÉSERVATIONS À VÉRIFIER + VALIDÉES À L'INSTANT ================= */}
+      {((recentlyValidatedReservations.length > 0) || verificationReservations.length > 0) && (!filterStatus || filterStatus === 'verification') && (
         <SectionCard
           title="En attente de validation"
           icon={AlertCircle}
-          right={<StatusBadge status="warning">{verificationReservations.length} en attente de validation</StatusBadge>}
+          right={
+            <span className="flex items-center gap-2">
+              {recentlyValidatedReservations.length > 0 && (
+                <StatusBadge status="success">{recentlyValidatedReservations.length} billet(s) validé(s)</StatusBadge>
+              )}
+              <StatusBadge status="warning">{verificationReservations.length} en attente de validation</StatusBadge>
+            </span>
+          }
         >
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filterReservationsByPeriod(verificationReservations, filterPeriod)
+            {[
+              ...recentlyValidatedReservations,
+              ...filterReservationsByPeriod(verificationReservations, filterPeriod).filter(
+                r => !recentlyValidatedReservations.some(v => v.id === r.id && v.agencyId === r.agencyId)
+              ),
+            ]
               .filter(r => !searchTerm || 
                 [r.clientNom, r.telephone, r.referenceCode, (r as ReservationWithProof).paymentReference, r.preuveMessage]
                   .join(' ')
@@ -1018,11 +1081,96 @@ const ReservationsEnLigne: React.FC = () => {
                   .includes(searchTerm.toLowerCase())
               )
               .map((reservation) => {
+                const isJustValidated = recentlyValidatedReservations.some(
+                  v => v.id === reservation.id && v.agencyId === reservation.agencyId
+                );
+                const billetUrl = getBilletUrl(reservation, (company as { slug?: string })?.slug);
+                const confirmationMessage = getBilletConfirmationMessage(reservation, billetUrl);
+                const phoneForWhatsApp = toWhatsAppPhone(reservation.telephone || '');
+                const whatsAppUrl = phoneForWhatsApp
+                  ? `https://wa.me/${phoneForWhatsApp}?text=${encodeURIComponent(confirmationMessage)}`
+                  : '';
+
+                if (isJustValidated) {
+                  return (
+                    <div
+                      id={`reservation-${reservation.id}`}
+                      key={`validated-${reservation.agencyId}_${reservation.id}`}
+                      className="border border-green-200 rounded-xl overflow-hidden bg-white shadow-md"
+                    >
+                      {/* Bandeau vert : Billet validé */}
+                      <div className="flex items-center justify-center gap-2 py-3 px-4 bg-green-600 text-white">
+                        <CheckCircle className="h-5 w-5 shrink-0" aria-hidden />
+                        <span className="font-semibold">Billet validé</span>
+                        {reservation.referenceCode && (
+                          <span className="ml-auto text-xs font-mono text-green-100">#{reservation.referenceCode}</span>
+                        )}
+                      </div>
+                      <div className="px-4 py-2 border-b border-gray-100 bg-gray-50/50">
+                        <p className="text-sm text-gray-700">
+                          {reservation.clientNom || 'Client'} · {reservation.depart || '—'} → {reservation.arrivee || '—'}
+                        </p>
+                      </div>
+                      {/* Actions */}
+                      <div className="p-4">
+                        <div className="flex flex-col gap-2">
+                          <a
+                            href={billetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85 disabled:pointer-events-none disabled:opacity-50"
+                          >
+                            <Eye className="h-4 w-4" />
+                            Voir billet
+                          </a>
+                          <Button
+                            variant="primary"
+                            className="w-full flex items-center justify-center gap-2"
+                            onClick={() => billetUrl && window.open(billetUrl, '_blank')}
+                          >
+                            <Download className="h-4 w-4" />
+                            Télécharger PDF
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            className="w-full flex items-center justify-center gap-2 border-green-300 text-green-800 hover:bg-green-50"
+                            onClick={() => {
+                              if (whatsAppUrl) {
+                                window.open(whatsAppUrl, '_blank');
+                                toast.success('WhatsApp ouvert avec le message prêt');
+                              }
+                            }}
+                            disabled={!phoneForWhatsApp}
+                          >
+                            <MessageCircle className="h-4 w-4" />
+                            Envoyer WhatsApp
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            className="w-full flex items-center justify-center gap-2"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(confirmationMessage);
+                                toast.success('Message copié dans le presse-papiers');
+                              } catch {
+                                toast.error('Erreur', { description: 'Impossible de copier le message dans le presse-papiers.' });
+                              }
+                            }}
+                          >
+                            <Copy className="h-4 w-4" />
+                            Copier message
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
                 const statusConfig = getStatusConfig(reservation.statut);
                 const isProcessing = processingId === reservation.id;
                 const proofUrl = getProofUrl(reservation);
                 const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
-                
+
                 return (
                   <div
                     id={`reservation-${reservation.id}`}

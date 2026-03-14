@@ -3,7 +3,7 @@
  * Affiche les bus à venir aujourd'hui, heure de passage à l'escale, places restantes, bouton vente billet.
  */
 import React, { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -16,7 +16,7 @@ import { listTripInstancesByRouteIdAndDate } from "@/modules/compagnie/tripInsta
 import type { RouteDocWithId } from "@/modules/compagnie/routes/routesTypes";
 import type { RouteStopDocWithId } from "@/modules/compagnie/routes/routesTypes";
 import type { TripInstanceDocWithId } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
-import { Bus, Ticket, Loader2, MapPin } from "lucide-react";
+import { Bus, Ticket, Loader2, MapPin, Users } from "lucide-react";
 
 function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
   const [h, m] = timeStr.split(":").map(Number);
@@ -160,13 +160,26 @@ export default function EscaleDashboardPage() {
     );
   }
 
+  const canManageTeam = (user?.role === "escale_manager" || user?.role === "chefAgence") && user?.companyId && user?.agencyId;
+
   return (
     <StandardLayoutWrapper>
-      <PageHeader
-        title="Tableau de bord escale"
-        subtitle={stop ? `${stop.city} (ordre ${stop.order}) — ${route?.origin ?? ""} → ${route?.destination ?? ""}` : "Escale"}
-        icon={Bus}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+        <PageHeader
+          title="Tableau de bord escale"
+          subtitle={stop ? `${stop.city} (ordre ${stop.order}) — ${route?.origin ?? ""} → ${route?.destination ?? ""}` : "Escale"}
+          icon={Bus}
+        />
+        {canManageTeam && (
+          <Link
+            to="/agence/team"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+          >
+            <Users className="w-4 h-4" />
+            Équipe
+          </Link>
+        )}
+      </div>
 
       {user?.companyId && user?.agencyId && (
         <div className="mb-6">
