@@ -16,7 +16,7 @@ import {
   getCashTransfersByDate,
 } from "./cashService";
 import { CASH_TRANSACTION_STATUS } from "./cashTypes";
-import type { CashTransactionDocWithId, CashClosureDocWithId } from "./cashTypes";
+import type { CashTransactionDocWithId, CashClosureDocWithId, CashRefundDocWithId, CashTransferDocWithId } from "./cashTypes";
 import { listRoutes } from "@/modules/compagnie/routes/routesService";
 import type { RouteDocWithId } from "@/modules/compagnie/routes/routesTypes";
 import { Wallet, Building2, MapPin, TrendingUp, AlertCircle, Route, ArrowUpRight, ArrowDownLeft } from "lucide-react";
@@ -29,8 +29,8 @@ export default function CompanyCashPage() {
   const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [transactions, setTransactions] = useState<CashTransactionDocWithId[]>([]);
   const [closures, setClosures] = useState<CashClosureDocWithId[]>([]);
-  const [refunds, setRefunds] = useState<{ id: string; amount: number; locationId: string; [k: string]: unknown }[]>([]);
-  const [transfers, setTransfers] = useState<{ id: string; amount: number; locationId: string; [k: string]: unknown }[]>([]);
+  const [refunds, setRefunds] = useState<CashRefundDocWithId[]>([]);
+  const [transfers, setTransfers] = useState<CashTransferDocWithId[]>([]);
   const [agencies, setAgencies] = useState<{ id: string; nom: string; type?: string }[]>([]);
   const [routes, setRoutes] = useState<RouteDocWithId[]>([]);
   const [loading, setLoading] = useState(true);
