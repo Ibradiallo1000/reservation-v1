@@ -252,9 +252,10 @@ export default function RouteResolver() {
     };
   }, [slug]);
 
-  // Recovery: when on company homepage, if pendingReservation exists and is en_attente_paiement, show banner or redirect
+  // Recovery: when on company homepage, if pendingReservation exists and is en_attente_paiement, show modal (not inline banner)
   const [recoveryChecked, setRecoveryChecked] = useState(false);
   const [pendingRecovery, setPendingRecovery] = useState<{ reservationId: string } | null>(null);
+  const [pendingRecoveryDismissed, setPendingRecoveryDismissed] = useState(false);
   useEffect(() => {
     if (recoveryChecked || loading || notFound || error || subPath !== null || !slug || !company) return;
     const pending = readPendingReservation();
@@ -384,44 +385,14 @@ export default function RouteResolver() {
       content = <CompanyAboutPage company={company} />;
       break;
     case null:
-      content = (
-        <>
-          {pendingRecovery && slug && (
-            <div
-              className="mx-auto max-w-md px-4 pt-4 pb-2"
-              role="alert"
-              aria-live="polite"
-            >
-              <div
-                className="rounded-xl border p-4 shadow-sm"
-                style={{
-                  backgroundColor: `${company?.couleurPrimaire ?? "#3b82f6"}0D`,
-                  borderColor: `${company?.couleurPrimaire ?? "#3b82f6"}40`,
-                }}
-              >
-                <p className="text-sm font-medium text-gray-800">
-                  Vous avez une réservation en attente.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => navigate(pathBase ? `/${pathBase}/upload-preuve/${pendingRecovery.reservationId}` : `/upload-preuve/${pendingRecovery.reservationId}`, { replace: true })}
-                  className="mt-3 w-full rounded-lg py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
-                  style={{
-                    backgroundColor: company?.couleurPrimaire ?? "#3b82f6",
-                  }}
-                >
-                  Continuer ma réservation
-                </button>
-              </div>
-            </div>
-          )}
-          <PublicCompanyPage {...common} isMobile={isMobile} />
-        </>
-      );
+      content = <PublicCompanyPage {...common} isMobile={isMobile} />;
       break;
     default:
       content = <PageNotFound />;
   }
+
+  const showPendingModal = pendingRecovery && slug && !pendingRecoveryDismissed && subPath === null;
+  const primaryColor = company?.couleurPrimaire ?? "#3b82f6";
 
   return (
     <CurrencyProvider currency={company?.devise}>
@@ -434,6 +405,44 @@ export default function RouteResolver() {
               primaryColor={company?.couleurPrimaire ?? undefined}
             />
           </div>
+          {/* Modal « Continuer ma réservation » : affichage professionnel, pas dans le header */}
+          {showPendingModal && pendingRecovery && (
+            <div
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="pending-reservation-title"
+            >
+              <div
+                className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 border border-gray-100"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2 id="pending-reservation-title" className="text-lg font-semibold text-gray-900 mb-2">
+                  Réservation en attente
+                </h2>
+                <p className="text-sm text-gray-600 mb-6">
+                  Vous avez commencé une réservation. Souhaitez-vous continuer pour envoyer votre preuve de paiement ?
+                </p>
+                <div className="flex flex-col gap-3">
+                  <button
+                    type="button"
+                    onClick={() => navigate(pathBase ? `/${pathBase}/upload-preuve/${pendingRecovery.reservationId}` : `/upload-preuve/${pendingRecovery.reservationId}`, { replace: true })}
+                    className="w-full rounded-xl py-3 px-4 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
+                    style={{ backgroundColor: primaryColor }}
+                  >
+                    Continuer ma réservation
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingRecoveryDismissed(true)}
+                    className="w-full rounded-xl py-3 px-4 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition"
+                  >
+                    Plus tard
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </Suspense>
       </ErrorBoundary>
     </CurrencyProvider>

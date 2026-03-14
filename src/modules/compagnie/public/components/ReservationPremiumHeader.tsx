@@ -29,25 +29,25 @@ export default function ReservationPremiumHeader({
   if (isAsymmetric) {
     return (
       <header
-        className="sticky top-0 z-50 pt-6 pb-10 px-4 text-white overflow-hidden rounded-br-[48px] border-b-4"
+        className="sticky top-0 z-50 pt-2 pb-3 px-3 sm:px-4 text-white overflow-hidden rounded-br-[20px] border-b-2"
         style={{
           backgroundColor: primaryColor,
           borderColor: secondaryColor,
-          boxShadow: `0 10px 30px ${secondaryColor}59`,
+          boxShadow: `0 4px 12px ${secondaryColor}40`,
         }}
       >
-        <div className="relative z-10 flex items-center justify-between gap-3">
+        <div className="relative z-10 flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={onBack}
-            className="p-2 rounded-full hover:bg-white/20 transition flex-shrink-0"
+            className="p-1.5 rounded-full hover:bg-white/20 transition flex-shrink-0"
             aria-label="Retour"
           >
-            <ChevronLeft className="h-6 w-6" />
+            <ChevronLeft className="h-4 w-4 sm:h-5 sm:w-5" />
           </button>
-          <div className="flex items-center gap-3 min-w-0 flex-1 justify-center">
+          <div className="flex items-center gap-2 min-w-0 flex-1 justify-center">
             {logoUrl && (
-              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-white/20 overflow-hidden ring-2 ring-white/30">
+              <div className="flex-shrink-0 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-white/20 overflow-hidden ring-1 ring-white/30">
                 <LazyLoadImage
                   src={logoUrl}
                   alt=""
@@ -56,9 +56,9 @@ export default function ReservationPremiumHeader({
                 />
               </div>
             )}
-            <h1 className="font-bold text-lg truncate">{title}</h1>
+            <h1 className="font-semibold text-base truncate">{title}</h1>
           </div>
-          <div className="w-10 flex-shrink-0" />
+          <div className="w-7 sm:w-8 flex-shrink-0" />
         </div>
       </header>
     );
@@ -68,10 +68,10 @@ export default function ReservationPremiumHeader({
 
   return (
     <header
-      className="sticky top-0 z-50 pt-6 pb-8 px-4 rounded-b-[32px] text-white overflow-hidden"
+      className="sticky top-0 z-50 pt-2 pb-3 px-3 sm:px-4 rounded-b-[20px] text-white overflow-hidden"
       style={{
         background: gradientBackground,
-        boxShadow: 'inset 0 -8px 20px rgba(0,0,0,0.15)',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
       }}
     >
       <div
@@ -82,18 +82,18 @@ export default function ReservationPremiumHeader({
           filter: 'blur(48px)',
         }}
       />
-      <div className="relative z-10 flex items-center justify-between gap-3">
+      <div className="relative z-10 flex items-center justify-between gap-2">
         <button
           type="button"
           onClick={onBack}
-          className="p-2 rounded-full hover:bg-white/20 transition flex-shrink-0"
+          className="p-1.5 rounded-full hover:bg-white/20 transition flex-shrink-0"
           aria-label="Retour"
         >
-          <ChevronLeft className="h-6 w-6" />
+          <ChevronLeft className="h-4 w-4 sm:h-5 sm:w-5" />
         </button>
-        <div className="flex items-center gap-3 min-w-0 flex-1 justify-center">
+        <div className="flex items-center gap-2 min-w-0 flex-1 justify-center">
           {logoUrl && (
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-white/20 overflow-hidden ring-2 ring-white/30">
+            <div className="flex-shrink-0 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-white/20 overflow-hidden ring-1 ring-white/30">
               <LazyLoadImage
                 src={logoUrl}
                 alt=""
@@ -103,13 +103,13 @@ export default function ReservationPremiumHeader({
             </div>
           )}
           <div className="min-w-0 text-center">
-            <h1 className="font-bold text-lg truncate">{title}</h1>
+            <h1 className="font-semibold text-base truncate">{title}</h1>
             {subtitle && (
-              <p className="text-white/90 text-sm truncate mt-0.5">{subtitle}</p>
+              <p className="text-white/90 text-xs truncate mt-0.5">{subtitle}</p>
             )}
           </div>
         </div>
-        <div className="w-10 flex-shrink-0" />
+        <div className="w-7 sm:w-8 flex-shrink-0" />
       </div>
     </header>
   );

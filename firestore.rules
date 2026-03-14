@@ -142,12 +142,12 @@ service cloud.firestore {
 
     /* =====================
        COMPAGNIES / AGENCES
-       Multi-tenant: authenticated users may only access their company's data (userCompanyId() == companyId).
-       Platform admin (admin_platforme) may access any company. Public read when unauthenticated (vitrine + stats landing).
+       Multi-tenant: write restricted to own company; read for vitrine: anyone can read company doc + agences (public page).
+       Platform admin (admin_platforme) may write any company. Public vitrine: get/list companies allowed for all (visitor may be logged in as another company).
     ===================== */
     match /companies/{companyId} {
-      allow get, list: if request.auth == null;
-      allow get, list: if request.auth != null && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+      allow get, list: if true;
+      allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
 
       /* Avis clients (vitrine publique) : lecture publique sans auth pour page compagnie */
       match /avis/{avisId} {
@@ -244,14 +244,14 @@ service cloud.firestore {
           );
 
           /* =============================
-             UPDATE 2 — SOUMISSION PREUVE (public)
-             Passage en_attente_paiement → preuve_recue. UploadPreuvePage envoie toujours ces 7 champs.
+             UPDATE 2 — SOUMISSION PREUVE (public ou utilisateur connecté)
+             Passage en_attente_paiement → preuve_recue. UploadPreuvePage.
+             Autorisé invité ou connecté (ex. "Continuer ma réservation"). Canal/statut : casse ignorée.
           ============================= */
           allow update: if (
-            request.auth == null &&
-            resource.data.get('canal', '') == "en_ligne" &&
-            resource.data.get('statut', '') == "en_attente_paiement" &&
-            request.resource.data.get('statut', '') == "preuve_recue" &&
+            resource.data.get('canal', '').toLowerCase().replace(' ', '_') == "en_ligne" &&
+            resource.data.get('statut', '').toLowerCase() == "en_attente_paiement" &&
+            request.resource.data.get('statut', '').toLowerCase() == "preuve_recue" &&
             request.resource.data.diff(resource.data).changedKeys().hasOnly([
               "statut", "paymentReference", "preuveMessage", "transactionReference",
               "proofSubmittedAt", "updatedAt", "preuveVia"

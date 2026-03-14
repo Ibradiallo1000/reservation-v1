@@ -20,6 +20,7 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({
   company,
   slug: _slug,
+  colors,
   navigate,
   t,
 }) => {
@@ -42,7 +43,8 @@ const Header: React.FC<HeaderProps> = ({
     img.src = company.logoUrl;
   }, [company?.logoUrl]);
 
-  const textColor = scrollProgress > 0.6 ? '#111827' : 'white';
+  const primary = colors?.primary || '#3b82f6';
+  const textColor = scrollProgress > 0.5 ? primary : '#ffffff';
   const bgOpacity = scrollProgress > 0.5 ? 0.92 : 0;
   const borderOpacity = scrollProgress > 0.5 ? 0.15 : 0;
 
@@ -62,12 +64,13 @@ const Header: React.FC<HeaderProps> = ({
         className="absolute inset-0 backdrop-blur-sm transition-all duration-300 pointer-events-auto"
         aria-hidden
       />
-      <div className="relative z-10 flex items-center justify-between w-full max-w-6xl mx-auto pointer-events-auto">
-        {/* Left: logo + company name */}
+      <div className="public-site-header-inner relative z-10 flex items-center justify-between w-full max-w-6xl mx-auto pointer-events-auto">
+        {/* Left: logo + company name (white en haut, couleur primaire au scroll) */}
         <button
           onClick={() => navigate('/')}
           className="flex items-center gap-2 sm:gap-3 min-w-0 select-none"
           aria-label={name}
+          style={{ color: textColor }}
         >
           {company?.logoUrl ? (
             <img
@@ -83,18 +86,19 @@ const Header: React.FC<HeaderProps> = ({
               {(name || 'C').trim().charAt(0).toUpperCase()}
             </span>
           )}
-          <span className="font-semibold text-sm sm:text-base tracking-wide truncate max-w-[120px] sm:max-w-[200px]">
+          <span className="font-semibold text-sm sm:text-base tracking-wide truncate max-w-[120px] sm:max-w-[200px]" style={{ color: textColor }}>
             {name}
           </span>
         </button>
 
-        {/* Right: language + login */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          <LanguageSwitcher variant="floating" scrollTextColor={textColor} />
+        {/* Right: langue (drapeaux) + connexion */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0" style={{ color: textColor }}>
+          <LanguageSwitcher variant="floating" scrollTextColor={textColor} primaryColor={primary} />
           <button
             onClick={() => navigate('/login')}
             className="p-2 rounded-lg opacity-90 hover:opacity-100 hover:bg-black/10 transition inline-flex items-center justify-center min-h-[40px] min-w-[40px]"
             aria-label={t('login')}
+            style={{ color: textColor }}
           >
             <User className="h-5 w-5 sm:h-5 sm:w-5" />
           </button>

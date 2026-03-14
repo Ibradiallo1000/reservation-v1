@@ -300,10 +300,12 @@ img.hero, img.logo {
 .public-booking .public-hero-titles h2 {
   color: #ffffff !important;
 }
-/* Header fixe : la couleur vient du composant (inline style), ne pas forcer le texte */
-.public-booking .public-site-header,
-.public-booking .public-site-header * {
-  color: inherit !important;
+/* Header fixe : couleur contrôlée par le composant (blanc en haut, couleur primaire au scroll) — ne pas forcer inherit */
+.public-booking .public-site-header {
+  /* color set via inline style in CompanyPublicHeader */
+}
+.public-booking .public-site-header .public-site-header-inner {
+  color: inherit;
 }
 .public-booking .text-gray-500 { color: #6b7280 !important; }
 .public-booking .text-gray-600 { color: #4b5563 !important; }
