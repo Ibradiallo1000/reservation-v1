@@ -43,6 +43,9 @@ import { Button } from '@/shared/ui/button';
 import { MetricCard, SectionCard, StatusBadge, type StatusVariant } from '@/ui';
 import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
 import { transitionToConfirmedOrPaidWithDailyStats } from '@/modules/agence/services/reservationStatutService';
+import { decrementReservedSeats } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { createCashTransaction } from '@/modules/compagnie/cash/cashService';
+import { LOCATION_TYPE } from '@/modules/compagnie/cash/cashTypes';
 
 /** Son Shopify (alarme / preuve reçue) : public/splash/son.mp3 */
 const NOTIFICATION_SOUND_URL = '/splash/son.mp3';
@@ -581,6 +584,33 @@ const ReservationsEnLigne: React.FC = () => {
         { validatedBy: user.uid ?? '', validatedAt: serverTimestamp() }
       );
 
+      const montant = Number(data?.montant ?? reservation.montant ?? 0);
+      if (montant > 0) {
+        try {
+          const paymentMethod = (data?.paymentMethod ?? data?.paiement ?? 'transfer').toString();
+          const cashTxId = await createCashTransaction({
+            companyId: user.companyId,
+            reservationId: reservation.id,
+            tripInstanceId: data?.tripInstanceId ?? undefined,
+            amount: montant,
+            currency: 'XOF',
+            paymentMethod: paymentMethod === 'mobile_money' ? 'mobile_money' : paymentMethod === 'virement' ? 'transfer' : 'transfer',
+            locationType: LOCATION_TYPE.AGENCE,
+            locationId: reservation.agencyId,
+            routeId: data?.routeId ?? undefined,
+            createdBy: user.uid ?? '',
+            date: (data?.date ?? new Date().toISOString().slice(0, 10)).toString().slice(0, 10),
+          });
+          await updateDoc(reservationRef, {
+            cashTransactionId: cashTxId,
+            paymentStatus: 'paid',
+            paymentMethod: data?.paymentMethod ?? data?.paiement ?? 'transfer',
+          });
+        } catch (err) {
+          console.error('[ReservationsEnLigne] createCashTransaction on confirm:', err);
+        }
+      }
+
       // CRM: sync customer (create or update stats by phone)
       const phone = (data?.telephone ?? data?.telephoneOriginal ?? reservation.telephone ?? '')?.toString() || '';
       const departureDate = (data?.date ?? reservation.date ?? '')?.toString() || '';
@@ -658,6 +688,14 @@ const ReservationsEnLigne: React.FC = () => {
         refusedAt: serverTimestamp(),
         refusalReason: inputReason.trim() || 'Raison non spécifiée',
       });
+
+      const tripInstanceId = data.tripInstanceId ?? null;
+      const seats = (data.seatsGo ?? 0) + (data.seatsReturn ?? 0);
+      if (tripInstanceId && seats > 0) {
+        decrementReservedSeats(user.companyId, tripInstanceId, seats).catch((err) => {
+          console.error('[ReservationsEnLigne] decrementReservedSeats on refuse:', err);
+        });
+      }
       
       // Retirer de la liste des réservations à vérifier
       setVerificationReservations(prev => 

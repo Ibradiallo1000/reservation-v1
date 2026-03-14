@@ -10,12 +10,11 @@ import ReservationStepHeader from '../components/ReservationStepHeader';
 import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, setDoc, serverTimestamp, getDoc,
 } from 'firebase/firestore';
-import { canonicalStatut } from '@/utils/reservationStatusUtils';
 import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
-import { incrementReservedSeats, getOrCreateTripInstanceForSlot } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { incrementReservedSeats, getOrCreateTripInstanceForSlot, listTripInstancesByRouteAndDate } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
@@ -273,59 +272,80 @@ export default function ReservationClientPage() {
           return toYMD(d); 
         });
 
+        const depNorm = (search.get('departure') || '').trim();
+        const arrNorm = (search.get('arrival') || '').trim();
         const allTrips: Trip[] = [];
-        for (const a of agences) {
-          const [wSnap, rSnap] = await Promise.all([
-            getDocs(query(
-              collection(db, 'companies', cdoc.id, 'agences', a.id, 'weeklyTrips'), 
-              where('active', '==', true)
-            )),
-            getDocs(collection(db, 'companies', cdoc.id, 'agences', a.id, 'reservations'))
-          ]);
-          const weekly = wSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
-            .filter(t => normalize(t.depart || t.departure || '') === departureQ && 
-                         normalize(t.arrivee || t.arrival || '') === arrivalQ);
-          const reservations = rSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-          
-          next8.forEach(dateStr => {
-            const d = new Date(dateStr); 
+
+        for (const dateStr of next8) {
+          let instances = await listTripInstancesByRouteAndDate(cdoc.id, depNorm, arrNorm, dateStr);
+          if (instances.length === 0) {
+            const d = new Date(dateStr);
             const dayName = DAYS[d.getDay()];
-            weekly.forEach((t: any) => {
-              (t.horaires?.[dayName] || []).forEach((heure: string) => {
-                if (dateStr === toYMD(new Date())) {
-                  const now = new Date();
-                  const nowHHMM = parse(
-                    `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-                    'HH:mm',
-                    new Date()
-                  );
-                  if (parse(heure, 'HH:mm', new Date()) <= nowHHMM) return;
+            for (const agence of agences) {
+              const wSnap = await getDocs(query(
+                collection(db, 'companies', cdoc.id, 'agences', agence.id, 'weeklyTrips'),
+                where('active', '==', true)
+              ));
+              const weekly = wSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) }))
+                .filter((t: any) => normalize(t.depart || t.departure || '') === departureQ && normalize(t.arrivee || t.arrival || '') === arrivalQ);
+              for (const t of weekly) {
+                const horaires = (t.horaires?.[dayName] || []) as string[];
+                for (const heure of horaires) {
+                  if (dateStr === toYMD(new Date())) {
+                    const now = new Date();
+                    const nowHHMM = parse(
+                      `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+                      'HH:mm',
+                      new Date()
+                    );
+                    if (parse(heure, 'HH:mm', new Date()) <= nowHHMM) continue;
+                  }
+                  await getOrCreateTripInstanceForSlot(cdoc.id, {
+                    agencyId: agence.id,
+                    departureCity: depNorm,
+                    arrivalCity: arrNorm,
+                    date: dateStr,
+                    departureTime: heure,
+                    seatCapacity: t.places ?? 30,
+                    price: t.price ?? null,
+                    weeklyTripId: t.id,
+                  });
                 }
-                const trajetId = `${t.id}_${dateStr}_${heure}`;
-                const total = t.places || 30;
-                const reserved = reservations
-                  .filter(r => String((r as any).trajetId) === trajetId && 
-                          ['confirme', 'paye'].includes(canonicalStatut((r as any).statut)))
-                  .reduce((a, r: any) => a + (r.seatsGo || 0), 0);
-                const remaining = total - reserved;
-                if (remaining > 0) {
-                  allTrips.push({
-                    id: trajetId,
-                    date: dateStr, 
-                    time: heure,
-                    departure: t.depart || t.departure || '',
-                    arrival: t.arrivee || t.arrival || '',
-                    price: t.price,
-                    agencyId: a.id as any, 
-                    companyId: cdoc.id as any,
-                    places: total, 
-                    remainingSeats: remaining
-                  } as any);
-                }
-              });
-            });
-          });
+              }
+            }
+            instances = await listTripInstancesByRouteAndDate(cdoc.id, depNorm, arrNorm, dateStr);
+          }
+          const todayYMD = toYMD(new Date());
+          for (const ti of instances) {
+            if ((ti as any).status === 'cancelled') continue;
+            const capacity = (ti as any).seatCapacity ?? (ti as any).capacitySeats ?? 30;
+            const reserved = (ti as any).reservedSeats ?? 0;
+            const remaining = capacity - reserved;
+            if (remaining <= 0) continue;
+            if (dateStr === todayYMD) {
+              const now = new Date();
+              const nowHHMM = parse(
+                `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+                'HH:mm',
+                new Date()
+              );
+              if (parse((ti as any).departureTime, 'HH:mm', new Date()) <= nowHHMM) continue;
+            }
+            allTrips.push({
+              id: ti.id,
+              date: ti.date,
+              time: (ti as any).departureTime,
+              departure: (ti as any).departureCity ?? (ti as any).routeDeparture ?? '',
+              arrival: (ti as any).arrivalCity ?? (ti as any).routeArrival ?? '',
+              price: (ti as any).price ?? 0,
+              agencyId: ti.agencyId,
+              companyId: cdoc.id as any,
+              places: capacity,
+              remainingSeats: remaining,
+            } as any);
+          }
         }
+
         const sorted = allTrips.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
         const uniqDates = [...new Set(sorted.map(t => t.date))];
 
@@ -439,19 +459,7 @@ export default function ReservationClientPage() {
     
     try {
       const companyId = selectedTrip.companyId;
-      let tripInstanceId = selectedTrip.id as string;
-      if (typeof tripInstanceId === 'string' && tripInstanceId.includes('_')) {
-        const ti = await getOrCreateTripInstanceForSlot(companyId, {
-          agencyId: selectedTrip.agencyId,
-          departureCity: selectedTrip.departure ?? '',
-          arrivalCity: selectedTrip.arrival ?? '',
-          date: selectedTrip.date ?? '',
-          departureTime: selectedTrip.time ?? '',
-          seatCapacity: selectedTrip.places ?? 30,
-          price: selectedTrip.price ?? null,
-        });
-        tripInstanceId = ti.id;
-      }
+      const tripInstanceId = selectedTrip.id as string;
 
       const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', selectedTrip.agencyId));
       const ag = agSnap.exists() ? (agSnap.data() as any) : {};

@@ -17,7 +17,6 @@ import BibliothequeImagesPage from '@/modules/compagnie/pages/BibliothequeImages
 import CompanyPaymentSettingsPage from '@/modules/compagnie/pages/CompanyPaymentSettingsPage';
 import ParametresBanques from '@/modules/compagnie/components/parametres/ParametresBanques';
 import CompagnieAgencesPage from '@/modules/compagnie/pages/CompagnieAgencesPage';
-import CompanyRoutesPage from '@/modules/compagnie/pages/CompanyRoutesPage';
 import FinancialSettingsPage from '@/modules/compagnie/settings/FinancialSettingsPage';
 
 import { useAuth } from '@/contexts/AuthContext';
@@ -31,7 +30,6 @@ import { Company } from '@/types/companyTypes';
 
 type TabKey =
   | 'agences'
-  | 'routes-reseau'
   | 'plan'
   | 'vitrine'
   | 'personnel'
@@ -46,7 +44,6 @@ type TabKey =
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'agences', label: 'Agences' },
-  { key: 'routes-reseau', label: 'Routes réseau' },
   { key: 'plan', label: 'Plan & abonnement' },
   { key: 'vitrine', label: 'Vitrine publique' },
   { key: 'personnel', label: 'Personnel' },
@@ -115,9 +112,6 @@ const CompagnieParametresTabsPage: React.FC = () => {
     switch (selectedTab) {
       case 'agences':
         return <CompagnieAgencesPage />;
-
-      case 'routes-reseau':
-        return <CompanyRoutesPage />;
 
       case 'plan':
         return <ParametresPlan companyId={companyId} />;

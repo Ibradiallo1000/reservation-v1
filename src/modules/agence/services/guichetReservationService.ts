@@ -21,6 +21,10 @@ import { updateDailyStatsOnReservationCreated } from '../aggregates/dailyStats';
 import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
 import { addToExpectedBalance } from '@/modules/agence/cashControl/cashSessionService';
 import type { CashPaymentMethod } from '@/modules/agence/cashControl/cashSessionTypes';
+import { incrementReservedSeats, findTripInstanceBySlot } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { getStopByOrder, getEscaleDestinations } from '@/modules/compagnie/routes/routeStopsService';
+import { createCashTransaction } from '@/modules/compagnie/cash/cashService';
+import { LOCATION_TYPE } from '@/modules/compagnie/cash/cashTypes';
 
 export type CreateGuichetReservationParams = {
   companyId: string;
@@ -64,13 +68,70 @@ function isOfflineError(e: unknown): boolean {
 }
 
 /**
+ * Vérifie qu'une agence escale ne vend que depuis son escale vers les destinations autorisées.
+ * Lance une erreur si depart/arrivee ne respectent pas les stops (order, dropoffAllowed).
+ */
+async function validateEscaleAgentReservation(
+  companyId: string,
+  agencyId: string,
+  depart: string,
+  arrivee: string,
+  tripInstanceId?: string | null
+): Promise<void> {
+  const agencyRef = doc(db, 'companies', companyId, 'agences', agencyId);
+  const agencySnap = await getDoc(agencyRef);
+  if (!agencySnap.exists()) return;
+  const ad = agencySnap.data() as { type?: string; routeId?: string; stopOrder?: number };
+  const typ = (ad.type ?? 'principale').toLowerCase();
+  if (typ !== 'escale' || !ad.routeId || ad.stopOrder == null) return;
+
+  const routeId = ad.routeId;
+  const stopOrder = ad.stopOrder;
+
+  const originStop = await getStopByOrder(companyId, routeId, stopOrder);
+  if (!originStop) throw new Error('Configuration escale invalide : stop introuvable.');
+  const allowedOrigin = (originStop.city ?? '').trim().toLowerCase();
+  const departNorm = (depart ?? '').trim().toLowerCase();
+  if (departNorm !== allowedOrigin) {
+    throw new Error(`Vente depuis l'escale uniquement : le départ doit être ${originStop.city}.`);
+  }
+
+  const destinations = await getEscaleDestinations(companyId, routeId, stopOrder);
+  const allowedCities = destinations.map((s) => (s.city ?? '').trim().toLowerCase()).filter(Boolean);
+  const arriveeNorm = (arrivee ?? '').trim().toLowerCase();
+  if (!allowedCities.includes(arriveeNorm)) {
+    throw new Error('Destination non autorisée pour cette escale (villes suivantes avec descente autorisée).');
+  }
+
+  if (tripInstanceId) {
+    const tiRef = doc(db, 'companies', companyId, 'tripInstances', tripInstanceId);
+    const tiSnap = await getDoc(tiRef);
+    if (tiSnap.exists()) {
+      const ti = tiSnap.data() as { routeId?: string | null };
+      if (ti.routeId != null && ti.routeId !== routeId) {
+        throw new Error('Ce trajet ne correspond pas à l\'escale de cette agence.');
+      }
+    }
+  }
+}
+
+/**
  * Crée une réservation guichet avec tous les champs d'audit et de traçabilité.
  * En ligne : transaction (vérification session + écriture). Hors ligne : setDoc mis en file pour sync.
+ * Pour une agence type escale : valide que depart = son escale et arrivee dans les stops autorisés (order > stopOrder, dropoffAllowed).
  */
 export async function createGuichetReservation(
   params: CreateGuichetReservationParams,
   options?: { deviceFingerprint?: string | null }
 ): Promise<string> {
+  await validateEscaleAgentReservation(
+    params.companyId,
+    params.agencyId,
+    params.depart,
+    params.arrivee,
+    params.tripInstanceId ?? null
+  );
+
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const shiftRef = doc(db, `${base}/shifts/${params.sessionId}`);
   const colRef = collection(db, `${base}/reservations`);
@@ -118,6 +179,7 @@ export async function createGuichetReservation(
     createdAt: now,
     createdInSessionId: params.sessionId,
     createdByUid: params.userId,
+    paymentStatus: 'paid',
     ...(params.tripInstanceId != null && { tripInstanceId: params.tripInstanceId }),
   };
 
@@ -147,11 +209,53 @@ export async function createGuichetReservation(
     }
   }
 
+  const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
+  let tripInstanceId = params.tripInstanceId ?? null;
+  if (tripInstanceId == null && params.trajetId && String(params.trajetId).includes('_')) {
+    const parts = String(params.trajetId).split('_');
+    if (parts.length >= 3) {
+      const [wtId, date, timePart] = parts;
+      const time = timePart?.replace('-', ':') ?? '';
+      const ti = await findTripInstanceBySlot(params.companyId, params.agencyId, date, time, params.depart, params.arrivee);
+      if (ti) tripInstanceId = ti.id;
+    }
+  }
+  if (tripInstanceId && seats > 0) {
+    incrementReservedSeats(params.companyId, tripInstanceId, seats).catch((err) => {
+      console.error('[guichetReservationService] incrementReservedSeats failed:', err);
+    });
+  }
+
   // Cash control: add ticket amount to open GUICHET cash session for this agent (if any)
   const montant = Number(params.montant ?? 0);
   if (montant > 0) {
     const paymentMethod = params.paymentMethod ?? 'cash';
     addToExpectedBalance(params.companyId, params.agencyId, params.userId, 'GUICHET', montant, paymentMethod).catch(() => {});
+  }
+
+  // Caisse TELIYA: enregistrer une cashTransaction et lier à la réservation
+  if (montant > 0) {
+    try {
+      const agencySnap = await getDoc(doc(db, 'companies', params.companyId, 'agences', params.agencyId));
+      const agencyType = (agencySnap.data() as { type?: string })?.type?.toLowerCase();
+      const locationType = agencyType === 'escale' ? LOCATION_TYPE.ESCALE : LOCATION_TYPE.AGENCE;
+      const paymentMethodCash = params.paymentMethod === 'bank' ? 'transfer' : (params.paymentMethod ?? 'cash');
+      const cashTxId = await createCashTransaction({
+        companyId: params.companyId,
+        reservationId: newId,
+        tripInstanceId: tripInstanceId ?? undefined,
+        amount: montant,
+        currency: 'XOF',
+        paymentMethod: paymentMethodCash,
+        locationType,
+        locationId: params.agencyId,
+        createdBy: params.userId,
+        date: params.date ? params.date.slice(0, 10) : new Date().toISOString().split('T')[0],
+      });
+      await updateDoc(newRef, { cashTransactionId: cashTxId });
+    } catch (err) {
+      console.error('[guichetReservationService] createCashTransaction failed:', err);
+    }
   }
 
   // CRM: sync customer (find by phone, create or update stats) — non-blocking, no breaking change

@@ -23,6 +23,7 @@ import { Button } from "@/shared/ui/button";
 import { canCompanyPerformAction } from "@/shared/subscription/restrictions";
 import type { SubscriptionStatus } from "@/shared/subscription/types";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
+import { listRoutes } from "@/modules/compagnie/routes/routesService";
 
 // Leaflet assets
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -41,7 +42,12 @@ interface Agence {
   ville: string;
   pays: string;
   quartier?: string;
+  /** principale | escale. Escale = point d'escale (agent escale_agent). */
   type?: string;
+  /** Route liée (pour type=escale). */
+  routeId?: string | null;
+  /** Ordre de l'escale sur la route (pour type=escale). */
+  stopOrder?: number | null;
   statut: Statut;
   emailGerant: string;
   nomGerant: string;
@@ -268,13 +274,16 @@ const CompagnieAgencesPage: React.FC = () => {
     ville: "",
     pays: "",
     quartier: "",
-    type: "",
+    type: "principale",
+    routeId: "",
+    stopOrder: "",
     emailGerant: "",
     nomGerant: "",
     telephone: "",
     latitude: "",
     longitude: "",
   });
+  const [routesList, setRoutesList] = useState<{ id: string; origin?: string; destination?: string; departureCity?: string; arrivalCity?: string }[]>([]);
 
   const [emailError, setEmailError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -324,7 +333,6 @@ const CompagnieAgencesPage: React.FC = () => {
   };
 
   useEffect(() => {
-    // fetchAgences when companyId changes — but ensure dbReady
     if (!companyId) {
       setAgences([]);
       return;
@@ -343,6 +351,13 @@ const CompagnieAgencesPage: React.FC = () => {
       mounted = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    listRoutes(companyId, { activeOnly: true })
+      .then((list) => setRoutesList(list))
+      .catch(() => setRoutesList([]));
   }, [companyId]);
 
   // Pagination calculations
@@ -392,7 +407,9 @@ const CompagnieAgencesPage: React.FC = () => {
       ville: "",
       pays: "",
       quartier: "",
-      type: "",
+      type: "principale",
+      routeId: "",
+      stopOrder: "",
       emailGerant: "",
       nomGerant: "",
       telephone: "",
@@ -454,7 +471,9 @@ const CompagnieAgencesPage: React.FC = () => {
         pays: formData.pays.trim(),
         paysNorm: norm(formData.pays),
         quartier: formData.quartier || "",
-        type: formData.type || "",
+        type: formData.type || "principale",
+        routeId: formData.type === "escale" && formData.routeId ? formData.routeId : null,
+        stopOrder: formData.type === "escale" && formData.stopOrder ? parseInt(formData.stopOrder, 10) : null,
         statut: "active",
         emailGerant: normalizeEmail(formData.emailGerant),
         nomGerant: formatNom(formData.nomGerant || ""),
@@ -515,7 +534,9 @@ const CompagnieAgencesPage: React.FC = () => {
           paysNorm: norm(formData.pays),
           slug: slugify(formData.nomAgence),
           quartier: formData.quartier || "",
-          type: formData.type || "",
+          type: formData.type || "principale",
+          routeId: formData.type === "escale" && formData.routeId ? formData.routeId : null,
+          stopOrder: formData.type === "escale" && formData.stopOrder ? parseInt(formData.stopOrder, 10) : null,
           nomGerant: formData.nomGerant,
           emailGerant: normalizeEmail(formData.emailGerant),
           telephone: onlyDigits(formData.telephone),
@@ -543,7 +564,9 @@ const CompagnieAgencesPage: React.FC = () => {
       ville: agence.ville,
       pays: agence.pays,
       quartier: agence.quartier || "",
-      type: agence.type || "",
+      type: agence.type || "principale",
+      routeId: agence.routeId ?? "",
+      stopOrder: agence.stopOrder != null ? String(agence.stopOrder) : "",
       emailGerant: agence.emailGerant,
       nomGerant: formatNom(agence.nomGerant || ""),
       telephone: onlyDigits(agence.telephone || ""),
@@ -697,14 +720,49 @@ const CompagnieAgencesPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium mb-1">Type</label>
-                  <input
+                  <label className="block text-sm font-medium mb-1">Type d'agence</label>
+                  <select
                     name="type"
                     value={formData.type}
-                    onChange={handleInputChange}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, type: e.target.value, routeId: e.target.value !== "escale" ? "" : prev.routeId, stopOrder: e.target.value !== "escale" ? "" : prev.stopOrder }))}
                     className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  >
+                    <option value="principale">Principale</option>
+                    <option value="escale">Escale</option>
+                  </select>
                 </div>
+                {formData.type === "escale" && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Route (escale)</label>
+                      <select
+                        name="routeId"
+                        value={formData.routeId}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, routeId: e.target.value }))}
+                        className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">— Choisir une route —</option>
+                        {routesList.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.origin ?? r.departureCity} → {r.destination ?? r.arrivalCity}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Ordre de l'escale sur la route</label>
+                      <input
+                        name="stopOrder"
+                        type="number"
+                        min={1}
+                        value={formData.stopOrder}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, stopOrder: e.target.value }))}
+                        className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="1 = origine, 2+ = escales"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="space-y-4">

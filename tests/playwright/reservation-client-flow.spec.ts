@@ -1,4 +1,4 @@
-import { test, expect as pwExpect } from "@playwright/test";
+import { test, expect as pwExpect, type Page } from "@playwright/test";
 
 /**
  * E2E: Flux réservation client (portail public)
@@ -6,16 +6,23 @@ import { test, expect as pwExpect } from "@playwright/test";
  * Routes: /:slug/reserver, /:slug/payment/:id, /:slug/upload-preuve/:id, /:slug/mon-billet, /:slug/reservation/:id
  * Rôle: Client (anonyme)
  *
- * Pour un flux complet avec données réelles: Firebase avec compagnie (slug demo), trajets et agences.
+ * Pour un flux complet avec données réelles: Firebase avec compagnie (slug mali-trans), trajets et agences.
  * Sans données: les tests vérifient la structure des pages et les redirections.
  */
-const SLUG = "demo";
+const SLUG = "mali-trans";
+
+// domcontentloaded + short delay: app uses Firebase, networkidle often never fires
+async function waitForPageReady(page: Page) {
+  await page.waitForLoadState("domcontentloaded");
+  await page.waitForLoadState("load").catch(() => {});
+  await new Promise((r) => setTimeout(r, 2000)); // allow React + Firebase to render
+}
 
 test.describe("Reservation client flow", () => {
   // --- 1. Ouverture du portail public ---
   test("1. ouverture du portail public", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     pwExpect(page).toHaveURL(/\//);
     await pwExpect(page).toHaveTitle(/.+/);
@@ -28,7 +35,7 @@ test.describe("Reservation client flow", () => {
 
   test("1b. page reserver accessible (public)", async ({ page }) => {
     await page.goto(`/${SLUG}/reserver`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     pwExpect(page).toHaveURL(new RegExp(`/${SLUG}/reserver`));
 
@@ -52,7 +59,7 @@ test.describe("Reservation client flow", () => {
   // --- 2. Recherche trajet ---
   test("2. recherche trajet (page reserver avec critères)", async ({ page }) => {
     await page.goto(`/${SLUG}/reserver?departure=Bamako&arrival=Sikasso`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     pwExpect(page).toHaveURL(new RegExp(`/${SLUG}/reserver`));
     pwExpect(page).toHaveURL(/departure=|arrival=/);
@@ -70,7 +77,7 @@ test.describe("Reservation client flow", () => {
   // --- 3. Création réservation ---
   test("3. création réservation (formulaire + passage au paiement)", async ({ page }) => {
     await page.goto(`/${SLUG}/reserver?departure=Bamako&arrival=Sikasso`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     const nameInput = page.getByPlaceholder(/Nom complet/i);
     const phoneInput = page.getByPlaceholder(/Téléphone/i);
@@ -88,7 +95,7 @@ test.describe("Reservation client flow", () => {
         .first();
       if (await dateButton.isVisible().catch(() => false)) {
         await dateButton.click();
-        await page.waitForLoadState("networkidle").catch(() => {});
+        await new Promise((r) => setTimeout(r, 1500));
       }
 
       const timeButton = page.getByRole("button", { name: /\d{1,2}:\d{2}/ }).first();
@@ -100,7 +107,7 @@ test.describe("Reservation client flow", () => {
       await pwExpect(submitButton).toBeVisible({ timeout: 5000 });
       await submitButton.click();
 
-      await page.waitForLoadState("networkidle").catch(() => {});
+      await new Promise((r) => setTimeout(r, 3000));
 
       const url = page.url();
       const onPayment = url.includes("/payment/");
@@ -117,11 +124,11 @@ test.describe("Reservation client flow", () => {
   });
 
   // --- 3b. Page paiement (après création réservation) ---
-  // Avec Firebase (compagnie slug=demo): affiche moyens de paiement ou "Réservation introuvable" ou 404.
+  // Avec Firebase (compagnie slug=mali-trans): affiche moyens de paiement ou "Réservation introuvable" ou 404.
   // Sans backend: RouteResolver peut rester en chargement — on vérifie au moins que l’URL est correcte.
   test("3b. page paiement — URL correcte et contenu ou chargement", async ({ page }) => {
     await page.goto(`/${SLUG}/payment/fake-reservation-id`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     pwExpect(page).toHaveURL(new RegExp(`/${SLUG}/payment/|/payment/`));
 
@@ -139,11 +146,11 @@ test.describe("Reservation client flow", () => {
   });
 
   // --- 4. Upload preuve de paiement ---
-  // Avec Firebase (compagnie slug=demo): formulaire preuve ou erreur ou 404.
+  // Avec Firebase (compagnie slug=mali-trans): formulaire preuve ou erreur ou 404.
   // Sans backend: RouteResolver peut rester en chargement — on vérifie au moins que l’URL est correcte.
   test("4. page upload preuve accessible", async ({ page }) => {
     await page.goto(`/${SLUG}/upload-preuve/fake-reservation-id`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     pwExpect(page).toHaveURL(new RegExp(`/${SLUG}/upload-preuve/|/upload-preuve/`));
 
@@ -166,7 +173,7 @@ test.describe("Reservation client flow", () => {
 
   test("4b. upload preuve — champs et bouton visibles quand données chargées", async ({ page }) => {
     await page.goto(`/${SLUG}/upload-preuve/fake-id`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     // Si la page affiche le formulaire (ex: state récupéré), on doit voir référence ou bouton
     const refOrPlaceholder = page.getByPlaceholder(/Paiement|Réf|MTN|Orange/i);
@@ -181,7 +188,7 @@ test.describe("Reservation client flow", () => {
   // --- 5. Vérification page billet ---
   test("5. page billet — token invalide affiche réservation introuvable", async ({ page }) => {
     await page.goto(`/${SLUG}/mon-billet?r=invalid-token`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     pwExpect(page).toHaveURL(new RegExp(`/${SLUG}/mon-billet`));
 
@@ -196,7 +203,7 @@ test.describe("Reservation client flow", () => {
 
   test("5b. page billet — id réservation invalide", async ({ page }) => {
     await page.goto(`/${SLUG}/reservation/fake-reservation-id`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     pwExpect(page).toHaveURL(new RegExp(`/${SLUG}/reservation/`));
 
@@ -212,7 +219,7 @@ test.describe("Reservation client flow", () => {
     // Sans token/id valide, on ne peut pas garantir le contenu "Votre billet".
     // On vérifie que la route reservation/:id ou mon-billet répond et affiche soit le billet soit l'erreur.
     await page.goto(`/${SLUG}/reservation/fake-id`);
-    await page.waitForLoadState("networkidle").catch(() => {});
+    await waitForPageReady(page);
 
     const cardTitle = page.getByText(/Réservation introuvable|Votre billet|Détails de réservation/i);
     await pwExpect(cardTitle.first()).toBeVisible({ timeout: 15000 });

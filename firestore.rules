@@ -155,10 +155,15 @@ service cloud.firestore {
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
-      /* Routes réseau (company transport routes). Read: same company or platform admin; Write: CEO (admin_compagnie) or platform admin. */
+      /* Routes réseau (company transport routes). Read: same company or platform admin. Write: responsable_logistique (same company), CEO (admin_compagnie) or platform admin. */
       match /routes/{routeId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-        allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme');
+        allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId));
+        /* Escales (stops) d'une route : mêmes droits que la route. */
+        match /stops/{stopId} {
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId));
+        }
       }
 
       /* Company banks (used by agency accounting transfer flow and CEO settings). */

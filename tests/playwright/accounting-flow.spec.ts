@@ -5,11 +5,11 @@ import { test, expect as pwExpect } from "@playwright/test";
  * Routes: /compagnie/:companyId/accounting (Vue Globale, Trésorerie, etc.)
  * Roles: company_accountant, financial_director, admin_platforme
  *
- * Uses a placeholder companyId "demo" for URL; without auth redirects to login.
+ * Uses test company "mali-trans" (slug/id) for URL; without auth redirects to login.
  * Optional env for a real run: E2E_ACCOUNTING_EMAIL, E2E_ACCOUNTING_PASSWORD
  */
 test.describe("Accounting flow", () => {
-  const accountingCompanyId = "demo";
+  const accountingCompanyId = "mali-trans";
 
   test("open login page", async ({ page }) => {
     await page.goto("/login");

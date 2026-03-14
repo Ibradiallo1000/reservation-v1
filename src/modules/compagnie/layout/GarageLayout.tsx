@@ -2,7 +2,7 @@
 // Layout dédié Chef Garage : uniquement Flotte + Configuration (pas d’accès CEO).
 import React from "react";
 import { useParams } from "react-router-dom";
-import { LayoutDashboard, List, Wrench, MapPin, AlertTriangle, Moon, Sun, Package, ShieldAlert, Users } from "lucide-react";
+import { LayoutDashboard, List, Wrench, MapPin, AlertTriangle, Moon, Sun, Package, ShieldAlert, Users, Route } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -99,6 +99,7 @@ const GarageLayout: React.FC = () => {
 
   const sections: NavSection[] = [
     { label: "Tableau de bord", icon: LayoutDashboard, path: `${basePath}/dashboard`, end: true },
+    { label: "Routes réseau", icon: Route, path: `${basePath}/routes`, end: true },
     { label: "Logistique", icon: Package, path: `${basePath}/logistics`, end: true },
     { label: "Équipage", icon: Users, path: `${basePath}/logistics/crew`, end: true },
     { label: "Liste flotte", icon: List, path: `${basePath}/fleet`, end: true },

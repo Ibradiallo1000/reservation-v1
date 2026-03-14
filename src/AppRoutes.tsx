@@ -82,6 +82,8 @@ const TripCostsPage = lazy(() => import("./modules/compagnie/pages/TripCostsPage
 const FleetFinancePage = lazy(() => import("./modules/compagnie/pages/FleetFinancePage"));
 const LogisticsDashboardPage = lazy(() => import("./modules/compagnie/pages/LogisticsDashboardPage"));
 const LogisticsCrewPage = lazy(() => import("./modules/compagnie/pages/LogisticsCrewPage"));
+const CompanyRoutesPage = lazy(() => import("./modules/compagnie/pages/CompanyRoutesPage"));
+const CompanyCashPage = lazy(() => import("./modules/compagnie/cash/CompanyCashPage"));
 const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 const FinancialSettingsPage = lazy(() => import("./modules/compagnie/settings/FinancialSettingsPage"));
 const NotificationsPage = lazy(() => import("./modules/compagnie/notifications/NotificationsPage"));
@@ -106,6 +108,7 @@ const AgencyTreasuryNewPayablePage = lazy(() => import("./modules/agence/treasur
 
 // ── Agency standalone (non-manager roles) ──
 const AgenceGuichetPage = lazy(() => import("./modules/agence/guichet/pages/AgenceGuichetPage"));
+const EscaleDashboardPage = lazy(() => import("./modules/agence/escale/pages/EscaleDashboardPage"));
 const ReceiptGuichetPage = lazy(() => import("./modules/agence/guichet/pages/ReceiptGuichetPage"));
 const AgenceComptabilitePage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceComptabilitePage"));
 const CashSessionsPage = lazy(() => import("./modules/agence/cashControl/CashSessionsPage"));
@@ -141,7 +144,10 @@ const landingTargetForRoles = (roles: unknown): string => {
     return "/agence/comptabilite";
   }
 
-  // AGENCE
+  // AGENCE — escale_agent → tableau de bord escale
+  if (hasAny(rolesArray, routePermissions.escaleDashboard) && rolesArray.includes("escale_agent")) {
+    return "/agence/escale";
+  }
   if (hasAny(rolesArray, routePermissions.guichet)) {
     return "/agence/guichet";
   }
@@ -176,6 +182,7 @@ const ROLE_LANDING: Record<string, string> = {
   agency_fleet_controller: "/agence/fleet",
   guichetier: "/agence/guichet",
   agentCourrier: "/agence/courrier",
+  escale_agent: "/agence/escale",
 };
 
 function RoleLanding() {
@@ -343,6 +350,7 @@ const AppRoutes = () => {
           <Route path="ceo-expenses" element={<CEOExpensesPage />} />
           <Route path="expenses-approvals" element={<Navigate to="ceo-expenses" replace />} />
           <Route path="revenus-liquidites" element={<RevenusLiquiditesPage />} />
+          <Route path="caisse" element={<CompanyCashPage />} />
           <Route path="finances" element={<RedirectFinancesToRevenus />} />
           <Route path="treasury" element={<RedirectTreasuryToRevenus />} />
           <Route path="operations-reseau" element={<OperationsFlotteLandingPage />} />
@@ -395,6 +403,7 @@ const AppRoutes = () => {
             </PrivateRoute>
           } />
           <Route path="fleet" element={<GarageDashboardPage />} />
+          <Route path="routes" element={<CompanyRoutesPage />} />
           <Route path="maintenance" element={<GarageDashboardPage view="maintenance" />} />
           <Route path="transit" element={<GarageDashboardPage view="transit" />} />
           <Route path="incidents" element={<GarageDashboardPage view="incidents" />} />
@@ -506,6 +515,10 @@ const AppRoutes = () => {
         </Route>
 
         {/* ========= PAGES HORS SHELL AGENCE ========= */}
+        <Route
+          path="/agence/escale"
+          element={<PrivateRoute allowedRoles={routePermissions.escaleDashboard}><EscaleDashboardPage /></PrivateRoute>}
+        />
         <Route
           path="/agence/guichet"
           element={<ProtectedRoute allowedRoles={routePermissions.guichet} withCurrency><AgenceGuichetPage /></ProtectedRoute>}

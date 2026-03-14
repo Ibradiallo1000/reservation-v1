@@ -16,6 +16,7 @@ import {
   serverTimestamp,
   increment,
   Timestamp,
+  runTransaction,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import {
@@ -55,12 +56,21 @@ export interface CreateTripInstanceParams {
   createdBy?: string;
 }
 
-/** Create a single trip instance. Returns the new document id. */
+/** Build deterministic trip instance id from weeklyTripId + date + time (avoids duplicates on lazy creation). */
+export function buildTripInstanceId(weeklyTripId: string, date: string, departureTime: string): string {
+  const safeTime = (departureTime || "").replace(":", "-");
+  return `${weeklyTripId}_${date}_${safeTime}`;
+}
+
+/** Create a single trip instance. Returns the new document id. If optionalId is provided, uses it (idempotent create). */
 export async function createTripInstance(
   companyId: string,
-  params: CreateTripInstanceParams
+  params: CreateTripInstanceParams,
+  optionalId?: string
 ): Promise<string> {
-  const ref = doc(tripInstancesRef(companyId));
+  const ref = optionalId
+    ? doc(tripInstancesRef(companyId), optionalId)
+    : doc(tripInstancesRef(companyId));
   const now = serverTimestamp();
   const dep = (params.departureCity || "").trim();
   const arr = (params.arrivalCity || "").trim();
@@ -100,7 +110,14 @@ export async function createTripInstance(
     routeId: params.routeId ?? null,
     price: params.price ?? null,
   };
-  await setDoc(ref, data);
+  if (optionalId) {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) tx.set(ref, data);
+    });
+  } else {
+    await setDoc(ref, data);
+  }
   return ref.id;
 }
 
@@ -131,11 +148,23 @@ export async function findTripInstanceBySlot(
   return { id: d.id, ...d.data() } as TripInstanceDocWithId;
 }
 
-/** Get or create a trip instance for a slot (lazy creation). */
+/** Get or create a trip instance for a slot (lazy creation). Uses deterministic id when weeklyTripId is set to avoid duplicates. */
 export async function getOrCreateTripInstanceForSlot(
   companyId: string,
   params: CreateTripInstanceParams
 ): Promise<TripInstanceDocWithId> {
+  const deterministicId =
+    params.weeklyTripId && params.date && params.departureTime
+      ? buildTripInstanceId(params.weeklyTripId, params.date, params.departureTime)
+      : null;
+  if (deterministicId) {
+    const ref = tripInstanceRef(companyId, deterministicId);
+    const snap = await getDoc(ref);
+    if (snap.exists()) return { id: snap.id, ...snap.data() } as TripInstanceDocWithId;
+    await createTripInstance(companyId, params, deterministicId);
+    const after = await getDoc(ref);
+    return { id: after.id, ...after.data() } as TripInstanceDocWithId;
+  }
   const existing = await findTripInstanceBySlot(
     companyId,
     params.agencyId,
@@ -174,6 +203,26 @@ export async function listTripInstancesByRouteAndDate(
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
 }
 
+/** List trip instances by routeId and date (for escale dashboard). Requires composite index: (routeId, date, departureTime). */
+export async function listTripInstancesByRouteIdAndDate(
+  companyId: string,
+  routeId: string,
+  date: string,
+  options?: { limitCount?: number }
+): Promise<TripInstanceDocWithId[]> {
+  if (!routeId || !date) return [];
+  const limitCount = options?.limitCount ?? 100;
+  const q = query(
+    tripInstancesRef(companyId),
+    where("routeId", "==", routeId),
+    where("date", "==", date),
+    orderBy("departureTime", "asc"),
+    limit(limitCount)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
+}
+
 /** Update trip instance status. */
 export async function updateTripInstanceStatus(
   companyId: string,
@@ -186,31 +235,50 @@ export async function updateTripInstanceStatus(
   });
 }
 
-/** Increment reservedSeats and passengerCount (e.g. when a reservation is created). */
+/** Increment reservedSeats and passengerCount (e.g. when a reservation is created). Uses transaction to avoid overbooking. */
 export async function incrementReservedSeats(
   companyId: string,
   tripInstanceId: string,
   seats: number
 ): Promise<void> {
   if (seats <= 0) return;
-  await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
-    reservedSeats: increment(seats),
-    passengerCount: increment(seats),
-    updatedAt: serverTimestamp(),
+  const ref = tripInstanceRef(companyId, tripInstanceId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error("Trip instance not found");
+    const d = snap.data() as { seatCapacity?: number; capacitySeats?: number; reservedSeats?: number };
+    const capacity = d.seatCapacity ?? d.capacitySeats ?? 0;
+    const current = d.reservedSeats ?? 0;
+    if (capacity > 0 && current + seats > capacity)
+      throw new Error("Plus assez de places disponibles sur ce trajet");
+    tx.update(ref, {
+      reservedSeats: increment(seats),
+      passengerCount: increment(seats),
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
-/** Decrement reservedSeats and passengerCount (e.g. when a reservation is cancelled). */
+/** Decrement reservedSeats and passengerCount (e.g. when a reservation is cancelled). Uses transaction to keep reservedSeats >= 0. */
 export async function decrementReservedSeats(
   companyId: string,
   tripInstanceId: string,
   seats: number
 ): Promise<void> {
   if (seats <= 0) return;
-  await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
-    reservedSeats: increment(-seats),
-    passengerCount: increment(-seats),
-    updatedAt: serverTimestamp(),
+  const ref = tripInstanceRef(companyId, tripInstanceId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) return;
+    const d = snap.data() as { reservedSeats?: number };
+    const current = d.reservedSeats ?? 0;
+    const delta = Math.min(seats, current);
+    if (delta <= 0) return;
+    tx.update(ref, {
+      reservedSeats: increment(-delta),
+      passengerCount: increment(-delta),
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 

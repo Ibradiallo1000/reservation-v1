@@ -20,6 +20,7 @@ export type Role =
   | 'guichetier'
   | 'chefEmbarquement'       // Chef embarquement (ex agency_boarding_officer)
   | 'agency_fleet_controller'
+  | 'escale_agent'           // Agent d'escale : voit tripInstances de son escale, vend billets, scan QR, voit ses ventes
 
   /** ============ SENTINEL (unknown role → redirect to login) ============ */
   | 'unauthenticated'
@@ -147,6 +148,13 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
 
   agency_fleet_controller: [
     'fleet',
+  ],
+
+  escale_agent: [
+    'dashboard',
+    'guichet',
+    'reservations',
+    'boarding',
   ],
 
   /** ============ SENTINEL ============ */

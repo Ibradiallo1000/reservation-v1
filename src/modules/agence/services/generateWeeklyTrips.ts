@@ -3,15 +3,17 @@ import { db } from '@/firebaseConfig';
 
 export interface CreateWeeklyTripOptions {
   scheduleId?: string | null;
-  /** When provided, stored on trip and departureCity/arrivalCity used for display. */
+  /** When provided, the weekly trip is linked to a route (origin/destination from route). departure/arrival are then derived from the route. */
   routeId?: string | null;
+  /** Origin (or use route.origin when routeId is set). */
   departureCity?: string;
+  /** Destination (or use route.destination when routeId is set). */
   arrivalCity?: string;
   /** Seat count (stored as seats and places for backward compat). */
   seats?: number;
 }
 
-/** Create a weekly trip document. Supports route-based (options.routeId + departureCity/arrivalCity) and legacy (departure/arrival only). */
+/** Create a weekly trip document. When routeId is set, origin/destination come from the route; departure/arrival are stored for display. Legacy: departure/arrival only. */
 export const generateWeeklyTrips = async (
   companyId: string,
   departure: string,

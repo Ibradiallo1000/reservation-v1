@@ -13,6 +13,7 @@ import {
   FileCheck,
   Users,
   ShieldCheck,
+  Wallet,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -196,6 +197,7 @@ const CompagnieLayout: React.FC = () => {
   const sections: NavSection[] = [
     { label: "Poste de Pilotage", icon: Gauge, path: `${basePath}/command-center` },
     { label: "Revenus & Liquidités", icon: DollarSign, path: `${basePath}/revenus-liquidites` },
+    { label: "Finance — Caisse", icon: Wallet, path: `${basePath}/caisse` },
     { label: "Performance Réseau", icon: TrendingUp, path: `${basePath}/dashboard` },
     { label: "Opérations Réseau", icon: BarChart2, path: `${basePath}/operations-reseau`, badge: onlineProofsCount },
     { label: "Exploitation Flotte", icon: Truck, path: `${basePath}/fleet` },

@@ -32,7 +32,7 @@ test.describe("Reservation flow", () => {
     await expect(page).toHaveURL(/\/resultats/);
 
     // 3. Navigate to a company reservation page
-    const slug = "demo";
+    const slug = "mali-trans";
     await page.goto(`/${slug}/reserver?departure=Bamako&arrival=Sikasso`);
     await expect(page).toHaveURL(new RegExp(`/${slug}/reserver`));
     await page.waitForLoadState("networkidle").catch(() => {});

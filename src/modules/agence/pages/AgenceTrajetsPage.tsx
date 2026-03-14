@@ -304,7 +304,7 @@ const AgenceTrajetsPage: React.FC = () => {
           )}
           {!modifierId && allowedRoutes.length === 0 && agencyCity && (
             <p className="mb-3 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
-              Aucune route au départ de <strong>{agencyCity}</strong>. Le siège doit ajouter des routes (Paramètres → Routes réseau) pour que vous puissiez créer des trajets.
+              Aucune route au départ de <strong>{agencyCity}</strong>. Le responsable logistique doit ajouter des routes (Garage → Routes réseau) pour que vous puissiez créer des trajets.
             </p>
           )}
           {!modifierId && allowedRoutes.length > 0 && (

@@ -4,6 +4,8 @@ import {
 import { db } from "@/firebaseConfig";
 import { canonicalStatut, isValidTransition } from "@/utils/reservationStatusUtils";
 import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
+import { decrementReservedSeats } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { createCashRefund, markCashTransactionRefunded } from "@/modules/compagnie/cash/cashService";
 
 /** Champs éditables par le guichet */
 export type ReservationEditable = Partial<{
@@ -44,7 +46,7 @@ async function writeAuditLog(basePath: string, payload: any) {
   });
 }
 
-/** Annuler un billet (statut → "annule", canonique). Phase B : transition + auditLog obligatoire. */
+/** Annuler un billet (statut → "annule", canonique). Phase B : transition + auditLog obligatoire. Libère les places sur le tripInstance si présent. */
 export async function cancelReservation(
   companyId: string,
   agencyId: string,
@@ -53,6 +55,10 @@ export async function cancelReservation(
 ) {
   const base = `companies/${companyId}/agences/${agencyId}`;
   const ref = doc(db, `${base}/reservations/${reservationId}`);
+  let tripInstanceId: string | null = null;
+  let seatsToRelease = 0;
+  let refundAmount = 0;
+  let cashTransactionIdToRefund: string | null = null;
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
@@ -65,6 +71,11 @@ export async function cancelReservation(
     if (!isValidTransition(oldStatut, "annule")) {
       throw new Error(`Transition non autorisée vers annule depuis: ${oldStatut}`);
     }
+
+    tripInstanceId = data.tripInstanceId ?? null;
+    seatsToRelease = (data.seatsGo ?? 0) + (data.seatsReturn ?? 0);
+    refundAmount = Number(data.montant ?? 0) || 0;
+    cashTransactionIdToRefund = data.cashTransactionId ?? null;
 
     const auditEntry = buildStatutTransitionPayload(oldStatut, "annule", {
       userId: requestedByUid,
@@ -93,6 +104,29 @@ export async function cancelReservation(
       by: { uid: requestedByUid, name: requestedByName || null },
     });
   });
+
+  if (tripInstanceId && seatsToRelease > 0) {
+    decrementReservedSeats(companyId, tripInstanceId, seatsToRelease).catch((err) => {
+      console.error("[cancelReservation] decrementReservedSeats failed:", err);
+    });
+  }
+
+  if (refundAmount > 0) {
+    createCashRefund({
+      companyId,
+      reservationId,
+      amount: refundAmount,
+      locationType: "agence",
+      locationId: agencyId,
+      createdBy: requestedByUid,
+      reason: reason ?? "Annulation",
+    }).catch((err) => console.error("[cancelReservation] createCashRefund failed:", err));
+    if (cashTransactionIdToRefund) {
+      markCashTransactionRefunded(companyId, cashTransactionIdToRefund).catch((err) =>
+        console.error("[cancelReservation] markCashTransactionRefunded failed:", err)
+      );
+    }
+  }
 }
 
 /** Modifier un billet (patch partiel et audité). */

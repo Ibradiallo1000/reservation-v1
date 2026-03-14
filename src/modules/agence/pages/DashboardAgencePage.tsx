@@ -18,6 +18,8 @@ import {
   TopTrajetsCard,
   NextDepartureCard
 } from '@/modules/agence/dashboard/components';
+import { CashSummaryCard } from '@/modules/compagnie/cash/CashSummaryCard';
+import { routePermissions } from '@/constants/routePermissions';
 import {
   StandardLayoutWrapper,
   PageHeader,
@@ -61,6 +63,12 @@ const DashboardAgencePage: React.FC = () => {
   const money = useFormatCurrency();
   const { id: agencyIdFromRoute } = useParams();
   const isOnline = useOnlineStatus();
+  const agencyId = agencyIdFromRoute || user?.agencyId;
+  const canCloseCash = useMemo(() => {
+    const role = (user as { role?: string })?.role ?? '';
+    const roles = Array.isArray((user as { roles?: string[] })?.roles) ? (user as { roles?: string[] }).roles! : [role];
+    return [...routePermissions.guichet, ...routePermissions.escaleDashboard].some((r) => roles.includes(r));
+  }, [user]);
 
   // Filtres de période
   const now = new Date();
@@ -318,6 +326,19 @@ const DashboardAgencePage: React.FC = () => {
             )}
           </div>
         </SectionCard>
+
+        {agencyId && user?.companyId && (
+          <div className="mb-6">
+            <CashSummaryCard
+              companyId={user.companyId}
+              locationId={agencyId}
+              locationType="agence"
+              canClose={canCloseCash}
+              createdBy={user?.uid ?? ''}
+              formatCurrency={money}
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <UIMetricCard
