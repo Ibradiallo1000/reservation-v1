@@ -26,6 +26,7 @@ import type { ReservationStatus } from '@/types/reservation';
 import { showTicketDirect as showTicketDirectUtil, canViewReceiptPage } from '@/utils/reservationStatusUtils';
 import { getDisplayPhone } from '@/utils/phoneUtils';
 import { useTranslation } from 'react-i18next';
+import { getPublicPathBase } from '../utils/subdomain';
 
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
@@ -432,7 +433,8 @@ const ReservationDetailsPage: React.FC = () => {
     if (!isTicketAvailable || !reservation) return;
     const currentPath = window.location.pathname;
     const slugToUse = reservation.companySlug || slug;
-    const targetPath = `/${slugToUse}/receipt/${reservation.id}`;
+    const pathBase = getPublicPathBase(slugToUse);
+    const targetPath = pathBase ? `/${pathBase}/receipt/${reservation.id}` : `/receipt/${reservation.id}`;
     if (currentPath !== targetPath) {
       navigate(targetPath, { replace: true });
     }
@@ -469,7 +471,8 @@ const ReservationDetailsPage: React.FC = () => {
     // Nettoyage complet avant nouvelle réservation
     clearPending();
     const slugToUse = reservation?.companySlug || slug;
-    navigate(`/${slugToUse}`, { replace: true });
+    const pathBase = getPublicPathBase(slugToUse);
+    navigate(pathBase ? `/${pathBase}` : '/', { replace: true });
   };
 
   // ===== RENDER =====
@@ -859,7 +862,8 @@ const ReservationDetailsPage: React.FC = () => {
               <button
                 onClick={() => {
                   const slugToUse = reservation.companySlug || slug;
-                  navigate(`/${slugToUse}/receipt/${reservation.id}`, { replace: false });
+                  const pathBase = getPublicPathBase(slugToUse);
+                  navigate(pathBase ? `/${pathBase}/receipt/${reservation.id}` : `/receipt/${reservation.id}`, { replace: false });
                 }}
                 className={`w-full py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 shadow-sm transition-all ${
                   canViewReceipt ? 'hover:opacity-95' : 'opacity-70 cursor-not-allowed'

@@ -7,6 +7,7 @@ import { SectionCard } from '@/ui';
 import { XCircle, Loader2, Info, Phone } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import ReservationStepHeader from '../components/ReservationStepHeader';
+import { getPublicPathBase, getSlugFromSubdomain } from '../utils/subdomain';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { hexToRgba, safeTextColor } from '@/utils/color';
 import ErrorScreen from '@/shared/ui/ErrorScreen';
@@ -291,7 +292,8 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       sessionStorage.removeItem('lastUssdCode');
       try { localStorage.removeItem('pendingReservation'); } catch {}
       log.info('Proof submitted → redirect to receipt');
-      navigate(`/${reservationDraft.companySlug || slug}/receipt/${reservationDraft.id}`, { replace: true });
+      const pathBase = getPublicPathBase(reservationDraft.companySlug || getSlugFromSubdomain() || slug || '');
+      navigate(pathBase ? `/${pathBase}/receipt/${reservationDraft.id}` : `/receipt/${reservationDraft.id}`, { replace: true });
     } catch (err) {
       log.error('handleSubmitProof error', err);
       setError('Une erreur est survenue lors de l\'envoi.');

@@ -261,11 +261,13 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       ?.replace('MERCHANT', method.merchantNumber || '')
       .replace('AMOUNT', String(reservation.montant));
 
+    const uploadPreuvePath = pathBase ? `/${pathBase}/upload-preuve/${reservation.id}` : `/upload-preuve/${reservation.id}`;
+
     if (ussd) {
       try {
         sessionStorage.setItem('lastUssdCode', ussd);
       } catch { /* ignore */ }
-      navigate(`/${slug}/upload-preuve/${reservation.id}`, {
+      navigate(uploadPreuvePath, {
         replace: false,
         state: { draft, companyInfo, paymentMethodKey: key },
       });
@@ -273,7 +275,7 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       return;
     }
 
-    navigate(`/${slug}/upload-preuve/${reservation.id}`, {
+    navigate(uploadPreuvePath, {
       replace: false,
       state: { draft, companyInfo, paymentMethodKey: key },
     });
