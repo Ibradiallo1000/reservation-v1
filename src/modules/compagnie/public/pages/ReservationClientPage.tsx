@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { SectionCard } from '@/ui';
-import { ChevronLeft, Phone, Plus, Minus, CheckCircle, User, AlertCircle, ArrowRight, Clock, Calendar, Loader2 } from 'lucide-react';
+import { ChevronLeft, Phone, Plus, Minus, CheckCircle, User, AlertCircle, ArrowRight, Clock, Calendar, Loader2, MessageCircle } from 'lucide-react';
 import ReservationStepHeader from '../components/ReservationStepHeader';
 import {
   collection, getDocs, query, where, addDoc, doc, updateDoc, setDoc, serverTimestamp, getDoc,
@@ -379,6 +379,19 @@ export default function ReservationClientPage() {
 
     load();
   }, [slug, departureQ, arrivalQ, reservationRouteId]);
+
+  // Appliquer les couleurs de la compagnie au thème du navigateur (barre d'adresse, zone autour du clavier sur mobile)
+  const DEFAULT_THEME_COLOR = '#FF6600';
+  useEffect(() => {
+    if (!company?.couleurPrimaire) return;
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (!meta) return;
+    const previous = meta.getAttribute('content') || DEFAULT_THEME_COLOR;
+    meta.setAttribute('content', company.couleurPrimaire);
+    return () => {
+      meta.setAttribute('content', previous);
+    };
+  }, [company?.couleurPrimaire]);
 
   const filteredTrips = useMemo(() => {
     if (!selectedDate) return [] as any[];
@@ -776,9 +789,15 @@ export default function ReservationClientPage() {
                 icon={User}
                 className="border-gray-100 shadow-sm bg-white rounded-xl"
               >
-                <p className="text-sm text-gray-600 mb-4">
-                  Nom et téléphone utilisés pour le voyage.
+                <p className="text-sm text-gray-600 mb-2">
+                  Nom complet et numéro de téléphone du ou des passagers pour le voyage.
                 </p>
+                <div className="flex items-start gap-2 p-3 rounded-xl mb-4 bg-green-50 border border-green-100">
+                  <MessageCircle className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" aria-hidden />
+                  <p className="text-sm text-green-800">
+                    <strong>Préférence :</strong> indiquez un numéro <strong>WhatsApp</strong> pour recevoir le lien de votre billet directement sur WhatsApp après validation.
+                  </p>
+                </div>
                 <div className="grid sm:grid-cols-2 gap-4">
                   {/* Nom */}
                   <div className="relative">
@@ -804,7 +823,7 @@ export default function ReservationClientPage() {
                     )}
                   </div>
 
-                  {/* Téléphone */}
+                  {/* Téléphone (WhatsApp recommandé) */}
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
                       <Phone className="h-5 w-5" />
@@ -817,7 +836,7 @@ export default function ReservationClientPage() {
                       className={`h-12 pl-11 pr-4 w-full border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none bg-gray-50/80 text-gray-900 placeholder-gray-400 transition ${
                         fieldErrors.phone ? 'border-red-300 focus:border-red-400' : 'border-gray-200 focus:border-gray-300'
                       }`}
-                      placeholder="Téléphone (ex: 22 22 22 22)"
+                      placeholder="Téléphone / WhatsApp (ex: 22 22 22 22)"
                       value={passenger.phone}
                       onChange={e => {
                         setPassenger(p => ({ ...p, phone: formatMaliPhone(e.target.value) }));
