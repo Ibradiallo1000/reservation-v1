@@ -18,6 +18,7 @@ import { incrementReservedSeats, getOrCreateTripInstanceForSlot, listTripInstanc
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
+import { getAgencyCityFromDoc } from '@/modules/agence/utils/agencyCity';
 
 /* ============== Anti-spam: mémoire locale ============== */
 const PENDING_KEY = 'pendingReservation';
@@ -256,8 +257,12 @@ export default function ReservationClientPage() {
 
         const agencesSnap = await getDocs(collection(db, 'companies', cdoc.id, 'agences'));
         const agences = agencesSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-        if (agences[0]) {
-          const a = agences[0];
+        // Afficher l'agence de la ville de DÉPART (ex. Bamako pour Bamako → Gao), pas la première de la liste.
+        const agencyForDeparture = agences.find(
+          a => normalize(getAgencyCityFromDoc(a)) === departureQ
+        ) ?? agences[0];
+        if (agencyForDeparture) {
+          const a = agencyForDeparture;
           setAgencyInfo({
             id: a.id,
             nom: a.nomAgence || a.nom || a.name,
@@ -353,6 +358,7 @@ export default function ReservationClientPage() {
         setDates(uniqDates); 
         setSelectedDate(uniqDates[0] || '');
 
+        const preloadAgency = agencyForDeparture ?? agences[0];
         sessionStorage.setItem(`preload_${slug}_${departureQ}_${arrivalQ}`, JSON.stringify({
           company: {
             id: cdoc.id, 
@@ -365,9 +371,9 @@ export default function ReservationClientPage() {
           trips: sorted, 
           dates: uniqDates,
           agencyInfo: { 
-            nom: agences[0]?.nomAgence || agences[0]?.nom || '', 
-            telephone: agences[0]?.telephone || '', 
-            code: agences[0]?.code 
+            nom: preloadAgency?.nomAgence || preloadAgency?.nom || '', 
+            telephone: preloadAgency?.telephone || '', 
+            code: preloadAgency?.code 
           }
         }));
       } catch (e: any) {
