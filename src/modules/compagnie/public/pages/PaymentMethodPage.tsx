@@ -78,7 +78,9 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const language = i18n.language?.startsWith('en') ? 'en' : 'fr';
 
   const pathParts = location.pathname.split('/').filter(Boolean);
-  const reservationIdFromPath = pathParts[1] === 'payment' ? pathParts[2] : undefined;
+  // Sous-domaine (prod) : /payment/:id → pathParts = ['payment', id]. Path (dev) : /:slug/payment/:id → pathParts = [slug, 'payment', id].
+  const reservationIdFromPath =
+    pathParts[0] === 'payment' ? pathParts[1] : (pathParts[1] === 'payment' ? pathParts[2] : undefined);
   const state = (location.state || {}) as {
     reservationId?: string;
     companyId?: string;

@@ -30,6 +30,7 @@ import TicketOnline from '@/modules/compagnie/public/components/ticket/TicketOnl
 import { getEffectiveStatut } from '@/utils/reservationStatusUtils';
 import { getDisplayPhone } from '@/utils/phoneUtils';
 import type { ReservationStatus } from '@/types/reservation';
+import { getSlugFromSubdomain } from '@/modules/compagnie/public/utils/subdomain';
 
 interface Reservation {
   id: string;
@@ -71,10 +72,13 @@ const ReceiptEnLignePage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // RouteResolver uses /:slug/* so "id" is not in params; extract from pathname
+  // Sous-domaine (prod) : /receipt/:id → pathParts = ['receipt', id]. Path (dev) : /:slug/receipt/:id → pathParts = [slug, 'receipt', id].
   const pathParts = useMemo(() => location.pathname.split('/').filter(Boolean), [location.pathname]);
-  const slug = params.slug ?? pathParts[0] ?? '';
-  const id = params.id ?? (pathParts[1] === 'receipt' ? pathParts[2] : undefined);
+  const slugFromSub = getSlugFromSubdomain();
+  const id =
+    params.id ??
+    (pathParts[0] === 'receipt' ? pathParts[1] : pathParts[1] === 'receipt' ? pathParts[2] : undefined);
+  const slug = slugFromSub ?? params.slug ?? (pathParts[0] !== 'receipt' ? pathParts[0] : '') ?? '';
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
