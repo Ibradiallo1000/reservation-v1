@@ -334,7 +334,6 @@ const ReceiptEnLignePage: React.FC = () => {
         primaryColor={primaryColor}
         secondaryColor={secondaryColor}
         title="Confirmation"
-        subtitle={reservation ? `${reservation.depart} → ${reservation.arrivee}` : undefined}
         logoUrl={companyInfo.logoUrl}
       />
 

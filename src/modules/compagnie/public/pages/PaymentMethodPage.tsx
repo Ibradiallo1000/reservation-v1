@@ -324,7 +324,6 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         primaryColor={primaryColor}
         secondaryColor={secondaryColor}
         title={t('paymentStepTitle')}
-        subtitle={`${formatCity(reservation.depart)} → ${formatCity(reservation.arrivee)}`}
         logoUrl={company.logoUrl}
       />
 

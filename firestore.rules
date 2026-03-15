@@ -246,16 +246,15 @@ service cloud.firestore {
           /* =============================
              UPDATE 2 — SOUMISSION PREUVE (public ou utilisateur connecté)
              Passage en_attente_paiement → preuve_recue. UploadPreuvePage.
-             Autorisé invité ou connecté (ex. "Continuer ma réservation"). Canal/statut : casse ignorée.
           ============================= */
           allow update: if (
-            resource.data.get('canal', '').toLowerCase().replace(' ', '_') == "en_ligne" &&
-            resource.data.get('statut', '').toLowerCase() == "en_attente_paiement" &&
-            request.resource.data.get('statut', '').toLowerCase() == "preuve_recue" &&
-            request.resource.data.diff(resource.data).changedKeys().hasOnly([
-              "statut", "paymentReference", "preuveMessage", "transactionReference",
-              "proofSubmittedAt", "updatedAt", "preuveVia"
-            ])
+            (resource.data.get('canal', '') == '' || (resource.data.get('canal', '') is string && resource.data.get('canal', '').toLowerCase().replace(' ', '_') == "en_ligne")) &&
+            (resource.data.get('statut', '') == "en_attente_paiement" || (resource.data.get('statut', '') is string && resource.data.get('statut', '').toLowerCase() == "en_attente_paiement")) &&
+            (request.resource.data.get('statut', '') == "preuve_recue" || (request.resource.data.get('statut', '') is string && request.resource.data.get('statut', '').toLowerCase() == "preuve_recue"))
+          );
+          allow update: if (
+            resource.data.get('statut', '') == "en_attente_paiement" &&
+            request.resource.data.get('statut', '') == "preuve_recue"
           );
 
           /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ; contrôleur embarquement : champs restreints */

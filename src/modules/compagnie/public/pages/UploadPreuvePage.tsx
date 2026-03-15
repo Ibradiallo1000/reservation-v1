@@ -370,7 +370,6 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         primaryColor={themeConfig.colors.primary}
         secondaryColor={themeConfig.colors.secondary}
         title={t('uploadProofStepTitle')}
-        subtitle={reservationDraft ? `${reservationDraft.depart} → ${reservationDraft.arrivee}` : undefined}
         logoUrl={companyInfo.logoUrl}
       />
 

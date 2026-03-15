@@ -537,7 +537,6 @@ const ReservationDetailsPage: React.FC = () => {
         primaryColor={primaryColor}
         secondaryColor={secondaryColor}
         title="Détails de réservation"
-        subtitle={reservation ? `${reservation.depart} → ${reservation.arrivee}` : undefined}
         logoUrl={companyInfo?.logoUrl}
       />
 
