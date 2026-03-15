@@ -576,43 +576,41 @@ export default function ReservationClientPage() {
     }
   }, [selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo, pathBase]);
 
-  // ---------- UI components ----------
+  // ---------- UI: carte trajet épurée (logo retiré, déjà présent dans le header) ----------
   const RouteCard = (titleRight?: string) => (
-    <div className="border border-gray-200 bg-white rounded-2xl shadow-md overflow-hidden">
-      <div className="flex items-center justify-between gap-4 px-5 sm:px-6 py-4">
-        <div className="flex items-center gap-3 min-w-0">
-          {company.logoUrl && (
-            <img src={company.logoUrl} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-gray-200" />
-          )}
-          <div className="min-w-0">
-            <div className="flex items-center text-gray-900 font-semibold">
-              <span className="truncate">
-                {existing?.depart ? formatCity(existing.depart) : formatCity(departureQ)}
-              </span>
-              <span className="mx-2 text-gray-400 font-normal">→</span>
-              <span className="truncate">
-                {existing?.arrivee ? formatCity(existing.arrivee) : formatCity(arrivalQ)}
-              </span>
-            </div>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {existing?.date ? `${existing.date} · ${existing.heure || ''}` : 'Sélectionnez la date et l\'heure'}
-            </p>
+    <div
+      className="rounded-2xl overflow-hidden"
+      style={{
+        background: `linear-gradient(135deg, ${theme.veryLightPrimary ?? `${theme.primary}14`}, ${theme.lightPrimary ?? `${theme.primary}22`})`,
+        border: `1px solid ${theme.primary}20`,
+      }}
+    >
+      <div className="flex items-center justify-between gap-4 px-4 sm:px-5 py-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-gray-900">
+            <span className="font-semibold text-sm sm:text-base truncate">
+              {existing?.depart ? formatCity(existing.depart) : formatCity(departureQ)}
+            </span>
+            <ArrowRight className="h-4 w-4 text-gray-400 flex-shrink-0" aria-hidden />
+            <span className="font-semibold text-sm sm:text-base truncate">
+              {existing?.arrivee ? formatCity(existing.arrivee) : formatCity(arrivalQ)}
+            </span>
           </div>
+          <p className="text-xs text-gray-600 mt-1">
+            {existing?.date ? `${existing.date} · ${existing.heure || ''}` : 'Choisissez la date et l\'heure ci-dessous'}
+          </p>
         </div>
-        <div className="text-right">
+        <div className="text-right flex-shrink-0">
           {titleRight ? (
-            <div className="text-lg sm:text-xl font-extrabold" style={{ color: theme.primary }}>
+            <span className="text-base font-bold" style={{ color: theme.primary }}>
               {titleRight}
-            </div>
+            </span>
           ) : (
             <>
-              <div className="text-xs text-gray-500">À partir de</div>
-              <div className="text-lg sm:text-xl font-extrabold" style={{ color: theme.primary }}>
-                { (existing?.montant ?? topPrice) != null 
-                  ? money(existing?.montant ?? topPrice)
-                  : '—' 
-                }
-              </div>
+              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">À partir de</p>
+              <p className="text-lg font-bold mt-0.5" style={{ color: theme.primary }}>
+                {(existing?.montant ?? topPrice) != null ? money(existing?.montant ?? topPrice) : '—'}
+              </p>
             </>
           )}
         </div>
@@ -666,12 +664,7 @@ export default function ReservationClientPage() {
     );
   }
 
-  const departureLabel = search.get('departure') || '';
-  const arrivalLabel = search.get('arrival') || '';
-  const routeSubtitle = departureLabel && arrivalLabel
-    ? `${formatCity(departureLabel)} → ${formatCity(arrivalLabel)}`
-    : undefined;
-
+  // Pas de sous-titre trajet dans le header : la page affiche déjà les trajets (départ → arrivée, prix).
   // ---------- Rendu principal ----------
   return (
     <div className="min-h-screen bg-gradient-to-br from-white to-gray-50">
@@ -680,7 +673,6 @@ export default function ReservationClientPage() {
         primaryColor={theme.primary}
         secondaryColor={theme.secondary}
         title="Réservation"
-        subtitle={routeSubtitle}
         logoUrl={company.logoUrl || undefined}
       />
       {!isOnline && (
@@ -698,37 +690,46 @@ export default function ReservationClientPage() {
         </div>
       ) : (
         /* Step 1 only: reservation form → then redirect to payment page */
-        <main className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4 sm:space-y-5">
+        <main className="max-w-[1100px] mx-auto px-3 sm:px-4 py-5 sm:py-6 space-y-5 sm:space-y-6">
           {RouteCard()}
 
           {agencyInfo?.nom && (
-            <div className="text-xs text-gray-500 px-1">Agence : {agencyInfo.nom} — {agencyInfo.telephone}</div>
+            <div className="flex items-center gap-2 text-gray-500">
+              <span className="inline-flex items-center gap-1.5 text-xs bg-gray-100 px-2.5 py-1 rounded-full">
+                <Phone className="h-3.5 w-3.5" />
+                {agencyInfo.nom}
+                {agencyInfo.telephone && <span className="text-gray-400">· {agencyInfo.telephone}</span>}
+              </span>
+            </div>
           )}
 
           {error && (
-            <div className="p-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-800">{error}</div>
+            <div className="p-4 rounded-xl bg-red-50 border border-red-100 text-red-800 text-sm">{error}</div>
           )}
 
           {/* dates */}
-          <SectionCard title="Choisissez votre date de départ" icon={Calendar} className="shadow-md">
-            <div className="flex gap-2 overflow-x-auto scrollbar-none">
+          <SectionCard
+            title="Date de départ"
+            icon={Calendar}
+            className="border-gray-100 shadow-sm bg-white rounded-xl"
+          >
+            <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
               {dates.map(d => (
                 <button
                   key={d}
                   onClick={() => { setSelectedDate(d); setSelectedTime(''); }}
-                  className="h-10 px-3 rounded-xl border text-sm whitespace-nowrap transition"
+                  className="flex-shrink-0 h-11 px-4 rounded-xl text-sm font-medium whitespace-nowrap transition-all duration-200"
                   style={{
-                    borderColor: selectedDate === d ? theme.primary : '#e5e7eb',
-                    color: selectedDate === d ? '#111827' : '#374151',
-                    backgroundColor: selectedDate === d ? theme.lightPrimary : '#f9fafb'
+                    border: selectedDate === d ? `2px solid ${theme.primary}` : '1px solid #e5e7eb',
+                    color: selectedDate === d ? theme.primary : '#4b5563',
+                    backgroundColor: selectedDate === d ? theme.lightPrimary : '#fafafa',
                   }}
                 >
-                  <span className="font-medium">{format(parseISO(d), 'EEE d', { locale: fr })}</span>
-                  {isToday(parseISO(d)) && (
-                    <span className="ml-2 text-xs text-gray-500">Aujourd'hui</span>
-                  )}
-                  {isTomorrow(parseISO(d)) && (
-                    <span className="ml-2 text-xs text-gray-500">Demain</span>
+                  {format(parseISO(d), 'EEE d', { locale: fr })}
+                  {(isToday(parseISO(d)) || isTomorrow(parseISO(d))) && (
+                    <span className="ml-1.5 text-xs opacity-80">
+                      {isToday(parseISO(d)) ? 'Auj.' : 'Demain'}
+                    </span>
                   )}
                 </button>
               ))}
@@ -737,30 +738,30 @@ export default function ReservationClientPage() {
 
           {/* heures */}
           {!!filteredTrips.length && (
-            <SectionCard title="Choisissez votre heure de départ" icon={Clock} className="shadow-md">
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+            <SectionCard
+              title="Heure de départ"
+              icon={Clock}
+              className="border-gray-100 shadow-sm bg-white rounded-xl"
+            >
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
                 {filteredTrips.map((t: any) => (
                   <button
                     key={t.id}
                     onClick={() => setSelectedTime(t.time)}
-                    className="h-11 px-3 rounded-lg border text-sm text-left transition"
+                    className="h-12 px-3 rounded-xl border text-sm text-left transition-all duration-200 flex flex-col justify-center"
                     style={{
-                      borderColor: selectedTime === t.time ? theme.secondary : '#e5e7eb',
-                      backgroundColor: selectedTime === t.time ? theme.lightSecondary : '#f9fafb'
+                      borderColor: selectedTime === t.time ? theme.primary : '#e5e7eb',
+                      backgroundColor: selectedTime === t.time ? theme.lightPrimary : '#fafafa',
+                      color: selectedTime === t.time ? theme.primary : '#374151',
                     }}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold">{t.time}</span>
-                      <span
-                        className="text-[11px] px-2 h-5 rounded-md grid place-items-center whitespace-nowrap leading-none"
-                        style={{ 
-                          color: seatColor(t.remainingSeats, t.places), 
-                          border: `1px solid ${seatColor(t.remainingSeats, t.places)}` 
-                        }}
-                      >
-                        {t.remainingSeats} pl.
-                      </span>
-                    </div>
+                    <span className="font-semibold">{t.time}</span>
+                    <span
+                      className="text-[11px] font-medium mt-0.5"
+                      style={{ color: seatColor(t.remainingSeats, t.places) }}
+                    >
+                      {t.remainingSeats} places
+                    </span>
                   </button>
                 ))}
               </div>
@@ -770,113 +771,115 @@ export default function ReservationClientPage() {
           {/* infos personnelles */}
           {selectedTrip && (
             <>
-              <SectionCard title="Informations personnelles" icon={User} className="shadow-md">
-                <p className="text-sm text-gray-500 mb-4">
-                  Entrez votre <span className="font-medium">nom complet</span> et votre <span className="font-medium">numéro de téléphone</span> utilisés pour voyager.
+              <SectionCard
+                title="Vos informations"
+                icon={User}
+                className="border-gray-100 shadow-sm bg-white rounded-xl"
+              >
+                <p className="text-sm text-gray-600 mb-4">
+                  Nom et téléphone utilisés pour le voyage.
                 </p>
-                <div className="grid sm:grid-cols-2 gap-3">
+                <div className="grid sm:grid-cols-2 gap-4">
                   {/* Nom */}
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <User className="h-5 w-5 text-gray-400" />
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                      <User className="h-5 w-5" />
                     </div>
                     <input
                       ref={nameInputRef}
-                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none bg-white text-gray-900 placeholder-gray-500 ${
-                        fieldErrors.fullName ? 'border-red-300' : 'border-gray-200'
+                      className={`h-12 pl-11 pr-4 w-full border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none bg-gray-50/80 text-gray-900 placeholder-gray-400 transition ${
+                        fieldErrors.fullName ? 'border-red-300 focus:border-red-400' : 'border-gray-200 focus:border-gray-300'
                       }`}
-                      placeholder="Nom complet *"
+                      placeholder="Nom complet"
                       value={passenger.fullName}
                       onChange={e => {
                         setPassenger(p => ({ ...p, fullName: e.target.value }));
-                        if (fieldErrors.fullName) {
-                          setFieldErrors(prev => ({ ...prev, fullName: '' }));
-                        }
+                        if (fieldErrors.fullName) setFieldErrors(prev => ({ ...prev, fullName: '' }));
                       }}
                     />
                     {fieldErrors.fullName && (
-                      <div className="text-xs text-red-600 mt-1 flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3" /> {fieldErrors.fullName}
-                    </div>
+                      <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {fieldErrors.fullName}
+                      </p>
                     )}
                   </div>
 
                   {/* Téléphone */}
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <Phone className="h-5 w-5 text-gray-400" />
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                      <Phone className="h-5 w-5" />
                     </div>
                     <input
                       ref={phoneInputRef}
                       inputMode="numeric"
                       autoComplete="tel"
-                      maxLength={11} // 8 chiffres + 3 espaces
-                      className={`h-11 pl-10 pr-3 w-full border rounded-lg focus:ring-2 focus:outline-none bg-white text-gray-900 placeholder-gray-500 ${
-                        fieldErrors.phone ? 'border-red-300' : 'border-gray-200'
+                      maxLength={11}
+                      className={`h-12 pl-11 pr-4 w-full border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none bg-gray-50/80 text-gray-900 placeholder-gray-400 transition ${
+                        fieldErrors.phone ? 'border-red-300 focus:border-red-400' : 'border-gray-200 focus:border-gray-300'
                       }`}
-                      placeholder="Téléphone * (ex: 22 22 22 22)"
+                      placeholder="Téléphone (ex: 22 22 22 22)"
                       value={passenger.phone}
                       onChange={e => {
-                        const formatted = formatMaliPhone(e.target.value);
-                        setPassenger(p => ({ ...p, phone: formatted }));
-
-                        if (fieldErrors.phone) {
-                        setFieldErrors(prev => ({ ...prev, phone: '' }));
-                        }
+                        setPassenger(p => ({ ...p, phone: formatMaliPhone(e.target.value) }));
+                        if (fieldErrors.phone) setFieldErrors(prev => ({ ...prev, phone: '' }));
                       }}
                     />
                     {fieldErrors.phone && (
-                      <div className="text-xs text-red-600 mt-1 flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3" /> {fieldErrors.phone}
-                      </div>
+                      <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {fieldErrors.phone}
+                      </p>
                     )}
                   </div>
 
                   {/* Places */}
-                  <div className="sm:col-span-2 flex items-center gap-4 mt-2">
-                    <span className="text-sm text-gray-600">Places</span>
-                    <button 
-                      onClick={() => setSeats(s => Math.max(1, s - 1))} 
-                      className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" 
-                      style={{ borderColor: theme.lightPrimary, color: theme.primary }}
-                    >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <span 
-                      className="px-3 py-1.5 rounded-lg text-sm font-semibold" 
-                      style={{ background: theme.lightPrimary, color: theme.primary }}
-                    >
-                      {seats}
-                    </span>
-                    <button 
-                      onClick={() => setSeats(s => Math.min(Math.min(5, selectedTrip.remainingSeats), s + 1))} 
-                      className="w-9 h-9 rounded-full border grid place-items-center hover:bg-gray-50" 
-                      style={{ borderColor: theme.lightPrimary, color: theme.primary }}
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                    <span className="text-xs" style={{ color: seatColor(selectedTrip.remainingSeats, selectedTrip.places) }}>
-                      {selectedTrip.remainingSeats} pl. dispo
+                  <div className="sm:col-span-2 flex items-center gap-3 pt-1">
+                    <span className="text-sm font-medium text-gray-700">Nombre de places</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSeats(s => Math.max(1, s - 1))}
+                        className="w-10 h-10 rounded-xl border-2 grid place-items-center transition hover:bg-gray-100"
+                        style={{ borderColor: theme.primary, color: theme.primary }}
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <span
+                        className="min-w-[2.5rem] text-center text-base font-bold"
+                        style={{ color: theme.primary }}
+                      >
+                        {seats}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSeats(s => Math.min(Math.min(5, selectedTrip.remainingSeats), s + 1))}
+                        className="w-10 h-10 rounded-xl border-2 grid place-items-center transition hover:bg-gray-100"
+                        style={{ borderColor: theme.primary, color: theme.primary }}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <span className="text-xs text-gray-500" style={{ color: seatColor(selectedTrip.remainingSeats, selectedTrip.places) }}>
+                      {selectedTrip.remainingSeats} places disponibles
                     </span>
                   </div>
                 </div>
-                
+
                 <button
+                  type="button"
                   onClick={createReservationDraft}
                   disabled={creating}
-                  className="mt-4 w-full h-11 rounded-xl font-semibold shadow-sm disabled:opacity-60 transition hover:brightness-[0.98] flex items-center justify-center gap-2"
+                  className="mt-6 w-full h-12 rounded-xl font-semibold shadow-md disabled:opacity-60 transition hover:opacity-95 active:scale-[0.99] flex items-center justify-center gap-2 text-white"
                   style={{
                     background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`,
-                    color: '#fff',
                   }}
                 >
-                  {creating ? 'Traitement…' : (
+                  {creating ? (
+                    'Traitement…'
+                  ) : (
                     <>
                       Passer au paiement
-                      <ArrowRight className="w-4 h-4" />
-                      <span className="font-bold">
-                        {money(selectedTrip.price * seats)}
-                      </span>
+                      <ArrowRight className="w-5 h-5" />
+                      <span className="font-bold">{money(selectedTrip.price * seats)}</span>
                     </>
                   )}
                 </button>

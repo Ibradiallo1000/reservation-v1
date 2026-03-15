@@ -394,16 +394,23 @@ export default function RouteResolver() {
   const showPendingModal = pendingRecovery && slug && !pendingRecoveryDismissed && subPath === null;
   const primaryColor = company?.couleurPrimaire ?? "#3b82f6";
 
+  /** Masquer la barre de navigation du bas pendant le parcours réservation (page plus propre et professionnelle). */
+  const isReservationFlow = [
+    "booking", "payment", "upload-preuve", "receipt", "confirmation", "details", "reservation",
+  ].includes(subPath ?? "");
+
   return (
     <CurrencyProvider currency={company?.devise}>
       <ErrorBoundary fallback={<MobileErrorScreen />}>
         <Suspense fallback={null}>
-          <div className="public-booking min-h-screen pb-20 md:pb-0">
+          <div className={`public-booking min-h-screen ${isReservationFlow ? "pb-0" : "pb-20 md:pb-0"}`}>
             {content}
-            <PublicBottomNav
-              slug={slug}
-              primaryColor={company?.couleurPrimaire ?? undefined}
-            />
+            {!isReservationFlow && (
+              <PublicBottomNav
+                slug={slug}
+                primaryColor={company?.couleurPrimaire ?? undefined}
+              />
+            )}
           </div>
           {/* Modal « Continuer ma réservation » : affichage professionnel, pas dans le header */}
           {showPendingModal && pendingRecovery && (
