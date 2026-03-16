@@ -17,16 +17,19 @@ import {
 } from "./cashService";
 import { CASH_TRANSACTION_STATUS } from "./cashTypes";
 import type { CashTransactionDocWithId, CashClosureDocWithId, CashRefundDocWithId, CashTransferDocWithId } from "./cashTypes";
+import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import { listRoutes } from "@/modules/compagnie/routes/routesService";
 import type { RouteDocWithId } from "@/modules/compagnie/routes/routesTypes";
 import { Wallet, Building2, MapPin, TrendingUp, AlertCircle, Route, ArrowUpRight, ArrowDownLeft } from "lucide-react";
 
-export default function CompanyCashPage() {
+type CompanyCashPageProps = { embedded?: boolean };
+
+export default function CompanyCashPage({ embedded = false }: CompanyCashPageProps) {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const money = useFormatCurrency();
-  const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(() => getTodayBamako());
   const [transactions, setTransactions] = useState<CashTransactionDocWithId[]>([]);
   const [closures, setClosures] = useState<CashClosureDocWithId[]>([]);
   const [refunds, setRefunds] = useState<CashRefundDocWithId[]>([]);
@@ -106,24 +109,12 @@ export default function CompanyCashPage() {
   const totalTransferred = transfers.reduce((s, t) => s + (Number(t.amount) || 0), 0);
 
   if (!companyId) {
-    return (
-      <StandardLayoutWrapper>
-        <PageHeader title="Finance — Caisse" icon={Wallet} />
-        <SectionCard title="Accès">
-          <p className="text-gray-600 dark:text-gray-400">Compagnie non identifiée.</p>
-        </SectionCard>
-      </StandardLayoutWrapper>
-    );
+    const msg = <SectionCard title="Accès"><p className="text-gray-600 dark:text-gray-400">Compagnie non identifiée.</p></SectionCard>;
+    return embedded ? msg : <StandardLayoutWrapper><PageHeader title="Finance — Caisse" icon={Wallet} />{msg}</StandardLayoutWrapper>;
   }
 
-  return (
-    <StandardLayoutWrapper>
-      <PageHeader
-        title="Finance — Caisse"
-        subtitle="Revenus par point de vente, argent en caisse et clôtures"
-        icon={Wallet}
-      />
-
+  const content = (
+    <>
       <div className="mb-4 flex items-center gap-4">
         <label className="text-sm font-medium">Date</label>
         <input
@@ -304,6 +295,18 @@ export default function CompanyCashPage() {
           </SectionCard>
         </>
       )}
+    </>
+  );
+
+  if (embedded) return content;
+  return (
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Finance — Caisse"
+        subtitle="Revenus par point de vente, argent en caisse et clôtures"
+        icon={Wallet}
+      />
+      {content}
     </StandardLayoutWrapper>
   );
 }

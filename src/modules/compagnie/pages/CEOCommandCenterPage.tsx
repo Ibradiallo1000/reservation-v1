@@ -2,7 +2,7 @@
 // 8 blocks: État global (no chart), Risques, Activité opérationnelle, Flotte, Alertes, Position financière (summary), Performance réseau (top 3), Actions rapides.
 // One data load wave, minimal state, no Recharts, no heavy compute. Component < 800 lines, < 15 useMemo.
 import React, { useEffect, useState, useMemo, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   collection,
   collectionGroup,
@@ -17,10 +17,9 @@ import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { format } from "date-fns";
-import { formatDateLongFr } from "@/utils/dateFmt";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { getDateRangeForPeriod, type PeriodKind } from "@/shared/date/periodUtils";
-import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
+import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import { Gauge } from "lucide-react";
 import { listClosedCashSessionsWithDiscrepancy } from "@/modules/agence/cashControl/cashSessionService";
 import type { CashSessionDocWithId } from "@/modules/agence/cashControl/cashSessionTypes";
@@ -45,8 +44,14 @@ import {
   ACCOUNT_WARNING_THRESHOLD,
   AGENCIES_AT_RISK_CRITICAL_COUNT,
 } from "@/modules/compagnie/commandCenter/strategicThresholds";
-import CommandCenterBlocksAtoE, { type BlocksAtoEData } from "@/modules/compagnie/commandCenter/CEOCommandCenterBlocks";
+import { MetricCard } from "@/ui";
+import { TrendingUp, Ticket, Building2, Truck, AlertTriangle, Clock } from "lucide-react";
 import { computeCeoGlobalStatus } from "@/modules/compagnie/commandCenter/ceoRiskRules";
+import { getDelayedBusesCountToday } from "@/modules/compagnie/tripInstances/tripProgressService";
+import { getNetworkStats } from "@/modules/compagnie/networkStats/networkStatsService";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { getPreviousPeriod, calculateChange } from "@/shared/date/periodComparisonUtils";
+import { getPeriodLabel } from "@/shared/date/periodUtils";
 const TODAY = format(new Date(), "yyyy-MM-dd");
 
 type DailyStatsDoc = {
@@ -160,6 +165,7 @@ export default function CEOCommandCenterPage() {
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const navigate = useNavigate();
+  const money = useFormatCurrency();
 
   const [dailyStatsList, setDailyStatsList] = useState<DailyStatsDoc[]>([]);
   const [liveStateList, setLiveStateList] = useState<AgencyLiveStateDoc[]>([]);
@@ -181,13 +187,33 @@ export default function CEOCommandCenterPage() {
   const [riskSettings, setRiskSettings] = useState(DEFAULT_RISK_SETTINGS);
   const [financialAccounts, setFinancialAccounts] = useState<{ id: string; agencyId: string | null; accountType: string; currentBalance: number }[]>([]);
   const [unpaidPayables, setUnpaidPayables] = useState<{ id: string; agencyId: string; remainingAmount: number; status: string }[]>([]);
-  const [period, setPeriod] = useState<PeriodKind>("month");
+  // Poste de pilotage simplifié (audit CEO) : uniquement aujourd'hui, pas de sélecteur de période
+  const [period, setPeriod] = useState<PeriodKind>("day");
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
   const [cashDiscrepancyList, setCashDiscrepancyList] = useState<{ agencyId: string; session: CashSessionDocWithId }[]>([]);
   const [courierDiscrepancyList, setCourierDiscrepancyList] = useState<{ agencyId: string; session: CourierSessionWithId }[]>([]);
+  const [delayedBusesCount, setDelayedBusesCount] = useState<number | null>(null);
+  const [busesInProgressCount, setBusesInProgressCount] = useState<number | null>(null);
+  const [caFromCash, setCaFromCash] = useState<number>(0);
+  const [billetsFromCash, setBilletsFromCash] = useState<number>(0);
+  const [agencesActivesFromCash, setAgencesActivesFromCash] = useState<number>(0);
+  const [cashKpisLoading, setCashKpisLoading] = useState(false);
+  /** Stats réseau du jour uniquement pour l'indicateur "État du réseau aujourd'hui" */
+  const [networkStatsToday, setNetworkStatsToday] = useState<Awaited<ReturnType<typeof getNetworkStats>> | null>(null);
+  /** Période précédente pour comparaison CA / billets / agences */
+  const [prevStats, setPrevStats] = useState<{
+    totalRevenue: number;
+    totalTickets: number;
+    activeAgencies: number;
+    comparisonLabel: string;
+  } | null>(null);
 
   const periodRange = React.useMemo(() => {
+    if (period === "day") {
+      const todayBamako = getTodayBamako();
+      return { startStr: todayBamako, endStr: todayBamako };
+    }
     const range = getDateRangeForPeriod(period, new Date(), customStart || undefined, customEnd || undefined);
     return {
       startStr: format(range.start, "yyyy-MM-dd"),
@@ -252,6 +278,68 @@ export default function CEOCommandCenterPage() {
       cancelled = true;
     };
   }, [companyId, periodRange.startStr, periodRange.endStr]);
+
+  // Indicateurs réseau : source unique networkStatsService (CA, billets, agences, bus en circulation)
+  useEffect(() => {
+    if (!companyId) return;
+    const { startStr, endStr } = periodRange;
+    setCashKpisLoading(true);
+    getNetworkStats(companyId, startStr, endStr)
+      .then((stats) => {
+        setCaFromCash(stats.totalRevenue);
+        setBilletsFromCash(stats.totalTickets);
+        setAgencesActivesFromCash(stats.activeAgencies);
+        setBusesInProgressCount(stats.busesInTransit);
+      })
+      .catch(() => {
+        setCaFromCash(0);
+        setBilletsFromCash(0);
+        setAgencesActivesFromCash(0);
+        setBusesInProgressCount(null);
+      })
+      .finally(() => setCashKpisLoading(false));
+  }, [companyId, periodRange.startStr, periodRange.endStr]);
+
+  // Bus en retard (aujourd'hui)
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    getDelayedBusesCountToday(companyId)
+      .then((delayed) => {
+        if (!cancelled) setDelayedBusesCount(delayed);
+      })
+      .catch(() => {
+        if (!cancelled) setDelayedBusesCount(null);
+      });
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  // Stats réseau du jour pour l'indicateur "État du réseau aujourd'hui" (toujours aujourd'hui, indépendant de la période)
+  useEffect(() => {
+    if (!companyId) return;
+    const today = getTodayBamako();
+    getNetworkStats(companyId, today, today)
+      .then(setNetworkStatsToday)
+      .catch(() => setNetworkStatsToday(null));
+  }, [companyId]);
+
+  // Période précédente : charger stats pour comparaison (vs hier / vs semaine dernière / vs mois précédent)
+  useEffect(() => {
+    if (!companyId) return;
+    const startDate = new Date(periodRange.startStr + "T00:00:00");
+    const endDate = new Date(periodRange.endStr + "T23:59:59");
+    const { previousStart, previousEnd, comparisonLabel } = getPreviousPeriod(startDate, endDate, period);
+    getNetworkStats(companyId, previousStart, previousEnd)
+      .then((stats) => {
+        setPrevStats({
+          totalRevenue: stats.totalRevenue,
+          totalTickets: stats.totalTickets,
+          activeAgencies: stats.activeAgencies,
+          comparisonLabel,
+        });
+      })
+      .catch(() => setPrevStats(null));
+  }, [companyId, periodRange.startStr, periodRange.endStr, period]);
 
   // Load dailyStats, agencyLiveState, expenses, discrepancies, trip revenues; agencies loaded here too
   useEffect(() => {
@@ -709,6 +797,7 @@ export default function CEOCommandCenterPage() {
   );
   const { accountsBelowCritical, accountsBelowWarning, agenciesAtRiskCount } = accountAndAgencyRisks;
 
+  type RiskCategory = "financial" | "network" | "fleet";
   const healthAndRisks = useMemo(() => {
     const healthStatus = computeCeoGlobalStatus({
       revenueDropPercent,
@@ -721,6 +810,7 @@ export default function CEOCommandCenterPage() {
       label: string;
       level: "danger" | "warning";
       actionRoute: string;
+      category: RiskCategory;
       impactText?: string;
       actionText?: string;
     }[] = [];
@@ -730,7 +820,8 @@ export default function CEOCommandCenterPage() {
         id: "agencies-drop",
         label: `Agences en baisse / sans revenu (${zeroRev.length})`,
         level: zeroRev.length >= AGENCIES_AT_RISK_CRITICAL_COUNT ? "danger" : "warning",
-        actionRoute: "dashboard",
+        actionRoute: "reservations-reseau",
+        category: "network",
         impactText: `${zeroRev.length} agence(s) impactée(s)`,
         actionText: "Analyser",
       });
@@ -740,7 +831,8 @@ export default function CEOCommandCenterPage() {
         id: "accounts-critical",
         label: `Comptes sous seuil danger (${accountsBelowCritical})`,
         level: "danger",
-        actionRoute: "revenus-liquidites",
+        actionRoute: "finances?tab=liquidites",
+        category: "financial",
         impactText: `${accountsBelowCritical} compte(s) sous seuil`,
         actionText: "Voir trésorerie",
       });
@@ -755,57 +847,36 @@ export default function CEOCommandCenterPage() {
   ]);
   const { healthStatus, prioritizedRisks } = healthAndRisks;
 
-  const blocksAtoEData = useMemo<BlocksAtoEData>(
-    () => ({
-      globalTicketRevenue,
-      globalCourierRevenue,
-      globalTotalRevenue,
-      pendingRevenue,
-      financialPosition,
-      pendingPayablesAmount,
-      pendingPayablesCount,
-      estimatedMonthlyBurn,
-      estimatedRunwayMonths,
-      realizedRevenue,
-      realizedCosts,
-      realizedProfit,
-      targetMarginPercent,
-      budgetGapTop3,
-      activeSessionsCount: liveOperationsMetrics.activeSessionsCount,
-      pendingValidationSessionsCount: liveOperationsMetrics.pendingValidationSessionsCount,
-      activeCourierSessionsCount: liveOperationsMetrics.activeCourierSessionsCount,
-      pendingCourierValidationCount: liveOperationsMetrics.pendingCourierValidationCount,
-      vehiclesInTransitCount: liveOperationsMetrics.vehiclesInTransitCount,
-      boardingOpenCount: liveOperationsMetrics.boardingOpenCount,
-      criticalCashDiscrepanciesCount: liveOperationsMetrics.criticalCashDiscrepanciesCount,
-      fleetUnavailableCount: liveOperationsMetrics.fleetUnavailableCount,
-      revenueVariationPercent,
-      healthStatus,
-      prioritizedRisks,
-      top3Agencies: topAgenciesByRevenue.slice(0, 3),
-    }),
-    [
-      globalTicketRevenue,
-      globalCourierRevenue,
-      globalTotalRevenue,
-      pendingRevenue,
-      financialPosition,
-      pendingPayablesAmount,
-      pendingPayablesCount,
-      estimatedMonthlyBurn,
-      estimatedRunwayMonths,
-      realizedRevenue,
-      realizedCosts,
-      realizedProfit,
-      targetMarginPercent,
-      budgetGapTop3,
-      liveOperationsMetrics,
-      revenueVariationPercent,
-      healthStatus,
-      prioritizedRisks,
-      topAgenciesByRevenue,
-    ]
-  );
+  /** État du réseau aujourd'hui : Bon / Moyen / Critique (taux remplissage + agences actives + retards bus) */
+  const networkStatusToday = useMemo<"bon" | "moyen" | "critique" | null>(() => {
+    if (!networkStatsToday) return null;
+    const totalAgencies = agencies.length || 1;
+    const activeAgencies = networkStatsToday.activeAgencies;
+    const capacity = networkStatsToday.networkCapacity || 0;
+    const tickets = networkStatsToday.totalTickets || 0;
+    const fillRatePct = capacity > 0 ? Math.round((tickets / capacity) * 100) : 0;
+    const delayed = delayedBusesCount ?? 0;
+
+    const fillCritical = fillRatePct < 20;
+    const fillMedium = fillRatePct >= 20 && fillRatePct < 40;
+    const agenciesCritical = totalAgencies > 0 && activeAgencies === 0;
+    const agenciesMedium = totalAgencies > 0 && activeAgencies > 0 && activeAgencies < totalAgencies / 2;
+    const delaysCritical = delayed >= 3;
+    const delaysMedium = delayed >= 1 && delayed < 3;
+
+    if (fillCritical || agenciesCritical || delaysCritical) return "critique";
+    if (fillMedium || agenciesMedium || delaysMedium) return "moyen";
+    return "bon";
+  }, [networkStatsToday, agencies.length, delayedBusesCount]);
+
+  const periodLabelShort =
+    period === "day"
+      ? "Aujourd'hui"
+      : period === "week"
+        ? "Cette semaine"
+        : period === "month"
+          ? "Ce mois"
+          : "Personnalisé";
 
   if (!companyId) {
     return (
@@ -825,29 +896,210 @@ export default function CEOCommandCenterPage() {
     );
   }
 
+  const base = `/compagnie/${companyId}`;
+  const periodParam = period === "day" ? "today" : period === "week" ? "week" : period === "month" ? "month" : "custom";
+
   return (
     <StandardLayoutWrapper noVerticalPadding className="px-4 md:px-6 pt-2 md:pt-3 pb-4 md:pb-5 space-y-4">
       <PageHeader
         title="Poste de pilotage"
-        subtitle={formatDateLongFr(new Date())}
+        subtitle={`${periodLabelShort} — ${getPeriodLabel(period, { start: new Date(periodRange.startStr), end: new Date(periodRange.endStr) }, customStart || undefined, customEnd || undefined)}`}
         icon={Gauge}
         className="mb-2"
         right={
-          <PeriodFilterBar
-            period={period}
-            customStart={customStart || undefined}
-            customEnd={customEnd || undefined}
-            onPeriodChange={(kind, start, end) => {
-              setPeriod(kind);
-              setCustomStart(start ?? "");
-              setCustomEnd(end ?? "");
-            }}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={period}
+              onChange={(e) => setPeriod(e.target.value as PeriodKind)}
+              className="border border-gray-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+            >
+              <option value="day">Aujourd&apos;hui</option>
+              <option value="week">Cette semaine</option>
+              <option value="month">Ce mois</option>
+              <option value="custom">Personnalisé</option>
+            </select>
+            {period === "custom" && (
+              <>
+                <input
+                  type="date"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="border border-gray-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-sm bg-white dark:bg-slate-800"
+                />
+                <span className="text-gray-500">→</span>
+                <input
+                  type="date"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="border border-gray-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-sm bg-white dark:bg-slate-800"
+                />
+              </>
+            )}
+          </div>
         }
       />
 
-      {/* ——— CEO Cockpit V2 — 8 blocs exécutifs (frozen) ——— */}
-      <CommandCenterBlocksAtoE companyId={companyId} navigate={navigate} data={blocksAtoEData} />
+      {/* Indicateur global : le CEO voit immédiatement si le réseau va bien ou non */}
+      <div
+        className={[
+          "rounded-xl border-2 p-4 flex flex-wrap items-center justify-between gap-4",
+          networkStatusToday === "critique" && "border-red-600 bg-red-50 dark:bg-red-950/30 dark:border-red-500",
+          networkStatusToday === "moyen" && "border-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-500",
+          networkStatusToday === "bon" && "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-500",
+          networkStatusToday === null && "border-gray-200 bg-gray-50/50 dark:border-slate-600 dark:bg-slate-800/50",
+        ].filter(Boolean).join(" ")}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-2xl" aria-hidden>
+            {networkStatusToday === "critique" ? "🔴" : networkStatusToday === "moyen" ? "🟠" : networkStatusToday === "bon" ? "🟢" : "—"}
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">État du réseau aujourd&apos;hui</h2>
+            <p className="text-sm text-gray-600 dark:text-slate-400">
+              {networkStatusToday === null
+                ? "Chargement…"
+                : networkStatusToday === "critique"
+                  ? "Critique — Vérifier remplissage, agences actives et retards bus"
+                  : networkStatusToday === "moyen"
+                    ? "Moyen — Activité ou retards à surveiller"
+                    : "Bon — Réseau opérationnel"}
+            </p>
+          </div>
+        </div>
+        <div className="text-lg font-bold text-gray-900 dark:text-white">
+          {networkStatusToday === "critique"
+            ? "Problème réseau"
+            : networkStatusToday === "moyen"
+              ? "À surveiller"
+              : networkStatusToday === "bon"
+                ? "Réseau OK"
+                : "—"}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <Link to={`${base}/reservations-reseau?period=${periodParam}`} className="block">
+          <MetricCard
+            label={period === "day" ? "CA aujourd'hui" : "CA période"}
+            value={cashKpisLoading ? "—" : money(caFromCash)}
+            icon={TrendingUp}
+            variation={prevStats ? calculateChange(caFromCash, prevStats.totalRevenue) : undefined}
+            variationLabel={prevStats?.comparisonLabel}
+          />
+        </Link>
+        <Link to={`${base}/reservations-reseau`} className="block">
+          <MetricCard
+            label="Billets vendus"
+            value={cashKpisLoading ? "—" : String(billetsFromCash)}
+            icon={Ticket}
+            variation={prevStats ? calculateChange(billetsFromCash, prevStats.totalTickets) : undefined}
+            variationLabel={prevStats?.comparisonLabel}
+          />
+        </Link>
+        <Link to={`${base}/reservations-reseau#agences`} className="block">
+          <MetricCard
+            label="Agences actives"
+            value={cashKpisLoading ? "—" : `${agencesActivesFromCash} / ${agencies.length || "—"}`}
+            icon={Building2}
+            variation={prevStats ? calculateChange(agencesActivesFromCash, prevStats.activeAgencies) : undefined}
+            variationLabel={prevStats?.comparisonLabel}
+          />
+        </Link>
+        <Link to={`${base}/flotte`} className="block">
+          <MetricCard
+            label="Bus en circulation"
+            value={busesInProgressCount !== null ? String(busesInProgressCount) : "—"}
+            icon={Truck}
+          />
+        </Link>
+        <Link to={`${base}/flotte?filter=retard`} className="block">
+          <MetricCard
+            label="Bus en retard"
+            value={delayedBusesCount !== null ? String(delayedBusesCount) : "—"}
+            icon={Clock}
+            valueColorVar={delayedBusesCount != null && delayedBusesCount > 0 ? "#b91c1c" : undefined}
+          />
+        </Link>
+        <Link to={`${base}/audit-controle`} className="block">
+          <MetricCard
+            label="Alertes critiques"
+            value={prioritizedRisks.length > 0 ? String(prioritizedRisks.length) : "0"}
+            icon={AlertTriangle}
+            valueColorVar={prioritizedRisks.length > 0 ? "#b91c1c" : undefined}
+          />
+        </Link>
+      </div>
+
+      {prioritizedRisks.length > 0 && (
+        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/20 p-4 space-y-4">
+          <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-200">Alertes à traiter</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <h4 className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-2">Alertes financières</h4>
+              <ul className="space-y-1 text-sm text-amber-900 dark:text-amber-100">
+                {prioritizedRisks
+                  .filter((r) => r.category === "financial")
+                  .map((r) => (
+                    <li key={r.id}>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`${base}/${r.actionRoute}`)}
+                        className="underline hover:no-underline text-left"
+                      >
+                        {r.label}
+                      </button>
+                    </li>
+                  ))}
+                {prioritizedRisks.filter((r) => r.category === "financial").length === 0 && (
+                  <li className="text-amber-600 dark:text-amber-400">Aucune</li>
+                )}
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-2">Alertes réseau</h4>
+              <ul className="space-y-1 text-sm text-amber-900 dark:text-amber-100">
+                {prioritizedRisks
+                  .filter((r) => r.category === "network")
+                  .map((r) => (
+                    <li key={r.id}>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`${base}/${r.actionRoute}`)}
+                        className="underline hover:no-underline text-left"
+                      >
+                        {r.label}
+                      </button>
+                    </li>
+                  ))}
+                {prioritizedRisks.filter((r) => r.category === "network").length === 0 && (
+                  <li className="text-amber-600 dark:text-amber-400">Aucune</li>
+                )}
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-2">Alertes flotte</h4>
+              <ul className="space-y-1 text-sm text-amber-900 dark:text-amber-100">
+                {prioritizedRisks
+                  .filter((r) => r.category === "fleet")
+                  .map((r) => (
+                    <li key={r.id}>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`${base}/${r.actionRoute}`)}
+                        className="underline hover:no-underline text-left"
+                      >
+                        {r.label}
+                      </button>
+                    </li>
+                  ))}
+                {prioritizedRisks.filter((r) => r.category === "fleet").length === 0 && (
+                  <li className="text-amber-600 dark:text-amber-400">Aucune</li>
+                )}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
     </StandardLayoutWrapper>
   );
 }

@@ -19,6 +19,7 @@ import {
   runTransaction,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import {
   TRIP_INSTANCE_COLLECTION,
   TRIP_INSTANCE_STATUS,
@@ -201,6 +202,33 @@ export async function listTripInstancesByRouteAndDate(
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
+}
+
+/** List trip instances by date range (for capacity / fill rate). Requires index: tripInstances (date ASC). */
+export async function listTripInstancesByDateRange(
+  companyId: string,
+  dateFrom: string,
+  dateTo: string,
+  options?: { limitCount?: number }
+): Promise<TripInstanceDocWithId[]> {
+  if (!dateFrom || !dateTo) return [];
+  const limitCount = options?.limitCount ?? 2000;
+  const q = query(
+    tripInstancesRef(companyId),
+    where("date", ">=", dateFrom),
+    where("date", "<=", dateTo),
+    limit(limitCount)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
+}
+
+/** Nombre de bus "en circulation" aujourd'hui : status in_progress = boarding ou departed. Date en Africa/Bamako. */
+export async function getBusesInProgressCountToday(companyId: string): Promise<number> {
+  const today = getTodayBamako();
+  const instances = await listTripInstancesByDateRange(companyId, today, today, { limitCount: 500 });
+  const statusInProgress = ["boarding", "departed"];
+  return instances.filter((ti) => statusInProgress.includes((ti.status ?? "").toLowerCase())).length;
 }
 
 /** List trip instances by routeId and date (for escale dashboard). Requires composite index: (routeId, date, departureTime). */

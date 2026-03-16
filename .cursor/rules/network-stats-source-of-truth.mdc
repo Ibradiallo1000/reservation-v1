@@ -1,0 +1,47 @@
+---
+description: Single source of truth for TELIYA dashboard indicators. Do not recalculate these indicators outside networkStatsService.
+globs: 
+  - "**/CEOCommandCenterPage.tsx"
+  - "**/ReservationsReseauPage.tsx"
+  - "**/FinancesPage.tsx"
+  - "**/FlottePage.tsx"
+  - "**/CompagnieDashboard*.tsx"
+  - "**/CompanyDashboard/**/*.tsx"
+  - "**/networkStats/**/*.ts"
+---
+
+# ARCHITECTURE RULE — SINGLE SOURCE OF TRUTH
+
+In TELIYA, **every dashboard indicator must have ONE source of truth**. No indicator may be recalculated differently across pages. All pages must use the **same calculation services**.
+
+## Canonical sources
+
+- **CA réseau** → `cashTransactions` (status = `"paid"`)
+- **Billets vendus** → `reservations` (count, status ≠ cancelled)
+- **Véhicules disponibles** → `vehicles` (operationalStatus = GARAGE, technicalStatus = NORMAL)
+- **Bus en circulation** → `tripInstances` (status boarding or departed)
+- **Agences actives** → `reservations` (distinct locationId / agencyId)
+
+## Mandatory usage
+
+These pages must **never** recalculate these indicators locally:
+
+- CEOCommandCenterPage
+- ReservationsReseauPage
+- FinancesPage
+- FlottePage
+- PerformanceReseau / CompanyDashboard components
+
+They must **only** call:
+
+```ts
+import { getNetworkStats } from "@/modules/compagnie/networkStats/networkStatsService";
+
+const stats = await getNetworkStats(companyId, dateFrom, dateTo);
+// Use stats.totalRevenue, stats.totalTickets, stats.activeAgencies,
+// stats.vehiclesAvailable, stats.busesInTransit, stats.networkCapacity, etc.
+```
+
+If an indicator already exists in `networkStatsService`, **do not** recalculate it elsewhere (no local `getCashTransactionsByDateRange` for CA, no local reservation counts for billets, no local `listVehicles` filter for "available", no local tripInstance count for "bus en circulation").
+
+**Goal:** Guarantee consistent figures across the whole TELIYA application.

@@ -50,6 +50,8 @@ interface Props {
   primaryColor: string;
   secondaryColor: string;
   validationHint: string;
+  /** Si true, le message d’attente parle du chef d’escale au lieu de la comptabilité. */
+  activationByEscaleManager?: boolean;
   clientSuggestions?: ClientSuggestion[];
   tariffKey?: string;
   onTariffChange?: (key: string) => void;
@@ -64,6 +66,7 @@ export const SalePanel: React.FC<Props> = ({
   placesAller, onPlacesAllerChange,
   totalPrice, canValidate, isProcessing, onValidate,
   formatMoney, primaryColor, secondaryColor, validationHint,
+  activationByEscaleManager = false,
   clientSuggestions = [],
   tariffKey = "plein", onTariffChange, tariffMultiplier = 1,
   additionalPassengers = [], onAdditionalPassengersChange,
@@ -144,7 +147,7 @@ export const SalePanel: React.FC<Props> = ({
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <p className="text-xs text-amber-800">
               {status === "pending"
-                ? "En attente d'activation par la comptabilité."
+                ? (activationByEscaleManager ? "En attente d'activation par le chef d'escale." : "En attente d'activation par la comptabilité.")
                 : "Ouvrez le comptoir pour commencer à vendre."}
             </p>
           </div>

@@ -12,7 +12,7 @@ interface OfflineReservation {
   seats: number;
   companyId: string;
   agencyId: string;
-  statut: "en_attente_sync" | "en_attente";
+  statut: "en_attente_sync" | "en_attente_paiement";
 }
 
 // Sauvegarde locale
@@ -29,10 +29,13 @@ export const syncOfflineReservations = async () => {
 
   for (const r of pending) {
     try {
+      const now = new Date();
+      const holdUntil = new Date(now.getTime() + 15 * 60 * 1000);
       await addDoc(collection(db, `companies/${r.companyId}/agences/${r.agencyId}/reservations`), {
         ...r,
-        statut: "en_attente",
-        createdAt: new Date()
+        statut: "en_attente_paiement",
+        holdUntil,
+        createdAt: now
       });
     } catch (err) {
       console.error("Erreur synchro offline:", err);

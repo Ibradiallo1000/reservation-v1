@@ -38,6 +38,8 @@ import {
   listTripInstancesByRouteIdAndDate,
   getOrCreateTripInstanceForSlot,
 } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { getRemainingSeats } from "@/modules/compagnie/tripInstances/segmentOccupancyService";
+import { getRemainingStopQuota } from "@/modules/compagnie/tripInstances/inventoryQuotaService";
 import { getStopByOrder, getEscaleDestinations } from "@/modules/compagnie/routes/routeStopsService";
 import { getDeviceFingerprint } from "@/utils/deviceFingerprint";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
@@ -84,9 +86,16 @@ type Trip = { id: string; date: string; time: string; departure: string; arrival
 type TicketRow = {
   id: string; referenceCode?: string; date: string; heure: string; depart: string; arrivee: string;
   nomClient: string; telephone?: string; seatsGo: number; seatsReturn?: number; montant: number;
-  canal?: string; statutEmbarquement?: string; statut?: string; trajetId?: string; shiftId?: string;
+  canal?: string; statutEmbarquement?: string; boardingStatus?: string; statut?: string; trajetId?: string; shiftId?: string;
   createdAt?: any; guichetierCode?: string;
 };
+
+/** Passager embarqué : boardingStatus prioritaire, fallback statutEmbarquement. */
+function isBoarded(row: { boardingStatus?: string; statutEmbarquement?: string }): boolean {
+  if ((row.boardingStatus ?? "").toLowerCase() === "boarded") return true;
+  const s = (row.statutEmbarquement ?? "").toLowerCase();
+  return s === "embarqué" || s === "embarque";
+}
 type ShiftReport = {
   shiftId: string; userId: string; userName?: string; userCode?: string;
   startAt: Timestamp; endAt: Timestamp; billets: number; montant: number;
@@ -94,7 +103,16 @@ type ShiftReport = {
   accountantValidated: boolean; managerValidated: boolean;
 };
 
-type EscaleContext = { routeId: string; stopOrder: number; originCity: string; destinationCities: string[] };
+type EscaleContext = { routeId: string; stopOrder: number; originCity: string; destinationCities: string[]; offsetMinutes?: number };
+
+/** Heure de passage à l’escale = départ origine + offset du stop (minutes). */
+function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
+  const [h, m] = timeStr.split(":").map(Number);
+  const total = (h ?? 0) * 60 + (m ?? 0) + minutesToAdd;
+  const h2 = Math.floor(total / 60) % 24;
+  const m2 = total % 60;
+  return `${String(h2).padStart(2, "0")}:${String(m2).padStart(2, "0")}`;
+}
 
 // ─── Helpers ───
 async function getSellerCode(uid?: string | null) {
@@ -158,6 +176,7 @@ const AgenceGuichetPage: React.FC = () => {
   // ── Company/Agency meta ──
   const [companyMeta, setCompanyMeta] = useState({ name: "Compagnie", code: "COMP", slug: DEFAULT_COMPANY_SLUG, logo: null as string | null, phone: "" });
   const [agencyMeta, setAgencyMeta] = useState({ name: "Agence", code: "AGC", phone: "" });
+  const [agencyType, setAgencyType] = useState<string>("");
   const [departure, setDeparture] = useState("");
   const [allArrivals, setAllArrivals] = useState<string[]>([]);
 
@@ -323,6 +342,7 @@ const AgenceGuichetPage: React.FC = () => {
           const ville = a?.ville || a?.city || a?.nomVille || a?.villeDepart || "";
           setDeparture((ville || "").toString());
           setAgencyMeta({ name: a?.nomAgence || a?.nom || ville || "Agence", code: makeShortCode(a?.nomAgence || a?.nom || ville, a?.code), phone: a?.telephone || "" });
+          setAgencyType((a?.type as string) || "");
         }
         if (!isEscaleMode || !locationState.routeId || locationState.stopOrder == null) {
           const weeklyRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
@@ -338,9 +358,10 @@ const AgenceGuichetPage: React.FC = () => {
         const destinations = await getEscaleDestinations(user.companyId, routeId, stopOrder);
         const originCity = originStop?.city ?? locationState.originEscaleCity ?? "";
         const destinationCities = destinations.map((s) => s.city).filter(Boolean);
+        const offsetMinutes = originStop?.estimatedArrivalOffsetMinutes ?? 0;
         setDeparture(originCity);
         setAllArrivals(destinationCities);
-        setEscaleContext({ routeId, stopOrder, originCity, destinationCities });
+        setEscaleContext({ routeId, stopOrder, originCity, destinationCities, offsetMinutes });
         if (destinationCities.length > 0) setArrival(destinationCities[0]);
       } catch (e) { console.error("[GUICHET] init:error", e); }
     })();
@@ -358,7 +379,7 @@ const AgenceGuichetPage: React.FC = () => {
           id: d.id, referenceCode: r.referenceCode, date: r.date, heure: r.heure,
           depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone,
           seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0,
-          canal: r.canal, statutEmbarquement: r.statutEmbarquement, statut: r.statut,
+          canal: r.canal, statutEmbarquement: r.statutEmbarquement, boardingStatus: r.boardingStatus, statut: r.statut,
           trajetId: r.trajetId, shiftId: r.shiftId, createdAt: r.createdAt,
           guichetierCode: r.guichetierCode || "",
         };
@@ -391,19 +412,29 @@ const AgenceGuichetPage: React.FC = () => {
         const d = new Date(now); d.setDate(now.getDate() + i);
         const dateISO = d.toISOString().split("T")[0];
         const instances = await listTripInstancesByRouteIdAndDate(user.companyId, escaleContext.routeId, dateISO);
+        const remainingMap: Record<string, number> = {};
+        const stopOrder = escaleContext.stopOrder;
+        await Promise.all(
+          instances.map(async (ti) => {
+            if ((ti as { status?: string }).status === "cancelled") return;
+            const r = await getRemainingStopQuota(user.companyId, ti.id, stopOrder);
+            remainingMap[ti.id] = r;
+          })
+        );
         for (const ti of instances) {
           if ((ti as { status?: string }).status === "cancelled") continue;
           const capacity = (ti as any).seatCapacity ?? (ti as any).capacitySeats ?? MAX_SEATS_FALLBACK;
-          const reserved = (ti as any).reservedSeats ?? 0;
-          const remaining = capacity - reserved;
+          const remaining = remainingMap[ti.id] ?? capacity - ((ti as any).reservedSeats ?? 0);
           if (remaining <= 0) continue;
           if (dateISO === now.toISOString().split("T")[0] && isPastTime(dateISO, (ti as any).departureTime)) continue;
           const tiRouteId = (ti as { routeId?: string }).routeId;
           if (tiRouteId != null && tiRouteId !== escaleContext.routeId) continue;
+          const depTime = (ti as any).departureTime ?? "00:00";
+          const passageEscaleTime = addMinutesToTime(depTime, escaleContext.offsetMinutes ?? 0);
           out.push({
             id: ti.id,
             date: ti.date,
-            time: (ti as any).departureTime,
+            time: passageEscaleTime,
             departure: originCity,
             arrival: arr.trim(),
             price: (ti as any).price ?? 0,
@@ -454,12 +485,23 @@ const AgenceGuichetPage: React.FC = () => {
         }
         instances = await listTripInstancesByRouteAndDate(user.companyId, dep, arr, dateISO);
       }
+      const remainingMap: Record<string, number> = {};
+      await Promise.all(
+        instances.map(async (ti) => {
+          if ((ti as any).routeId) {
+            const r = await getRemainingSeats(user.companyId, ti.id);
+            remainingMap[ti.id] = r;
+          }
+        })
+      );
       for (const ti of instances) {
         if (ti.agencyId !== user.agencyId) continue;
         if ((ti as { status?: string }).status === "cancelled") continue;
         const capacity = (ti as any).seatCapacity ?? (ti as any).capacitySeats ?? MAX_SEATS_FALLBACK;
         const reserved = (ti as any).reservedSeats ?? 0;
-        const remaining = capacity - reserved;
+        const remaining = (ti as any).routeId && remainingMap[ti.id] !== undefined
+          ? remainingMap[ti.id]
+          : capacity - reserved;
         if (remaining <= 0) continue;
         if (dateISO === now.toISOString().split("T")[0] && isPastTime(dateISO, (ti as any).departureTime)) continue;
         out.push({
@@ -618,7 +660,7 @@ const AgenceGuichetPage: React.FC = () => {
   const cancelReservation = useCallback(async (row: TicketRow) => {
     if (!user?.companyId || !user?.agencyId) return;
     if (row.canal && row.canal !== CANALS.GUICHET) { alert("Annulation uniquement pour les ventes guichet."); return; }
-    if (row.statutEmbarquement === EMBARKMENT_STATUS.EMBARQUE) { alert("Impossible : passager embarqué."); return; }
+    if (isBoarded(row)) { alert("Impossible : passager embarqué."); return; }
     if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) { alert("Déjà annulé."); return; }
     const reason = prompt("Motif d'annulation (min. 5 caractères) :") || "";
     if (!reason.trim() || reason.length < 5) { alert("Motif requis (min. 5 caractères)."); return; }
@@ -672,7 +714,7 @@ const AgenceGuichetPage: React.FC = () => {
   }, [user?.companyId, user?.agencyId, user?.uid, user?.displayName, user?.email, sellerCodeCached, money, soundEnabled]);
 
   const openEdit = useCallback((row: TicketRow) => {
-    if (row.statutEmbarquement === EMBARKMENT_STATUS.EMBARQUE) { alert("Modification impossible : passager embarqué."); return; }
+    if (isBoarded(row)) { alert("Modification impossible : passager embarqué."); return; }
     if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) { alert("Déjà annulé."); return; }
     setEditTarget({ id: row.id, nomClient: row.nomClient, telephone: row.telephone, seatsGo: row.seatsGo ?? 1, seatsReturn: row.seatsReturn ?? 0, montant: row.montant ?? 0, expectedPrice: row.montant ?? 0 });
     setEditOpen(true);
@@ -707,7 +749,7 @@ const AgenceGuichetPage: React.FC = () => {
     const unsub = onSnapshot(q, (snap) => {
       setTickets(snap.docs.map((d) => {
         const r = d.data() as any;
-        return { id: d.id, referenceCode: r.referenceCode, date: r.date, heure: r.heure, depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone, seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0, canal: r.canal, statutEmbarquement: r.statutEmbarquement, statut: r.statut, trajetId: r.trajetId, createdAt: r.createdAt, guichetierCode: r.guichetierCode || "" };
+        return { id: d.id, referenceCode: r.referenceCode, date: r.date, heure: r.heure, depart: r.depart, arrivee: r.arrivee, nomClient: r.nomClient, telephone: r.telephone, seatsGo: r.seatsGo || 1, seatsReturn: r.seatsReturn || 0, montant: r.montant || 0, canal: r.canal, statutEmbarquement: r.statutEmbarquement, boardingStatus: r.boardingStatus, statut: r.statut, trajetId: r.trajetId, createdAt: r.createdAt, guichetierCode: r.guichetierCode || "" };
       }));
       setLoadingReport(false);
     }, (err) => {
@@ -903,6 +945,7 @@ const AgenceGuichetPage: React.FC = () => {
                 secondaryColor={theme.secondary}
                 onStart={() => startShift().catch((e: any) => alert(e?.message || "Erreur"))}
                 onRefresh={() => refresh().catch(() => {})}
+                activationByEscaleManager={agencyType === "escale"}
               />
             ) : sessionLockedByOtherDevice ? (
               <ClosedOverlay
@@ -912,6 +955,7 @@ const AgenceGuichetPage: React.FC = () => {
                 secondaryColor={theme.secondary}
                 onStart={() => {}}
                 onRefresh={() => refresh().catch(() => {})}
+                activationByEscaleManager={agencyType === "escale"}
               />
             ) : (
               <div className="max-w-[1600px] mx-auto p-4 lg:p-6 h-full flex flex-col min-h-0">
@@ -955,7 +999,8 @@ const AgenceGuichetPage: React.FC = () => {
                     {arrival && selectedDate && (
                       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-3">
                         <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5">
-                          <Clock4 className="w-3.5 h-3.5 text-gray-400" /> Horaires disponibles
+                          <Clock4 className="w-3.5 h-3.5 text-gray-400" />
+                          {isEscaleMode ? "Heure de passage à l'escale" : "Horaires disponibles"}
                         </h3>
                         <TimeSlotGrid
                           slots={filteredTrips}
@@ -1001,6 +1046,7 @@ const AgenceGuichetPage: React.FC = () => {
                       primaryColor={theme.primary}
                       secondaryColor={theme.secondary}
                       validationHint={validationHint}
+                      activationByEscaleManager={agencyType === "escale"}
                       clientSuggestions={clientSuggestions}
                       tariffKey={tariffKey}
                       onTariffChange={setTariffKey}
@@ -1072,7 +1118,7 @@ const AgenceGuichetPage: React.FC = () => {
                         <tbody className="divide-y divide-gray-100">
                           {filteredTickets.map((t) => {
                             const canceled = t.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || t.montant === 0;
-                            const boarded = t.statutEmbarquement === EMBARKMENT_STATUS.EMBARQUE;
+                            const boarded = isBoarded(t);
                             return (
                               <tr key={t.id} className={`hover:bg-gray-50/50 transition-colors ${canceled ? "bg-red-50/40" : boarded ? "bg-emerald-50/40" : ""}`}>
                                 <td className="px-4 py-3">

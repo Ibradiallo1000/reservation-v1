@@ -38,6 +38,8 @@ import {
 import { getAffectationForBoarding } from "@/modules/compagnie/fleet/affectationService";
 import { getEffectiveStatut, canEmbarkWithScan, RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
+import { ensureProgressArrival, markOriginDeparture, ensureAutoDepartIfNeeded, getTripProgress, ORIGIN_STOP_ORDER } from "@/modules/compagnie/tripInstances/tripProgressService";
+import { findTripInstanceBySlot } from "@/modules/compagnie/tripInstances/tripInstanceService";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { Plane, CheckCircle, AlertTriangle } from "lucide-react";
 import {
@@ -62,13 +64,28 @@ interface Reservation {
   canal?: string;
   montant?: number;
   statut?: string;
+  /** Déprécié : utiliser boardingStatus. Conservé pour compatibilité affichage. */
   statutEmbarquement?: StatutEmbarquement;
+  /** Source de vérité embarquement : pending | boarded | no_show */
+  boardingStatus?: string;
   checkInTime?: any;
   trajetId?: string;
   referenceCode?: string;
   controleurId?: string;
   arrival?: string;
   seatsGo?: number;
+  destinationStopOrder?: number | null;
+}
+
+/** Retourne le statut d'embarquement effectif (boardingStatus prioritaire, fallback statutEmbarquement). */
+function getEffectiveBoardingStatus(r: { boardingStatus?: string; statutEmbarquement?: string }): "boarded" | "no_show" | "pending" {
+  const b = (r.boardingStatus ?? "").toLowerCase();
+  if (b === "boarded") return "boarded";
+  if (b === "no_show") return "no_show";
+  const s = (r.statutEmbarquement ?? "").toLowerCase();
+  if (s === "embarqué" || s === "embarque") return "boarded";
+  if (s === "absent") return "no_show";
+  return "pending";
 }
 
 interface WeeklyTrip {
@@ -301,15 +318,22 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicle
     };
   }, []);
 
-  // Fast boarding overlay (success / error for 1.2s; success can show "Embarqué (hors ligne)")
+  // Fast boarding overlay (success / error for 1.2s; success can show "Embarqué (hors ligne)" + détail passager + alerte dépassement)
+  type ScanDetails = {
+    nomClient?: string;
+    depart?: string;
+    arrivee?: string;
+    statutEmbarquement?: string;
+    overtravel?: boolean;
+  };
   const [fastBoardOverlay, setFastBoardOverlay] = useState<
-    { type: "success"; offline?: boolean } | { type: "error"; message: string } | null
+    { type: "success"; offline?: boolean; scanDetails?: ScanDetails } | { type: "error"; message: string } | null
   >(null);
   const overlayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showFastBoardSuccess = useCallback((offline?: boolean) => {
+  const showFastBoardSuccess = useCallback((offline?: boolean, scanDetails?: ScanDetails) => {
     if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
-    setFastBoardOverlay({ type: "success", offline: !!offline });
+    setFastBoardOverlay({ type: "success", offline: !!offline, scanDetails: scanDetails ?? undefined });
     try { navigator.vibrate(120); } catch {}
     try { new Audio("/beep.mp3").play(); } catch {}
     overlayTimeoutRef.current = setTimeout(() => {
@@ -552,23 +576,33 @@ useEffect(() => {
         const qEmb = query(
           collection(db, `companies/${companyId}/agences/${agencyIdToUse}/reservations`),
           where("date", "==", selectedDate),
-          where("heure", "==", selectedTrip!.heure),
-          where("statutEmbarquement", "==", "embarqué")
+          where("heure", "==", selectedTrip!.heure)
         );
         const snapEmb = await getDocs(qEmb);
         let seatsEmbarques = 0;
         snapEmb.docs.forEach((d) => {
-          const docData = d.data() as { trajetId?: string; depart?: string; arrivee?: string; arrival?: string; seatsGo?: number };
+          const docData = d.data() as { trajetId?: string; depart?: string; arrivee?: string; arrival?: string; seatsGo?: number; boardingStatus?: string; statutEmbarquement?: string };
           if (docData.trajetId === selectedTrip?.id || (normCity(docData.depart) === normCity(selectedTrip!.departure) && normCity(docData.arrivee || docData.arrival) === normCity(selectedTrip!.arrival))) {
-            seatsEmbarques += docData.seatsGo ?? 1;
+            if (getEffectiveBoardingStatus(docData) === "boarded") seatsEmbarques += docData.seatsGo ?? 1;
           }
         });
         const resSnap = await getDoc(resRef);
-        const dataPre = resSnap.exists() ? (resSnap.data() as { statutEmbarquement?: string; seatsGo?: number }) : null;
-        const alreadyEmbarked = dataPre?.statutEmbarquement === "embarqué";
+        const dataPre = resSnap.exists() ? (resSnap.data() as { boardingStatus?: string; statutEmbarquement?: string; seatsGo?: number }) : null;
+        const alreadyEmbarked = dataPre ? getEffectiveBoardingStatus(dataPre) === "boarded" : false;
         const addSeats = alreadyEmbarked ? 0 : (dataPre?.seatsGo ?? 1);
         if (seatsEmbarques + addSeats > vehicleCapacity) {
           throw new Error("Capacité véhicule atteinte");
+        }
+      }
+
+      // Arrivée auto à l'escale si embarquement depuis une escale (avant action passager)
+      if (statut === "embarqué" && (agencyInfo as { type?: string; stopOrder?: number })?.type === "escale") {
+        const stopOrder = (agencyInfo as { stopOrder?: number }).stopOrder;
+        if (stopOrder != null && companyId) {
+          const resSnap = await getDoc(resRef);
+          const resData = resSnap.exists() ? (resSnap.data() as { tripInstanceId?: string; trajetId?: string }) : {};
+          const tripInstanceId = resData.tripInstanceId ?? resData.trajetId ?? selectedTrip?.id;
+          if (tripInstanceId) await ensureProgressArrival(companyId, tripInstanceId, stopOrder);
         }
       }
 
@@ -671,7 +705,7 @@ useEffect(() => {
             const currentEmbarked = statsSnap.exists()
               ? ((statsSnap.data() as { embarkedSeats?: number }).embarkedSeats ?? 0)
               : 0;
-            const addSeats = (data.statutEmbarquement === "embarqué")
+            const addSeats = getEffectiveBoardingStatus(data as { boardingStatus?: string; statutEmbarquement?: string }) === "boarded"
               ? 0
               : (Number(data.seatsGo) || 1);
             if (vehicleCapacity != null && vehicleCapacity > 0 && currentEmbarked + addSeats > vehicleCapacity) {
@@ -681,7 +715,7 @@ useEffect(() => {
           }
 
           // verrou uniquement pour EMBARQUÉ (évite double-scan)
-          if (data.statutEmbarquement === "embarqué" && statut === "embarqué") {
+          if (getEffectiveBoardingStatus(data as { boardingStatus?: string; statutEmbarquement?: string }) === "boarded" && statut === "embarqué") {
             throw new Error("Déjà embarqué");
           }
           const lockRef = doc(
@@ -703,14 +737,15 @@ useEffect(() => {
             });
           }
 
-          const patch: any = {
-            statutEmbarquement: statut,
+          const patch: Record<string, unknown> = {
+            boardingStatus: statut === "embarqué" ? "boarded" : statut === "absent" ? "no_show" : "pending",
             controleurId: uid,
             checkInTime: statut === "embarqué" ? serverTimestamp() : null,
           };
           if (statut === "embarqué") {
-            patch.statut = "embarque";
-            patch.auditLog = arrayUnion(
+            (patch as any).journeyStatus = "in_transit";
+            (patch as any).statut = "embarque";
+            (patch as any).auditLog = arrayUnion(
               buildStatutTransitionPayload(String(data.statut ?? ""), "embarque", {
                 userId: uid,
                 userRole: (user as { role?: string })?.role ?? "controleur_embarquement",
@@ -857,6 +892,7 @@ useEffect(() => {
 
       const batch = writeBatch(db);
       batch.update(resRef, {
+        boardingStatus: "no_show",
         statutEmbarquement: "absent",
         noShowAt: serverTimestamp(),
         noShowBy: uid,
@@ -872,6 +908,7 @@ useEffect(() => {
         seatsGo: (data as any).seatsGo || 1,
         canal: "report",
         statut: "confirme",
+        boardingStatus: "pending",
         statutEmbarquement: "en_attente",
         sourceReservationId: reservationId,
         createdBy: uid,
@@ -907,6 +944,9 @@ useEffect(() => {
     return `${dep}_${arr}_${hr}_${dt}`;
   }, [selectedTrip, selectedDate]);
   const [isClosed, setIsClosed] = useState(false);
+  const [tripInstanceIdForSlot, setTripInstanceIdForSlot] = useState<string | null>(null);
+  const [originDepartureDone, setOriginDepartureDone] = useState(false);
+  const [sendingOriginDeparture, setSendingOriginDeparture] = useState(false);
 
   useEffect(() => {
     if (!companyId || !selectedAgencyId || !tripKey) { setIsClosed(false); return; }
@@ -914,6 +954,58 @@ useEffect(() => {
     const unsub = onSnapshot(ref, (s) => setIsClosed(s.exists()));
     return () => unsub();
   }, [companyId, selectedAgencyId, tripKey]);
+
+  /* ---------- Résoudre tripInstanceId + auto-départ 30 min après clôture ---------- */
+  useEffect(() => {
+    if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate || !isClosed) {
+      setTripInstanceIdForSlot(null);
+      setOriginDepartureDone(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const closureRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingClosures/${tripKey!}`);
+        const closureSnap = await getDoc(closureRef);
+        const closedAt = closureSnap.exists() ? (closureSnap.data() as { closedAt?: { toMillis: () => number } }).closedAt : null;
+        const ti = await findTripInstanceBySlot(
+          companyId,
+          selectedAgencyId,
+          selectedDate,
+          selectedTrip.heure,
+          selectedTrip.departure,
+          selectedTrip.arrival
+        );
+        if (cancelled || !ti) {
+          setTripInstanceIdForSlot(null);
+          setOriginDepartureDone(false);
+          return;
+        }
+        setTripInstanceIdForSlot(ti.id);
+        if (closedAt && typeof (closedAt as any).toMillis === "function") await ensureAutoDepartIfNeeded(companyId, ti.id, closedAt as any);
+        const progress = await getTripProgress(companyId, ti.id);
+        const origin = progress.find((p) => p.stopOrder === ORIGIN_STOP_ORDER);
+        setOriginDepartureDone(!!origin?.departureTime);
+      } catch {
+        if (!cancelled) setTripInstanceIdForSlot(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [companyId, selectedAgencyId, selectedTrip, selectedDate, isClosed, tripKey]);
+
+  const handleBusParti = useCallback(async () => {
+    if (!companyId || !tripInstanceIdForSlot || !uid) return;
+    setSendingOriginDeparture(true);
+    try {
+      await markOriginDeparture(companyId, tripInstanceIdForSlot, uid);
+      setOriginDepartureDone(true);
+    } catch (e) {
+      console.error("[Embarquement] markOriginDeparture error:", e);
+      alert(e instanceof Error ? e.message : "Erreur lors de l'enregistrement du départ.");
+    } finally {
+      setSendingOriginDeparture(false);
+    }
+  }, [companyId, tripInstanceIdForSlot, uid]);
 
   /* ---------- Clôturer : un seul passage + verrou + reprogrammation ---------- */
   const cloturerEmbarquement = useCallback(async () => {
@@ -962,10 +1054,11 @@ useEffect(() => {
 
         // Marquer comme ABSENT tout ce qui n'est pas embarqué
         for (const r of reservations) {
-          const embarked = r.statutEmbarquement === "embarqué";
+          const embarked = getEffectiveBoardingStatus(r) === "boarded";
           if (!embarked) {
             const resRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${r.id}`);
             tx.update(resRef, {
+              boardingStatus: "no_show",
               statutEmbarquement: "absent",
               noShowAt: serverTimestamp(),
               noShowBy: uid,
@@ -1000,7 +1093,7 @@ useEffect(() => {
         updateDailyStatsOnBoardingClosed(tx, companyId, selectedAgencyId, selectedDate);
         const tripKey = boardingStatsKey(selectedTrip.departure, selectedTrip.arrival, selectedTrip.heure, selectedDate);
         const absentSeats = reservations
-          .filter((r) => r.statutEmbarquement !== "embarqué")
+          .filter((r) => getEffectiveBoardingStatus(r) !== "boarded")
           .reduce((sum, r) => sum + ((r as { seatsGo?: number }).seatsGo ?? 1), 0);
         setBoardingStatsClosed(tx, companyId, selectedAgencyId, tripKey, absentSeats);
         updateAgencyLiveStateOnBoardingClosed(tx, companyId, selectedAgencyId);
@@ -1042,7 +1135,7 @@ useEffect(() => {
       const batch = writeBatch(db);
 
       for (const r of reservations) {
-        const embarked = r.statutEmbarquement === "embarqué";
+        const embarked = getEffectiveBoardingStatus(r) === "boarded";
         if (embarked) continue;
 
         if ((r as any).reprogrammedOnce === true) continue;
@@ -1078,6 +1171,7 @@ useEffect(() => {
             seatsGo: (r as any).seatsGo || 1,
             canal: "report",
             statut: "confirme",
+            boardingStatus: "pending",
             statutEmbarquement: "en_attente",
             sourceReservationId: r.id,
             createdBy: uid,
@@ -1180,8 +1274,27 @@ useEffect(() => {
           } : undefined
         );
         if (found) {
+          let scanDetails: ScanDetails | undefined;
+          try {
+            const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
+            const resSnap = await getDoc(resRef);
+            if (resSnap.exists()) {
+              const d = resSnap.data() as Record<string, unknown>;
+              const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
+              const currentStopOrder = (agencyInfo as { type?: string; stopOrder?: number } | null)?.type === "escale" ? (agencyInfo as { stopOrder?: number }).stopOrder : undefined;
+              const overtravel = currentStopOrder != null && destOrder != null && destOrder < currentStopOrder;
+              const eff = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string });
+              scanDetails = {
+                nomClient: (d.nomClient as string) ?? undefined,
+                depart: (d.depart as string) ?? undefined,
+                arrivee: (d.arrivee as string) ?? undefined,
+                statutEmbarquement: eff === "boarded" ? "embarqué" : eff === "no_show" ? "absent" : "en_attente",
+                overtravel,
+              };
+            }
+          } catch (_) {}
           await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
-          showFastBoardSuccess();
+          showFastBoardSuccess(false, scanDetails);
           setScanCode("");
         } else {
           showFastBoardError("Réservation introuvable.");
@@ -1191,7 +1304,7 @@ useEffect(() => {
         showFastBoardError(normalizeOverlayMessage(err?.message ?? "Erreur lors de la validation manuelle."));
       }
     },
-    [scanCode, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage]
+    [scanCode, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage, agencyInfo]
   );
 
   /* ---------- Scanner caméra ---------- */
@@ -1257,8 +1370,20 @@ useEffect(() => {
                 } : undefined
               );
               if (found) {
+                let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
+                try {
+                  const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
+                  const resSnap = await getDoc(resRef);
+                  if (resSnap.exists()) {
+                    const d = resSnap.data() as Record<string, unknown>;
+                    const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
+                    const currentStopOrder = (agencyInfo as { type?: string; stopOrder?: number } | null)?.type === "escale" ? (agencyInfo as { stopOrder?: number }).stopOrder : undefined;
+                    const overtravel = currentStopOrder != null && destOrder != null && destOrder < currentStopOrder;
+                    scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
+                  }
+                } catch (_) {}
                 await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
-                showFastBoardSuccess();
+                showFastBoardSuccess(false, scanDetails);
               } else {
                 showFastBoardError("Billet introuvable.");
               }
@@ -1317,8 +1442,20 @@ useEffect(() => {
                 } : undefined
               );
               if (found) {
+                let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
+                try {
+                  const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
+                  const resSnap = await getDoc(resRef);
+                  if (resSnap.exists()) {
+                    const d = resSnap.data() as Record<string, unknown>;
+                    const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
+                    const currentStopOrder = (agencyInfo as { type?: string; stopOrder?: number } | null)?.type === "escale" ? (agencyInfo as { stopOrder?: number }).stopOrder : undefined;
+                    const overtravel = currentStopOrder != null && destOrder != null && destOrder < currentStopOrder;
+                    scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
+                  }
+                } catch (_) {}
                 await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
-                showFastBoardSuccess();
+                showFastBoardSuccess(false, scanDetails);
               } else {
                 showFastBoardError("Billet introuvable.");
               }
@@ -1340,7 +1477,7 @@ useEffect(() => {
         videoRef.current.srcObject = null;
       }
     };
-  }, [scanOn, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage]);
+  }, [scanOn, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage, agencyInfo]);
 
   /* ---------- Filtre & Totaux ---------- */
   const filtered = useMemo(() => {
@@ -1453,6 +1590,19 @@ useEffect(() => {
               <span className="text-2xl font-bold">
                 {fastBoardOverlay.offline ? "Embarqué (hors ligne)" : "Embarqué"}
               </span>
+              {fastBoardOverlay.scanDetails && (
+                <div className="mt-4 text-center px-4 max-w-md">
+                  <div className="text-lg font-medium">{fastBoardOverlay.scanDetails.nomClient || "—"}</div>
+                  <div className="text-sm opacity-90">Origine: {fastBoardOverlay.scanDetails.depart || "—"}</div>
+                  <div className="text-sm opacity-90">Destination: {fastBoardOverlay.scanDetails.arrivee || "—"}</div>
+                  <div className="text-sm opacity-90">Statut: {fastBoardOverlay.scanDetails.statutEmbarquement || "—"}</div>
+                  {fastBoardOverlay.scanDetails.overtravel && (
+                    <div className="mt-3 px-3 py-2 bg-white/20 rounded font-bold text-sm">
+                      ⚠ PASSAGER AU-DELÀ DE SA DESTINATION
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -1682,6 +1832,17 @@ useEffect(() => {
             >
               {isClosed ? "Clôturé" : "🚍 Clôturer"}
             </button>
+            {isClosed && tripInstanceIdForSlot && !originDepartureDone && (
+              <button
+                type="button"
+                onClick={handleBusParti}
+                disabled={sendingOriginDeparture}
+                className="w-full sm:w-auto px-3 py-2 rounded-lg text-sm min-h-[40px] bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                title="Enregistrer le départ du bus depuis l'agence d'origine"
+              >
+                {sendingOriginDeparture ? "Enregistrement…" : "🚌 Bus parti"}
+              </button>
+            )}
           </div>
 
           {scanOn && (
@@ -1820,8 +1981,9 @@ useEffect(() => {
                   </tr>
                 ) : (
                   filtered.map((r, idx) => {
-                    const embarked = r.statutEmbarquement === "embarqué";
-                    const absent   = r.statutEmbarquement === "absent";
+                    const eff = getEffectiveBoardingStatus(r);
+                    const embarked = eff === "boarded";
+                    const absent   = eff === "no_show";
                     const seats = r.seatsGo ?? 1;
                     return (
                       <tr

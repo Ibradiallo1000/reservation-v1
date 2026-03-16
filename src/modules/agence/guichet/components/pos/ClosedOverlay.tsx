@@ -8,10 +8,12 @@ interface Props {
   secondaryColor: string;
   onStart: () => void;
   onRefresh: () => void;
+  /** Si true, le message d’attente parle du chef d’escale au lieu de la comptabilité. */
+  activationByEscaleManager?: boolean;
 }
 
 export const ClosedOverlay: React.FC<Props> = ({
-  status, locked, primaryColor, secondaryColor, onStart, onRefresh,
+  status, locked, primaryColor, secondaryColor, onStart, onRefresh, activationByEscaleManager = false,
 }) => {
   const gradient = `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`;
 
@@ -42,9 +44,13 @@ export const ClosedOverlay: React.FC<Props> = ({
           </h2>
           <p className="text-gray-500 mt-2 text-sm max-w-xs mx-auto">
             {locked
-              ? "Ce poste est déjà ouvert sur un autre appareil. Fermez-le là-bas ou contactez la comptabilité."
+              ? activationByEscaleManager
+                ? "Ce poste est déjà ouvert sur un autre appareil. Fermez-le là-bas ou contactez le chef d'escale."
+                : "Ce poste est déjà ouvert sur un autre appareil. Fermez-le là-bas ou contactez la comptabilité."
               : status === "pending"
-                ? "Votre demande a été envoyée. La comptabilité doit activer votre poste."
+                ? activationByEscaleManager
+                  ? "Votre demande a été envoyée. Le chef d'escale doit activer votre poste."
+                  : "Votre demande a été envoyée. La comptabilité doit activer votre poste."
                 : "Ouvrez le comptoir pour commencer à vendre des billets."}
           </p>
         </div>

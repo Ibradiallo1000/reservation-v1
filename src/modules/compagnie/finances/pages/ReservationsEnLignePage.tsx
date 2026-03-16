@@ -5,6 +5,7 @@ import {
   deleteDoc, onSnapshot, getDoc, updateDoc, serverTimestamp, getDocs, Timestamp
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { getStartOfDayBamako, getEndOfDayBamako } from '@/shared/date/dateUtilsTz';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { 
@@ -487,15 +488,13 @@ const ReservationsEnLigne: React.FC = () => {
   /* ================= FILTRAGE AVEC PÉRIODE ================= */
   const filterReservationsByPeriod = (reservations: Reservation[], period: FilterOptions['period']) => {
     if (period === 'today') {
-      // Pour "aujourd'hui", filtrer les réservations du jour même
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-      
+      // Pour "aujourd'hui", filtrer en fuseau Africa/Bamako (cohérent avec les dashboards)
+      const todayStart = getStartOfDayBamako();
+      const todayEnd = getEndOfDayBamako();
+
       return reservations.filter(reservation => {
         let reservationDate: Date;
-        
+
         if (reservation.createdAt instanceof Timestamp) {
           reservationDate = reservation.createdAt.toDate();
         } else if (typeof reservation.createdAt === 'string') {
@@ -505,7 +504,7 @@ const ReservationsEnLigne: React.FC = () => {
         } else {
           return false;
         }
-        
+
         return reservationDate >= todayStart && reservationDate <= todayEnd;
       });
     }

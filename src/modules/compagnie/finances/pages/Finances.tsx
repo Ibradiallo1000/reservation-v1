@@ -105,7 +105,7 @@ const Finances: React.FC = () => {
   const money = useFormatCurrency();
   
   const [loading, setLoading] = useState(true);
-  const [periodType, setPeriodType] = useState<'day' | 'week' | 'month' | 'quarter' | 'year' | 'custom'>('month');
+  const [periodType, setPeriodType] = useState<'day' | 'week' | 'month' | 'quarter' | 'year' | 'custom'>('day');
   const [customDateRange, setCustomDateRange] = useState<{start: Date | null, end: Date | null}>({start: null, end: null});
   const [financialData, setFinancialData] = useState<FinancialData | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());

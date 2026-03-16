@@ -208,6 +208,27 @@ export async function getCashTransactionsByDate(
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CashTransactionDocWithId));
 }
 
+/**
+ * Transactions de caisse sur une plage de dates (pour CA et billets période).
+ * Requiert index : cashTransactions (date ASC).
+ */
+export async function getCashTransactionsByDateRange(
+  companyId: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<CashTransactionDocWithId[]> {
+  const ref = cashTransactionsRef(companyId);
+  const q = query(
+    ref,
+    where("date", ">=", dateFrom),
+    where("date", "<=", dateTo),
+    orderBy("date", "asc"),
+    limit(5000)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CashTransactionDocWithId));
+}
+
 // ─────────────── Cash refunds ───────────────
 
 export interface CreateCashRefundParams {

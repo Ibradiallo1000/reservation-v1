@@ -15,6 +15,7 @@ import {
   listTripInstancesByRouteAndDate,
   getOrCreateTripInstanceForSlot,
 } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { getRemainingSeats } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
 
 interface WeeklyTrip {
   id: string;
@@ -159,19 +160,25 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
         }
         instances = await listTripInstancesByRouteAndDate(company.id, depNorm, arrNorm, dateStr);
       }
+      const remainingById: Record<string, number> = {};
+      await Promise.all(
+        instances
+          .filter((ti) => (ti as any).routeId)
+          .map(async (ti) => {
+            remainingById[ti.id] = await getRemainingSeats(company.id, ti.id);
+          })
+      );
       const list: Trip[] = instances
-        .filter(ti => ti.status !== 'cancelled' && ((ti.seatCapacity ?? 0) - (ti.reservedSeats ?? 0)) > 0)
-        .map(ti => ({
-          id: ti.id,
-          date: ti.date,
-          time: ti.departureTime,
-          departure: ti.departureCity ?? '',
-          arrival: ti.arrivalCity ?? '',
-          price: (ti as any).price ?? 0,
-          places: ti.seatCapacity ?? 0,
-          remainingSeats: (ti.seatCapacity ?? 0) - (ti.reservedSeats ?? 0),
-          agencyId: ti.agencyId,
-        }));
+        .filter(ti => ti.status !== 'cancelled')
+        .map(ti => {
+          const capacity = (ti.seatCapacity ?? 0);
+          const fallback = capacity - (ti.reservedSeats ?? 0);
+          const remaining = (ti as any).routeId && remainingById[ti.id] !== undefined
+            ? remainingById[ti.id]
+            : fallback;
+          return { id: ti.id, date: ti.date, time: ti.departureTime, departure: ti.departureCity ?? '', arrival: ti.arrivalCity ?? '', price: (ti as any).price ?? 0, places: capacity, remainingSeats: remaining, agencyId: ti.agencyId };
+        })
+        .filter(t => t.remainingSeats > 0);
       setTrips(list);
     } catch (err) {
       console.error('Erreur Firestore:', err);

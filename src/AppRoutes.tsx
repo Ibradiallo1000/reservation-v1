@@ -84,6 +84,10 @@ const LogisticsDashboardPage = lazy(() => import("./modules/compagnie/pages/Logi
 const LogisticsCrewPage = lazy(() => import("./modules/compagnie/pages/LogisticsCrewPage"));
 const CompanyRoutesPage = lazy(() => import("./modules/compagnie/pages/CompanyRoutesPage"));
 const CompanyCashPage = lazy(() => import("./modules/compagnie/cash/CompanyCashPage"));
+const FinancesPage = lazy(() => import("./modules/compagnie/pages/FinancesPage"));
+const ReservationsReseauPage = lazy(() => import("./modules/compagnie/pages/ReservationsReseauPage"));
+const FlottePage = lazy(() => import("./modules/compagnie/pages/FlottePage"));
+const AuditControlePage = lazy(() => import("./modules/compagnie/pages/AuditControlePage"));
 const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 const FinancialSettingsPage = lazy(() => import("./modules/compagnie/settings/FinancialSettingsPage"));
 const NotificationsPage = lazy(() => import("./modules/compagnie/notifications/NotificationsPage"));
@@ -108,7 +112,12 @@ const AgencyTreasuryNewPayablePage = lazy(() => import("./modules/agence/treasur
 
 // ── Agency standalone (non-manager roles) ──
 const AgenceGuichetPage = lazy(() => import("./modules/agence/guichet/pages/AgenceGuichetPage"));
+const EscaleLayout = lazy(() => import("./modules/agence/escale/layout/EscaleLayout"));
 const EscaleDashboardPage = lazy(() => import("./modules/agence/escale/pages/EscaleDashboardPage"));
+const EscaleBusDuJourPage = lazy(() => import("./modules/agence/escale/pages/EscaleBusDuJourPage"));
+const EscaleCaissePage = lazy(() => import("./modules/agence/escale/pages/EscaleCaissePage"));
+const BoardingEscalePage = lazy(() => import("./modules/agence/escale/pages/BoardingEscalePage"));
+const BusPassengerManifestPage = lazy(() => import("./modules/agence/escale/pages/BusPassengerManifestPage"));
 const ReceiptGuichetPage = lazy(() => import("./modules/agence/guichet/pages/ReceiptGuichetPage"));
 const AgenceComptabilitePage = lazy(() => import("./modules/agence/comptabilite/pages/AgenceComptabilitePage"));
 const CashSessionsPage = lazy(() => import("./modules/agence/cashControl/CashSessionsPage"));
@@ -348,21 +357,25 @@ const AppRoutes = () => {
           <Route index element={<RoleLanding />} />
           <Route path="command-center" element={<CEOCommandCenterPage />} />
           <Route path="payment-approvals" element={<CEOPaymentApprovalsPage />} />
-          <Route path="ceo-expenses" element={<CEOExpensesPage />} />
-          <Route path="expenses-approvals" element={<Navigate to="ceo-expenses" replace />} />
-          <Route path="revenus-liquidites" element={<RevenusLiquiditesPage />} />
-          <Route path="caisse" element={<CompanyCashPage />} />
-          <Route path="finances" element={<RedirectFinancesToRevenus />} />
-          <Route path="treasury" element={<RedirectTreasuryToRevenus />} />
-          <Route path="operations-reseau" element={<OperationsFlotteLandingPage />} />
-          <Route path="fleet" element={<GarageDashboardPage />} />
-          <Route path="fleet-finance" element={<FleetFinancePage />} />
-          <Route path="dashboard" element={<CompagnieDashboard />} />
-          <Route path="comptabilite" element={<CompagnieComptabilitePage />} />
+          <Route path="ceo-expenses" element={<Navigate to="audit-controle?tab=depenses" replace />} />
+          <Route path="expenses-approvals" element={<Navigate to="audit-controle?tab=depenses" replace />} />
+          <Route path="revenus-liquidites" element={<Navigate to="finances?tab=ca" replace />} />
+          <Route path="caisse" element={<Navigate to="finances?tab=caisse" replace />} />
+          <Route path="finances" element={<FinancesPage />} />
+          <Route path="treasury" element={<Navigate to="finances?tab=liquidites" replace />} />
+          <Route path="operations-reseau" element={<Navigate to="reservations-reseau" replace />} />
+          <Route path="fleet" element={<Navigate to="flotte?tab=exploitation" replace />} />
+          <Route path="fleet-finance" element={<Navigate to="flotte?tab=rentabilite" replace />} />
+          <Route path="dashboard" element={<Navigate to="reservations-reseau" replace />} />
+          <Route path="reservations-reseau" element={<ReservationsReseauPage />} />
+          <Route path="reservations-reseau/reservations" element={<CompagnieReservationsPage />} />
+          <Route path="reservations" element={<Navigate to="reservations-reseau/reservations" replace />} />
+          <Route path="flotte" element={<FlottePage />} />
+          <Route path="comptabilite" element={<Navigate to="audit-controle?tab=controle" replace />} />
+          <Route path="audit-controle" element={<AuditControlePage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="parametres/plan" element={<ParametresPlan companyId={""} />} />
-          <Route path="reservations" element={<CompagnieReservationsPage />} />
           <Route path="customers" element={<CompagnieCustomersPage />} />
           <Route path="customers/:customerId" element={<CompagnieCustomerProfilePage />} />
           <Route path="images" element={<BibliothequeImagesPage />} />
@@ -515,11 +528,23 @@ const AppRoutes = () => {
           <Route path="movements" element={<FleetMovementLogPage />} />
         </Route>
 
-        {/* ========= PAGES HORS SHELL AGENCE ========= */}
+        {/* ========= ESCALE (layout + tableau de bord, bus du jour, caisse) ========= */}
         <Route
           path="/agence/escale"
-          element={<PrivateRoute allowedRoles={routePermissions.escaleDashboard}><EscaleDashboardPage /></PrivateRoute>}
-        />
+          element={
+            <PrivateRoute allowedRoles={routePermissions.escaleDashboard}>
+              <TenantGuard>
+                <EscaleLayout />
+              </TenantGuard>
+            </PrivateRoute>
+          }
+        >
+          <Route index element={<EscaleDashboardPage />} />
+          <Route path="bus" element={<EscaleBusDuJourPage />} />
+          <Route path="embarquement" element={<BoardingEscalePage />} />
+          <Route path="manifeste" element={<BusPassengerManifestPage />} />
+          <Route path="caisse" element={<EscaleCaissePage />} />
+        </Route>
         <Route
           path="/agence/guichet"
           element={<ProtectedRoute allowedRoles={routePermissions.guichet} withCurrency><AgenceGuichetPage /></ProtectedRoute>}

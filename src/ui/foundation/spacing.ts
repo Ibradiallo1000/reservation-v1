@@ -36,11 +36,11 @@ export const spacingClasses = {
 
 /** Page-level: horizontal padding (responsive) */
 export const pagePaddingX = "px-4 md:px-6";
-/** Page-level: vertical padding */
-export const pagePaddingY = "py-4 md:py-6";
+/** Page-level: vertical padding — réduit pour rapprocher contenu du header (16px) */
+export const pagePaddingY = "py-4";
 /** Page-level: all padding */
-export const pagePadding = "p-4 md:p-6";
-/** Vertical rhythm between sections — premium: avoid tight stacking */
-export const pageVerticalGap = "space-y-8";
+export const pagePadding = "px-4 md:px-6 py-4";
+/** Vertical rhythm between sections — 16px entre header, titre et cartes */
+export const pageVerticalGap = "space-y-4";
 /** Content max width + centering */
 export const pageMaxWidth = "max-w-7xl mx-auto";

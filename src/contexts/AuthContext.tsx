@@ -65,6 +65,8 @@ const CANONICAL_ROLES: ReadonlySet<string> = new Set([
   "agency_fleet_controller",
   "financial_director",
   "agentcourrier",
+  "escale_agent",
+  "escale_manager",
 ]);
 
 const normalizeRole = (r?: string): Role => {
@@ -133,6 +135,9 @@ export const landingTargetForRoles = (roles: unknown): string => {
   if (hasAny(rolesArray, ["guichetier"])) return "/agence/guichet";
   // agentCourrier → espace courrier
   if (hasAny(rolesArray, ["agentCourrier", "agentcourrier"])) return "/agence/courrier";
+
+  // escale_agent / escale_manager → tableau de bord escale
+  if (hasAny(rolesArray, ["escale_agent", "escale_manager"])) return "/agence/escale";
 
   // unauthenticated / user / unknown → /login
   return "/login";

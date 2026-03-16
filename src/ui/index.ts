@@ -31,12 +31,12 @@ export type {
 } from "./foundation";
 
 // Layout
-export { StandardLayoutWrapper, PageHeader } from "./layout";
-export type { StandardLayoutWrapperProps, PageHeaderProps } from "./layout";
+export { StandardLayoutWrapper, PageHeader, Breadcrumb } from "./layout";
+export type { StandardLayoutWrapperProps, PageHeaderProps, BreadcrumbProps, BreadcrumbItem } from "./layout";
 
 // Cards
-export { SectionCard, MetricCard } from "./cards";
-export type { SectionCardProps, MetricCardProps } from "./cards";
+export { SectionCard, MetricCard, AppCard } from "./cards";
+export type { SectionCardProps, MetricCardProps, AppCardProps } from "./cards";
 
 // Feedback
 export { StatusBadge, EmptyState, AlertMessage } from "./feedback";

@@ -10,7 +10,9 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 type ExpenseRow = ExpenseDoc & { id: string };
 
-export default function CEOExpensesPage() {
+type CEOExpensesPageProps = { embedded?: boolean };
+
+export default function CEOExpensesPage({ embedded = false }: CEOExpensesPageProps) {
   const { user } = useAuth() as any;
   const money = useFormatCurrency();
   const companyId = user?.companyId ?? "";
@@ -73,14 +75,8 @@ export default function CEOExpensesPage() {
     }
   };
 
-  return (
-    <StandardLayoutWrapper>
-      <PageHeader
-        title="Dépenses"
-        subtitle="Validation des dépenses stratégiques en attente de décision CEO."
-        icon={ShieldCheck}
-      />
-      <SectionCard title="Dépenses en attente CEO" icon={ShieldCheck}>
+  const content = (
+    <SectionCard title="Dépenses en attente CEO" icon={ShieldCheck}>
         {loading ? (
           <div className="py-8 text-center text-gray-500">Chargement...</div>
         ) : rows.length === 0 ? (
@@ -128,7 +124,18 @@ export default function CEOExpensesPage() {
             </table>
           </div>
         )}
-      </SectionCard>
+    </SectionCard>
+  );
+
+  if (embedded) return content;
+  return (
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Dépenses"
+        subtitle="Validation des dépenses stratégiques en attente de décision CEO."
+        icon={ShieldCheck}
+      />
+      {content}
     </StandardLayoutWrapper>
   );
 }

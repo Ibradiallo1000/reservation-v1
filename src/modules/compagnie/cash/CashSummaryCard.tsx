@@ -10,6 +10,7 @@ import {
   createCashClosure,
 } from "./cashService";
 import type { CashTransactionDocWithId, CashClosureDocWithId } from "./cashTypes";
+import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import { SectionCard, ActionButton } from "@/ui";
 import { Wallet, Receipt, Lock, Loader2 } from "lucide-react";
 
@@ -24,6 +25,8 @@ export interface CashSummaryCardProps {
   canClose: boolean;
   createdBy: string;
   formatCurrency: (n: number) => string;
+  /** Date à afficher (YYYY-MM-DD). Par défaut : aujourd'hui. */
+  date?: string;
 }
 
 export function CashSummaryCard({
@@ -33,8 +36,10 @@ export function CashSummaryCard({
   canClose,
   createdBy,
   formatCurrency,
+  date: dateProp,
 }: CashSummaryCardProps) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = getTodayBamako();
+  const date = dateProp ?? today;
   const [transactions, setTransactions] = useState<CashTransactionDocWithId[]>([]);
   const [total, setTotal] = useState(0);
   const [lastClosure, setLastClosure] = useState<CashClosureDocWithId | null>(null);
@@ -49,8 +54,8 @@ export function CashSummaryCard({
     setLoading(true);
     try {
       const [txList, totalAmount, last] = await Promise.all([
-        getCashTransactionsByLocation(companyId, locationId, today),
-        getCashTotalByLocation(companyId, locationId, today),
+        getCashTransactionsByLocation(companyId, locationId, date),
+        getCashTotalByLocation(companyId, locationId, date),
         getLastClosureByLocation(companyId, locationId),
       ]);
       setTransactions(txList);
@@ -61,7 +66,7 @@ export function CashSummaryCard({
     } finally {
       setLoading(false);
     }
-  }, [companyId, locationId, today]);
+  }, [companyId, locationId, date]);
 
   useEffect(() => {
     load();
@@ -101,9 +106,10 @@ export function CashSummaryCard({
     }
   };
 
+  const cardTitle = date === today ? "Caisse aujourd'hui" : `Caisse du ${date}`;
   if (loading) {
     return (
-      <SectionCard title="Caisse aujourd'hui">
+      <SectionCard title={cardTitle}>
         <div className="flex items-center gap-2 text-gray-500 py-4">
           <Loader2 className="w-5 h-5 animate-spin" />
           Chargement…
@@ -114,7 +120,7 @@ export function CashSummaryCard({
 
   return (
     <>
-      <SectionCard title="Caisse aujourd'hui">
+      <SectionCard title={cardTitle}>
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
             <Receipt className="w-4 h-4" />
@@ -134,7 +140,7 @@ export function CashSummaryCard({
               )}
             </div>
           )}
-          {canClose && (
+          {canClose && date === today && (
             <ActionButton onClick={handleOpenClosure} title="Clôturer la caisse">
               <Lock className="w-4 h-4" />
               Clôturer la caisse
@@ -146,7 +152,7 @@ export function CashSummaryCard({
       {closureModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg max-w-md w-full p-6 space-y-4">
-            <h3 className="text-lg font-semibold">Clôture de caisse — {today}</h3>
+            <h3 className="text-lg font-semibold">Clôture de caisse — {date}</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400">
               Montant attendu (somme des ventes du jour) : <strong>{formatCurrency(total)}</strong>
             </p>

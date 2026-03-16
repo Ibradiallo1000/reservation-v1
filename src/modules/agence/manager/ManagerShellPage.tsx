@@ -111,6 +111,13 @@ const ManagerShellInner: React.FC = () => {
   }, [companyId, agencyId]);
 
   const sections: NavSection[] = useMemo(() => {
+    const isEscaleOnly = (has("escale_agent") || has("escale_manager")) && !has("chefAgence") && !has("admin_compagnie");
+    if (isEscaleOnly) {
+      return [
+        { label: "Équipe", icon: Users, path: "/agence/team", end: true },
+        { label: "Retour tableau de bord escale", icon: LayoutDashboard, path: "/agence/escale", end: true },
+      ];
+    }
     const isCourierOnly = has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie");
     const list: NavSection[] = isCourierOnly
       ? [
@@ -158,10 +165,18 @@ const ManagerShellInner: React.FC = () => {
 
   useAgencyKeyboardShortcuts(sections);
 
-  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier");
+  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier") || has("escale_agent") || has("escale_manager");
 
   if (has("agentCourrier") && !pathname.startsWith("/agence/courrier")) {
     return <Navigate to="/agence/courrier" replace />;
+  }
+  if (has("escale_agent") || has("escale_manager")) {
+    if (pathname === "/agence" || pathname === "/agence/") {
+      return <Navigate to="/agence/team" replace />;
+    }
+    if (!pathname.startsWith("/agence/team")) {
+      return <Navigate to="/agence/escale" replace />;
+    }
   }
   if (!canUseShell) {
     if (has("chefEmbarquement")) return <Navigate to="/agence/boarding" replace />;
@@ -183,7 +198,8 @@ const ManagerShellInner: React.FC = () => {
 
   const companyName = company?.nom || "Compagnie";
   const agencyName = user?.agencyNom || user?.agencyName || "Agence";
-  const roleLabel = has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie")
+  const roleLabel = has("escale_manager") ? "Chef d'escale" : has("escale_agent") ? "Agent escale"
+    : has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie")
     ? "Agent courrier"
     : "Chef d'agence";
   const primary = (theme?.colors?.primary ?? "#FF6600").trim();

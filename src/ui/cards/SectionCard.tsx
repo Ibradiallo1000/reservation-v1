@@ -4,15 +4,12 @@
  */
 import React from "react";
 import { cn } from "@/lib/utils";
-import { radius, shadows, transitions, typography } from "@/ui/foundation";
+import { typography } from "@/ui/foundation";
 import type { LucideIcon } from "lucide-react";
 
 const cardBase = cn(
   "border border-gray-200 bg-white text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100",
-  radius.lg,
-  shadows.sm,
-  transitions.shadow,
-  "hover:shadow-md"
+  "rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
 );
 
 export interface SectionCardProps {

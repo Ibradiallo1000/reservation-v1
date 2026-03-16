@@ -66,6 +66,9 @@ const routeForRole = (role: string): string => {
       return "/agence/guichet";
     case "agentCourrier":
       return "/agence/courrier";
+    case "escale_agent":
+    case "escale_manager":
+      return "/agence/escale";
     default:
       return "/login";
   }

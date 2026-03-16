@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  collection, doc, query, where, onSnapshot, getDocs, limit, Timestamp,
+  collection, doc, getDoc, query, where, onSnapshot, getDocs, limit, Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { activateSession } from "@/modules/agence/services/sessionService";
 import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
@@ -74,6 +75,15 @@ export default function ManagerCockpitPage() {
   const [courierTodayCount, setCourierTodayCount] = useState(0);
   const [courierInTransitCount, setCourierInTransitCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [agencyType, setAgencyType] = useState<string>("");
+  const [activatingShiftId, setActivatingShiftId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) { setLoading(false); return; }
+    getDoc(doc(db, `companies/${companyId}/agences/${agencyId}`)).then((snap) => {
+      setAgencyType((snap.exists() ? (snap.data() as any)?.type : "") ?? "");
+    });
+  }, [companyId, agencyId]);
 
   useEffect(() => {
     if (!companyId || !agencyId) { setLoading(false); return; }
@@ -85,7 +95,7 @@ export default function ManagerCockpitPage() {
       (s) => setLiveState(s.exists() ? (s.data() as AgencyLiveStateDoc) : null)));
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/shifts`),
-        where("status", "in", ["active", "paused", "closed", "validated"]), limit(100)),
+        where("status", "in", ["pending", "active", "paused", "closed", "validated"]), limit(100)),
       (s) => setShifts(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))));
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
@@ -161,6 +171,32 @@ export default function ManagerCockpitPage() {
 
   const closedPending = useMemo(() => shifts.filter((s) => s.status === "closed"), [shifts]);
   const validatedByCompta = useMemo(() => shifts.filter((s) => s.status === "validated" && s.lockedComptable && !((s as any).lockedChef)), [shifts]);
+  const pendingShifts = useMemo(() => shifts.filter((s) => s.status === "pending"), [shifts]);
+  const rolesArr: string[] = useMemo(() => {
+    const r = (user as any)?.role;
+    return Array.isArray(r) ? r : r ? [r] : [];
+  }, [user]);
+  const isEscaleManager = rolesArr.includes("escale_manager");
+  const isEscaleAgency = agencyType === "escale";
+  const canActivateShifts = isEscaleAgency && isEscaleManager;
+
+  const handleActivateShift = useCallback(async (shiftId: string) => {
+    if (!companyId || !agencyId || !(user as any)?.uid) return;
+    setActivatingShiftId(shiftId);
+    try {
+      await activateSession({
+        companyId,
+        agencyId,
+        shiftId,
+        activatedBy: { id: (user as any).uid, name: (user as any).displayName ?? (user as any).nom ?? (user as any).email ?? "Chef d'escale" },
+      });
+    } catch (e) {
+      console.error("[ManagerCockpit] activateSession error:", e);
+      alert(e instanceof Error ? e.message : "Erreur lors de l'activation du poste.");
+    } finally {
+      setActivatingShiftId(null);
+    }
+  }, [companyId, agencyId, user]);
 
   const activeCounters = useMemo(() =>
     shifts.filter((s) => s.status === "active" || s.status === "paused").map((s) => {
@@ -277,6 +313,45 @@ export default function ManagerCockpitPage() {
               <AlertMessage key={i} severity={a.severity} message={a.message} />
             ))}
           </div>
+        </SectionCard>
+      )}
+
+      {canActivateShifts && (
+        <SectionCard title="Postes en attente d'activation" icon={Clock} noPad>
+          {pendingShifts.length === 0 ? (
+            <EmptyState message="Aucun poste en attente d'activation." />
+          ) : (
+            <div className={table.wrapper}>
+              <table className={table.base}>
+                <thead className={table.head}>
+                  <tr>
+                    <th className={table.th}>Guichetier</th>
+                    <th className={table.th}>Créé le</th>
+                    <th className={table.th}>Action</th>
+                  </tr>
+                </thead>
+                <tbody className={table.body}>
+                  {pendingShifts.map((s) => (
+                    <tr key={s.id} className={tableRowClassName()}>
+                      <td className={table.td}>{s.userName ?? s.userId}</td>
+                      <td className={table.td}>
+                        {s.createdAt?.toMillis ? format(new Date(s.createdAt.toMillis()), "dd/MM/yyyy HH:mm") : "—"}
+                      </td>
+                      <td className={table.td}>
+                        <ActionButton
+                          size="sm"
+                          onClick={() => handleActivateShift(s.id)}
+                          disabled={activatingShiftId === s.id}
+                        >
+                          {activatingShiftId === s.id ? "Activation…" : "Activer"}
+                        </ActionButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </SectionCard>
       )}
 

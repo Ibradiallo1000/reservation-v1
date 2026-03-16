@@ -26,6 +26,15 @@ service cloud.firestore {
     function isAgencyManager() {
       return isAuth() && (getUserRole() == 'chefAgence' || getUserRole() == 'admin_compagnie');
     }
+    function isEscaleManager() {
+      return isAuth() && getUserRole() == 'escale_manager';
+    }
+    /* Chef d'agence ou chef d'escale : peuvent gérer l'équipe de leur agence. */
+    function canManageAgencyTeam(agencyId) {
+      return isAuth() && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme'
+        || (getUserRole() == 'chefAgence' && getUserAgencyId() == agencyId)
+        || (getUserRole() == 'escale_manager' && getUserAgencyId() == agencyId));
+    }
     /* Fleet & vehicle operations (ex chef_garage). Backward compat: accept both role names. */
     function isResponsableLogistique() {
       return isAuth() && (getUserRole() == 'responsable_logistique' || getUserRole() == 'chef_garage');
@@ -52,6 +61,12 @@ service cloud.firestore {
       let docAgencyId = userData == null ? '' : userData.get('agencyId', '');
       let tokenAgencyId = request.auth != null ? request.auth.token.get('agencyId', '') : '';
       return docAgencyId != '' ? docAgencyId : tokenAgencyId;
+    }
+    /* Escale roles: allow read company data (agences, routes, stops) when their agency is under this company. */
+    function escaleUserCanReadCompany(companyId) {
+      return isAuth() && (getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager')
+        && getUserAgencyId() != ''
+        && exists(/databases/$(database)/documents/companies/$(companyId)/agences/$(getUserAgencyId()));
     }
     function userCompanyId() {
       let path = /databases/$(database)/documents/users/$(request.auth.uid);
@@ -155,13 +170,13 @@ service cloud.firestore {
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
-      /* Routes réseau (company transport routes). Read: same company or platform admin. Write: responsable_logistique (same company), CEO (admin_compagnie) or platform admin. */
+      /* Routes réseau (company transport routes). Read: same company, platform admin, or escale user whose agency is in this company. */
       match /routes/{routeId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId));
         /* Escales (stops) d'une route : mêmes droits que la route. */
         match /stops/{stopId} {
-          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
           allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId));
         }
       }
@@ -194,24 +209,68 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservedSeats', 'passengerCount', 'updatedAt'])
             && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0));
         allow delete: if false;
+        /* Progression bus par escale (arrivée/départ). Lecture: public. Écriture: chefAgence, escale_manager, escale_agent, admin_platforme uniquement. */
+        match /progress/{stopOrder} {
+          allow get, list: if true;
+          allow create, update: if isAuth() && (getUserRole() == 'chefAgence' || getUserRole() == 'escale_manager' || getUserRole() == 'escale_agent' || getUserRole() == 'admin_platforme') && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+          allow delete: if false;
+        }
+        match /inventory/{docId} {
+          allow get, list: if true;
+          allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow delete: if false;
+        }
+      }
+
+      /* Caisse (cashTransactions, cashClosures, cashRefunds, cashTransfers). Read/write: same company, platform admin, or escale user whose agency is in this company. */
+      match /cashTransactions/{txId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow delete: if false;
+      }
+      match /cashClosures/{closureId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow delete: if false;
+      }
+      match /cashRefunds/{refundId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow delete: if false;
+      }
+      match /cashTransfers/{transferId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow delete: if false;
+      }
+
+      match /connections/{connectionId} {
+        allow get, list, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow delete: if false;
       }
 
       match /agences/{agencyId} {
-        allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
+        allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId)
+          || (isAuth() && (getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId());
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow delete: if false;
 
         match /users/{agencyUserId} {
           allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          allow create: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             request.resource.data.get('role', '') != 'chefAgence'
             || getUserRole() == 'admin_compagnie'
             || getUserRole() == 'admin_platforme'
-          );
-          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          )) || (canManageAgencyTeam(agencyId) && request.resource.data.get('role', '') != 'chefAgence');
+          allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
             || request.resource.data.get('role', '') != 'chefAgence'
             || getUserRole() == 'admin_compagnie'
             || getUserRole() == 'admin_platforme'
-          );
+          )) || (canManageAgencyTeam(agencyId) && (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
+            || request.resource.data.get('role', '') != 'chefAgence'
+          ));
           allow delete: if false;
         }
 
@@ -273,23 +332,31 @@ service cloud.firestore {
         }
 
         match /shifts/{shiftId} {
-          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
-            resource.data.status != 'validated' &&
-            (request.resource.data.status != 'validated' || isComptable()) &&
-            (request.resource.data.status != 'closed' || (isGuichetier() && resource.data.userId == request.auth.uid))
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'
+            || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'
+            || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
+          allow update: if isAuth() && (
+            (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+              resource.data.status != 'validated' &&
+              (request.resource.data.status != 'validated' || isComptable()) &&
+              (request.resource.data.status != 'closed' || (isGuichetier() && resource.data.userId == request.auth.uid))
+            )
+            || (isEscaleManager() && agencyId == getUserAgencyId() && resource.data.status == 'pending' && request.resource.data.status == 'active')
           );
           allow delete: if false;
         }
 
         match /shiftReports/{reportId} {
-          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'
+            || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'
+            || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
           allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             resource.data.get('status', '') != 'validated' &&
             (request.resource.data.get('status', '') != 'validated' || isComptable())
-          );
+          )
+          || (isEscaleManager() && agencyId == getUserAgencyId());
           allow delete: if false;
         }
 
@@ -409,12 +476,13 @@ service cloud.firestore {
          - Update: only allowed fields; forbid changing accountType, agencyId, companyId.
       ============================================================ */
       match /financialAccounts/{accountId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId)) && (
           getUserRole() == 'admin_compagnie' ||
           getUserRole() == 'company_ceo' ||
           getUserRole() == 'company_accountant' ||
-          getUserRole() == 'chefAgence'
+          getUserRole() == 'chefAgence' ||
+          ((getUserRole() == 'escale_manager' || getUserRole() == 'escale_agent') && request.resource.data.get('accountType', '') == 'agency_cash' && request.resource.data.get('agencyId', '') == getUserAgencyId())
         );
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           request.resource.data.diff(resource.data).affectedKeys()

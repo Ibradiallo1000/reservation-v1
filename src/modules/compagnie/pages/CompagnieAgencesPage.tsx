@@ -517,9 +517,9 @@ const CompagnieAgencesPage: React.FC = () => {
         companyId,
         nomAgence: formData.nomAgence.trim(),
         nomAgenceNorm: norm(formData.nomAgence),
-        ville: formData.ville.trim(),
-        villeNorm: norm(formData.ville),
-        city: formData.ville.trim(), // for network trip planning: departure city filter
+        ville: (formData.type === "escale" && selectedStop ? selectedStop.city : formData.ville).trim(),
+        villeNorm: norm(formData.type === "escale" && selectedStop ? selectedStop.city : formData.ville),
+        city: (formData.type === "escale" && selectedStop ? selectedStop.city : formData.ville).trim(), // for network trip planning: source = stop pour escale
         pays: formData.pays.trim(),
         paysNorm: norm(formData.pays),
         quartier: formData.quartier || "",
@@ -537,9 +537,10 @@ const CompagnieAgencesPage: React.FC = () => {
     );
 
     // 2️⃣ créer l’invitation
+    const firstUserRole = formData.type === "escale" ? "escale_manager" : "chefAgence";
     const inviteResult = await createInvitationDoc({
       email: normalizeEmail(formData.emailGerant),
-      role: "chefAgence",
+      role: firstUserRole,
       companyId,
       agencyId: agenceRef.id,
       fullName: formatNom(formData.nomGerant || ""),
@@ -590,13 +591,14 @@ const CompagnieAgencesPage: React.FC = () => {
       }
       try {
         const agenceRef = doc(db, "companies", companyId, "agences", editingId);
+        const villeValue = formData.type === "escale" && selectedStop ? selectedStop.city : formData.ville;
         await updateDoc(agenceRef, {
           companyId,
           nomAgence: formData.nomAgence,
           nomAgenceNorm: norm(formData.nomAgence),
-          ville: formData.ville,
-          villeNorm: norm(formData.ville),
-          city: formData.ville.trim(),
+          ville: villeValue,
+          villeNorm: norm(villeValue),
+          city: (villeValue ?? "").trim(),
           pays: formData.pays,
           paysNorm: norm(formData.pays),
           slug: slugify(formData.nomAgence),
@@ -758,11 +760,15 @@ const CompagnieAgencesPage: React.FC = () => {
                   <label className="block text-sm font-medium mb-1">Ville *</label>
                   <input
                     name="ville"
-                    value={formData.ville}
+                    value={formData.type === "escale" && selectedStop ? selectedStop.city : formData.ville}
                     onChange={handleInputChange}
-                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={formData.type === "escale" && !!selectedStop}
+                    className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 dark:disabled:bg-gray-700 disabled:cursor-not-allowed"
                     required
                   />
+                  {formData.type === "escale" && selectedStop && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Ville définie par l&apos;escale sélectionnée sur la route.</p>
+                  )}
                 </div>
 
                 <div>

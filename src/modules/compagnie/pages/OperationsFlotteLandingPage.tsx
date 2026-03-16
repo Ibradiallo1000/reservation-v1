@@ -22,12 +22,7 @@ import {
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
 
-function getDateKey(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const da = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${da}`;
-}
+import { getStartOfDayBamako, getEndOfDayBamako } from "@/shared/date/dateUtilsTz";
 
 export default function OperationsFlotteLandingPage() {
   const { user } = useAuth();
@@ -50,9 +45,8 @@ export default function OperationsFlotteLandingPage() {
       return;
     }
 
-    const today = getDateKey(new Date());
-    const startTs = Timestamp.fromDate(new Date(`${today}T00:00:00`));
-    const endTs = Timestamp.fromDate(new Date(`${today}T23:59:59`));
+    const startTs = Timestamp.fromDate(getStartOfDayBamako());
+    const endTs = Timestamp.fromDate(getEndOfDayBamako());
 
     (async () => {
       setLoading(true);
@@ -129,11 +123,11 @@ export default function OperationsFlotteLandingPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="Accès rapides" icon={ClipboardList}>
+      <SectionCard title="Actions rapides" icon={ClipboardList}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <button
             type="button"
-            onClick={() => navigate(`${basePath}/reservations`)}
+            onClick={() => navigate(`${basePath}/reservations-reseau/reservations`)}
             className="flex items-center justify-between p-5 rounded-lg border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 hover:bg-gray-50/50 dark:hover:bg-slate-700/50 transition text-left group"
           >
             <div className="flex items-center gap-3">
@@ -141,25 +135,8 @@ export default function OperationsFlotteLandingPage() {
                 <ClipboardList className="w-6 h-6 text-gray-600 dark:text-slate-400" />
               </div>
               <div>
-                <div className="font-semibold text-gray-900 dark:text-white">Réservations</div>
-                <div className="text-sm text-gray-500 dark:text-slate-400">Voir et gérer toutes les réservations</div>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-600 dark:group-hover:text-slate-300" />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => navigate(`${basePath}/fleet`)}
-            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 hover:bg-gray-50/50 dark:hover:bg-slate-700/50 transition text-left group"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center">
-                <Truck className="w-6 h-6 text-gray-600 dark:text-slate-400" />
-              </div>
-              <div>
-                <div className="font-semibold text-gray-900 dark:text-white">Flotte</div>
-                <div className="text-sm text-gray-500 dark:text-slate-400">Supervision des véhicules et affectations</div>
+                <div className="font-semibold text-gray-900 dark:text-white">Voir les réservations</div>
+                <div className="text-sm text-gray-500 dark:text-slate-400">Gérer toutes les réservations</div>
               </div>
             </div>
             <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-600 dark:group-hover:text-slate-300" />

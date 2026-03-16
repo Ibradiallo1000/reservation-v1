@@ -15,6 +15,8 @@ import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
 import { incrementReservedSeats, getOrCreateTripInstanceForSlot, listTripInstancesByRouteAndDate } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { getStopOrdersFromCities, getRemainingSeats } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
+import { getRemainingStopQuota } from '@/modules/compagnie/tripInstances/inventoryQuotaService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
@@ -321,11 +323,25 @@ export default function ReservationClientPage() {
             instances = await listTripInstancesByRouteAndDate(cdoc.id, depNorm, arrNorm, dateStr);
           }
           const todayYMD = toYMD(new Date());
+          const withRoute = instances.filter((ti) => (ti as any).routeId && (ti as any).status !== 'cancelled');
+          const remainingById: Record<string, number> = {};
+          await Promise.all(
+            withRoute.map(async (ti) => {
+              const routeId = (ti as any).routeId;
+              const resolved = await getStopOrdersFromCities(cdoc.id, routeId, depNorm, arrNorm);
+              const originOrder = resolved?.originStopOrder ?? 1;
+              remainingById[ti.id] = await getRemainingStopQuota(cdoc.id, ti.id, originOrder);
+            })
+          );
           for (const ti of instances) {
             if ((ti as any).status === 'cancelled') continue;
             const capacity = (ti as any).seatCapacity ?? (ti as any).capacitySeats ?? 30;
             const reserved = (ti as any).reservedSeats ?? 0;
-            const remaining = capacity - reserved;
+            const fallbackRemaining = capacity - reserved;
+            const routeId = (ti as any).routeId ?? null;
+            const remaining = routeId != null && remainingById[ti.id] !== undefined
+              ? remainingById[ti.id]
+              : fallbackRemaining;
             if (remaining <= 0) continue;
             if (dateStr === todayYMD) {
               const now = new Date();
@@ -347,6 +363,7 @@ export default function ReservationClientPage() {
               companyId: cdoc.id as any,
               places: capacity,
               remainingSeats: remaining,
+              routeId,
             } as any);
           }
         }
@@ -513,6 +530,22 @@ export default function ReservationClientPage() {
         tripInstanceId
       });
 
+      let originStopOrder: number | null = null;
+      let destinationStopOrder: number | null = null;
+      const routeId = (selectedTrip as any).routeId ?? null;
+      if (routeId) {
+        const resolved = await getStopOrdersFromCities(
+          selectedTrip.companyId,
+          routeId,
+          selectedTrip.departure,
+          selectedTrip.arrival
+        );
+        if (resolved) {
+          originStopOrder = resolved.originStopOrder;
+          destinationStopOrder = resolved.destinationStopOrder;
+        }
+      }
+
       const now = new Date();
       const telephoneInput = passenger.phone.trim();
       const reservation = {
@@ -539,6 +572,11 @@ export default function ReservationClientPage() {
         referenceCode,
         trajetId: selectedTrip.id,
         tripInstanceId,
+        ...(originStopOrder != null && { originStopOrder }),
+        ...(destinationStopOrder != null && { destinationStopOrder }),
+        boardingStatus: 'pending',
+        dropoffStatus: 'pending',
+        journeyStatus: 'booked',
         holdUntil: addMin(now, 15),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),

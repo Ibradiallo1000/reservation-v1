@@ -1,11 +1,13 @@
 // src/utils/firestoreErrorHandler.ts
 let lastShown = 0;
 
-function parseIndexUrlFromError(err: any): string | null {
-  // Firestore renvoie souvent un lien "https://console.firebase.google.com/.../indexes?create_composite=..."
-  const text = String(err?.message || err?.stack || '');
+/** Extract Firestore index creation URL from error message (for Copy button / UI). */
+export function parseIndexUrlFromError(err: unknown): string | null {
+  const raw = err as { message?: string; stack?: string };
+  const text = typeof err === "string" ? err : String(raw?.message || raw?.stack || "");
   const match = text.match(/https?:\/\/[^\s"]*indexes[^\s"]*/i);
-  return match ? match[0] : null;
+  if (!match?.[0]) return null;
+  return match[0].replace(/[)\].,;]+$/g, "");
 }
 
 export function handleFirestoreError(err: any) {

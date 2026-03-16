@@ -13,16 +13,13 @@ import {
   type VehicleCostBreakdown,
 } from "@/modules/compagnie/profitability/operationalProfitabilityService";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
-import { Truck, TrendingUp, TrendingDown, DollarSign, ExternalLink } from "lucide-react";
+import { Truck, TrendingUp, TrendingDown, DollarSign } from "lucide-react";
+import { parseIndexUrlFromError } from "@/utils/firestoreErrorHandler";
+import { FirestoreIndexLink } from "@/shared/components/FirestoreIndexLink";
 
-function extractFirestoreIndexUrl(errorText: string): string | null {
-  const match = errorText.match(/https?:\/\/[^\s"]*indexes[^\s"]*/i);
-  if (!match?.[0]) return null;
-  // Firebase appends punctuation in some messages.
-  return match[0].replace(/[)\].,;]+$/g, "");
-}
+type FleetFinancePageProps = { embedded?: boolean };
 
-export default function FleetFinancePage() {
+export default function FleetFinancePage({ embedded = false }: FleetFinancePageProps) {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
@@ -34,7 +31,7 @@ export default function FleetFinancePage() {
   const [routeProfitability, setRouteProfitability] = useState<RouteProfitability[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const indexUrl = error ? extractFirestoreIndexUrl(error) : null;
+  const indexUrl = error ? parseIndexUrlFromError(error) : null;
 
   useEffect(() => {
     if (!companyId) {
@@ -76,28 +73,18 @@ export default function FleetFinancePage() {
     return { revenue, costs, profit: revenue - costs };
   }, [stats]);
 
-  return (
-    <StandardLayoutWrapper>
-      <PageHeader
-        title="Finance Flotte"
-        subtitle="Rentabilité de la flotte : revenus, coûts et marge par véhicule et par trajet."
-        icon={Truck}
-        primaryColorVar={theme?.colors?.primary ? "var(--teliya-primary)" : undefined}
-      />
-
+  const content = (
+    <>
       {error && (
         <div className="mb-4 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 text-sm space-y-2">
           <p className="break-words">{error}</p>
           {indexUrl && (
-            <a
-              href={indexUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-md border border-red-200 bg-white px-3 py-1.5 text-red-700 hover:bg-red-50 dark:border-red-700 dark:bg-red-900/30 dark:text-red-100"
-            >
-              Créer l'index Firestore
-              <ExternalLink className="h-4 w-4" />
-            </a>
+            <div className="mt-3">
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-2">
+                Cliquez sur <strong>Copier</strong> pour copier le lien, puis ouvrez-le pour créer l&apos;index.
+              </p>
+              <FirestoreIndexLink indexUrl={indexUrl} title="Lien de création d'index" />
+            </div>
           )}
         </div>
       )}
@@ -245,6 +232,19 @@ export default function FleetFinancePage() {
           </div>
         </>
       )}
+    </>
+  );
+
+  if (embedded) return content;
+  return (
+    <StandardLayoutWrapper>
+      <PageHeader
+        title="Finance Flotte"
+        subtitle="Rentabilité de la flotte : revenus, coûts et marge par véhicule et par trajet."
+        icon={Truck}
+        primaryColorVar={theme?.colors?.primary ? "var(--teliya-primary)" : undefined}
+      />
+      {content}
     </StandardLayoutWrapper>
   );
 }

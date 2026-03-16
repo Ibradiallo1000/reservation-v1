@@ -15,9 +15,9 @@ export const DESIGN = {
   cardBorder: "1px solid hsl(214.3 31.8% 91.4%)", // border color from CSS vars
 
   // ─── Page Layout ───
-  pagePadding: "p-4 sm:p-6",
+  pagePadding: "px-4 sm:px-6 py-4",
   pageWidth: "w-full max-w-7xl mx-auto",
-  verticalSpacing: "space-y-6",
+  verticalSpacing: "space-y-4",
 
   // ─── Typography (Teliya global) ───
   typography: {

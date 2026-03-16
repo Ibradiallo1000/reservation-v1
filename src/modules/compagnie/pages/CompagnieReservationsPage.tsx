@@ -26,6 +26,7 @@ import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { getDateRangeForPeriod, getPeriodLabel, type PeriodKind } from "@/shared/date/periodUtils";
+import { getStartOfDayBamako, getEndOfDayBamako } from "@/shared/date/dateUtilsTz";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
@@ -64,7 +65,7 @@ const CompagnieReservationsPage: React.FC = () => {
   const theme = useCompanyTheme(company);
 
   // Période (partagée : Semaine | Mois | Année | Personnalisé)
-  const [period, setPeriod] = useState<PeriodKind>("month");
+  const [period, setPeriod] = useState<PeriodKind>("day");
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
 
@@ -341,10 +342,17 @@ const CompagnieReservationsPage: React.FC = () => {
     </>
   );
 
+  const basePath = `/compagnie/${companyId}`;
+  const breadcrumb = [
+    { label: "Réservations réseau", path: `${basePath}/reservations-reseau` },
+    { label: "Réservations" },
+  ];
+
   return (
     <StandardLayoutWrapper>
       <PageHeader
         title={`Réservations — ${label}`}
+        breadcrumb={breadcrumb}
         subtitle={selectedAgencyId ? findAgencyDisplay(selectedAgencyId) : undefined}
         right={headerActions}
       />
@@ -409,6 +417,11 @@ const CompagnieReservationsPage: React.FC = () => {
                 const guichet = group.reservations.filter((r) => r.canal === "guichet").length;
                 const enLigne = billets - guichet;
                 const pGuichet = billets ? Math.round((guichet / billets) * 100) : 0;
+                const todayStart = getStartOfDayBamako();
+                const todayEnd = getEndOfDayBamako();
+                const hasActivityToday = group.reservations.some(
+                  (r) => r.createdAt && r.createdAt >= todayStart && r.createdAt <= todayEnd
+                );
 
                 return (
                   <div
@@ -458,6 +471,13 @@ const CompagnieReservationsPage: React.FC = () => {
                         {billets} billets
                       </span>
                     </div>
+                    <p className="text-xs mt-1 text-gray-600 dark:text-slate-400">
+                      Statut : {hasActivityToday ? (
+                        <span className="font-medium text-emerald-600 dark:text-emerald-400">🟢 active</span>
+                      ) : (
+                        <span className="font-medium text-amber-600 dark:text-amber-400">🟠 inactive aujourd&apos;hui</span>
+                      )}
+                    </p>
 
                     <div className="mt-4">
                       <div className="text-2xl font-bold">{money(ca)}</div>

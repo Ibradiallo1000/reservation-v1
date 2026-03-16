@@ -189,24 +189,20 @@ const CompagnieLayout: React.FC = () => {
     };
   }, [currentCompanyId]);
 
-  // Navigation : Command Center, Revenue & Liquidity, Network Performance, Operations, Fleet, Control & Audit, Configuration
+  // Navigation simplifiée (audit CEO) : Poste de pilotage, Réservations réseau, Finances, Flotte, Audit & contrôle
   const basePath = urlCompanyId
     ? `/compagnie/${urlCompanyId}`
     : "/compagnie";
 
   const sections: NavSection[] = [
-    { label: "Poste de Pilotage", icon: Gauge, path: `${basePath}/command-center` },
-    { label: "Revenus & Liquidités", icon: DollarSign, path: `${basePath}/revenus-liquidites` },
-    { label: "Finance — Caisse", icon: Wallet, path: `${basePath}/caisse` },
-    { label: "Performance Réseau", icon: TrendingUp, path: `${basePath}/dashboard` },
-    { label: "Opérations Réseau", icon: BarChart2, path: `${basePath}/operations-reseau`, badge: onlineProofsCount },
-    { label: "Exploitation Flotte", icon: Truck, path: `${basePath}/fleet` },
-    { label: "Finance Flotte", icon: DollarSign, path: `${basePath}/fleet-finance` },
-    { label: "Contrôle & Audit", icon: FileCheck, path: `${basePath}/comptabilite` },
+    { label: "Poste de pilotage", icon: Gauge, path: `${basePath}/command-center` },
+    { label: "Réservations réseau", icon: TrendingUp, path: `${basePath}/reservations-reseau`, end: false, badge: onlineProofsCount },
+    { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
+    { label: "Flotte", icon: Truck, path: `${basePath}/flotte` },
     {
-      label: "Dépenses",
-      icon: ShieldCheck,
-      path: `${basePath}/ceo-expenses`,
+      label: "Audit & contrôle",
+      icon: FileCheck,
+      path: `${basePath}/audit-controle`,
       badge: pendingCeoExpensesCount || undefined,
     },
     { label: "Clients", icon: Users, path: `${basePath}/customers` },

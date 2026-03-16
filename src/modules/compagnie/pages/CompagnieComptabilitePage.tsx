@@ -155,7 +155,7 @@ const CompagnieComptabilitePage: React.FC = () => {
   // ==========================================================================
   
   const [activeTab, setActiveTab] = useState<'reconciliation' | 'movements' | 'audit'>('reconciliation');
-  const [range, setRange] = useState<RangeKey>('mois');
+  const [range, setRange] = useState<RangeKey>('jour');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [loading, setLoading] = useState(false);

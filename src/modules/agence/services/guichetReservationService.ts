@@ -21,8 +21,9 @@ import { updateDailyStatsOnReservationCreated } from '../aggregates/dailyStats';
 import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
 import { addToExpectedBalance } from '@/modules/agence/cashControl/cashSessionService';
 import type { CashPaymentMethod } from '@/modules/agence/cashControl/cashSessionTypes';
-import { incrementReservedSeats, findTripInstanceBySlot } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { incrementReservedSeats, findTripInstanceBySlot, getTripInstance } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { getStopByOrder, getEscaleDestinations } from '@/modules/compagnie/routes/routeStopsService';
+import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
 import { createCashTransaction } from '@/modules/compagnie/cash/cashService';
 import { LOCATION_TYPE } from '@/modules/compagnie/cash/cashTypes';
 
@@ -54,6 +55,9 @@ export type CreateGuichetReservationParams = {
   paymentMethod?: CashPaymentMethod;
   /** Optional link to trip instance (real execution of the trip). When set, reservation is attached to that instance. */
   tripInstanceId?: string | null;
+  /** Segment orders on the route (for segment-based occupancy). When omitted, resolved from route + depart/arrivee when possible. */
+  originStopOrder?: number | null;
+  destinationStopOrder?: number | null;
 };
 
 function isOfflineError(e: unknown): boolean {
@@ -132,6 +136,25 @@ export async function createGuichetReservation(
     params.tripInstanceId ?? null
   );
 
+  let originStopOrder: number | null = params.originStopOrder ?? null;
+  let destinationStopOrder: number | null = params.destinationStopOrder ?? null;
+  if ((originStopOrder == null || destinationStopOrder == null) && params.tripInstanceId) {
+    const ti = await getTripInstance(params.companyId, params.tripInstanceId);
+    const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+    if (routeId) {
+      const resolved = await getStopOrdersFromCities(
+        params.companyId,
+        routeId,
+        params.depart,
+        params.arrivee
+      );
+      if (resolved) {
+        originStopOrder = originStopOrder ?? resolved.originStopOrder;
+        destinationStopOrder = destinationStopOrder ?? resolved.destinationStopOrder;
+      }
+    }
+  }
+
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const shiftRef = doc(db, `${base}/shifts/${params.sessionId}`);
   const colRef = collection(db, `${base}/reservations`);
@@ -147,6 +170,8 @@ export async function createGuichetReservation(
     heure: params.heure,
     depart: params.depart,
     arrivee: params.arrivee,
+    ...(originStopOrder != null && { originStopOrder }),
+    ...(destinationStopOrder != null && { destinationStopOrder }),
     nomClient: params.nomClient,
     telephone: params.telephone,
     telephoneOriginal: phoneOriginal || null,
@@ -157,6 +182,9 @@ export async function createGuichetReservation(
     montant: params.montant,
     statut: 'paye',
     statutEmbarquement: 'en_attente',
+    boardingStatus: 'pending',
+    dropoffStatus: 'pending',
+    journeyStatus: 'booked',
     checkInTime: null,
     reportInfo: null,
     compagnieId: params.companyId,

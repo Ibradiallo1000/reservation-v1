@@ -1,6 +1,11 @@
 // =============================================
 // src/hooks/useCompanyDashboardData.ts
 // =============================================
+/**
+ * @deprecated Replaced by networkStatsService (getNetworkStats, getNetworkStatsChartData).
+ * Do not use for new pages. Prefer getNetworkStats() for KPIs and getReservationsInRange + buildChartDataFromReservations for chart.
+ * This hook remains for CompagnieDashboard only for company, perAgency, alerts, totalAgences until full migration.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
 import {
@@ -432,19 +437,43 @@ export function useCompanyDashboardData({
   }, [paidReservations, previousPaidReservations, totalAgences, villesCouvertes, parCanal, parStatut]);
 
   const series = useMemo<Series>(() => {
+    const dayKeyFrom = getDateKey(dateFrom);
+    const dayKeyTo = getDateKey(dateTo);
+    const isSingleDay = dayKeyFrom === dayKeyTo;
     const m = new Map<string, { reservations: number; revenue: number }>();
-    for (let d = new Date(dateFrom); d <= dateTo; d.setDate(d.getDate() + 1)) {
-      m.set(getDateKey(d), { reservations: 0, revenue: 0 });
+
+    if (isSingleDay) {
+      for (let h = 0; h < 24; h++) {
+        const key = `${dayKeyFrom}T${String(h).padStart(2, "0")}`;
+        m.set(key, { reservations: 0, revenue: 0 });
+      }
+      paidReservations.forEach(r => {
+        const dt = toDateSafe(r.createdAt) ?? (r.date ? new Date(`${r.date}T${r.heure || "00:00"}:00`) : new Date());
+        if (getDateKey(dt) !== dayKeyFrom) return;
+        const hour = dt.getHours();
+        const key = `${dayKeyFrom}T${String(hour).padStart(2, "0")}`;
+        const curr = m.get(key) || { reservations: 0, revenue: 0 };
+        curr.reservations += r.seatsGo || 1;
+        curr.revenue += r.montant || 0;
+        m.set(key, curr);
+      });
+    } else {
+      for (let d = new Date(dateFrom); d <= dateTo; d.setDate(d.getDate() + 1)) {
+        m.set(getDateKey(d), { reservations: 0, revenue: 0 });
+      }
+      paidReservations.forEach(r => {
+        const dt = toDateSafe(r.createdAt) ?? (r.date ? new Date(`${r.date}T${r.heure || "00:00"}:00`) : new Date());
+        const key = getDateKey(dt);
+        const curr = m.get(key) || { reservations: 0, revenue: 0 };
+        curr.reservations += r.seatsGo || 1;
+        curr.revenue += r.montant || 0;
+        m.set(key, curr);
+      });
     }
-    paidReservations.forEach(r => {
-      const dt = toDateSafe(r.createdAt) ?? (r.date ? new Date(`${r.date}T${r.heure || "00:00"}:00`) : new Date());
-      const key = getDateKey(dt);
-      const curr = m.get(key) || { reservations: 0, revenue: 0 };
-      curr.reservations += r.seatsGo || 1;
-      curr.revenue += r.montant || 0;
-      m.set(key, curr);
-    });
-    const daily = Array.from(m).map(([date, v]) => ({ date, reservations: v.reservations, revenue: v.revenue }));
+
+    const daily = Array.from(m.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, v]) => ({ date, reservations: v.reservations, revenue: v.revenue }));
     return { daily };
   }, [paidReservations, dateFrom.getTime(), dateTo.getTime()]);
 

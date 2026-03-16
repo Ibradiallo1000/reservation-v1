@@ -6,7 +6,7 @@ export const routePermissions = {
   garageLayout: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
   logisticsDashboard: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
   companyAccountantLayout: ["company_accountant", "financial_director", "admin_compagnie", "admin_platforme"] as const,
-  agenceShell: ["chefAgence", "superviseur", "agentCourrier", "escale_manager", "admin_compagnie"] as const,
+  agenceShell: ["chefAgence", "superviseur", "agentCourrier", "escale_manager", "escale_agent", "admin_compagnie"] as const,
   boarding: ["chefEmbarquement", "chefAgence", "escale_agent", "escale_manager", "admin_compagnie"] as const,
   fleet: ["agency_fleet_controller", "chefAgence", "admin_compagnie"] as const,
   companyFleet: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,

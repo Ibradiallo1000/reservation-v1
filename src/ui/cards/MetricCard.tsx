@@ -6,19 +6,17 @@
 import React from "react";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { radius, shadows, typography } from "@/ui/foundation";
+import { typography } from "@/ui/foundation";
 import type { LucideIcon } from "lucide-react";
 
 const cardBase = cn(
   "flex min-h-[110px] flex-col justify-between border border-gray-200 bg-white p-4 sm:p-5 dark:border-gray-700 dark:bg-gray-900",
-  radius.lg,
-  shadows.sm
+  "rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
 );
 
 const cardCritical = cn(
   "flex min-h-[110px] flex-col justify-between border-2 border-red-400 bg-red-50/50 p-4 sm:p-5 dark:border-red-500 dark:bg-red-900/20",
-  radius.lg,
-  shadows.sm
+  "rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
 );
 
 export interface MetricCardProps {
@@ -42,6 +40,10 @@ export interface MetricCardProps {
   className?: string;
   /** Decorative mode (soft gradient + icon badge) */
   decorative?: boolean;
+  /** Variation vs période précédente (ex: "+12 %", "-8 %") — affichée sous la valeur en vert/rouge/gris */
+  variation?: string;
+  /** Label sous la variation (ex: "Comparé à hier", "vs semaine dernière") */
+  variationLabel?: string;
 }
 
 export const MetricCard: React.FC<MetricCardProps> = ({
@@ -55,6 +57,8 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   valueColorVar,
   className,
   decorative = false,
+  variation,
+  variationLabel,
 }) => (
   <div
     className={cn(
@@ -107,6 +111,25 @@ export const MetricCard: React.FC<MetricCardProps> = ({
     {critical && criticalMessage && (
       <p className={cn("mt-1.5", typography.mutedSm, "font-medium text-red-600 dark:text-red-400")}>
         {criticalMessage}
+      </p>
+    )}
+    {variation != null && variation !== "" && (
+      <p className={cn("mt-1.5 flex flex-wrap items-baseline gap-1", typography.mutedSm)}>
+        <span
+          className={cn(
+            "font-medium",
+            variation.startsWith("+") && "text-emerald-600 dark:text-emerald-400",
+            variation.startsWith("-") && "text-red-600 dark:text-red-400",
+            !variation.startsWith("+") && !variation.startsWith("-") && "text-gray-500 dark:text-slate-400"
+          )}
+        >
+          {variation.startsWith("+") && "▲ "}
+          {variation.startsWith("-") && "▼ "}
+          {variation}
+        </span>
+        {variationLabel && (
+          <span className="text-gray-500 dark:text-slate-400">{variationLabel}</span>
+        )}
       </p>
     )}
   </div>

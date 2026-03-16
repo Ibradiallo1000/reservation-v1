@@ -113,9 +113,10 @@ type ViewFilter = "all" | "available" | "transit" | "maintenance" | "accidented"
 
 interface GarageDashboardPageProps {
   view?: GarageView;
+  embedded?: boolean;
 }
 
-export default function GarageDashboardPage({ view }: GarageDashboardPageProps) {
+export default function GarageDashboardPage({ view, embedded = false }: GarageDashboardPageProps) {
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? "";
   const { user } = useAuth();
@@ -537,32 +538,12 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
     userRole === "admin_platforme";
 
   if (!companyId) {
-    return (
-      <StandardLayoutWrapper>
-        <PageHeader title={pageTitle} />
-        <p className="text-slate-600">Compagnie introuvable.</p>
-      </StandardLayoutWrapper>
-    );
+    const msg = <p className="text-slate-600">Compagnie introuvable.</p>;
+    return embedded ? msg : (<StandardLayoutWrapper><PageHeader title={pageTitle} />{msg}</StandardLayoutWrapper>);
   }
 
-  return (
-    <StandardLayoutWrapper className="garage-dashboard">
-      <PageHeader
-        title={pageTitle}
-        icon={Truck}
-        right={
-          canManageFleet ? (
-            <button
-              type="button"
-              onClick={openAddVehicleModal}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition hover:opacity-90"
-              style={{ backgroundColor: theme.secondary }}
-            >
-              <Plus className="w-4 h-4" /> Ajouter un véhicule
-            </button>
-          ) : undefined
-        }
-      />
+  const content = (
+    <>
       {error && (
         <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
           {error}
@@ -1071,6 +1052,29 @@ export default function GarageDashboardPage({ view }: GarageDashboardPageProps) 
           </div>
         </div>
       )}
+    </>
+  );
+
+  if (embedded) return content;
+  return (
+    <StandardLayoutWrapper className="garage-dashboard">
+      <PageHeader
+        title={pageTitle}
+        icon={Truck}
+        right={
+          canManageFleet ? (
+            <button
+              type="button"
+              onClick={openAddVehicleModal}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition hover:opacity-90"
+              style={{ backgroundColor: theme.secondary }}
+            >
+              <Plus className="w-4 h-4" /> Ajouter un véhicule
+            </button>
+          ) : undefined
+        }
+      />
+      {content}
     </StandardLayoutWrapper>
   );
 }

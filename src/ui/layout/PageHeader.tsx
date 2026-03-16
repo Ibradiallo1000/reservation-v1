@@ -7,12 +7,15 @@ import React from "react";
 import { cn } from "@/lib/utils";
 import { typography } from "@/ui/foundation";
 import type { LucideIcon } from "lucide-react";
+import { Breadcrumb, type BreadcrumbItem } from "./Breadcrumb";
 
 export interface PageHeaderProps {
   /** Main title (required) */
   title: React.ReactNode;
   /** Optional subtitle or description below title */
   subtitle?: React.ReactNode;
+  /** Optional breadcrumb items (e.g. [{ label: "Réservations réseau", path: "/compagnie/x/reservations-reseau" }, { label: "Réservations" }]) */
+  breadcrumb?: BreadcrumbItem[];
   /** Optional icon shown left of title (uses theme primary for background) */
   icon?: LucideIcon;
   /** Optional right slot (actions, breadcrumb, etc.) */
@@ -30,6 +33,7 @@ const DEFAULT_PRIMARY_VAR = "var(--teliya-primary, #FF6600)";
 export const PageHeader: React.FC<PageHeaderProps> = ({
   title,
   subtitle,
+  breadcrumb,
   icon: Icon,
   right,
   primaryColorVar = DEFAULT_PRIMARY_VAR,
@@ -42,6 +46,10 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
       className
     )}
   >
+    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+    {breadcrumb && breadcrumb.length > 0 && (
+      <Breadcrumb items={breadcrumb} className="mb-0.5" />
+    )}
     <div className="flex min-w-0 items-center gap-3">
       {Icon && (
         <div
@@ -65,6 +73,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
         </h1>
         {subtitle && <p className={cn("mt-1", typography.subtitle)}>{subtitle}</p>}
       </div>
+    </div>
     </div>
     {right && <div className="shrink-0">{right}</div>}
   </header>

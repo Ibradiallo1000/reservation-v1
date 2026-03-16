@@ -1,36 +1,121 @@
 // ======================================================
 // src/components/CompanyDashboard/RevenueReservationsChart.tsx
 // ======================================================
-import React from "react";
+import React, { useMemo } from "react";
 import {
   ResponsiveContainer,
   AreaChart,
   Area,
+  Line,
   CartesianGrid,
   XAxis,
   YAxis,
   Tooltip,
   Legend,
 } from "recharts";
+import dayjs from "dayjs";
+import "dayjs/locale/fr";
 
-type Point = { date: string; revenue: number; reservations: number };
+dayjs.locale("fr");
+
+export type ChartRangeKey = "day" | "week" | "month" | "custom";
+
+type Point = { date: string; revenue: number; reservations: number; label?: string; trend?: number; agenciesActive?: number };
 
 const DEFAULT_PRIMARY = "#ef4444";
 const DEFAULT_SECONDARY = "#3b82f6";
+const TREND_COLOR = "#6366f1";
+
+/** Moyenne mobile simple pour la tendance du CA */
+function calculateTrend(data: Point[], windowSize = 3): Point[] {
+  return data.map((item, index, arr) => {
+    const start = Math.max(0, index - windowSize + 1);
+    const subset = arr.slice(start, index + 1);
+    const avg = subset.length ? subset.reduce((sum, d) => sum + (d.revenue || 0), 0) / subset.length : 0;
+    return { ...item, trend: Math.round(avg) };
+  });
+}
+
+/** Formate le label de l'axe X selon la période (jour → heures, semaine → Lun/Mar, mois → 01/02) */
+function formatXLabel(dateStr: string, range: ChartRangeKey): string {
+  const isHourly = dateStr.includes("T");
+  if (range === "day" || isHourly) {
+    const hour = isHourly ? parseInt(dateStr.split("T")[1]?.slice(0, 2) || "0", 10) : 0;
+    return `${String(hour).padStart(2, "0")}h`;
+  }
+  const d = dayjs(dateStr);
+  if (!d.isValid()) return dateStr;
+  if (range === "week") return d.format("ddd");
+  return d.format("DD");
+}
+
+/** Tooltip personnalisé : date, CA, réservations, agences actives */
+function CustomTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: Point }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const data = payload[0].payload;
+  const dateLabel = data.date.includes("T")
+    ? dayjs(data.date.slice(0, 10)).format("dddd D MMMM") + " — " + data.date.slice(11, 13) + "h"
+    : dayjs(data.date).format("dddd D MMMM");
+  return (
+    <div className="bg-white dark:bg-slate-800 shadow-md rounded-lg p-3 border border-gray-200 dark:border-slate-600 text-sm min-w-[180px]">
+      <div className="font-medium mb-2 text-gray-900 dark:text-white border-b border-gray-100 dark:border-slate-600 pb-2">
+        {dateLabel}
+      </div>
+      <div className="flex justify-between gap-4 py-1">
+        <span className="text-gray-600 dark:text-slate-400">CA</span>
+        <span className="font-medium text-red-600 dark:text-red-400">
+          {(data.revenue ?? 0).toLocaleString("fr-FR")} FCFA
+        </span>
+      </div>
+      <div className="flex justify-between gap-4 py-1">
+        <span className="text-gray-600 dark:text-slate-400">Réservations</span>
+        <span className="font-medium text-amber-600 dark:text-amber-400">
+          {data.reservations ?? 0}
+        </span>
+      </div>
+      {data.agenciesActive !== undefined && (
+        <div className="flex justify-between gap-4 py-1">
+          <span className="text-gray-600 dark:text-slate-400">Agences actives</span>
+          <span className="font-medium text-gray-900 dark:text-white">{data.agenciesActive}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function RevenueReservationsChart({
-  data,
+  data: rawData,
   loading,
   primaryColor,
   secondaryColor,
+  range = "month",
 }: {
   data: Point[];
   loading?: boolean;
   primaryColor?: string;
   secondaryColor?: string;
+  /** Période affichée : day = 24h, week = Lun/Mar..., month = 01...31 */
+  range?: ChartRangeKey;
 }) {
   const primary = primaryColor || DEFAULT_PRIMARY;
   const secondary = secondaryColor || DEFAULT_SECONDARY;
+
+  const data = useMemo(() => {
+    if (!rawData?.length) return [];
+    const withLabels = rawData.map((p) => ({
+      ...p,
+      label: formatXLabel(p.date, range),
+    }));
+    return calculateTrend(withLabels, 3);
+  }, [rawData, range]);
+
   if (loading) {
     return (
       <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
@@ -61,10 +146,10 @@ export function RevenueReservationsChart({
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+          <XAxis dataKey="label" tick={{ fontSize: 12 }} />
           <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
           <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-          <Tooltip />
+          <Tooltip content={<CustomTooltip />} />
           <Legend />
           <Area
             yAxisId="left"
@@ -87,6 +172,16 @@ export function RevenueReservationsChart({
             fill="url(#fillReservations)"
             dot={false}
             activeDot={{ r: 4, fill: secondary }}
+          />
+          <Line
+            yAxisId="left"
+            type="monotone"
+            dataKey="trend"
+            name="Tendance"
+            stroke={TREND_COLOR}
+            strokeWidth={2}
+            dot={false}
+            strokeDasharray="5 5"
           />
         </AreaChart>
       </ResponsiveContainer>

@@ -20,6 +20,8 @@ import { DollarSign, AlertTriangle, Building2, Download, Info, Siren } from "luc
 import { useCapabilities } from "@/core/hooks/useCapabilities";
 import AccessDenied from "@/core/ui/AccessDenied";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
+import { getNetworkStats } from "@/modules/compagnie/networkStats/networkStatsService";
+import { calculateChange } from "@/shared/date/periodComparisonUtils";
 
 const SHIFT_REPORTS_COLLECTION = "shiftReports";
 
@@ -116,6 +118,11 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   >([]);
   const [liveUpdatedAt, setLiveUpdatedAt] = useState<Date | null>(null);
   const [currency, setCurrency] = useState("XOF");
+  const [comparisonStats, setComparisonStats] = useState<{
+    day: { current: number; prev: number; label: string };
+    week: { current: number; prev: number; label: string };
+    month: { current: number; prev: number; label: string };
+  } | null>(null);
 
   useEffect(() => {
     if (!companyId) {
@@ -203,6 +210,38 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
         setLoading(false);
       }
     })();
+  }, [companyId]);
+
+  // Comparaison période précédente (vs hier, vs 7j précédents, vs 30j précédents)
+  useEffect(() => {
+    if (!companyId) return;
+    const now = new Date();
+    const today = toDateKey(now);
+    const yesterday = toDateKey(subDays(now, 1));
+    const weekEnd = today;
+    const weekStart = toDateKey(subDays(now, 6));
+    const prevWeekEnd = toDateKey(subDays(now, 7));
+    const prevWeekStart = toDateKey(subDays(now, 13));
+    const monthEnd = today;
+    const monthStart = toDateKey(subDays(now, 29));
+    const prevMonthEnd = toDateKey(subDays(now, 30));
+    const prevMonthStart = toDateKey(subDays(now, 59));
+    Promise.all([
+      getNetworkStats(companyId, today, today),
+      getNetworkStats(companyId, yesterday, yesterday),
+      getNetworkStats(companyId, weekStart, weekEnd),
+      getNetworkStats(companyId, prevWeekStart, prevWeekEnd),
+      getNetworkStats(companyId, monthStart, monthEnd),
+      getNetworkStats(companyId, prevMonthStart, prevMonthEnd),
+    ])
+      .then(([currDay, prevDay, currWeek, prevWeek, currMonth, prevMonth]) => {
+        setComparisonStats({
+          day: { current: currDay.totalRevenue, prev: prevDay.totalRevenue, label: "Comparé à hier" },
+          week: { current: currWeek.totalRevenue, prev: prevWeek.totalRevenue, label: "Comparé aux 7 jours précédents" },
+          month: { current: currMonth.totalRevenue, prev: prevMonth.totalRevenue, label: "Comparé aux 30 jours précédents" },
+        });
+      })
+      .catch(() => setComparisonStats(null));
   }, [companyId]);
 
   useEffect(() => {
@@ -573,9 +612,30 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
           <DollarSign className="w-5 h-5" /> Revenus consolidés (billets + courrier)
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MetricCard label="Aujourd'hui (total)" value={money(revenueToday.total)} icon={DollarSign} valueColorVar="#4338ca" />
-          <MetricCard label="7 derniers jours (total)" value={money(revenueWeek.total)} icon={DollarSign} valueColorVar="#7c3aed" />
-          <MetricCard label="30 derniers jours (total)" value={money(revenueMonth.total)} icon={DollarSign} valueColorVar="#0f766e" />
+          <MetricCard
+            label="Aujourd'hui (total)"
+            value={comparisonStats ? money(comparisonStats.day.current) : money(revenueToday.total)}
+            icon={DollarSign}
+            valueColorVar="#4338ca"
+            variation={comparisonStats ? calculateChange(comparisonStats.day.current, comparisonStats.day.prev) : undefined}
+            variationLabel={comparisonStats?.day.label}
+          />
+          <MetricCard
+            label="7 derniers jours (total)"
+            value={comparisonStats ? money(comparisonStats.week.current) : money(revenueWeek.total)}
+            icon={DollarSign}
+            valueColorVar="#7c3aed"
+            variation={comparisonStats ? calculateChange(comparisonStats.week.current, comparisonStats.week.prev) : undefined}
+            variationLabel={comparisonStats?.week.label}
+          />
+          <MetricCard
+            label="30 derniers jours (total)"
+            value={comparisonStats ? money(comparisonStats.month.current) : money(revenueMonth.total)}
+            icon={DollarSign}
+            valueColorVar="#0f766e"
+            variation={comparisonStats ? calculateChange(comparisonStats.month.current, comparisonStats.month.prev) : undefined}
+            variationLabel={comparisonStats?.month.label}
+          />
         </div>
         <div className="mt-3 text-sm text-gray-600 dark:text-gray-400">
           <span className="font-medium">30j :</span> Billets {money(revenueMonth.ticket)} · Courrier {money(revenueMonth.courier)}

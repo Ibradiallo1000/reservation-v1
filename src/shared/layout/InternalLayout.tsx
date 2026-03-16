@@ -78,6 +78,8 @@ const ROLE_LABELS: Record<string, string> = {
   company_accountant: "Chef Comptable",
   financial_director: "Directeur Financier",
   agency_accountant: "Comptable Agence",
+  escale_agent: "Agent escale",
+  escale_manager: "Chef d'escale",
 };
 
 /* ================================================================

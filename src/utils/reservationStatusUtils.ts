@@ -15,9 +15,9 @@ const normalizeStatut = (s?: string) =>
   (s ?? "").toString().toLowerCase().trim().replace(/\s+/g, "_");
 
 /**
- * Convention unique sans accent (paye, embarque).
+ * Convention unique sans accent. Statuts officiels : en_attente_paiement, preuve_recue, confirme, paye, annule, refuse.
  * À utiliser pour toute comparaison ou logique métier sur reservation.statut.
- * Lecture : accepte payé/embarqué (legacy). Écriture : toujours paye, embarque.
+ * Lecture : accepte alias (payé→paye, en_attente→en_attente_paiement, verification→preuve_recue). Écriture : toujours valeur canonique.
  */
 export function canonicalStatut(s?: string): string {
   const n = normalizeStatut(s);
@@ -26,6 +26,8 @@ export function canonicalStatut(s?: string): string {
   if (n === "annulé") return "annule";
   if (n === "refusé") return "refuse";
   if (n === "validé") return "confirme";
+  if (n === "en_attente") return "en_attente_paiement";
+  if (n === "verification" || n === "verif") return "preuve_recue";
   return n;
 }
 
@@ -36,22 +38,25 @@ export const RESERVATION_STATUT_QUERY_BOARDABLE: readonly string[] = ["confirme"
 
 /* ---------- Phase B : statuts officiels (Spark, sans Cloud Functions) ---------- */
 
-/** Seuls statuts autorisés en base. Convention sans accent : paye, embarque. */
+/** Statuts officiels (convention sans accent). Billets vendus = confirme | paye uniquement. */
 export type ReservationStatut =
+  | "en_attente_paiement"
+  | "preuve_recue"
   | "confirme"
   | "paye"
-  | "preuve_recue"
-  | "annulation_en_attente"
   | "annule"
+  | "refuse"
+  | "annulation_en_attente"
   | "rembourse"
   | "embarque"
   | "expire";
 
-/** Statuts valides (canonical). Legacy payé/embarqué acceptés en lecture via canonicalStatut. */
+/** Statuts valides (canonical). Alias en_attente, verification acceptés en lecture via canonicalStatut. */
 const VALID_STATUTS = new Set<string>([
+  "en_attente_paiement",
+  "preuve_recue",
   "confirme",
   "paye",
-  "preuve_recue",
   "annulation_en_attente",
   "annule",
   "rembourse",
@@ -59,6 +64,7 @@ const VALID_STATUTS = new Set<string>([
   "expire",
   "refuse",
   "verification",
+  "en_attente",
 ]);
 
 /** Transitions autorisées (old → new). Clés et valeurs en canonique (paye, embarque). */
