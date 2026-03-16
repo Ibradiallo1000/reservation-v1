@@ -4,7 +4,7 @@
  */
 import dayjs from "dayjs";
 
-export type PeriodKind = "day" | "week" | "month" | "custom";
+export type PeriodKind = "day" | "week" | "month" | "year" | "custom";
 
 export interface PreviousPeriodResult {
   previousStart: string;

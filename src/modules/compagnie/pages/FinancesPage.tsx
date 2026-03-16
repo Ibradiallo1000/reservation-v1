@@ -23,9 +23,9 @@ const TABS = [
   { key: TAB_CA, label: "CA", icon: DollarSign },
   { key: TAB_LIQUIDITES, label: "Liquidités", icon: Wallet },
   { key: TAB_CAISSE, label: "Caisse", icon: Banknote },
-] as const;
+];
 
-type TabKey = (typeof TABS)[number]["key"];
+type TabKey = typeof TAB_CA | typeof TAB_LIQUIDITES | typeof TAB_CAISSE;
 
 export default function FinancesPage() {
   const { user, company } = useAuth();
@@ -40,7 +40,9 @@ export default function FinancesPage() {
     setActiveTab(tabFromUrl);
   }, [tabFromUrl]);
 
-  const [companyInfo, setCompanyInfo] = React.useState<{ id: string; [key: string]: unknown } | null>(company ?? null);
+  const [companyInfo, setCompanyInfo] = React.useState<{ id: string; [key: string]: unknown } | null>(
+    company ? { id: company.id, ...(company as unknown as { [key: string]: unknown }) } : null
+  );
   useEffect(() => {
     if (!companyId) return;
     getDoc(doc(db, "companies", companyId))
@@ -50,7 +52,7 @@ export default function FinancesPage() {
       .catch(() => {});
   }, [companyId]);
 
-  const theme = useCompanyTheme((companyInfo ?? company ?? null) as Company | null);
+  const theme = useCompanyTheme((company as Company | null) ?? null);
 
   const setTab = (tab: TabKey) => {
     setActiveTab(tab);
@@ -74,12 +76,13 @@ export default function FinancesPage() {
       />
       <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3 mb-4">
         {TABS.map(({ key, label, icon: Icon }) => {
-          const active = activeTab === key;
+          const tabKey = key as TabKey;
+          const active = activeTab === tabKey;
           return (
             <button
               key={key}
               type="button"
-              onClick={() => setTab(key)}
+              onClick={() => setTab(tabKey)}
               className={[
                 "inline-flex items-center gap-2 px-4 py-2.5 rounded-t-lg text-sm font-medium transition-all",
                 active

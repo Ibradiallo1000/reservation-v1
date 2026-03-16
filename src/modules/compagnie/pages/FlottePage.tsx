@@ -16,11 +16,11 @@ const TAB_EXPLOITATION = "exploitation";
 const TAB_RENTABILITE = "rentabilite";
 
 const TABS = [
-  { key: TAB_EXPLOITATION as const, label: "Exploitation", icon: Truck, description: "Bus actifs, affectations, trajets" },
-  { key: TAB_RENTABILITE as const, label: "Rentabilité", icon: DollarSign, description: "Revenus, coûts et marge par véhicule" },
+  { key: TAB_EXPLOITATION, label: "Exploitation", icon: Truck, description: "Bus actifs, affectations, trajets" },
+  { key: TAB_RENTABILITE, label: "Rentabilité", icon: DollarSign, description: "Revenus, coûts et marge par véhicule" },
 ];
 
-type TabKey = (typeof TABS)[number]["key"];
+type TabKey = typeof TAB_EXPLOITATION | typeof TAB_RENTABILITE;
 
 export default function FlottePage() {
   const { user } = useAuth();
@@ -93,12 +93,13 @@ export default function FlottePage() {
 
       <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3 mb-4">
         {TABS.map(({ key, label, icon: Icon }) => {
-          const active = activeTab === key;
+          const tabKey = key as TabKey;
+          const active = activeTab === tabKey;
           return (
             <button
               key={key}
               type="button"
-              onClick={() => setTab(key)}
+              onClick={() => setTab(tabKey)}
               className={[
                 "inline-flex items-center gap-2 px-4 py-2.5 rounded-t-lg text-sm font-medium transition-all",
                 active

@@ -112,14 +112,28 @@ export default function EscaleBusDuJourPage() {
   }, [load]);
 
   const rows = instances.map((ti) => {
-    const capacity = (ti as { seatCapacity?: number; capacitySeats?: number }).seatCapacity ?? (ti as { capacitySeats?: number }).capacitySeats ?? 0;
+    const capacity =
+      (ti as { seatCapacity?: number; capacitySeats?: number }).seatCapacity ??
+      (ti as { capacitySeats?: number }).capacitySeats ??
+      0;
     const reserved = (ti as { reservedSeats?: number }).reservedSeats ?? 0;
     const remaining = remainingByInstanceId[ti.id] ?? capacity - reserved;
+    const quotaDisplay = quotaDisplayByInstanceId[ti.id];
+    const remainingAllowed =
+      quotaDisplay != null ? Math.min(remaining, quotaDisplay.remainingStopQuota) : remaining;
+
     const departureTime = (ti as { departureTime?: string }).departureTime ?? "";
     const offsetMin = stop?.estimatedArrivalOffsetMinutes ?? 0;
     const timeAtStop = addMinutesToTime(departureTime, offsetMin);
-    const origin = (ti as { departureCity?: string; routeDeparture?: string }).departureCity ?? (ti as { routeDeparture?: string }).routeDeparture ?? "";
-    const dest = (ti as { arrivalCity?: string; routeArrival?: string }).arrivalCity ?? (ti as { routeArrival?: string }).routeArrival ?? "";
+    const origin =
+      (ti as { departureCity?: string; routeDeparture?: string }).departureCity ??
+      (ti as { routeDeparture?: string }).routeDeparture ??
+      "";
+    const dest =
+      (ti as { arrivalCity?: string; routeArrival?: string }).arrivalCity ??
+      (ti as { routeArrival?: string }).routeArrival ??
+      "";
+
     return {
       id: ti.id,
       origin,
@@ -129,6 +143,8 @@ export default function EscaleBusDuJourPage() {
       remaining,
       capacity,
       status: (ti as { status?: string }).status,
+      quotaDisplay,
+      remainingAllowed,
     };
   });
 

@@ -14,11 +14,11 @@ const TAB_DEPENSES = "depenses";
 const TAB_CONTROLE = "controle";
 
 const TABS = [
-  { key: TAB_DEPENSES as const, label: "Dépenses à valider", icon: ShieldCheck },
-  { key: TAB_CONTROLE as const, label: "Contrôle & Audit", icon: FileCheck },
+  { key: TAB_DEPENSES, label: "Dépenses à valider", icon: ShieldCheck },
+  { key: TAB_CONTROLE, label: "Contrôle & Audit", icon: FileCheck },
 ];
 
-type TabKey = (typeof TABS)[number]["key"];
+type TabKey = typeof TAB_DEPENSES | typeof TAB_CONTROLE;
 
 export default function AuditControlePage() {
   const { user } = useAuth();
@@ -55,12 +55,13 @@ export default function AuditControlePage() {
       />
       <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3 mb-4">
         {TABS.map(({ key, label, icon: Icon }) => {
-          const active = activeTab === key;
+          const tabKey = key as TabKey;
+          const active = activeTab === tabKey;
           return (
             <button
               key={key}
               type="button"
-              onClick={() => setTab(key)}
+              onClick={() => setTab(tabKey)}
               className={[
                 "inline-flex items-center gap-2 px-4 py-2.5 rounded-t-lg text-sm font-medium transition-all",
                 active
