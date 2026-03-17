@@ -126,9 +126,9 @@ export default function CompagnieComptabiliteValidationPage() {
       />
       <SectionCard
         title="Sessions validées agence"
-        icon={<FileCheck className="w-5 h-5" />}
-        action={
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        icon={FileCheck}
+        right={
+          <Button variant="secondary" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={`w-4 h-4 mr-1 ${loading ? "animate-spin" : ""}`} />
             Actualiser
           </Button>
@@ -187,7 +187,7 @@ export default function CompagnieComptabiliteValidationPage() {
                         <div className="flex items-center justify-end gap-2">
                           <Button
                             size="sm"
-                            variant="default"
+                            variant="primary"
                             onClick={() => handleValidate(report)}
                             disabled={busy}
                           >
@@ -196,7 +196,7 @@ export default function CompagnieComptabiliteValidationPage() {
                           </Button>
                           <Button
                             size="sm"
-                            variant="outline"
+                            variant="secondary"
                             onClick={() => setRejectModalId(report.shiftId)}
                             disabled={busy}
                           >
@@ -227,7 +227,7 @@ export default function CompagnieComptabiliteValidationPage() {
                               />
                               <div className="flex justify-end gap-2 mt-3">
                                 <Button
-                                  variant="outline"
+                                  variant="secondary"
                                   size="sm"
                                   onClick={() => setRejectModalId(null)}
                                 >
@@ -235,7 +235,7 @@ export default function CompagnieComptabiliteValidationPage() {
                                 </Button>
                                 <Button
                                   size="sm"
-                                  variant="destructive"
+                                  variant="danger"
                                   onClick={() => handleReject(report)}
                                   disabled={busy}
                                 >

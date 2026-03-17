@@ -38,11 +38,12 @@ export function listenRemainingSeatsForDate(opts: {
     const usedByTrip: Record<string, number> = {};
 
     snap.forEach((d) => {
-      const r = d.data() as any;
+      const r = d.data() as { statut?: string; trajetId?: string; seatsGo?: number; seatsReturn?: number; places?: number };
       const statut = String(r.statut || '').toLowerCase();
-      if (!VALID_STATUSES.has(statut)) return;           // payé / preuve_recue
-      const tripKey = r.trajetId;
-      const seats = Number(r.seatsGo || 0);              // somme seatsGo uniquement
+      if (!VALID_STATUSES.has(statut)) return;
+      const tripKey = r.trajetId ?? '';
+      if (!tripKey) return;
+      const seats = (Number(r.seatsGo ?? r.places) || 1) + (Number(r.seatsReturn) || 0);
       usedByTrip[tripKey] = (usedByTrip[tripKey] || 0) + seats;
     });
 

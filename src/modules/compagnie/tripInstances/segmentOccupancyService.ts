@@ -8,8 +8,9 @@ import { collectionGroup, getDocs, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getTripInstance } from "./tripInstanceService";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import { getReservedPlaces } from "./remainingPlacesUtils";
 
-const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "validé"];
+const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "confirmé", "validé"];
 
 function normalizeCity(city: string): string {
   return (city ?? "").trim().toLowerCase();
@@ -103,8 +104,32 @@ export async function computeSegmentOccupancy(
 }
 
 /**
- * Remaining seats = seatCapacity - max(segment occupancies).
- * If the trip has no route/stops, falls back to seatCapacity - reservedSeats (backward compat).
+ * Nombre de places réservées pour une instance (somme des places des réservations confirmées).
+ * Source unique : les réservations Firestore, pas le champ reservedSeats (évite 56 vs 57).
+ */
+export async function getReservedSeatsForTripInstance(
+  companyId: string,
+  tripInstanceId: string
+): Promise<number> {
+  const resSnap = await getDocs(
+    query(
+      collectionGroup(db, "reservations"),
+      where("tripInstanceId", "==", tripInstanceId)
+    )
+  );
+  const list = resSnap.docs
+    .map((d) => d.data() as { statut?: string; boardingStatus?: string; seatsGo?: number; seatsReturn?: number; places?: number })
+    .filter((r) => {
+      if (!CONFIRMED_STATUTS.includes((r.statut ?? "").toString().toLowerCase())) return false;
+      if ((r.boardingStatus ?? "pending").toString().toLowerCase() === "no_show") return false;
+      return true;
+    });
+  return getReservedPlaces(list);
+}
+
+/**
+ * Remaining seats = seatCapacity - max(segment occupancies) si route avec stops,
+ * sinon seatCapacity - somme des places des réservations (plus de fallback reservedSeats pour l’affichage).
  */
 export async function getRemainingSeats(
   companyId: string,
@@ -118,7 +143,7 @@ export async function getRemainingSeats(
 
   const occupancy = await computeSegmentOccupancy(companyId, tripInstanceId);
   if (occupancy == null || occupancy.length === 0) {
-    const reserved = (ti as { reservedSeats?: number }).reservedSeats ?? 0;
+    const reserved = await getReservedSeatsForTripInstance(companyId, tripInstanceId);
     return Math.max(0, capacity - reserved);
   }
   const maxOccupancy = Math.max(0, ...occupancy);
