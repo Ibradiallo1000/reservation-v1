@@ -2,6 +2,7 @@
 // Combobox villes : une seule surface visuelle, design premium, dropdown fluide. Logique métier inchangée.
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { MapPin } from "lucide-react";
 import { useVilles } from "@/shared/hooks/useVilles";
 
 type VilleComboboxProps = {
@@ -9,6 +10,8 @@ type VilleComboboxProps = {
   onChange: (val: string) => void;
   placeholder?: string;
   required?: boolean;
+  /** Afficher l’icône de localisation (MapPin) à gauche du champ. */
+  showLocationIcon?: boolean;
   /** Style du wrapper (conteneur). Le parent contrôle le rendu ; pas de styles contradictoires. */
   wrapperClassName?: string;
   /** Style du champ input (texte/placeholder). Input reste bg-transparent. */
@@ -43,6 +46,7 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
   onChange,
   placeholder = "Ville…",
   required = false,
+  showLocationIcon = false,
   wrapperClassName,
   inputClassName,
 }) => {
@@ -129,6 +133,9 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
   return (
     <div ref={containerRef} className="flex-1 min-w-0 relative z-20 w-full">
       <div className={wrapperCls}>
+        {showLocationIcon && (
+          <MapPin className="h-5 w-5 text-gray-600 shrink-0 mr-3" aria-hidden />
+        )}
         <input
           type="text"
           value={value}

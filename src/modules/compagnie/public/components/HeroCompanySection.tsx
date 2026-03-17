@@ -1,5 +1,5 @@
 // src/modules/compagnie/public/components/HeroCompanySection.tsx
-// Hero: unified horizontal search bar with swap, glass style, responsive — ULTRA PREMIUM
+// Design exact maquette : glassmorphism conteneur, champs ville blancs + MapPin, bouton swap glass, bouton recherche glass rouge.
 
 import React, { useState } from "react";
 import { Search, ArrowLeftRight } from "lucide-react";
@@ -45,11 +45,11 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
 
   const hasBgImage = Boolean(heroImageUrl);
 
-  /* Inputs: frosted glass (lisible) + texte bien contrasté */
-  const glassInputClass =
-    "bg-white/50 backdrop-blur-md border border-white/40 rounded-2xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.3)] [&_svg]:text-gray-700 px-4 py-3 min-h-[48px]";
-  const glassInputTextClass =
-    "bg-transparent text-gray-900 font-semibold text-base placeholder-gray-700 caret-gray-900 min-w-0 [text-shadow:0_1px_2px_rgba(255,255,255,0.9)]";
+  /* Champs ville : fond BLANC solide, bordure gris clair, icône MapPin (design maquette) */
+  const cityInputWrapper =
+    "bg-white border border-gray-200 rounded-xl px-4 py-3 min-h-[48px] shadow-sm";
+  const cityInputText =
+    "text-gray-800 font-medium placeholder-gray-500 bg-transparent";
 
   return (
     <section className="relative w-full min-w-0">
@@ -62,7 +62,10 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
               alt=""
               aria-hidden
             />
-            <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/35 to-black/10 z-0" aria-hidden />
+            <div
+              className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/30 to-black/20 z-0"
+              aria-hidden
+            />
           </>
         ) : (
           <div className="absolute inset-0 bg-neutral-900" aria-hidden />
@@ -76,52 +79,62 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
             {companyName || t("ourCompany")}
           </h2>
 
+          {/* Conteneur unique glassmorphism : translucide, blur, dégradé léger, coins très arrondis */}
           <form
             onSubmit={handleSubmit}
-            className="mt-6 sm:mt-8 mx-auto max-w-3xl rounded-2xl bg-white/5 backdrop-blur-xl border border-white/20 shadow-2xl p-4 sm:p-5 md:p-6"
+            className="mt-6 sm:mt-8 mx-auto max-w-3xl rounded-3xl shadow-2xl p-4 sm:p-5 md:p-6 border border-white/25 bg-black/20 backdrop-blur-xl bg-gradient-to-b from-gray-900/40 to-gray-900/25"
           >
-            {/* ALWAYS horizontal: [ Départ ] ⇄ [ Arrivée ] */}
-            <div className="flex flex-row items-stretch gap-2 sm:gap-3 w-full min-w-0">
+            <div className="flex flex-row items-stretch gap-3 w-full min-w-0">
               <div className="flex-1 min-w-0 flex items-center">
                 <VilleCombobox
                   value={departure}
                   onChange={setDeparture}
-                  placeholder={t("departureCity")}
-                  wrapperClassName={glassInputClass}
-                  inputClassName={glassInputTextClass}
+                  placeholder="Départ"
+                  showLocationIcon
+                  wrapperClassName={cityInputWrapper}
+                  inputClassName={cityInputText}
                 />
               </div>
 
+              {/* Bouton swap : circulaire, glass, icône gris foncé */}
               <button
                 type="button"
                 onClick={handleSwap}
                 aria-label={t("swapCities")}
-                className="flex-shrink-0 w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-white/20 backdrop-blur-sm hover:bg-white/30 border border-white/30 flex items-center justify-center text-white transition shadow-lg hover:shadow-xl"
+                className="flex-shrink-0 w-12 h-12 rounded-full border border-gray-300/80 bg-white/20 backdrop-blur-md hover:bg-white/30 flex items-center justify-center transition"
               >
-                <ArrowLeftRight className="h-5 w-5" aria-hidden />
+                <ArrowLeftRight className="h-5 w-5 text-gray-700" aria-hidden />
               </button>
 
               <div className="flex-1 min-w-0 flex items-center">
                 <VilleCombobox
                   value={arrival}
                   onChange={setArrival}
-                  placeholder={t("arrivalCity")}
-                  wrapperClassName={glassInputClass}
-                  inputClassName={glassInputTextClass}
+                  placeholder="Arrivée"
+                  showLocationIcon
+                  wrapperClassName={cityInputWrapper}
+                  inputClassName={cityInputText}
                 />
               </div>
             </div>
 
+            {/* Bouton recherche : glass teinté rouge, icône rouge, texte blanc gras */}
             <div className="mt-4 sm:mt-5">
               <button
                 type="submit"
                 disabled={disabled}
-                className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-semibold text-white text-base transition disabled:opacity-60 disabled:cursor-not-allowed hover:opacity-95 shadow-lg border border-white/20"
+                className="w-full min-h-[52px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-bold text-white text-base transition disabled:opacity-60 disabled:cursor-not-allowed border border-white/30 shadow-lg backdrop-blur-md hover:opacity-95"
                 style={{
-                  backgroundColor: disabled ? "rgba(100,100,100,0.8)" : secondaryColor,
+                  backgroundColor: disabled
+                    ? "rgba(100,100,100,0.6)"
+                    : `${primaryColor}cc`,
                 }}
               >
-                <Search className="h-5 w-5 shrink-0" style={{ color: primaryColor }} aria-hidden />
+                <Search
+                  className="h-5 w-5 shrink-0"
+                  style={{ color: primaryColor }}
+                  aria-hidden
+                />
                 {t("searchTrip")}
               </button>
             </div>
