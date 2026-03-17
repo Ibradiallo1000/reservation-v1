@@ -1,7 +1,9 @@
 export interface WeeklyTrip {
   id: string;
-  /** Route id (companies/{companyId}/routes/{routeId}). When set, departureCity/arrivalCity come from route. */
+  /** Route id (companies/{companyId}/routes/{routeId}). When set, departure/arrival are set from direction. */
   routeId?: string | null;
+  /** Canonical route label for display only (e.g. "Bamako-Gao"). Never derive departure/arrival from this. */
+  route?: string | null;
   departureCity?: string;
   arrivalCity?: string;
   /** Legacy: use departureCity when present. */

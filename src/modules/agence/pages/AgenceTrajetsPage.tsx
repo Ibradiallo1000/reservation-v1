@@ -247,12 +247,22 @@ const AgenceTrajetsPage: React.FC = () => {
           setLoading(false);
           return setMessage('⚠️ Veuillez choisir une route (départ depuis votre agence).');
         }
-        const dep = (selectedRoute.departureCity ?? '').trim();
-        const arr = (selectedRoute.arrivalCity ?? '').trim();
+        const { origin: routeOrigin, destination: routeDestination } = getRouteOriginAndDestination(selectedRoute, tripDirection);
+        const dep = routeOrigin.trim();
+        const arr = routeDestination.trim();
         if (!dep || !arr) {
           setLoading(false);
           return setMessage('❌ Route invalide (ville de départ ou d\'arrivée manquante).');
         }
+        if (dep.toLowerCase() === arr.toLowerCase()) {
+          setLoading(false);
+          return setMessage('❌ Départ et arrivée doivent être différents (éviter X → X).');
+        }
+        const routeLabel = `${selectedRoute.startCity ?? selectedRoute.origin}-${selectedRoute.endCity ?? selectedRoute.destination}`;
+        console.log('Route:', routeLabel);
+        console.log('Direction:', tripDirection);
+        console.log('Departure:', dep);
+        console.log('Arrival:', arr);
         await generateWeeklyTrips(
           user.companyId,
           dep,
@@ -263,6 +273,8 @@ const AgenceTrajetsPage: React.FC = () => {
           user.agencyId,
           {
             routeId: selectedRouteId,
+            route: routeLabel,
+            direction: tripDirection,
             departureCity: dep,
             arrivalCity: arr,
             seats: placesNum,

@@ -8,6 +8,8 @@ export interface CreateWeeklyTripOptions {
   scheduleId?: string | null;
   /** When provided, the weekly trip is linked to a route (origin/destination from route + direction). */
   routeId?: string | null;
+  /** Canonical route label for display only (e.g. "Bamako-Gao"). Never use to derive departure/arrival. */
+  route?: string | null;
   /** Direction on the route: forward (startCity → endCity) or reverse (endCity → startCity). */
   direction?: WeeklyTripDirection;
   /** Origin (or use route + direction when routeId is set). */
@@ -37,6 +39,12 @@ export const generateWeeklyTrips = async (
     const arr = (options?.arrivalCity ?? arrival).trim();
     const seats = options?.seats ?? places;
 
+    if (dep.toLowerCase() === arr.toLowerCase()) {
+      throw new Error('Départ et arrivée doivent être différents (éviter X → X).');
+    }
+
+    console.log('Route (weekly trip):', { route: options?.route ?? `${dep}-${arr}`, direction: options?.direction, departure: dep, arrival: arr });
+
     const tripData: Record<string, unknown> = {
       id: newTripRef.id,
       departure: dep,
@@ -54,6 +62,7 @@ export const generateWeeklyTrips = async (
       updatedAt: Timestamp.now(),
     };
     if (options?.routeId != null && options.routeId !== '') tripData.routeId = options.routeId;
+    if (options?.route != null && String(options.route).trim() !== '') tripData.route = String(options.route).trim();
     if (options?.scheduleId != null && options.scheduleId !== '') tripData.scheduleId = options.scheduleId;
     if (options?.direction != null && (options.direction === 'forward' || options.direction === 'reverse')) tripData.direction = options.direction;
 

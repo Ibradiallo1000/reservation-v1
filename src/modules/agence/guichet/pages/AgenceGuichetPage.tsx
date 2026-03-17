@@ -81,7 +81,7 @@ const MAX_SEATS_FALLBACK = 30;
 const DEFAULT_COMPANY_SLUG = "compagnie-par-defaut";
 
 // ─── Types ───
-type WeeklyTrip = { id: string; departure: string; arrival: string; active: boolean; horaires: Record<string, string[]>; price: number; places?: number };
+type WeeklyTrip = { id: string; departure: string; arrival: string; departureCity?: string; arrivalCity?: string; active: boolean; horaires: Record<string, string[]>; price: number; places?: number };
 type Trip = { id: string; date: string; time: string; departure: string; arrival: string; price: number; places: number; remainingSeats?: number };
 type TicketRow = {
   id: string; referenceCode?: string; date: string; heure: string; depart: string; arrivee: string;
@@ -468,7 +468,9 @@ const AgenceGuichetPage: React.FC = () => {
         const weeklySnap = await getDocs(query(weeklyRef, where("active", "==", true)));
         const weekly = weeklySnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as WeeklyTrip[];
         for (const w of weekly) {
-          if (!w.active || (w.departure || "").toLowerCase().trim() !== depNorm || (w.arrival || "").toLowerCase().trim() !== arrNorm) continue;
+          const wDep = (w.departure ?? w.departureCity ?? "").trim().toLowerCase();
+          const wArr = (w.arrival ?? w.arrivalCity ?? "").trim().toLowerCase();
+          if (!w.active || wDep !== depNorm || wArr !== arrNorm || wDep === wArr) continue;
           const horaires = w.horaires?.[dayName] || [];
           for (const h of horaires) {
             await getOrCreateTripInstanceForSlot(user.companyId, {
@@ -504,12 +506,15 @@ const AgenceGuichetPage: React.FC = () => {
           : capacity - reserved;
         if (remaining <= 0) continue;
         if (dateISO === now.toISOString().split("T")[0] && isPastTime(dateISO, (ti as any).departureTime)) continue;
+        const tripDep = (ti as any).departureCity ?? (ti as any).routeDeparture ?? dep;
+        const tripArr = (ti as any).arrivalCity ?? (ti as any).routeArrival ?? arr;
+        if ((tripDep || "").trim().toLowerCase() === (tripArr || "").trim().toLowerCase()) continue;
         out.push({
           id: ti.id,
           date: ti.date,
           time: (ti as any).departureTime,
-          departure: (ti as any).departureCity ?? (ti as any).routeDeparture ?? dep,
-          arrival: (ti as any).arrivalCity ?? (ti as any).routeArrival ?? arr,
+          departure: tripDep,
+          arrival: tripArr,
           price: (ti as any).price ?? 0,
           places: capacity,
           remainingSeats: remaining,
