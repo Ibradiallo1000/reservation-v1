@@ -83,13 +83,6 @@
       ]
     },
     {
-      "collectionGroup": "agencyLiveState",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "shiftReports",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
@@ -155,6 +148,41 @@
       ]
     },
     {
+      "collectionGroup": "reservations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "tripInstanceId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "tripInstanceId", "order": "ASCENDING" },
+        { "fieldPath": "originStopOrder", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "tripInstanceId", "order": "ASCENDING" },
+        { "fieldPath": "destinationStopOrder", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "tripInstanceId", "order": "ASCENDING" },
+        { "fieldPath": "boardingStatus", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "dailyTrips",
       "queryScope": "COLLECTION",
       "fields": [
@@ -191,20 +219,6 @@
         { "fieldPath": "publicPageEnabled", "order": "ASCENDING" },
         { "fieldPath": "pays", "order": "ASCENDING" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "financialMovements",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "performedAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "financialMovements",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "performedAt", "order": "ASCENDING" }
       ]
     },
     {
@@ -314,20 +328,6 @@
       ]
     },
     {
-      "collectionGroup": "courierSessions",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "agentId", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "shipments",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "sessionId", "order": "ASCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "shipments",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
@@ -348,13 +348,6 @@
       "collectionGroup": "shipments",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
-        { "fieldPath": "originAgencyId", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "shipments",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
         { "fieldPath": "originAgencyId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
@@ -364,20 +357,6 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "vehicleId", "order": "ASCENDING" },
-        { "fieldPath": "date", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionId": "fleetCosts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "date", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionId": "fuelLogs",
-      "queryScope": "COLLECTION",
-      "fields": [
         { "fieldPath": "date", "order": "DESCENDING" }
       ]
     },
