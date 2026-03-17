@@ -12,8 +12,10 @@ import {
 import { db } from '@/firebaseConfig';
 import { getAgencyCityFromDoc } from '@/modules/agence/utils/agencyCity';
 import { generateWeeklyTrips } from '@/modules/agence/services/generateWeeklyTrips';
-import { listRoutesByDepartureCity, capitalizeCityName } from '@/modules/compagnie/routes/routesService';
+import { listRoutesByStartOrEndCity, capitalizeCityName } from '@/modules/compagnie/routes/routesService';
 import type { RouteDocWithId } from '@/modules/compagnie/routes/routesTypes';
+import { getRouteOriginAndDestination } from '@/modules/compagnie/routes/routeStopsService';
+import { ROUTE_DIRECTION, type RouteDirection } from '@/modules/compagnie/routes/routesTypes';
 import { useAuth } from '@/contexts/AuthContext';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -28,6 +30,7 @@ const joursDeLaSemaine = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'sa
 interface WeeklyTrip {
   id: string;
   routeId?: string | null;
+  direction?: RouteDirection;
   departureCity?: string;
   arrivalCity?: string;
   departure: string;
@@ -61,12 +64,17 @@ const AgenceTrajetsPage: React.FC = () => {
   const [agencyCity, setAgencyCity] = useState<string | null>(null);
   const [allowedRoutes, setAllowedRoutes] = useState<RouteDocWithId[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string>('');
+  const [tripDirection, setTripDirection] = useState<RouteDirection>(ROUTE_DIRECTION.FORWARD);
   const itemsPerPage = 10;
 
   const selectedRoute = allowedRoutes.find((r) => r.id === selectedRouteId);
   const editingTrip = modifierId ? trajets.find((t) => t.id === modifierId) : null;
-  const displayDeparture = selectedRoute?.departureCity ?? (editingTrip?.departureCity ?? editingTrip?.departure) ?? '';
-  const displayArrival = selectedRoute?.arrivalCity ?? (editingTrip?.arrivalCity ?? editingTrip?.arrival) ?? '';
+  const displayDeparture = selectedRoute
+    ? getRouteOriginAndDestination(selectedRoute, tripDirection).origin
+    : (editingTrip?.departureCity ?? editingTrip?.departure ?? '');
+  const displayArrival = selectedRoute
+    ? getRouteOriginAndDestination(selectedRoute, tripDirection).destination
+    : (editingTrip?.arrivalCity ?? editingTrip?.arrival ?? '');
 
   const theme = {
     primary: company?.couleurPrimaire || '#06b6d4',
@@ -98,13 +106,13 @@ const AgenceTrajetsPage: React.FC = () => {
     });
   }, [user?.companyId, user?.agencyId]);
 
-  // Load routes where departureCity === agency.city (only these can be used for trip config)
+  // Load routes where startCity or endCity === agency city (one route = both directions)
   useEffect(() => {
     if (!user?.companyId || !agencyCity) {
       setAllowedRoutes([]);
       return;
     }
-    listRoutesByDepartureCity(user.companyId, agencyCity).then(setAllowedRoutes);
+    listRoutesByStartOrEndCity(user.companyId, agencyCity).then(setAllowedRoutes);
   }, [user?.companyId, agencyCity]);
 
   useEffect(() => {
@@ -183,6 +191,7 @@ const AgenceTrajetsPage: React.FC = () => {
 
   const resetForm = () => {
     setSelectedRouteId('');
+    setTripDirection(ROUTE_DIRECTION.FORWARD);
     setPrice('');
     setPlaces('');
     setHoraires({});
@@ -313,30 +322,65 @@ const AgenceTrajetsPage: React.FC = () => {
             </p>
           )}
           {!modifierId && (
-            <div className="mb-3">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Route <span className="text-red-500">*</span></label>
-              <select
-                value={selectedRouteId}
-                onChange={(e) => setSelectedRouteId(e.target.value)}
-                disabled={allowedRoutes.length === 0}
-                className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                <option value="">
-                  {allowedRoutes.length === 0 ? "— Aucune route disponible —" : "— Choisir une route —"}
-                </option>
-                {allowedRoutes.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.departureCity ?? r.origin} → {r.arrivalCity ?? r.destination}
-                    {r.distanceKm != null ? ` (${r.distanceKm} km)` : r.distance != null ? ` (${r.distance} km)` : ""}
+            <>
+              <div className="mb-3">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Route <span className="text-red-500">*</span></label>
+                <select
+                  value={selectedRouteId}
+                  onChange={(e) => setSelectedRouteId(e.target.value)}
+                  disabled={allowedRoutes.length === 0}
+                  className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">
+                    {allowedRoutes.length === 0 ? "— Aucune route disponible —" : "— Choisir une route —"}
                   </option>
-                ))}
-              </select>
-              {allowedRoutes.length === 0 && agencyCity && (
-                <p className="mt-2 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
-                  Aucune route au départ de <strong>{capitalizeCityName(agencyCity)}</strong>. Le responsable logistique doit ajouter des routes (Garage → Routes réseau) pour que vous puissiez créer des trajets.
-                </p>
+                  {allowedRoutes.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.startCity ?? r.origin} ↔ {r.endCity ?? r.destination}
+                      {r.distanceKm != null ? ` (${r.distanceKm} km)` : r.distance != null ? ` (${r.distance} km)` : ""}
+                    </option>
+                  ))}
+                </select>
+                {allowedRoutes.length === 0 && agencyCity && (
+                  <p className="mt-2 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
+                    Aucune route passant par <strong>{capitalizeCityName(agencyCity)}</strong>. Le responsable logistique doit ajouter des routes (Garage → Routes réseau) pour que vous puissiez créer des trajets.
+                  </p>
+                )}
+              </div>
+              {selectedRouteId && (
+                <div className="mb-3">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Direction</label>
+                  <div className="flex gap-4">
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="direction"
+                        checked={tripDirection === ROUTE_DIRECTION.FORWARD}
+                        onChange={() => setTripDirection(ROUTE_DIRECTION.FORWARD)}
+                        className="rounded border-gray-300"
+                      />
+                      <span>Aller</span>
+                      <span className="text-gray-500 text-sm">
+                        ({selectedRoute ? (selectedRoute.startCity ?? selectedRoute.origin) : ''} → {selectedRoute ? (selectedRoute.endCity ?? selectedRoute.destination) : ''})
+                      </span>
+                    </label>
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="direction"
+                        checked={tripDirection === ROUTE_DIRECTION.REVERSE}
+                        onChange={() => setTripDirection(ROUTE_DIRECTION.REVERSE)}
+                        className="rounded border-gray-300"
+                      />
+                      <span>Retour</span>
+                      <span className="text-gray-500 text-sm">
+                        ({selectedRoute ? (selectedRoute.endCity ?? selectedRoute.destination) : ''} → {selectedRoute ? (selectedRoute.startCity ?? selectedRoute.origin) : ''})
+                      </span>
+                    </label>
+                  </div>
+                </div>
               )}
-            </div>
+            </>
           )}
           {modifierId && editingTrip && (
             <div className="mb-3 p-2 rounded bg-gray-50 dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300">

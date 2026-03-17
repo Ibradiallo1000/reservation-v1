@@ -293,7 +293,7 @@ export default function CompanyRoutesPage() {
           </div>
         ) : routes.length === 0 ? (
           <div className="p-6">
-            <EmptyState message="Aucune route. Ajoutez des liaisons (ex. Bamako → Sikasso) et leurs escales." />
+            <EmptyState message="Aucune route. Ajoutez des liaisons (ex. Bamako ↔ Sikasso) ; une route représente les deux sens (aller et retour)." />
             <div className="mt-3 flex justify-center">
               <ActionButton onClick={openCreate}>
                 <Plus className="w-4 h-4" />
@@ -318,9 +318,9 @@ export default function CompanyRoutesPage() {
                 {routes.map((r) => (
                   <tr key={r.id} className="border-t border-gray-200 dark:border-gray-700">
                     <td className={table.td}>
-                      <span className="font-medium">{r.origin ?? r.departureCity}</span>
-                      <span className="mx-1 text-gray-500">→</span>
-                      <span className="font-medium">{r.destination ?? r.arrivalCity}</span>
+                      <span className="font-medium">{r.startCity ?? r.origin ?? r.departureCity}</span>
+                      <span className="mx-1 text-gray-500">↔</span>
+                      <span className="font-medium">{r.endCity ?? r.destination ?? r.arrivalCity}</span>
                     </td>
                     <td className={table.td}>{r.distanceKm != null ? `${r.distanceKm} km` : r.distance != null ? `${r.distance} km` : "—"}</td>
                     <td className={table.td}>{r.estimatedDurationMinutes != null ? `${r.estimatedDurationMinutes} min` : r.estimatedDuration != null ? `${r.estimatedDuration} min` : "—"}</td>
@@ -453,10 +453,10 @@ export default function CompanyRoutesPage() {
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="p-6 border-b border-gray-200 dark:border-gray-700">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Escales — {routeForStops.origin ?? routeForStops.departureCity} → {routeForStops.destination ?? routeForStops.arrivalCity}
+                Escales — {routeForStops.startCity ?? routeForStops.origin ?? routeForStops.departureCity} ↔ {routeForStops.endCity ?? routeForStops.destination ?? routeForStops.arrivalCity}
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Ordre croissant. Première = origine, dernière = destination. Minimum 2 escales.
+                Ordre croissant (sens canonique). Première = startCity, dernière = endCity. Les agences choisissent Aller ou Retour à la création du trajet.
               </p>
             </div>
             <div className="p-4 flex-1 overflow-y-auto">

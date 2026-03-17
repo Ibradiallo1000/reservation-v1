@@ -226,6 +226,114 @@ export async function getNetworkCapacityOnly(
   }, 0);
 }
 
+export interface AgencyStats {
+  totalTickets: number;
+  totalRevenue: number;
+  onlineTickets: number;
+  counterTickets: number;
+  /** Graphique journalier/horaires aligné sur CEO (même structure que ChartDataPoint). */
+  dailyChartData: ChartDataPoint[];
+}
+
+/**
+ * Statistiques d'une agence unique, avec les mêmes règles que le CEO :
+ * - Billets vendus = réservations créées (createdAt Bamako) dont statut canonique ∈ {confirme, paye}
+ * - Période définie par [dateFrom, dateTo] (YYYY-MM-DD) en fuseau Africa/Bamako
+ * - Découpage journalier ou horaire identique à buildChartDataFromReservations/getNetworkStatsChartData
+ */
+export async function getAgencyStats(
+  companyId: string,
+  agencyId: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<AgencyStats> {
+  const periodStart = getStartOfDayInBamako(dateFrom);
+  const periodEnd = getEndOfDayInBamako(dateTo);
+
+  const startTs = Timestamp.fromDate(periodStart);
+  const endTs = Timestamp.fromDate(periodEnd);
+
+  const q = query(
+    collectionGroup(db, "reservations"),
+    where("companyId", "==", companyId),
+    where("agencyId", "==", agencyId),
+    where("createdAt", ">=", startTs),
+    where("createdAt", "<=", endTs),
+    orderBy("createdAt", "asc"),
+    limit(5000)
+  );
+
+  const snap = await getDocs(q);
+  const reservations = snap.docs.map((d) => {
+    const data = d.data();
+    const createdAt = data.createdAt?.toDate?.() ?? new Date(0);
+    const statut = (data.statut ?? data.status ?? "").toString();
+    const montant = Number(data.montant ?? data.amount ?? 0) || 0;
+    const seatsGo = Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1;
+    const canalRaw = (data.canal ?? "").toString().toLowerCase().trim();
+    const canalNorm = canalRaw.replace(/\s|_|-/g, "");
+    const isOnline =
+      canalNorm.includes("ligne") || canalNorm === "online" || canalNorm === "web";
+    const canal: "online" | "counter" = isOnline ? "online" : "counter";
+    return {
+      createdAt,
+      statut,
+      montant,
+      seatsGo,
+      canal,
+    };
+  });
+
+  const sold = reservations.filter((r) => isSoldReservation(r.statut));
+  const totalTickets = sold.length;
+  const totalRevenue = sold.reduce((sum, r) => sum + r.montant, 0);
+  const onlineTickets = sold.filter((r) => r.canal === "online").length;
+  const counterTickets = sold.filter((r) => r.canal === "counter").length;
+
+  // Construire dailyChartData à partir des sold (mêmes règles que buildChartDataFromReservations).
+  const isSingleDay = dateFrom === dateTo;
+  const map = new Map<string, { revenue: number; reservations: number }>();
+
+  if (isSingleDay) {
+    for (let h = 0; h < 24; h++) {
+      map.set(`${dateFrom}T${String(h).padStart(2, "0")}`, { revenue: 0, reservations: 0 });
+    }
+    sold.forEach((r) => {
+      const hour = getHourBamako(r.createdAt);
+      const key = `${dateFrom}T${String(hour).padStart(2, "0")}`;
+      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
+      curr.revenue += r.montant;
+      curr.reservations += r.seatsGo;
+      map.set(key, curr);
+    });
+  } else {
+    const start = new Date(dateFrom + "T00:00:00");
+    const end = new Date(dateTo + "T23:59:59");
+    for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
+      map.set(getDateKeyBamako(new Date(t)), { revenue: 0, reservations: 0 });
+    }
+    sold.forEach((r) => {
+      const key = getDateKeyBamako(r.createdAt);
+      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
+      curr.revenue += r.montant;
+      curr.reservations += r.seatsGo;
+      map.set(key, curr);
+    });
+  }
+
+  const dailyChartData: ChartDataPoint[] = Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, v]) => ({ date, revenue: v.revenue, reservations: v.reservations }));
+
+  return {
+    totalTickets,
+    totalRevenue,
+    onlineTickets,
+    counterTickets,
+    dailyChartData,
+  };
+}
+
 /**
  * Source unique : tous les indicateurs réseau pour une période.
  * Logique des ventes : billets vendus = réservations créées (createdAt) pour toutes les périodes (jour, semaine, mois).

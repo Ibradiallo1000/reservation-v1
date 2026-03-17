@@ -1,6 +1,6 @@
 // src/AppRoutes.tsx — Routes centralisées, permissions et helpers partagés
 import { Suspense, lazy } from "react";
-import { Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useParams, useLocation, Outlet } from "react-router-dom";
 import { useAuth } from "./contexts/AuthContext";
 import PrivateRoute from "./modules/auth/components/PrivateRoute";
 import ProtectedRoute from "./modules/auth/components/ProtectedRoute";
@@ -88,6 +88,7 @@ const FinancesPage = lazy(() => import("./modules/compagnie/pages/FinancesPage")
 const ReservationsReseauPage = lazy(() => import("./modules/compagnie/pages/ReservationsReseauPage"));
 const FlottePage = lazy(() => import("./modules/compagnie/pages/FlottePage"));
 const AuditControlePage = lazy(() => import("./modules/compagnie/pages/AuditControlePage"));
+const CompagnieComptabiliteValidationPage = lazy(() => import("./modules/compagnie/pages/CompagnieComptabiliteValidationPage"));
 const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 const FinancialSettingsPage = lazy(() => import("./modules/compagnie/settings/FinancialSettingsPage"));
 const NotificationsPage = lazy(() => import("./modules/compagnie/notifications/NotificationsPage"));
@@ -371,6 +372,7 @@ const AppRoutes = () => {
           <Route path="reservations-reseau/reservations" element={<CompagnieReservationsPage />} />
           <Route path="reservations" element={<Navigate to="reservations-reseau/reservations" replace />} />
           <Route path="flotte" element={<FlottePage />} />
+          <Route path="comptabilite/validation" element={<CompagnieComptabiliteValidationPage />} />
           <Route path="comptabilite" element={<Navigate to="audit-controle?tab=controle" replace />} />
           <Route path="audit-controle" element={<AuditControlePage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
@@ -480,6 +482,14 @@ const AppRoutes = () => {
           <Route path="treasury/new-payable" element={<AgencyTreasuryNewPayablePage />} />
           <Route path="team" element={<ManagerTeamPage />} />
           <Route path="reports" element={<ManagerReportsPage />} />
+          <Route path="fleet" element={<Outlet />}>
+            <Route index element={<FleetDashboardPage />} />
+            <Route path="operations" element={<AgenceFleetOperationsPage />} />
+            <Route path="assignment" element={<FleetAssignmentPage />} />
+            <Route path="vehicles" element={<FleetVehiclesPage />} />
+            <Route path="crew" element={<FleetCrewPage />} />
+            <Route path="movements" element={<FleetMovementLogPage />} />
+          </Route>
           <Route
             path="courrier"
             element={
@@ -509,23 +519,6 @@ const AppRoutes = () => {
         >
           <Route index element={<BoardingDashboardPage />} />
           <Route path="scan" element={<BoardingScanPage />} />
-        </Route>
-
-        {/* ========= FLEET (Phase 3 - separate from Agency Manager) ========= */}
-        <Route
-          path="/agence/fleet"
-          element={
-            <PrivateRoute allowedRoles={routePermissions.fleet}>
-              <FleetLayout />
-            </PrivateRoute>
-          }
-        >
-          <Route index element={<FleetDashboardPage />} />
-          <Route path="operations" element={<AgenceFleetOperationsPage />} />
-          <Route path="assignment" element={<FleetAssignmentPage />} />
-          <Route path="vehicles" element={<FleetVehiclesPage />} />
-          <Route path="crew" element={<FleetCrewPage />} />
-          <Route path="movements" element={<FleetMovementLogPage />} />
         </Route>
 
         {/* ========= ESCALE (layout + tableau de bord, bus du jour, caisse) ========= */}

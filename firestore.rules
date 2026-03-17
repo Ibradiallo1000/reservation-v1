@@ -477,12 +477,15 @@ service cloud.firestore {
       ============================================================ */
       match /financialAccounts/{accountId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
-        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId)) && (
-          getUserRole() == 'admin_compagnie' ||
-          getUserRole() == 'company_ceo' ||
-          getUserRole() == 'company_accountant' ||
-          getUserRole() == 'chefAgence' ||
-          ((getUserRole() == 'escale_manager' || getUserRole() == 'escale_agent') && request.resource.data.get('accountType', '') == 'agency_cash' && request.resource.data.get('agencyId', '') == getUserAgencyId())
+        allow create: if isAuth() && (
+          (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId)) && (
+            getUserRole() == 'admin_compagnie' ||
+            getUserRole() == 'company_ceo' ||
+            getUserRole() == 'company_accountant' ||
+            getUserRole() == 'chefAgence' ||
+            ((getUserRole() == 'escale_manager' || getUserRole() == 'escale_agent') && request.resource.data.get('accountType', '') == 'agency_cash' && request.resource.data.get('agencyId', '') == getUserAgencyId())
+          )
+          || (getUserRole() == 'chefAgence' && request.resource.data.get('accountType', '') == 'agency_cash' && request.resource.data.get('agencyId', '') == getUserAgencyId() && request.resource.data.get('companyId', '') == companyId)
         );
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           request.resource.data.diff(resource.data).affectedKeys()
@@ -735,12 +738,14 @@ service cloud.firestore {
       allow get: if request.auth != null && request.auth.uid == userId;
       allow list: if isAuth();
       allow create: if isAuth() && (
-        request.resource.data.get('role', '') != 'chefAgence'
+        request.auth.uid == userId
+        || request.resource.data.get('role', '') != 'chefAgence'
         || getUserRole() == 'admin_compagnie'
         || getUserRole() == 'admin_platforme'
       );
       allow update: if isAuth() && (
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
+        request.auth.uid == userId
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
         || request.resource.data.get('role', '') != 'chefAgence'
         || getUserRole() == 'admin_compagnie'
         || getUserRole() == 'admin_platforme'

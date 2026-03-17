@@ -23,12 +23,18 @@ import { db } from '@/firebaseConfig';
 import {
   SHIFT_STATUS,
   SHIFT_REPORTS_COLLECTION,
+  VALIDATION_LEVEL,
   canCloseShift,
   isShiftLocked,
   type ShiftStatusValue,
 } from '../constants/sessionLifecycle';
 import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
-import { updateDailyStatsOnSessionClosed, updateDailyStatsOnSessionValidated, toDailyStatsDate } from '../aggregates/dailyStats';
+import {
+  updateDailyStatsOnSessionClosed,
+  updateDailyStatsOnSessionValidatedByAgency,
+  updateDailyStatsOnSessionValidatedByCompany,
+  toDailyStatsDate,
+} from '../aggregates/dailyStats';
 import { updateAgencyLiveStateOnSessionOpened, updateAgencyLiveStateOnSessionClosed, updateAgencyLiveStateOnSessionValidated } from '../aggregates/agencyLiveState';
 import { recordMovementInTransaction } from '@/modules/compagnie/treasury/financialMovements';
 import { agencyCashAccountId } from '@/modules/compagnie/treasury/types';
@@ -376,8 +382,7 @@ export async function closeSession(params: {
 }
 
 /**
- * Validation comptable unique (Phase 2) : CLOSED → VALIDATED avec audit immuable.
- * Un seul flux. Aucune modification possible après VALIDATED.
+ * Validation niveau agence : CLOSED → VALIDATED_AGENCY. Pas de mouvement trésorerie (chef comptable le fait).
  */
 export type ValidationAudit = {
   validatedBy: { id: string; name?: string | null };
@@ -407,7 +412,12 @@ export async function validateSessionByAccountant(params: {
     if (!sSnap.exists()) throw new Error('Poste introuvable.');
     if (!rSnap.exists()) throw new Error('Rapport introuvable.');
     const s = sSnap.data() as Record<string, unknown>;
-    if ((s.status as string) === SHIFT_STATUS.VALIDATED) throw new Error('Poste déjà validé (verrouillé).');
+    if ((s.status as string) === SHIFT_STATUS.VALIDATED) {
+      return;
+    }
+    if ((s.status as string) === SHIFT_STATUS.VALIDATED_AGENCY) {
+      return; // déjà validé agence
+    }
     if ((s.status as string) !== SHIFT_STATUS.CLOSED) throw new Error('Seuls les postes clôturés peuvent être validés.');
 
     const expectedCash = Number(s.totalCash ?? s.amount ?? 0);
@@ -423,13 +433,15 @@ export async function validateSessionByAccountant(params: {
     };
 
     tx.update(shiftRef, stripUndefined({
-      status: SHIFT_STATUS.VALIDATED,
+      status: SHIFT_STATUS.VALIDATED_AGENCY,
       validatedAt: now,
       validationAudit,
       updatedAt: serverTimestamp(),
     }));
     tx.update(reportRef, stripUndefined({
-      status: 'validated',
+      status: 'validated_agency',
+      validationLevel: VALIDATION_LEVEL.AGENCY,
+      validatedByAgencyAt: now,
       validatedAt: now,
       validationAudit,
       updatedAt: serverTimestamp(),
@@ -438,20 +450,71 @@ export async function validateSessionByAccountant(params: {
     const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
     const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
     const statsDate = toDailyStatsDate(closedAt);
-    updateDailyStatsOnSessionValidated(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
+    updateDailyStatsOnSessionValidatedByAgency(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
     updateAgencyLiveStateOnSessionValidated(tx, params.companyId, params.agencyId);
+    // Pas de mouvement trésorerie ici : réservé à la validation chef comptable (validateSessionByHeadAccountant).
+  });
 
-    // Treasury: revenue_cash movement (external → agency_cash) when account exists
+  return { computedDifference };
+}
+
+/**
+ * Validation chef comptable (niveau compagnie) : VALIDATED_AGENCY → VALIDATED.
+ * Enregistre validatedByCompanyAt, met à jour dailyStats (ticketRevenueCompany) et crée le mouvement trésorerie.
+ */
+export async function validateSessionByHeadAccountant(params: {
+  companyId: string;
+  agencyId: string;
+  shiftId: string;
+  validatedBy: { id: string; name?: string | null };
+}): Promise<void> {
+  const base = `companies/${params.companyId}/agences/${params.agencyId}`;
+  const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
+  const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
+
+  await runTransaction(db, async (tx) => {
+    const sSnap = await tx.get(shiftRef);
+    const rSnap = await tx.get(reportRef);
+    if (!sSnap.exists()) throw new Error('Poste introuvable.');
+    if (!rSnap.exists()) throw new Error('Rapport introuvable.');
+    const s = sSnap.data() as Record<string, unknown>;
+    if ((s.status as string) === SHIFT_STATUS.VALIDATED) {
+      return;
+    }
+    if ((s.status as string) !== SHIFT_STATUS.VALIDATED_AGENCY) {
+      throw new Error('Seuls les postes validés par le comptable agence peuvent être validés par le chef comptable.');
+    }
+
+    const now = Timestamp.now();
+    const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
+    const receivedCashAmount = Number((s.validationAudit as { receivedCashAmount?: number })?.receivedCashAmount ?? totalRevenue);
+
+    tx.update(shiftRef, stripUndefined({
+      status: SHIFT_STATUS.VALIDATED,
+      validatedAt: now,
+      updatedAt: serverTimestamp(),
+    }));
+    tx.update(reportRef, stripUndefined({
+      status: 'validated',
+      validationLevel: VALIDATION_LEVEL.COMPANY,
+      validatedByCompanyAt: now,
+      updatedAt: serverTimestamp(),
+    }));
+
+    const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
+    const statsDate = toDailyStatsDate(closedAt);
+    updateDailyStatsOnSessionValidatedByCompany(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
+
     const agencyCashId = agencyCashAccountId(params.agencyId);
     const agencyCashRef = financialAccountRef(params.companyId, agencyCashId);
     const accountSnap = await tx.get(agencyCashRef);
-    if (accountSnap.exists() && params.receivedCashAmount > 0) {
+    if (accountSnap.exists() && receivedCashAmount > 0) {
       const currency = (accountSnap.data() as { currency?: string }).currency ?? 'XOF';
       await recordMovementInTransaction(tx, {
         companyId: params.companyId,
         fromAccountId: null,
         toAccountId: agencyCashId,
-        amount: params.receivedCashAmount,
+        amount: receivedCashAmount,
         currency,
         movementType: 'revenue_cash',
         referenceType: 'shift',
@@ -459,12 +522,31 @@ export async function validateSessionByAccountant(params: {
         agencyId: params.agencyId,
         performedBy: params.validatedBy.id,
         performedAt: now,
-        notes: null,
+        notes: 'Validation chef comptable',
       });
     }
   });
+}
 
-  return { computedDifference };
+/**
+ * Rejet par le chef comptable : marque le rapport comme rejeté (reste VALIDATED_AGENCY, exclu de la liste de validation).
+ */
+export async function rejectSessionByHeadAccountant(params: {
+  companyId: string;
+  agencyId: string;
+  shiftId: string;
+  rejectedBy: { id: string; name?: string | null };
+  reason?: string;
+}): Promise<void> {
+  const base = `companies/${params.companyId}/agences/${params.agencyId}`;
+  const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
+  const now = Timestamp.now();
+  await updateDoc(reportRef, stripUndefined({
+    rejectedByCompanyAt: now,
+    rejectedBy: { id: params.rejectedBy.id, name: params.rejectedBy.name ?? null },
+    rejectionReason: params.reason ?? null,
+    updatedAt: serverTimestamp(),
+  }));
 }
 
 /**

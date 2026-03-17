@@ -16,6 +16,7 @@ import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
+import { migrateAgentsAgentCode, allocateAgentCode, roleHasAgentCode } from "@/modules/agence/services/agentCodeService";
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, StatusBadge } from "@/ui";
 import { Users } from "lucide-react";
 
@@ -34,6 +35,7 @@ interface Agent {
   agencyName?: string;
   staffCode?: string;   // ex: G001 / ACC001
   codeCourt?: string;   // alias du staffCode pour compat
+  agentCode?: string;   // ex: G01, C01, E01 (unique par agence)
   createdAt: any;
 }
 
@@ -244,9 +246,9 @@ const AgencePersonnelPage: React.FC = () => {
         user.agencyId,
         "users"
       );
+      await migrateAgentsAgentCode(user.companyId, user.agencyId);
       const snap = await getDocs(ref);
-      
-      // Transformer les documents en objets Agent avec des valeurs par défaut
+
       const list = snap.docs
         .map((d) => {
           const data = d.data();
@@ -263,12 +265,12 @@ const AgencePersonnelPage: React.FC = () => {
             agencyName: data.agencyName || "",
             staffCode: data.staffCode,
             codeCourt: data.codeCourt,
+            agentCode: data.agentCode,
             createdAt: data.createdAt || Timestamp.now(),
           } as Agent;
         })
-        .filter(agent => agent.uid && agent.displayName); // Filtrer les agents valides
+        .filter(agent => agent.uid && agent.displayName);
 
-      // Backfill local: si guichetier/comptable sans code => en attribuer un
       const toFix = list.filter(a => (a.role === "guichetier" || a.role === "agency_accountant") && !a.staffCode);
       
       if (toFix.length > 0) {
@@ -298,14 +300,15 @@ const AgencePersonnelPage: React.FC = () => {
               companyId: data.companyId || user.companyId!,
               agencyId: data.agencyId || user.agencyId!,
               agencyName: data.agencyName || "",
-              staffCode: data.staffCode,
-              codeCourt: data.codeCourt,
-              createdAt: data.createdAt || Timestamp.now(),
-            } as Agent;
-          })
+            staffCode: data.staffCode,
+            codeCourt: data.codeCourt,
+            agentCode: data.agentCode,
+            createdAt: data.createdAt || Timestamp.now(),
+          } as Agent;
+        })
           .filter(agent => agent.uid && agent.displayName);
-        
-        setAgents(list2.sort((a, b) => 
+
+        setAgents(list2.sort((a, b) =>
           (a.displayName || "").localeCompare(b.displayName || "")
         ));
       } else {
@@ -482,14 +485,18 @@ const AgencePersonnelPage: React.FC = () => {
         }
       }
 
-      // Subcollection agence
-      await updateDoc(localRef, {
+      let newAgentCode: string | undefined;
+      if (roleHasAgentCode(editRole) && !before.agentCode) {
+        newAgentCode = await allocateAgentCode(user.companyId, user.agencyId, editRole) ?? undefined;
+      }
+      const localUpdates: Record<string, unknown> = {
         displayName: editDisplayName,
         telephone: editTelephone,
         role: editRole,
-      });
+      };
+      if (newAgentCode) localUpdates.agentCode = newAgentCode;
+      await updateDoc(localRef, localUpdates);
 
-      // Doc racine
       const uid = before.uid;
       if (uid) {
         const rootRef = doc(db, "users", uid);
@@ -498,8 +505,6 @@ const AgencePersonnelPage: React.FC = () => {
           telephone: editTelephone,
           role: editRole,
         });
-
-        // Si guichetier/agency_accountant et pas encore de code
         if ((editRole === "guichetier" || editRole === "agency_accountant") && !before.staffCode) {
           const code = await allocateStaffCode({
             companyId: user.companyId,
@@ -513,7 +518,6 @@ const AgencePersonnelPage: React.FC = () => {
         }
       }
 
-      // Refresh local state
       setAgents((prev) =>
         prev.map((a) =>
           a.id === editId
@@ -522,6 +526,7 @@ const AgencePersonnelPage: React.FC = () => {
                 displayName: editDisplayName,
                 telephone: editTelephone,
                 role: editRole,
+                ...(newAgentCode ? { agentCode: newAgentCode } : {}),
               }
             : a
         )
@@ -690,7 +695,7 @@ const AgencePersonnelPage: React.FC = () => {
                         <option value="chefEmbarquement">Chef embarquement</option>
                       </select>
                       <div className="text-sm text-gray-500 flex items-center">
-                        Code: <span className="font-mono ml-1">{agent.staffCode || "—"}</span>
+                        Code: <span className="font-mono ml-1">{agent.agentCode || agent.staffCode || "—"}</span>
                       </div>
                       <div className="text-xs text-gray-500 flex items-center gap-1">
                         Statut: <StatusBadge status={agent.active ? "active" : "cancelled"}>{agent.active ? "Actif" : "Désactivé"}</StatusBadge>
@@ -703,7 +708,7 @@ const AgencePersonnelPage: React.FC = () => {
                         <span className="text-gray-500 text-sm">• {agent.role}</span>
                         {(agent.role === "guichetier" || agent.role === "agency_accountant") && (
                           <span className="ml-2 px-2 py-0.5 rounded bg-gray-100 font-mono text-xs">
-                            {agent.staffCode || "—"}
+                            {agent.agentCode || agent.staffCode || "—"}
                           </span>
                         )}
                       </p>

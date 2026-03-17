@@ -163,22 +163,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       if (isLoggingOut) return;
       if (!firebaseUser.email) return;
 
+      console.log("[AuthContext] attachInvitationIfNeeded: vérification pour", firebaseUser.uid, firebaseUser.email);
       const userRef = doc(db, "users", firebaseUser.uid);
       const existing = await getDoc(userRef);
-      if (existing.exists()) return;
+      if (existing.exists()) {
+        console.log("[AuthContext] attachInvitationIfNeeded: document users existe déjà pour", firebaseUser.uid);
+      }
 
+      // Les invitations sont stockées avec email en minuscules ; Auth peut garder la casse
+      const emailNorm = firebaseUser.email.trim().toLowerCase();
       const q = query(
         collection(db, "invitations"),
-        where("email", "==", firebaseUser.email),
+        where("email", "==", emailNorm),
         where("status", "==", "pending")
       );
 
       const snap = await getDocs(q);
-      if (snap.empty) return;
+      if (snap.empty) {
+        console.log("[AuthContext] attachInvitationIfNeeded: aucune invitation en attente pour", emailNorm);
+        return;
+      }
 
       const invite = snap.docs[0];
       const data: any = invite.data();
-
+      console.log("[AuthContext] attachInvitationIfNeeded: invitation trouvée", { inviteId: invite.id, role: data.role, companyId: data.companyId, agencyId: data.agencyId });
       const invRole = data.role ?? "chefAgence";
       const canonicalRole =
         invRole === "comptable" && data.agencyId
@@ -188,23 +196,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             : invRole === "company_ceo"
               ? "admin_compagnie"
               : invRole;
+      const nom = (data.fullName ?? data.name ?? "").trim() || firebaseUser.email || "";
 
-      await setDoc(userRef, {
-        uid: firebaseUser.uid,
-        email: firebaseUser.email,
-        role: canonicalRole,
-        companyId: data.companyId,
-        agencyId: data.agencyId ?? "",
-        nom: data.fullName ?? "",
-        createdAt: serverTimestamp(),
-        lastLogin: serverTimestamp(),
-      });
+      if (!existing.exists()) {
+        // Créer le document users (chef d'agence ou autre rôle) avec le format attendu
+        console.log("[AuthContext] attachInvitationIfNeeded: création du document users/", firebaseUser.uid, { role: canonicalRole, companyId: data.companyId, agencyId: data.agencyId });
+        await setDoc(userRef, {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          nom,
+          role: canonicalRole,
+          companyId: data.companyId ?? "",
+          agencyId: data.agencyId ?? "",
+          invitationId: invite.id,
+          createdAt: serverTimestamp(),
+          lastLogin: serverTimestamp(),
+        });
+        console.log("[AuthContext] attachInvitationIfNeeded: document users créé avec succès pour", firebaseUser.uid);
+      } else {
+        // Utilisateur déjà présent : mettre à jour avec la nouvelle agence / rôle
+        console.log("[AuthContext] attachInvitationIfNeeded: mise à jour du document users/", firebaseUser.uid, { role: canonicalRole, companyId: data.companyId, agencyId: data.agencyId });
+        await updateDoc(userRef, {
+          role: canonicalRole,
+          companyId: data.companyId ?? "",
+          agencyId: data.agencyId ?? "",
+          invitationId: invite.id,
+          lastLogin: serverTimestamp(),
+          ...(nom ? { nom } : {}),
+        });
+        console.log("[AuthContext] attachInvitationIfNeeded: document users mis à jour avec succès pour", firebaseUser.uid);
+      }
 
       await updateDoc(invite.ref, {
         status: "accepted",
         uid: firebaseUser.uid,
         acceptedAt: serverTimestamp(),
       });
+      console.log("[AuthContext] attachInvitationIfNeeded: invitation marquée acceptée");
 
       if (data.companyId && data.agencyId) {
         const agencyUserRef = doc(
@@ -214,7 +242,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           "agences",
           data.agencyId,
           "users",
-          invite.ref.id
+          invite.id
         );
         try {
           await updateDoc(agencyUserRef, {

@@ -45,7 +45,7 @@ export default function FleetCrewPage() {
         getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/users`)),
         listVehicles(companyId),
       ]);
-      const crew = usersSnap.docs.map((d) => {
+      const allCrew = usersSnap.docs.map((d) => {
         const data = d.data() as any;
         return {
           id: d.id,
@@ -59,6 +59,9 @@ export default function FleetCrewPage() {
           assignedVehicleId: data.assignedVehicleId ?? "",
         } as CrewMember;
       });
+      const crew = allCrew.filter(
+        (m) => m.crewRole === "driver" || m.crewRole === "convoyeur" || m.crewRole === "both"
+      );
       const vehicleOpts = allVehicles
         .filter((v: any) => {
           const sameAgency = String(v.currentAgencyId ?? "") === String(agencyId);
@@ -118,7 +121,7 @@ export default function FleetCrewPage() {
             Chargement...
           </div>
         ) : members.length === 0 ? (
-          <EmptyState message="Aucun agent disponible." />
+          <EmptyState message="Aucun membre d'équipage flotte (chauffeur ou convoyeur). Attribuez un rôle équipage aux agents depuis l'Équipe ou cette page." />
         ) : (
           <div className="space-y-3">
             {members.map((m) => (

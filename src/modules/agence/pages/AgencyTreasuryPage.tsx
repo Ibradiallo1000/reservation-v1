@@ -71,15 +71,15 @@ export default function AgencyTreasuryPage() {
     }
     const currency = (company as { devise?: string })?.devise ?? "XOF";
     setError(null);
-    ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as { nom?: string })?.nom)
-      .then(() => listAccounts(companyId, { agencyId }))
-      .then(setAccounts)
-      .catch(() => {
-        setError(
-          !isOnline
-            ? "Connexion indisponible. Impossible de charger la trésorerie."
-            : "Erreur lors du chargement de la trésorerie."
-        );
+    const runEnsure = () =>
+      ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as { nom?: string })?.nom)
+        .then(() => listAccounts(companyId, { agencyId }))
+        .then(setAccounts);
+    runEnsure()
+      .catch((err: any) => {
+        const isPerm = err?.code === "permission-denied" || err?.message?.includes("permission");
+        if (isPerm) setTimeout(() => runEnsure().catch(() => setError("Erreur lors du chargement de la trésorerie.")), 1500);
+        else setError(!isOnline ? "Connexion indisponible. Impossible de charger la trésorerie." : "Erreur lors du chargement de la trésorerie.");
       })
       .finally(() => setLoading(false));
   }, [companyId, agencyId, company, isOnline, reloadKey]);

@@ -148,9 +148,16 @@ export function useManagerAlerts(): ManagerAlertsResult {
 
     /* One-time fetch: cash position + today's expenses */
     const currency = (company as any)?.devise ?? "XOF";
-    ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as any)?.nom).then(() => {
-      listAccounts(companyId, { agencyId }).then((accs) =>
-        setCashPosition(accs.reduce((s, a) => s + a.currentBalance, 0)));
+    const runEnsureAndList = () =>
+      ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as any)?.nom).then(() =>
+        listAccounts(companyId, { agencyId }).then((accs) =>
+          setCashPosition(accs.reduce((s, a) => s + a.currentBalance, 0))));
+
+    runEnsureAndList().catch((err: any) => {
+      const isPerm = (err?.code === "permission-denied" || err?.message?.includes("permission"));
+      if (isPerm) {
+        setTimeout(() => runEnsureAndList().catch(() => {}), 1500);
+      }
     });
 
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);

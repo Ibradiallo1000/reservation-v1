@@ -182,18 +182,22 @@ const AcceptInvitationPage = () => {
         invitation.agencyId
       );
 
-      // 3. Create user document in Firestore
-      await setDoc(doc(db, "users", firebaseUser.uid), {
+      // 3. Create user document in Firestore (format attendu: agencyId, companyId, createdAt, email, invitationId, lastLogin, nom, role, uid)
+      const nom = displayName.trim() || invitation.email || "";
+      const userPayload = {
         uid: firebaseUser.uid,
         email: invitation.email,
-        nom: displayName.trim(),
+        nom,
         role: canonicalRole,
         companyId: invitation.companyId || "",
         agencyId: invitation.agencyId || "",
         createdAt: serverTimestamp(),
         lastLogin: serverTimestamp(),
         invitationId: invitation.id,
-      });
+      };
+      console.log("[AcceptInvitationPage] Création du document users/", firebaseUser.uid, userPayload);
+      await setDoc(doc(db, "users", firebaseUser.uid), userPayload);
+      console.log("[AcceptInvitationPage] Document users créé avec succès pour", firebaseUser.uid);
 
       // 4. Mark invitation as accepted
       await updateDoc(doc(db, "invitations", invitation.id), {
@@ -216,6 +220,8 @@ const AcceptInvitationPage = () => {
         try {
           await updateDoc(agencyUserRef, {
             invitationPending: false,
+            invitationAccepted: true,
+            active: true,
             uid: firebaseUser.uid,
           });
         } catch {
@@ -414,6 +420,15 @@ const AcceptInvitationPage = () => {
         {error && (
           <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3">
             <p className="text-sm text-red-700">{error}</p>
+            {error.includes("compte existe déjà") && (
+              <button
+                type="button"
+                onClick={() => navigate("/login")}
+                className="mt-3 w-full bg-orange-600 text-white py-2 rounded-lg font-medium hover:bg-orange-700 transition"
+              >
+                Se connecter (votre profil chef d&apos;agence sera créé)
+              </button>
+            )}
           </div>
         )}
 

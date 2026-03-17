@@ -14,10 +14,21 @@ export const ROUTE_STATUS = {
 } as const;
 export type RouteStatus = (typeof ROUTE_STATUS)[keyof typeof ROUTE_STATUS];
 
+/** Direction du trajet sur une route réseau. forward = startCity → endCity, reverse = endCity → startCity. */
+export const ROUTE_DIRECTION = {
+  FORWARD: "forward",
+  REVERSE: "reverse",
+} as const;
+export type RouteDirection = (typeof ROUTE_DIRECTION)[keyof typeof ROUTE_DIRECTION];
+
 export interface RouteDoc {
-  /** Origin city (start of route). Alias: departureCity for backward compat. */
+  /** Ville de début de la route (sens canonique). Une route représente startCity ↔ endCity. */
+  startCity?: string;
+  /** Ville de fin de la route (sens canonique). */
+  endCity?: string;
+  /** Origin city (start of route). Alias: departureCity for backward compat. Égal à startCity si présent. */
   origin: string;
-  /** Destination city (end of route). Alias: arrivalCity for backward compat. */
+  /** Destination city (end of route). Alias: arrivalCity for backward compat. Égal à endCity si présent. */
   destination: string;
   /** Distance in km. */
   distanceKm?: number | null;

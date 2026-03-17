@@ -1,5 +1,7 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Navigate, useNavigate, useLocation } from "react-router-dom";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { lightenForDarkMode } from "@/utils/color";
@@ -13,6 +15,7 @@ import {
   Wallet,
   Package,
   Receipt,
+  Truck,
 } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection, NavSectionChild } from "@/shared/layout/InternalLayout";
@@ -47,14 +50,23 @@ const TREASURY_CHILDREN: NavSectionChild[] = [
   { label: "Nouveau payable fournisseur", path: "/agence/treasury/new-payable" },
 ];
 
+const FLEET_CHILDREN: NavSectionChild[] = [
+  { label: "Tableau de bord", path: "/agence/fleet", end: true },
+  { label: "Exploitation", path: "/agence/fleet/operations", end: true },
+  { label: "Affectation", path: "/agence/fleet/assignment" },
+  { label: "Véhicules", path: "/agence/fleet/vehicles" },
+  { label: "Équipage", path: "/agence/fleet/crew" },
+  { label: "Mouvements", path: "/agence/fleet/movements" },
+];
+
 const BASE_SECTIONS: Array<NavSection & { moduleKey: string }> = [
   { label: "Poste de pilotage", icon: LayoutDashboard, path: "/agence/dashboard", end: true, moduleKey: "dashboard" },
-  { label: "Opérations",  icon: Activity,        path: "/agence/operations",             moduleKey: "operations" },
-  { label: "Finances",    icon: Banknote,        path: "/agence/finances",               moduleKey: "finances" },
-  { label: "Trésorerie",  icon: Wallet,          path: "/agence/treasury",               moduleKey: "treasury", children: TREASURY_CHILDREN },
-  { label: "Rapports",    icon: FileBarChart2,   path: "/agence/reports",                moduleKey: "reports" },
-  { label: "Trajets",     icon: MapPinned,       path: "/agence/trajets",                moduleKey: "trajets" },
-  { label: "Équipe",      icon: Users,           path: "/agence/team",                   moduleKey: "team" },
+  { label: "Opérations", icon: Activity, path: "/agence/operations", moduleKey: "operations" },
+  { label: "Finances", icon: Banknote, path: "/agence/finances", moduleKey: "finances" },
+  { label: "Trésorerie", icon: Wallet, path: "/agence/treasury", moduleKey: "treasury", children: TREASURY_CHILDREN },
+  { label: "Rapports", icon: FileBarChart2, path: "/agence/reports", moduleKey: "reports" },
+  { label: "Trajets", icon: MapPinned, path: "/agence/trajets", moduleKey: "trajets" },
+  { label: "Équipe", icon: Users, path: "/agence/team", moduleKey: "team" },
 ];
 
 const ManagerShellInner: React.FC = () => {
@@ -75,7 +87,7 @@ const ManagerShellInner: React.FC = () => {
     "Courrier": 6,
     "Rapports": 7,
     "Trajets": 8,
-    "Équipage flotte": 9,
+    "Flotte": 9,
     "Équipe": 10,
   };
 
@@ -153,11 +165,13 @@ const ManagerShellInner: React.FC = () => {
         children: COURRIER_CHILDREN,
       });
     }
-    if (has("chefAgence") || has("admin_compagnie")) {
+    if (has("chefAgence") || has("admin_compagnie") || has("agency_fleet_controller")) {
       list.push({
-        label: "Équipage flotte",
-        icon: Users,
-        path: "/agence/fleet/crew",
+        label: "Flotte",
+        icon: Truck,
+        path: "/agence/fleet",
+        end: false,
+        children: FLEET_CHILDREN,
       });
     }
     return isCourierOnly ? list : list.sort((a, b) => (sectionOrder[a.label] ?? 99) - (sectionOrder[b.label] ?? 99));
@@ -165,7 +179,7 @@ const ManagerShellInner: React.FC = () => {
 
   useAgencyKeyboardShortcuts(sections);
 
-  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier") || has("escale_agent") || has("escale_manager");
+  const canUseShell = has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agentCourrier") || has("escale_agent") || has("escale_manager") || has("agency_fleet_controller");
 
   if (has("agentCourrier") && !pathname.startsWith("/agence/courrier")) {
     return <Navigate to="/agence/courrier" replace />;
@@ -180,7 +194,6 @@ const ManagerShellInner: React.FC = () => {
   }
   if (!canUseShell) {
     if (has("chefEmbarquement")) return <Navigate to="/agence/boarding" replace />;
-    if (has("agency_fleet_controller")) return <Navigate to="/agence/fleet" replace />;
     if (has("guichetier")) return <Navigate to="/agence/guichet" replace />;
     if (has("agency_accountant")) return <Navigate to="/agence/comptabilite" replace />;
     return <Navigate to="/login" replace />;
@@ -197,7 +210,28 @@ const ManagerShellInner: React.FC = () => {
     : trialEndsAtRaw instanceof Date ? trialEndsAtRaw : null;
 
   const companyName = company?.nom || "Compagnie";
-  const agencyName = user?.agencyNom || user?.agencyName || "Agence";
+  const [agencyNameFromDb, setAgencyNameFromDb] = useState<string>("");
+
+  useEffect(() => {
+    if (!companyId || !agencyId) {
+      setAgencyNameFromDb("");
+      return;
+    }
+    let cancelled = false;
+    getDoc(doc(db, "companies", companyId, "agences", agencyId))
+      .then((snap) => {
+        if (cancelled || !snap.exists()) return;
+        const data = snap.data() as Record<string, unknown>;
+        const name = (data?.name ?? data?.nom ?? data?.nomAgence ?? user?.agencyName ?? user?.agencyNom ?? "Agence") as string;
+        if (!cancelled) setAgencyNameFromDb(name || "Agence");
+      })
+      .catch(() => {
+        if (!cancelled) setAgencyNameFromDb(user?.agencyNom ?? user?.agencyName ?? "Agence");
+      });
+    return () => { cancelled = true; };
+  }, [companyId, agencyId, user?.agencyName, user?.agencyNom]);
+
+  const agencyName = agencyNameFromDb || user?.agencyNom || user?.agencyName || "Agence";
   const roleLabel = has("escale_manager") ? "Chef d'escale" : has("escale_agent") ? "Agent escale"
     : has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie")
     ? "Agent courrier"
@@ -225,17 +259,16 @@ const ManagerShellInner: React.FC = () => {
       userName={user?.displayName || undefined}
       userEmail={user?.email || undefined}
       brandName={companyName}
+      brandSubtitle={agencyName ? `Agence : ${agencyName}` : undefined}
       logoUrl={company?.logoUrl}
       primaryColor={theme?.colors?.primary}
       secondaryColor={theme?.colors?.secondary}
       onLogout={handleLogout}
       headerLeft={
         <div className="hidden sm:flex items-center gap-2 text-sm min-w-0">
-          <span className="font-semibold text-gray-900 truncate">{companyName}</span>
-          <span className="text-gray-300">/</span>
-          <span className="text-gray-600 truncate">{agencyName}</span>
-          <span className="text-gray-300">/</span>
-          <span className="text-gray-500">{roleLabel}</span>
+          <span className="font-semibold text-gray-900 dark:text-white truncate">
+            Opérations — {agencyName}
+          </span>
         </div>
       }
       headerRight={

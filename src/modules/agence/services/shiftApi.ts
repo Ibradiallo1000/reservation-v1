@@ -7,6 +7,7 @@ import {
   collection,
   doc,
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -15,12 +16,9 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
-import { SHIFT_REPORTS_COLLECTION } from '../constants/sessionLifecycle';
-import { toDailyStatsDate, updateDailyStatsOnSessionValidated } from '../aggregates/dailyStats';
+import { SHIFT_REPORTS_COLLECTION, SHIFT_STATUS, VALIDATION_LEVEL } from '../constants/sessionLifecycle';
+import { toDailyStatsDate, updateDailyStatsOnSessionValidatedByAgency } from '../aggregates/dailyStats';
 import { updateAgencyLiveStateOnSessionValidated } from '../aggregates/agencyLiveState';
-import { recordMovementInTransaction } from '@/modules/compagnie/treasury/financialMovements';
-import { agencyCashAccountId } from '@/modules/compagnie/treasury/types';
-import { financialAccountRef } from '@/modules/compagnie/treasury/financialAccounts';
 
 export type DayRange = { start: Date; end: Date };
 export const dayRange = (dateISO: string): DayRange => {
@@ -75,8 +73,69 @@ export async function listPendingReports(
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string; [k: string]: unknown }));
 }
 
+export type ShiftReportValidatedByAgency = {
+  id: string;
+  shiftId: string;
+  companyId: string;
+  agencyId: string;
+  agencyName?: string;
+  userName?: string | null;
+  userCode?: string | null;
+  startAt: unknown;
+  endAt?: unknown;
+  totalRevenue?: number;
+  totalCash?: number;
+  totalDigital?: number;
+  validatedByAgencyAt?: unknown;
+  [k: string]: unknown;
+};
+
+/** Liste tous les rapports validés par l'agence (en attente validation chef comptable) pour une compagnie. */
+export async function listReportsValidatedByAgencyForCompany(
+  companyId: string
+): Promise<ShiftReportValidatedByAgency[]> {
+  const agenciesRef = collection(db, `companies/${companyId}/agences`);
+  const agenciesSnap = await getDocs(agenciesRef);
+  const results: ShiftReportValidatedByAgency[] = [];
+  for (const agDoc of agenciesSnap.docs) {
+    const agencyId = agDoc.id;
+    const agencyData = agDoc.data() as { name?: string; nom?: string };
+    const agencyName = agencyData?.name ?? agencyData?.nom ?? agencyId;
+    const ref = collection(db, `companies/${companyId}/agences/${agencyId}/${SHIFT_REPORTS_COLLECTION}`);
+    const q = query(ref, where('status', '==', 'validated_agency'), limit(200));
+    const snap = await getDocs(q);
+    snap.docs.forEach((d) => {
+      const data = d.data();
+      if (data.rejectedByCompanyAt) return;
+      results.push({
+        id: d.id,
+        shiftId: d.id,
+        companyId: data.companyId ?? companyId,
+        agencyId: data.agencyId ?? agencyId,
+        agencyName,
+        userName: data.userName ?? null,
+        userCode: data.userCode ?? null,
+        startAt: data.startAt,
+        endAt: data.endAt,
+        totalRevenue: Number(data.totalRevenue ?? data.montant ?? 0),
+        totalCash: Number(data.totalCash ?? 0),
+        totalDigital: Number(data.totalDigital ?? 0),
+        validatedByAgencyAt: data.validatedByAgencyAt,
+        ...data,
+      });
+    });
+  }
+  results.sort((a, b) => {
+    const at = (a.validatedByAgencyAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
+    const bt = (b.validatedByAgencyAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
+    return bt - at;
+  });
+  return results;
+}
+
 /**
- * Validation comptable (une seule voie). Met à jour shiftReports et shifts → status validated.
+ * Validation comptable agence (même flux que validateSessionByAccountant). CLOSED → VALIDATED_AGENCY.
+ * Pas de mouvement trésorerie (réservé au chef comptable via validateSessionByHeadAccountant).
  */
 export async function validateReportClient(opts: {
   companyId: string;
@@ -96,15 +155,23 @@ export async function validateReportClient(opts: {
     if (!sSnap.exists()) throw new Error('Poste introuvable');
 
     const s = sSnap.data() as Record<string, unknown>;
-    if (s.status === 'validated') throw new Error('Poste déjà validé.');
-    if (s.status !== 'closed') throw new Error('Seuls les postes clôturés peuvent être validés.');
+    const status = (s.status as string) ?? '';
+    if (status === SHIFT_STATUS.VALIDATED || status === 'validated') {
+      return;
+    }
+    if (status === SHIFT_STATUS.VALIDATED_AGENCY || status === 'validated_agency') {
+      return;
+    }
+    if (status !== 'closed') throw new Error('Seuls les postes clôturés peuvent être validés.');
 
     const now = Timestamp.now();
 
     tx.set(
       rRef,
       {
-        status: 'validated',
+        status: 'validated_agency',
+        validationLevel: VALIDATION_LEVEL.AGENCY,
+        validatedByAgencyAt: now,
         accountantValidated: true,
         accountantValidatedAt: now,
         accountantStamp: {
@@ -119,7 +186,7 @@ export async function validateReportClient(opts: {
     tx.set(
       sRef,
       {
-        status: 'validated',
+        status: SHIFT_STATUS.VALIDATED_AGENCY,
         validatedAt: now,
         accountantValidated: true,
         accountantValidatedAt: now,
@@ -127,7 +194,7 @@ export async function validateReportClient(opts: {
           validated: true,
           at: now,
           by: { id: accountant.id, name: accountant.name },
-          note: note || 'Réception espèces validée',
+          note: note || 'Réception espèces validée (agence)',
         },
         updatedAt: now,
       },
@@ -137,28 +204,7 @@ export async function validateReportClient(opts: {
     const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
     const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
     const statsDate = toDailyStatsDate(closedAt);
-    updateDailyStatsOnSessionValidated(tx, companyId, agencyId, statsDate, totalRevenue);
+    updateDailyStatsOnSessionValidatedByAgency(tx, companyId, agencyId, statsDate, totalRevenue);
     updateAgencyLiveStateOnSessionValidated(tx, companyId, agencyId);
-
-    const agencyCashId = agencyCashAccountId(agencyId);
-    const agencyCashRef = financialAccountRef(companyId, agencyCashId);
-    const accountSnap = await tx.get(agencyCashRef);
-    if (accountSnap.exists() && totalRevenue > 0) {
-      const currency = (accountSnap.data() as { currency?: string }).currency ?? 'XOF';
-      await recordMovementInTransaction(tx, {
-        companyId,
-        fromAccountId: null,
-        toAccountId: agencyCashId,
-        amount: totalRevenue,
-        currency,
-        movementType: 'revenue_cash',
-        referenceType: 'shift',
-        referenceId: shiftId,
-        agencyId,
-        performedBy: accountant.id,
-        performedAt: now,
-        notes: note || null,
-      });
-    }
   });
 }

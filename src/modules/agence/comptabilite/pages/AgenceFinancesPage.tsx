@@ -1,12 +1,11 @@
 // ✅ src/pages/AgenceFinancesPage.tsx — version compatible structure imbriquée Firestore
 
 import React, { useEffect, useState } from 'react';
-import { Timestamp, collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/firebaseConfig';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
 import { Wallet } from 'lucide-react';
+import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
 
 const AgenceFinancesPage: React.FC = () => {
   const { user } = useAuth();
@@ -27,22 +26,25 @@ const AgenceFinancesPage: React.FC = () => {
       default:
         now.setHours(0, 0, 0, 0);
     }
-    return Timestamp.fromDate(now);
+    return now;
   };
 
   const fetchStats = async () => {
     if (!user?.companyId || !user?.agencyId) return;
 
-    const start = getStartDate();
-    const q = query(
-      collection(db, 'companies', user.companyId, 'agences', user.agencyId, 'reservations'),
-      where('createdAt', '>=', start),
-      where('statut', 'in', ['paye', 'payé'])
-    );
-    const snap = await getDocs(q);
-    const total = snap.docs.reduce((sum, doc) => sum + (doc.data().montant || 0), 0);
-    setRevenu(total);
-    setNombre(snap.size);
+    const startDate = getStartDate();
+    const endDate = new Date();
+
+    const startKey = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(
+      startDate.getDate()
+    ).padStart(2, "0")}`;
+    const endKey = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-${String(
+      endDate.getDate()
+    ).padStart(2, "0")}`;
+
+    const stats = await getAgencyStats(user.companyId, user.agencyId, startKey, endKey);
+    setRevenu(stats.totalRevenue);
+    setNombre(stats.totalTickets);
   };
 
   useEffect(() => {
@@ -68,8 +70,11 @@ const AgenceFinancesPage: React.FC = () => {
       <SectionCard title="Résumé">
         <p className="text-lg">Revenu total : <span className="font-bold text-green-700">{money(revenu)}</span></p>
         <p className="text-lg">Nombre de réservations : <span className="font-bold text-blue-700">{nombre}</span></p>
-        <div className="mt-4">
+        <div className="mt-4 flex items-center justify-between gap-4">
           <ActionButton onClick={() => window.print()}>Imprimer le résumé</ActionButton>
+          <p className="text-xs text-gray-500">
+            Chiffres réseau calculés par <span className="font-semibold">networkStatsService</span> (réservations en ligne + guichet).
+          </p>
         </div>
       </SectionCard>
     </StandardLayoutWrapper>

@@ -14,6 +14,14 @@ export interface DailyStatsDoc {
   courierRevenue?: number;
   /** Total revenue (ticketRevenue + courierRevenue). Legacy docs may only have totalRevenue. */
   totalRevenue: number;
+  /** Revenus billets validés par le comptable agence. */
+  ticketRevenueAgency?: number;
+  /** Revenus billets validés par le chef comptable. */
+  ticketRevenueCompany?: number;
+  /** Revenus courrier validés par le comptable agence. */
+  courierRevenueAgency?: number;
+  /** Revenus courrier validés par le chef comptable. */
+  courierRevenueCompany?: number;
   totalPassengers: number;
   totalSeats: number;
   validatedSessions: number;

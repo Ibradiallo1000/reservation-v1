@@ -1,13 +1,18 @@
 import { collection, doc, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 
+/** Direction du trajet sur la route. forward = startCity → endCity, reverse = endCity → startCity. */
+export type WeeklyTripDirection = "forward" | "reverse";
+
 export interface CreateWeeklyTripOptions {
   scheduleId?: string | null;
-  /** When provided, the weekly trip is linked to a route (origin/destination from route). departure/arrival are then derived from the route. */
+  /** When provided, the weekly trip is linked to a route (origin/destination from route + direction). */
   routeId?: string | null;
-  /** Origin (or use route.origin when routeId is set). */
+  /** Direction on the route: forward (startCity → endCity) or reverse (endCity → startCity). */
+  direction?: WeeklyTripDirection;
+  /** Origin (or use route + direction when routeId is set). */
   departureCity?: string;
-  /** Destination (or use route.destination when routeId is set). */
+  /** Destination (or use route + direction when routeId is set). */
   arrivalCity?: string;
   /** Seat count (stored as seats and places for backward compat). */
   seats?: number;
@@ -50,6 +55,7 @@ export const generateWeeklyTrips = async (
     };
     if (options?.routeId != null && options.routeId !== '') tripData.routeId = options.routeId;
     if (options?.scheduleId != null && options.scheduleId !== '') tripData.scheduleId = options.scheduleId;
+    if (options?.direction != null && (options.direction === 'forward' || options.direction === 'reverse')) tripData.direction = options.direction;
 
     await setDoc(newTripRef, tripData);
     return newTripRef.id;

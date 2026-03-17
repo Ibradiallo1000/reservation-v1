@@ -22,6 +22,10 @@ import AccessDenied from "@/core/ui/AccessDenied";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { getNetworkStats } from "@/modules/compagnie/networkStats/networkStatsService";
 import { calculateChange } from "@/shared/date/periodComparisonUtils";
+import {
+  getUnifiedCompanyFinance,
+  type UnifiedAgencyFinance,
+} from "@/modules/finance/services/unifiedFinanceService";
 
 const SHIFT_REPORTS_COLLECTION = "shiftReports";
 
@@ -123,6 +127,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     week: { current: number; prev: number; label: string };
     month: { current: number; prev: number; label: string };
   } | null>(null);
+  const [unifiedFinance, setUnifiedFinance] = useState<UnifiedAgencyFinance | null>(null);
+  const [unifiedFinanceLoading, setUnifiedFinanceLoading] = useState(false);
 
   useEffect(() => {
     if (!companyId) {
@@ -210,6 +216,18 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
         setLoading(false);
       }
     })();
+  }, [companyId]);
+
+  // Finance unifiée : 3 niveaux (live, cash, validated) — période 30 derniers jours
+  useEffect(() => {
+    if (!companyId) return;
+    const monthStart = toDateKey(subDays(new Date(), 29));
+    const today = toDateKey(new Date());
+    setUnifiedFinanceLoading(true);
+    getUnifiedCompanyFinance(companyId, monthStart, today)
+      .then(setUnifiedFinance)
+      .catch(() => setUnifiedFinance(null))
+      .finally(() => setUnifiedFinanceLoading(false));
   }, [companyId]);
 
   // Comparaison période précédente (vs hier, vs 7j précédents, vs 30j précédents)
@@ -516,6 +534,32 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   return wrap(
     <>
       {!embedded && <PageHeader title="Finances compagnie" />}
+
+      {/* Finance unifiée : 3 niveaux */}
+      <section className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Ventes temps réel</div>
+          <div className="text-xl font-bold mt-1" style={{ color: "#2563eb" }}>
+            {unifiedFinanceLoading ? "—" : money(unifiedFinance?.live.totalRevenue ?? 0)}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">Source : reservations + shipments (vendus / payés)</p>
+        </div>
+        <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Encaissements</div>
+          <div className="text-xl font-bold mt-1" style={{ color: "#16a34a" }}>
+            {unifiedFinanceLoading ? "—" : money(unifiedFinance?.cash.total ?? 0)}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">Source : cashTransactions (status paid)</p>
+        </div>
+        <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Revenus validés</div>
+          <div className="text-xl font-bold mt-1" style={{ color: "#7c3aed" }}>
+            {unifiedFinanceLoading ? "—" : money(unifiedFinance?.validated.totalRevenue ?? 0)}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">Source : dailyStats (ticketRevenue + courierRevenue)</p>
+        </div>
+      </section>
+
       <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-3 mb-3">
           <h2 className="text-lg font-semibold">Surveillance financière</h2>

@@ -40,6 +40,8 @@ import { useAgencyDarkMode } from '@/modules/agence/shared';
 import AgencyTreasuryNewOperationPage from '@/modules/agence/treasury/pages/AgencyTreasuryNewOperationPage';
 import AgencyTreasuryTransferPage from '@/modules/agence/treasury/pages/AgencyTreasuryTransferPage';
 import AgencyTreasuryNewPayablePage from '@/modules/agence/treasury/pages/AgencyTreasuryNewPayablePage';
+import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
+import { getTodayBamako } from '@/shared/date/dateUtilsTz';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -251,6 +253,9 @@ const AgenceComptabilitePage: React.FC = () => {
   const [liveStats, setLiveStats] = useState<Record<string, { reservations: number; tickets: number; amount: number }>>({});
   const liveUnsubsRef = useRef<Record<string, () => void>>({});
 
+  /* Total agence aujourd'hui (en ligne + guichet), même source que le poste de pilotage / CEO */
+  const [agencyStatsToday, setAgencyStatsToday] = useState<{ totalTickets: number; totalRevenue: number } | null>(null);
+
   /* ============================================================================
      SECTION : ÉTATS REACT - AGRÉGATS COMPTABLES (ÉTENDU)
      Description : Calculs agrégés pour la validation des réceptions
@@ -450,6 +455,15 @@ const AgenceComptabilitePage: React.FC = () => {
       console.log('[AgenceCompta] Arrêt de l\'écoute des postes');
       unsub();
     };
+  }, [user?.companyId, user?.agencyId]);
+
+  /* Total agence aujourd'hui (en ligne + guichet) — même source que poste de pilotage / CEO */
+  useEffect(() => {
+    if (!user?.companyId || !user?.agencyId) return;
+    const todayKey = getTodayBamako();
+    getAgencyStats(user.companyId, user.agencyId, todayKey, todayKey)
+      .then((stats) => setAgencyStatsToday({ totalTickets: stats.totalTickets, totalRevenue: stats.totalRevenue }))
+      .catch(() => setAgencyStatsToday(null));
   }, [user?.companyId, user?.agencyId]);
 
   /* ============================================================================
@@ -1301,23 +1315,24 @@ const AgenceComptabilitePage: React.FC = () => {
         
         {tab === 'controle' && (
           <div className="space-y-6">
-            {/* KPI Globaux */}
+            {/* KPI Globaux — Total agence (aujourd'hui), en ligne + guichet, même source que poste de pilotage */}
+            <p className="text-xs text-gray-500">Total agence aujourd'hui (en ligne + guichet), même source que le poste de pilotage et le CEO.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
               <MetricCard
                 label="Billets vendus"
-                value={liveTotalsGlobal.tickets.toString()}
+                value={agencyStatsToday !== null ? agencyStatsToday.totalTickets.toString() : liveTotalsGlobal.tickets.toString()}
                 icon={Ticket}
                 valueColorVar={theme?.primary}
               />
               <MetricCard
                 label="Chiffre d'affaires"
-                value={money(liveTotalsGlobal.amount)}
+                value={agencyStatsToday !== null ? money(agencyStatsToday.totalRevenue) : money(liveTotalsGlobal.amount)}
                 icon={Wallet}
                 valueColorVar={theme?.primary}
               />
               <MetricCard
                 label="Réservations"
-                value={liveTotalsGlobal.reservations.toString()}
+                value={agencyStatsToday !== null ? agencyStatsToday.totalTickets.toString() : liveTotalsGlobal.reservations.toString()}
                 icon={Activity}
                 valueColorVar={theme?.primary}
               />

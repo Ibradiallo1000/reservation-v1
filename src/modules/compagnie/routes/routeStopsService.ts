@@ -17,8 +17,36 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import { ROUTES_COLLECTION, ROUTE_STOPS_SUBCOLLECTION, type RouteStopDoc, type RouteStopDocWithId } from "./routesTypes";
+import { ROUTES_COLLECTION, ROUTE_STOPS_SUBCOLLECTION, ROUTE_DIRECTION, type RouteStopDoc, type RouteStopDocWithId, type RouteDirection } from "./routesTypes";
 import { getRoute, capitalizeCityName } from "./routesService";
+
+/** Route shape sufficient for direction helpers (startCity/endCity or origin/destination). */
+export interface RouteForDirection {
+  startCity?: string;
+  endCity?: string;
+  origin?: string;
+  destination?: string;
+}
+
+/** Returns origin and destination for display/creation given route and direction. */
+export function getRouteOriginAndDestination(
+  route: RouteForDirection,
+  direction: RouteDirection
+): { origin: string; destination: string } {
+  const start = (route.startCity ?? route.origin ?? "").trim();
+  const end = (route.endCity ?? route.destination ?? "").trim();
+  if (direction === ROUTE_DIRECTION.REVERSE) return { origin: end, destination: start };
+  return { origin: start, destination: end };
+}
+
+/** Returns stops in the correct order for the given direction. forward = as stored (startCity … endCity), reverse = reversed. */
+export function getRouteStopsOrdered(
+  stops: RouteStopDocWithId[],
+  direction: RouteDirection
+): RouteStopDocWithId[] {
+  if (direction === ROUTE_DIRECTION.REVERSE) return [...stops].reverse();
+  return stops;
+}
 
 function stopsRef(companyId: string, routeId: string) {
   return collection(db, "companies", companyId, ROUTES_COLLECTION, routeId, ROUTE_STOPS_SUBCOLLECTION);

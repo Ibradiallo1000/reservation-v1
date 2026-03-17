@@ -130,10 +130,18 @@ const LoginPage: React.FC = () => {
       );
       stepLog("after signInWithEmailAndPassword (Auth OK)");
 
-      const snap = await getDoc(doc(db, "users", cred.user.uid));
+      let snap = await getDoc(doc(db, "users", cred.user.uid));
       stepLog("after getDoc(users)");
-      const userData = snap.exists() ? snap.data() : {};
-      const rawRole = userData.role;
+      let userData = snap.exists() ? snap.data() : {};
+      let rawRole = userData.role;
+
+      if (!rawRole) {
+        stepLog("pas de rôle encore (invitation en cours?) — attente 2s puis retry getDoc");
+        await new Promise((r) => setTimeout(r, 2000));
+        snap = await getDoc(doc(db, "users", cred.user.uid));
+        userData = snap.exists() ? snap.data() : {};
+        rawRole = userData.role;
+      }
 
       // Legacy: resolve "comptable" before normalization (until migration runs)
       let roleToNormalize = rawRole;
@@ -155,7 +163,7 @@ const LoginPage: React.FC = () => {
       });
 
       if (role === "unauthenticated") {
-        console.error("[LoginPage] role normalized to unauthenticated; raw role:", userData.role);
+        console.warn("[LoginPage] rôle manquant ou invalide après lecture du profil; raw role:", userData.role);
         setError("Profil incomplet (rôle manquant ou invalide). Contactez l’administrateur.");
         setLoading(false);
         return;

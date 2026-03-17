@@ -24,6 +24,10 @@ function baseIncrements() {
     totalRevenue: increment(0),
     ticketRevenue: increment(0),
     courierRevenue: increment(0),
+    ticketRevenueAgency: increment(0),
+    ticketRevenueCompany: increment(0),
+    courierRevenueAgency: increment(0),
+    courierRevenueCompany: increment(0),
     totalPassengers: increment(0),
     totalSeats: increment(0),
     validatedSessions: increment(0),
@@ -80,8 +84,59 @@ export function updateDailyStatsOnSessionClosed(
 }
 
 /**
- * Call from within a transaction when a guichet session becomes VALIDATED.
- * Adds ticket revenue and total revenue (ticketRevenue + courierRevenue over time).
+ * Call when a guichet session is validated by agency accountant (VALIDATED_AGENCY).
+ * Updates agency-level stats only: ticketRevenueAgency.
+ */
+export function updateDailyStatsOnSessionValidatedByAgency(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  date: string,
+  ticketRevenue: number
+): void {
+  if (ticketRevenue <= 0) return;
+  const ref = dailyStatsRef(companyId, agencyId, date);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    date,
+    ...baseIncrements(),
+    ticketRevenueAgency: increment(ticketRevenue),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/**
+ * Call when a guichet session is validated by head accountant (VALIDATED).
+ * Updates company-level stats: ticketRevenueCompany, totalRevenue.
+ */
+export function updateDailyStatsOnSessionValidatedByCompany(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  date: string,
+  ticketRevenue: number
+): void {
+  if (ticketRevenue <= 0) return;
+  const ref = dailyStatsRef(companyId, agencyId, date);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    date,
+    ...baseIncrements(),
+    ticketRevenueCompany: increment(ticketRevenue),
+    ticketRevenue: increment(ticketRevenue),
+    totalRevenue: increment(ticketRevenue),
+    validatedSessions: increment(1),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/**
+ * @deprecated Use updateDailyStatsOnSessionValidatedByAgency + ByCompany (two-level validation).
+ * Call from within a transaction when a guichet session becomes VALIDATED (legacy single-step).
  */
 export function updateDailyStatsOnSessionValidated(
   tx: Transaction,

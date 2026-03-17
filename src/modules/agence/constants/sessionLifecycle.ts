@@ -1,6 +1,6 @@
 /**
  * Cycle de vie unifié des postes guichet (Phase 1 — Stabilisation).
- * PENDING → ACTIVE → CLOSED → VALIDATED (LOCKED)
+ * PENDING → ACTIVE → CLOSED → VALIDATED_AGENCY (comptable agence) → VALIDATED (chef comptable, LOCKED)
  * Une seule collection pour les rapports : shiftReports.
  */
 
@@ -9,7 +9,16 @@ export const SHIFT_STATUS = {
   ACTIVE: 'active',
   PAUSED: 'paused',
   CLOSED: 'closed',
+  /** Validé par le comptable agence ; en attente validation chef comptable. */
+  VALIDATED_AGENCY: 'validated_agency',
+  /** Validé par le chef comptable (niveau compagnie) ; verrouillé. */
   VALIDATED: 'validated',
+} as const;
+
+/** Niveau de validation pour shiftReports. */
+export const VALIDATION_LEVEL = {
+  AGENCY: 'agency',
+  COMPANY: 'company',
 } as const;
 
 export type ShiftStatusValue = typeof SHIFT_STATUS[keyof typeof SHIFT_STATUS];
@@ -34,6 +43,7 @@ export const LOCKED_STATUS = SHIFT_STATUS.VALIDATED;
 /** Nom unique de la collection des rapports (plus de shift_reports). */
 export const SHIFT_REPORTS_COLLECTION = 'shiftReports';
 
+/** Verrouillé uniquement après validation chef comptable (VALIDATED). VALIDATED_AGENCY reste modifiable par le chef. */
 export function isShiftLocked(status: string): boolean {
   return status === SHIFT_STATUS.VALIDATED;
 }

@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  collection, doc, getDoc, query, where, onSnapshot, getDocs, limit, Timestamp,
+  collection, doc, getDoc, query, where, onSnapshot, getDocs, limit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { activateSession } from "@/modules/agence/services/sessionService";
@@ -23,6 +23,8 @@ import { useDateFilterContext } from "./DateFilterContext";
 import { useManagerAlerts } from "./useManagerAlerts";
 import type { DailyStatsDoc, AgencyLiveStateDoc } from "../aggregates/types";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
+import { getAgencyStats } from "@/modules/compagnie/networkStats/networkStatsService";
+import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 
 const SESSION_WARN_H = 8;
 
@@ -77,6 +79,9 @@ export default function ManagerCockpitPage() {
   const [loading, setLoading] = useState(true);
   const [agencyType, setAgencyType] = useState<string>("");
   const [activatingShiftId, setActivatingShiftId] = useState<string | null>(null);
+  /** Ventes par poste (shiftId), même source que le comptable — en temps réel */
+  const [liveStatsByShift, setLiveStatsByShift] = useState<Record<string, { tickets: number; revenue: number }>>({});
+  const liveUnsubsRef = useRef<Record<string, () => void>>({});
 
   useEffect(() => {
     if (!companyId || !agencyId) { setLoading(false); return; }
@@ -128,8 +133,13 @@ export default function ManagerCockpitPage() {
     });
 
     const currency = (company as any)?.devise ?? "XOF";
-    ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as any)?.nom).then(() => {
-      listAccounts(companyId, { agencyId }).then((accs) => setCashPosition(accs.reduce((s, a) => s + a.currentBalance, 0)));
+    const runEnsure = () =>
+      ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as any)?.nom).then(() =>
+        listAccounts(companyId, { agencyId }).then((accs) => setCashPosition(accs.reduce((s, a) => s + a.currentBalance, 0))));
+    runEnsure().catch((err: any) => {
+      if (err?.code === "permission-denied" || err?.message?.includes("permission")) {
+        setTimeout(() => runEnsure().catch(() => {}), 1500);
+      }
     });
 
     setLoading(false);
@@ -138,19 +148,61 @@ export default function ManagerCockpitPage() {
 
   useEffect(() => {
     if (!companyId || !agencyId) return;
-    if (dateFilter.preset === "today") {
-      setFilteredRevenue(dailyStats?.totalRevenue ?? reservationsToday.reduce((a, r) => a + (r.montant ?? 0), 0));
-      setFilteredTickets(dailyStats?.totalPassengers ?? reservationsToday.reduce((a, r) => a + (r.seatsGo ?? 1), 0));
-      return;
-    }
-    const resRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
-    getDocs(query(resRef, where("createdAt", ">=", Timestamp.fromDate(dateFilter.range.start)),
-      where("createdAt", "<=", Timestamp.fromDate(dateFilter.range.end)), where("statut", "in", ["paye", "payé"])))
-      .then((s) => {
-        setFilteredRevenue(s.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0));
-        setFilteredTickets(s.size);
+    const startKey =
+      dateFilter.preset === "today"
+        ? getTodayBamako()
+        : toLocalISO(dateFilter.range.start);
+    const endKey =
+      dateFilter.preset === "today"
+        ? getTodayBamako()
+        : toLocalISO(dateFilter.range.end);
+    getAgencyStats(companyId, agencyId, startKey, endKey)
+      .then((stats) => {
+        setFilteredRevenue(stats.totalRevenue);
+        setFilteredTickets(stats.totalTickets);
+      })
+      .catch((err) => {
+        console.error("[ManagerCockpit] getAgencyStats failed:", err);
+        setFilteredRevenue(0);
+        setFilteredTickets(0);
       });
-  }, [companyId, agencyId, dateFilter.preset, dateFilter.range.start.getTime(), dateFilter.range.end.getTime(), dailyStats, reservationsToday]);
+  }, [companyId, agencyId, dateFilter.preset, dateFilter.range.start.getTime(), dateFilter.range.end.getTime()]);
+
+  /* Ventes par poste en temps réel (même logique que le comptable : réservations avec ce shiftId) */
+  const activeOrPausedShifts = useMemo(
+    () => shifts.filter((s) => s.status === "active" || s.status === "paused"),
+    [shifts]
+  );
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    const rRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
+    for (const id of Object.keys(liveUnsubsRef.current)) {
+      const needed = activeOrPausedShifts.some((s) => s.id === id);
+      if (!needed) {
+        liveUnsubsRef.current[id]?.();
+        delete liveUnsubsRef.current[id];
+      }
+    }
+    for (const s of activeOrPausedShifts) {
+      if (liveUnsubsRef.current[s.id]) continue;
+      const q = query(rRef, where("shiftId", "==", s.id));
+      const unsub = onSnapshot(q, (snap) => {
+        let tickets = 0;
+        let revenue = 0;
+        snap.forEach((d) => {
+          const r = d.data() as { seatsGo?: number; seatsReturn?: number; montant?: number };
+          tickets += (r.seatsGo ?? 0) + (r.seatsReturn ?? 0);
+          revenue += r.montant ?? 0;
+        });
+        setLiveStatsByShift((prev) => ({ ...prev, [s.id]: { tickets, revenue } }));
+      });
+      liveUnsubsRef.current[s.id] = unsub;
+    }
+    return () => {
+      Object.values(liveUnsubsRef.current).forEach((u) => u());
+      liveUnsubsRef.current = {};
+    };
+  }, [companyId, agencyId, activeOrPausedShifts]);
 
   const departures = useMemo(() => {
     const list: Array<{ key: string; departure: string; arrival: string; heure: string; embarked: number; capacity: number; closed: boolean }> = [];
@@ -200,14 +252,18 @@ export default function ManagerCockpitPage() {
 
   const activeCounters = useMemo(() =>
     shifts.filter((s) => s.status === "active" || s.status === "paused").map((s) => {
-      const shiftRes = reservationsToday.filter((r) => r.shiftId === s.id);
+      const live = liveStatsByShift[s.id];
+      const fallbackRes = reservationsToday.filter((r) => r.shiftId === s.id);
       return {
-        id: s.id, name: s.userName ?? s.userId,
-        tickets: shiftRes.reduce((a, r) => a + (r.seatsGo ?? 1), 0),
-        revenue: shiftRes.reduce((a, r) => a + (r.montant ?? 0), 0),
+        id: s.id,
+        name: s.userName ?? s.userId,
+        tickets: live ? live.tickets : fallbackRes.reduce((a, r) => a + (r.seatsGo ?? 1), 0),
+        revenue: live ? live.revenue : fallbackRes.reduce((a, r) => a + (r.montant ?? 0), 0),
         status: s.status as "active" | "paused",
       };
-    }), [shifts, reservationsToday]);
+    }),
+    [shifts, reservationsToday, liveStatsByShift]
+  );
 
   const alertItems = useMemo(() =>
     managerAlerts.filter((a) => a.module === "dashboard" || a.module === "finances" || a.module === "operations")
@@ -242,6 +298,7 @@ export default function ManagerCockpitPage() {
         <MetricCard label="Colis en transit" value={courierInTransitCount} icon={Package} valueColorVar="#0f766e" />
         <MetricCard label="Départs restants" value={departuresRemaining} icon={Bus} valueColorVar="#c2410c" />
       </div>
+      <p className="text-xs text-gray-500 mt-1 mb-2">CA et billets : source réseau TELIYA (réservations confirme/paye, en ligne + guichet). Les lignes « Guichets actifs » ci-dessous restent basées sur les sessions guichet.</p>
 
       <SectionCard title="Actions manager">
         <div className="flex flex-wrap gap-2">
@@ -252,23 +309,32 @@ export default function ManagerCockpitPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="Guichets actifs" icon={Monitor}
+      <SectionCard title="Guichets actifs — surveillance en temps réel" icon={Monitor}
         right={<StatusBadge status="success">{activeCounters.length} actif{activeCounters.length > 1 ? "s" : ""}</StatusBadge>}
         noPad>
-        {activeCounters.length === 0 ? (
-          <EmptyState message="Aucun guichet actif en ce moment." />
+        <div className="px-4 pt-3 pb-1">
+          <p className="text-xs text-gray-500">Même vue que le comptable : total agence (en ligne + guichet) puis détail par poste de vente.</p>
+        </div>
+        {activeCounters.length === 0 && filteredTickets === 0 && filteredRevenue === 0 ? (
+          <EmptyState message="Aucun guichet actif et aucune vente sur la période." />
         ) : (
           <div className={table.wrapper}>
             <table className={table.base}>
               <thead className={table.head}>
                 <tr>
-                  <th className={table.th}>Guichetier</th>
-                  <th className={table.thRight}>Billets (session)</th>
-                  <th className={table.thRight}>Revenu (session)</th>
+                  <th className={table.th}>Poste / Guichetier</th>
+                  <th className={table.thRight}>Billets</th>
+                  <th className={table.thRight}>Revenu</th>
                   <th className={table.th}>Statut</th>
                 </tr>
               </thead>
               <tbody className={table.body}>
+                <tr className={tableRowClassName()} style={{ backgroundColor: "var(--tw-sky-50, #f0f9ff)" }}>
+                  <td className={table.td}><span className="font-semibold text-gray-900">Total agence (en ligne + guichet)</span></td>
+                  <td className={table.tdRight}>{filteredTickets}</td>
+                  <td className={table.tdRight}>{money(filteredRevenue)}</td>
+                  <td className={table.td}><span className="text-xs text-gray-500">Réseau TELIYA</span></td>
+                </tr>
                 {activeCounters.map((c) => (
                   <tr key={c.id} className={tableRowClassName()}>
                     <td className={table.td}><span className="font-medium text-gray-900">{c.name}</span></td>
@@ -286,7 +352,8 @@ export default function ManagerCockpitPage() {
       </SectionCard>
 
       {activeCounters.length > 0 && (
-        <SectionCard title="Postes actifs en temps réel">
+        <SectionCard title="Postes actifs en temps réel (détail par session)">
+          <p className="text-xs text-gray-500 mb-2">Ventes liées à chaque poste guichet ouvert. Le total agence (en ligne + guichet) est affiché dans le tableau ci-dessus.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {activeCounters.map((c) => (
               <div key={`card_${c.id}`} className="rounded-lg border border-gray-200 bg-white p-3">
@@ -298,8 +365,8 @@ export default function ManagerCockpitPage() {
                     <StatusBadge status="pending">Pause</StatusBadge>
                   )}
                 </div>
-                <div className="mt-2 text-xs text-gray-600">Billets session: {c.tickets}</div>
-                <div className="text-sm font-medium text-gray-800">Revenu session: {money(c.revenue)}</div>
+                <div className="mt-2 text-xs text-gray-600">Billets (session): {c.tickets}</div>
+                <div className="text-sm font-medium text-gray-800">Revenu (session): {money(c.revenue)}</div>
               </div>
             ))}
           </div>

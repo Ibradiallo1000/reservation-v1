@@ -8,6 +8,7 @@ import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 import { allocateCourierAgentCode } from "@/modules/logistics/services/allocateCourierAgentCode";
+import { allocateAgentCode, migrateAgentsAgentCode, roleHasAgentCode } from "@/modules/agence/services/agentCodeService";
 import {
   Users, UserPlus, X, RotateCcw, Loader2, Copy, Check, RefreshCw,
 } from "lucide-react";
@@ -52,6 +53,7 @@ type Agent = {
   role: string;
   active: boolean;
   staffCode?: string;
+  agentCode?: string;
   invitationPending?: boolean;
   invitationToken?: string;
 };
@@ -147,6 +149,9 @@ export default function ManagerTeamPage() {
         snap = await getDocs(ref);
       }
 
+      await migrateAgentsAgentCode(companyId, agencyId);
+      snap = await getDocs(ref);
+
       const list: Agent[] = snap.docs.map((d) => {
         const data = d.data();
         return {
@@ -155,6 +160,7 @@ export default function ManagerTeamPage() {
           email: data.email || "", telephone: data.telephone || "",
           role: data.role || "guichetier", active: data.active !== false,
           staffCode: data.staffCode || data.codeCourt || "",
+          agentCode: data.agentCode || "",
           invitationPending: data.invitationPending || false,
           invitationToken: data.invitationToken || "",
         };
@@ -208,11 +214,13 @@ export default function ManagerTeamPage() {
         createdBy: user?.uid,
       });
 
+      const agentCode = roleHasAgentCode(formRole) ? await allocateAgentCode(companyId, agencyId, formRole) : undefined;
       await setDoc(doc(db, "companies", companyId, "agences", agencyId, "users", result.inviteId), {
         displayName: formName.trim(), email: formEmail.trim().toLowerCase(),
         telephone: formPhone.trim() || "", role: formRole,
         active: false, invitationPending: true, invitationToken: result.token,
         companyId, agencyId, createdAt: Timestamp.now(),
+        ...(agentCode ? { agentCode } : {}),
       });
 
       setLastUrl(result.activationUrl);
@@ -258,8 +266,13 @@ export default function ManagerTeamPage() {
         }
       }
       const localRef = doc(db, "companies", companyId, "agences", agencyId, "users", editId);
-      await updateDoc(localRef, { displayName: editName, telephone: editPhone, role: editRole });
       const agent = agents.find((a) => a.id === editId);
+      const updates: Record<string, unknown> = { displayName: editName, telephone: editPhone, role: editRole };
+      if (roleHasAgentCode(editRole) && !agent?.agentCode) {
+        const agentCode = await allocateAgentCode(companyId, agencyId, editRole);
+        if (agentCode) updates.agentCode = agentCode;
+      }
+      await updateDoc(localRef, updates);
       if (agent?.uid) {
         const rootRef = doc(db, "users", agent.uid);
         const rootSnap = await getDoc(rootRef);
@@ -277,7 +290,7 @@ export default function ManagerTeamPage() {
           if (rootSnap.exists()) await updateDoc(doc(db, "users", agent.uid), { staffCode: code, codeCourt: code });
         }
       }
-      setAgents((p) => p.map((a) => a.id === editId ? { ...a, displayName: editName, telephone: editPhone, role: editRole } : a));
+      setAgents((p) => p.map((a) => a.id === editId ? { ...a, displayName: editName, telephone: editPhone, role: editRole, agentCode: (updates.agentCode as string) || a.agentCode } : a));
       setEditId(null);
       flash("success", "Agent modifié.");
     } catch { flash("error", "Erreur lors de la modification."); }
@@ -437,7 +450,7 @@ export default function ManagerTeamPage() {
                           </select>
                         </td>
                         <td className={table.td}>
-                          <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{a.staffCode || "—"}</code>
+                          <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{a.agentCode || a.staffCode || "—"}</code>
                         </td>
                         <td className={table.td}>
                           <input value={editPhone} onChange={(e) => setEditPhone(e.target.value)}
@@ -462,7 +475,7 @@ export default function ManagerTeamPage() {
                         </td>
                         <td className={table.td}>{ROLE_LABELS[a.role] ?? a.role}</td>
                         <td className={table.td}>
-                          <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{a.staffCode || "—"}</code>
+                          <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{a.agentCode || a.staffCode || "—"}</code>
                         </td>
                         <td className={table.td}>
                           <div className="text-sm">{a.email}</div>

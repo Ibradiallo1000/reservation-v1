@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import {
-  collection, query, where, getDocs, onSnapshot, limit, orderBy, Timestamp,
+  collection, query, where, onSnapshot, limit, orderBy,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -19,6 +19,7 @@ import {
   StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, ActionButton, table, tableRowClassName, typography,
 } from "@/ui";
 import { useDateFilterContext } from "./DateFilterContext";
+import { getAgencyStats } from "@/modules/compagnie/networkStats/networkStatsService";
 
 type ShiftDoc = {
   id: string; status: string; userId: string; userName?: string | null;
@@ -51,9 +52,14 @@ export default function ManagerFinancesPage() {
     const unsubs: Array<() => void> = [];
 
     const currency = (company as any)?.devise ?? "XOF";
-    ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as any)?.nom).then(() => {
-      listAccounts(companyId, { agencyId }).then((accs) =>
-        setCashPosition(accs.reduce((s, a) => s + a.currentBalance, 0)));
+    const runEnsure = () =>
+      ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as any)?.nom).then(() =>
+        listAccounts(companyId, { agencyId }).then((accs) =>
+          setCashPosition(accs.reduce((s, a) => s + a.currentBalance, 0))));
+    runEnsure().catch((err: any) => {
+      if (err?.code === "permission-denied" || err?.message?.includes("permission")) {
+        setTimeout(() => runEnsure().catch(() => {}), 1500);
+      }
     });
 
     unsubs.push(onSnapshot(
@@ -69,17 +75,21 @@ export default function ManagerFinancesPage() {
     return () => unsubs.forEach((u) => u());
   }, [companyId, agencyId, company]);
 
-  /* ── Date-filtered revenue/expenses (for display KPIs) ── */
+  /* ── Date-filtered revenue (source réseau TELIYA) et dépenses ── */
   useEffect(() => {
     if (!companyId || !agencyId) return;
     const { start, end } = dateFilter.range;
-    const resRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
+    const startKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+    const endKey = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
 
-    getDocs(query(resRef, where("createdAt", ">=", Timestamp.fromDate(start)),
-      where("createdAt", "<=", Timestamp.fromDate(end)), where("statut", "in", ["paye", "payé"])))
-      .then((s) => {
-        setRevenue(s.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0));
-        setTickets(s.size);
+    getAgencyStats(companyId, agencyId, startKey, endKey)
+      .then((stats) => {
+        setRevenue(stats.totalRevenue);
+        setTickets(stats.totalTickets);
+      })
+      .catch(() => {
+        setRevenue(0);
+        setTickets(0);
       });
 
     listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 200 }).then((list) => {
@@ -91,18 +101,18 @@ export default function ManagerFinancesPage() {
     });
   }, [companyId, agencyId, dateFilter.range.start.getTime(), dateFilter.range.end.getTime()]);
 
-  /* ── Today-scoped data for cash variance (never affected by date filter) ── */
+  /* ── Today-scoped data for cash variance (source réseau TELIYA, never affected by date filter) ── */
   useEffect(() => {
     if (!companyId || !agencyId) return;
     const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    getAgencyStats(companyId, agencyId, todayKey, todayKey)
+      .then((stats) => setTodayRevenue(stats.totalRevenue))
+      .catch(() => setTodayRevenue(0));
+
     const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999);
-    const resRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
-
-    getDocs(query(resRef, where("createdAt", ">=", Timestamp.fromDate(todayStart)),
-      where("createdAt", "<=", Timestamp.fromDate(todayEnd)), where("statut", "in", ["paye", "payé"])))
-      .then((s) => setTodayRevenue(s.docs.reduce((a, d) => a + (d.data().montant ?? 0), 0)));
-
     listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 200 }).then((list) => {
       const filtered = list.filter((e) => {
         const d = (e as any).createdAt?.toDate?.() ?? new Date();
@@ -168,6 +178,7 @@ export default function ManagerFinancesPage() {
           valueColorVar={hasCashVariance ? undefined : "#059669"}
         />
       </div>
+      <p className="text-xs text-gray-500 mt-1 mb-2">CA et billets : source réseau TELIYA (réservations confirme/paye). Position caisse et écarts : caisse et sessions guichet.</p>
 
       <SectionCard title="Arbitrages de validation" icon={CheckCircle2} noPad>
         {pendingApproval.length === 0 && closedShifts.length === 0 ? (

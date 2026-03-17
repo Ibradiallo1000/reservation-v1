@@ -28,10 +28,12 @@ function routeRef(companyId: string, routeId: string) {
 }
 
 export interface CreateRouteParams {
-  /** Origin city (or use departureCity for compat). */
+  /** Origin / start city (or use startCity, departureCity for compat). */
   origin?: string;
-  /** Destination city (or use arrivalCity for compat). */
+  /** Destination / end city (or use endCity, arrivalCity for compat). */
   destination?: string;
+  startCity?: string;
+  endCity?: string;
   departureCity?: string;
   arrivalCity?: string;
   distanceKm?: number | null;
@@ -51,13 +53,13 @@ export function capitalizeCityName(name: string): string {
 }
 
 function normOrigin(params: CreateRouteParams): string {
-  return capitalizeCityName(params.origin ?? params.departureCity ?? "");
+  return capitalizeCityName(params.origin ?? params.startCity ?? params.departureCity ?? "");
 }
 function normDest(params: CreateRouteParams): string {
-  return capitalizeCityName(params.destination ?? params.arrivalCity ?? "");
+  return capitalizeCityName(params.destination ?? params.endCity ?? params.arrivalCity ?? "");
 }
 
-/** Create a route (status ACTIVE). Returns the new document id. */
+/** Create a route (status ACTIVE). One route = both directions (startCity ↔ endCity). Rejects if a route already exists between the same two cities (either order). */
 export async function createRoute(
   companyId: string,
   params: CreateRouteParams
@@ -65,8 +67,20 @@ export async function createRoute(
   const origin = normOrigin(params);
   const dest = normDest(params);
   if (!origin || !dest) throw new Error("Origin et destination sont obligatoires.");
+  if (origin.toLowerCase() === dest.toLowerCase()) throw new Error("L'origine et la destination doivent être différentes.");
+  const existing = await listRoutes(companyId, { limitCount: 500 });
+  const hasDuplicate = existing.some(
+    (r) => {
+      const a = (r.startCity ?? r.origin ?? "").toLowerCase();
+      const b = (r.endCity ?? r.destination ?? "").toLowerCase();
+      return (a === origin.toLowerCase() && b === dest.toLowerCase()) || (a === dest.toLowerCase() && b === origin.toLowerCase());
+    }
+  );
+  if (hasDuplicate) throw new Error("Une route existe déjà entre ces deux villes. Une seule route représente les deux sens (aller et retour).");
   const ref = doc(routesRef(companyId));
   await setDoc(ref, {
+    startCity: origin,
+    endCity: dest,
     origin,
     destination: dest,
     distanceKm: params.distanceKm ?? params.distance ?? null,
@@ -96,10 +110,12 @@ export async function updateRoute(
   if (origin !== undefined) {
     data.origin = origin;
     data.departureCity = origin;
+    data.startCity = origin;
   }
   if (dest !== undefined) {
     data.destination = dest;
     data.arrivalCity = dest;
+    data.endCity = dest;
   }
   if (params.distanceKm !== undefined || params.distance !== undefined) {
     const v = params.distanceKm ?? params.distance ?? null;
@@ -138,10 +154,14 @@ export async function setRouteStatus(
 
 function normalizeRouteDoc(id: string, data: Record<string, unknown>): RouteDoc & { id: string } {
   const d = data as Record<string, unknown>;
-  const origin = (d.origin ?? d.departureCity ?? "") as string;
-  const destination = (d.destination ?? d.arrivalCity ?? "") as string;
+  const origin = (d.origin ?? d.departureCity ?? d.startCity ?? "") as string;
+  const destination = (d.destination ?? d.arrivalCity ?? d.endCity ?? "") as string;
+  const startCity = (d.startCity ?? origin) as string;
+  const endCity = (d.endCity ?? destination) as string;
   return {
     id,
+    startCity,
+    endCity,
     origin,
     destination,
     departureCity: origin,
@@ -193,6 +213,44 @@ export async function listRoutesByDepartureCity(
   let list = snap.docs.map((d) => normalizeRouteDoc(d.id, d.data() as Record<string, unknown>));
   list = list.filter((r) => (r.status ?? ROUTE_STATUS.ACTIVE) === ROUTE_STATUS.ACTIVE);
   list.sort((a, b) => (a.destination || a.arrivalCity || "").localeCompare(b.destination || b.arrivalCity || ""));
+  return list;
+}
+
+/** List ACTIVE routes where startCity or endCity (or origin/destination for legacy routes) equals the given city (for agency trip config: one route = both directions). */
+export async function listRoutesByStartOrEndCity(
+  companyId: string,
+  city: string,
+  options?: { limitCount?: number }
+): Promise<(RouteDoc & { id: string })[]> {
+  const cityNorm = capitalizeCityName((city || "").trim());
+  if (!cityNorm) return [];
+  const limitCount = options?.limitCount ?? 200;
+  const ref = routesRef(companyId);
+  // Query all fields that can represent "city at one end": new (startCity/endCity) and legacy (origin/destination, departureCity/arrivalCity)
+  const [snapStartCity, snapEndCity, snapOrigin, snapDestination] = await Promise.all([
+    getDocs(query(ref, where("startCity", "==", cityNorm), limit(limitCount))),
+    getDocs(query(ref, where("endCity", "==", cityNorm), limit(limitCount))),
+    getDocs(query(ref, where("origin", "==", cityNorm), limit(limitCount))),
+    getDocs(query(ref, where("destination", "==", cityNorm), limit(limitCount))),
+  ]);
+  const byId = new Map<string, ReturnType<typeof normalizeRouteDoc>>();
+  const addFromSnap = (snap: Awaited<ReturnType<typeof getDocs>>) => {
+    for (const d of snap.docs) {
+      if (byId.has(d.id)) continue;
+      const r = normalizeRouteDoc(d.id, d.data() as Record<string, unknown>);
+      if ((r.status ?? ROUTE_STATUS.ACTIVE) === ROUTE_STATUS.ACTIVE) byId.set(r.id, r);
+    }
+  };
+  addFromSnap(snapStartCity);
+  addFromSnap(snapEndCity);
+  addFromSnap(snapOrigin);
+  addFromSnap(snapDestination);
+  const list = Array.from(byId.values());
+  list.sort((a, b) => {
+    const sa = a.startCity ?? a.origin ?? "";
+    const sb = b.startCity ?? b.origin ?? "";
+    return sa.localeCompare(sb) || (a.endCity ?? a.destination ?? "").localeCompare(b.endCity ?? b.destination ?? "");
+  });
   return list;
 }
 

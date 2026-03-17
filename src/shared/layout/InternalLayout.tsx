@@ -45,6 +45,8 @@ export interface InternalLayoutProps {
   userEmail?: string;
   /** Brand / company name shown at the top */
   brandName?: string;
+  /** Optional subtitle under brand (e.g. "Agence : Bamako") */
+  brandSubtitle?: string;
   /** Logo URL */
   logoUrl?: string;
   /** Primary color override (falls back to DESIGN.defaultTheme.primary) */
@@ -91,6 +93,7 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
   userName,
   userEmail,
   brandName = "Teliya",
+  brandSubtitle,
   logoUrl,
   primaryColor,
   secondaryColor,
@@ -116,6 +119,7 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       displayName={displayName}
       userInitial={userInitial}
       brandName={brandName}
+      brandSubtitle={brandSubtitle}
       logoUrl={logoUrl}
       primary={primary}
       secondary={secondary}
@@ -134,6 +138,7 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       displayName={displayName}
       userInitial={userInitial}
       brandName={brandName}
+      brandSubtitle={brandSubtitle}
       logoUrl={logoUrl}
       primary={primary}
       secondary={secondary}
@@ -157,6 +162,7 @@ interface LayoutVariantProps {
   displayName: string;
   userInitial: string;
   brandName: string;
+  brandSubtitle?: string;
   logoUrl?: string;
   primary: string;
   secondary: string;
@@ -225,6 +231,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   displayName,
   userInitial,
   brandName,
+  brandSubtitle,
   logoUrl,
   primary,
   secondary,
@@ -270,7 +277,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
     <div className="flex-1 flex flex-col">
       {/* Brand */}
       <div className="px-4 py-4 border-b border-white/15 flex items-center justify-between">
-        <div className="flex items-center gap-2 overflow-hidden">
+        <div className="flex items-center gap-2 overflow-hidden min-w-0 flex-1">
           {logoUrl ? (
             <img
               src={logoUrl}
@@ -283,9 +290,16 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
             </div>
           )}
           {!collapsed && (
-            <span className="text-lg font-semibold tracking-wide truncate">
-              {brandName}
-            </span>
+            <div className="min-w-0 flex-1">
+              <span className="text-lg font-semibold tracking-wide truncate block">
+                {brandName}
+              </span>
+              {brandSubtitle && (
+                <span className="text-xs text-white/85 truncate block">
+                  {brandSubtitle}
+                </span>
+              )}
+            </div>
           )}
         </div>
         <button
@@ -562,6 +576,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
   displayName,
   userInitial,
   brandName,
+  brandSubtitle,
   logoUrl,
   primary,
   secondary,
@@ -607,6 +622,11 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
               >
                 {brandName}
               </div>
+              {brandSubtitle && (
+                <div className="text-xs text-gray-500 dark:text-slate-400 truncate">
+                  {brandSubtitle}
+                </div>
+              )}
             </div>
           </div>
 

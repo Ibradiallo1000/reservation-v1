@@ -52,6 +52,10 @@ import { getNetworkStats } from "@/modules/compagnie/networkStats/networkStatsSe
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { getPreviousPeriod, calculateChange } from "@/shared/date/periodComparisonUtils";
 import { getPeriodLabel } from "@/shared/date/periodUtils";
+import {
+  getUnifiedCompanyFinance,
+  type UnifiedAgencyFinance,
+} from "@/modules/finance/services/unifiedFinanceService";
 const TODAY = format(new Date(), "yyyy-MM-dd");
 
 type DailyStatsDoc = {
@@ -141,7 +145,7 @@ function tripCostPerDoc(r: TripCostRow): number {
 }
 
 function toMillis(value: unknown): number | null {
-  if (!value) return null;
+  if (value == null) return null;
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -149,12 +153,25 @@ function toMillis(value: unknown): number | null {
     return Number.isNaN(ms) ? null : ms;
   }
   if (typeof value === "object") {
-    const maybeToDate = (value as { toDate?: () => Date }).toDate;
-    if (typeof maybeToDate === "function") {
-      const d = maybeToDate();
-      return d instanceof Date ? d.getTime() : null;
+    const obj = value as { toMillis?: () => number; toDate?: () => Date; seconds?: number };
+    if (typeof obj.toMillis === "function") {
+      try {
+        const ms = obj.toMillis();
+        return Number.isFinite(ms) ? ms : null;
+      } catch {
+        return null;
+      }
     }
-    const seconds = (value as { seconds?: number }).seconds;
+    const maybeToDate = obj.toDate;
+    if (typeof maybeToDate === "function") {
+      try {
+        const d = maybeToDate();
+        return d instanceof Date ? d.getTime() : null;
+      } catch {
+        return null;
+      }
+    }
+    const seconds = obj.seconds;
     if (typeof seconds === "number" && Number.isFinite(seconds)) return seconds * 1000;
   }
   return null;
@@ -208,6 +225,9 @@ export default function CEOCommandCenterPage() {
     activeAgencies: number;
     comparisonLabel: string;
   } | null>(null);
+  /** Finance unifiée : live / cash / validated */
+  const [unifiedFinance, setUnifiedFinance] = useState<UnifiedAgencyFinance | null>(null);
+  const [unifiedFinanceLoading, setUnifiedFinanceLoading] = useState(false);
 
   const periodRange = React.useMemo(() => {
     if (period === "day") {
@@ -298,6 +318,17 @@ export default function CEOCommandCenterPage() {
         setBusesInProgressCount(null);
       })
       .finally(() => setCashKpisLoading(false));
+  }, [companyId, periodRange.startStr, periodRange.endStr]);
+
+  // Finance unifiée : 3 niveaux (live, cash, validated)
+  useEffect(() => {
+    if (!companyId) return;
+    const { startStr, endStr } = periodRange;
+    setUnifiedFinanceLoading(true);
+    getUnifiedCompanyFinance(companyId, startStr, endStr)
+      .then(setUnifiedFinance)
+      .catch(() => setUnifiedFinance(null))
+      .finally(() => setUnifiedFinanceLoading(false));
   }, [companyId, periodRange.startStr, periodRange.endStr]);
 
   // Bus en retard (aujourd'hui)
@@ -974,6 +1005,37 @@ export default function CEOCommandCenterPage() {
               : networkStatusToday === "bon"
                 ? "Réseau OK"
                 : "—"}
+        </div>
+      </div>
+
+      {/* Finance unifiée : 3 niveaux (temps réel / encaissements / validé) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
+          <MetricCard
+            label="Ventes temps réel"
+            value={unifiedFinanceLoading ? "—" : money(unifiedFinance?.live.totalRevenue ?? 0)}
+            icon={TrendingUp}
+            valueColorVar="#2563eb"
+          />
+          <p className="text-xs text-gray-500 mt-1">Source : reservations + shipments (vendus / payés)</p>
+        </div>
+        <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
+          <MetricCard
+            label="Encaissements"
+            value={unifiedFinanceLoading ? "—" : money(unifiedFinance?.cash.total ?? 0)}
+            icon={TrendingUp}
+            valueColorVar="#16a34a"
+          />
+          <p className="text-xs text-gray-500 mt-1">Source : cashTransactions (status paid)</p>
+        </div>
+        <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
+          <MetricCard
+            label="Revenus validés"
+            value={unifiedFinanceLoading ? "—" : money(unifiedFinance?.validated.totalRevenue ?? 0)}
+            icon={TrendingUp}
+            valueColorVar="#7c3aed"
+          />
+          <p className="text-xs text-gray-500 mt-1">Source : dailyStats (ticketRevenue + courierRevenue)</p>
         </div>
       </div>
 

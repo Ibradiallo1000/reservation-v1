@@ -106,8 +106,13 @@ const formatNom = (s: string) =>
 
 const onlyDigits = (s: string) => s.replace(/\D/g, "");
 const isValidEmailFormat = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
-const isValidPhone = (s: string) => {
+
+/** Mali: +223, numéro national 8 chiffres (ex. 70 12 34 56, 22 XX XX XX). */
+const isValidPhone = (s: string, pays?: string) => {
   const digits = onlyDigits(s);
+  const normPays = (pays ?? "").trim().toLowerCase();
+  const isMali = normPays.includes("mali");
+  if (isMali) return digits.length === 8; // Mali: exactement 8 chiffres
   return digits.length >= 8 && digits.length <= 15;
 };
 
@@ -293,6 +298,7 @@ const CompagnieAgencesPage: React.FC = () => {
   const [emailError, setEmailError] = useState("");
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [geocodingLoading, setGeocodingLoading] = useState(false);
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [agencyIdToDelete, setAgencyIdToDelete] = useState<string | null>(null);
@@ -410,11 +416,11 @@ const CompagnieAgencesPage: React.FC = () => {
     if (name === "emailGerant") setEmailError("");
 
     if (name === "nomGerant") {
-      setFormData((prev) => ({ ...prev, [name]: formatNom(value) }));
+      setFormData((prev) => ({ ...prev, [name]: value }));
       return;
     }
     if (name === "telephone") {
-      const digits = onlyDigits(value);
+      const digits = onlyDigits(value).slice(0, 15);
       setFormData((prev) => ({ ...prev, [name]: digits }));
       return;
     }
@@ -433,6 +439,46 @@ const CompagnieAgencesPage: React.FC = () => {
       latitude: String(lat),
       longitude: String(lng),
     }));
+  };
+
+  /** Centrer la carte sur la ville et le pays (géocodage Nominatim) et placer le marqueur. */
+  const handleCenterOnCity = async () => {
+    const ville = (formData.type === "escale" && selectedStop ? selectedStop.city : formData.ville).trim();
+    const pays = formData.pays.trim();
+    if (!ville || !pays) {
+      alert("Veuillez saisir la ville et le pays avant de centrer la carte.");
+      return;
+    }
+    setGeocodingLoading(true);
+    try {
+      const q = encodeURIComponent(`${ville}, ${pays}`);
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`,
+        { headers: { "Accept-Language": "fr" } }
+      );
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const { lat, lon } = data[0];
+        const latNum = parseFloat(lat);
+        const lonNum = parseFloat(lon);
+        if (Number.isFinite(latNum) && Number.isFinite(lonNum)) {
+          setFormData((prev) => ({
+            ...prev,
+            latitude: String(latNum),
+            longitude: String(lonNum),
+          }));
+        } else {
+          alert("Coordonnées invalides retournées pour cette ville.");
+        }
+      } else {
+        alert("Ville ou pays introuvable. Zoomez sur la carte et cliquez pour placer le point.");
+      }
+    } catch (e) {
+      console.error("Geocoding error:", e);
+      alert("Impossible de localiser la ville. Placez le point manuellement sur la carte.");
+    } finally {
+      setGeocodingLoading(false);
+    }
   };
 
   const resetForm = () => {
@@ -502,8 +548,16 @@ const CompagnieAgencesPage: React.FC = () => {
     return;
   }
 
-  if (!isValidPhone(formData.telephone)) {
-    alert("Téléphone invalide");
+  if (!isValidPhone(formData.telephone, formData.pays)) {
+    const isMali = (formData.pays ?? "").trim().toLowerCase().includes("mali");
+    alert(isMali
+      ? "Téléphone invalide. Pour le Mali, saisir 8 chiffres (ex. 70 12 34 56)."
+      : "Téléphone invalide (8 à 15 chiffres).");
+    return;
+  }
+
+  if (!formData.latitude?.trim() || !formData.longitude?.trim()) {
+    alert("Veuillez sélectionner la position de l'agence sur la carte (cliquez sur le point).");
     return;
   }
 
@@ -685,11 +739,25 @@ const CompagnieAgencesPage: React.FC = () => {
     } catch (err: any) {
       console.error("Erreur delete agency (function):", err);
       const code = err?.code || err?.status || "";
+      const msg = String(err?.message ?? err ?? "");
+      const isCorsOrNetwork =
+        code === "internal" ||
+        msg.includes("Failed to fetch") ||
+        msg.includes("CORS") ||
+        msg.includes("NetworkError");
       if (code === "permission-denied" || code === "unauthenticated") {
         alert("Permission refusée — vous n'êtes pas autorisé à supprimer une agence.");
+      } else if (isCorsOrNetwork) {
+        alert(
+          "Impossible de contacter le serveur (CORS ou réseau).\n\n" +
+            "En local, la suppression d'agence via cette page est bloquée. Solutions :\n" +
+            "• Utiliser l'application déployée en production, ou\n" +
+            "• Passer au plan Blaze et déployer les Cloud Functions (companyDeleteAgencyCascadeHttp avec CORS), ou\n" +
+            "• Supprimer l'agence manuellement dans la console Firebase (Firestore)."
+        );
       } else {
         const details = err?.details ? `\nDétails: ${JSON.stringify(err.details)}` : "";
-        alert("Erreur lors de la suppression : " + (err?.message || String(err)) + details);
+        alert("Erreur lors de la suppression : " + msg + details);
       }
     } finally {
       setDeleteLoading(false);
@@ -860,12 +928,17 @@ const CompagnieAgencesPage: React.FC = () => {
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Nom du gérant *</label>
+                  <label className="block text-sm font-medium mb-1">Nom et prénom du gérant *</label>
                   <input
                     name="nomGerant"
                     value={formData.nomGerant}
                     onChange={handleInputChange}
+                    onBlur={(e) => {
+                      const v = (e.target.value || "").trim();
+                      if (v) setFormData((prev) => ({ ...prev, nomGerant: formatNom(v) }));
+                    }}
                     className="form-input w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Ex. Amadou Keita (première lettre en majuscule)"
                     required
                   />
                 </div>
@@ -897,27 +970,42 @@ const CompagnieAgencesPage: React.FC = () => {
                     minLength={8}
                     maxLength={15}
                     className={`form-input w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 ${
-                      formData.telephone && !isValidPhone(formData.telephone)
+                      formData.telephone && !isValidPhone(formData.telephone, formData.pays)
                         ? "border-red-500 focus:ring-red-400"
                         : "border-gray-300 focus:ring-blue-500"
                     }`}
                     required
-                    placeholder="Ex.: 78953098"
+                    placeholder={(formData.pays || "").toLowerCase().includes("mali") ? "+223 70 12 34 56 (8 chiffres)" : "Ex. 78953098"}
                   />
+                  {(formData.pays || "").toLowerCase().includes("mali") && formData.telephone.length > 0 && formData.telephone.length !== 8 && (
+                    <p className="text-amber-600 dark:text-amber-400 text-xs mt-1">Mali : 8 chiffres (ex. 70 12 34 56)</p>
+                  )}
                 </div>
               </div>
             </div>
 
             <div className="mt-6">
               <label className="block text-sm font-medium mb-1">
-                📍 Position géographique{" "}
+                📍 Position géographique *
                 {formData.latitude && formData.longitude && (
                   <span className="text-gray-500 ml-2">
                     ({formData.latitude}, {formData.longitude})
                   </span>
                 )}
               </label>
-              <p className="text-sm text-gray-500 mb-2">Cliquez sur la carte pour positionner l'agence</p>
+              <p className="text-sm text-gray-500 mb-2">
+                Saisissez la ville et le pays, puis cliquez sur « Centrer sur la ville » pour aller à l’emplacement, ou zoomez et cliquez sur la carte pour placer le point.
+              </p>
+              <div className="flex flex-wrap gap-2 mb-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleCenterOnCity}
+                  disabled={geocodingLoading || !formData.ville?.trim() || !formData.pays?.trim()}
+                >
+                  {geocodingLoading ? "Recherche…" : "Centrer sur la ville"}
+                </Button>
+              </div>
               <div className="h-64 rounded-lg border border-gray-300 overflow-hidden">
                 <MapContainer
                   center={[

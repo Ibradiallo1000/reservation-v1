@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
+import cors from "cors";
 
 if (!admin.apps.length) admin.initializeApp();
 
@@ -626,26 +627,25 @@ export const companyCreateAgencyCascade = functions
    - Supprime l’agence + traite le staff (détacher / transférer / désactiver / supprimer)
    - Met à jour aussi les custom claims selon l’action
 ------------------------------------------------------- */
-export const companyDeleteAgencyCascade = functions
-  .region("europe-west1")
-  .runWith({ timeoutSeconds: 540, memory: "1GB" })
-  .https.onCall(async (data, context) => {
-    try {
-      const { companyId, agencyId, staffAction, transferToAgencyId, allowDeleteUsers } = (data || {}) as {
-        companyId?: string;
-        agencyId?: string;
-        staffAction?: "detach" | "transfer" | "disable" | "delete";
-        transferToAgencyId?: string | null;
-        allowDeleteUsers?: boolean;
-      };
-      if (!companyId || !agencyId)
-        throw new functions.https.HttpsError("invalid-argument", "companyId/agencyId manquant.");
-      assertCompanyScope(context, companyId);
+async function runCompanyDeleteAgencyCascade(
+  data: Record<string, unknown>,
+  context: functions.https.CallableContext
+): Promise<Record<string, unknown>> {
+  const { companyId, agencyId, staffAction, transferToAgencyId, allowDeleteUsers } = (data || {}) as {
+    companyId?: string;
+    agencyId?: string;
+    staffAction?: "detach" | "transfer" | "disable" | "delete";
+    transferToAgencyId?: string | null;
+    allowDeleteUsers?: boolean;
+  };
+  if (!companyId || !agencyId)
+    throw new functions.https.HttpsError("invalid-argument", "companyId/agencyId manquant.");
+  assertCompanyScope(context, companyId);
 
-      const companyRef = db.doc(`companies/${companyId}`);
-      const agRef = companyRef.collection("agences").doc(agencyId);
-      const agSnap = await agRef.get();
-      if (!agSnap.exists) return { ok: true, note: "already deleted" };
+  const companyRef = db.doc(`companies/${companyId}`);
+  const agRef = companyRef.collection("agences").doc(agencyId);
+  const agSnap = await agRef.get();
+  if (!agSnap.exists) return { ok: true, success: true, note: "already deleted" };
 
       // 1) staff lié à l’agence
       const usersSnap = await db
@@ -730,19 +730,85 @@ export const companyDeleteAgencyCascade = functions
         await agRef.delete();
       }
 
-      return {
-        ok: true,
-        staffCount: staffUids.length,
-        transferred: staffAction === "transfer" ? staffUids : [],
-        detached: staffAction === "detach" ? staffUids : [],
-        disabled: staffAction === "disable" ? staffUids : [],
-        deleted: staffAction === "delete" ? staffUids : [],
-      };
+  return {
+    ok: true,
+    success: true,
+    staffCount: staffUids.length,
+    transferred: staffAction === "transfer" ? staffUids : [],
+    detached: staffAction === "detach" ? staffUids : [],
+    disabled: staffAction === "disable" ? staffUids : [],
+    deleted: staffAction === "delete" ? staffUids : [],
+  };
+}
+
+export const companyDeleteAgencyCascade = functions
+  .region("europe-west1")
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .https.onCall(async (data, context) => {
+    try {
+      return await runCompanyDeleteAgencyCascade((data || {}) as Record<string, unknown>, context);
     } catch (err: any) {
       functions.logger.error("companyDeleteAgencyCascade FAILED", err);
       if (err instanceof functions.https.HttpsError) throw err;
       throw new functions.https.HttpsError("internal", "companyDeleteAgencyCascade failed");
     }
+  });
+
+/* -------------------------------------------------------
+   3b) companyDeleteAgencyCascadeHttp (HTTP + CORS for browsers)
+------------------------------------------------------- */
+const corsHandler = cors({ origin: true });
+export const companyDeleteAgencyCascadeHttp = functions
+  .region("europe-west1")
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .https.onRequest((req, res) => {
+    corsHandler(req, res, async () => {
+      if (req.method === "OPTIONS") {
+        res.status(204).send("");
+        return;
+      }
+      if (req.method !== "POST") {
+        res.status(405).json({ error: { code: "method-not-allowed", message: "POST only" } });
+        return;
+      }
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        res.status(401).json({ error: { code: "unauthenticated", message: "Connexion requise." } });
+        return;
+      }
+      const token = authHeader.slice(7);
+      let decoded: admin.auth.DecodedIdToken;
+      try {
+        decoded = await auth.verifyIdToken(token);
+      } catch {
+        res.status(401).json({ error: { code: "unauthenticated", message: "Token invalide." } });
+        return;
+      }
+      const context = {
+        auth: { uid: decoded.uid, token: decoded },
+      } as functions.https.CallableContext;
+      let body: { data?: Record<string, unknown> };
+      try {
+        body = typeof req.body === "object" && req.body !== null ? req.body : {};
+      } catch {
+        res.status(400).json({ error: { code: "invalid-argument", message: "Body JSON invalide." } });
+        return;
+      }
+      const data = body.data || {};
+      try {
+        const result = await runCompanyDeleteAgencyCascade(data, context);
+        res.status(200).json({ result });
+      } catch (err: any) {
+        functions.logger.error("companyDeleteAgencyCascadeHttp FAILED", err);
+        if (err instanceof functions.https.HttpsError) {
+          const code = err.code || "internal";
+          const status = code === "unauthenticated" ? 401 : code === "permission-denied" ? 403 : code === "invalid-argument" ? 400 : 500;
+          res.status(status).json({ error: { code, message: err.message } });
+          return;
+        }
+        res.status(500).json({ error: { code: "internal", message: "companyDeleteAgencyCascade failed" } });
+      }
+    });
   });
 
 /* -------------------------------------------------------

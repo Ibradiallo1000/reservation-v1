@@ -1,7 +1,7 @@
 // src/pages/DashboardAgencePage.tsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { collection, onSnapshot, query, where, Timestamp, orderBy, getDocs } from 'firebase/firestore';
+import { collection, query, where, Timestamp, getDocs } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { shipmentsRef } from '@/modules/logistics/domain/firestorePaths';
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,6 +30,8 @@ import {
 } from '@/ui';
 import { Ticket, DollarSign, Monitor, Store, FileDown } from 'lucide-react';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
+import { getUnifiedAgencyFinance, type UnifiedAgencyFinance } from '@/modules/finance/services/unifiedFinanceService';
 
 /* ===================== Types & helpers ===================== */
 type DailyStat = { date: string; reservations: number; revenue: number };
@@ -104,6 +106,8 @@ const DashboardAgencePage: React.FC = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const unsubscribeRef = useRef<() => void>();
+  const [unifiedFinance, setUnifiedFinance] = useState<UnifiedAgencyFinance | null>(null);
+  const [unifiedFinanceLoading, setUnifiedFinanceLoading] = useState(false);
 
   const fetchStats = useCallback(async (startDate: Date, endDate: Date) => {
     const companyId = user?.companyId;
@@ -116,87 +120,49 @@ const DashboardAgencePage: React.FC = () => {
 
     setIsLoading(true);
     setLoadError(null);
-    if (unsubscribeRef.current) unsubscribeRef.current();
+    // ⚙️ Période en format YYYY-MM-DD pour le moteur réseau (Africa/Bamako)
+    const startKey = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(
+      startDate.getDate()
+    ).padStart(2, "0")}`;
+    const endKey = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-${String(
+      endDate.getDate()
+    ).padStart(2, "0")}`;
 
-    // ✅ IMPORTANT : on ne prend que les réservations "payé"
-    const qy = query(
-      collection(db, 'companies', companyId, 'agences', agencyId, 'reservations'),
-      where('createdAt','>=', Timestamp.fromDate(startDate)),
-      where('createdAt','<=', Timestamp.fromDate(endDate)),
-      where('statut', 'in', ['paye', 'payé']),
-      orderBy('createdAt','asc')
-    );
+    try {
+      const agencyStats = await getAgencyStats(companyId, agencyId, startKey, endKey);
 
-    const unsub = onSnapshot(qy, snap => {
-      const rows: Reservation[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-
-      let totalRevenue = 0;
-      const channels: Record<'online'|'counter', number> = { online:0, counter:0 };
-      const dest: Record<string, number> = {};
-      const daily: Record<string, {count:number; revenue:number}> = {};
-      const topMap: Record<string, {name:string; count:number; revenue:number}> = {};
-
-      for (const r of rows) {
-        totalRevenue += r.montant || 0;
-
-        const raw = (r.canal || '').toString().toLowerCase().trim();
-        const norm = raw.replace(/\s|_|-/g,'');
-        const isOnline = norm.includes('ligne') || norm === 'online' || norm === 'web';
-        const canal: 'online'|'counter' = isOnline ? 'online' : 'counter';
-        channels[canal]++;
-
-        const destKey = r.arrivee || 'Inconnu';
-        dest[destKey] = (dest[destKey]||0) + 1;
-
-        if ((r as any).createdAt) {
-          const d = toJSDate((r as any).createdAt);
-          const key = fmtDDMM(d);
-          if (!daily[key]) daily[key] = {count:0, revenue:0};
-          daily[key].count++;
-          daily[key].revenue += r.montant || 0;
-        }
-
-        const routeName = `${r.depart || '?'} → ${r.arrivee || '?'}`;
-        const routeKey  = r.trajetId || routeName;
-        if (!topMap[routeKey]) topMap[routeKey] = { name: routeName, count:0, revenue:0 };
-        topMap[routeKey].count  += 1;
-        topMap[routeKey].revenue+= r.montant || 0;
-      }
-
-      const dailyStats = Object.entries(daily)
-        .map(([date, v]) => ({ date, reservations: v.count, revenue: v.revenue }))
-        .sort((a,b)=> {
-          const [ad,am]=a.date.split('/').map(Number), [bd,bm]=b.date.split('/').map(Number);
-          return am===bm ? ad-bd : am-bm;
-        });
+      const dailyStats: DailyStat[] = agencyStats.dailyChartData.map((p) => {
+        // p.date est soit YYYY-MM-DD soit YYYY-MM-DDThh:00 → on formate en DD/MM pour l'affichage local
+        const d = typeof p.date === "string" && p.date.includes("T") ? p.date.split("T")[0] : p.date;
+        const [y, m, day] = d.split("-").map(Number);
+        const dateObj = new Date(y, (m || 1) - 1, day || 1);
+        return {
+          date: fmtDDMM(dateObj),
+          reservations: p.reservations,
+          revenue: p.revenue,
+        };
+      });
 
       const channelData: ChannelStat[] = [
-        { name:'En ligne', value: channels.online },
-        { name:'Guichet',  value: channels.counter }
+        { name: "En ligne", value: agencyStats.onlineTickets },
+        { name: "Guichet", value: agencyStats.counterTickets },
       ];
-
-      const topRoutes: TopRoute[] = Object.entries(topMap)
-        .map(([id,v]) => ({ id, name:v.name, count:v.count, revenue:v.revenue }))
-        .sort((a,b)=> b.revenue - a.revenue);
-
-      const destinations: DestinationStat[] = Object.entries(dest)
-        .map(([name,count]) => ({ name, count }))
-        .sort((a,b)=> b.count - a.count);
 
       setStats((prev) => ({
         ...prev,
-        sales: rows.length,
-        totalRevenue,
-        ticketRevenue: totalRevenue,
+        sales: agencyStats.totalTickets,
+        totalRevenue: agencyStats.totalRevenue,
+        ticketRevenue: agencyStats.totalRevenue,
         courierRevenue: prev.courierRevenue,
         dailyStats,
-        nextDeparture: '—',
-        destinations,
+        // On gardera nextDeparture / destinations / topRoutes tels quels, mis à jour par d'autres flux si nécessaire
+        nextDeparture: prev.nextDeparture,
+        destinations: prev.destinations,
         channels: channelData,
-        topRoutes
+        topRoutes: prev.topRoutes,
       }));
       setIsLoading(false);
-    }, (e)=>{
+    } catch (e) {
       console.error(e);
       setLoadError(
         !isOnline
@@ -204,10 +170,8 @@ const DashboardAgencePage: React.FC = () => {
           : "Erreur lors du chargement des indicateurs agence."
       );
       setIsLoading(false);
-    });
-
-    unsubscribeRef.current = unsub;
-  }, [user?.companyId, user?.agencyId, agencyIdFromRoute]);
+    }
+  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, isOnline]);
 
   // Courier revenue for period (paid shipments only)
   useEffect(() => {
@@ -239,8 +203,22 @@ const DashboardAgencePage: React.FC = () => {
 
   useEffect(() => {
     fetchStats(dateRange[0], dateRange[1]);
-    return () => { if (unsubscribeRef.current) unsubscribeRef.current(); };
+    return () => { if (unsubscribeRef.current) unsubscribeRef.current?.(); };
   }, [fetchStats, dateRange, reloadKey]);
+
+  // Finance unifiée : live / cash / validated (même période que le dashboard)
+  useEffect(() => {
+    const companyId = user?.companyId;
+    const agencyId = agencyIdFromRoute || user?.agencyId;
+    if (!companyId || !agencyId) return;
+    const startKey = `${dateRange[0].getFullYear()}-${String(dateRange[0].getMonth() + 1).padStart(2, '0')}-${String(dateRange[0].getDate()).padStart(2, '0')}`;
+    const endKey = `${dateRange[1].getFullYear()}-${String(dateRange[1].getMonth() + 1).padStart(2, '0')}-${String(dateRange[1].getDate()).padStart(2, '0')}`;
+    setUnifiedFinanceLoading(true);
+    getUnifiedAgencyFinance(companyId, agencyId, startKey, endKey)
+      .then(setUnifiedFinance)
+      .catch(() => setUnifiedFinance(null))
+      .finally(() => setUnifiedFinanceLoading(false));
+  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, dateRange]);
 
   // Pagination “Top trajets”
   const [routePage, setRoutePage] = useState(1);
@@ -327,6 +305,11 @@ const DashboardAgencePage: React.FC = () => {
           </div>
         </SectionCard>
 
+        <div className="mt-2 mb-6 text-xs text-gray-500">
+          Chiffres réseau basés sur les réservations (en ligne + guichet), calculés par le moteur TELIYA
+          <span className="font-semibold"> networkStatsService</span>. Les chiffres de caisse restent gérés par les sessions guichet.
+        </div>
+
         {agencyId && user?.companyId && (
           <div className="mb-6">
             <CashSummaryCard
@@ -339,6 +322,31 @@ const DashboardAgencePage: React.FC = () => {
             />
           </div>
         )}
+
+        {/* Finance unifiée : 3 niveaux */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Ventes temps réel</div>
+            <div className="text-xl font-bold mt-1" style={{ color: '#2563eb' }}>
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.live.totalRevenue ?? 0)}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Source : reservations + shipments (vendus / payés)</p>
+          </div>
+          <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Encaissements</div>
+            <div className="text-xl font-bold mt-1" style={{ color: '#16a34a' }}>
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.cash.total ?? 0)}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Source : cashTransactions (status paid)</p>
+          </div>
+          <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Revenus validés</div>
+            <div className="text-xl font-bold mt-1" style={{ color: '#7c3aed' }}>
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.validated.totalRevenue ?? 0)}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Source : dailyStats (ticketRevenue + courierRevenue)</p>
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <UIMetricCard
