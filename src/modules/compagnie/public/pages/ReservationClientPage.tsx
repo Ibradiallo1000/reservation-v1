@@ -16,7 +16,6 @@ import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
 import { incrementReservedSeats } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
-import { getRemainingStopQuota } from '@/modules/compagnie/tripInstances/inventoryQuotaService';
 import { buildValidTripsFromWeeklyTrips } from '@/modules/compagnie/tripInstances/publicValidTripsService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
@@ -283,6 +282,7 @@ export default function ReservationClientPage() {
           return parse(time, 'HH:mm', new Date()) <= nowHHMM;
         };
 
+        // Page résa publique : ne jamais lire collectionGroup('reservations') (règles = lecture réservée à la compagnie). Toujours utiliser capacité simple (seatCapacity - reservedSeats) pour éviter "Missing or insufficient permissions" (visiteur non connecté ou connecté autre compte).
         const { validTrips } = await buildValidTripsFromWeeklyTrips({
           companyId: cdoc.id,
           depNorm,
@@ -291,13 +291,7 @@ export default function ReservationClientPage() {
           agences: agences.map((a) => ({ id: a.id })),
           daysAhead: 14,
           isPastTime: isPastTimeFn,
-          getRemaining: async (companyId, instanceId, ti) => {
-            const routeId = ti.routeId as string | null;
-            if (routeId != null) {
-              const resolved = await getStopOrdersFromCities(companyId, routeId, depNorm, arrNorm);
-              const originOrder = resolved?.originStopOrder ?? 1;
-              return getRemainingStopQuota(companyId, instanceId, originOrder);
-            }
+          getRemaining: async (_companyId, _instanceId, ti) => {
             const cap = (ti.seatCapacity ?? ti.capacitySeats ?? 30) as number;
             const res = (ti.reservedSeats ?? 0) as number;
             return Math.max(0, cap - res);
