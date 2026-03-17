@@ -21,6 +21,7 @@ import { buildValidTripsFromWeeklyTrips } from '@/modules/compagnie/tripInstance
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
+import { resolveReservationById } from '../utils/resolveReservation';
 import { getAgencyCityFromDoc } from '@/modules/agence/utils/agencyCity';
 
 /* ============== Anti-spam: mémoire locale ============== */
@@ -163,31 +164,26 @@ export default function ReservationClientPage() {
     }
   }, [existing, slug, navigate, pathBase]);
 
-  // Mode consultation (load existing for redirect)
+  // Mode consultation (load existing for redirect) — accès via publicReservations uniquement
   useEffect(() => {
     const loadExisting = async () => {
-      if (!reservationRouteId) return;
+      if (!reservationRouteId || !slug) return;
       setLoading(true);
       try {
-        if (!routeState.companyId || !routeState.agencyId) {
-          setError("Information manquante (company/agency). Revenez en arrière et réessayez.");
+        const r = await resolveReservationById(slug, reservationRouteId);
+        const snap = r.snapshot;
+        if (!snap) {
+          setError("Réservation introuvable. Utilisez le lien de votre billet (mon-billet?r=...).");
           setLoading(false);
           return;
         }
+        const companyId = r.companyId;
+        const agencyId = r.agencyId;
 
-        const refDoc = doc(db, 'companies', routeState.companyId, 'agences', routeState.agencyId, 'reservations', reservationRouteId);
-        const snap = await getDoc(refDoc);
-        if (!snap.exists()) {
-          setError("Réservation introuvable.");
-          setLoading(false);
-          return;
-        }
-        const r = snap.data() as any;
-
-        const compSnap = await getDoc(doc(db, 'companies', routeState.companyId));
+        const compSnap = await getDoc(doc(db, 'companies', companyId));
         const comp = compSnap.exists() ? (compSnap.data() as any) : {};
         setCompany({
-          id: routeState.companyId,
+          id: companyId,
           name: comp.nom || comp.name || '',
           code: (comp.code || '').toString().toUpperCase(),
           couleurPrimaire: comp.couleurPrimaire || '#f43f5e',
@@ -195,10 +191,10 @@ export default function ReservationClientPage() {
           logoUrl: comp.logoUrl || ''
         });
 
-        const agSnap = await getDoc(doc(db, 'companies', routeState.companyId, 'agences', routeState.agencyId));
+        const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
         const ag = agSnap.exists() ? (agSnap.data() as any) : {};
         setAgencyInfo({
-          id: routeState.agencyId,
+          id: agencyId,
           nom: ag.nomAgence || ag.nom || ag.name || 'Agence',
           telephone: ag.telephone,
           code: (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined
@@ -206,19 +202,19 @@ export default function ReservationClientPage() {
 
         setExisting({
           id: reservationRouteId,
-          companyId: routeState.companyId,
-          agencyId: routeState.agencyId,
-          canal: r.canal,
-          statut: r.statut,
-          nomClient: r.nomClient,
-          telephone: r.telephone,
-          depart: r.depart,
-          arrivee: r.arrivee || r.arrival,
-          date: r.date,
-          heure: r.heure,
-          montant: r.montant ?? r.montant_total,
-          seatsGo: r.seatsGo,
-          referenceCode: r.referenceCode
+          companyId,
+          agencyId,
+          canal: (snap.canal as string) ?? 'en_ligne',
+          statut: (snap.statut as string) ?? '',
+          nomClient: (snap.nomClient as string) ?? '',
+          telephone: (snap.telephone as string) ?? '',
+          depart: (snap.depart as string) ?? '',
+          arrivee: (snap.arrivee as string) ?? '',
+          date: (snap.date as string) ?? '',
+          heure: (snap.heure as string) ?? '',
+          montant: Number(snap.montant ?? 0),
+          seatsGo: Number(snap.seatsGo ?? 1),
+          referenceCode: (snap.referenceCode as string) ?? ''
         });
 
         setLoading(false);
@@ -230,7 +226,7 @@ export default function ReservationClientPage() {
     };
 
     void loadExisting();
-  }, [reservationRouteId, routeState.companyId, routeState.agencyId]);
+  }, [reservationRouteId, routeState.companyId, routeState.agencyId, slug]);
 
   // Mode création
   useEffect(() => {
@@ -551,13 +547,39 @@ export default function ReservationClientPage() {
         { publicToken: token, publicUrl, updatedAt: serverTimestamp() }
       );
 
-      await setDoc(doc(db, 'publicReservations', refDoc.id), {
+      const publicSnapshot = {
         reservationId: refDoc.id,
         companyId: selectedTrip.companyId,
         agencyId: selectedTrip.agencyId,
         slug: slug!,
         publicToken: token,
+        nomClient: reservation.nomClient,
+        telephone: reservation.telephone,
+        depart: reservation.depart,
+        arrivee: reservation.arrivee,
+        date: reservation.date,
+        heure: reservation.heure,
+        montant: reservation.montant,
+        seatsGo: reservation.seatsGo,
+        seatsReturn: reservation.seatsReturn,
+        tripType: reservation.tripType,
+        statut: reservation.statut,
+        canal: reservation.canal,
+        referenceCode: reservation.referenceCode,
+        companyName: reservation.companyName,
+        agencyNom: reservation.agencyNom,
+        companySlug: reservation.companySlug,
+        trajetId: reservation.trajetId,
+        tripInstanceId: reservation.tripInstanceId,
         createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(doc(db, 'publicReservations', token), publicSnapshot);
+      await setDoc(doc(db, 'publicReservations', refDoc.id), {
+        token,
+        companyId: selectedTrip.companyId,
+        agencyId: selectedTrip.agencyId,
+        slug: slug!,
       });
       
       try { 

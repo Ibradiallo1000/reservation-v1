@@ -11,6 +11,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { resolveReservationById } from "../utils/resolveReservation";
 
 import PageNotFound from "@/shared/ui/PageNotFound";
 import ErrorBoundary from "@/shared/core/ErrorBoundary";
@@ -270,22 +271,19 @@ export default function RouteResolver() {
     let alive = true;
     (async () => {
       try {
-        const companyId = pending.companyId;
-        const agencyId = pending.agencyId;
-        if (!companyId || !agencyId) {
+        if (!pending.companyId || !pending.agencyId) {
           setRecoveryChecked(true);
           return;
         }
-        const resRef = doc(db, "companies", companyId, "agences", agencyId, "reservations", pending.id);
-        const snap = await getDoc(resRef);
+        const r = await resolveReservationById(pending.slug, pending.id);
         if (!alive) return;
-        if (!snap.exists()) {
+        const snapshot = r.snapshot;
+        if (!snapshot) {
           try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
           setRecoveryChecked(true);
           return;
         }
-        const data = snap.data() as { statut?: string };
-        const status = (data?.statut ?? "").toLowerCase();
+        const status = (String(snapshot.statut ?? "")).toLowerCase();
         if (status !== "en_attente_paiement") {
           try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
           setRecoveryChecked(true);

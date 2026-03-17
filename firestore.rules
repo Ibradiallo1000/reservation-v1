@@ -125,11 +125,10 @@ service cloud.firestore {
       allow get, list: if true;
     }
 
-    /* Résolution publique des réservations (slug + id ou token). Pas de collectionGroup. */
-    match /publicReservations/{reservationId} {
-      allow get, list: if true;
-      allow create: if true;
-      allow update, delete: if false;
+    /* Résolution publique des réservations par token uniquement. Doc id = publicToken ; accès par get(id) uniquement (pas de list). */
+    match /publicReservations/{docId} {
+      allow get, create, update: if true;
+      allow list, delete: if false;
     }
 
     /* Invitations (onboarding, accept link). Get by id for accept flow; list/create/update/delete authenticated. */
@@ -170,13 +169,13 @@ service cloud.firestore {
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
-      /* Routes réseau (company transport routes). Read: same company, platform admin, or escale user whose agency is in this company. */
+      /* Routes réseau. Lecture publique pour calcul places (résa en ligne) ; écriture = compagnie / admin. */
       match /routes/{routeId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow get, list: if true;
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId));
-        /* Escales (stops) d'une route : mêmes droits que la route. */
+        /* Escales (stops) : lecture publique pour quota par segment. */
         match /stops/{stopId} {
-          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+          allow get, list: if true;
           allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId));
         }
       }
@@ -285,8 +284,9 @@ service cloud.firestore {
 
         match /reservations/{reservationId} {
 
-          /* 🔓 Lecture & création publiques (unauthenticated) ou même compagnie / admin plateforme */
-          allow get, list, create: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
+          /* 🔓 Création publique. Lecture réservée aux utilisateurs compagnie ; accès billet public = via publicReservations (doc id = publicToken) uniquement. */
+          allow create: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
 
           /* =============================
              UPDATE 1 — APRÈS CRÉATION
@@ -703,8 +703,9 @@ service cloud.firestore {
       allow get, list: if true;
     }
 
+    /* Collection group reservations : lecture uniquement pour utilisateurs authentifiés (même compagnie ou admin). Pas d'accès public (billet = publicReservations + token). */
     match /{path=**}/reservations/{reservationId} {
-      allow get, list: if true;
+      allow get, list: if isAuth() && (getUserRole() == 'admin_platforme' || resource.data.get('companyId', '') == userCompanyId());
     }
 
     /* Collection group dailyStats (e.g. CompanyFinancesPage). CEO / platform: same-tenant by document companyId. */

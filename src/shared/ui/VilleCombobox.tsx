@@ -10,6 +10,10 @@ type VilleComboboxProps = {
   onChange: (val: string) => void;
   placeholder?: string;
   required?: boolean;
+  /** Optional: override wrapper (input container) styles e.g. for hero glass look */
+  wrapperClassName?: string;
+  /** Optional: override input text/placeholder styles */
+  inputClassName?: string;
 };
 
 const VilleCombobox: React.FC<VilleComboboxProps> = ({
@@ -17,6 +21,8 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
   onChange,
   placeholder = "Ville…",
   required = false,
+  wrapperClassName,
+  inputClassName,
 }) => {
   const { villes } = useVilles();
   const [showList, setShowList] = useState(false);
@@ -105,9 +111,18 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
 
   const displayList = showList && filtered.length > 0;
 
+  const wrapperCls =
+    wrapperClassName != null
+      ? wrapperClassName
+      : "border border-gray-200 bg-white";
+  const inputCls =
+    inputClassName != null
+      ? `flex-1 outline-none min-w-0 ${inputClassName}`
+      : "flex-1 outline-none text-gray-900 placeholder-gray-400 bg-transparent caret-gray-900 min-w-0";
+
   return (
-    <div ref={containerRef} className="flex-1 relative z-20">
-      <div className="flex items-center border border-gray-200 rounded-xl px-3 py-2 bg-white">
+    <div ref={containerRef} className="flex-1 min-w-0 relative z-20">
+      <div className={`flex items-center rounded-xl px-3 py-2 min-h-[48px] ${wrapperCls}`}>
         <MapPin className="h-5 w-5 text-gray-500 mr-2 shrink-0" />
         <input
           type="text"
@@ -117,7 +132,7 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           required={required}
-          className="flex-1 outline-none text-gray-900 placeholder-gray-400 bg-white caret-gray-900 min-w-0"
+          className={inputCls}
           autoComplete="off"
         />
       </div>

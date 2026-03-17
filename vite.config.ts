@@ -43,18 +43,20 @@ export default defineConfig({
       manifest: {
         name: 'Teliya',
         short_name: 'Teliya',
-        id: '/',
+        id: 'app.teliya',
         description: 'Réservation de billets en ligne et au guichet',
         theme_color: '#FF6600',
-        background_color: '#FF6600',
+        background_color: '#FFFFFF',
         display: 'standalone',
         orientation: 'portrait',
         lang: 'fr',
         dir: 'ltr',
+        scope: '/',
         start_url: '/',
         icons: [
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
         screenshots: [
           { src: '/screenshots/desktop-wide.png', sizes: '1920x1080', type: 'image/png', form_factor: 'wide', label: 'Teliya - Version Bureau' },

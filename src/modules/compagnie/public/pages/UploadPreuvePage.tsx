@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db } from '@/firebaseConfig';
 import { doc, getDoc, updateDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
+import { resolveReservationById } from '../utils/resolveReservation';
 import { SectionCard } from '@/ui';
 import { XCircle, Loader2, Info, Phone } from 'lucide-react';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
@@ -128,27 +129,17 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
           }
           setReservationDraft(parsedDraft);
         } else if (reservationId && slug) {
-          // 3) Depuis Firestore par reservationId (retour après USSD / reload)
+          // 3) Depuis Firestore par reservationId (accès via publicReservations uniquement, pas de lecture directe reservations)
           log.info('Init from Firestore by reservationId', { reservationId });
-          const pubRef = doc(db, 'publicReservations', reservationId);
-          const pubSnap = await getDoc(pubRef);
-          if (!pubSnap.exists()) {
-            throw new Error('Réservation introuvable');
+          const r = await resolveReservationById(slug, reservationId);
+          const snapshot = r.snapshot;
+          if (!snapshot) {
+            throw new Error('Réservation introuvable. Utilisez le lien de votre billet (mon-billet?r=...).');
           }
-          const pub = pubSnap.data() as { companyId?: string; agencyId?: string; slug?: string };
-          const companyId = pub.companyId;
-          const agencyId = pub.agencyId;
-          const companySlug = pub.slug || slug;
-          if (!companyId || !agencyId) {
-            throw new Error('Données de réservation incomplètes');
-          }
-          const resRef = doc(db, 'companies', companyId, 'agences', agencyId, 'reservations', reservationId);
-          const resSnap = await getDoc(resRef);
-          if (!resSnap.exists()) {
-            throw new Error('Réservation introuvable');
-          }
-          const resData = resSnap.data() as Record<string, unknown>;
-          const statut = ((resData.statut as string) || '').toLowerCase();
+          const companyId = r.companyId;
+          const agencyId = r.agencyId;
+          const companySlug = (snapshot.companySlug as string) || (snapshot.slug as string) || slug;
+          const statut = ((snapshot.statut as string) || '').toLowerCase();
           if (statut !== 'en_attente_paiement') {
             throw new Error(statut === 'confirme' || statut === 'preuve_recue' ? 'Cette réservation a déjà été traitée.' : 'Cette réservation n\'est plus en attente de preuve.');
           }
@@ -163,17 +154,17 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
             agencyId,
             companyId,
             companySlug,
-            companyName: (companyData.nom as string) || (companyData.name as string) || 'Compagnie',
-            nomClient: (resData.nomClient as string) || '',
-            telephone: getDisplayPhone(resData),
-            depart: (resData.depart as string) || '',
-            arrivee: (resData.arrivee as string) || '',
-            date: (resData.date as string) || '',
-            heure: (resData.heure as string) || '',
-            seatsGo: typeof resData.seatsGo === 'number' ? resData.seatsGo : 1,
+            companyName: (companyData.nom as string) || (companyData.name as string) || (snapshot.companyName as string) || 'Compagnie',
+            nomClient: (snapshot.nomClient as string) || '',
+            telephone: getDisplayPhone(snapshot),
+            depart: (snapshot.depart as string) || '',
+            arrivee: (snapshot.arrivee as string) || '',
+            date: (snapshot.date as string) || '',
+            heure: (snapshot.heure as string) || '',
+            seatsGo: typeof snapshot.seatsGo === 'number' ? snapshot.seatsGo : 1,
             seatsReturn: 0,
             tripType: 'aller_simple',
-            montant: typeof resData.montant === 'number' ? resData.montant : 0,
+            montant: typeof snapshot.montant === 'number' ? snapshot.montant : 0,
             preuveMessage: '',
           };
           setReservationDraft(draft);

@@ -5,6 +5,7 @@ import {
   doc, onSnapshot, getDoc, getDocs, collection, query, where,
   updateDoc, serverTimestamp,
 } from 'firebase/firestore';
+import type { Unsubscribe } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { resolveReservationById, resolveReservationByToken } from '../utils/resolveReservation';
 import { SectionCard, StatusBadge } from '@/ui';
@@ -157,6 +158,7 @@ const ReservationDetailsPage: React.FC = () => {
   const qs = new URLSearchParams(location.search);
   const token = qs.get('r') || '';
   const reservationRef = useRef<DocumentReference | null>(null);
+  const publicTokenRef = useRef<string | null>(null);
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [agencyName, setAgencyName] = useState<string>('');
@@ -184,14 +186,48 @@ const ReservationDetailsPage: React.FC = () => {
     try { localStorage.setItem(STEP_KEY(slug), 'details'); } catch {}
   }, [slug]);
 
-  // 🔄 Chargement / abonnement Firestore
+  /** Construit un objet Reservation depuis le snapshot publicReservations (pas d'accès direct à reservations pour le public). */
+  const mapPublicSnapshotToReservation = useCallback((data: Record<string, unknown>, reservationId: string): Reservation => {
+    const s = String((data.statut ?? '') || '').toLowerCase();
+    let normalizedStatus: ReservationStatus = 'en_attente_paiement';
+    if (['preuve_recue', 'verif', 'vérif'].some(k => s.includes(k))) normalizedStatus = 'verification';
+    else if (['pay', 'confirm', 'valid'].some(k => s.includes(k))) normalizedStatus = 'confirme';
+    else if (['refuse', 'refusé', 'reject', 'rejeté'].some(k => s.includes(k))) normalizedStatus = 'refuse';
+    else if (['annule', 'cancel', 'cancelled'].some(k => s.includes(k))) normalizedStatus = 'annule';
+    else if (s === 'en_attente_paiement' || s.includes('attente_paiement')) normalizedStatus = 'en_attente_paiement';
+
+    return {
+      id: reservationId,
+      nomClient: (data.nomClient as string) ?? '',
+      telephone: (data.telephone as string) ?? '',
+      depart: (data.depart as string) ?? '',
+      arrivee: (data.arrivee as string) ?? '',
+      date: (data.date as string) ?? '',
+      heure: (data.heure as string) ?? '',
+      montant: Number(data.montant) ?? 0,
+      seatsGo: Number(data.seatsGo) ?? 1,
+      seatsReturn: Number(data.seatsReturn) ?? 0,
+      tripType: (data.tripType as string) ?? 'aller_simple',
+      statut: normalizedStatus,
+      canal: (data.canal as string) ?? 'en_ligne',
+      referenceCode: data.referenceCode as string | undefined,
+      companyId: (data.companyId as string) ?? '',
+      companySlug: (data.companySlug as string) ?? '',
+      companyName: (data.companyName as string) ?? '',
+      agencyId: (data.agencyId as string) ?? '',
+      agencyNom: (data.agencyNom as string) ?? '',
+      updatedAt: (data.updatedAt as any)?.toDate?.()?.toISOString?.() ?? new Date().toISOString(),
+    };
+  }, []);
+
+  // 🔄 Chargement via publicReservations (snapshot + abonnement par token), pas d'accès direct à reservations pour le public
   useEffect(() => {
     if ((!id && !token) || !slug) { 
       setError('Paramètres manquants'); 
       setLoading(false); 
       return; 
     }
-    let unsub: undefined | (() => void);
+    let unsub: Unsubscribe | undefined;
 
     (async () => {
       try {
@@ -200,14 +236,21 @@ const ReservationDetailsPage: React.FC = () => {
 
         let ref: DocumentReference;
         let hardId = id || '';
+        let publicToken: string | undefined;
+        let snapshot: Record<string, unknown> | undefined;
 
         if (id) {
           const r = await resolveReservationById(slug, id);
           ref = r.ref;
+          publicToken = r.publicToken;
+          snapshot = r.snapshot;
+          hardId = r.hardId ?? id;
         } else if (token) {
           const r = await resolveReservationByToken(slug, token);
           ref = r.ref;
           hardId = r.hardId;
+          publicToken = r.publicToken ?? token;
+          snapshot = r.snapshot;
         } else {
           setError('Paramètres manquants');
           setLoading(false);
@@ -215,120 +258,71 @@ const ReservationDetailsPage: React.FC = () => {
         }
 
         reservationRef.current = ref;
-        unsub = onSnapshot(ref, async (snap) => {
-          if (!snap.exists()) { 
-            // 🔴 CORRECTION CRITIQUE : Nettoyage forcé si réservation introuvable
-            console.warn('❌ Réservation introuvable dans Firestore, nettoyage du cache...');
-            clearPending();
-            
-            setError('Réservation introuvable ou expirée. Veuillez créer une nouvelle réservation.'); 
-            setLoading(false); 
-            return; 
+        publicTokenRef.current = publicToken ?? null;
+
+        if (snapshot) {
+          const resId = (snapshot.reservationId as string) ?? hardId;
+          setReservation(mapPublicSnapshotToReservation(snapshot, resId));
+        } else if (!publicToken) {
+          setError('Réservation introuvable ou expirée. Utilisez le lien de votre billet (mon-billet?r=...).');
+        }
+
+        const companyId = ref.path.split('/')[1];
+        const agencyId = ref.path.split('/')[3];
+        try {
+          const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
+          const ag = agSnap.exists() ? (agSnap.data() as any) : {};
+          setAgencyName(ag?.nom || ag?.name || (snapshot?.agencyNom as string) || '');
+          const lat = ag?.latitude != null ? Number(ag.latitude) : null;
+          const lng = ag?.longitude != null ? Number(ag.longitude) : null;
+          setAgencyLatitude(Number.isFinite(lat) ? lat : null);
+          setAgencyLongitude(Number.isFinite(lng) ? lng : null);
+        } catch {}
+        try {
+          const cSnap = await getDoc(doc(db, 'companies', companyId));
+          if (cSnap.exists()) {
+            const d = cSnap.data() as any;
+            setCompanyInfo({
+              id: cSnap.id,
+              name: d?.name || d?.nom,
+              primaryColor: d?.primaryColor,
+              secondaryColor: d?.secondaryColor,
+              couleurPrimaire: d?.couleurPrimaire,
+              logoUrl: d?.logoUrl
+            });
           }
-          
-          const data = snap.data() as any;
-          const next: Reservation = { 
-            ...data, 
-            id: snap.id, 
-            updatedAt: data?.updatedAt || new Date().toISOString() 
-          };
-          
-          // Normalisation des anciens statuts vers les nouveaux (ALIGNÉ AVEC ADMIN)
-          const normalizedStatus = (() => {
-            const s = (data.statut ?? '').toString().toLowerCase();
-            if (['preuve_recue', 'verif', 'vérif'].some(k => s.includes(k))) return 'verification';
-            if (['pay', 'confirm', 'valid'].some(k => s.includes(k))) return 'confirme';
-            if (['refuse', 'refusé', 'reject', 'rejeté'].some(k => s.includes(k))) return 'refuse';
-            if (['annule', 'cancel', 'cancelled'].some(k => s.includes(k))) return 'annule';
-            if (s === 'en_attente_paiement' || s.includes('attente_paiement')) return 'en_attente_paiement' as ReservationStatus;
-            return 'en_attente' as ReservationStatus;
-          })();
+        } catch {}
 
-          const finalReservation = {
-            ...next,
-            statut: normalizedStatus
-          };
-          
-          setReservation(finalReservation);
+        setLoading(false);
 
-          // 🔴 CORRECTION AMÉLIORÉE : Nettoyage plus agressif
-          const pend = readPending();
-          
-          // Nettoyage si réservation terminée OU si ancien ID différent
-          if (normalizedStatus === 'confirme' || normalizedStatus === 'annule' || normalizedStatus === 'refuse') {
-            if (pend?.id === snap.id) {
-              console.log('✅ Réservation terminée, nettoyage du cache');
-              clearPending();
-            }
-          }
-          
-          // Nettoyage si l'ID en cache ne correspond pas à la réservation actuelle
-          if (pend && pend.id !== snap.id) {
-            console.log('🔄 ID différent détecté, nettoyage ancien cache');
-            clearPending();
-          }
+        if (publicToken) {
+          unsub = onSnapshot(doc(db, 'publicReservations', publicToken), (snap) => {
+            if (!snap.exists()) return;
+            const data = snap.data() as Record<string, unknown>;
+            const resId = (data.reservationId as string) ?? hardId;
+            setReservation(mapPublicSnapshotToReservation(data, resId));
+            const pend = readPending();
+            const statut = String((data.statut ?? '') || '').toLowerCase();
+            if (['confirme', 'annule', 'refuse'].some(x => statut.includes(x)) && pend?.id === resId) clearPending();
+          }, (e) => {
+            console.error('publicReservations onSnapshot:', e);
+          });
+        }
 
-          // Récupération du nom et des coordonnées de l'agence (pour itinéraire)
-          const companyId = ref.path.split('/')[1];
-          const agencyId = ref.path.split('/')[3];
-          const inline = finalReservation.agencyNom || finalReservation.agenceNom;
-          if (inline) setAgencyName(inline);
-          try {
-            const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
-            const ag = agSnap.exists() ? (agSnap.data() as any) : {};
-            if (!inline) setAgencyName(ag?.nom || ag?.name || '');
-            const lat = ag?.latitude != null ? Number(ag.latitude) : null;
-            const lng = ag?.longitude != null ? Number(ag.longitude) : null;
-            setAgencyLatitude(Number.isFinite(lat) ? lat : null);
-            setAgencyLongitude(Number.isFinite(lng) ? lng : null);
-          } catch {}
-
-          // Récupération des infos de la compagnie (toujours depuis Firestore, pas de state)
-          try {
-            const companyId = ref.path.split('/')[1];
-            const cSnap = await getDoc(doc(db, 'companies', companyId));
-            if (cSnap.exists()) {
-              const d = cSnap.data() as any;
-              setCompanyInfo({
-                id: cSnap.id,
-                name: d?.name || d?.nom,
-                primaryColor: d?.primaryColor,
-                secondaryColor: d?.secondaryColor,
-                couleurPrimaire: d?.couleurPrimaire,
-                logoUrl: d?.logoUrl
-              });
-            }
-          } catch {}
-
-          setLoading(false);
-
-          // Normalisation de l'URL si arrivé via token
-          if (!id && hardId) {
-            const slugToUse = finalReservation.companySlug || slug;
-            window.history.replaceState({}, '', `/${slugToUse}/reservation/${hardId}`);
-          }
-        }, (e) => {
-          console.error('❌ Erreur Firestore:', e);
-          // 🔴 CORRECTION : Nettoyage aussi en cas d'erreur
-          clearPending();
-          setError(e?.message || 'Erreur de connexion au serveur'); 
-          setLoading(false);
-        });
+        if (!id && hardId) {
+          const slugToUse = (snapshot?.companySlug as string) || slug;
+          window.history.replaceState({}, '', `/${slugToUse}/reservation/${hardId}`);
+        }
       } catch (e: any) {
         console.error('❌ Erreur générale:', e);
-        // 🔴 CORRECTION : Nettoyage aussi en cas d'erreur générale
         clearPending();
         setError(e?.message || 'Impossible de localiser la réservation'); 
         setLoading(false);
       }
     })();
 
-    return () => { 
-      if (unsub) {
-        unsub(); 
-      }
-    };
-  }, [id, token, slug]);
+    return () => { unsub?.(); };
+  }, [id, token, slug, mapPublicSnapshotToReservation]);
 
   // 🎉 Confetti pour paiement confirmé
   useEffect(() => {
@@ -380,20 +374,14 @@ const ReservationDetailsPage: React.FC = () => {
       setProofError('Indiquez la référence reçue (au moins 4 caractères)');
       return;
     }
+    const currentStatut = (reservation.statut || '').toLowerCase();
+    if (currentStatut !== 'en_attente_paiement') {
+      setProofError('Cette réservation a expiré ou a déjà été traitée.');
+      return;
+    }
     setProofUploading(true);
     setProofError(null);
     try {
-      const snap = await getDoc(ref);
-      if (!snap.exists()) {
-        setProofError('Réservation introuvable.');
-        return;
-      }
-      const data = snap.data() as any;
-      const currentStatut = (data.statut || '').toLowerCase();
-      if (currentStatut !== 'en_attente_paiement') {
-        setProofError('Cette réservation a expiré ou a déjà été traitée. Créez une nouvelle réservation si besoin.');
-        return;
-      }
       const inputReference = (proofMessage || '').trim();
       await updateDoc(ref, {
         statut: 'preuve_recue',
@@ -401,6 +389,14 @@ const ReservationDetailsPage: React.FC = () => {
         proofSubmittedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      const tok = publicTokenRef.current;
+      if (tok) {
+        await updateDoc(doc(db, 'publicReservations', tok), {
+          statut: 'preuve_recue',
+          paymentReference: inputReference,
+          updatedAt: serverTimestamp(),
+        });
+      }
       setProofMessage('');
       setProofError(null);
     } catch (e: any) {

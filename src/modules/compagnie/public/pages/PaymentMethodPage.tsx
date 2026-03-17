@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, collection, query, where } from 'firebase/firestore';
+import { resolveReservationById } from '../utils/resolveReservation';
 import { db } from '@/firebaseConfig';
 import { Check, Phone } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
@@ -108,63 +109,40 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
     setLoading(true);
     setError(null);
     try {
-      // Resolve reservation (publicReservations gives companyId, agencyId)
-      const pubRef = doc(db, 'publicReservations', reservationId);
-      const pubSnap = await getDoc(pubRef);
-      if (!pubSnap.exists()) {
-        setError('Réservation introuvable.');
+      const r = await resolveReservationById(slug, reservationId);
+      const cid = r.companyId;
+      const aid = r.agencyId;
+      const snap = r.snapshot;
+      if (!snap) {
+        setError('Réservation introuvable. Utilisez le lien reçu par email ou le lien de votre billet.');
         setLoading(false);
         return;
       }
-      const pub = pubSnap.data() as { companyId?: string; agencyId?: string; slug?: string };
-      const cid = companyId ?? pub.companyId;
-      const aid = agencyId ?? pub.agencyId;
-      if (!cid || !aid) {
-        setError('Réservation invalide.');
-        setLoading(false);
-        return;
-      }
-      if (pub.slug && pub.slug !== slug) {
-        setError('Réservation introuvable.');
-        setLoading(false);
-        return;
-      }
-
-      const resRef = doc(db, 'companies', cid, 'agences', aid, 'reservations', reservationId);
-      const resSnap = await getDoc(resRef);
-      if (!resSnap.exists()) {
-        setError('Réservation introuvable.');
-        setLoading(false);
-        return;
-      }
-      const r = resSnap.data() as Record<string, unknown>;
-      const statut = (r.statut as string) || '';
-      if (statut.toLowerCase() !== 'en_attente_paiement') {
+      const statut = String(snap.statut || '').toLowerCase();
+      if (statut !== 'en_attente_paiement') {
         setError('Cette réservation n’est plus en attente de paiement.');
         setLoading(false);
         return;
       }
-
       const toStr = (v: unknown): string => (typeof v === 'string' ? v : '');
       const normDate = (v: unknown): string => {
         if (typeof v === 'string') return v;
         if (v && typeof v === 'object' && 'seconds' in v) return new Date((v as { seconds: number }).seconds * 1000).toISOString().slice(0, 10);
         return '';
       };
-      const normHeure = (v: unknown): string => toStr(v);
       setReservation({
         id: reservationId,
         companyId: cid,
         agencyId: aid,
-        nomClient: toStr(r.nomClient),
-        telephone: toStr(r.telephoneOriginal ?? r.telephone),
-        depart: toStr(r.depart),
-        arrivee: toStr(r.arrivee),
-        date: normDate(r.date),
-        heure: normHeure(r.heure),
-        montant: Number(r.montant ?? r.montant_total ?? 0),
-        seatsGo: Number(r.seatsGo ?? 1),
-        statut: toStr(r.statut),
+        nomClient: toStr(snap.nomClient),
+        telephone: toStr(snap.telephoneOriginal ?? snap.telephone),
+        depart: toStr(snap.depart),
+        arrivee: toStr(snap.arrivee),
+        date: normDate(snap.date),
+        heure: toStr(snap.heure),
+        montant: Number(snap.montant ?? (snap as any).montant_total ?? 0),
+        seatsGo: Number(snap.seatsGo ?? 1),
+        statut: toStr(snap.statut),
       });
 
       const compSnap = await getDoc(doc(db, 'companies', cid));
