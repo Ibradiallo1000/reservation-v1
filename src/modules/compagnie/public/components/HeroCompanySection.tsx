@@ -45,10 +45,11 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
 
   const hasBgImage = Boolean(heroImageUrl);
 
+  /* Inputs: frosted glass (lisible) + texte bien contrasté */
   const glassInputClass =
-    "bg-white/20 backdrop-blur-sm border border-white/30 [&_svg]:text-white/90";
+    "bg-white/50 backdrop-blur-md border border-white/40 rounded-2xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.3)] [&_svg]:text-gray-700 px-4 py-3 min-h-[48px]";
   const glassInputTextClass =
-    "bg-transparent text-white placeholder-white/70 caret-white";
+    "bg-transparent text-gray-900 font-semibold text-base placeholder-gray-700 caret-gray-900 min-w-0 [text-shadow:0_1px_2px_rgba(255,255,255,0.9)]";
 
   return (
     <section className="relative w-full min-w-0">
@@ -77,11 +78,11 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
 
           <form
             onSubmit={handleSubmit}
-            className="mt-6 sm:mt-8 mx-auto max-w-3xl rounded-2xl bg-white/15 backdrop-blur-xl border border-white/20 shadow-2xl p-4 sm:p-5 md:p-6"
+            className="mt-6 sm:mt-8 mx-auto max-w-3xl rounded-2xl bg-white/5 backdrop-blur-xl border border-white/20 shadow-2xl p-4 sm:p-5 md:p-6"
           >
-            {/* Horizontal layout: [ Départ ] ⇄ [ Arrivée ]; stacked on very small screens */}
-            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 items-stretch sm:items-center">
-              <div className="flex-1 min-w-0 flex items-center rounded-2xl bg-white/20 backdrop-blur-sm border border-white/30 shadow-lg min-h-[48px] px-3 py-2">
+            {/* ALWAYS horizontal: [ Départ ] ⇄ [ Arrivée ] */}
+            <div className="flex flex-row items-stretch gap-2 sm:gap-3 w-full min-w-0">
+              <div className="flex-1 min-w-0 flex items-center">
                 <VilleCombobox
                   value={departure}
                   onChange={setDeparture}
@@ -95,27 +96,29 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
                 type="button"
                 onClick={handleSwap}
                 aria-label={t("swapCities")}
-                className="flex-shrink-0 w-12 h-12 sm:w-11 sm:h-11 rounded-full bg-white/25 hover:bg-white/35 border border-white/30 flex items-center justify-center text-white transition shadow-md hover:shadow-lg self-center sm:self-auto"
+                className="flex-shrink-0 w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-white/20 backdrop-blur-sm hover:bg-white/30 border border-white/30 flex items-center justify-center text-white transition shadow-lg hover:shadow-xl"
               >
                 <ArrowLeftRight className="h-5 w-5" aria-hidden />
               </button>
 
-              <VilleCombobox
-                value={arrival}
-                onChange={setArrival}
-                placeholder={t("arrivalCity")}
-                wrapperClassName={glassInputClass}
-                inputClassName={glassInputTextClass}
-              />
+              <div className="flex-1 min-w-0 flex items-center">
+                <VilleCombobox
+                  value={arrival}
+                  onChange={setArrival}
+                  placeholder={t("arrivalCity")}
+                  wrapperClassName={glassInputClass}
+                  inputClassName={glassInputTextClass}
+                />
+              </div>
             </div>
 
-            <div className="mt-4">
+            <div className="mt-4 sm:mt-5">
               <button
                 type="submit"
                 disabled={disabled}
-                className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-semibold text-white transition disabled:opacity-60 disabled:cursor-not-allowed hover:opacity-95 shadow-lg"
+                className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-semibold text-white text-base transition disabled:opacity-60 disabled:cursor-not-allowed hover:opacity-95 shadow-lg border border-white/20"
                 style={{
-                  backgroundColor: disabled ? "rgba(120,120,120,0.7)" : secondaryColor,
+                  backgroundColor: disabled ? "rgba(100,100,100,0.8)" : secondaryColor,
                 }}
               >
                 <Search className="h-5 w-5 shrink-0" style={{ color: primaryColor }} aria-hidden />
