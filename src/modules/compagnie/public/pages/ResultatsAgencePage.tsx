@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { Company } from '@/types/companyTypes';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
@@ -11,21 +11,8 @@ import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { PageLoadingState } from '@/shared/ui/PageStates';
-import {
-  listTripInstancesByRouteAndDate,
-  getOrCreateTripInstanceForSlot,
-} from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { buildValidTripsFromWeeklyTrips } from '@/modules/compagnie/tripInstances/publicValidTripsService';
 import { getRemainingSeats } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
-
-interface WeeklyTrip {
-  id: string;
-  departure: string;
-  arrival: string;
-  horaires: { [key: string]: string[] };
-  price: number;
-  places?: number;
-  active: boolean;
-}
 
 interface Trip {
   id: string;
@@ -42,8 +29,6 @@ interface Trip {
 interface Props {
   company: Company;
 }
-
-const DAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 
 const hexToRgba = (hex: string, alpha: number = 1): string => {
   const r = parseInt(hex.slice(1, 3), 16);
@@ -83,6 +68,7 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [allowedDates, setAllowedDates] = useState<string[]>([]);
   const isOnline = useOnlineStatus();
 
   const themeConfig = useMemo(() => {
@@ -107,96 +93,80 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
 
   const { colors, classes } = themeConfig;
 
-  const allDates = useMemo(() => {
-    const today = new Date();
-    return Array.from({ length: 8 }, (_, i) => {
-      const d = new Date(today);
-      d.setDate(d.getDate() + i);
-      return d.toISOString().split('T')[0];
-    });
-  }, []);
+  const filteredTrips = useMemo(
+    () => (selectedDate ? trips.filter((t) => t.date === selectedDate) : []),
+    [trips, selectedDate]
+  );
 
-  const filteredTrips = useMemo(() => trips, [trips]);
-
-  const fetchTripsForDate = useCallback(async (dateStr: string) => {
-    if (!company.id || !departure?.trim() || !arrival?.trim()) return;
+  useEffect(() => {
+    if (!company.id || !departure?.trim() || !arrival?.trim()) {
+      setAllowedDates([]);
+      setTrips([]);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
     setLoading(true);
     setError(null);
     const depNorm = departure.trim();
     const arrNorm = arrival.trim();
-    try {
-      let instances = await listTripInstancesByRouteAndDate(company.id, depNorm, arrNorm, dateStr);
-      if (instances.length === 0) {
+    const normalize = (s: string) => s.trim().toLowerCase();
+    (async () => {
+      try {
         const agencesSnap = await getDocs(collection(db, 'companies', company.id, 'agences'));
-        const agences = agencesSnap.docs.map(d => ({ id: d.id }));
-        const d = new Date(dateStr);
-        const dayName = DAYS[d.getDay()];
-        for (const agence of agences) {
-          const trajetsSnap = await getDocs(query(
-            collection(db, 'companies', company.id, 'agences', agence.id, 'weeklyTrips'),
-            where('active', '==', true)
-          ));
-          const weeklyTrips = trajetsSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as Omit<WeeklyTrip, 'id'>) }));
-          for (const trip of weeklyTrips) {
-            const tripData = trip as any;
-            const tripDep = (tripData.departureCity ?? tripData.departure ?? '').trim();
-            const tripArr = (tripData.arrivalCity ?? tripData.arrival ?? '').trim();
-            if (tripDep.toLowerCase() !== depNorm.toLowerCase() || tripArr.toLowerCase() !== arrNorm.toLowerCase()) continue;
-            const horaires = trip.horaires?.[dayName] || [];
-            for (const heure of horaires) {
-              await getOrCreateTripInstanceForSlot(company.id, {
-                agencyId: agence.id,
-                departureCity: depNorm,
-                arrivalCity: arrNorm,
-                date: dateStr,
-                departureTime: heure,
-                seatCapacity: (trip as any).seats ?? trip.places ?? 30,
-                price: trip.price ?? null,
-                weeklyTripId: trip.id,
-                routeId: (trip as any).routeId ?? null,
-              });
-            }
-          }
+        const agences = agencesSnap.docs.map((d) => ({ id: d.id }));
+        const todayYMD = new Date().toISOString().split('T')[0];
+        const isPastTime = (dateStr: string, time: string) => {
+          if (dateStr !== todayYMD) return false;
+          const dt = new Date(`${dateStr}T${time}`);
+          return dt.getTime() < new Date().getTime();
+        };
+        const { validTrips, dates } = await buildValidTripsFromWeeklyTrips({
+          companyId: company.id,
+          depNorm,
+          arrNorm,
+          normalize,
+          agences,
+          daysAhead: 14,
+          isPastTime,
+          getRemaining: async (companyId, instanceId) => getRemainingSeats(companyId, instanceId),
+        });
+        if (cancelled) return;
+        const list: Trip[] = validTrips.map((t) => ({
+          id: t.id,
+          date: t.date,
+          time: t.time,
+          departure: t.departure,
+          arrival: t.arrival,
+          price: t.price,
+          places: t.places,
+          remainingSeats: t.remainingSeats,
+          agencyId: t.agencyId,
+        }));
+        setTrips(list);
+        setAllowedDates(dates);
+        if (dates.length > 0) {
+          setSelectedDate((prev) => (dates.includes(prev) ? prev : dates[0]));
         }
-        instances = await listTripInstancesByRouteAndDate(company.id, depNorm, arrNorm, dateStr);
+      } catch (err) {
+        console.error('Erreur Firestore:', err);
+        if (!cancelled) {
+          setError('Erreur lors du chargement des trajets');
+          setTrips([]);
+          setAllowedDates([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      const remainingById: Record<string, number> = {};
-      await Promise.all(
-        instances
-          .filter((ti) => (ti as any).routeId)
-          .map(async (ti) => {
-            remainingById[ti.id] = await getRemainingSeats(company.id, ti.id);
-          })
-      );
-      const list: Trip[] = instances
-        .filter(ti => ti.status !== 'cancelled')
-        .map(ti => {
-          const capacity = (ti.seatCapacity ?? 0);
-          const fallback = capacity - (ti.reservedSeats ?? 0);
-          const remaining = (ti as any).routeId && remainingById[ti.id] !== undefined
-            ? remainingById[ti.id]
-            : fallback;
-          return { id: ti.id, date: ti.date, time: ti.departureTime, departure: ti.departureCity ?? '', arrival: ti.arrivalCity ?? '', price: (ti as any).price ?? 0, places: capacity, remainingSeats: remaining, agencyId: ti.agencyId };
-        })
-        .filter(t => t.remainingSeats > 0);
-      setTrips(list);
-    } catch (err) {
-      console.error('Erreur Firestore:', err);
-      setError('Erreur lors du chargement des trajets');
-      setTrips([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [company.id, departure, arrival]);
+    })();
+    return () => { cancelled = true; };
+  }, [company.id, departure, arrival, reloadKey]);
 
   useEffect(() => {
-    if (!selectedDate || !company.id || !departure || !arrival) {
-      setLoading(false);
-      if (company.id && departure && arrival && !selectedDate) setTrips([]);
-      return;
+    if (allowedDates.length > 0 && selectedDate && !allowedDates.includes(selectedDate)) {
+      setSelectedDate(allowedDates[0]);
     }
-    fetchTripsForDate(selectedDate);
-  }, [company.id, departure, arrival, selectedDate, reloadKey, fetchTripsForDate]);
+  }, [allowedDates, selectedDate]);
 
   useEffect(() => {
     if (filteredTrips.length > 0) {
@@ -347,8 +317,11 @@ const ResultatsAgencePage: React.FC<Props> = ({ company }) => {
               <Calendar className="h-5 w-5" style={{ color: colors.primary }} />
               Choisissez votre date de départ
             </h3>
+            {allowedDates.length === 0 && departure && arrival ? (
+              <p className="text-sm text-gray-600 py-2">Aucun jour de circulation défini pour cette liaison. Les jours affichés correspondent aux horaires configurés (guichet).</p>
+            ) : null}
             <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide">
-              {allDates.map(date => (
+              {allowedDates.map(date => (
                 <button
                   key={date}
                   onClick={() => handleSelectDate(date)}

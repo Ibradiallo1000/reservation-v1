@@ -14,9 +14,10 @@ import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
-import { incrementReservedSeats, getOrCreateTripInstanceForSlot, listTripInstancesByRouteAndDate } from '@/modules/compagnie/tripInstances/tripInstanceService';
-import { getStopOrdersFromCities, getRemainingSeats } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
+import { incrementReservedSeats } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
 import { getRemainingStopQuota } from '@/modules/compagnie/tripInstances/inventoryQuotaService';
+import { buildValidTripsFromWeeklyTrips } from '@/modules/compagnie/tripInstances/publicValidTripsService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
@@ -127,7 +128,6 @@ export default function ReservationClientPage() {
     code?: string;
   }>({});
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [dates, setDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTime, setSelectedTime] = useState('');
   const [seats, setSeats] = useState(1);
@@ -273,109 +273,48 @@ export default function ReservationClientPage() {
           });
         }
 
-        const next8 = Array.from({ length: 8 }, (_, i) => { 
-          const d = new Date(); 
-          d.setDate(d.getDate() + i); 
-          return toYMD(d); 
-        });
-
         const depNorm = (search.get('departure') || '').trim();
         const arrNorm = (search.get('arrival') || '').trim();
-        const allTrips: Trip[] = [];
 
-        for (const dateStr of next8) {
-          let instances = await listTripInstancesByRouteAndDate(cdoc.id, depNorm, arrNorm, dateStr);
-          if (instances.length === 0) {
-            const d = new Date(dateStr);
-            const dayName = DAYS[d.getDay()];
-            for (const agence of agences) {
-              const wSnap = await getDocs(query(
-                collection(db, 'companies', cdoc.id, 'agences', agence.id, 'weeklyTrips'),
-                where('active', '==', true)
-              ));
-              const weekly = wSnap.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) }))
-                .filter((t: any) => normalize(t.depart || t.departure || '') === departureQ && normalize(t.arrivee || t.arrival || '') === arrivalQ);
-              for (const t of weekly) {
-                const horaires = (t.horaires?.[dayName] || []) as string[];
-                for (const heure of horaires) {
-                  if (dateStr === toYMD(new Date())) {
-                    const now = new Date();
-                    const nowHHMM = parse(
-                      `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-                      'HH:mm',
-                      new Date()
-                    );
-                    if (parse(heure, 'HH:mm', new Date()) <= nowHHMM) continue;
-                  }
-                  await getOrCreateTripInstanceForSlot(cdoc.id, {
-                    agencyId: agence.id,
-                    departureCity: depNorm,
-                    arrivalCity: arrNorm,
-                    date: dateStr,
-                    departureTime: heure,
-                    seatCapacity: t.places ?? 30,
-                    price: t.price ?? null,
-                    weeklyTripId: t.id,
-                  });
-                }
-              }
-            }
-            instances = await listTripInstancesByRouteAndDate(cdoc.id, depNorm, arrNorm, dateStr);
-          }
-          const todayYMD = toYMD(new Date());
-          const withRoute = instances.filter((ti) => (ti as any).routeId && (ti as any).status !== 'cancelled');
-          const remainingById: Record<string, number> = {};
-          await Promise.all(
-            withRoute.map(async (ti) => {
-              const routeId = (ti as any).routeId;
-              const resolved = await getStopOrdersFromCities(cdoc.id, routeId, depNorm, arrNorm);
-              const originOrder = resolved?.originStopOrder ?? 1;
-              remainingById[ti.id] = await getRemainingStopQuota(cdoc.id, ti.id, originOrder);
-            })
+        const isPastTimeFn = (dateStr: string, time: string) => {
+          if (dateStr !== toYMD(new Date())) return false;
+          const now = new Date();
+          const nowHHMM = parse(
+            `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+            'HH:mm',
+            new Date()
           );
-          for (const ti of instances) {
-            if ((ti as any).status === 'cancelled') continue;
-            const capacity = (ti as any).seatCapacity ?? (ti as any).capacitySeats ?? 30;
-            const reserved = (ti as any).reservedSeats ?? 0;
-            const fallbackRemaining = capacity - reserved;
-            const routeId = (ti as any).routeId ?? null;
-            const remaining = routeId != null && remainingById[ti.id] !== undefined
-              ? remainingById[ti.id]
-              : fallbackRemaining;
-            if (remaining <= 0) continue;
-            if (dateStr === todayYMD) {
-              const now = new Date();
-              const nowHHMM = parse(
-                `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-                'HH:mm',
-                new Date()
-              );
-              if (parse((ti as any).departureTime, 'HH:mm', new Date()) <= nowHHMM) continue;
+          return parse(time, 'HH:mm', new Date()) <= nowHHMM;
+        };
+
+        const { validTrips } = await buildValidTripsFromWeeklyTrips({
+          companyId: cdoc.id,
+          depNorm,
+          arrNorm,
+          normalize: (s) => normalize(s),
+          agences: agences.map((a) => ({ id: a.id })),
+          daysAhead: 14,
+          isPastTime: isPastTimeFn,
+          getRemaining: async (companyId, instanceId, ti) => {
+            const routeId = ti.routeId as string | null;
+            if (routeId != null) {
+              const resolved = await getStopOrdersFromCities(companyId, routeId, depNorm, arrNorm);
+              const originOrder = resolved?.originStopOrder ?? 1;
+              return getRemainingStopQuota(companyId, instanceId, originOrder);
             }
-            allTrips.push({
-              id: ti.id,
-              date: ti.date,
-              time: (ti as any).departureTime,
-              departure: (ti as any).departureCity ?? (ti as any).routeDeparture ?? '',
-              arrival: (ti as any).arrivalCity ?? (ti as any).routeArrival ?? '',
-              price: (ti as any).price ?? 0,
-              agencyId: ti.agencyId,
-              companyId: cdoc.id as any,
-              places: capacity,
-              remainingSeats: remaining,
-              routeId,
-            } as any);
-          }
-        }
+            const cap = (ti.seatCapacity ?? ti.capacitySeats ?? 30) as number;
+            const res = (ti.reservedSeats ?? 0) as number;
+            return Math.max(0, cap - res);
+          },
+        });
 
-        const sorted = allTrips.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
-        const uniqDates = [...new Set(sorted.map(t => t.date))];
-
-        setTrips(sorted); 
-        setDates(uniqDates); 
-        setSelectedDate(uniqDates[0] || '');
+        const sorted = validTrips as Trip[];
+        setTrips(sorted);
+        const firstDate = sorted[0]?.date ?? '';
+        setSelectedDate(firstDate);
 
         const preloadAgency = agencyForDeparture ?? agences[0];
+        const derivedDates = Array.from(new Set(sorted.map((t: Trip) => t.date))).sort();
         sessionStorage.setItem(`preload_${slug}_${departureQ}_${arrivalQ}`, JSON.stringify({
           company: {
             id: cdoc.id, 
@@ -386,7 +325,7 @@ export default function ReservationClientPage() {
             code: (cdata.code || 'MT').toString().toUpperCase()
           }, 
           trips: sorted, 
-          dates: uniqDates,
+          dates: derivedDates,
           agencyInfo: { 
             nom: preloadAgency?.nomAgence || preloadAgency?.nom || '', 
             telephone: preloadAgency?.telephone || '', 
@@ -415,6 +354,18 @@ export default function ReservationClientPage() {
       meta.setAttribute('content', previous);
     };
   }, [company?.couleurPrimaire]);
+
+  const dates = useMemo(
+    () => Array.from(new Set(trips.map((t: Trip) => t.date))).sort(),
+    [trips]
+  );
+
+  useEffect(() => {
+    if (!dates.length) return;
+    if (!dates.includes(selectedDate)) {
+      setSelectedDate(dates[0]);
+    }
+  }, [dates, selectedDate]);
 
   const filteredTrips = useMemo(() => {
     if (!selectedDate) return [] as any[];
