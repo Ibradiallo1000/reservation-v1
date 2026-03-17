@@ -1,5 +1,5 @@
 // src/modules/compagnie/public/components/HeroCompanySection.tsx
-// Hero: unified horizontal search bar with swap, glass style, responsive
+// Hero: unified horizontal search bar with swap, glass style, responsive — ULTRA PREMIUM
 
 import React, { useState } from "react";
 import { Search, ArrowLeftRight } from "lucide-react";

@@ -286,7 +286,10 @@ service cloud.firestore {
 
           /* 🔓 Création publique. Lecture réservée aux utilisateurs compagnie ; accès billet public = via publicReservations (doc id = publicToken) uniquement. */
           allow create: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme';
-          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          /* get : compagnie + admin_platforme ; ou public pour résa en_ligne (upload preuve, reçu, mon-billet). list : jamais en public. */
+          allow get: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+            || (request.auth == null && resource.data.get('canal', '') == 'en_ligne');
+          allow list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
 
           /* =============================
              UPDATE 1 — APRÈS CRÉATION

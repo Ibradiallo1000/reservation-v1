@@ -2,7 +2,6 @@
 // Combobox villes : filtre en temps réel, ouverture au focus, pas de logique bloquante
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { MapPin } from "lucide-react";
 import { useVilles } from "@/shared/hooks/useVilles";
 
 type VilleComboboxProps = {
@@ -123,7 +122,6 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
   return (
     <div ref={containerRef} className="flex-1 min-w-0 relative z-20">
       <div className={`flex items-center rounded-xl px-3 py-2 min-h-[48px] ${wrapperCls}`}>
-        <MapPin className="h-5 w-5 text-gray-500 mr-2 shrink-0" />
         <input
           type="text"
           value={value}
