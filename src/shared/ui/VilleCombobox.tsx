@@ -1,5 +1,5 @@
 // src/shared/ui/VilleCombobox.tsx
-// Combobox villes : filtre en temps réel, ouverture au focus, pas de logique bloquante
+// Combobox villes : une seule surface visuelle, design premium, dropdown fluide. Logique métier inchangée.
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useVilles } from "@/shared/hooks/useVilles";
@@ -9,11 +9,34 @@ type VilleComboboxProps = {
   onChange: (val: string) => void;
   placeholder?: string;
   required?: boolean;
-  /** Optional: override wrapper (input container) styles e.g. for hero glass look */
+  /** Style du wrapper (conteneur). Le parent contrôle le rendu ; pas de styles contradictoires. */
   wrapperClassName?: string;
-  /** Optional: override input text/placeholder styles */
+  /** Style du champ input (texte/placeholder). Input reste bg-transparent. */
   inputClassName?: string;
 };
+
+const BASE_WRAPPER =
+  "flex items-center min-w-0 bg-white border border-gray-200 rounded-xl px-4 py-3 min-h-[48px] transition focus-within:ring-2 focus-within:ring-gray-300 focus-within:border-gray-300";
+
+const BASE_INPUT =
+  "w-full min-w-0 bg-transparent outline-none font-medium text-gray-900 placeholder-gray-400";
+
+const DROPDOWN_LIST =
+  "absolute top-full left-0 right-0 mt-2 max-h-60 overflow-y-auto overflow-x-hidden bg-white border border-gray-200 rounded-xl shadow-lg z-50";
+
+const DROPDOWN_ITEM_BASE =
+  "px-4 py-3 cursor-pointer text-gray-800 hover:bg-gray-100";
+const DROPDOWN_ITEM_ACTIVE = "bg-gray-100";
+
+function normalize(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[''`-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 const VilleCombobox: React.FC<VilleComboboxProps> = ({
   value,
@@ -28,31 +51,16 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const normalize = (text: string) =>
-    text
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/['’`-]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  // Filtrage robuste: ignore accents/casse/tirets/apostrophes et priorise startsWith.
   const filtered = useMemo(() => {
     const q = normalize(value);
     if (!q) return villes;
     const startsWithMatches: string[] = [];
     const includesMatches: string[] = [];
-
     for (const city of villes) {
-      const normalizedCity = normalize(city);
-      if (normalizedCity.startsWith(q)) {
-        startsWithMatches.push(city);
-      } else if (normalizedCity.includes(q)) {
-        includesMatches.push(city);
-      }
+      const n = normalize(city);
+      if (n.startsWith(q)) startsWithMatches.push(city);
+      else if (n.includes(q)) includesMatches.push(city);
     }
-
     return [...startsWithMatches, ...includesMatches];
   }, [villes, value]);
 
@@ -60,12 +68,10 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
     setHighlightedIndex(0);
   }, [filtered]);
 
-  // Focus → ouvrir la liste si des villes sont chargées
   const handleFocus = () => {
     if (villes.length > 0) setShowList(true);
   };
 
-  // Clic extérieur → fermer
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -108,20 +114,21 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
     }
   };
 
-  const displayList = showList && filtered.length > 0;
+  const showDropdown = showList && filtered.length > 0;
 
   const wrapperCls =
     wrapperClassName != null
-      ? wrapperClassName
-      : "border border-gray-200 bg-white";
+      ? `${wrapperClassName} flex items-center min-w-0`
+      : BASE_WRAPPER;
+
   const inputCls =
     inputClassName != null
-      ? `flex-1 outline-none min-w-0 ${inputClassName}`
-      : "flex-1 outline-none text-gray-900 placeholder-gray-400 bg-transparent caret-gray-900 min-w-0";
+      ? `${BASE_INPUT} ${inputClassName}`
+      : BASE_INPUT;
 
   return (
-    <div ref={containerRef} className="flex-1 min-w-0 relative z-20">
-      <div className={`flex items-center rounded-xl px-3 py-2 min-h-[48px] ${wrapperCls}`}>
+    <div ref={containerRef} className="flex-1 min-w-0 relative z-20 w-full">
+      <div className={wrapperCls}>
         <input
           type="text"
           value={value}
@@ -135,24 +142,19 @@ const VilleCombobox: React.FC<VilleComboboxProps> = ({
         />
       </div>
 
-      {displayList && (
-        <ul
-          className="absolute top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto rounded-xl bg-white border border-gray-200 shadow-lg z-50"
-          role="listbox"
-        >
-          {filtered.map((c, i) => (
+      {showDropdown && (
+        <ul className={DROPDOWN_LIST} role="listbox">
+          {filtered.map((city, i) => (
             <li
-              key={c}
-              className={`px-3 py-2 text-gray-900 hover:bg-gray-100 cursor-pointer ${
-                i === highlightedIndex ? "bg-gray-100" : ""
-              }`}
+              key={city}
+              className={`${DROPDOWN_ITEM_BASE} ${i === highlightedIndex ? DROPDOWN_ITEM_ACTIVE : ""}`}
               onMouseEnter={() => setHighlightedIndex(i)}
               onMouseDown={(e) => {
                 e.preventDefault();
-                choose(c);
+                choose(city);
               }}
             >
-              {c}
+              {city}
             </li>
           ))}
         </ul>
