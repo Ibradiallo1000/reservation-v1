@@ -79,6 +79,8 @@ const ReceiptEnLignePage: React.FC = () => {
     params.id ??
     (pathParts[0] === 'receipt' ? pathParts[1] : pathParts[1] === 'receipt' ? pathParts[2] : undefined);
   const slug = slugFromSub ?? params.slug ?? (pathParts[0] !== 'receipt' ? pathParts[0] : '') ?? '';
+  /** Sous-domaine : accueil = /. Sinon accueil = /:slug (évite 404 sur "Retour") */
+  const homePath = slugFromSub ? '/' : (slug ? `/${slug}` : '/');
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
@@ -313,7 +315,7 @@ const ReceiptEnLignePage: React.FC = () => {
         </p>
         <button
           type="button"
-          onClick={() => navigate(slug ? `/${slug}` : '/')}
+          onClick={() => navigate(homePath)}
           className="px-4 py-2 rounded-lg font-medium text-white"
           style={{ backgroundColor: primaryColor }}
         >
@@ -334,7 +336,7 @@ const ReceiptEnLignePage: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <ReservationStepHeader
-        onBack={() => navigate(-1)}
+        onBack={() => navigate(homePath)}
         primaryColor={primaryColor}
         secondaryColor={secondaryColor}
         title="Confirmation"
@@ -387,7 +389,7 @@ const ReceiptEnLignePage: React.FC = () => {
           Imprimer
         </button>
         <button
-          onClick={() => navigate(`/${slug}`)}
+          onClick={() => navigate(homePath)}
           className="py-2 rounded-lg bg-gray-200 text-gray-800 flex items-center justify-center gap-1"
         >
           <Home size={16} />

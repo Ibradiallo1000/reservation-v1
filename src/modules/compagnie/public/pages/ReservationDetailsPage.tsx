@@ -455,11 +455,12 @@ const ReservationDetailsPage: React.FC = () => {
       })
     : null;
 
-  // 🔴 CORRECTION : Gestion du bouton "Retour"
+  // 🔴 CORRECTION : Gestion du bouton "Retour" — toujours vers l'accueil compagnie (évite 404 en sous-domaine)
   const handleGoBack = () => {
-    // Nettoyage avant de revenir en arrière
     clearPending();
-    navigate(-1);
+    const slugToUse = reservation?.companySlug || slug;
+    const pathBase = getPublicPathBase(slugToUse);
+    navigate(pathBase ? `/${pathBase}` : '/', { replace: false });
   };
 
   // 🔴 CORRECTION : Gestion du bouton "Nouvelle réservation"

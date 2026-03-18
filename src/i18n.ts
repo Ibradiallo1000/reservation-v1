@@ -29,6 +29,8 @@ i18n
           searchTitle: 'Trouvez votre trajet',
           departureCity: 'Ville de départ',
           arrivalCity: 'Ville d’arrivée',
+          depart: 'Départ',
+          arrival: 'Arrivée',
           searchTrip: 'Rechercher',
           swapCities: 'Inverser départ et arrivée',
           departurePlaceholder: 'Ex: Bamako',
@@ -108,6 +110,14 @@ i18n
           aboutDestinationsCount: '{{count}}+ destinations',
           aboutSatisfactionRate: '{{rate}}% satisfaction',
           aboutSupport24h: 'Support 24/7',
+
+          serviceWifi: 'Wi-Fi à bord',
+          serviceClimatisation: 'Bus climatisé',
+          serviceUsb: 'Prise USB',
+          serviceBoisson: 'Boisson offerte',
+          serviceSiegesConfort: 'Sièges confort',
+          serviceTv: 'Écran / TV',
+          serviceEauFraiche: 'Eau fraîche',
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Sécurité',
@@ -298,6 +308,8 @@ i18n
           searchTitle: 'Find your trip',
           departureCity: 'Departure city',
           arrivalCity: 'Arrival city',
+          depart: 'Depart',
+          arrival: 'Arrival',
           searchTrip: 'Search',
           swapCities: 'Swap departure and arrival',
           departurePlaceholder: 'Ex: Bamako',
@@ -377,6 +389,14 @@ i18n
           aboutDestinationsCount: '{{count}}+ destinations',
           aboutSatisfactionRate: '{{rate}}% satisfaction',
           aboutSupport24h: '24/7 support',
+
+          serviceWifi: 'On-board Wi-Fi',
+          serviceClimatisation: 'Air-conditioned bus',
+          serviceUsb: 'USB port',
+          serviceBoisson: 'Complimentary drink',
+          serviceSiegesConfort: 'Comfortable seats',
+          serviceTv: 'Screen / TV',
+          serviceEauFraiche: 'Cold water',
 
           // 🟢 Clés manquantes ajoutées pour ServicesCarousel
           serviceSecurityTitle: 'Security',

@@ -71,10 +71,18 @@ export interface BuildValidTripsParams {
   getRemaining?: (companyId: string, instanceId: string, ti: Record<string, unknown>) => Promise<number>;
 }
 
+/** Slot à créer : (agence, weekly, date, heure) */
+interface SlotToCreate {
+  agencyId: string;
+  weekly: WeeklyTripLike;
+  dateStr: string;
+  heure: string;
+}
+
 /**
  * Pour chaque weeklyTrip (par agence), génère les instances réelles sur les jours
- * où horaires[day] existe. Puis construit validTrips avec remaining > 0 et non passés,
- * et dérive les dates affichables de validTrips (aucun jour vide).
+ * où horaires[day] existe. Puis construit validTrips avec remaining > 0 et non passés.
+ * Optimisé : chargement weeklyTrips en parallèle, création des slots en parallèle, listing par date en parallèle.
  */
 export async function buildValidTripsFromWeeklyTrips(
   params: BuildValidTripsParams
@@ -92,21 +100,33 @@ export async function buildValidTripsFromWeeklyTrips(
 
   const today = new Date();
   const todayYMD = toYMD(today);
+  const depNormN = normalize(depNorm);
+  const arrNormN = normalize(arrNorm);
 
-  // 1) Par agence et par weeklyTrip : créer/assurer les instances pour les jours où horaires[day] existe
-  const dateStrSet = new Set<string>();
-  for (const agence of agences) {
-    const wSnap = await getDocs(
-      query(
-        collection(db, "companies", companyId, "agences", agence.id, "weeklyTrips"),
-        where("active", "==", true)
+  // 1) Charger tous les weeklyTrips de toutes les agences en parallèle
+  const weeklySnapshots = await Promise.all(
+    agences.map((agence) =>
+      getDocs(
+        query(
+          collection(db, "companies", companyId, "agences", agence.id, "weeklyTrips"),
+          where("active", "==", true)
+        )
       )
-    );
+    )
+  );
+
+  // 2) Construire la liste de tous les slots à créer (sans await)
+  const slotsToCreate: SlotToCreate[] = [];
+  const dateStrSet = new Set<string>();
+
+  for (let a = 0; a < agences.length; a++) {
+    const agence = agences[a];
+    const wSnap = weeklySnapshots[a];
     const weekly = wSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as WeeklyTripLike));
     for (const t of weekly) {
       const tripDep = normalize(t.departureCity ?? t.departure ?? t.depart ?? "");
       const tripArr = normalize(t.arrivalCity ?? t.arrival ?? t.arrivee ?? "");
-      if (tripDep !== normalize(depNorm) || tripArr !== normalize(arrNorm)) continue;
+      if (tripDep !== depNormN || tripArr !== arrNormN) continue;
 
       const horaires = t.horaires || {};
       for (let i = 0; i < daysAhead; i++) {
@@ -119,65 +139,91 @@ export async function buildValidTripsFromWeeklyTrips(
 
         for (const heure of slots) {
           if (dateStr === todayYMD && isPastTime(dateStr, heure)) continue;
-          await getOrCreateTripInstanceForSlot(companyId, {
-            agencyId: agence.id,
-            departureCity: depNorm.trim(),
-            arrivalCity: arrNorm.trim(),
-            date: dateStr,
-            departureTime: heure,
-            seatCapacity: t.seats ?? t.places ?? 30,
-            price: t.price ?? null,
-            weeklyTripId: t.id,
-            routeId: t.routeId ?? null,
-          });
+          slotsToCreate.push({ agencyId: agence.id, weekly: t, dateStr, heure });
           dateStrSet.add(dateStr);
         }
       }
     }
   }
 
-  // 2) Pour chaque date concernée, lister les instances et calculer remaining
-  const validTrips: ValidTrip[] = [];
-  for (const dateStr of dateStrSet) {
-    const instances = await listTripInstancesByRouteAndDate(companyId, depNorm, arrNorm, dateStr);
-    for (const ti of instances) {
-      const data = ti as unknown as Record<string, unknown>;
-      if (data.status === "cancelled") continue;
-      const capacity = (data.seatCapacity ?? data.capacitySeats ?? 30) as number;
-      const reserved = (data.reservedSeats ?? 0) as number;
-      const remaining =
-        getRemaining != null
-          ? await getRemaining(companyId, ti.id, data)
-          : Math.max(0, capacity - reserved);
-      if (remaining <= 0) continue;
-      if (dateStr === todayYMD && isPastTime(dateStr, (data.departureTime as string) ?? "00:00"))
-        continue;
+  // 3) Créer toutes les instances en parallèle
+  await Promise.all(
+    slotsToCreate.map(({ agencyId, weekly, dateStr, heure }) =>
+      getOrCreateTripInstanceForSlot(companyId, {
+        agencyId,
+        departureCity: depNorm.trim(),
+        arrivalCity: arrNorm.trim(),
+        date: dateStr,
+        departureTime: heure,
+        seatCapacity: weekly.seats ?? weekly.places ?? 30,
+        price: weekly.price ?? null,
+        weeklyTripId: weekly.id,
+        routeId: weekly.routeId ?? null,
+      })
+    )
+  );
 
-      validTrips.push({
-        id: ti.id,
-        date: ti.date,
-        time: (data.departureTime as string) ?? "",
-        departure: (data.departureCity ?? data.routeDeparture ?? depNorm) as string,
-        arrival: (data.arrivalCity ?? data.routeArrival ?? arrNorm) as string,
-        price: (data.price as number) ?? 0,
-        places: capacity,
-        remainingSeats: remaining,
-        agencyId: ti.agencyId,
-        companyId,
-        routeId: (data.routeId as string | null) ?? null,
-      });
-    }
+  // 4) Lister les instances pour toutes les dates en parallèle
+  const dateStrArray = [...dateStrSet];
+  const instancesByDate = await Promise.all(
+    dateStrArray.map((dateStr) =>
+      listTripInstancesByRouteAndDate(companyId, depNorm, arrNorm, dateStr)
+    )
+  );
+
+  // 5) Construire validTrips (remaining en parallèle si getRemaining fourni)
+  const allInstances = instancesByDate.flat();
+  const withRemaining =
+    getRemaining != null
+      ? await Promise.all(
+          allInstances.map(async (ti) => {
+            const data = ti as unknown as Record<string, unknown>;
+            const remaining = await getRemaining(companyId, ti.id, data);
+            return { ti, data, remaining };
+          })
+        )
+      : allInstances.map((ti) => {
+          const data = ti as unknown as Record<string, unknown>;
+          const capacity = (data.seatCapacity ?? data.capacitySeats ?? 30) as number;
+          const reserved = (data.reservedSeats ?? 0) as number;
+          return { ti, data, remaining: Math.max(0, capacity - reserved) };
+        });
+
+  const validTrips: ValidTrip[] = [];
+  for (const { ti, data, remaining } of withRemaining) {
+    if (data.status === "cancelled") continue;
+    if (remaining <= 0) continue;
+    const dateStr = ti.date;
+    if (dateStr === todayYMD && isPastTime(dateStr, (data.departureTime as string) ?? "00:00"))
+      continue;
+
+    const capacity = (data.seatCapacity ?? data.capacitySeats ?? 30) as number;
+    validTrips.push({
+      id: ti.id,
+      date: ti.date,
+      time: (data.departureTime as string) ?? "",
+      departure: (data.departureCity ?? data.routeDeparture ?? depNorm) as string,
+      arrival: (data.arrivalCity ?? data.routeArrival ?? arrNorm) as string,
+      price: (data.price as number) ?? 0,
+      places: capacity,
+      remainingSeats: remaining,
+      agencyId: ti.agencyId,
+      companyId,
+      routeId: (data.routeId as string | null) ?? null,
+    });
   }
 
   validTrips.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
   const dates = [...new Set(validTrips.map((t) => t.date))].sort();
 
-  console.log(
-    "validTrips (trajets réels):",
-    validTrips.length,
-    "dates dérivées:",
-    dates.length,
-    dates
-  );
+  if (import.meta.env?.DEV) {
+    console.log(
+      "validTrips (trajets réels):",
+      validTrips.length,
+      "dates dérivées:",
+      dates.length,
+      dates
+    );
+  }
   return { validTrips, dates };
 }

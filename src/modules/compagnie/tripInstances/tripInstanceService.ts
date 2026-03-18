@@ -357,3 +357,42 @@ export async function getTripInstance(
   if (!snap.exists()) return null;
   return { id: snap.id, ...snap.data() } as TripInstanceDocWithId;
 }
+
+/** List trip instances for a weekly trip (for lock checks). Single-field query, no composite index needed. */
+export async function listTripInstancesByWeeklyTripId(
+  companyId: string,
+  weeklyTripId: string,
+  options?: { limitCount?: number }
+): Promise<TripInstanceDocWithId[]> {
+  if (!weeklyTripId?.trim()) return [];
+  const limitCount = options?.limitCount ?? 2000;
+  const q = query(
+    tripInstancesRef(companyId),
+    where("weeklyTripId", "==", weeklyTripId.trim()),
+    limit(limitCount)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
+}
+
+/** Verrouillage métier weeklyTrip : indique si le trajet a des réservations et le max de places réservées (pour bloquer réduction en dessous). */
+export interface WeeklyTripLockStatus {
+  hasReservations: boolean;
+  maxReservedSeats: number;
+}
+
+export async function getWeeklyTripLockStatus(
+  companyId: string,
+  weeklyTripId: string
+): Promise<WeeklyTripLockStatus> {
+  const instances = await listTripInstancesByWeeklyTripId(companyId, weeklyTripId);
+  let maxReservedSeats = 0;
+  for (const ti of instances) {
+    const r = (ti as { reservedSeats?: number }).reservedSeats ?? 0;
+    if (r > 0) maxReservedSeats = Math.max(maxReservedSeats, r);
+  }
+  return {
+    hasReservations: maxReservedSeats > 0,
+    maxReservedSeats,
+  };
+}

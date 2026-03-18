@@ -20,17 +20,17 @@ interface CompanyServicesProps {
 const SERVICES_MAP: Record<
   string,
   {
-    label: string;
+    labelKey: string;
     icon: React.ElementType;
   }
 > = {
-  wifi: { label: "Wi-Fi à bord", icon: Wifi },
-  climatisation: { label: "Bus climatisé", icon: Wind },
-  usb: { label: "Prise USB", icon: Zap },
-  boisson: { label: "Boisson offerte", icon: Coffee },
-  sieges_confort: { label: "Sièges confort", icon: Sofa },
-  tv: { label: "Écran / TV", icon: Tv },
-  eau_fraiche: { label: "Eau fraîche", icon: Snowflake },
+  wifi: { labelKey: "serviceWifi", icon: Wifi },
+  climatisation: { labelKey: "serviceClimatisation", icon: Wind },
+  usb: { labelKey: "serviceUsb", icon: Zap },
+  boisson: { labelKey: "serviceBoisson", icon: Coffee },
+  sieges_confort: { labelKey: "serviceSiegesConfort", icon: Sofa },
+  tv: { labelKey: "serviceTv", icon: Tv },
+  eau_fraiche: { labelKey: "serviceEauFraiche", icon: Snowflake },
 };
 
 const CompanyServices: React.FC<CompanyServicesProps> = ({
@@ -80,7 +80,7 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
             }}
           >
             {validServices.map((key) => {
-              const { icon: Icon, label } = SERVICES_MAP[key];
+              const { icon: Icon, labelKey } = SERVICES_MAP[key];
 
               return (
                 <div
@@ -101,9 +101,9 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
                     <Icon size={16} style={{ color: secondaryColor }} />
                   </div>
 
-                  {/* Texte */}
+                  {/* Texte (traduit selon la langue) */}
                   <span className="text-sm font-medium text-gray-800">
-                    {label}
+                    {t(labelKey)}
                   </span>
                 </div>
               );

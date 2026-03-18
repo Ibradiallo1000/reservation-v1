@@ -32,6 +32,7 @@ import {
   type CashTransferMethod,
 } from "./cashTypes";
 import { updateDoc } from "firebase/firestore";
+import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 
 function cashTransactionsRef(companyId: string) {
   return collection(db, "companies", companyId, CASH_TRANSACTIONS_COLLECTION);
@@ -60,15 +61,18 @@ export interface CreateCashTransactionParams {
   locationId: string;
   routeId?: string | null;
   createdBy: string;
-  /** Date du jour (YYYY-MM-DD). Si omis, utilise aujourd'hui. */
+  /** Date réelle d'encaissement (YYYY-MM-DD). Source de vérité pour les encaissements. Si omis, utilise aujourd'hui (Bamako). */
+  paidAt?: string;
+  /** @deprecated Utiliser paidAt. Conservé pour rétrocompat. */
   date?: string;
 }
 
 /**
  * Crée une entrée de caisse (chaque réservation confirmée génère une cashTransaction).
+ * paidAt = date réelle d'encaissement (vente). Ne pas utiliser la date du trajet.
  */
 export async function createCashTransaction(params: CreateCashTransactionParams): Promise<string> {
-  const date = params.date ?? new Date().toISOString().split("T")[0];
+  const paidAt = params.paidAt ?? params.date ?? getTodayBamako();
   const ref = cashTransactionsRef(params.companyId);
   const docRef = await addDoc(ref, {
     reservationId: params.reservationId,
@@ -80,7 +84,8 @@ export async function createCashTransaction(params: CreateCashTransactionParams)
     locationId: params.locationId,
     routeId: params.routeId ?? null,
     createdBy: params.createdBy,
-    date,
+    date: paidAt,
+    paidAt,
     status: CASH_TRANSACTION_STATUS.PAID,
     createdAt: serverTimestamp(),
   });
@@ -88,14 +93,30 @@ export async function createCashTransaction(params: CreateCashTransactionParams)
 }
 
 /**
- * Marque une cashTransaction comme remboursée (lors d'un remboursement).
+ * Marque une cashTransaction comme remboursée (lors d'un remboursement ou annulation).
+ * À appeler systématiquement lorsqu'une réservation est annulée et possède un cashTransactionId.
  */
 export async function markCashTransactionRefunded(
   companyId: string,
   transactionId: string
 ): Promise<void> {
   const ref = doc(db, "companies", companyId, CASH_TRANSACTIONS_COLLECTION, transactionId);
-  await updateDoc(ref, { status: CASH_TRANSACTION_STATUS.REFUNDED });
+  await updateDoc(ref, {
+    status: CASH_TRANSACTION_STATUS.REFUNDED,
+    refundedAt: serverTimestamp(),
+  });
+}
+
+/**
+ * Marque une cashTransaction comme orpheline (réservation absente ou invalide).
+ * Les transactions orphelines ne sont pas incluses dans les encaissements principaux.
+ */
+export async function markCashTransactionOrphan(
+  companyId: string,
+  transactionId: string
+): Promise<void> {
+  const ref = doc(db, "companies", companyId, CASH_TRANSACTIONS_COLLECTION, transactionId);
+  await updateDoc(ref, { status: CASH_TRANSACTION_STATUS.ORPHAN });
 }
 
 /**
@@ -209,7 +230,8 @@ export async function getCashTransactionsByDate(
 }
 
 /**
- * Transactions de caisse sur une plage de dates (pour CA et billets période).
+ * Transactions de caisse sur une plage de dates (champ "date" — rétrocompat).
+ * Pour les encaissements par période, privilégier getCashTransactionsByPaidAtRange.
  * Requiert index : cashTransactions (date ASC).
  */
 export async function getCashTransactionsByDateRange(
@@ -223,6 +245,29 @@ export async function getCashTransactionsByDateRange(
     where("date", ">=", dateFrom),
     where("date", "<=", dateTo),
     orderBy("date", "asc"),
+    limit(5000)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CashTransactionDocWithId));
+}
+
+/**
+ * Transactions de caisse par date réelle d'encaissement (paidAt).
+ * Source de vérité pour les encaissements par période. Les documents sans paidAt
+ * (données anciennes) ne sont pas retournés — exécuter la migration de backfill si besoin.
+ * Requiert index : cashTransactions (paidAt ASC).
+ */
+export async function getCashTransactionsByPaidAtRange(
+  companyId: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<CashTransactionDocWithId[]> {
+  const ref = cashTransactionsRef(companyId);
+  const q = query(
+    ref,
+    where("paidAt", ">=", dateFrom),
+    where("paidAt", "<=", dateTo),
+    orderBy("paidAt", "asc"),
     limit(5000)
   );
   const snap = await getDocs(q);

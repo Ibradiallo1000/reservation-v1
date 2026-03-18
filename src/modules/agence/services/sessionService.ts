@@ -526,6 +526,42 @@ export async function validateSessionByHeadAccountant(params: {
       });
     }
   });
+
+  await setValidatedAtOnShiftReservations({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    shiftId: params.shiftId,
+    validatedAt: Timestamp.now(),
+  });
+}
+
+/**
+ * Met à jour validatedAt sur les réservations vendues de la session (source de vérité pour revenus validés).
+ */
+async function setValidatedAtOnShiftReservations(params: {
+  companyId: string;
+  agencyId: string;
+  shiftId: string;
+  validatedAt: Timestamp;
+}): Promise<void> {
+  const base = `companies/${params.companyId}/agences/${params.agencyId}`;
+  const reservationsRef = collection(db, base, RESERVATIONS_COLLECTION);
+  const q = query(
+    reservationsRef,
+    where('createdInSessionId', '==', params.shiftId),
+    limit(500)
+  );
+  const snap = await getDocs(q);
+  const sold = ['paye', 'confirme', 'payé', 'confirmé'];
+  const toUpdate = snap.docs.filter((d) => {
+    const statut = String((d.data() as { statut?: string }).statut ?? '').toLowerCase();
+    return sold.some((s) => statut === s || statut.includes(s));
+  });
+  await Promise.all(
+    toUpdate.map((d) =>
+      updateDoc(d.ref, { validatedAt: params.validatedAt, updatedAt: serverTimestamp() })
+    )
+  );
 }
 
 /**

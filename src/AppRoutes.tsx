@@ -255,6 +255,13 @@ function SubdomainAwareHome() {
   return isSub ? <RouteResolver /> : <HomePage />;
 }
 
+/** Sur sous-domaine, /a-propos (et autres chemins à un segment) doit rendre RouteResolver. Sinon redirection. */
+function SubdomainOnlyRouteResolver() {
+  const isSub = typeof window !== "undefined" && isPublicSubdomain();
+  if (!isSub) return <Navigate to="/" replace />;
+  return <RouteResolver />;
+}
+
 const AppRoutes = () => {
   const { loading } = useAuth();
   const { pathname } = useLocation();
@@ -270,6 +277,9 @@ const AppRoutes = () => {
 
         {/* "/" : sous-domaine → RouteResolver (slug depuis l'hôte), sinon HomePage */}
         <Route path="/" element={<Suspense fallback={null}><SubdomainAwareHome /></Suspense>} />
+
+        {/* Sous-domaine : /a-propos (voir plus) sans préfixe slug → RouteResolver */}
+        <Route path="/a-propos" element={<Suspense fallback={null}><SubdomainOnlyRouteResolver /></Suspense>} />
 
         {/* Role-based landing (used by PrivateRoute redirects) */}
         <Route path="/role-landing" element={<RoleLanding />} />

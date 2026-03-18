@@ -12,9 +12,13 @@ interface CompanyAboutPageProps {
 export default function CompanyAboutPage({ company }: CompanyAboutPageProps) {
   const { slug } = useParams<{ slug?: string }>();
   const navigate = useNavigate();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isEn = i18n.language?.startsWith("en") ?? false;
 
   const about = company?.about;
+  const aboutDescription = isEn && about?.descriptionEn?.trim()
+    ? about.descriptionEn.trim()
+    : about?.description?.trim();
   const primaryColor = company?.couleurPrimaire ?? "#3B82F6";
   const secondaryColor = company?.couleurSecondaire ?? "#10B981";
 
@@ -86,9 +90,9 @@ export default function CompanyAboutPage({ company }: CompanyAboutPageProps) {
                 </h2>
               </div>
 
-              {about?.description?.trim() && (
+              {aboutDescription && (
                 <p className="text-gray-700 text-sm sm:text-base leading-relaxed max-w-2xl mx-auto">
-                  {about.description.trim()}
+                  {aboutDescription}
                 </p>
               )}
             </div>

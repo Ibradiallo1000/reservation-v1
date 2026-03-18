@@ -414,11 +414,21 @@ const AgenceGuichetPage: React.FC = () => {
         const instances = await listTripInstancesByRouteIdAndDate(user.companyId, escaleContext.routeId, dateISO);
         const remainingMap: Record<string, number> = {};
         const stopOrder = escaleContext.stopOrder;
+        const capacityFallbackEscale = (ti: { seatCapacity?: number; capacitySeats?: number; reservedSeats?: number }) =>
+          Math.max(0, ((ti as any).seatCapacity ?? (ti as any).capacitySeats ?? 0) - ((ti as any).reservedSeats ?? 0));
         await Promise.all(
           instances.map(async (ti) => {
             if ((ti as { status?: string }).status === "cancelled") return;
-            const r = await getRemainingStopQuota(user.companyId, ti.id, stopOrder);
-            remainingMap[ti.id] = r;
+            try {
+              const r = await getRemainingStopQuota(user.companyId, ti.id, stopOrder);
+              remainingMap[ti.id] = r;
+            } catch (e: unknown) {
+              if (e && typeof e === "object" && "code" in e && (e as { code?: string }).code === "permission-denied") {
+                remainingMap[ti.id] = capacityFallbackEscale(ti);
+              } else {
+                throw e;
+              }
+            }
           })
         );
         for (const ti of instances) {
@@ -456,60 +466,65 @@ const AgenceGuichetPage: React.FC = () => {
     if (!dep || !arr || !user?.agencyId) return;
     const depNorm = dep.trim().toLowerCase();
     const arrNorm = arr.trim().toLowerCase();
-    const out: Trip[] = [];
     const now = new Date();
-    for (let i = 0; i < DAYS_IN_ADVANCE; i++) {
+
+    // 1) Charger weeklyTrips une seule fois (réutilisé pour tous les jours)
+    let weekly: WeeklyTrip[] = [];
+    try {
+      const weeklyRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
+      const weeklySnap = await getDocs(query(weeklyRef, where("active", "==", true)));
+      weekly = weeklySnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as WeeklyTrip[];
+    } catch (weeklyErr: unknown) {
+      if (weeklyErr && typeof weeklyErr === "object" && "code" in weeklyErr && (weeklyErr as { code?: string }).code === "permission-denied") {
+        weekly = [];
+      } else {
+        throw weeklyErr;
+      }
+    }
+
+    // 2) Traiter tous les jours en parallèle (au lieu de 8 appels séquentiels)
+    const dayPromises = Array.from({ length: DAYS_IN_ADVANCE }, async (_, i) => {
       const d = new Date(now); d.setDate(now.getDate() + i);
       const dateISO = d.toISOString().split("T")[0];
       const dayName = d.toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
       let instances = await listTripInstancesByRouteAndDate(user.companyId, dep, arr, dateISO);
-      if (instances.length === 0) {
-        const weeklyRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
-        const weeklySnap = await getDocs(query(weeklyRef, where("active", "==", true)));
-        const weekly = weeklySnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as WeeklyTrip[];
+      if (instances.length === 0 && weekly.length > 0) {
+        const slots: Array<{ w: WeeklyTrip; h: string }> = [];
         for (const w of weekly) {
           const wDep = (w.departure ?? w.departureCity ?? "").trim().toLowerCase();
           const wArr = (w.arrival ?? w.arrivalCity ?? "").trim().toLowerCase();
           if (!w.active || wDep !== depNorm || wArr !== arrNorm || wDep === wArr) continue;
           const horaires = w.horaires?.[dayName] || [];
-          for (const h of horaires) {
-            await getOrCreateTripInstanceForSlot(user.companyId, {
-              agencyId: user.agencyId,
-              departureCity: dep.trim(),
-              arrivalCity: arr.trim(),
-              date: dateISO,
-              departureTime: h,
-              seatCapacity: w.places || MAX_SEATS_FALLBACK,
-              price: w.price ?? 0,
-              weeklyTripId: w.id,
-            });
-          }
+          for (const h of horaires) slots.push({ w, h });
         }
+        await Promise.all(slots.map(({ w, h }) =>
+          getOrCreateTripInstanceForSlot(user.companyId, {
+            agencyId: user.agencyId,
+            departureCity: dep.trim(),
+            arrivalCity: arr.trim(),
+            date: dateISO,
+            departureTime: h,
+            seatCapacity: w.places || MAX_SEATS_FALLBACK,
+            price: w.price ?? 0,
+            weeklyTripId: w.id,
+          })
+        ));
         instances = await listTripInstancesByRouteAndDate(user.companyId, dep, arr, dateISO);
       }
-      const remainingMap: Record<string, number> = {};
-      await Promise.all(
-        instances.map(async (ti) => {
-          if ((ti as any).routeId) {
-            const r = await getRemainingSeats(user.companyId, ti.id);
-            remainingMap[ti.id] = r;
-          }
-        })
-      );
+      // Guichet : pas d'appel getRemainingSeats (lent) — on utilise capacity - reservedSeats
+      const dayOut: Trip[] = [];
       for (const ti of instances) {
         if (ti.agencyId !== user.agencyId) continue;
         if ((ti as { status?: string }).status === "cancelled") continue;
         const capacity = (ti as any).seatCapacity ?? (ti as any).capacitySeats ?? MAX_SEATS_FALLBACK;
         const reserved = (ti as any).reservedSeats ?? 0;
-        const remaining = (ti as any).routeId && remainingMap[ti.id] !== undefined
-          ? remainingMap[ti.id]
-          : capacity - reserved;
+        const remaining = Math.max(0, capacity - reserved);
         if (remaining <= 0) continue;
         if (dateISO === now.toISOString().split("T")[0] && isPastTime(dateISO, (ti as any).departureTime)) continue;
         const tripDep = (ti as any).departureCity ?? (ti as any).routeDeparture ?? dep;
         const tripArr = (ti as any).arrivalCity ?? (ti as any).routeArrival ?? arr;
         if ((tripDep || "").trim().toLowerCase() === (tripArr || "").trim().toLowerCase()) continue;
-        out.push({
+        dayOut.push({
           id: ti.id,
           date: ti.date,
           time: (ti as any).departureTime,
@@ -520,7 +535,11 @@ const AgenceGuichetPage: React.FC = () => {
           remainingSeats: remaining,
         });
       }
-    }
+      return dayOut;
+    });
+
+    const dayResults = await Promise.all(dayPromises);
+    const out = dayResults.flat();
     out.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
     const future = out.filter((t) => !isPastTime(t.date, t.time));
     setTrips(future);

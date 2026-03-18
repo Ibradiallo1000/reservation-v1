@@ -16,7 +16,8 @@ interface FooterProps {
 
 const Footer: React.FC<FooterProps> = ({ company }) => {
   const [showAvisForm, setShowAvisForm] = useState(false);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isEn = i18n.language?.startsWith("en") ?? false;
   const currentYear = new Date().getFullYear();
 
   const {
@@ -76,7 +77,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
             </div>
             <p className="text-sm text-gray-300 leading-relaxed">
               {(() => {
-                const raw = about?.description?.trim() ?? '';
+                const raw = (isEn && about?.descriptionEn?.trim() ? about.descriptionEn.trim() : about?.description?.trim()) ?? '';
                 if (!raw) return t('defaultAbout');
                 if (raw.length <= 150) return raw;
                 return `${raw.slice(0, 150).trim()}…`;

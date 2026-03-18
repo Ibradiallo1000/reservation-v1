@@ -274,7 +274,8 @@ service cloud.firestore {
         }
 
         match /weeklyTrips/{tripId} {
-          allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId);
+          allow get, list: if request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId)
+            || (getUserAgencyId() != '' && agencyId == getUserAgencyId());
           allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             getUserRole() == 'admin_compagnie' ||
             getUserRole() == 'admin_platforme' ||
@@ -706,9 +707,14 @@ service cloud.firestore {
       allow get, list: if true;
     }
 
-    /* Collection group reservations : lecture uniquement pour utilisateurs authentifiés (même compagnie ou admin). Pas d'accès public (billet = publicReservations + token). */
+    /* Collection group reservations : lecture pour admin, même compagnie (companyId/compagnieId), ou même agence (guichetier, chefAgence, etc.). */
     match /{path=**}/reservations/{reservationId} {
-      allow get, list: if isAuth() && (getUserRole() == 'admin_platforme' || resource.data.get('companyId', '') == userCompanyId());
+      allow get, list: if isAuth() && (
+        getUserRole() == 'admin_platforme'
+        || resource.data.get('companyId', '') == userCompanyId()
+        || resource.data.get('compagnieId', '') == userCompanyId()
+        || (getUserAgencyId() != '' && resource.data.get('agencyId', '') == getUserAgencyId())
+      );
     }
 
     /* Collection group dailyStats (e.g. CompanyFinancesPage). CEO / platform: same-tenant by document companyId. */

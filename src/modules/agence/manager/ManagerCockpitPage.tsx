@@ -13,14 +13,15 @@ import { fr } from "date-fns/locale";
 import { listAccounts, ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import {
   Banknote, Ticket, Gauge, Wallet, Bus,
-  AlertTriangle, CheckCircle2, Clock, Monitor, Package,
+  CheckCircle2, Clock, Monitor, Package,
 } from "lucide-react";
 import { DateFilterBar } from "./DateFilterBar";
 import {
-  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, AlertMessage, ActionButton, table, tableRowClassName, typography,
+  StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, ActionButton, table, tableRowClassName, typography,
 } from "@/ui";
 import { useDateFilterContext } from "./DateFilterContext";
 import { useManagerAlerts } from "./useManagerAlerts";
+import { buildManagerDecisions, type DecisionEngineResult } from "@/modules/compagnie/commandCenter/decisionEngine";
 import type { DailyStatsDoc, AgencyLiveStateDoc } from "../aggregates/types";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import { getAgencyStats } from "@/modules/compagnie/networkStats/networkStatsService";
@@ -63,7 +64,7 @@ export default function ManagerCockpitPage() {
   const navigate = useNavigate();
 
   const dateFilter = useDateFilterContext();
-  const { alerts: managerAlerts } = useManagerAlerts();
+  const { alerts: managerAlerts, cashVariance } = useManagerAlerts();
 
   const [dailyStats, setDailyStats] = useState<DailyStatsDoc | null>(null);
   const [liveState, setLiveState] = useState<AgencyLiveStateDoc | null>(null);
@@ -265,13 +266,61 @@ export default function ManagerCockpitPage() {
     [shifts, reservationsToday, liveStatsByShift]
   );
 
-  const alertItems = useMemo(() =>
-    managerAlerts.filter((a) => a.module === "dashboard" || a.module === "finances" || a.module === "operations")
-      .map((a) => ({
-        severity: (a.severity === "critical" ? "red" : a.severity === "warning" ? "yellow" : "green") as "red" | "yellow" | "green",
-        message: `${a.title} — ${a.description}`,
+  const delayThresholdMin = (company as any)?.delayThresholdMinutes ?? 30;
+  const delayedDeparturesCount = useMemo(() => {
+    const now = Date.now();
+    return departures.filter((d) => {
+      if (d.closed) return false;
+      const [h, m] = d.heure.split(":").map(Number);
+      const scheduled = new Date();
+      scheduled.setHours(h || 0, m || 0, 0, 0);
+      return now > scheduled.getTime() + delayThresholdMin * 60_000;
+    }).length;
+  }, [departures, delayThresholdMin]);
+  const lowFillDeparturesCount = useMemo(
+    () => departures.filter((d) => !d.closed && d.capacity > 0 && Math.round((d.embarked / d.capacity) * 100) < 30).length,
+    [departures]
+  );
+  const fullSlotsCount = useMemo(
+    () => departures.filter((d) => d.capacity > 0 && Math.round((d.embarked / d.capacity) * 100) >= 80).length,
+    [departures]
+  );
+
+  const managerDecisions = useMemo((): DecisionEngineResult => {
+    return buildManagerDecisions({
+      revenue: filteredRevenue,
+      tickets: filteredTickets,
+      fillRatePct: avgOccupancy,
+      cashPosition,
+      cashVariance,
+      alerts: managerAlerts.map((a) => ({
+        id: a.id,
+        severity: a.severity,
+        title: a.title,
+        description: a.description,
+        link: a.link,
       })),
-  [managerAlerts]);
+      delayedDeparturesCount,
+      lowFillDeparturesCount,
+      pendingComptaCount: closedPending.length,
+      pendingChefApprovalCount: validatedByCompta.length,
+      fullSlotsCount,
+      totalSlotsCount: departures.length,
+    });
+  }, [
+    filteredRevenue,
+    filteredTickets,
+    avgOccupancy,
+    cashPosition,
+    cashVariance,
+    managerAlerts,
+    delayedDeparturesCount,
+    lowFillDeparturesCount,
+    closedPending.length,
+    validatedByCompta.length,
+    fullSlotsCount,
+    departures.length,
+  ]);
 
   if (loading) return <StandardLayoutWrapper><p className={typography.muted}>Chargement du cockpit…</p></StandardLayoutWrapper>;
 
@@ -289,16 +338,128 @@ export default function ManagerCockpitPage() {
         }
       />
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-        <MetricCard label="CA période" value={money(filteredRevenue)} icon={Banknote} valueColorVar="#059669" />
-        <MetricCard label="Billets période" value={filteredTickets} icon={Ticket} valueColorVar="#1d4ed8" />
-        <MetricCard label="Taux de remplissage" value={`${avgOccupancy}%`} icon={Gauge} valueColorVar="#7c3aed" />
-        <MetricCard label="Trésorerie agence" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
-        <MetricCard label="Colis créés (jour)" value={courierTodayCount} icon={Package} valueColorVar="#c2410c" />
-        <MetricCard label="Colis en transit" value={courierInTransitCount} icon={Package} valueColorVar="#0f766e" />
-        <MetricCard label="Départs restants" value={departuresRemaining} icon={Bus} valueColorVar="#c2410c" />
+      {/* 1. SITUATION ACTUELLE */}
+      <div
+        className={[
+          "rounded-xl border-2 p-4 flex flex-wrap items-center justify-between gap-4",
+          managerDecisions.status === "CRITIQUE" && "border-red-600 bg-red-50 dark:bg-red-950/30 dark:border-red-500",
+          managerDecisions.status === "SURVEILLANCE" && "border-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-500",
+          managerDecisions.status === "BON" && "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-500",
+        ].filter(Boolean).join(" ")}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-2xl" aria-hidden>
+            {managerDecisions.status === "CRITIQUE" ? "🔴" : managerDecisions.status === "SURVEILLANCE" ? "🟠" : "🟢"}
+          </span>
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Situation actuelle</h2>
+            <ul className="text-sm text-gray-600 dark:text-slate-400 mt-1 list-disc list-inside space-y-0.5">
+              {managerDecisions.summary.slice(0, 3).map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+        <div className="text-lg font-bold text-gray-900 dark:text-white">
+          {managerDecisions.status === "CRITIQUE" ? "CRITIQUE" : managerDecisions.status === "SURVEILLANCE" ? "SURVEILLANCE" : "BON"}
+        </div>
       </div>
-      <p className="text-xs text-gray-500 mt-1 mb-2">CA et billets : source réseau TELIYA (réservations confirme/paye, en ligne + guichet). Les lignes « Guichets actifs » ci-dessous restent basées sur les sessions guichet.</p>
+
+      {/* 2. PROBLÈMES PRIORITAIRES — Score, conséquences, options */}
+      {managerDecisions.problems.length > 0 && (
+        <div className="rounded-lg border-2 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/20 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-200">Problèmes prioritaires (triés par score de décision)</h3>
+          <ul className="space-y-3">
+            {managerDecisions.problems.map((p) => (
+              <li key={p.id} className="rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-800 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <span className="inline-flex items-center rounded-md bg-amber-100 dark:bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200">
+                    Score {p.score.toLocaleString("fr-FR")}
+                  </span>
+                  <span className={`text-xs font-medium ${p.level === "danger" ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}>
+                    {p.level === "danger" ? "Danger" : "Attention"}
+                  </span>
+                </div>
+                <h4 className="font-semibold text-gray-900 dark:text-white mt-1">{p.title}</h4>
+                <p className="text-sm text-gray-600 dark:text-slate-400 mt-1"><strong>Cause :</strong> {p.cause}</p>
+                <p className="text-sm text-gray-700 dark:text-slate-300 mt-0.5"><strong>Impact :</strong> {p.impact}</p>
+                <div className="mt-2 rounded bg-slate-50 dark:bg-slate-800/50 p-2 text-xs">
+                  <p className="text-emerald-700 dark:text-emerald-400"><strong>Si vous agissez :</strong> {p.consequences.ifAction}</p>
+                  <p className="text-red-700 dark:text-red-400 mt-1"><strong>Si vous ne faites rien :</strong> {p.consequences.ifNoAction}</p>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600 dark:text-slate-400">
+                  <span><strong>Demain :</strong> {p.projection.nextDay.toLocaleString("fr-FR")} FCFA</span>
+                  <span><strong>7 jours :</strong> {p.projection.nextWeek.toLocaleString("fr-FR")} FCFA</span>
+                </div>
+                <p className="text-xs font-medium text-gray-600 dark:text-slate-400 mt-2 mb-1">Options :</p>
+                <ul className="space-y-1">
+                  {p.options.map((opt, idx) => (
+                    <li key={idx} className={`flex flex-wrap items-center gap-2 text-sm ${idx === p.recommendedOptionIndex ? "rounded-md bg-blue-50 dark:bg-blue-900/30 p-2 border border-blue-200 dark:border-blue-700" : ""}`}>
+                      {idx === p.recommendedOptionIndex && (
+                        <span className="inline-flex items-center rounded bg-blue-600 px-1.5 py-0.5 text-xs font-medium text-white">Recommandé</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => navigate(p.actionRoute)}
+                        className="text-left text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                      >
+                        {opt.label}
+                      </button>
+                      <span className="text-gray-500 dark:text-slate-500">
+                        {opt.estimatedImpact >= 0 ? "+" : ""}{opt.estimatedImpact.toLocaleString("fr-FR")} FCFA
+                      </span>
+                      <span className={`text-xs ${opt.risk === "low" ? "text-emerald-600" : opt.risk === "medium" ? "text-amber-600" : "text-red-600"}`}>
+                        risque {opt.risk === "low" ? "faible" : opt.risk === "medium" ? "moyen" : "élevé"}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-slate-500">
+                        · effort {opt.effort === "low" ? "rapide" : opt.effort === "medium" ? "coordination" : "structurel"}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-slate-500">
+                        · effet {opt.timeToImpact === "immediate" ? "aujourd'hui" : opt.timeToImpact === "short" ? "1–3 j" : "semaine"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 3. OPPORTUNITÉS */}
+      {managerDecisions.opportunities.length > 0 && (
+        <div className="rounded-lg border-2 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/20 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">Opportunités</h3>
+          <ul className="space-y-2">
+            {managerDecisions.opportunities.map((o) => (
+              <li key={o.id} className="flex flex-wrap items-baseline gap-2 text-sm">
+                <span className="font-medium text-gray-900 dark:text-white">{o.titre}</span>
+                <span className="text-emerald-700 dark:text-emerald-300">— {o.preuve}</span>
+                <span className="text-gray-600 dark:text-slate-400">→ {o.actionSuggeree}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 4. À FAIRE MAINTENANT */}
+      {managerDecisions.actions.length > 0 && (
+        <div className="rounded-lg border-2 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/20 p-4">
+          <h3 className="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-2">À faire maintenant</h3>
+          <div className="flex flex-wrap gap-2">
+            {managerDecisions.actions.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => navigate(a.route)}
+                className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <SectionCard title="Actions manager">
         <div className="flex flex-wrap gap-2">
@@ -309,11 +470,12 @@ export default function ManagerCockpitPage() {
         </div>
       </SectionCard>
 
+      {/* Guichets actifs — tableau unique (fusion tableau + détail) */}
       <SectionCard title="Guichets actifs — surveillance en temps réel" icon={Monitor}
         right={<StatusBadge status="success">{activeCounters.length} actif{activeCounters.length > 1 ? "s" : ""}</StatusBadge>}
         noPad>
         <div className="px-4 pt-3 pb-1">
-          <p className="text-xs text-gray-500">Même vue que le comptable : total agence (en ligne + guichet) puis détail par poste de vente.</p>
+          <p className="text-xs text-gray-500">Total agence (en ligne + guichet) puis détail par poste. Même source que le comptable.</p>
         </div>
         {activeCounters.length === 0 && filteredTickets === 0 && filteredRevenue === 0 ? (
           <EmptyState message="Aucun guichet actif et aucune vente sur la période." />
@@ -350,38 +512,6 @@ export default function ManagerCockpitPage() {
           </div>
         )}
       </SectionCard>
-
-      {activeCounters.length > 0 && (
-        <SectionCard title="Postes actifs en temps réel (détail par session)">
-          <p className="text-xs text-gray-500 mb-2">Ventes liées à chaque poste guichet ouvert. Le total agence (en ligne + guichet) est affiché dans le tableau ci-dessus.</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {activeCounters.map((c) => (
-              <div key={`card_${c.id}`} className="rounded-lg border border-gray-200 bg-white p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-semibold text-gray-900 truncate">{c.name}</div>
-                  {c.status === "active" ? (
-                    <StatusBadge status="active">Actif</StatusBadge>
-                  ) : (
-                    <StatusBadge status="pending">Pause</StatusBadge>
-                  )}
-                </div>
-                <div className="mt-2 text-xs text-gray-600">Billets (session): {c.tickets}</div>
-                <div className="text-sm font-medium text-gray-800">Revenu (session): {money(c.revenue)}</div>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      )}
-
-      {alertItems.length > 0 && (
-        <SectionCard title="Alertes" icon={AlertTriangle}>
-          <div className="space-y-2">
-            {alertItems.slice(0, 10).map((a, i) => (
-              <AlertMessage key={i} severity={a.severity} message={a.message} />
-            ))}
-          </div>
-        </SectionCard>
-      )}
 
       {canActivateShifts && (
         <SectionCard title="Postes en attente d'activation" icon={Clock} noPad>
@@ -462,6 +592,18 @@ export default function ManagerCockpitPage() {
           </div>
         )}
       </SectionCard>
+
+      {/* KPI secondaires — détail */}
+      <p className="text-xs text-gray-500 mt-4 mb-2">Indicateurs détaillés — CA et billets : source réseau TELIYA (réservations confirmées/payées).</p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 opacity-95">
+        <MetricCard label="CA période" value={money(filteredRevenue)} icon={Banknote} valueColorVar="#059669" />
+        <MetricCard label="Billets période" value={filteredTickets} icon={Ticket} valueColorVar="#1d4ed8" />
+        <MetricCard label="Taux de remplissage" value={`${avgOccupancy}%`} icon={Gauge} valueColorVar="#7c3aed" />
+        <MetricCard label="Trésorerie agence" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
+        <MetricCard label="Colis créés (jour)" value={courierTodayCount} icon={Package} valueColorVar="#c2410c" />
+        <MetricCard label="Colis en transit" value={courierInTransitCount} icon={Package} valueColorVar="#0f766e" />
+        <MetricCard label="Départs restants" value={departuresRemaining} icon={Bus} valueColorVar="#c2410c" />
+      </div>
     </StandardLayoutWrapper>
   );
 }

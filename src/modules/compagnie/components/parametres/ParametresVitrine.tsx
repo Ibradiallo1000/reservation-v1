@@ -118,6 +118,7 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
     const aboutRaw = companyData.about ?? {};
     const aboutClean: Record<string, unknown> = {};
     if (aboutRaw.description !== undefined && aboutRaw.description !== "") aboutClean.description = aboutRaw.description;
+    if (aboutRaw.descriptionEn !== undefined && aboutRaw.descriptionEn !== "") aboutClean.descriptionEn = aboutRaw.descriptionEn;
     if (aboutRaw.yearsExperience !== undefined && aboutRaw.yearsExperience !== null) aboutClean.yearsExperience = aboutRaw.yearsExperience;
     if (aboutRaw.destinationsCount !== undefined && aboutRaw.destinationsCount !== null) aboutClean.destinationsCount = aboutRaw.destinationsCount;
     if (aboutRaw.satisfactionRate !== undefined && aboutRaw.satisfactionRate !== null) aboutClean.satisfactionRate = aboutRaw.satisfactionRate;
@@ -221,6 +222,28 @@ const ParametresVitrine: React.FC<ParametresVitrineProps> = ({
               />
               <span className="text-xs text-gray-500">
                 {(companyData.about?.description?.length ?? 0)} / 1000
+              </span>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Présentation publique (EN)</label>
+              <textarea
+                placeholder="Description affichée en anglais sur la page publique"
+                value={companyData.about?.descriptionEn ?? ""}
+                onChange={(e) =>
+                  setCompanyData({
+                    ...companyData,
+                    about: {
+                      ...(companyData.about ?? {}),
+                      descriptionEn: e.target.value.slice(0, 1000),
+                    },
+                  })
+                }
+                maxLength={1000}
+                rows={4}
+                className="w-full border border-gray-200 rounded-lg px-4 py-2 resize-y"
+              />
+              <span className="text-xs text-gray-500">
+                {(companyData.about?.descriptionEn?.length ?? 0)} / 1000
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

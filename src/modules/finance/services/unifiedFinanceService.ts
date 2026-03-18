@@ -1,16 +1,22 @@
 /**
  * Service financier unifié TELIYA — 3 niveaux : temps réel (live), encaissements (cash), revenus validés (validated).
- * Source unique pour les dashboards CEO, Compagnie et Agence. Ne supprime pas dailyStats (conservé pour comptabilité / historique).
- * Alignement dates : getStartOfDayInBamako / getEndOfDayInBamako (Africa/Bamako) comme CEO et networkStatsService.
+ * Source de vérité : Ventes → reservations (createdAt), Encaissements → cashTransactions (paidAt, liées à réservation),
+ * Revenus validés → reservations (validatedAt). dailyStats = vue dérivée (conservée pour historique).
  */
 
 import { collectionGroup, query, where, getDocs, orderBy, limit, Timestamp } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
 import { isSoldReservation } from "@/modules/compagnie/networkStats/networkStatsService";
-import { getCashTransactionsByDateRange } from "@/modules/compagnie/cash/cashService";
+import { getCashTransactionsByPaidAtRange, getCashTransactionsByDateRange } from "@/modules/compagnie/cash/cashService";
 import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
+import {
+  getTotalSales,
+  getTotalCash,
+  getValidatedRevenue,
+  type FinancialPeriod,
+} from "./financialConsistencyService";
 
 const PAID_PAYMENT_STATUSES = ["PAID_ORIGIN", "PAID_DESTINATION"];
 
@@ -30,7 +36,10 @@ export interface UnifiedAgencyFinance {
     totalRevenue: number;
   };
   cash: {
+    /** Encaissements (transactions paid liées à une réservation valide). */
     total: number;
+    /** Montant des transactions orphelines (non inclus dans total). */
+    orphanAmount?: number;
   };
   validated: {
     totalRevenue: number;
@@ -43,9 +52,9 @@ export interface UnifiedAgencyFinance {
 
 /**
  * Calcule les 3 niveaux financiers pour une agence sur une plage de dates.
- * - live : reservations (isSoldReservation) + shipments payés (transportFee + insuranceAmount)
- * - cash : cashTransactions status === "paid"
- * - validated : dailyStats (ticketRevenue + courierRevenue)
+ * - live : reservations (createdAt, isSoldReservation) + shipments payés
+ * - cash : cashTransactions paidAt, status paid, liées à une réservation valide (hors orphelines)
+ * - validated : reservations (validatedAt) + dailyStats courier (dérivé)
  */
 export async function getUnifiedAgencyFinance(
   companyId: string,
@@ -53,23 +62,16 @@ export async function getUnifiedAgencyFinance(
   dateFrom: string,
   dateTo: string
 ): Promise<UnifiedAgencyFinance> {
+  const period: FinancialPeriod = { dateFrom, dateTo };
   const periodStart = getStartOfDayInBamako(dateFrom);
   const periodEnd = getEndOfDayInBamako(dateTo);
   const startTs = Timestamp.fromDate(periodStart);
   const endTs = Timestamp.fromDate(periodEnd);
 
-  const [reservationsSnap, shipmentsSnap, cashTxList, dailyStatsSnap] = await Promise.all([
-    getDocs(
-      query(
-        collectionGroup(db, "reservations"),
-        where("companyId", "==", companyId),
-        where("agencyId", "==", agencyId),
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "asc"),
-        limit(5000)
-      )
-    ),
+  const [salesRes, cashRes, validatedRes, shipmentsSnap, dailyStatsSnap] = await Promise.all([
+    getTotalSales(companyId, period, agencyId),
+    getTotalCash(companyId, period, { agencyId, includeOrphans: false }),
+    getValidatedRevenue(companyId, period, agencyId),
     getDocs(
       query(
         shipmentsRef(db, companyId),
@@ -80,7 +82,6 @@ export async function getUnifiedAgencyFinance(
         limit(5000)
       )
     ),
-    getCashTransactionsByDateRange(companyId, dateFrom, dateTo),
     getDocs(
       query(
         collectionGroup(db, "dailyStats"),
@@ -93,17 +94,6 @@ export async function getUnifiedAgencyFinance(
     ),
   ]);
 
-  const reservations = reservationsSnap.docs.map((d) => {
-    const data = d.data();
-    return {
-      statut: (data.statut ?? data.status ?? "").toString(),
-      montant: Number(data.montant ?? data.amount ?? 0) || 0,
-    };
-  });
-  const soldReservations = reservations.filter((r) => isSoldReservation(r.statut));
-  const liveTickets = soldReservations.length;
-  const liveTicketsRevenue = soldReservations.reduce((sum, r) => sum + r.montant, 0);
-
   let liveCourierRevenue = 0;
   shipmentsSnap.docs.forEach((d) => {
     const s = d.data() as { paymentStatus?: string; transportFee?: number; insuranceAmount?: number };
@@ -112,37 +102,28 @@ export async function getUnifiedAgencyFinance(
     }
   });
 
-  const cashTotal = cashTxList
-    .filter(
-      (t) =>
-        (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID &&
-        ((t as { agencyId?: string }).agencyId === agencyId || t.locationId === agencyId)
-    )
-    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-
-  let validatedTotal = 0;
+  let validatedCourierFromStats = 0;
   let validatedAgencySum = 0;
   let validatedCompanySum = 0;
   dailyStatsSnap.docs.forEach((d) => {
     const data = d.data();
-    const ticket = Number(data.ticketRevenue ?? data.totalRevenue ?? 0);
-    const courier = Number(data.courierRevenue ?? 0);
-    validatedTotal += ticket + courier;
+    validatedCourierFromStats += Number(data.courierRevenue ?? 0);
     validatedAgencySum += Number(data.ticketRevenueAgency ?? 0) + Number(data.courierRevenueAgency ?? 0);
     validatedCompanySum += Number(data.ticketRevenueCompany ?? 0) + Number(data.courierRevenueCompany ?? 0);
   });
 
-  const liveTotalRevenue = liveTicketsRevenue + liveCourierRevenue;
+  const validatedTotal = validatedRes.total + validatedCourierFromStats;
+  const liveTotalRevenue = salesRes.total + liveCourierRevenue;
 
   const result: UnifiedAgencyFinance = {
     live: {
-      tickets: liveTickets,
+      tickets: salesRes.tickets,
       courier: liveCourierRevenue,
-      liveTicketsRevenue,
+      liveTicketsRevenue: salesRes.total,
       liveCourierRevenue,
       totalRevenue: liveTotalRevenue,
     },
-    cash: { total: cashTotal },
+    cash: { total: cashRes.total, orphanAmount: cashRes.orphanAmount },
     validated: {
       totalRevenue: validatedTotal,
       validatedAgency: validatedAgencySum,
@@ -152,7 +133,7 @@ export async function getUnifiedAgencyFinance(
 
   if (typeof console !== "undefined" && console.log) {
     console.log("[unifiedFinanceService] getUnifiedAgencyFinance", {
-      source: "reservations + shipments + cashTransactions + dailyStats",
+      source: "reservations + cashTransactions(paidAt) + validatedAt + dailyStats(courier)",
       companyId,
       agencyId,
       dateFrom,
@@ -168,28 +149,23 @@ export async function getUnifiedAgencyFinance(
 
 /**
  * Agrège les 3 niveaux financiers au niveau compagnie (toutes agences).
+ * Même logique de source de vérité : createdAt (ventes), paidAt (encaissements liés), validatedAt (validé).
  */
 export async function getUnifiedCompanyFinance(
   companyId: string,
   dateFrom: string,
   dateTo: string
 ): Promise<UnifiedAgencyFinance> {
+  const period: FinancialPeriod = { dateFrom, dateTo };
   const periodStart = getStartOfDayInBamako(dateFrom);
   const periodEnd = getEndOfDayInBamako(dateTo);
   const startTs = Timestamp.fromDate(periodStart);
   const endTs = Timestamp.fromDate(periodEnd);
 
-  const [reservationsSnap, shipmentsSnap, cashTxList, dailyStatsSnap] = await Promise.all([
-    getDocs(
-      query(
-        collectionGroup(db, "reservations"),
-        where("companyId", "==", companyId),
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "asc"),
-        limit(5000)
-      )
-    ),
+  const [salesRes, cashRes, validatedRes, shipmentsSnap, dailyStatsSnap] = await Promise.all([
+    getTotalSales(companyId, period),
+    getTotalCash(companyId, period, { includeOrphans: false }),
+    getValidatedRevenue(companyId, period),
     getDocs(
       query(
         shipmentsRef(db, companyId),
@@ -199,7 +175,6 @@ export async function getUnifiedCompanyFinance(
         limit(5000)
       )
     ),
-    getCashTransactionsByDateRange(companyId, dateFrom, dateTo),
     getDocs(
       query(
         collectionGroup(db, "dailyStats"),
@@ -211,17 +186,6 @@ export async function getUnifiedCompanyFinance(
     ),
   ]);
 
-  const reservations = reservationsSnap.docs.map((d) => {
-    const data = d.data();
-    return {
-      statut: (data.statut ?? data.status ?? "").toString(),
-      montant: Number(data.montant ?? data.amount ?? 0) || 0,
-    };
-  });
-  const soldReservations = reservations.filter((r) => isSoldReservation(r.statut));
-  const liveTickets = soldReservations.length;
-  const liveTicketsRevenue = soldReservations.reduce((sum, r) => sum + r.montant, 0);
-
   let liveCourierRevenue = 0;
   shipmentsSnap.docs.forEach((d) => {
     const s = d.data() as { paymentStatus?: string; transportFee?: number; insuranceAmount?: number };
@@ -230,33 +194,28 @@ export async function getUnifiedCompanyFinance(
     }
   });
 
-  const cashTotal = cashTxList
-    .filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID)
-    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-
-  let validatedTotal = 0;
+  let validatedCourierFromStats = 0;
   let validatedAgencySum = 0;
   let validatedCompanySum = 0;
   dailyStatsSnap.docs.forEach((d) => {
     const data = d.data();
-    const ticket = Number(data.ticketRevenue ?? data.totalRevenue ?? 0);
-    const courier = Number(data.courierRevenue ?? 0);
-    validatedTotal += ticket + courier;
+    validatedCourierFromStats += Number(data.courierRevenue ?? 0);
     validatedAgencySum += Number(data.ticketRevenueAgency ?? 0) + Number(data.courierRevenueAgency ?? 0);
     validatedCompanySum += Number(data.ticketRevenueCompany ?? 0) + Number(data.courierRevenueCompany ?? 0);
   });
 
-  const liveTotalRevenue = liveTicketsRevenue + liveCourierRevenue;
+  const validatedTotal = validatedRes.total + validatedCourierFromStats;
+  const liveTotalRevenue = salesRes.total + liveCourierRevenue;
 
   const result: UnifiedAgencyFinance = {
     live: {
-      tickets: liveTickets,
+      tickets: salesRes.tickets,
       courier: liveCourierRevenue,
-      liveTicketsRevenue,
+      liveTicketsRevenue: salesRes.total,
       liveCourierRevenue,
       totalRevenue: liveTotalRevenue,
     },
-    cash: { total: cashTotal },
+    cash: { total: cashRes.total, orphanAmount: cashRes.orphanAmount },
     validated: {
       totalRevenue: validatedTotal,
       validatedAgency: validatedAgencySum,
@@ -266,7 +225,7 @@ export async function getUnifiedCompanyFinance(
 
   if (typeof console !== "undefined" && console.log) {
     console.log("[unifiedFinanceService] getUnifiedCompanyFinance", {
-      source: "reservations + shipments + cashTransactions + dailyStats",
+      source: "reservations + cashTransactions(paidAt) + validatedAt + dailyStats(courier)",
       companyId,
       dateFrom,
       dateTo,

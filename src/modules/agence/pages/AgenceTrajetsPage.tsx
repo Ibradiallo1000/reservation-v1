@@ -20,10 +20,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { ajouterVillesDepuisTrajet } from '@/modules/agence/utils/updateVilles';
+import { getWeeklyTripLockStatus, type WeeklyTripLockStatus } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
 import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 import { Route, FileDown } from 'lucide-react';
 import { toast } from 'sonner';
+
+const LOCK_MESSAGE = 'Ce trajet contient déjà des réservations. Certaines modifications sont bloquées.';
 
 const joursDeLaSemaine = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 
@@ -65,6 +68,9 @@ const AgenceTrajetsPage: React.FC = () => {
   const [allowedRoutes, setAllowedRoutes] = useState<RouteDocWithId[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string>('');
   const [tripDirection, setTripDirection] = useState<RouteDirection>(ROUTE_DIRECTION.FORWARD);
+  const [tripLocked, setTripLocked] = useState<WeeklyTripLockStatus | null>(null);
+  const [tripLockLoading, setTripLockLoading] = useState(false);
+  const [editActive, setEditActive] = useState<boolean>(true);
   const itemsPerPage = 10;
 
   const selectedRoute = allowedRoutes.find((r) => r.id === selectedRouteId);
@@ -196,7 +202,23 @@ const AgenceTrajetsPage: React.FC = () => {
     setPlaces('');
     setHoraires({});
     setModifierId(null);
+    setTripLocked(null);
+    setTripLockLoading(false);
   };
+
+  // Charger le statut de verrouillage dès qu'on ouvre un trajet en modification
+  useEffect(() => {
+    if (!modifierId || !user?.companyId) {
+      setTripLocked(null);
+      setTripLockLoading(false);
+      return;
+    }
+    setTripLockLoading(true);
+    getWeeklyTripLockStatus(user.companyId, modifierId)
+      .then(setTripLocked)
+      .catch(() => setTripLocked({ hasReservations: false, maxReservedSeats: 0 }))
+      .finally(() => setTripLockLoading(false));
+  }, [modifierId, user?.companyId]);
 
   const exporterPDF = () => {
     const doc = new jsPDF();
@@ -224,25 +246,41 @@ const AgenceTrajetsPage: React.FC = () => {
 
     const priceNum = parseInt(price, 10);
     const placesNum = parseInt(places, 10);
-    if (!price.trim() || !places.trim() || Object.keys(horairesFiltres).length === 0) {
-      setLoading(false);
-      return setMessage('⚠️ Prix, places et au moins un horaire sont obligatoires.');
-    }
 
     try {
       if (modifierId) {
-        await updateDoc(
-          doc(db, 'companies', user.companyId, 'agences', user.agencyId, 'weeklyTrips', modifierId),
-          {
-            price: priceNum,
-            places: placesNum,
-            seats: placesNum,
-            horaires: horairesFiltres,
-            updatedAt: serverTimestamp(),
+        if (tripLocked?.hasReservations) {
+          await updateDoc(
+            doc(db, 'companies', user.companyId, 'agences', user.agencyId, 'weeklyTrips', modifierId),
+            { active: editActive, updatedAt: serverTimestamp() }
+          );
+          setMessage('✅ Statut du trajet mis à jour.');
+        } else {
+          if (!price.trim() || !places.trim() || Object.keys(horairesFiltres).length === 0) {
+            setLoading(false);
+            return setMessage('⚠️ Prix, places et au moins un horaire sont obligatoires.');
           }
-        );
-        setMessage('✅ Trajet modifié avec succès.');
+          if (tripLocked && placesNum < tripLocked.maxReservedSeats) {
+            setLoading(false);
+            return setMessage(`⚠️ Impossible de passer à ${placesNum} place(s) : au moins ${tripLocked.maxReservedSeats} place(s) déjà réservée(s) sur une instance.`);
+          }
+          await updateDoc(
+            doc(db, 'companies', user.companyId, 'agences', user.agencyId, 'weeklyTrips', modifierId),
+            {
+              price: priceNum,
+              places: placesNum,
+              seats: placesNum,
+              horaires: horairesFiltres,
+              updatedAt: serverTimestamp(),
+            }
+          );
+          setMessage('✅ Trajet modifié avec succès.');
+        }
       } else {
+        if (!price.trim() || !places.trim() || Object.keys(horairesFiltres).length === 0) {
+          setLoading(false);
+          return setMessage('⚠️ Prix, places et au moins un horaire sont obligatoires.');
+        }
         if (!selectedRouteId || !selectedRoute) {
           setLoading(false);
           return setMessage('⚠️ Veuillez choisir une route (départ depuis votre agence).');
@@ -394,6 +432,16 @@ const AgenceTrajetsPage: React.FC = () => {
               )}
             </>
           )}
+          {modifierId && tripLockLoading && (
+            <div className="mb-3 p-3 rounded bg-blue-50 dark:bg-blue-900/20 text-sm text-blue-800 dark:text-blue-200">
+              Vérification des réservations…
+            </div>
+          )}
+          {modifierId && tripLocked?.hasReservations && (
+            <div className="mb-3 p-3 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-sm text-amber-800 dark:text-amber-200">
+              {LOCK_MESSAGE}
+            </div>
+          )}
           {modifierId && editingTrip && (
             <div className="mb-3 p-2 rounded bg-gray-50 dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300">
               Route (non modifiable) : <strong>{displayDeparture} → {displayArrival}</strong>
@@ -404,6 +452,21 @@ const AgenceTrajetsPage: React.FC = () => {
               Départ : <strong>{displayDeparture}</strong> — Arrivée : <strong>{displayArrival}</strong>
             </div>
           )}
+          {modifierId && tripLocked?.hasReservations ? (
+            <div className="mb-4 space-y-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editActive}
+                  onChange={e => setEditActive(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Trajet actif</span>
+              </label>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Seul le statut actif/inactif peut être modifié lorsque des réservations existent.</p>
+            </div>
+          ) : (
+            <>
           <div className="mb-3">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Prix ({currencySymbol})</label>
             <input
@@ -411,8 +474,9 @@ const AgenceTrajetsPage: React.FC = () => {
               placeholder={`Prix (${currencySymbol})`}
               value={price}
               onChange={e => setPrice(e.target.value)}
-              className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600"
+              className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600 disabled:opacity-60 disabled:cursor-not-allowed"
               min="0"
+              disabled={!!(modifierId && tripLocked?.hasReservations)}
             />
           </div>
           <div className="mb-4">
@@ -422,8 +486,9 @@ const AgenceTrajetsPage: React.FC = () => {
               placeholder="Places"
               value={places}
               onChange={e => setPlaces(e.target.value)}
-              className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600"
+              className="border p-2 w-full rounded dark:bg-gray-800 dark:border-gray-600 disabled:opacity-60 disabled:cursor-not-allowed"
               min="1"
+              disabled={!!(modifierId && tripLocked?.hasReservations)}
             />
           </div>
 
@@ -458,12 +523,15 @@ const AgenceTrajetsPage: React.FC = () => {
             </div>
           ))}
 
+            </>
+          )}
+
           <ActionButton 
             onClick={handleSubmit} 
-            disabled={loading}
+            disabled={loading || (!!modifierId && tripLockLoading)}
             className="mt-4 w-full"
           >
-            {loading ? '⏳ En cours...' : modifierId ? 'Mettre à jour' : 'Enregistrer le trajet'}
+            {loading ? '⏳ En cours...' : modifierId && tripLocked?.hasReservations ? 'Mettre à jour le statut' : modifierId ? 'Mettre à jour' : 'Enregistrer le trajet'}
           </ActionButton>
 
           {message && (
@@ -569,6 +637,7 @@ const AgenceTrajetsPage: React.FC = () => {
                           setPrice(String(t.price ?? '')); 
                           setPlaces(String(t.seats ?? t.places ?? '')); 
                           setHoraires(t.horaires ?? {}); 
+                          setEditActive(t.active ?? true);
                         }} 
                         disabled={loading}
                         className="bg-yellow-500 hover:bg-yellow-700 text-white px-3 py-1 rounded text-sm"

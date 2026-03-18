@@ -31,6 +31,8 @@ export interface WhyChooseItem {
 ========================= */
 export interface CompanyAbout {
   description?: string;
+  /** Description en anglais (vitrine bilingue). */
+  descriptionEn?: string;
   yearsExperience?: number;
   destinationsCount?: number;
   satisfactionRate?: number;

@@ -47,6 +47,7 @@ import {
 import { MetricCard } from "@/ui";
 import { TrendingUp, Ticket, Building2, Truck, AlertTriangle, Clock } from "lucide-react";
 import { computeCeoGlobalStatus } from "@/modules/compagnie/commandCenter/ceoRiskRules";
+import { buildCeoDecisions, type DecisionEngineResult } from "@/modules/compagnie/commandCenter/decisionEngine";
 import { getDelayedBusesCountToday } from "@/modules/compagnie/tripInstances/tripProgressService";
 import { getNetworkStats } from "@/modules/compagnie/networkStats/networkStatsService";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
@@ -345,7 +346,7 @@ export default function CEOCommandCenterPage() {
     return () => { cancelled = true; };
   }, [companyId]);
 
-  // Stats réseau du jour pour l'indicateur "État du réseau aujourd'hui" (toujours aujourd'hui, indépendant de la période)
+  // Stats réseau du jour pour l'indicateur "État du réseau aujourd'hui"
   useEffect(() => {
     if (!companyId) return;
     const today = getTodayBamako();
@@ -354,7 +355,7 @@ export default function CEOCommandCenterPage() {
       .catch(() => setNetworkStatsToday(null));
   }, [companyId]);
 
-  // Période précédente : charger stats pour comparaison (vs hier / vs semaine dernière / vs mois précédent)
+  // Période précédente : charger stats pour comparaison
   useEffect(() => {
     if (!companyId) return;
     const startDate = new Date(periodRange.startStr + "T00:00:00");
@@ -900,6 +901,64 @@ export default function CEOCommandCenterPage() {
     return "bon";
   }, [networkStatsToday, agencies.length, delayedBusesCount]);
 
+  /** Taux de remplissage réseau (0–100) pour le decision engine */
+  const fillRatePct = useMemo(() => {
+    if (!networkStatsToday?.networkCapacity || networkStatsToday.networkCapacity <= 0) return 0;
+    return Math.round(((networkStatsToday.totalTickets ?? 0) / networkStatsToday.networkCapacity) * 100);
+  }, [networkStatsToday]);
+
+  /** Decision Engine : situation, problèmes (cause + impact + action), opportunités, actions */
+  const ceoDecisions = useMemo((): DecisionEngineResult => {
+    return buildCeoDecisions({
+      healthStatus,
+      networkStatusToday,
+      agencyProfits: agencyProfits.map((p) => ({ agencyId: p.agencyId, nom: p.nom, revenue: Number(p.revenue) || 0 })),
+      financialAccounts,
+      cashDiscrepancyList: cashDiscrepancyList.map(({ agencyId, session }) => ({
+        agencyId,
+        session: { discrepancy: session.discrepancy ?? undefined },
+      })),
+      courierDiscrepancyList: courierDiscrepancyList.map(({ agencyId, session }) => ({
+        agencyId,
+        session: { difference: session.difference ?? undefined },
+      })),
+      topAgenciesByRevenue,
+      prevStats,
+      currentRevenue: caFromCash,
+      delayedBusesCount,
+      fillRatePct,
+      totalAgencies: agencies.length,
+      activeAgenciesCount: agencesActivesFromCash,
+      maxCashDiscrepancyThreshold: Number(riskSettings.maxCashDiscrepancy) || 0,
+      getAgencyName: agencyNames,
+      financialGap:
+        unifiedFinance != null
+          ? {
+              salesTotal: unifiedFinance.live.totalRevenue,
+              cashTotal: unifiedFinance.cash.total,
+              orphanAmount: unifiedFinance.cash.orphanAmount ?? 0,
+            }
+          : undefined,
+    });
+  }, [
+    healthStatus,
+    networkStatusToday,
+    agencyProfits,
+    financialAccounts,
+    cashDiscrepancyList,
+    courierDiscrepancyList,
+    topAgenciesByRevenue,
+    prevStats,
+    caFromCash,
+    delayedBusesCount,
+    fillRatePct,
+    agencies.length,
+    agencesActivesFromCash,
+    riskSettings.maxCashDiscrepancy,
+    agencyNames,
+    unifiedFinance,
+  ]);
+
   const periodLabelShort =
     period === "day"
       ? "Aujourd'hui"
@@ -970,45 +1029,130 @@ export default function CEOCommandCenterPage() {
         }
       />
 
-      {/* Indicateur global : le CEO voit immédiatement si le réseau va bien ou non */}
+      {/* 1. BLOC SITUATION ACTUELLE — Comprendre en 5 secondes */}
       <div
         className={[
           "rounded-xl border-2 p-4 flex flex-wrap items-center justify-between gap-4",
-          networkStatusToday === "critique" && "border-red-600 bg-red-50 dark:bg-red-950/30 dark:border-red-500",
-          networkStatusToday === "moyen" && "border-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-500",
-          networkStatusToday === "bon" && "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-500",
-          networkStatusToday === null && "border-gray-200 bg-gray-50/50 dark:border-slate-600 dark:bg-slate-800/50",
+          ceoDecisions.status === "CRITIQUE" && "border-red-600 bg-red-50 dark:bg-red-950/30 dark:border-red-500",
+          ceoDecisions.status === "SURVEILLANCE" && "border-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-500",
+          ceoDecisions.status === "BON" && "border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-500",
         ].filter(Boolean).join(" ")}
       >
         <div className="flex items-center gap-3">
           <span className="text-2xl" aria-hidden>
-            {networkStatusToday === "critique" ? "🔴" : networkStatusToday === "moyen" ? "🟠" : networkStatusToday === "bon" ? "🟢" : "—"}
+            {ceoDecisions.status === "CRITIQUE" ? "🔴" : ceoDecisions.status === "SURVEILLANCE" ? "🟠" : "🟢"}
           </span>
           <div>
-            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">État du réseau aujourd&apos;hui</h2>
-            <p className="text-sm text-gray-600 dark:text-slate-400">
-              {networkStatusToday === null
-                ? "Chargement…"
-                : networkStatusToday === "critique"
-                  ? "Critique — Vérifier remplissage, agences actives et retards bus"
-                  : networkStatusToday === "moyen"
-                    ? "Moyen — Activité ou retards à surveiller"
-                    : "Bon — Réseau opérationnel"}
-            </p>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Situation actuelle</h2>
+            <ul className="text-sm text-gray-600 dark:text-slate-400 mt-1 list-disc list-inside space-y-0.5">
+              {ceoDecisions.summary.slice(0, 3).map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
           </div>
         </div>
         <div className="text-lg font-bold text-gray-900 dark:text-white">
-          {networkStatusToday === "critique"
-            ? "Problème réseau"
-            : networkStatusToday === "moyen"
-              ? "À surveiller"
-              : networkStatusToday === "bon"
-                ? "Réseau OK"
-                : "—"}
+          {ceoDecisions.status === "CRITIQUE" ? "CRITIQUE" : ceoDecisions.status === "SURVEILLANCE" ? "SURVEILLANCE" : "BON"}
         </div>
       </div>
 
-      {/* Finance unifiée : 3 niveaux (temps réel / encaissements / validé) */}
+      {/* 2. BLOC PROBLÈMES PRIORITAIRES — Score, conséquences, options */}
+      {ceoDecisions.problems.length > 0 && (
+        <div className="rounded-lg border-2 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/20 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-200">Problèmes prioritaires (triés par score de décision)</h3>
+          <ul className="space-y-3">
+            {ceoDecisions.problems.map((p) => (
+              <li key={p.id} className="rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-800 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <span className="inline-flex items-center rounded-md bg-amber-100 dark:bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200">
+                    Score {p.score.toLocaleString("fr-FR")}
+                  </span>
+                  <span className={`text-xs font-medium ${p.level === "danger" ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}>
+                    {p.level === "danger" ? "Danger" : "Attention"}
+                  </span>
+                </div>
+                <h4 className="font-semibold text-gray-900 dark:text-white mt-1">{p.title}</h4>
+                <p className="text-sm text-gray-600 dark:text-slate-400 mt-1"><strong>Cause :</strong> {p.cause}</p>
+                <p className="text-sm text-gray-700 dark:text-slate-300 mt-0.5"><strong>Impact :</strong> {p.impact}</p>
+                <div className="mt-2 rounded bg-slate-50 dark:bg-slate-800/50 p-2 text-xs">
+                  <p className="text-emerald-700 dark:text-emerald-400"><strong>Si vous agissez :</strong> {p.consequences.ifAction}</p>
+                  <p className="text-red-700 dark:text-red-400 mt-1"><strong>Si vous ne faites rien :</strong> {p.consequences.ifNoAction}</p>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600 dark:text-slate-400">
+                  <span><strong>Demain :</strong> {p.projection.nextDay.toLocaleString("fr-FR")} FCFA</span>
+                  <span><strong>7 jours :</strong> {p.projection.nextWeek.toLocaleString("fr-FR")} FCFA</span>
+                </div>
+                <p className="text-xs font-medium text-gray-600 dark:text-slate-400 mt-2 mb-1">Options :</p>
+                <ul className="space-y-1">
+                  {p.options.map((opt, idx) => (
+                    <li key={idx} className={`flex flex-wrap items-center gap-2 text-sm ${idx === p.recommendedOptionIndex ? "rounded-md bg-blue-50 dark:bg-blue-900/30 p-2 border border-blue-200 dark:border-blue-700" : ""}`}>
+                      {idx === p.recommendedOptionIndex && (
+                        <span className="inline-flex items-center rounded bg-blue-600 px-1.5 py-0.5 text-xs font-medium text-white">Recommandé</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`${base}/${p.actionRoute}`)}
+                        className="text-left text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                      >
+                        {opt.label}
+                      </button>
+                      <span className="text-gray-500 dark:text-slate-500">
+                        {opt.estimatedImpact >= 0 ? "+" : ""}{opt.estimatedImpact.toLocaleString("fr-FR")} FCFA
+                      </span>
+                      <span className={`text-xs ${opt.risk === "low" ? "text-emerald-600" : opt.risk === "medium" ? "text-amber-600" : "text-red-600"}`}>
+                        risque {opt.risk === "low" ? "faible" : opt.risk === "medium" ? "moyen" : "élevé"}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-slate-500">
+                        · effort {opt.effort === "low" ? "rapide" : opt.effort === "medium" ? "coordination" : "structurel"}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-slate-500">
+                        · effet {opt.timeToImpact === "immediate" ? "aujourd'hui" : opt.timeToImpact === "short" ? "1–3 j" : "semaine"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 3. BLOC OPPORTUNITÉS */}
+      {ceoDecisions.opportunities.length > 0 && (
+        <div className="rounded-lg border-2 border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/20 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">Opportunités</h3>
+          <ul className="space-y-2">
+            {ceoDecisions.opportunities.map((o) => (
+              <li key={o.id} className="flex flex-wrap items-baseline gap-2 text-sm">
+                <span className="font-medium text-gray-900 dark:text-white">{o.titre}</span>
+                <span className="text-emerald-700 dark:text-emerald-300">— {o.preuve}</span>
+                <span className="text-gray-600 dark:text-slate-400">→ {o.actionSuggeree}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 4. BLOC À FAIRE MAINTENANT — Max 3 actions */}
+      {ceoDecisions.actions.length > 0 && (
+        <div className="rounded-lg border-2 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-900/20 p-4">
+          <h3 className="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-2">À faire maintenant</h3>
+          <div className="flex flex-wrap gap-2">
+            {ceoDecisions.actions.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => navigate(`${base}/${a.route}`)}
+                className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 5. FINANCE UNIFIÉE — Résumé contrôle */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
           <MetricCard
@@ -1039,6 +1183,8 @@ export default function CEOCommandCenterPage() {
         </div>
       </div>
 
+      {/* 6. KPI (secondaire — détail) */}
+      <p className="text-xs text-gray-500 mb-2">Indicateurs détaillés — période sélectionnée</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <Link to={`${base}/reservations-reseau?period=${periodParam}`} className="block">
           <MetricCard
@@ -1084,84 +1230,14 @@ export default function CEOCommandCenterPage() {
         </Link>
         <Link to={`${base}/audit-controle`} className="block">
           <MetricCard
-            label="Alertes critiques"
-            value={prioritizedRisks.length > 0 ? String(prioritizedRisks.length) : "0"}
+            label="Problèmes prioritaires"
+            value={ceoDecisions.problems.length > 0 ? String(ceoDecisions.problems.length) : "0"}
             icon={AlertTriangle}
-            valueColorVar={prioritizedRisks.length > 0 ? "#b91c1c" : undefined}
+            valueColorVar={ceoDecisions.problems.length > 0 ? "#b91c1c" : undefined}
           />
         </Link>
       </div>
 
-      {prioritizedRisks.length > 0 && (
-        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/20 p-4 space-y-4">
-          <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-200">Alertes à traiter</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <h4 className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-2">Alertes financières</h4>
-              <ul className="space-y-1 text-sm text-amber-900 dark:text-amber-100">
-                {prioritizedRisks
-                  .filter((r) => r.category === "financial")
-                  .map((r) => (
-                    <li key={r.id}>
-                      <button
-                        type="button"
-                        onClick={() => navigate(`${base}/${r.actionRoute}`)}
-                        className="underline hover:no-underline text-left"
-                      >
-                        {r.label}
-                      </button>
-                    </li>
-                  ))}
-                {prioritizedRisks.filter((r) => r.category === "financial").length === 0 && (
-                  <li className="text-amber-600 dark:text-amber-400">Aucune</li>
-                )}
-              </ul>
-            </div>
-            <div>
-              <h4 className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-2">Alertes réseau</h4>
-              <ul className="space-y-1 text-sm text-amber-900 dark:text-amber-100">
-                {prioritizedRisks
-                  .filter((r) => r.category === "network")
-                  .map((r) => (
-                    <li key={r.id}>
-                      <button
-                        type="button"
-                        onClick={() => navigate(`${base}/${r.actionRoute}`)}
-                        className="underline hover:no-underline text-left"
-                      >
-                        {r.label}
-                      </button>
-                    </li>
-                  ))}
-                {prioritizedRisks.filter((r) => r.category === "network").length === 0 && (
-                  <li className="text-amber-600 dark:text-amber-400">Aucune</li>
-                )}
-              </ul>
-            </div>
-            <div>
-              <h4 className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-2">Alertes flotte</h4>
-              <ul className="space-y-1 text-sm text-amber-900 dark:text-amber-100">
-                {prioritizedRisks
-                  .filter((r) => r.category === "fleet")
-                  .map((r) => (
-                    <li key={r.id}>
-                      <button
-                        type="button"
-                        onClick={() => navigate(`${base}/${r.actionRoute}`)}
-                        className="underline hover:no-underline text-left"
-                      >
-                        {r.label}
-                      </button>
-                    </li>
-                  ))}
-                {prioritizedRisks.filter((r) => r.category === "fleet").length === 0 && (
-                  <li className="text-amber-600 dark:text-amber-400">Aucune</li>
-                )}
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
     </StandardLayoutWrapper>
   );
 }

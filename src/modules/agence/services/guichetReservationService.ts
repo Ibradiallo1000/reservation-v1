@@ -26,6 +26,7 @@ import { getStopByOrder, getEscaleDestinations } from '@/modules/compagnie/route
 import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
 import { createCashTransaction } from '@/modules/compagnie/cash/cashService';
 import { LOCATION_TYPE } from '@/modules/compagnie/cash/cashTypes';
+import { getTodayBamako } from '@/shared/date/dateUtilsTz';
 
 export type CreateGuichetReservationParams = {
   companyId: string;
@@ -278,7 +279,7 @@ export async function createGuichetReservation(
         locationType,
         locationId: params.agencyId,
         createdBy: params.userId,
-        date: params.date ? params.date.slice(0, 10) : new Date().toISOString().split('T')[0],
+        paidAt: getTodayBamako(),
       });
       await updateDoc(newRef, { cashTransactionId: cashTxId });
     } catch (err) {

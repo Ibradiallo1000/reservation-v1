@@ -5,7 +5,7 @@ import {
   deleteDoc, onSnapshot, getDoc, updateDoc, serverTimestamp, getDocs, Timestamp
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
-import { getStartOfDayBamako, getEndOfDayBamako } from '@/shared/date/dateUtilsTz';
+import { getStartOfDayBamako, getEndOfDayBamako, getTodayBamako } from '@/shared/date/dateUtilsTz';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { 
@@ -632,7 +632,7 @@ const ReservationsEnLigne: React.FC = () => {
             locationId: reservation.agencyId,
             routeId: data?.routeId ?? undefined,
             createdBy: user.uid ?? '',
-            date: (data?.date ?? new Date().toISOString().slice(0, 10)).toString().slice(0, 10),
+            paidAt: getTodayBamako(),
           });
           await updateDoc(reservationRef, {
             cashTransactionId: cashTxId,

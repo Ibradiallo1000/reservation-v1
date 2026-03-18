@@ -8,10 +8,12 @@ export const CASH_CLOSURES_COLLECTION = "cashClosures";
 export const CASH_REFUNDS_COLLECTION = "cashRefunds";
 export const CASH_TRANSFERS_COLLECTION = "cashTransfers";
 
-/** Statut d'une transaction caisse : payée ou remboursée. */
+/** Statut d'une transaction caisse : payée, remboursée, orpheline (réservation absente/annulée), ou annulée. */
 export const CASH_TRANSACTION_STATUS = {
   PAID: "paid",
   REFUNDED: "refunded",
+  ORPHAN: "orphan",
+  CANCELLED: "cancelled",
 } as const;
 export type CashTransactionStatus = (typeof CASH_TRANSACTION_STATUS)[keyof typeof CASH_TRANSACTION_STATUS];
 
@@ -41,11 +43,15 @@ export interface CashTransactionDoc {
   locationId: string;
   routeId?: string | null;
   createdBy: string;
-  /** Date du jour de la transaction (YYYY-MM-DD) pour regroupement journalier */
+  /** @deprecated Utiliser paidAt. Date du jour (YYYY-MM-DD) — conservé pour rétrocompat. */
   date: string;
-  /** paid | refunded. Défaut paid. */
+  /** Date réelle d'encaissement (YYYY-MM-DD). Source de vérité pour les encaissements par période. */
+  paidAt?: string;
+  /** paid | refunded | orphan | cancelled. Défaut paid. */
   status?: CashTransactionStatus | string;
   createdAt: unknown;
+  /** Remboursement / annulation : date de mise à jour du statut (Timestamp). */
+  refundedAt?: unknown;
 }
 
 export interface CashTransactionDocWithId extends CashTransactionDoc {

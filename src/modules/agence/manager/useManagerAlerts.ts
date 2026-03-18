@@ -46,6 +46,8 @@ export interface ManagerAlertsResult {
   dismissAlert: (alertId: string) => void;
   markAllAlertsRead: () => void;
   loading: boolean;
+  /** Écart caisse (caisse - ventes du jour + dépenses) pour Decision Engine */
+  cashVariance: number;
 }
 
 const SESSION_WARN_H = 8;
@@ -340,6 +342,12 @@ export function useManagerAlerts(): ManagerAlertsResult {
     return counts;
   }, [visibleAlerts]);
 
+  /** Écart caisse (pour Decision Engine) : caisse - ventes du jour + dépenses du jour */
+  const cashVariance = useMemo(
+    () => cashPosition - todayRevenue + todayExpenses,
+    [cashPosition, todayRevenue, todayExpenses]
+  );
+
   return {
     alerts: visibleAlerts,
     totalAlertCount: visibleAlerts.length,
@@ -348,5 +356,6 @@ export function useManagerAlerts(): ManagerAlertsResult {
     dismissAlert,
     markAllAlertsRead,
     loading,
+    cashVariance,
   };
 }

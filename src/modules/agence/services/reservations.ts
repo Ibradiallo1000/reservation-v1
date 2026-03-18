@@ -121,11 +121,11 @@ export async function cancelReservation(
       createdBy: requestedByUid,
       reason: reason ?? "Annulation",
     }).catch((err) => console.error("[cancelReservation] createCashRefund failed:", err));
-    if (cashTransactionIdToRefund) {
-      markCashTransactionRefunded(companyId, cashTransactionIdToRefund).catch((err) =>
-        console.error("[cancelReservation] markCashTransactionRefunded failed:", err)
-      );
-    }
+  }
+  if (cashTransactionIdToRefund) {
+    markCashTransactionRefunded(companyId, cashTransactionIdToRefund).catch((err) =>
+      console.error("[cancelReservation] markCashTransactionRefunded failed:", err)
+    );
   }
 }
 

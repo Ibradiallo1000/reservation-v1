@@ -89,7 +89,7 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
                 <VilleCombobox
                   value={departure}
                   onChange={setDeparture}
-                  placeholder="Départ"
+                  placeholder={t("depart")}
                   showLocationIcon
                   wrapperClassName={cityInputWrapper}
                   inputClassName={cityInputText}
@@ -110,7 +110,7 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
                 <VilleCombobox
                   value={arrival}
                   onChange={setArrival}
-                  placeholder="Arrivée"
+                  placeholder={t("arrival")}
                   showLocationIcon
                   wrapperClassName={cityInputWrapper}
                   inputClassName={cityInputText}
