@@ -174,15 +174,18 @@ export const PosSessionBar: React.FC<Props> = ({
 
             <div className="h-8 w-px bg-gray-200 ml-1" />
 
-            {/* User */}
-            <div className="hidden lg:flex items-center gap-2 bg-gray-50 border rounded-lg px-2.5 py-1.5">
-              <div className="w-7 h-7 rounded-full bg-gray-200 grid place-items-center text-xs font-bold text-gray-600">
+            {/* User : nom + code guichetier (toujours visible, code affiché même si GUEST) */}
+            <div className="flex items-center gap-2 bg-gray-50 border rounded-lg px-2.5 py-1.5">
+              <div className="w-7 h-7 rounded-full bg-gray-200 grid place-items-center text-xs font-bold text-gray-600 shrink-0">
                 {userName.charAt(0).toUpperCase()}
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 hidden sm:block">
                 <p className="text-xs font-medium text-gray-900 truncate max-w-[120px]">{userName}</p>
-                <p className="text-[10px] text-gray-500">{userCode}</p>
+                <p className="text-[10px] text-gray-500 font-mono">{userCode || "GUEST"}</p>
               </div>
+              <span className="sm:hidden text-xs font-mono text-gray-600 font-medium" title={`Code guichetier: ${userCode || "GUEST"}`}>
+                {userCode || "GUEST"}
+              </span>
             </div>
             <button onClick={onLogout}
               className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 transition"

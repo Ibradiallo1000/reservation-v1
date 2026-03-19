@@ -183,6 +183,9 @@ const ReceiptModal: React.FC<Props> = ({
             <div style={{ fontSize: '11px' }}>
               Émis le {emissionDate}
             </div>
+            <div style={{ fontSize: '11px', marginTop: '4px' }}>
+              Guichetier : <strong>{reservation.guichetierCode || 'GUEST'}</strong>
+            </div>
           </div>
 
           <hr />

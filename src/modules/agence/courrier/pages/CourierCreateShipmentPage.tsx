@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/firebaseConfig";
-import { getDocs, onSnapshot, query, where } from "firebase/firestore";
+import { getDocs, getDoc, doc, onSnapshot, query, where } from "firebase/firestore";
 import { collection } from "firebase/firestore";
 import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPaths";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
@@ -58,10 +58,12 @@ export default function CourierCreateShipmentPage() {
     () => getPhoneRuleFromCountry((company as { pays?: string } | null | undefined)?.pays),
     [company]
   );
-  const agentCode = (user as { staffCode?: string; codeCourt?: string; code?: string })?.staffCode
+  const [agentCodeFromTeam, setAgentCodeFromTeam] = useState<string | null>(null);
+  const agentCode = agentCodeFromTeam
+    ?? (user as { staffCode?: string; codeCourt?: string; code?: string })?.staffCode
     ?? (user as { codeCourt?: string; code?: string })?.codeCourt
     ?? (user as { code?: string })?.code
-    ?? "COUR";
+    ?? "GUEST";
 
   const [session, setSession] = useState<CourierSession | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -80,6 +82,27 @@ export default function CourierCreateShipmentPage() {
   const [showReceipt, setShowReceipt] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
   const [recentShipments, setRecentShipments] = useState<Shipment[]>([]);
+
+  useEffect(() => {
+    if (!agentId || !companyId || !agencyId) return;
+    (async () => {
+      try {
+        const rootSnap = await getDoc(doc(db, "users", agentId));
+        if (rootSnap.exists()) {
+          const u = rootSnap.data() as { staffCode?: string; codeCourt?: string; code?: string };
+          const code = u.staffCode || u.codeCourt || u.code;
+          if (code) { setAgentCodeFromTeam(code); return; }
+        }
+        const usersRef = collection(db, "companies", companyId, "agences", agencyId, "users");
+        const snap = await getDocs(query(usersRef, where("uid", "==", agentId)));
+        if (snap.docs.length > 0) {
+          const d = snap.docs[0].data() as { agentCode?: string; staffCode?: string; codeCourt?: string; code?: string };
+          const code = d.agentCode || d.staffCode || d.codeCourt || d.code;
+          if (code) setAgentCodeFromTeam(code);
+        }
+      } catch { /* ignore */ }
+    })();
+  }, [agentId, companyId, agencyId]);
 
   useEffect(() => {
     if (!companyId || !agencyId || !agentId) return;
@@ -311,12 +334,20 @@ export default function CourierCreateShipmentPage() {
         title="Nouvel Envoi"
         primaryColorVar="var(--courier-primary, #ea580c)"
         right={
-          <Link to="/agence/courrier">
-            <ActionButton variant="secondary" className="!border-[var(--courier-primary,#ea580c)] !text-[var(--courier-primary,#ea580c)] hover:!bg-[var(--courier-primary,#ea580c)] hover:!text-white">
-              <ArrowLeft className="h-4 w-4" />
-              Courrier
-            </ActionButton>
-          </Link>
+          <div className="flex items-center gap-3">
+            <span className="hidden sm:inline text-sm text-gray-600">
+              {agentName} <span className="font-mono font-medium text-gray-800">({agentCode})</span>
+            </span>
+            <span className="sm:hidden text-xs font-mono font-medium text-gray-700" title={`Agent: ${agentName} (${agentCode})`}>
+              {agentCode}
+            </span>
+            <Link to="/agence/courrier">
+              <ActionButton variant="secondary" className="!border-[var(--courier-primary,#ea580c)] !text-[var(--courier-primary,#ea580c)] hover:!bg-[var(--courier-primary,#ea580c)] hover:!text-white">
+                <ArrowLeft className="h-4 w-4" />
+                Courrier
+              </ActionButton>
+            </Link>
+          </div>
         }
       />
 

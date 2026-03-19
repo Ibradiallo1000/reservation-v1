@@ -28,7 +28,7 @@ const CourierReceipt: React.FC<CourierReceiptProps> = ({
   agentCode: agentCodeProp,
   onClose,
 }) => {
-  const agentCode = agentCodeProp ?? shipment.agentCode ?? "—";
+  const agentCode = agentCodeProp ?? shipment.agentCode ?? "GUEST";
   const money = useFormatCurrency();
   const ref = useRef<HTMLDivElement>(null);
 

@@ -11,16 +11,28 @@ import { ACCOUNT_CRITICAL_THRESHOLD, ACCOUNT_WARNING_THRESHOLD, AGENCIES_AT_RISK
 
 export type DecisionStatus = "BON" | "SURVEILLANCE" | "CRITIQUE";
 
+export type ConfidenceLevel = "low" | "medium" | "high";
+
 /** Option d'action pour un problème (2 à 3 par problème) */
 export interface DecisionOption {
   label: string;
   /** Impact estimé en FCFA (positif = gain, négatif = perte évitée) */
   estimatedImpact: number;
+  /**
+   * Clarifie la nature de l'impact affiché en UI (évite l'ambiguïté gain/injection/estimation).
+   * - cash_injection: besoin d'apport (montant à injecter)
+   * - estimated_saving: économie potentielle (estimation)
+   * - estimated_loss: perte estimée (estimation)
+   * - real_gain: gain réel / revenu réalisé (uniquement si prouvé)
+   */
+  impactKind?: "cash_injection" | "estimated_saving" | "estimated_loss" | "real_gain";
   risk: "low" | "medium" | "high";
   /** low = action rapide (clic, validation), medium = coordination, high = changement structurel */
   effort: "low" | "medium" | "high";
   /** immediate = effet aujourd'hui, short = 1–3 jours, medium = plusieurs jours / semaine */
   timeToImpact: "immediate" | "short" | "medium";
+  /** Faisabilité : high si ressources connues, low si dépend de données inconnues */
+  feasibility?: "high" | "low";
 }
 
 export interface DecisionProblem {
@@ -39,16 +51,23 @@ export interface DecisionProblem {
     ifAction: string;
     ifNoAction: string;
   };
-  /** Projection temporelle (FCFA) — cohérence > précision */
+  /** Projection temporelle (FCFA). Null si données insuffisantes pour une estimation fiable. */
   projection: {
     nextDay: number;
     nextWeek: number;
-  };
+  } | null;
+  /** Mention obligatoire pour toute projection + niveau de confiance. */
+  projectionKind?: "estimation" | "trend_projection";
+  confidenceLevel?: ConfidenceLevel;
   options: DecisionOption[];
   /** Index de l'option recommandée (meilleur ratio impact / effort / risk) */
   recommendedOptionIndex: number;
   actionRoute: string;
   level: "danger" | "warning";
+  /** Niveau de priorité affiché (remplace le score numérique en UI). */
+  severityLevel?: "critique" | "élevé" | "moyen";
+  /** Si false : ne pas afficher d'options, afficher "Analyse en cours — données insuffisantes". */
+  recommendationSafe?: boolean;
 }
 
 export interface DecisionOpportunity {
@@ -74,12 +93,77 @@ export interface DecisionEngineResult {
   opportunities: DecisionOpportunity[];
   /** Max 3 actions, triées par impact */
   actions: DecisionAction[];
+  /** Si false : activité insuffisante — ne pas afficher projections ni recommandations stratégiques, seulement alertes critiques */
+  dataSufficient: boolean;
+}
+
+function toConfidenceLevel(confidence: number): ConfidenceLevel {
+  if (confidence >= 0.75) return "high";
+  if (confidence >= 0.45) return "medium";
+  return "low";
+}
+
+function inferOptionImpactKind(opt: DecisionOption): DecisionOption["impactKind"] {
+  const label = (opt.label ?? "").toLowerCase();
+  if (
+    label.includes("inject") ||
+    label.includes("approvision") ||
+    label.includes("recharger") ||
+    label.includes("alimenter") ||
+    label.includes("renflouer")
+  ) {
+    return "cash_injection";
+  }
+  if (opt.estimatedImpact < 0) return "estimated_loss";
+  return "estimated_saving";
 }
 
 // ─── Constantes opportunités ─────────────────────────────────────────────────
 
 const OPPORTUNITY_GROWTH_PCT = 5;
 const OPPORTUNITY_FILL_RATE_GOOD = 80;
+
+// ─── Seuils de fiabilité et sévérité (UI) ─────────────────────────────────────
+
+/** Données suffisantes si au moins une des conditions : totalTrips >= 2, totalTickets >= 2, plusieurs créneaux/agences */
+export interface DataSufficiencyInput {
+  totalTrips?: number;
+  totalTickets?: number;
+  totalSlots?: number;
+  activeAgenciesCount?: number;
+}
+
+export function isDataSufficient(data: DataSufficiencyInput): boolean {
+  const trips = data.totalTrips ?? 0;
+  const tickets = data.totalTickets ?? 0;
+  const slots = data.totalSlots ?? 0;
+  const agencies = data.activeAgenciesCount ?? 0;
+  return trips >= 2 || tickets >= 2 || slots >= 2 || agencies >= 2;
+}
+
+/** Recommandation sûre seulement si données suffisantes et capacité connue (ex. plus d'un départ). */
+export function isRecommendationSafe(
+  problemId: string,
+  dataSufficient: boolean,
+  totalTripsOrSlots: number
+): boolean {
+  if (!dataSufficient) return false;
+  const needsMultipleSlots = ["low-fill", "agencies-no-revenue", "delayed-buses", "delayed-departures"].includes(problemId);
+  if (needsMultipleSlots && totalTripsOrSlots <= 1) return false;
+  return true;
+}
+
+/** Seuils pour affichage Sévérité (remplace le score numérique). */
+const SEVERITY_CRITICAL_MIN = 200_000;
+const SEVERITY_HIGH_MIN = 50_000;
+
+export type SeverityLevel = "critique" | "élevé" | "moyen";
+
+export function getSeverityLevel(score: number): SeverityLevel {
+  if (score >= SEVERITY_CRITICAL_MIN) return "critique";
+  if (score >= SEVERITY_HIGH_MIN) return "élevé";
+  return "moyen";
+}
 
 // ─── Scoring : finalScore = impact × urgency × confidence × businessCriticality ───────────
 
@@ -113,7 +197,7 @@ function getRecommendedOptionIndex(options: DecisionOption[]): number {
   return best;
 }
 
-/** Construit un DecisionProblem avec score, projection et recommendedOptionIndex */
+/** Construit un DecisionProblem avec score, projection (peut être null), recommendedOptionIndex */
 function buildProblem(problem: {
   id: string;
   title: string;
@@ -124,7 +208,8 @@ function buildProblem(problem: {
   confidence: number;
   businessCriticality: number;
   consequences: { ifAction: string; ifNoAction: string };
-  projection: { nextDay: number; nextWeek: number };
+  projection: { nextDay: number; nextWeek: number } | null;
+  projectionKind?: "estimation" | "trend_projection";
   options: DecisionOption[];
   actionRoute: string;
   level: "danger" | "warning";
@@ -135,8 +220,23 @@ function buildProblem(problem: {
     problem.confidence,
     problem.businessCriticality
   );
-  const recommendedOptionIndex = getRecommendedOptionIndex(problem.options);
-  return { ...problem, score, recommendedOptionIndex };
+  const options = problem.options.map((o) => ({ ...o, impactKind: o.impactKind ?? inferOptionImpactKind(o) }));
+  const recommendedOptionIndex = getRecommendedOptionIndex(options);
+  const severityLevel = getSeverityLevel(score);
+  const inferredProjectionKind: "estimation" | "trend_projection" | undefined =
+    problem.projection == null
+      ? undefined
+      : problem.projectionKind ??
+        (problem.projection.nextWeek !== problem.projection.nextDay ? "trend_projection" : "estimation");
+  return {
+    ...problem,
+    options,
+    score,
+    recommendedOptionIndex,
+    severityLevel,
+    projectionKind: inferredProjectionKind,
+    confidenceLevel: problem.projection ? toConfidenceLevel(problem.confidence) : undefined,
+  };
 }
 
 // ─── CEO : entrée (données déjà chargées par CEOCommandCenterPage) ───────────
@@ -162,8 +262,8 @@ export interface CeoDecisionInput {
   currentRevenue: number;
   /** Bus en retard aujourd'hui */
   delayedBusesCount: number | null;
-  /** Remplissage réseau (0–100) pour opportunités */
-  fillRatePct: number;
+  /** Remplissage réseau (0–100) pour opportunités. Null si capacité inconnue ou 0. */
+  fillRatePct: number | null;
   /** Nom total d'agences (pour résumé) */
   totalAgencies: number;
   /** Agences actives sur la période */
@@ -174,6 +274,9 @@ export interface CeoDecisionInput {
   getAgencyName: (agencyId: string) => string;
   /** Écart financier : encaissements > ventes (transactions orphelines ou incohérences) */
   financialGap?: { salesTotal: number; cashTotal: number; orphanAmount: number };
+  /** Pour filtre de fiabilité : ne générer problèmes stratégiques que si données suffisantes */
+  totalTrips?: number;
+  totalTickets?: number;
 }
 
 /**
@@ -198,12 +301,25 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
     financialGap,
   } = input;
 
+  const dataSufficient = isDataSufficient({
+    totalTrips: input.totalTrips,
+    totalTickets: input.totalTickets,
+    activeAgenciesCount: input.activeAgenciesCount,
+  });
+  const totalTripsForSafe = input.totalTrips ?? 0;
+
   const threshold = Number(input.maxCashDiscrepancyThreshold ?? 0);
+  /** Comptes pris en compte pour seuils : banques, mobile money, réserves. Exclut agency_cash (une caisse par agence). */
+  const MAIN_ACCOUNT_TYPES = ["company_bank", "agency_bank", "mobile_money", "expense_reserve"];
+  const isMainAccount = (a: { accountType?: string; type?: string; currentBalance: number }) => {
+    const t = (a.accountType ?? a.type ?? "").toString();
+    return MAIN_ACCOUNT_TYPES.includes(t) && a.currentBalance >= 0;
+  };
   const accountsBelowCritical = financialAccounts.filter(
-    (a) => a.currentBalance < ACCOUNT_CRITICAL_THRESHOLD && a.currentBalance >= 0
+    (a) => isMainAccount(a) && a.currentBalance < ACCOUNT_CRITICAL_THRESHOLD
   ).length;
   const accountsBelowWarning = financialAccounts.filter(
-    (a) => a.currentBalance < ACCOUNT_WARNING_THRESHOLD && a.currentBalance >= 0
+    (a) => isMainAccount(a) && a.currentBalance < ACCOUNT_WARNING_THRESHOLD
   ).length;
   const zeroRevAgencies = agencyProfits.filter((p) => p.revenue === 0);
   const agenciesAtRiskCount = zeroRevAgencies.length;
@@ -261,47 +377,95 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
         ifAction: "Rapprochement des transactions orphelines et correction des remboursements manquants.",
         ifNoAction: "Poursuite des incohérences et décisions basées sur des chiffres faux.",
       },
-      projection: { nextDay: gapAmount, nextWeek: Math.round(gapAmount * 1.1) },
+      projection: dataSufficient ? { nextDay: gapAmount, nextWeek: Math.round(gapAmount * 1.1) } : null,
       options: [
-        { label: "Vérifier transactions orphelines (Audit & contrôle)", estimatedImpact: gapAmount, risk: "low", effort: "medium", timeToImpact: "short" },
-        { label: "Exécuter le script de détection des incohérences", estimatedImpact: gapAmount, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Ne rien faire", estimatedImpact: -gapAmount, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Vérifier transactions orphelines (Audit & contrôle)", estimatedImpact: gapAmount, risk: "low", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Exécuter le script de détection des incohérences", estimatedImpact: gapAmount, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -gapAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "audit-controle",
       level: "danger",
     }));
   }
 
+  // Ventes détectées sans encaissements : incohérence de flux ventes ↔ encaissements.
+  if (financialGap && financialGap.salesTotal > 0 && financialGap.cashTotal === 0) {
+    problemsRaw.push(
+      buildProblem({
+        id: "sales-without-cash",
+        title: "Ventes détectées sans encaissements",
+        cause: "Des réservations ont été vendues mais aucun encaissement n'a été détecté sur la période.",
+        impact: "Ventes détectées sans encaissements — incohérence de flux entre ventes et caisse.",
+        impactAmount: financialGap.salesTotal,
+        urgency: 5,
+        confidence: 0.95,
+        businessCriticality: 5,
+        projection: dataSufficient ? { nextDay: financialGap.salesTotal, nextWeek: Math.round(financialGap.salesTotal * 1.2) } : null,
+        projectionKind: "estimation",
+        consequences: {
+          ifAction:
+            "Vérifier immédiatement les sessions de caisse (guichet) et les paiements en ligne pour identifier les encaissements manquants.",
+          ifNoAction: "Risque de décisions faussées et de perte de contrôle sur la trésorerie réelle.",
+        },
+        options: [
+          {
+            label: "Analyser les encaissements manquants",
+            estimatedImpact: financialGap.salesTotal,
+            risk: "medium",
+            effort: "medium",
+            timeToImpact: "short",
+            feasibility: "high",
+          },
+          {
+            label: "Ne rien faire",
+            estimatedImpact: -financialGap.salesTotal,
+            risk: "high",
+            effort: "low",
+            timeToImpact: "immediate",
+            feasibility: "low",
+          },
+        ],
+        actionRoute: "/compagnie/finances?tab=cash",
+        level: "danger",
+      })
+    );
+  }
+
   if (accountsBelowCritical > 0) {
     const totalUnder = financialAccounts
-      .filter((a) => a.currentBalance < ACCOUNT_CRITICAL_THRESHOLD && a.currentBalance >= 0)
+      .filter((a) => isMainAccount(a) && a.currentBalance < ACCOUNT_CRITICAL_THRESHOLD)
       .reduce((sum, a) => sum + (ACCOUNT_CRITICAL_THRESHOLD - a.currentBalance), 0);
     const impactAmount = Math.max(totalUnder, 50000);
+    const seuilFormatted = ACCOUNT_CRITICAL_THRESHOLD.toLocaleString("fr-FR");
+    const montantFormatted = totalUnder.toLocaleString("fr-FR");
     problemsRaw.push(buildProblem({
       id: "accounts-critical",
-      title: `Comptes sous seuil danger (${accountsBelowCritical})`,
-      cause: `${accountsBelowCritical} compte(s) trésorerie sous ${ACCOUNT_CRITICAL_THRESHOLD} — risque de liquidité.`,
-      impact: totalUnder > 0 ? `Déficit cumulé estimé : ${totalUnder.toLocaleString("fr-FR")} (écart au seuil).` : `${accountsBelowCritical} compte(s) concerné(s).`,
+      title: `${accountsBelowCritical} compte(s) trésorerie avec trop peu d’argent`,
+      cause: `${accountsBelowCritical} compte(s) (banque, mobile money, réserves) ont un solde inférieur à ${seuilFormatted} FCFA. En dessous de ce seuil, les paiements peuvent être bloqués.`,
+      impact: totalUnder > 0
+        ? `Il manque environ ${montantFormatted} FCFA pour remonter ces comptes au seuil de sécurité (${seuilFormatted} FCFA chacun).`
+        : `${accountsBelowCritical} compte(s) à traiter.`,
       impactAmount,
       urgency: 5,
       confidence: 0.9,
       businessCriticality: 5,
       consequences: {
-        ifAction: "Rétablissement des liquidités et reprise du contrôle trésorerie.",
-        ifNoAction: "Risque de blocage des paiements et perte de confiance des partenaires.",
+        ifAction: "Les comptes sont réalimentés, les paiements peuvent reprendre normalement.",
+        ifNoAction: "Risque de ne plus pouvoir payer (fournisseurs, salaires, etc.) et perte de confiance.",
       },
-      projection: { nextDay: totalUnder, nextWeek: totalUnder * 1.5 },
+      projection: dataSufficient ? { nextDay: totalUnder, nextWeek: totalUnder * 1.5 } : null,
+      projectionKind: "estimation",
       options: [
-        { label: "Renflouer les comptes et identifier la cause", estimatedImpact: totalUnder, risk: "low", effort: "medium", timeToImpact: "short" },
-        { label: "Réduire les sorties et reporter les dépenses non urgentes", estimatedImpact: Math.round(totalUnder * 0.5), risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -totalUnder, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Renflouer les comptes et identifier la cause", estimatedImpact: totalUnder, impactKind: "cash_injection", risk: "low", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Réduire les sorties et reporter les dépenses non urgentes", estimatedImpact: Math.round(totalUnder * 0.5), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -totalUnder, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "finances?tab=liquidites",
       level: "danger",
     }));
   }
 
-  if (zeroRevAgencies.length > 0) {
+  if (dataSufficient && zeroRevAgencies.length > 0) {
     const names = zeroRevAgencies.slice(0, 5).map((a) => a.nom).join(", ");
     const more = zeroRevAgencies.length > 5 ? ` et ${zeroRevAgencies.length - 5} autre(s)` : "";
     const estCaPerdu = zeroRevAgencies.length * 150000;
@@ -320,9 +484,9 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
       },
       projection: { nextDay: Math.round(estCaPerdu * 0.3), nextWeek: estCaPerdu },
       options: [
-        { label: "Analyser réservations réseau et relancer par agence", estimatedImpact: Math.round(estCaPerdu * 0.6), risk: "low", effort: "medium", timeToImpact: "short" },
-        { label: "Contacter les agences et vérifier l'offre (horaires, prix)", estimatedImpact: Math.round(estCaPerdu * 0.3), risk: "medium", effort: "low", timeToImpact: "immediate" },
-        { label: "Ne rien faire", estimatedImpact: -estCaPerdu, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Analyser réservations réseau et relancer par agence", estimatedImpact: Math.round(estCaPerdu * 0.6), risk: "low", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Contacter les agences et vérifier l'offre (horaires, prix)", estimatedImpact: Math.round(estCaPerdu * 0.3), risk: "medium", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -estCaPerdu, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "reservations-reseau",
       level: agenciesAtRiskCount >= AGENCIES_AT_RISK_CRITICAL_COUNT ? "danger" : "warning",
@@ -347,11 +511,11 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
         ifAction: "Correction immédiate du déficit et rapprochement des sessions.",
         ifNoAction: "Risque d'amplification et perte de contrôle financier.",
       },
-      projection: { nextDay: totalCashGap, nextWeek: Math.round(totalCashGap * 1.3) },
+      projection: dataSufficient ? { nextDay: totalCashGap, nextWeek: Math.round(totalCashGap * 1.3) } : null,
       options: [
-        { label: "Vérifier et régulariser dans Audit & contrôle", estimatedImpact: totalCashGap, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Contrôler les prochaines sessions et former les guichetiers", estimatedImpact: Math.round(totalCashGap * 0.5), risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -totalCashGap, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Vérifier et régulariser dans Audit & contrôle", estimatedImpact: totalCashGap, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Contrôler les prochaines sessions et former les guichetiers", estimatedImpact: Math.round(totalCashGap * 0.5), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -totalCashGap, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "audit-controle",
       level: "danger",
@@ -376,39 +540,42 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
         ifAction: "Régularisation des sessions et alignement comptable.",
         ifNoAction: "Écarts non résolus et risque de contentieux.",
       },
-      projection: { nextDay: totalCourierGap, nextWeek: Math.round(totalCourierGap * 1.2) },
+      projection: dataSufficient ? { nextDay: totalCourierGap, nextWeek: Math.round(totalCourierGap * 1.2) } : null,
       options: [
-        { label: "Valider et régulariser dans Audit & contrôle", estimatedImpact: totalCourierGap, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Reporter et revoir processus courrier", estimatedImpact: 0, risk: "medium", effort: "high", timeToImpact: "medium" },
-        { label: "Ne rien faire", estimatedImpact: -totalCourierGap, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Valider et régulariser dans Audit & contrôle", estimatedImpact: totalCourierGap, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Reporter et revoir processus courrier", estimatedImpact: 0, risk: "medium", effort: "high", timeToImpact: "medium", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -totalCourierGap, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "audit-controle",
       level: "warning",
     }));
   }
 
-  if (accountsBelowWarning > 0 && accountsBelowCritical === 0) {
+  if (dataSufficient && accountsBelowWarning > 0 && accountsBelowCritical === 0) {
     const totalUnderWarn = financialAccounts
-      .filter((a) => a.currentBalance < ACCOUNT_WARNING_THRESHOLD && a.currentBalance >= 0)
+      .filter((a) => isMainAccount(a) && a.currentBalance < ACCOUNT_WARNING_THRESHOLD)
       .reduce((sum, a) => sum + (ACCOUNT_WARNING_THRESHOLD - a.currentBalance), 0);
+    const warnFormatted = ACCOUNT_WARNING_THRESHOLD.toLocaleString("fr-FR");
+    const criticalFormatted = ACCOUNT_CRITICAL_THRESHOLD.toLocaleString("fr-FR");
     problemsRaw.push(buildProblem({
       id: "accounts-warning",
-      title: `Comptes sous seuil d'avertissement (${accountsBelowWarning})`,
-      cause: `Solde(s) entre ${ACCOUNT_WARNING_THRESHOLD} et ${ACCOUNT_CRITICAL_THRESHOLD} — vigilance liquidités.`,
-      impact: `${accountsBelowWarning} compte(s) à surveiller.`,
+      title: `${accountsBelowWarning} compte(s) trésorerie à surveiller`,
+      cause: `Ces comptes (banque, mobile money, réserves) ont entre ${criticalFormatted} et ${warnFormatted} FCFA. En dessous de ${criticalFormatted} FCFA, c’est le seuil danger.`,
+      impact: `Environ ${totalUnderWarn.toLocaleString("fr-FR")} FCFA manquants pour être à l’aise sur ces comptes.`,
       impactAmount: Math.max(totalUnderWarn, 25000),
       urgency: 3,
       confidence: 0.9,
       businessCriticality: 3,
       consequences: {
-        ifAction: "Anticipation des encaissements ou transferts pour rester au-dessus du seuil critique.",
-        ifNoAction: "Risque de basculement sous le seuil danger.",
+        ifAction: "Vous sécurisez les comptes avant d’atteindre le seuil danger.",
+        ifNoAction: "Risque de passer sous le seuil danger et de bloquer les paiements.",
       },
       projection: { nextDay: Math.round(totalUnderWarn * 0.2), nextWeek: totalUnderWarn },
+      projectionKind: "estimation",
       options: [
-        { label: "Renflouer ou transférer pour sécuriser", estimatedImpact: totalUnderWarn, risk: "low", effort: "medium", timeToImpact: "short" },
-        { label: "Surveiller et planifier les encaissements", estimatedImpact: Math.round(totalUnderWarn * 0.5), risk: "medium", effort: "low", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -totalUnderWarn, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Renflouer ou transférer pour sécuriser", estimatedImpact: totalUnderWarn, impactKind: "cash_injection", risk: "low", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Surveiller et planifier les encaissements", estimatedImpact: Math.round(totalUnderWarn * 0.5), risk: "medium", effort: "low", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -totalUnderWarn, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "finances?tab=liquidites",
       level: "warning",
@@ -416,7 +583,7 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
   }
 
   const delayed = delayedBusesCount ?? 0;
-  if (delayed > 0) {
+  if (dataSufficient && delayed > 0) {
     const estPerteRetard = delayed * 50000;
     problemsRaw.push(buildProblem({
       id: "delayed-buses",
@@ -433,21 +600,27 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
       },
       projection: { nextDay: Math.round(estPerteRetard * 0.5), nextWeek: estPerteRetard * 2 },
       options: [
-        { label: "Consulter la flotte (filtre retard) et coordonner", estimatedImpact: Math.round(estPerteRetard * 0.5), risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Informer les agences et reporter les départs suivants", estimatedImpact: Math.round(estPerteRetard * 0.3), risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -estPerteRetard, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Consulter la flotte (filtre retard) et coordonner", estimatedImpact: Math.round(estPerteRetard * 0.5), risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Informer les agences et reporter les départs suivants", estimatedImpact: Math.round(estPerteRetard * 0.3), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -estPerteRetard, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "flotte?filter=retard",
       level: delayed >= 3 ? "danger" : "warning",
     }));
   }
 
-  const problems = problemsRaw.sort((a, b) => b.score - a.score);
+  const problems = problemsRaw
+    .sort((a, b) => b.score - a.score)
+    .map((p) => ({
+      ...p,
+      recommendationSafe: isRecommendationSafe(p.id, dataSufficient, totalTripsForSafe),
+    }));
 
-  // ─── Opportunities ────────────────────────────────────────────────────────
+  // ─── Opportunities (uniquement si données suffisantes) ────────────────────────
   const opportunities: DecisionOpportunity[] = [];
-
-  if (prevStats && prevStats.totalRevenue > 0 && currentRevenue > prevStats.totalRevenue) {
+  if (!dataSufficient) {
+    // Pas d'opportunités stratégiques avec trop peu de données
+  } else if (prevStats && prevStats.totalRevenue > 0 && currentRevenue > prevStats.totalRevenue) {
     const changePct = ((currentRevenue - prevStats.totalRevenue) / prevStats.totalRevenue) * 100;
     if (changePct >= OPPORTUNITY_GROWTH_PCT) {
       opportunities.push({
@@ -459,25 +632,13 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
     }
   }
 
-  if (fillRatePct >= OPPORTUNITY_FILL_RATE_GOOD) {
+  if (dataSufficient && fillRatePct != null && fillRatePct >= OPPORTUNITY_FILL_RATE_GOOD) {
     opportunities.push({
       id: "fill-rate-good",
       titre: "Bon taux de remplissage réseau",
       preuve: `${fillRatePct} % de remplissage sur la période`,
       actionSuggeree: "Envisager d'ajouter des départs sur les créneaux saturés.",
     });
-  }
-
-  if (topAgenciesByRevenue.length >= 1) {
-    const top = topAgenciesByRevenue[0];
-    if (top.revenue > 0) {
-      opportunities.push({
-        id: "top-agency",
-        titre: "Agence performante",
-        preuve: `${top.nom} : ${top.revenue.toLocaleString("fr-FR")} sur la période`,
-        actionSuggeree: "S'appuyer sur les bonnes pratiques de cette agence pour les autres.",
-      });
-    }
   }
 
   // ─── Actions (max 3, dérivées des problèmes au plus haut score) ─────────────
@@ -498,6 +659,7 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
     problems,
     opportunities,
     actions,
+    dataSufficient,
   };
 }
 
@@ -520,8 +682,8 @@ export interface ManagerDecisionInput {
   revenue: number;
   /** Billets période */
   tickets: number;
-  /** Taux de remplissage moyen (0–100) */
-  fillRatePct: number;
+  /** Taux de remplissage moyen (0–100). Null si capacité inconnue ou 0. */
+  fillRatePct: number | null;
   /** Trésorerie agence */
   cashPosition: number;
   /** Écart caisse (cashPosition - todayRevenue + todayExpenses) si pertinent */
@@ -584,6 +746,13 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
     totalSlotsCount = 0,
   } = input;
 
+  const dataSufficient = isDataSufficient({
+    totalTrips: totalSlotsCount,
+    totalTickets: tickets,
+    totalSlots: totalSlotsCount,
+  });
+  const totalSlotsForSafe = totalSlotsCount || 0;
+
   const hasCriticalAlerts = alerts.some((a) => a.severity === "critical");
   const hasWarningAlerts = alerts.some((a) => a.severity === "warning");
   const status = computeManagerGlobalStatus({
@@ -596,7 +765,11 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
   // ─── Summary ──────────────────────────────────────────────────────────────
   const summary: string[] = [];
   summary.push(`CA période : ${revenue.toLocaleString("fr-FR")} — ${tickets} billets.`);
-  summary.push(`Remplissage moyen : ${fillRatePct} %. Trésorerie agence : ${cashPosition.toLocaleString("fr-FR")}.`);
+  summary.push(
+    fillRatePct != null && !Number.isNaN(fillRatePct)
+      ? `Remplissage moyen : ${fillRatePct} %. Trésorerie agence : ${cashPosition.toLocaleString("fr-FR")}.`
+      : `Trésorerie agence : ${cashPosition.toLocaleString("fr-FR")}.`
+  );
   if (pendingChefApprovalCount > 0) {
     summary.push(`${pendingChefApprovalCount} rapport(s) à approuver.`);
   } else if (pendingComptaCount > 0) {
@@ -623,11 +796,11 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         ifAction: "Clôture comptable à jour et réconciliation des caisses.",
         ifNoAction: "Retard persistant et blocage des contrôles.",
       },
-      projection: { nextDay: impactAmount, nextWeek: impactAmount * 2 },
+      projection: dataSufficient ? { nextDay: impactAmount, nextWeek: impactAmount * 2 } : null,
       options: [
-        { label: `Approuver les ${pendingChefApprovalCount} rapport(s) dans Finances`, estimatedImpact: impactAmount, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Vérifier d'abord les montants puis approuver", estimatedImpact: Math.round(impactAmount * 0.8), risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: `Approuver les ${pendingChefApprovalCount} rapport(s) dans Finances`, estimatedImpact: impactAmount, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Vérifier d'abord les montants puis approuver", estimatedImpact: Math.round(impactAmount * 0.8), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "/agence/finances",
       level: "danger",
@@ -649,11 +822,11 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         ifAction: "Correction immédiate du déficit ou régularisation du surplus.",
         ifNoAction: "Risque d'amplification et perte de contrôle financier.",
       },
-      projection: { nextDay: absVariance, nextWeek: Math.round(absVariance * 1.3) },
+      projection: dataSufficient ? { nextDay: absVariance, nextWeek: Math.round(absVariance * 1.3) } : null,
       options: [
-        { label: "Vérifier mouvements et rapports de caisse dans Finances", estimatedImpact: absVariance, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Contrôler les prochaines sessions avant de régulariser", estimatedImpact: Math.round(absVariance * 0.5), risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -absVariance, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Vérifier mouvements et rapports de caisse dans Finances", estimatedImpact: absVariance, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Contrôler les prochaines sessions avant de régulariser", estimatedImpact: Math.round(absVariance * 0.5), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -absVariance, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "/agence/finances",
       level: "danger",
@@ -675,11 +848,11 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         ifAction: "Relance du comptable et validation en chaîne.",
         ifNoAction: "Retard de réconciliation et accumulation des écarts.",
       },
-      projection: { nextDay: Math.round(impactAmount * 0.3), nextWeek: impactAmount },
+      projection: dataSufficient ? { nextDay: Math.round(impactAmount * 0.3), nextWeek: impactAmount } : null,
       options: [
-        { label: "Relancer la validation compta dans Finances", estimatedImpact: impactAmount, risk: "low", effort: "low", timeToImpact: "short" },
-        { label: "Traiter manuellement les rapports prioritaires", estimatedImpact: Math.round(impactAmount * 0.6), risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Relancer la validation compta dans Finances", estimatedImpact: impactAmount, risk: "low", effort: "low", timeToImpact: "short", feasibility: "high" },
+        { label: "Traiter manuellement les rapports prioritaires", estimatedImpact: Math.round(impactAmount * 0.6), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "/agence/finances",
       level: "warning",
@@ -702,18 +875,18 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         ifAction: "Reprise des ventes dès qu'un guichet est activé ou départs clôturés.",
         ifNoAction: "Ventes perdues et insatisfaction client.",
       },
-      projection: { nextDay: impactAmount, nextWeek: impactAmount * 3 },
+      projection: dataSufficient ? { nextDay: impactAmount, nextWeek: impactAmount * 3 } : null,
       options: [
-        { label: "Activer un guichet immédiatement", estimatedImpact: impactAmount, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Clôturer les départs non servis", estimatedImpact: 0, risk: "medium", effort: "low", timeToImpact: "immediate" },
-        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Activer un guichet immédiatement", estimatedImpact: impactAmount, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Clôturer les départs non servis", estimatedImpact: 0, risk: "medium", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: noCounterAlert.link,
       level: "danger",
     }));
   }
 
-  if (delayedDeparturesCount > 0) {
+  if (dataSufficient && delayedDeparturesCount > 0) {
     const impactAmount = delayedDeparturesCount * 30000;
     problemsRaw.push(buildProblem({
       id: "delayed-departures",
@@ -730,22 +903,24 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
       },
       projection: { nextDay: Math.round(impactAmount * 0.5), nextWeek: impactAmount * 2 },
       options: [
-        { label: "Consulter Opérations et coordonner avec les guichets", estimatedImpact: Math.round(impactAmount * 0.5), risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Informer les clients et reporter si besoin", estimatedImpact: Math.round(impactAmount * 0.3), risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Consulter Opérations et coordonner avec les guichets", estimatedImpact: Math.round(impactAmount * 0.5), risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Informer les clients et reporter si besoin", estimatedImpact: Math.round(impactAmount * 0.3), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "/agence/operations",
       level: "warning",
     }));
   }
 
-  if (lowFillDeparturesCount > 0) {
+  if (dataSufficient && lowFillDeparturesCount > 0) {
     const siegesVides = lowFillDeparturesCount * 35;
     const prixMoyen = 5000;
     const impactAmount = siegesVides * prixMoyen;
+    const totalSlots = Math.max(totalSlotsCount || 0, lowFillDeparturesCount);
+    const titleContext = totalSlots > 0 ? ` sur ${totalSlots}` : "";
     problemsRaw.push(buildProblem({
       id: "low-fill",
-      title: lowFillDeparturesCount === 1 ? "1 départ avec faible remplissage" : `${lowFillDeparturesCount} départs avec faible remplissage`,
+      title: lowFillDeparturesCount === 1 ? `1 départ${titleContext} avec faible remplissage` : `${lowFillDeparturesCount} départs${titleContext} avec faible remplissage`,
       cause: "Remplissage < 30 % sur un ou plusieurs créneaux.",
       impact: `Sièges vides : ${lowFillDeparturesCount} créneau(x) sous-utilisé(s) — potentiel CA non réalisé.`,
       impactAmount,
@@ -758,9 +933,9 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
       },
       projection: { nextDay: Math.round(impactAmount * 0.2), nextWeek: impactAmount },
       options: [
-        { label: "Réduire un départ pour limiter les coûts", estimatedImpact: 150000, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Maintenir + promotion sur le créneau", estimatedImpact: 80000, risk: "medium", effort: "medium", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Réduire un départ pour limiter les coûts", estimatedImpact: 150000, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: totalSlotsForSafe <= 1 ? "low" : "high" },
+        { label: "Maintenir + promotion sur le créneau", estimatedImpact: 80000, risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: "/agence/operations",
       level: "warning",
@@ -768,7 +943,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
   }
 
   const longSessionAlert = alerts.find((a) => a.title.includes("session") && a.title.includes("h"));
-  if (longSessionAlert) {
+  if (dataSufficient && longSessionAlert) {
     problemsRaw.push(buildProblem({
       id: "long-sessions",
       title: longSessionAlert.title,
@@ -784,16 +959,21 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
       },
       projection: { nextDay: 25000, nextWeek: 50000 },
       options: [
-        { label: "Planifier une pause ou une relève (Dashboard)", estimatedImpact: 50000, risk: "low", effort: "low", timeToImpact: "immediate" },
-        { label: "Surveiller et rappeler la procédure de clôture", estimatedImpact: 25000, risk: "medium", effort: "low", timeToImpact: "short" },
-        { label: "Ne rien faire", estimatedImpact: -50000, risk: "high", effort: "low", timeToImpact: "immediate" },
+        { label: "Planifier une pause ou une relève (Dashboard)", estimatedImpact: 50000, risk: "low", effort: "low", timeToImpact: "immediate", feasibility: "high" },
+        { label: "Surveiller et rappeler la procédure de clôture", estimatedImpact: 25000, risk: "medium", effort: "low", timeToImpact: "short", feasibility: "high" },
+        { label: "Ne rien faire", estimatedImpact: -50000, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
       actionRoute: longSessionAlert.link,
       level: "warning",
     }));
   }
 
-  const problems = problemsRaw.sort((a, b) => b.score - a.score);
+  const problems = problemsRaw
+    .sort((a, b) => b.score - a.score)
+    .map((p) => ({
+      ...p,
+      recommendationSafe: isRecommendationSafe(p.id, dataSufficient, totalSlotsForSafe),
+    }));
 
   // ─── Actions (max 3, dérivées des problèmes au plus haut score) ─────────────
   const topByScoreM = problems.slice(0, 3);
@@ -807,10 +987,11 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
     };
   });
 
-  // ─── Opportunities ─────────────────────────────────────────────────────────
+  // ─── Opportunities (uniquement si données suffisantes) ──────────────────────
   const opportunities: DecisionOpportunity[] = [];
-
-  if (prevRevenue != null && prevRevenue > 0 && revenue > prevRevenue) {
+  if (!dataSufficient) {
+    // Pas d'opportunités stratégiques avec trop peu de données
+  } else if (prevRevenue != null && prevRevenue > 0 && revenue > prevRevenue) {
     const changePct = ((revenue - prevRevenue) / prevRevenue) * 100;
     if (changePct >= OPPORTUNITY_GROWTH_PCT && comparisonLabel) {
       opportunities.push({
@@ -822,7 +1003,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
     }
   }
 
-  if (fillRatePct >= OPPORTUNITY_FILL_RATE_GOOD) {
+  if (dataSufficient && fillRatePct != null && fillRatePct >= OPPORTUNITY_FILL_RATE_GOOD) {
     opportunities.push({
       id: "fill-good",
       titre: "Bon taux de remplissage",
@@ -831,7 +1012,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
     });
   }
 
-  if (totalSlotsCount > 0 && fullSlotsCount > 0) {
+  if (dataSufficient && totalSlotsCount > 0 && fullSlotsCount > 0) {
     const pctFull = Math.round((fullSlotsCount / totalSlotsCount) * 100);
     if (pctFull >= 20) {
       opportunities.push({
@@ -849,5 +1030,6 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
     problems,
     opportunities,
     actions,
+    dataSufficient,
   };
 }

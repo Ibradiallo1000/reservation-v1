@@ -41,6 +41,7 @@ import AgencyTreasuryNewOperationPage from '@/modules/agence/treasury/pages/Agen
 import AgencyTreasuryTransferPage from '@/modules/agence/treasury/pages/AgencyTreasuryTransferPage';
 import AgencyTreasuryNewPayablePage from '@/modules/agence/treasury/pages/AgencyTreasuryNewPayablePage';
 import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
+import { getCashTransactionsByLocation } from '@/modules/compagnie/cash/cashService';
 import { getTodayBamako } from '@/shared/date/dateUtilsTz';
 
 /* ============================================================================
@@ -48,7 +49,7 @@ import { getTodayBamako } from '@/shared/date/dateUtilsTz';
    Description : Définition des structures de données principales
    ============================================================================ */
 
-type ShiftStatus = 'pending' | 'active' | 'paused' | 'closed' | 'validated';
+type ShiftStatus = 'pending' | 'active' | 'paused' | 'closed' | 'validated_agency' | 'validated';
 
 type ShiftDoc = {
   id: string;
@@ -64,6 +65,7 @@ type ShiftDoc = {
   totalTickets?: number;
   totalReservations?: number;
   totalAmount?: number;
+  totalRevenue?: number;
   totalCash?: number;
   totalDigital?: number;
   payBy?: Record<string, number>;
@@ -222,6 +224,7 @@ const AgenceComptabilitePage: React.FC = () => {
   const [activeShifts, setActiveShifts] = useState<ShiftDoc[]>([]);
   const [pausedShifts, setPausedShifts] = useState<ShiftDoc[]>([]);
   const [closedShifts, setClosedShifts] = useState<ShiftDoc[]>([]);
+  const [validatedAgencyShifts, setValidatedAgencyShifts] = useState<ShiftDoc[]>([]);
   const [validatedShifts, setValidatedShifts] = useState<ShiftDoc[]>([]);
   const [validatedLimit, setValidatedLimit] = useState(10);
 
@@ -370,11 +373,13 @@ const AgenceComptabilitePage: React.FC = () => {
     companyId: r.companyId,
     agencyId: r.agencyId,
     status: r.status,
-    startTime: r.startTime || r.openedAt,
-    endTime: r.endTime || r.closedAt,
-    totalTickets: r.totalTickets,
+    startTime: r.startTime || r.startAt || r.openedAt,
+    endTime: r.endTime || r.endAt || r.closedAt,
+    totalTickets: r.totalTickets ?? r.tickets,
     totalReservations: r.totalReservations,
-    totalAmount: r.totalAmount,
+    totalAmount: r.totalAmount ?? r.amount,
+    totalRevenue: r.totalRevenue ?? r.amount,
+    totalCash: r.totalCash ?? r.amount,
     payBy: r.payBy,
     accountantId: r.accountantId,
     accountantCode: r.accountantCode,
@@ -435,11 +440,12 @@ const AgenceComptabilitePage: React.FC = () => {
         (s.endTime?.toMillis?.() ?? 0) ||
         (s.startTime?.toMillis?.() ?? 0);
 
-      // Mise à jour des listes groupées par statut
+      // Mise à jour des listes groupées par statut (incl. validated_agency pour visibilité chef)
       setPendingShifts(all.filter(s => s.status === 'pending').sort((a,b)=>byTime(b)-byTime(a)));
       setActiveShifts(all.filter(s => s.status === 'active').sort((a,b)=>byTime(b)-byTime(a)));
       setPausedShifts(all.filter(s => s.status === 'paused').sort((a,b)=>byTime(b)-byTime(a)));
       setClosedShifts(all.filter(s => s.status === 'closed').sort((a,b)=>byTime(b)-byTime(a)));
+      setValidatedAgencyShifts(all.filter(s => s.status === 'validated_agency').sort((a,b)=>byTime(b)-byTime(a)));
       setValidatedShifts(all.filter(s => s.status === 'validated').sort((a,b)=>byTime(b)-byTime(a)));
 
       console.log('[AgenceCompta] Postes mis à jour:', {
@@ -447,6 +453,7 @@ const AgenceComptabilitePage: React.FC = () => {
         active: all.filter(s => s.status === 'active').length,
         paused: all.filter(s => s.status === 'paused').length,
         closed: all.filter(s => s.status === 'closed').length,
+        validated_agency: all.filter(s => s.status === 'validated_agency').length,
         validated: all.filter(s => s.status === 'validated').length
       });
     });
@@ -795,7 +802,7 @@ const AgenceComptabilitePage: React.FC = () => {
       ));
 
       let extraDocs: any[] = [];
-      // Recherche des transactions orphelines dans la période
+      // Orphelins guichet uniquement (même vendeur, sans shiftId) — les postes listés sont des sessions guichet
       if (start && end) {
         const snapAll = await getDocs(query(
           rRef,
@@ -806,25 +813,14 @@ const AgenceComptabilitePage: React.FC = () => {
           const r = d.data() as any;
           const dt = r.createdAt?.toDate?.() ?? new Date(0);
           const inRange = dt >= start && dt <= end;
-          
-          // Pour guichet : vérifier le vendeur
           const canal = String(r.canal || '').toLowerCase();
-          if (canal === 'guichet' || canal === '') {
-            const sameSeller =
-              (!!userId   && r.guichetierId   === userId) ||
-              (!!userCode && r.guichetierCode === userCode);
-            const noShiftId = !r.shiftId || r.shiftId === '';
-            return inRange && sameSeller && noShiftId;
-          }
-          
-          // Pour en ligne : vérifier l'agence
-          if (canal === 'en_ligne') {
-            const sameAgency = r.agencyId === user.agencyId;
-            const noShiftId = !r.shiftId || r.shiftId === '';
-            return inRange && sameAgency && noShiftId;
-          }
-          
-          return false;
+          // Ne pas inclure les réservations en ligne dans le rapport d'un poste guichet
+          if (canal === 'en_ligne') return false;
+          const sameSeller =
+            (!!userId   && r.guichetierId   === userId) ||
+            (!!userCode && r.guichetierCode === userCode);
+          const noShiftId = !r.shiftId || r.shiftId === '';
+          return inRange && (canal === 'guichet' || canal === '') && sameSeller && noShiftId;
         });
       }
 
@@ -992,12 +988,32 @@ const AgenceComptabilitePage: React.FC = () => {
         }
       };
 
-      const [sr, sm] = await Promise.all([
+      const shiftsRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
+      const toEnd = new Date(currentRange.to.getTime() - 1);
+      const qVA = query(
+        shiftsRef,
+        where('status', '==', 'validated_agency'),
+        where('validatedAt', '>=', Timestamp.fromDate(currentRange.from)),
+        where('validatedAt', '<=', Timestamp.fromDate(toEnd)),
+        orderBy('validatedAt', 'asc')
+      );
+      const qV = query(
+        shiftsRef,
+        where('status', '==', 'validated'),
+        where('validatedAt', '>=', Timestamp.fromDate(currentRange.from)),
+        where('validatedAt', '<=', Timestamp.fromDate(toEnd)),
+        orderBy('validatedAt', 'asc')
+      );
+
+      const [sr, sm, sVa, sV] = await Promise.all([
         safeGetDocs("cashReceipts", qR),
         safeGetDocs("cashMovements", qM),
+        safeGetDocs("shifts(validated_agency)", qVA),
+        safeGetDocs("shifts(validated)", qV),
       ]);
 
       const map: Record<string, { in: number; out: number }> = {};
+      const shiftIdsAlreadyCredited = new Set<string>();
 
       // Agrégation des entrées (reçus de caisse)
       sr?.forEach(d => {
@@ -1008,7 +1024,25 @@ const AgenceComptabilitePage: React.FC = () => {
         const inc = Number(r.cashReceived || 0);
         if (!map[key]) map[key] = { in: 0, out: 0 };
         map[key].in += Math.max(0, inc);
+        if (r.shiftId) shiftIdsAlreadyCredited.add(r.shiftId);
       });
+
+      // Entrées issues des sessions validées (agence ou chef) dans la période, non déjà comptées via cashReceipts
+      const addValidatedShiftEntries = (snap: Awaited<ReturnType<typeof getDocs>> | null) => {
+        snap?.forEach(d => {
+          if (shiftIdsAlreadyCredited.has(d.id)) return;
+          const r = d.data() as any;
+          const dt = r.validatedAt?.toDate?.() ?? new Date();
+          if (dt < currentRange.from || dt >= currentRange.to) return;
+          const key = dt.toISOString().split('T')[0];
+          const inc = Number(r.amount ?? r.totalRevenue ?? r.validationAudit?.receivedCashAmount ?? 0);
+          if (inc <= 0) return;
+          if (!map[key]) map[key] = { in: 0, out: 0 };
+          map[key].in += inc;
+        });
+      };
+      addValidatedShiftEntries(sVa);
+      addValidatedShiftEntries(sV);
 
       // Agrégation des sorties (dépenses et transferts)
       sm?.forEach(d => {
@@ -1070,79 +1104,68 @@ const AgenceComptabilitePage: React.FC = () => {
   
   const loadReconciliation = useCallback(async () => {
     console.log('[AgenceCompta] Chargement des données de réconciliation pour', reconciliationDate);
-    
+
     if (!user?.companyId || !user?.agencyId) return;
-    
+
     setLoadingReconciliation(true);
-    
+
     try {
-      const date = new Date(reconciliationDate);
-      const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
-      const end = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
-      
-      // 1. Récupérer TOUTES les réservations de l'agence pour la journée
-      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
-      const q = query(
-        rRef,
-        where('date', '==', reconciliationDate),
-        orderBy('createdAt', 'asc')
-      );
-      
-      const snap = await getDocs(q);
-      
-      // 2. Calculer les agrégats
-      let ventesGuichet = { reservations: 0, tickets: 0, montant: 0 };
-      let ventesEnLigne = { reservations: 0, tickets: 0, montant: 0 };
+      // Source de vérité : cashTransactions (même source que totaux session / closeSession)
+      const dateStr = reconciliationDate.trim() || new Date().toISOString().split('T')[0];
+      let list: Array<{ id: string; sourceType?: string; locationId?: string; amount?: number; seats?: number; paymentMethod?: string; status?: string }>;
+      try {
+        list = await getCashTransactionsByLocation(user.companyId, user.agencyId, dateStr);
+      } catch (idxErr) {
+        console.warn('[AgenceCompta] getCashTransactionsByLocation (date) failed, trying paidAt range', idxErr);
+        const { getCashTransactionsByPaidAtRange } = await import('@/modules/compagnie/cash/cashService');
+        const all = await getCashTransactionsByPaidAtRange(user.companyId, dateStr, dateStr);
+        list = all.filter((t: { locationId?: string }) => t.locationId === user.agencyId);
+      }
+
+      const ventesGuichet = { reservations: 0, tickets: 0, montant: 0 };
+      const ventesEnLigne = { reservations: 0, tickets: 0, montant: 0 };
       let encaissementsEspeces = 0;
       let encaissementsMobileMoney = 0;
-      
-      snap.forEach(d => {
-        const r = d.data() as any;
-        const canal = String(r.canal || '').toLowerCase();
-        const paiement = String(r.paiement || '').toLowerCase();
-        const montant = r.montant || 0;
-        const tickets = (r.seatsGo || 0) + (r.seatsReturn || 0);
-        
-        if (canal === 'guichet' || canal === '') {
+
+      const refunded = 'refunded';
+      list.forEach((t) => {
+        if ((t as { status?: string }).status === refunded) return;
+        const amount = Number(t.amount || 0);
+        const seats = Number(t.seats || 0);
+        const source = String((t as { sourceType?: string }).sourceType || '').toLowerCase();
+        const payment = String((t as { paymentMethod?: string }).paymentMethod || '').toLowerCase();
+
+        if (source === 'guichet') {
           ventesGuichet.reservations += 1;
-          ventesGuichet.tickets += tickets;
-          ventesGuichet.montant += montant;
-          
-          if (paiement.includes('esp')) {
-            encaissementsEspeces += montant;
-          }
-          if (paiement.includes('mobile') || paiement.includes('mm')) {
-            encaissementsMobileMoney += montant;
-          }
-        } else if (canal === 'en_ligne') {
+          ventesGuichet.tickets += seats || 1;
+          ventesGuichet.montant += amount;
+          if (payment.includes('cash') || payment.includes('esp')) encaissementsEspeces += amount;
+          else if (payment.includes('mobile') || payment.includes('mm')) encaissementsMobileMoney += amount;
+        } else if (source === 'online') {
           ventesEnLigne.reservations += 1;
-          ventesEnLigne.tickets += tickets;
-          ventesEnLigne.montant += montant;
-          // En ligne : pas d'encaissement dans la caisse agence
+          ventesEnLigne.tickets += seats || 1;
+          ventesEnLigne.montant += amount;
         }
       });
-      
-      // 3. Calculer l'écart
+
       const encaissementsTotal = encaissementsEspeces + encaissementsMobileMoney;
       const ecart = ventesGuichet.montant - encaissementsTotal;
-      
-      // 4. Mettre à jour l'état
+
       setReconciliationData({
         ventesGuichet,
         ventesEnLigne,
         encaissementsEspeces,
         encaissementsMobileMoney,
         encaissementsTotal,
-        ecart
+        ecart,
       });
-      
-      console.log('[AgenceCompta] Réconciliation calculée:', {
+
+      console.log('[AgenceCompta] Réconciliation calculée (cashTransactions):', {
         ventesGuichet,
         ventesEnLigne,
         encaissementsTotal,
-        ecart
+        ecart,
       });
-      
     } catch (error) {
       console.error('[AgenceCompta] Erreur lors du chargement de la réconciliation:', error);
       alert('Erreur lors du chargement de la réconciliation');
@@ -1163,8 +1186,8 @@ const AgenceComptabilitePage: React.FC = () => {
      ============================================================================ */
   
   const findShift = useCallback(
-    (id?: string) => [...activeShifts, ...pausedShifts, ...closedShifts, ...validatedShifts].find(s => s.id === id),
-    [activeShifts, pausedShifts, closedShifts, validatedShifts]
+    (id?: string) => [...activeShifts, ...pausedShifts, ...closedShifts, ...validatedAgencyShifts, ...validatedShifts].find(s => s.id === id),
+    [activeShifts, pausedShifts, closedShifts, validatedAgencyShifts, validatedShifts]
   );
 
   /* ============================================================================
@@ -1339,11 +1362,12 @@ const AgenceComptabilitePage: React.FC = () => {
             </div>
 
             {/* Stats rapides */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 sm:gap-4">
               <MetricCard label="En attente" value={pendingShifts.length} icon={Clock4} valueColorVar="#4f46e5" />
               <MetricCard label="En service" value={activeShifts.length} icon={Play} valueColorVar="#059669" />
               <MetricCard label="En pause" value={pausedShifts.length} icon={Pause} valueColorVar="#d97706" />
               <MetricCard label="Clôturés" value={closedShifts.length} icon={StopCircle} valueColorVar="#e11d48" />
+              <MetricCard label="Validé agence" value={validatedAgencyShifts.length} icon={CheckCircle2} valueColorVar="#0d9488" />
               <MetricCard label="Validés" value={validatedShifts.length} icon={CheckCircle2} valueColorVar="#64748b" />
             </div>
 
@@ -1551,6 +1575,32 @@ const AgenceComptabilitePage: React.FC = () => {
               );
             })()}
             </SectionCard>
+
+            {/* Postes validés agence (visibles pour le chef, en attente validation compagnie) */}
+            {validatedAgencyShifts.length > 0 && (
+              <SectionCard
+                title="Validé agence (en attente validation chef)"
+                help="Sessions déjà validées par le comptable agence ; en attente de validation par le chef comptable."
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {validatedAgencyShifts.map((s) => {
+                    const ui = usersCache[s.userId] || {};
+                    const name = ui.name || s.userName || s.userEmail || s.userId;
+                    const code = ui.code || s.userCode || '—';
+                    return (
+                      <div key={s.id} className="rounded-xl border border-teal-200 bg-teal-50/30 p-4">
+                        <div className="font-semibold text-gray-900">{name} <span className="text-gray-500 text-sm">({code})</span></div>
+                        <div className="text-sm text-gray-600 mt-1">
+                          {s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} → {s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleString('fr-FR') : '—'}
+                        </div>
+                        <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(s.totalAmount ?? s.totalRevenue ?? 0)}</div>
+                        <div className="mt-2 text-xs text-teal-700">Validé agence · En attente chef comptable</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </SectionCard>
+            )}
           </div>
         )}
 
@@ -1581,7 +1631,7 @@ const AgenceComptabilitePage: React.FC = () => {
                     onChange={(e) => loadReportForShift(e.target.value)}
                   >
                     <option value="">— Sélectionnez un poste —</option>
-                    {[...activeShifts, ...pausedShifts, ...closedShifts, ...validatedShifts].map(s => {
+                    {[...activeShifts, ...pausedShifts, ...closedShifts, ...validatedAgencyShifts, ...validatedShifts].map(s => {
                       const ui   = usersCache[s.userId] || {};
                       const name = ui.name || s.userName || s.userEmail || s.userId;
                       const code = ui.code || s.userCode || '—';
@@ -1589,10 +1639,11 @@ const AgenceComptabilitePage: React.FC = () => {
                       const end   = s.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime)   : null;
 
                       const statutFr =
-                        s.status === 'active'    ? 'En service'  :
-                        s.status === 'paused'    ? 'En pause'    :
-                        s.status === 'closed'    ? 'Clôturé'     :
-                        s.status === 'validated' ? 'Validé'      : 'En attente';
+                        s.status === 'active'           ? 'En service'  :
+                        s.status === 'paused'           ? 'En pause'    :
+                        s.status === 'closed'           ? 'Clôturé'     :
+                        s.status === 'validated_agency' ? 'Validé agence' :
+                        s.status === 'validated'        ? 'Validé'      : 'En attente';
 
                       const periode = `${start ? start.toLocaleDateString('fr-FR') : '?'} → ${end ? end.toLocaleDateString('fr-FR') : '?'}`;
 
@@ -2451,6 +2502,7 @@ const shiftStatusToBadge: Record<string, "active" | "pending" | "success" | "war
   paused: "pending",
   closed: "warning",
   pending: "pending",
+  validated_agency: "success",
   validated: "success",
 };
 
@@ -2470,6 +2522,7 @@ const SectionShifts: React.FC<{
     paused: "En pause",
     closed: "Clôturé",
     pending: "En attente",
+    validated_agency: "Validé agence (en attente chef)",
     validated: "Validé",
   };
   return (

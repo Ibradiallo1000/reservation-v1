@@ -114,14 +114,29 @@ function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
   return `${String(h2).padStart(2, "0")}:${String(m2).padStart(2, "0")}`;
 }
 
-// ─── Helpers ───
-async function getSellerCode(uid?: string | null) {
+// ─── Helpers : code guichetier depuis users root, sinon depuis Équipe (agence/users) ───
+async function getSellerCode(
+  uid?: string | null,
+  companyId?: string | null,
+  agencyId?: string | null
+): Promise<string | null> {
   if (!uid) return null;
   try {
     const s = await getDoc(doc(db, "users", uid));
-    if (!s.exists()) return null;
-    const u = s.data() as any;
-    return u.staffCode || u.codeCourt || u.code || null;
+    if (s.exists()) {
+      const u = s.data() as any;
+      const code = u.staffCode || u.codeCourt || u.code || null;
+      if (code) return code;
+    }
+    if (companyId && agencyId) {
+      const usersRef = collection(db, "companies", companyId, "agences", agencyId, "users");
+      const snap = await getDocs(query(usersRef, where("uid", "==", uid)));
+      if (snap.docs.length > 0) {
+        const d = snap.docs[0].data() as any;
+        return d.agentCode || d.staffCode || d.codeCourt || d.code || null;
+      }
+    }
+    return null;
   } catch { return null; }
 }
 
@@ -199,9 +214,11 @@ const AgenceGuichetPage: React.FC = () => {
   const [tariffKey, setTariffKey] = useState("plein");
   const [additionalPassengers, setAdditionalPassengers] = useState<Array<{ name: string; phone: string }>>([]);
 
-  // ── Session summary ──
+  // ── Session summary (données du rapport de clôture = même source que "Sessions en attente de validation") ──
   const [showSummary, setShowSummary] = useState(false);
+  const [summaryStart, setSummaryStart] = useState<Date | null>(null);
   const [summaryEnd, setSummaryEnd] = useState<Date | null>(null);
+  const [summaryTickets, setSummaryTickets] = useState<Array<{ depart: string; arrivee: string; seatsGo: number; seatsReturn?: number; montant: number; statutEmbarquement?: string }>>([]);
 
   // ── Live session data ──
   const [tickets, setTickets] = useState<TicketRow[]>([]);
@@ -326,7 +343,7 @@ const AgenceGuichetPage: React.FC = () => {
     (async () => {
       try {
         if (user?.uid) {
-          const sc = await getSellerCode(user.uid);
+          const sc = await getSellerCode(user.uid, user.companyId, user.agencyId);
           if (sc) setSellerCodeCached(sc);
         }
         if (!user?.companyId || !user?.agencyId) return;
@@ -657,6 +674,7 @@ const AgenceGuichetPage: React.FC = () => {
         montant: totalPrice, statut: RESERVATION_STATUS.PAYE, paiement: "espèces",
         agencyNom: agencyMeta.name, agenceTelephone: agencyMeta.phone,
         createdAt: new Date(), referenceCode,
+        guichetierCode: sellerCodeCached || staffCodeForSale || "GUEST",
       });
       setReceiptCompany({
         nom: companyMeta.name, logoUrl: companyMeta.logo || undefined,
@@ -853,15 +871,36 @@ const AgenceGuichetPage: React.FC = () => {
   }, [tickets, reportSearch]);
 
   // ═══════════════ SESSION CLOSE WITH SUMMARY ═══════════════
+  /** Convertit les détails du rapport de clôture (même source que "Sessions en attente de validation") en lignes pour le popup. */
+  const detailsToSummaryRows = useCallback((details: { trajet: string; billets: number; montant: number }[]) => {
+    return (details || []).map((d) => {
+      const [depart = "", arrivee = ""] = String(d.trajet || "").split("→");
+      return {
+        depart: depart.trim(),
+        arrivee: arrivee.trim(),
+        seatsGo: d.billets ?? 0,
+        seatsReturn: 0,
+        montant: d.montant ?? 0,
+      };
+    });
+  }, []);
+
   const handleSessionClose = useCallback(async () => {
+    const startTime = sessionStartedAt ?? null;
     try {
-      await closeShift();
+      const result = await closeShift();
+      setSummaryStart(startTime);
       setSummaryEnd(new Date());
+      if (result) {
+        setSummaryTickets(detailsToSummaryRows(result.details));
+      } else {
+        setSummaryTickets([]);
+      }
       setShowSummary(true);
       if (soundEnabled) playSound("close");
       handleTabChange("rapport");
     } catch (e: any) { alert(e?.message || "Erreur"); }
-  }, [closeShift, soundEnabled, handleTabChange]);
+  }, [closeShift, detailsToSummaryRows, soundEnabled, handleTabChange, sessionStartedAt]);
 
   // ═══════════════════════════════════════════════════════════════
   //  RENDER
@@ -877,7 +916,7 @@ const AgenceGuichetPage: React.FC = () => {
         status={status}
         locked={sessionLockedByOtherDevice}
         userName={user?.displayName || user?.email || "—"}
-        userCode={sellerCodeCached || staffCodeForSale}
+        userCode={sellerCodeCached || staffCodeForSale || "GUEST"}
         companyLogo={companyMeta.logo}
         companyName={companyMeta.name}
         agencyName={agencyMeta.name}
@@ -1247,7 +1286,7 @@ const AgenceGuichetPage: React.FC = () => {
           {tab === "historique" && (
             <div className="max-w-[1600px] mx-auto p-4 lg:p-6 space-y-5">
               <SectionCard title="Historique des sessions validées">
-                <p className={typography.muted}>{user?.displayName || user?.email || "—"} ({sellerCodeCached})</p>
+                <p className={typography.muted}>{user?.displayName || user?.email || "—"} ({(sellerCodeCached || staffCodeForSale || "GUEST")})</p>
               </SectionCard>
               <SectionCard title="Liste des sessions validées" noPad>
                 {loadingHistory ? (
@@ -1321,11 +1360,11 @@ const AgenceGuichetPage: React.FC = () => {
       {/* Session summary modal */}
       <SessionSummaryModal
         open={showSummary}
-        tickets={tickets}
-        sessionStart={sessionStartedAt}
-        sessionEnd={summaryEnd}
+        tickets={showSummary ? summaryTickets : tickets}
+        sessionStart={showSummary ? summaryStart : sessionStartedAt}
+        sessionEnd={showSummary ? summaryEnd : null}
         userName={user?.displayName || user?.email || "—"}
-        userCode={sellerCodeCached || staffCodeForSale}
+        userCode={sellerCodeCached || staffCodeForSale || "GUEST"}
         formatMoney={money}
         primaryColor={theme.primary}
         secondaryColor={theme.secondary}

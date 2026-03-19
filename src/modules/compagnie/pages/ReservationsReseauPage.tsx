@@ -23,6 +23,8 @@ import { RevenueReservationsChart } from "@/modules/compagnie/admin/components/C
 import { NetworkHealthSummary } from "@/modules/compagnie/admin/components/CompanyDashboard/NetworkHealthSummary";
 import { CriticalAlertsPanel, type CriticalAlert } from "@/modules/compagnie/admin/components/CompanyDashboard/CriticalAlertsPanel";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
+import { useGlobalDataSnapshot } from "@/contexts/GlobalDataSnapshotContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageOfflineState } from "@/shared/ui/PageStates";
@@ -32,10 +34,13 @@ import {
   isSoldReservation,
   isCancelledReservation,
   getNetworkCapacityOnly,
-  getNetworkStats,
 } from "@/modules/compagnie/networkStats/networkStatsService";
-import { getTodayBamako } from "@/shared/date/dateUtilsTz";
-import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
+import { getNetworkOperationalStats } from "@/modules/compagnie/networkStats/networkOperationalService";
+import {
+  getNetworkSales,
+  type FinancialPeriod,
+} from "@/modules/finance/services/financialConsistencyService";
+import { getTodayBamako, getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
 import { getPreviousPeriod, calculateChange, type PeriodKind } from "@/shared/date/periodComparisonUtils";
 import { getDoc } from "firebase/firestore";
 import { Percent } from "lucide-react";
@@ -46,13 +51,8 @@ import timezone from "dayjs/plugin/timezone";
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DEFAULT_RANGE: RangeKey = "day";
-
-function getDateKey(d: Date) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const da = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${da}`;
+function getDateKey(d: Date): string {
+  return dayjs(d).tz("Africa/Bamako").format("YYYY-MM-DD");
 }
 
 export default function ReservationsReseauPage() {
@@ -62,27 +62,80 @@ export default function ReservationsReseauPage() {
   const isOnline = useOnlineStatus();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
   const money = useFormatCurrency();
+  const globalPeriod = useGlobalPeriodContext();
+  const globalSnapshot = useGlobalDataSnapshot();
 
-  const [range, setRange] = useState<RangeKey>(DEFAULT_RANGE);
-  const [customStart, setCustomStart] = useState<string | null>(null);
-  const [customEnd, setCustomEnd] = useState<string | null>(null);
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 60 * 1000);
-    return () => clearInterval(id);
-  }, []);
+  const range: RangeKey =
+    globalPeriod.preset === "day"
+      ? "day"
+      : globalPeriod.preset === "month"
+        ? "month"
+        : "custom";
+  const customStart = globalPeriod.preset === "custom" ? globalPeriod.startDate : null;
+  const customEnd = globalPeriod.preset === "custom" ? globalPeriod.endDate : null;
+
+  const setRange = React.useCallback(
+    (v: RangeKey) => {
+      if (v === "day") return globalPeriod.setPreset("day");
+      if (v === "month") return globalPeriod.setPreset("month");
+      if (v === "custom") return globalPeriod.setPreset("custom");
+
+      // Map legacy dashboard ranges to a locked custom range (still global, URL-synced).
+      const now = new Date();
+      if (v === "prev_month") {
+        const firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endPrev = new Date(firstOfThisMonth.getTime() - 1);
+        const startPrev = new Date(endPrev.getFullYear(), endPrev.getMonth(), 1);
+        const start = `${startPrev.getFullYear()}-${String(startPrev.getMonth() + 1).padStart(2, "0")}-${String(
+          startPrev.getDate()
+        ).padStart(2, "0")}`;
+        const end = `${endPrev.getFullYear()}-${String(endPrev.getMonth() + 1).padStart(2, "0")}-${String(
+          endPrev.getDate()
+        ).padStart(2, "0")}`;
+        return globalPeriod.setCustomRange(start, end);
+      }
+      if (v === "ytd") {
+        const start = `${now.getFullYear()}-01-01`;
+        const end = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+        return globalPeriod.setCustomRange(start, end);
+      }
+      if (v === "12m") {
+        const endD = now;
+        const startD = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+        const start = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(
+          startD.getDate()
+        ).padStart(2, "0")}`;
+        const end = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, "0")}-${String(
+          endD.getDate()
+        ).padStart(2, "0")}`;
+        return globalPeriod.setCustomRange(start, end);
+      }
+    },
+    [globalPeriod]
+  );
+
+  const setCustomStart = React.useCallback(
+    (v: string | null) => {
+      if (!v) return;
+      globalPeriod.setCustomRange(v, globalPeriod.endDate);
+    },
+    [globalPeriod]
+  );
+
+  const setCustomEnd = React.useCallback(
+    (v: string | null) => {
+      if (!v) return;
+      globalPeriod.setCustomRange(globalPeriod.startDate, v);
+    },
+    [globalPeriod]
+  );
 
   const { dateFrom, dateTo, periodLabel } = useMemo(() => {
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-    let start = new Date(now.getFullYear(), now.getMonth(), 1);
-    let end = endOfToday;
-    if (range === "day") {
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-    }
-    const label = new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" }).format(start);
+    const start = new Date(`${globalPeriod.startDate}T00:00:00.000`);
+    const end = new Date(`${globalPeriod.endDate}T23:59:59.999`);
+    const label = `${globalPeriod.startDate} → ${globalPeriod.endDate}`;
     return { dateFrom: start, dateTo: end, periodLabel: label };
-  }, [range, customStart, customEnd, now]);
+  }, [globalPeriod.startDate, globalPeriod.endDate]);
 
   // ——— Une seule source de vérité : réservations chargées UNE FOIS ———
   const [reservationsInRange, setReservationsInRange] = useState<Awaited<ReturnType<typeof getReservationsInRange>>>([]);
@@ -97,13 +150,25 @@ export default function ReservationsReseauPage() {
     activeAgencies: number;
     comparisonLabel: string;
   } | null>(null);
+  /** Couche unique : snapshot global (même état que CEO / Finances). */
+  const networkMetrics = React.useMemo(
+    () => ({
+      salesTotal: globalSnapshot.snapshot.sales,
+      tickets: globalSnapshot.snapshot.tickets,
+      occupancy: globalSnapshot.snapshot.occupancy,
+    }),
+    [globalSnapshot.snapshot.sales, globalSnapshot.snapshot.tickets, globalSnapshot.snapshot.occupancy]
+  );
+  const networkMetricsLoading = globalSnapshot.loading;
 
-  const startStr = getDateKey(dateFrom);
-  const endStr = getDateKey(dateTo);
+  const startStr = globalPeriod.startDate;
+  const endStr = globalPeriod.endDate;
   const periodStart = getStartOfDayInBamako(startStr);
   const periodEnd = getEndOfDayInBamako(endStr);
 
-  // 1) Une seule requête Firestore pour les réservations de la période
+  // KPI réseau : snapshot global unique (pas de fetch local).
+
+  // 1) Réservations pour détail (graphique, tableau agences)
   useEffect(() => {
     if (!companyId) {
       setReservationsInRange([]);
@@ -139,23 +204,29 @@ export default function ReservationsReseauPage() {
     }).catch(() => {});
   }, [companyId]);
 
-  // Capacité réseau (taux de remplissage) — pas de requête réservations
+  // Capacité réseau (affichage détail uniquement ; remplissage vient de getNetworkOccupancy)
   useEffect(() => {
     if (!companyId) return;
-    getNetworkCapacityOnly(companyId, startStr, endStr).then(setCapacity).catch(() => setCapacity(null));
+    getNetworkCapacityOnly(companyId, startStr, endStr)
+      .then((cap) => setCapacity(cap || null))
+      .catch(() => setCapacity(null));
   }, [companyId, startStr, endStr]);
 
-  // Période précédente (comparaison)
+  // Période précédente (comparaison — ventes/billets couche unique, agences opérationnel)
   useEffect(() => {
     if (!companyId) return;
     const periodForCompare: PeriodKind = range === "day" ? "day" : range === "custom" ? "custom" : "month";
     const { previousStart, previousEnd, comparisonLabel } = getPreviousPeriod(dateFrom, dateTo, periodForCompare);
-    getNetworkStats(companyId, previousStart, previousEnd)
-      .then((stats) => {
+    const prevPeriod: FinancialPeriod = { dateFrom: previousStart, dateTo: previousEnd };
+    Promise.all([
+      getNetworkSales(companyId, prevPeriod),
+      getNetworkOperationalStats(companyId, previousStart, previousEnd),
+    ])
+      .then(([sales, operational]) => {
         setPrevStats({
-          totalRevenue: stats.totalRevenue,
-          totalTickets: stats.totalTickets,
-          activeAgencies: stats.activeAgencies,
+          totalRevenue: sales.total,
+          totalTickets: sales.tickets,
+          activeAgencies: operational.activeAgencies,
           comparisonLabel,
         });
       })
@@ -248,9 +319,7 @@ export default function ReservationsReseauPage() {
   }, [companyId]);
 
   const capaciteReseau = capacity ?? 0;
-  const tauxRemplissagePct =
-    capaciteReseau > 0 ? Math.round((billetsVendus / capaciteReseau) * 100) : null;
-  const statsLoading = reservationsLoading;
+  const statsLoading = reservationsLoading || networkMetricsLoading;
 
   if (!companyId) {
     return (
@@ -273,16 +342,32 @@ export default function ReservationsReseauPage() {
       <PageHeader
         title="Réservations réseau"
         breadcrumb={breadcrumb}
-        subtitle={`CA, billets vendus et tableau agences — Période : ${periodLabel}`}
+        subtitle={`Ventes, billets (places) et tableau agences — Période : ${periodLabel}`}
         right={
-          <TimeFilterBar
-            range={range}
-            setRange={setRange}
-            customStart={customStart}
-            setCustomStart={setCustomStart}
-            customEnd={customEnd}
-            setCustomEnd={setCustomEnd}
-          />
+          <div className="flex flex-wrap items-center gap-3">
+            <TimeFilterBar
+              range={range}
+              setRange={setRange}
+              customStart={customStart}
+              setCustomStart={setCustomStart}
+              customEnd={customEnd}
+              setCustomEnd={setCustomEnd}
+            />
+            <div className="text-xs text-slate-500">
+              {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
+              :{" "}
+              {globalSnapshot.snapshot.lastUpdatedAt
+                ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
+                : "—"}
+              <button
+                type="button"
+                onClick={() => void globalSnapshot.refresh()}
+                className="ml-2 rounded-md border border-slate-200 bg-white px-2 py-1 hover:bg-slate-50"
+              >
+                Rafraîchir
+              </button>
+            </div>
+          </div>
         }
       />
       {!isOnline && (
@@ -310,25 +395,25 @@ export default function ReservationsReseauPage() {
         ) : (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <MetricCard label="Billets vendus" value={String(billetsVendus)} icon={Ticket} />
+              <MetricCard label="Billets (places)" value={String(networkMetrics.tickets)} icon={Ticket} />
               <MetricCard label="Capacité réseau" value={String(capaciteReseau)} icon={TrendingUp} />
               <MetricCard
                 label="Remplissage"
-                value={tauxRemplissagePct != null ? `${tauxRemplissagePct} %` : "—"}
+                value={networkMetrics.occupancy != null ? `${networkMetrics.occupancy} %` : "—"}
                 icon={Percent}
-                valueColorVar={tauxRemplissagePct != null && tauxRemplissagePct >= 50 ? "var(--teliya-primary)" : undefined}
+                valueColorVar={networkMetrics.occupancy != null && networkMetrics.occupancy >= 50 ? "var(--teliya-primary)" : undefined}
               />
             </div>
             {/* Indicateur réseau global pour le CEO */}
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-600">
               <span className="text-sm font-medium text-gray-700 dark:text-slate-300">État du réseau : </span>
-              {tauxRemplissagePct == null ? (
+              {networkMetrics.occupancy == null ? (
                 <span className="text-gray-500 dark:text-slate-400">—</span>
-              ) : tauxRemplissagePct < 20 ? (
+              ) : networkMetrics.occupancy < 20 ? (
                 <span className="inline-flex items-center gap-1.5 font-medium text-red-600 dark:text-red-400">
                   <span aria-hidden>🔴</span> Réseau en alerte
                 </span>
-              ) : tauxRemplissagePct < 40 ? (
+              ) : networkMetrics.occupancy < 40 ? (
                 <span className="inline-flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
                   <span aria-hidden>🟠</span> Activité faible
                 </span>
@@ -342,7 +427,7 @@ export default function ReservationsReseauPage() {
         )}
       </SectionCard>
 
-      {/* KPIs période — dérivés de reservationsInRange (une seule source) */}
+      {/* KPIs période — couche unique (aligné CEO / Finances) */}
       {statsLoading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -353,21 +438,21 @@ export default function ReservationsReseauPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
           <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
             <MetricCard
-              label="CA"
-              value={money(caTotal)}
+              label="Ventes"
+              value={money(networkMetrics.salesTotal)}
               icon={TrendingUp}
               valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
-              variation={prevStats ? calculateChange(caTotal, prevStats.totalRevenue) : undefined}
+              variation={prevStats ? calculateChange(networkMetrics.salesTotal, prevStats.totalRevenue) : undefined}
               variationLabel={prevStats?.comparisonLabel}
             />
           </Link>
           <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
             <MetricCard
-              label="Billets vendus"
-              value={String(billetsVendus)}
+              label="Billets (places)"
+              value={String(networkMetrics.tickets)}
               icon={Ticket}
               valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
-              variation={prevStats ? calculateChange(billetsVendus, prevStats.totalTickets) : undefined}
+              variation={prevStats ? calculateChange(networkMetrics.tickets, prevStats.totalTickets) : undefined}
               variationLabel={prevStats?.comparisonLabel}
             />
           </Link>

@@ -7,17 +7,18 @@ import { useParams } from "react-router-dom";
 import { collection, getDocs, doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
+import { useGlobalDataSnapshot } from "@/contexts/GlobalDataSnapshotContext";
 import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard } from "@/ui";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import {
-  getCashTransactionsByDate,
+  getCashTransactionsByPaidAtRange,
   getClosuresByDate,
   getCashRefundsByDate,
   getCashTransfersByDate,
 } from "./cashService";
 import { CASH_TRANSACTION_STATUS } from "./cashTypes";
 import type { CashTransactionDocWithId, CashClosureDocWithId, CashRefundDocWithId, CashTransferDocWithId } from "./cashTypes";
-import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import { listRoutes } from "@/modules/compagnie/routes/routesService";
 import type { RouteDocWithId } from "@/modules/compagnie/routes/routesTypes";
 import { Wallet, Building2, MapPin, TrendingUp, AlertCircle, Route, ArrowUpRight, ArrowDownLeft } from "lucide-react";
@@ -29,7 +30,16 @@ export default function CompanyCashPage({ embedded = false }: CompanyCashPagePro
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const money = useFormatCurrency();
-  const [date, setDate] = useState(() => getTodayBamako());
+  const globalPeriod = useGlobalPeriodContext();
+  const globalSnapshot = useGlobalDataSnapshot();
+  /** Date d'encaissement = premier jour de la période globale (jour J par défaut). */
+  const date = globalPeriod.startDate;
+  const setDate = useCallback(
+    (newDate: string) => {
+      globalPeriod.setCustomRange(newDate, newDate);
+    },
+    [globalPeriod]
+  );
   const [transactions, setTransactions] = useState<CashTransactionDocWithId[]>([]);
   const [closures, setClosures] = useState<CashClosureDocWithId[]>([]);
   const [refunds, setRefunds] = useState<CashRefundDocWithId[]>([]);
@@ -47,7 +57,7 @@ export default function CompanyCashPage({ embedded = false }: CompanyCashPagePro
     try {
       const [agencesSnap, txList, closureList, routesList, refundsList, transfersList] = await Promise.all([
         getDocs(collection(db, "companies", companyId, "agences")),
-        getCashTransactionsByDate(companyId, date),
+        getCashTransactionsByPaidAtRange(companyId, date, date),
         getClosuresByDate(companyId, date),
         listRoutes(companyId).catch(() => []),
         getCashRefundsByDate(companyId, date),
@@ -115,8 +125,24 @@ export default function CompanyCashPage({ embedded = false }: CompanyCashPagePro
 
   const content = (
     <>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <span>
+          {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
+          :{" "}
+          {globalSnapshot.snapshot.lastUpdatedAt
+            ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
+            : "—"}
+        </span>
+        <button
+          type="button"
+          onClick={() => void globalSnapshot.refresh()}
+          className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-800"
+        >
+          Rafraîchir
+        </button>
+      </div>
       <div className="mb-4 flex items-center gap-4">
-        <label className="text-sm font-medium">Date</label>
+        <label className="text-sm font-medium">Date d&apos;encaissement (paidAt)</label>
         <input
           type="date"
           value={date}
@@ -136,6 +162,11 @@ export default function CompanyCashPage({ embedded = false }: CompanyCashPagePro
               label="Argent en caisse"
               value={money(totalCash)}
               icon={Wallet}
+            />
+            <MetricCard
+              label="Encaissements (snapshot)"
+              value={globalSnapshot.loading ? "—" : money(globalSnapshot.snapshot.cash)}
+              icon={TrendingUp}
             />
             <MetricCard
               label="Argent transféré"

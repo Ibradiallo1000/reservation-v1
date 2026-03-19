@@ -39,6 +39,7 @@ import { updateAgencyLiveStateOnSessionOpened, updateAgencyLiveStateOnSessionClo
 import { recordMovementInTransaction } from '@/modules/compagnie/treasury/financialMovements';
 import { agencyCashAccountId } from '@/modules/compagnie/treasury/types';
 import { financialAccountRef } from '@/modules/compagnie/treasury/financialAccounts';
+import { getCashTransactionsBySessionId } from '@/modules/compagnie/cash/cashService';
 
 const SHIFTS_COLLECTION = 'shifts';
 const RESERVATIONS_COLLECTION = 'reservations';
@@ -243,7 +244,8 @@ export function isCurrentDeviceClaimed(shiftDoc: { deviceFingerprint?: string | 
 }
 
 /**
- * Calcule les totaux de revenus dans une transaction (lecture des réservations via refs).
+ * Calcule les totaux depuis la caisse (cashTransactions) — source de vérité financière.
+ * 1 vente = 1 encaissement → totaux session = somme(cashTransactions.sessionId).
  */
 export async function closeSession(params: {
   companyId: string;
@@ -255,25 +257,41 @@ export async function closeSession(params: {
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const shiftsRef = collection(db, `${base}/${SHIFTS_COLLECTION}`);
   const shiftRef = doc(shiftsRef, params.shiftId);
-  const reservationsRef = collection(db, `${base}/${RESERVATIONS_COLLECTION}`);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
 
-  // Récupérer les refs des réservations du poste (pour les lire dans la transaction)
-  const qRes = query(
-    reservationsRef,
-    where('shiftId', '==', params.shiftId),
-    where('canal', '==', CANAL_GUICHET)
-  );
-  const resSnap = await getDocs(qRes);
-  const resRefs = resSnap.docs.map((d) => d.ref);
+  const cashList = await getCashTransactionsBySessionId(params.companyId, params.shiftId);
+  let totalRevenue = 0;
+  let totalCash = 0;
+  let totalDigital = 0;
+  let tickets = 0;
+  const byRoute: Record<string, { billets: number; montant: number }> = {};
+  for (const c of cashList) {
+    const amount = Number(c.amount ?? 0);
+    const seats = Number(c.seats ?? 0);
+    totalRevenue += amount;
+    tickets += seats;
+    const pm = String(c.paymentMethod ?? '').toLowerCase();
+    if (pm === 'cash' || pm === 'espèces' || pm === 'especes') totalCash += amount;
+    else totalDigital += amount;
+    const key = (c.routeLabel && String(c.routeLabel).trim()) || 'Sans trajet';
+    if (!byRoute[key]) byRoute[key] = { billets: 0, montant: 0 };
+    byRoute[key].billets += seats;
+    byRoute[key].montant += amount;
+  }
+  const details = Object.entries(byRoute).map(([trajet, v]) => ({
+    trajet,
+    billets: v.billets,
+    montant: v.montant,
+    heures: [] as string[],
+  }));
 
   let resultTotals: CloseSessionTotals = {
-    totalRevenue: 0,
-    totalReservations: 0,
-    totalCash: 0,
-    totalDigital: 0,
-    tickets: 0,
-    details: [],
+    totalRevenue,
+    totalReservations: cashList.length,
+    totalCash,
+    totalDigital,
+    tickets,
+    details,
   };
 
   await runTransaction(db, async (tx) => {
@@ -286,40 +304,6 @@ export async function closeSession(params: {
     if (shiftData.deviceFingerprint && shiftData.deviceFingerprint !== params.deviceFingerprint) {
       throw new Error('Session ouverte sur un autre appareil.');
     }
-
-    let totalRevenue = 0;
-    let totalReservations = 0;
-    let totalCash = 0;
-    let totalDigital = 0;
-    let tickets = 0;
-    const byRoute: Record<string, { billets: number; montant: number; heures: Set<string> }> = {};
-
-    for (const ref of resRefs) {
-      const docSnap = await tx.get(ref);
-      if (!docSnap.exists()) continue;
-      const r = docSnap.data() as Record<string, unknown>;
-      const montant = Number(r.montant ?? 0);
-      const n = Number(r.seatsGo ?? 0) + Number(r.seatsReturn ?? 0);
-      totalReservations += 1;
-      tickets += n;
-      totalRevenue += montant;
-      const paiement = String(r.paiement ?? '').toLowerCase();
-      if (paiement === 'espèces' || paiement === 'especes') totalCash += montant;
-      else totalDigital += montant;
-
-      const key = `${r.depart ?? ''}→${r.arrivee ?? r.arrival ?? ''}`;
-      if (!byRoute[key]) byRoute[key] = { billets: 0, montant: 0, heures: new Set<string>() };
-      byRoute[key].billets += n;
-      byRoute[key].montant += montant;
-      if (r.heure) byRoute[key].heures.add(String(r.heure));
-    }
-
-    const details = Object.entries(byRoute).map(([trajet, v]) => ({
-      trajet,
-      billets: v.billets,
-      montant: v.montant,
-      heures: Array.from(v.heures).sort(),
-    }));
 
     const now = Timestamp.now();
     const startAt = (shiftData.startAt ?? shiftData.startTime ?? now) as Timestamp;
@@ -337,7 +321,7 @@ export async function closeSession(params: {
       billets: tickets,
       montant: totalRevenue,
       totalRevenue,
-      totalReservations,
+      totalReservations: cashList.length,
       totalCash,
       totalDigital,
       details,
@@ -358,7 +342,7 @@ export async function closeSession(params: {
       tickets,
       amount: totalRevenue,
       totalRevenue,
-      totalReservations,
+      totalReservations: cashList.length,
       totalCash,
       totalDigital,
       updatedAt: serverTimestamp(),
@@ -370,7 +354,7 @@ export async function closeSession(params: {
 
     resultTotals = {
       totalRevenue,
-      totalReservations,
+      totalReservations: cashList.length,
       totalCash,
       totalDigital,
       tickets,
@@ -444,8 +428,22 @@ export async function validateSessionByAccountant(params: {
       validatedByAgencyAt: now,
       validatedAt: now,
       validationAudit,
+      accountantValidated: true,
+      accountantValidatedAt: now,
       updatedAt: serverTimestamp(),
     }));
+
+    // Enregistrer la remise de caisse comme entrée dans le journal de caisse d'agence
+    if (params.receivedCashAmount > 0) {
+      const cashReceiptsRef = collection(db, base, 'cashReceipts');
+      const newReceiptRef = doc(cashReceiptsRef);
+      tx.set(newReceiptRef, {
+        cashReceived: params.receivedCashAmount,
+        shiftId: params.shiftId,
+        createdAt: serverTimestamp(),
+        validatedBy: params.validatedBy,
+      });
+    }
 
     const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
     const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
@@ -498,6 +496,8 @@ export async function validateSessionByHeadAccountant(params: {
       status: 'validated',
       validationLevel: VALIDATION_LEVEL.COMPANY,
       validatedByCompanyAt: now,
+      managerValidated: true,
+      managerValidatedAt: now,
       updatedAt: serverTimestamp(),
     }));
 
@@ -523,6 +523,8 @@ export async function validateSessionByHeadAccountant(params: {
         performedBy: params.validatedBy.id,
         performedAt: now,
         notes: 'Validation chef comptable',
+        sourceType: "guichet",
+        sourceSessionId: params.shiftId,
       });
     }
   });

@@ -950,7 +950,7 @@ const ReconciliationTab: React.FC<{
             icon={Wallet}
           />
           <MetricCard
-            label="Écart global"
+            label="Écart (après réconciliation)"
             value={money(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0))}
             icon={AlertTriangle}
             critical={Math.abs(performanceData.reduce((sum, a) => sum + a.ecartEspeces, 0)) >= 1000}

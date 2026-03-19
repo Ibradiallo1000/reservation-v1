@@ -5,7 +5,7 @@ import React, { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { db } from "@/firebaseConfig";
-import { collection, getDocs, onSnapshot, query, where } from "firebase/firestore";
+import { collection, getDocs, getDoc, doc, onSnapshot, query, where } from "firebase/firestore";
 import { createCourierSession, closeCourierSession as closeCourierSessionService } from "@/modules/logistics/services/courierSessionService";
 import { courierSessionsRef, courierSessionRef } from "@/modules/logistics/domain/courierSessionPaths";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
@@ -46,10 +46,33 @@ export default function CourierSessionPage() {
   const [receiptShipment, setReceiptShipment] = useState<Shipment | null>(null);
   const [labelShipment, setLabelShipment] = useState<Shipment | null>(null);
   const [agencies, setAgencies] = useState<{ id: string; nomAgence?: string; nom?: string }[]>([]);
-  const agentCode = (user as { staffCode?: string; codeCourt?: string; code?: string })?.staffCode
+  const [agentCodeFromTeam, setAgentCodeFromTeam] = useState<string | null>(null);
+  const agentCode = agentCodeFromTeam
+    ?? (user as { staffCode?: string; codeCourt?: string; code?: string })?.staffCode
     ?? (user as { codeCourt?: string; code?: string })?.codeCourt
     ?? (user as { code?: string })?.code
-    ?? "COUR";
+    ?? "GUEST";
+
+  useEffect(() => {
+    if (!agentId || !companyId || !agencyId) return;
+    (async () => {
+      try {
+        const rootSnap = await getDoc(doc(db, "users", agentId));
+        if (rootSnap.exists()) {
+          const u = rootSnap.data() as { staffCode?: string; codeCourt?: string; code?: string };
+          const code = u.staffCode || u.codeCourt || u.code;
+          if (code) { setAgentCodeFromTeam(code); return; }
+        }
+        const usersRef = collection(db, "companies", companyId, "agences", agencyId, "users");
+        const snap = await getDocs(query(usersRef, where("uid", "==", agentId)));
+        if (snap.docs.length > 0) {
+          const d = snap.docs[0].data() as { agentCode?: string; staffCode?: string; codeCourt?: string; code?: string };
+          const code = d.agentCode || d.staffCode || d.codeCourt || d.code;
+          if (code) setAgentCodeFromTeam(code);
+        }
+      } catch { /* ignore */ }
+    })();
+  }, [agentId, companyId, agencyId]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -143,17 +166,25 @@ export default function CourierSessionPage() {
         title="Session Courrier"
         primaryColorVar="var(--courier-primary, #ea580c)"
         right={
-          session?.status === "ACTIVE" ? (
-            <Link to="/agence/courrier/nouveau">
-              <ActionButton
-                variant="primary"
-                className="!bg-[var(--courier-primary,#ea580c)] hover:!brightness-90"
-              >
-                <Plus className="h-4 w-4" />
-                Nouvel envoi
-              </ActionButton>
-            </Link>
-          ) : undefined
+          <div className="flex items-center gap-3">
+            <span className="hidden sm:inline text-sm text-gray-600">
+              {agentName} <span className="font-mono font-medium text-gray-800">({agentCode})</span>
+            </span>
+            <span className="sm:hidden text-xs font-mono font-medium text-gray-700" title={`Agent: ${agentName} (${agentCode})`}>
+              {agentCode}
+            </span>
+            {session?.status === "ACTIVE" ? (
+              <Link to="/agence/courrier/nouveau">
+                <ActionButton
+                  variant="primary"
+                  className="!bg-[var(--courier-primary,#ea580c)] hover:!brightness-90"
+                >
+                  <Plus className="h-4 w-4" />
+                  Nouvel envoi
+                </ActionButton>
+              </Link>
+            ) : undefined}
+          </div>
         }
       />
 
@@ -161,6 +192,7 @@ export default function CourierSessionPage() {
         session={session}
         shipments={shipments}
         agencyName={agencyName}
+        currentAgentCode={agentCode}
         primaryColor={primaryColor}
         secondaryColor={secondaryColor}
       />

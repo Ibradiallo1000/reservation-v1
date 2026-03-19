@@ -14,6 +14,8 @@ export interface CourierSessionLivePanelProps {
   session: CourierSession | null;
   shipments: Shipment[];
   agencyName: string;
+  /** Code agent affiché quand la session n'a pas encore agentCode (ex. avant création) ou en fallback. */
+  currentAgentCode?: string;
   primaryColor?: string;
   secondaryColor?: string;
 }
@@ -25,6 +27,7 @@ export default function CourierSessionLivePanel({
   session,
   shipments,
   agencyName,
+  currentAgentCode,
   primaryColor = DEFAULT_PRIMARY,
   secondaryColor = DEFAULT_SECONDARY,
 }: CourierSessionLivePanelProps) {
@@ -60,7 +63,7 @@ export default function CourierSessionLivePanel({
     <SectionCard title="Session en direct" className="mb-6 print:hidden">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="Statut" value={statusLabel} icon={Activity} valueColorVar={primaryVar} decorative />
-        <MetricCard label="Code agent" value={session?.agentCode ?? "—"} icon={User} valueColorVar={primaryVar} className="font-mono" decorative />
+        <MetricCard label="Code agent" value={session?.agentCode ?? currentAgentCode ?? "GUEST"} icon={User} valueColorVar={primaryVar} className="font-mono" decorative />
         <MetricCard label="Ouverture" value={openingTime} icon={Clock} valueColorVar={primaryVar} decorative />
         <MetricCard label="Envois créés" value={createdInSession.length} icon={Package} valueColorVar={primaryVar} decorative />
         <MetricCard label="Total encaissé origine" value={money(originTotal)} icon={Banknote} valueColorVar={primaryVar} className="teliya-monetary" decorative />

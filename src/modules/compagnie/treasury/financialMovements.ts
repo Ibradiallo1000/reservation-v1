@@ -48,6 +48,10 @@ export interface RecordMovementParams {
   entryType?: EntryType;
   approvedBy?: string | null;
   approvedByRole?: string | null;
+  /** Audit: source métier du flux (guichet / online / transfer). */
+  sourceType?: "guichet" | "online" | "transfer";
+  /** Audit: session source (shiftId / virtualSessionId) si applicable. */
+  sourceSessionId?: string | null;
 }
 
 /** Idempotency collection: one doc per uniqueReferenceKey. Client transactions cannot run queries; we use a doc ref. */
@@ -138,6 +142,8 @@ export async function recordMovementInTransaction(tx: Transaction, params: Recor
     performedByRole: params.performedByRole ?? null,
     approvedBy: params.approvedBy ?? null,
     approvedByRole: params.approvedByRole ?? null,
+    sourceType: params.sourceType ?? null,
+    sourceSessionId: params.sourceSessionId ?? null,
   });
   return movementRef.id;
 }

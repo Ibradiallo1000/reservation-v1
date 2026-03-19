@@ -21,6 +21,7 @@ import { Timestamp } from 'firebase/firestore';
 import {
   createSession,
   closeSession,
+  type CloseSessionTotals,
   pauseSession,
   continueSession,
   claimSession,
@@ -96,6 +97,8 @@ function normalizeShift(id: string, data: Record<string, unknown>): ShiftDoc {
   };
 }
 
+export type { CloseSessionTotals };
+
 type Api = {
   activeShift: ShiftDoc | null;
   status: ShiftStatus;
@@ -104,7 +107,7 @@ type Api = {
   startShift: () => Promise<void>;
   pauseShift: () => Promise<void>;
   continueShift: () => Promise<void>;
-  closeShift: () => Promise<void>;
+  closeShift: () => Promise<CloseSessionTotals | null>;
   refresh: () => Promise<void>;
 };
 
@@ -221,10 +224,10 @@ export function useActiveShift(): Api {
     await continueSession(activeShift.companyId, activeShift.agencyId, activeShift.id);
   }, [activeShift]);
 
-  const closeShift = useCallback(async () => {
+  const closeShift = useCallback(async (): Promise<CloseSessionTotals | null> => {
     if (!activeShift) throw new Error('Aucun poste en cours.');
     const fingerprint = getDeviceFingerprint();
-    await closeSession({
+    const totals = await closeSession({
       companyId: activeShift.companyId,
       agencyId: activeShift.agencyId,
       shiftId: activeShift.id,
@@ -232,6 +235,7 @@ export function useActiveShift(): Api {
       deviceFingerprint: fingerprint,
     });
     setActiveShift(null);
+    return totals;
   }, [activeShift]);
 
   const refresh = useCallback(async () => {}, []);

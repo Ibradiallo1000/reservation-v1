@@ -624,6 +624,9 @@ const ReservationsEnLigne: React.FC = () => {
           const cashTxId = await createCashTransaction({
             companyId: user.companyId,
             reservationId: reservation.id,
+            // Online: session virtuelle par agence et par jour (générée si absente).
+            sessionId: null,
+            sourceType: "online",
             tripInstanceId: data?.tripInstanceId ?? undefined,
             amount: montant,
             currency: 'XOF',

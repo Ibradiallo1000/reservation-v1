@@ -218,8 +218,9 @@ export default function ManagerCockpitPage() {
     return list;
   }, [weeklyTrips, dayName, today, reservationsToday, boardingClosures]);
 
-  const avgOccupancy = departures.length > 0
-    ? Math.round((departures.reduce((a, d) => a + d.embarked, 0) / Math.max(1, departures.reduce((a, d) => a + d.capacity, 0))) * 100) : 0;
+  const totalCapacity = departures.reduce((a, d) => a + d.capacity, 0);
+  const avgOccupancy: number | null = departures.length > 0 && totalCapacity > 0
+    ? Math.round((departures.reduce((a, d) => a + d.embarked, 0) / totalCapacity) * 100) : null;
   const departuresRemaining = departures.filter((d) => !d.closed).length;
 
   const closedPending = useMemo(() => shifts.filter((s) => s.status === "closed"), [shifts]);
@@ -365,16 +366,22 @@ export default function ManagerCockpitPage() {
         </div>
       </div>
 
-      {/* 2. PROBLÈMES PRIORITAIRES — Score, conséquences, options */}
+      {!managerDecisions.dataSufficient && (
+        <div className="rounded-lg border-2 border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 p-4 text-sm text-amber-800 dark:text-amber-200">
+          ⚠️ Activité insuffisante pour une analyse fiable. Les alertes critiques (caisse, rapports) restent affichées. Aucune projection ni recommandation stratégique tant que les données sont trop faibles.
+        </div>
+      )}
+
+      {/* 2. PROBLÈMES PRIORITAIRES — Sévérité, conséquences, options */}
       {managerDecisions.problems.length > 0 && (
         <div className="rounded-lg border-2 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/20 p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-200">Problèmes prioritaires (triés par score de décision)</h3>
+          <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-200">Problèmes prioritaires</h3>
           <ul className="space-y-3">
             {managerDecisions.problems.map((p) => (
               <li key={p.id} className="rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-slate-800 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <span className="inline-flex items-center rounded-md bg-amber-100 dark:bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200">
-                    Score {p.score.toLocaleString("fr-FR")}
+                    {p.severityLevel === "critique" ? "🔴 Critique" : p.severityLevel === "élevé" ? "🟠 Élevé" : "🟡 Moyen"}
                   </span>
                   <span className={`text-xs font-medium ${p.level === "danger" ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}>
                     {p.level === "danger" ? "Danger" : "Attention"}
@@ -388,38 +395,45 @@ export default function ManagerCockpitPage() {
                   <p className="text-red-700 dark:text-red-400 mt-1"><strong>Si vous ne faites rien :</strong> {p.consequences.ifNoAction}</p>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600 dark:text-slate-400">
-                  <span><strong>Demain :</strong> {p.projection.nextDay.toLocaleString("fr-FR")} FCFA</span>
-                  <span><strong>7 jours :</strong> {p.projection.nextWeek.toLocaleString("fr-FR")} FCFA</span>
+                  {p.projection != null ? (
+                    <>
+                      <span><strong>Demain :</strong> {p.projection.nextDay.toLocaleString("fr-FR")} FCFA</span>
+                      <span><strong>7 jours :</strong> {p.projection.nextWeek.toLocaleString("fr-FR")} FCFA</span>
+                    </>
+                  ) : (
+                    <span className="italic">Projection non disponible (activité insuffisante)</span>
+                  )}
                 </div>
                 <p className="text-xs font-medium text-gray-600 dark:text-slate-400 mt-2 mb-1">Options :</p>
-                <ul className="space-y-1">
-                  {p.options.map((opt, idx) => (
-                    <li key={idx} className={`flex flex-wrap items-center gap-2 text-sm ${idx === p.recommendedOptionIndex ? "rounded-md bg-blue-50 dark:bg-blue-900/30 p-2 border border-blue-200 dark:border-blue-700" : ""}`}>
-                      {idx === p.recommendedOptionIndex && (
-                        <span className="inline-flex items-center rounded bg-blue-600 px-1.5 py-0.5 text-xs font-medium text-white">Recommandé</span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => navigate(p.actionRoute)}
-                        className="text-left text-blue-600 dark:text-blue-400 hover:underline font-medium"
-                      >
-                        {opt.label}
-                      </button>
-                      <span className="text-gray-500 dark:text-slate-500">
-                        {opt.estimatedImpact >= 0 ? "+" : ""}{opt.estimatedImpact.toLocaleString("fr-FR")} FCFA
-                      </span>
-                      <span className={`text-xs ${opt.risk === "low" ? "text-emerald-600" : opt.risk === "medium" ? "text-amber-600" : "text-red-600"}`}>
-                        risque {opt.risk === "low" ? "faible" : opt.risk === "medium" ? "moyen" : "élevé"}
-                      </span>
-                      <span className="text-xs text-gray-500 dark:text-slate-500">
-                        · effort {opt.effort === "low" ? "rapide" : opt.effort === "medium" ? "coordination" : "structurel"}
-                      </span>
-                      <span className="text-xs text-gray-500 dark:text-slate-500">
-                        · effet {opt.timeToImpact === "immediate" ? "aujourd'hui" : opt.timeToImpact === "short" ? "1–3 j" : "semaine"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                {p.recommendationSafe !== false ? (
+                  <ul className="space-y-1">
+                    {p.options.map((opt, idx) => (
+                      <li key={idx} className={`flex flex-wrap items-center gap-2 text-sm ${idx === p.recommendedOptionIndex ? "rounded-md bg-blue-50 dark:bg-blue-900/30 p-2 border border-blue-200 dark:border-blue-700" : ""}`}>
+                        {idx === p.recommendedOptionIndex && (
+                          <span className="inline-flex items-center rounded bg-blue-600 px-1.5 py-0.5 text-xs font-medium text-white">Recommandé</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => navigate(p.actionRoute)}
+                          className="text-left text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                        >
+                          {opt.label}
+                        </button>
+                        <span className="text-gray-500 dark:text-slate-500">
+                          {opt.estimatedImpact >= 0 ? "+" : ""}{opt.estimatedImpact.toLocaleString("fr-FR")} FCFA
+                        </span>
+                        <span className={`text-xs ${opt.risk === "low" ? "text-emerald-600" : opt.risk === "medium" ? "text-amber-600" : "text-red-600"}`}>
+                          risque {opt.risk === "low" ? "faible" : opt.risk === "medium" ? "moyen" : "élevé"}
+                        </span>
+                        <span className="text-xs text-gray-500 dark:text-slate-500">
+                          · faisabilité {opt.feasibility === "low" ? "faible" : "élevée"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm italic text-gray-500 dark:text-slate-400">Analyse en cours — données insuffisantes pour recommander une action.</p>
+                )}
               </li>
             ))}
           </ul>
@@ -598,7 +612,7 @@ export default function ManagerCockpitPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 opacity-95">
         <MetricCard label="CA période" value={money(filteredRevenue)} icon={Banknote} valueColorVar="#059669" />
         <MetricCard label="Billets période" value={filteredTickets} icon={Ticket} valueColorVar="#1d4ed8" />
-        <MetricCard label="Taux de remplissage" value={`${avgOccupancy}%`} icon={Gauge} valueColorVar="#7c3aed" />
+        <MetricCard label="Taux de remplissage" value={avgOccupancy != null ? `${avgOccupancy}%` : "Indisponible"} icon={Gauge} valueColorVar="#7c3aed" />
         <MetricCard label="Trésorerie agence" value={money(cashPosition)} icon={Wallet} valueColorVar="#4f46e5" />
         <MetricCard label="Colis créés (jour)" value={courierTodayCount} icon={Package} valueColorVar="#c2410c" />
         <MetricCard label="Colis en transit" value={courierInTransitCount} icon={Package} valueColorVar="#0f766e" />

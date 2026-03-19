@@ -8,6 +8,9 @@ import TenantGuard from "./modules/auth/components/TenantGuard";
 import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 import { AuthCurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { routePermissions } from "@/constants/routePermissions";
+import { GlobalPeriodProvider } from "@/contexts/GlobalPeriodContext";
+import { GlobalDataSnapshotProvider } from "@/contexts/GlobalDataSnapshotContext";
+import { GlobalMoneyPositionsProvider } from "@/contexts/GlobalMoneyPositionsContext";
 
 const RouteResolver = lazy(() => import("./modules/compagnie/public/router/RouteResolver"));
 const AdminCompanyPlan = lazy(() => import("@/modules/plateforme/pages/AdminCompanyPlan"));
@@ -360,7 +363,13 @@ const AppRoutes = () => {
           element={
             <PrivateRoute allowedRoles={routePermissions.compagnieLayout}>
               <TenantGuard>
-                <CompagnieLayout />
+                <GlobalPeriodProvider>
+                  <GlobalDataSnapshotProvider>
+                    <GlobalMoneyPositionsProvider>
+                      <CompagnieLayout />
+                    </GlobalMoneyPositionsProvider>
+                  </GlobalDataSnapshotProvider>
+                </GlobalPeriodProvider>
               </TenantGuard>
             </PrivateRoute>
           }

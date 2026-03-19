@@ -10,6 +10,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   runTransaction,
   serverTimestamp,
   Timestamp,
@@ -262,16 +263,21 @@ export async function createGuichetReservation(
     addToExpectedBalance(params.companyId, params.agencyId, params.userId, 'GUICHET', montant, paymentMethod).catch(() => {});
   }
 
-  // Caisse TELIYA: enregistrer une cashTransaction et lier à la réservation
+  // Caisse TELIYA: 1 vente = 1 encaissement. Aucune réservation sans cashTransaction.
   if (montant > 0) {
+    const agencySnap = await getDoc(doc(db, 'companies', params.companyId, 'agences', params.agencyId));
+    const agencyType = (agencySnap.data() as { type?: string })?.type?.toLowerCase();
+    const locationType = agencyType === 'escale' ? LOCATION_TYPE.ESCALE : LOCATION_TYPE.AGENCE;
+    const paymentMethodCash = params.paymentMethod === 'bank' ? 'transfer' : (params.paymentMethod ?? 'cash');
+    const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
+    const routeLabel = [params.depart, params.arrivee].filter(Boolean).join('→') || null;
     try {
-      const agencySnap = await getDoc(doc(db, 'companies', params.companyId, 'agences', params.agencyId));
-      const agencyType = (agencySnap.data() as { type?: string })?.type?.toLowerCase();
-      const locationType = agencyType === 'escale' ? LOCATION_TYPE.ESCALE : LOCATION_TYPE.AGENCE;
-      const paymentMethodCash = params.paymentMethod === 'bank' ? 'transfer' : (params.paymentMethod ?? 'cash');
       const cashTxId = await createCashTransaction({
         companyId: params.companyId,
         reservationId: newId,
+        sessionId: params.sessionId,
+        sourceType: "guichet",
+        sourceSessionId: params.sessionId,
         tripInstanceId: tripInstanceId ?? undefined,
         amount: montant,
         currency: 'XOF',
@@ -280,10 +286,14 @@ export async function createGuichetReservation(
         locationId: params.agencyId,
         createdBy: params.userId,
         paidAt: getTodayBamako(),
+        seats,
+        routeLabel,
       });
       await updateDoc(newRef, { cashTransactionId: cashTxId });
     } catch (err) {
       console.error('[guichetReservationService] createCashTransaction failed:', err);
+      await deleteDoc(newRef);
+      throw err;
     }
   }
 

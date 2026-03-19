@@ -49,3 +49,17 @@ export function getStartOfDayInBamako(dateStr: string): Date {
 export function getEndOfDayInBamako(dateStr: string): Date {
   return dayjs.tz(`${dateStr}T23:59:59.999`, TZ_BAMAKO).toDate();
 }
+
+/**
+ * Normalise une chaîne en date stricte YYYY-MM-DD (sans espace, sans timezone).
+ * À utiliser pour paidAt et pour dateFrom/dateTo des requêtes cash.
+ * Si la chaîne contient déjà YYYY-MM-DD au début, le retourne ; sinon tente un parse.
+ */
+export function normalizeDateToYYYYMMDD(value: string | null | undefined): string {
+  const s = (value ?? "").trim();
+  const match = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return match[0];
+  const parsed = dayjs(s, ["YYYY-MM-DD", "DD/MM/YYYY", "YYYY/MM/DD"], true);
+  if (parsed.isValid()) return parsed.format("YYYY-MM-DD");
+  return s.slice(0, 10);
+}

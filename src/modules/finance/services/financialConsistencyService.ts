@@ -6,11 +6,16 @@
 
 import { collectionGroup, query, where, getDocs, orderBy, limit, Timestamp, doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
-import { isSoldReservation } from "@/modules/compagnie/networkStats/networkStatsService";
+import {
+  getStartOfDayInBamako,
+  getEndOfDayInBamako,
+  normalizeDateToYYYYMMDD,
+} from "@/shared/date/dateUtilsTz";
+import { isSoldReservation, getNetworkCapacityOnly } from "@/modules/compagnie/networkStats/networkStatsService";
 import {
   getCashTransactionsByPaidAtRange,
   getCashTransactionsByDateRange,
+  getCashTransactionsByPaidAtExact,
   type CashTransactionDocWithId,
 } from "@/modules/compagnie/cash/cashService";
 import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
@@ -46,16 +51,68 @@ export async function getTotalSales(
   const q = query(collectionGroup(db, "reservations"), ...constraints);
   const snap = await getDocs(q);
   let total = 0;
-  let tickets = 0;
+  let tickets = 0; // somme des places (seatsGo), pas le nombre de réservations
   snap.docs.forEach((d) => {
     const data = d.data();
     const statut = (data.statut ?? data.status ?? "").toString();
     if (isSoldReservation(statut)) {
-      tickets += 1;
+      tickets += Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1;
       total += Number(data.montant ?? data.amount ?? 0) || 0;
     }
   });
   return { total, tickets };
+}
+
+/** Ventes réseau (réservations vendues, createdAt). Alias explicite pour usage commun. */
+export async function getNetworkSales(
+  companyId: string,
+  period: FinancialPeriod,
+  agencyId?: string
+): Promise<{ total: number; tickets: number }> {
+  return getTotalSales(companyId, period, agencyId);
+}
+
+/** Encaissements réseau (cashTransactions paidAt, liées à réservation). */
+export async function getNetworkCash(
+  companyId: string,
+  period: FinancialPeriod,
+  options: { agencyId?: string; includeOrphans?: boolean } = {}
+): Promise<TotalCashResult> {
+  return getTotalCash(companyId, period, options);
+}
+
+/** Revenus validés (réservations avec validatedAt dans la période). */
+export async function getNetworkValidated(
+  companyId: string,
+  period: FinancialPeriod,
+  agencyId?: string
+): Promise<{ total: number; tickets: number }> {
+  return getValidatedRevenue(companyId, period, agencyId);
+}
+
+/** Billets réseau = somme des places (seatsGo) des réservations vendues (createdAt). */
+export async function getNetworkTickets(
+  companyId: string,
+  period: FinancialPeriod,
+  agencyId?: string
+): Promise<number> {
+  const res = await getTotalSales(companyId, period, agencyId);
+  return res.tickets;
+}
+
+/** Remplissage réseau = seatsGo / capacity (0–100 ou null si capacité 0). */
+export async function getNetworkOccupancy(
+  companyId: string,
+  period: FinancialPeriod,
+  agencyId?: string
+): Promise<number | null> {
+  const [sales, capacity] = await Promise.all([
+    getTotalSales(companyId, period, agencyId),
+    getNetworkCapacityOnly(companyId, period.dateFrom, period.dateTo),
+  ]);
+  if (!capacity || capacity <= 0) return null;
+  const seatsGo = sales.tickets;
+  return Math.round((seatsGo / capacity) * 100);
 }
 
 export interface TotalCashResult {
@@ -76,13 +133,31 @@ export async function getTotalCash(
 ): Promise<TotalCashResult> {
   const { agencyId, includeOrphans = false } = options;
 
-  let list: CashTransactionDocWithId[];
-  try {
-    list = await getCashTransactionsByPaidAtRange(companyId, period.dateFrom, period.dateTo);
-  } catch {
-    list = await getCashTransactionsByDateRange(companyId, period.dateFrom, period.dateTo);
-  }
+  const dateFrom = normalizeDateToYYYYMMDD(period.dateFrom);
+  const dateTo = normalizeDateToYYYYMMDD(period.dateTo);
 
+  // Test brutal : toujours utiliser la requête exacte (paidAt == dateFrom) pour afficher les encaissements.
+  let list: CashTransactionDocWithId[] = await getCashTransactionsByPaidAtExact(companyId, dateFrom);
+
+  // Log debug : comparer dateFrom/dateTo avec paidAt des documents pour diagnostiquer les mismatches.
+  const firstTransaction = list[0];
+  // eslint-disable-next-line no-console
+  console.log("[TELIYA getTotalCash]", {
+    dateFrom,
+    dateTo,
+    resultsCount: list.length,
+    sample: firstTransaction
+      ? {
+          id: (firstTransaction as any).id,
+          paidAt: (firstTransaction as any).paidAt,
+          date: (firstTransaction as any).date,
+          amount: (firstTransaction as any).amount,
+        }
+      : null,
+  });
+
+  // Inclut toutes les sources métier (guichet + online). On ne filtre PAS sur sourceType
+  // pour ne pas exclure les paiements en ligne, seulement sur le statut PAID.
   const paid = list.filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID);
   const empty: TotalCashResult = { total: 0, orphanAmount: 0, orphanCount: 0, orphanTransactions: [] };
   if (paid.length === 0) return empty;
@@ -160,11 +235,11 @@ export async function getValidatedRevenue(
   const q = query(collectionGroup(db, "reservations"), ...constraints);
   const snap = await getDocs(q);
   let total = 0;
-  let tickets = 0;
+  let tickets = 0; // somme des places (seatsGo)
   snap.docs.forEach((d) => {
     const data = d.data();
     total += Number(data.montant ?? data.amount ?? 0) || 0;
-    tickets += 1;
+    tickets += Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1;
   });
   return { total, tickets };
 }
@@ -234,6 +309,18 @@ export async function detectFinancialInconsistencies(
 
   const cashTotalWithOrphans = cashRes.total + cashRes.orphanAmount;
   const mismatchAmount = Math.max(0, cashTotalWithOrphans - salesRes.total);
+
+  // Log de contrôle (temporaire) pour audit: nombre de transactions et montant brut avant filtrage.
+  const rawCashTotal = cashList.reduce((s, t) => s + (Number((t as any).amount ?? 0) || 0), 0);
+  // eslint-disable-next-line no-console
+  console.log("[TELIYA audit] detectFinancialInconsistencies", {
+    period,
+    salesTotal: salesRes.total,
+    cashTotal: cashRes.total,
+    cashTxCount: cashList.length,
+    paidCashCount: paidCash.length,
+    rawCashTotal,
+  });
 
   return {
     orphanTransactions: cashRes.orphanTransactions,

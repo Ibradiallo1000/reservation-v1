@@ -14,14 +14,19 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
+import { useGlobalDataSnapshot } from "@/contexts/GlobalDataSnapshotContext";
+import { useGlobalMoneyPositions } from "@/contexts/GlobalMoneyPositionsContext";
 import { StandardLayoutWrapper, PageHeader, MetricCard } from "@/ui";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { DollarSign, AlertTriangle, Building2, Download, Info, Siren } from "lucide-react";
 import { useCapabilities } from "@/core/hooks/useCapabilities";
 import AccessDenied from "@/core/ui/AccessDenied";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
-import { getNetworkStats } from "@/modules/compagnie/networkStats/networkStatsService";
 import { calculateChange } from "@/shared/date/periodComparisonUtils";
+import {
+  getNetworkSales,
+} from "@/modules/finance/services/financialConsistencyService";
 import {
   getUnifiedCompanyFinance,
   type UnifiedAgencyFinance,
@@ -60,6 +65,10 @@ type ReservationDoc = {
   createdInSessionId?: string;
   montant?: number;
   date?: string;
+  /** Date de vente (créée). Utilisé pour aligner la période (audit-proof). */
+  createdAt?: unknown;
+  /** Nombre de places effectivement vendues (billets = somme(seatsGo)). */
+  seatsGo?: number;
 };
 
 function toDateKey(d: Date) {
@@ -112,7 +121,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const { hasCapability, loading: capLoading } = useCapabilities();
 
-  const [dailyStats, setDailyStats] = useState<DailyStatsDoc[]>([]);
+  /** Données dérivées uniquement (dailyStats) : jamais pour calcul principal ventes/cash/validated. */
+  const [derivedDailyStats, setDerivedDailyStats] = useState<DailyStatsDoc[]>([]);
   const [discrepancies, setDiscrepancies] = useState<ShiftReportDoc[]>([]);
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
   const [agencyFilter, setAgencyFilter] = useState<string>("");
@@ -129,6 +139,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   } | null>(null);
   const [unifiedFinance, setUnifiedFinance] = useState<UnifiedAgencyFinance | null>(null);
   const [unifiedFinanceLoading, setUnifiedFinanceLoading] = useState(false);
+  const globalSnapshot = useGlobalDataSnapshot();
+  const moneyPositions = useGlobalMoneyPositions();
 
   useEffect(() => {
     if (!companyId) {
@@ -172,7 +184,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
           limit(500)
         );
         const dailySnap = await getDocs(qDaily);
-        setDailyStats(dailySnap.docs.map((d) => d.data() as DailyStatsDoc));
+        setDerivedDailyStats(dailySnap.docs.map((d) => d.data() as DailyStatsDoc));
 
         const disc: ShiftReportDoc[] = [];
         for (const a of ags.slice(0, 30)) {
@@ -218,45 +230,42 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     })();
   }, [companyId]);
 
-  // Finance unifiée : 3 niveaux (live, cash, validated) — période 30 derniers jours
+  const globalPeriod = useGlobalPeriodContext();
+
+  // Finance unifiée : 3 niveaux (live, cash, validated) — période globale unique
   useEffect(() => {
     if (!companyId) return;
-    const monthStart = toDateKey(subDays(new Date(), 29));
-    const today = toDateKey(new Date());
+    const { dateFrom, dateTo } = globalPeriod.toFinancialPeriod();
     setUnifiedFinanceLoading(true);
-    getUnifiedCompanyFinance(companyId, monthStart, today)
+    getUnifiedCompanyFinance(companyId, dateFrom, dateTo)
       .then(setUnifiedFinance)
       .catch(() => setUnifiedFinance(null))
       .finally(() => setUnifiedFinanceLoading(false));
-  }, [companyId]);
+  }, [companyId, globalPeriod.startDate, globalPeriod.endDate]);
 
-  // Comparaison période précédente (vs hier, vs 7j précédents, vs 30j précédents)
+  // Comparaison période précédente : ventes (getNetworkSales), pas getNetworkStats
   useEffect(() => {
     if (!companyId) return;
     const now = new Date();
     const today = toDateKey(now);
     const yesterday = toDateKey(subDays(now, 1));
-    const weekEnd = today;
     const weekStart = toDateKey(subDays(now, 6));
-    const prevWeekEnd = toDateKey(subDays(now, 7));
     const prevWeekStart = toDateKey(subDays(now, 13));
-    const monthEnd = today;
     const monthStart = toDateKey(subDays(now, 29));
-    const prevMonthEnd = toDateKey(subDays(now, 30));
     const prevMonthStart = toDateKey(subDays(now, 59));
     Promise.all([
-      getNetworkStats(companyId, today, today),
-      getNetworkStats(companyId, yesterday, yesterday),
-      getNetworkStats(companyId, weekStart, weekEnd),
-      getNetworkStats(companyId, prevWeekStart, prevWeekEnd),
-      getNetworkStats(companyId, monthStart, monthEnd),
-      getNetworkStats(companyId, prevMonthStart, prevMonthEnd),
+      getNetworkSales(companyId, { dateFrom: today, dateTo: today }),
+      getNetworkSales(companyId, { dateFrom: yesterday, dateTo: yesterday }),
+      getNetworkSales(companyId, { dateFrom: weekStart, dateTo: today }),
+      getNetworkSales(companyId, { dateFrom: prevWeekStart, dateTo: toDateKey(subDays(now, 7)) }),
+      getNetworkSales(companyId, { dateFrom: monthStart, dateTo: today }),
+      getNetworkSales(companyId, { dateFrom: prevMonthStart, dateTo: toDateKey(subDays(now, 30)) }),
     ])
       .then(([currDay, prevDay, currWeek, prevWeek, currMonth, prevMonth]) => {
         setComparisonStats({
-          day: { current: currDay.totalRevenue, prev: prevDay.totalRevenue, label: "Comparé à hier" },
-          week: { current: currWeek.totalRevenue, prev: prevWeek.totalRevenue, label: "Comparé aux 7 jours précédents" },
-          month: { current: currMonth.totalRevenue, prev: prevMonth.totalRevenue, label: "Comparé aux 30 jours précédents" },
+          day: { current: currDay.total, prev: prevDay.total, label: "Comparé à hier" },
+          week: { current: currWeek.total, prev: prevWeek.total, label: "Comparé aux 7 jours précédents" },
+          month: { current: currMonth.total, prev: prevMonth.total, label: "Comparé aux 30 jours précédents" },
         });
       })
       .catch(() => setComparisonStats(null));
@@ -270,7 +279,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
 
     const shiftsByAgency = new Map<string, ShiftDoc[]>();
     const reservationsByAgency = new Map<string, ReservationDoc[]>();
-    const todayKey = toDateKey(new Date());
+    // "Aujourd'hui" = borne haute de la période globale (par défaut: jour J).
+    const dayKey = globalPeriod.endDate;
     const unsubs: Array<() => void> = [];
 
     const recompute = () => {
@@ -291,9 +301,24 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
           const shiftRef = r.shiftId ?? r.createdInSessionId;
           if (!shiftRef || !nonValidatedShiftIds.has(shiftRef)) return;
           if (canonicalStatut(r.statut) !== "paye") return;
-          if (r.date && r.date !== todayKey) return;
+          // Alignement strict sur la date de vente (createdAt) => ventes = réservations.createdAt.
+          // Fallback: si createdAt absent, utiliser r.date (legacy) pour ne pas casser les données anciennes.
+          const createdAtAny = r.createdAt as any;
+          let reservationDateKey: string | null = null;
+          try {
+            if (createdAtAny?.toDate) {
+              reservationDateKey = toDateKey(createdAtAny.toDate());
+            } else if (typeof createdAtAny?.seconds === "number") {
+              reservationDateKey = toDateKey(new Date(createdAtAny.seconds * 1000));
+            }
+          } catch {
+            reservationDateKey = null;
+          }
+          const legacyDateKey = typeof r.date === "string" ? r.date : null;
+          const effectiveDateKey = reservationDateKey ?? legacyDateKey;
+          if (effectiveDateKey && effectiveDateKey !== dayKey) return;
           liveAmount += Number(r.montant) || 0;
-          liveTickets += 1;
+          liveTickets += Number(r.seatsGo ?? 1) || 1;
         });
 
         return {
@@ -329,7 +354,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [companyId, agencies]);
+  }, [companyId, agencies, globalPeriod.endDate]);
 
   const agencyNames = useMemo(() => new Map(agencies.map((a) => [a.id, a.nom])), [agencies]);
   const getAgencyDisplayName = (agencyId: string) => {
@@ -350,30 +375,59 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     }, 0);
 
   const revenueToday = useMemo(() => {
-    const today = toDateKey(new Date());
-    const list = dailyStats.filter((d) => d.date === today);
+    const day = globalPeriod.endDate;
+    const list = derivedDailyStats.filter((d) => d.date === day);
     return { ticket: sumTicket(list), courier: sumCourier(list), total: sumTotal(list) };
-  }, [dailyStats]);
+  }, [derivedDailyStats]);
 
   const revenueWeek = useMemo(() => {
     const today = new Date();
     const weekStart = subDays(today, 6);
-    const list = dailyStats.filter((d) => {
+    const list = derivedDailyStats.filter((d) => {
       if (!d.date) return false;
       const dt = new Date(d.date);
       return dt >= startOfDay(weekStart) && dt <= endOfDay(today);
     });
     return { ticket: sumTicket(list), courier: sumCourier(list), total: sumTotal(list) };
-  }, [dailyStats]);
+  }, [derivedDailyStats]);
 
   const revenueMonth = useMemo(() => ({
-    ticket: sumTicket(dailyStats),
-    courier: sumCourier(dailyStats),
-    total: sumTotal(dailyStats),
-  }), [dailyStats]);
+    ticket: sumTicket(derivedDailyStats),
+    courier: sumCourier(derivedDailyStats),
+    total: sumTotal(derivedDailyStats),
+  }), [derivedDailyStats]);
+
+  /** Revenus consolidés période précédente (même source que les totaux → cohérence des chiffres). */
+  const revenueYesterday = useMemo(() => {
+    const yesterday = toDateKey(subDays(new Date(), 1));
+    const list = derivedDailyStats.filter((d) => d.date === yesterday);
+    return sumTotal(list);
+  }, [derivedDailyStats]);
+  const revenuePrevWeek = useMemo(() => {
+    const now = new Date();
+    const prevWeekEnd = subDays(now, 7);
+    const prevWeekStart = subDays(now, 13);
+    const list = derivedDailyStats.filter((d) => {
+      if (!d.date) return false;
+      const dt = new Date(d.date);
+      return dt >= startOfDay(prevWeekStart) && dt <= endOfDay(prevWeekEnd);
+    });
+    return sumTotal(list);
+  }, [derivedDailyStats]);
+  const revenuePrevMonth = useMemo(() => {
+    const now = new Date();
+    const prevMonthEnd = subDays(now, 30);
+    const prevMonthStart = subDays(now, 59);
+    const list = derivedDailyStats.filter((d) => {
+      if (!d.date) return false;
+      const dt = new Date(d.date);
+      return dt >= startOfDay(prevMonthStart) && dt <= endOfDay(prevMonthEnd);
+    });
+    return sumTotal(list);
+  }, [derivedDailyStats]);
 
   const byAgency = useMemo(() => {
-    const today = toDateKey(new Date());
+    const today = globalPeriod.endDate;
     const map = new Map<string, { today: number; week: number; month: number; ticket: number; courier: number }>();
 
     // Initialize all known agencies so they always appear (even with zero activity)
@@ -381,7 +435,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
       map.set(a.id, { today: 0, week: 0, month: 0, ticket: 0, courier: 0 });
     });
 
-    dailyStats.forEach((d) => {
+    derivedDailyStats.forEach((d) => {
       const aid = d.agencyId ?? "";
       if (!aid) return;
       const cur = map.get(aid) ?? { today: 0, week: 0, month: 0, ticket: 0, courier: 0 };
@@ -402,7 +456,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
       nom: getAgencyDisplayName(agencyId),
       ...v,
     }));
-  }, [dailyStats, agencies, agencyNames]);
+  }, [derivedDailyStats, agencies, agencyNames]);
 
   const filteredDiscrepancies = useMemo(() => {
     if (!agencyFilter) return discrepancies;
@@ -535,28 +589,44 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     <>
       {!embedded && <PageHeader title="Finances compagnie" />}
 
-      {/* Finance unifiée : 3 niveaux */}
+      {/* Positions d'argent (vérité métier) */}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <span>
+          {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
+          :{" "}
+          {globalSnapshot.snapshot.lastUpdatedAt
+            ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
+            : "—"}
+        </span>
+        <button
+          type="button"
+          onClick={() => void globalSnapshot.refresh()}
+          className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-800"
+        >
+          Rafraîchir
+        </button>
+      </div>
       <section className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Ventes temps réel</div>
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">En attente validation (guichet)</div>
           <div className="text-xl font-bold mt-1" style={{ color: "#2563eb" }}>
-            {unifiedFinanceLoading ? "—" : money(unifiedFinance?.live.totalRevenue ?? 0)}
+            {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.pendingGuichet)}
           </div>
-          <p className="text-xs text-gray-500 mt-1">Source : reservations + shipments (vendus / payés)</p>
+          <p className="text-xs text-gray-500 mt-1">sessions clôturées non validées</p>
         </div>
         <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Encaissements</div>
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Validé agence</div>
           <div className="text-xl font-bold mt-1" style={{ color: "#16a34a" }}>
-            {unifiedFinanceLoading ? "—" : money(unifiedFinance?.cash.total ?? 0)}
+            {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.validatedAgency)}
           </div>
-          <p className="text-xs text-gray-500 mt-1">Source : cashTransactions (status paid)</p>
+          <p className="text-xs text-gray-500 mt-1">sessions validées par comptable agence</p>
         </div>
         <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Revenus validés</div>
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Centralisé (banque / mobile money)</div>
           <div className="text-xl font-bold mt-1" style={{ color: "#7c3aed" }}>
-            {unifiedFinanceLoading ? "—" : money(unifiedFinance?.validated.totalRevenue ?? 0)}
+            {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.centralised)}
           </div>
-          <p className="text-xs text-gray-500 mt-1">Source : dailyStats (ticketRevenue + courierRevenue)</p>
+          <p className="text-xs text-gray-500 mt-1">financialAccounts (comptes entreprise)</p>
         </div>
       </section>
 
@@ -658,27 +728,27 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <MetricCard
             label="Aujourd'hui (total)"
-            value={comparisonStats ? money(comparisonStats.day.current) : money(revenueToday.total)}
+            value={money(revenueToday.total)}
             icon={DollarSign}
             valueColorVar="#4338ca"
-            variation={comparisonStats ? calculateChange(comparisonStats.day.current, comparisonStats.day.prev) : undefined}
-            variationLabel={comparisonStats?.day.label}
+            variation={calculateChange(revenueToday.total, revenueYesterday)}
+            variationLabel="Comparé à hier"
           />
           <MetricCard
             label="7 derniers jours (total)"
-            value={comparisonStats ? money(comparisonStats.week.current) : money(revenueWeek.total)}
+            value={money(revenueWeek.total)}
             icon={DollarSign}
             valueColorVar="#7c3aed"
-            variation={comparisonStats ? calculateChange(comparisonStats.week.current, comparisonStats.week.prev) : undefined}
-            variationLabel={comparisonStats?.week.label}
+            variation={calculateChange(revenueWeek.total, revenuePrevWeek)}
+            variationLabel="Comparé aux 7 jours précédents"
           />
           <MetricCard
             label="30 derniers jours (total)"
-            value={comparisonStats ? money(comparisonStats.month.current) : money(revenueMonth.total)}
+            value={money(revenueMonth.total)}
             icon={DollarSign}
             valueColorVar="#0f766e"
-            variation={comparisonStats ? calculateChange(comparisonStats.month.current, comparisonStats.month.prev) : undefined}
-            variationLabel={comparisonStats?.month.label}
+            variation={calculateChange(revenueMonth.total, revenuePrevMonth)}
+            variationLabel="Comparé aux 30 jours précédents"
           />
         </div>
         <div className="mt-3 text-sm text-gray-600 dark:text-gray-400">

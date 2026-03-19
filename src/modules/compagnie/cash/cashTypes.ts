@@ -33,6 +33,12 @@ export type CashPaymentMethod = (typeof CASH_PAYMENT_METHOD)[keyof typeof CASH_P
 
 export interface CashTransactionDoc {
   reservationId: string;
+  /** Session guichet/courrier à l'origine de l'encaissement (pour correspondance validation). */
+  sessionId?: string | null;
+  /** Source métier (audit-proof). */
+  sourceType?: "guichet" | "online" | "transfer" | string;
+  /** Session source (guichet/courrier/virtualSession). */
+  sourceSessionId?: string | null;
   tripInstanceId?: string | null;
   amount: number;
   currency: string;
@@ -45,10 +51,18 @@ export interface CashTransactionDoc {
   createdBy: string;
   /** @deprecated Utiliser paidAt. Date du jour (YYYY-MM-DD) — conservé pour rétrocompat. */
   date: string;
-  /** Date réelle d'encaissement (YYYY-MM-DD). Source de vérité pour les encaissements par période. */
+  /**
+   * Date réelle d'encaissement, format strict "YYYY-MM-DD" (pas d'espace, pas de timezone).
+   * Source de vérité pour les encaissements par période.
+   * Recommandation future : migrer vers Firestore Timestamp pour requêtes et indexation cohérentes.
+   */
   paidAt?: string;
   /** paid | refunded | orphan | cancelled. Défaut paid. */
   status?: CashTransactionStatus | string;
+  /** Nombre de places (billets) — source de vérité pour totaux session. */
+  seats?: number;
+  /** Libellé trajet (ex. "Bamako→Gao") pour regroupement rapports. */
+  routeLabel?: string | null;
   createdAt: unknown;
   /** Remboursement / annulation : date de mise à jour du statut (Timestamp). */
   refundedAt?: unknown;

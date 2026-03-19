@@ -73,7 +73,7 @@ export const SessionSummaryModal: React.FC<Props> = ({
             </div>
             <div>
               <h2 className="text-lg font-bold text-gray-900">Session clôturée</h2>
-              <p className="text-xs text-gray-500">{userName} ({userCode})</p>
+              <p className="text-xs text-gray-500">{userName} ({userCode || "GUEST"})</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 transition">
@@ -134,10 +134,11 @@ export const SessionSummaryModal: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Time info */}
-          <div className="flex items-center justify-between text-xs text-gray-400 bg-gray-50 rounded-lg px-4 py-2">
+          {/* Time info : Début / Fin / Durée */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600 bg-gray-50 rounded-lg px-4 py-2">
             <span>Début : {sessionStart ? sessionStart.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"}</span>
-            <span>Fin : {sessionEnd ? sessionEnd.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>
+            <span>Fin : {sessionEnd ? sessionEnd.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+            <span>Durée : {duration}</span>
           </div>
         </div>
 
