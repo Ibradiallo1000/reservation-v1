@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import { OperationalSourceBadge } from "@/modules/agence/components/OperationalDataHint";
 
 interface DailyStat {
   date: string;
@@ -35,9 +36,15 @@ export const RevenueChart = ({
   return (
     <Card className="shadow-sm border border-gray-200">
       <CardHeader>
-        <CardTitle style={{ color: theme.colors.primary }}>
-          Réservations par jour
-        </CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle style={{ color: theme.colors.primary }}>
+            Réservations par jour
+          </CardTitle>
+          <OperationalSourceBadge />
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Revenus affichés : agrégat réservations (networkStats) — donnée opérationnelle, non comptable.
+        </p>
       </CardHeader>
       <CardContent>
         <div className="h-64">

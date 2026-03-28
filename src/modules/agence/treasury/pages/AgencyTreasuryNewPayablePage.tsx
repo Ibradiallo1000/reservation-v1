@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { SectionCard, ActionButton } from "@/ui";
+import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
 import { PAYABLE_CATEGORIES, type PayableCategory } from "@/modules/compagnie/finance/payablesTypes";
 import { createPayable } from "@/modules/compagnie/finance/payablesService";
 import { doc, getDoc, Timestamp } from "firebase/firestore";
@@ -36,6 +37,8 @@ const compactDigits = (value: string) => {
 };
 
 export default function AgencyTreasuryNewPayablePage() {
+  const { pathname } = useLocation();
+  const isStandaloneComptaTreasury = pathname.startsWith("/agence/comptabilite/treasury");
   const { user } = useAuth() as any;
   const companyId =
     user?.companyId ?? user?.compagnieId ?? user?.company?.id ?? user?.company?.companyId ?? "";
@@ -224,11 +227,16 @@ export default function AgencyTreasuryNewPayablePage() {
   };
 
   if (!companyId) {
-    return <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
+    const missing = <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
+    return isStandaloneComptaTreasury ? (
+      <StandardLayoutWrapper className="min-w-0">{missing}</StandardLayoutWrapper>
+    ) : (
+      missing
+    );
   }
 
-  return (
-    <div className="space-y-6">
+  const body = (
+    <div className="min-w-0 space-y-6">
       <SectionCard title="Nouveau payable fournisseur agence" icon={FilePlus2}>
         {loading ? (
           <div className="py-8 text-center text-gray-500">Chargement...</div>
@@ -258,15 +266,20 @@ export default function AgencyTreasuryNewPayablePage() {
                 {suppliers.length === 0 && (
                   <div className="mt-2 space-y-2">
                     <p className="text-xs text-amber-700">Aucun fournisseur actif configuré au niveau compagnie.</p>
-                    <div className="flex gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
                       <input
                         type="text"
                         value={newSupplierName}
                         onChange={(e) => setNewSupplierName(e.target.value)}
                         placeholder="Nouveau fournisseur"
-                        className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        className="min-w-0 flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
                       />
-                      <ActionButton type="button" onClick={handleCreateSupplier} disabled={creatingSupplier}>
+                      <ActionButton
+                        type="button"
+                        className="w-full shrink-0 sm:w-auto"
+                        onClick={handleCreateSupplier}
+                        disabled={creatingSupplier}
+                      >
                         {creatingSupplier ? "Ajout..." : "Ajouter"}
                       </ActionButton>
                     </div>
@@ -378,5 +391,11 @@ export default function AgencyTreasuryNewPayablePage() {
         )}
       </SectionCard>
     </div>
+  );
+
+  return isStandaloneComptaTreasury ? (
+    <StandardLayoutWrapper className="min-w-0">{body}</StandardLayoutWrapper>
+  ) : (
+    body
   );
 }

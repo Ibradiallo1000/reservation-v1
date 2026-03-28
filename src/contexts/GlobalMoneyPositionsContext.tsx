@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
 import { CASH_TRANSACTION_STATUS, LOCATION_TYPE } from "@/modules/compagnie/cash/cashTypes";
+import { USE_PAYMENTS_AS_SOURCE } from "@/config/featureFlags";
 
 export type MoneyPositionsSnapshot = {
   /** GUICHET (en attente validation) */
@@ -43,6 +44,8 @@ export type MoneyPositionsSnapshot = {
     | { agencyId: string; type: "TX_WITHOUT_SESSION"; count: number }
     | { agencyId: string; type: "VALIDATED_WITHOUT_TX"; sessionId: string }
   >;
+  /** Total des payments confirmés sur la période (flux unifié, lecture seule). Conservé en parallèle de cashTransactions. */
+  paymentsConfirmedTotal?: number;
   lastUpdatedAt: Date | null;
   mode?: "realtime";
 };
@@ -91,6 +94,13 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
   const byAgencyRef = React.useRef<MoneyPositionsSnapshot["byAgency"]>({});
   const bySessionRef = React.useRef<MoneyPositionsSnapshot["bySession"]>({});
   const inconsistenciesRef = React.useRef<MoneyPositionsSnapshot["inconsistencies"]>([]);
+  const paymentsConfirmedRef = React.useRef(0);
+  const paymentsConfirmedByAgencyRef = React.useRef<Record<string, number>>({});
+  const validatedAgencyOnlineRef = React.useRef(0);
+  const validatedAgencyByAgencyOnlineRef = React.useRef<Record<string, number>>({});
+  const validatedAgencyShiftOnlyRef = React.useRef(0);
+  const validatedAgencyByAgencyShiftOnlyRef = React.useRef<Record<string, number>>({});
+  const validatedAgencyBySessionShiftOnlyRef = React.useRef<Record<string, Record<string, number>>>({});
   const scheduleRef = React.useRef<number | null>(null);
 
   const commit = React.useCallback(() => {
@@ -101,6 +111,7 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
       byAgency: byAgencyRef.current,
       bySession: bySessionRef.current,
       inconsistencies: inconsistenciesRef.current,
+      paymentsConfirmedTotal: paymentsConfirmedRef.current,
       lastUpdatedAt: new Date(),
       mode: "realtime",
     });
@@ -124,17 +135,23 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
     const startTs = Timestamp.fromDate(start);
     const endTs = Timestamp.fromDate(end);
 
-    // 1) cashTransactions sous companies/{companyId}/cashTransactions (pas de champ companyId dans le doc).
+    // 1) Encaissements cash : filtre createdAt + période (Bamako) — interdit : where/orderBy sur paidAt (string).
     const cashTxRefCol = collection(db, "companies", companyId, "cashTransactions");
-    const qCashTx =
-      period.startDate === period.endDate
-        ? query(cashTxRefCol, where("paidAt", "==", period.startDate))
-        : query(
-            cashTxRefCol,
-            where("paidAt", ">=", period.startDate),
-            where("paidAt", "<=", period.endDate),
-            orderBy("paidAt", "asc")
-          );
+    const qCashTx = query(
+      cashTxRefCol,
+      where("createdAt", ">=", startTs),
+      where("createdAt", "<=", endTs),
+      orderBy("createdAt", "asc")
+    );
+
+    const movementsRefCol = collection(db, "companies", companyId, "financialTransactions");
+    const qMovementsPayment = query(
+      movementsRefCol,
+      where("type", "==", "payment_received"),
+      where("performedAt", ">=", startTs),
+      where("performedAt", "<=", endTs),
+      orderBy("performedAt", "asc")
+    );
 
     // 2) VALIDÉ AGENCE = sessions validées par comptable agence (source unique = validationAudit)
     // On utilise shiftReports car il contient status=validated_agency + validationAudit + validatedAt.
@@ -147,7 +164,7 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
       orderBy("validatedAt", "asc")
     );
 
-    // 3) CENTRALISÉ = financialMovements vers comptes entreprise (source unique = flux)
+    // 3) CENTRALISÉ = financialTransactions vers comptes entreprise (source unique = flux)
     // Étape A: écouter les comptes entreprise pour obtenir les IDs de comptes "central".
     const qCentralAccounts = query(
       collection(db, "companies", companyId, "financialAccounts"),
@@ -171,8 +188,8 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
         return;
       }
       const qMov = query(
-        collection(db, "companies", companyId, "financialMovements"),
-        where("toAccountId", "in", ids as any),
+        collection(db, "companies", companyId, "financialTransactions"),
+        where("creditAccountId", "in", ids as any),
         where("performedAt", ">=", startTs),
         where("performedAt", "<=", endTs),
         orderBy("performedAt", "asc")
@@ -214,72 +231,48 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
           scheduleCommit();
         },
         (err) => {
-          setError(err?.message ?? "Erreur onSnapshot financialMovements");
+          setError(err?.message ?? "Erreur onSnapshot financialTransactions");
           setLoading(false);
         }
       );
     };
 
-    const unsubCash = onSnapshot(
-      qCashTx,
-      (snap) => {
-        let totalPaid = 0;
-        const byAgency: Record<string, number> = {};
-        const bySession: Record<string, Record<string, number>> = {};
-        const txWithoutSessionByAgency: Record<string, number> = {};
-        snap.docs.forEach((d) => {
-          const t = d.data() as any;
-          const status = String(t.status ?? "");
-          const locType = String(t.locationType ?? "");
-          if (status !== CASH_TRANSACTION_STATUS.PAID) return;
-          if (locType !== LOCATION_TYPE.AGENCE && locType !== LOCATION_TYPE.ESCALE) return;
-          const amt = Number(t.amount ?? 0) || 0;
-          totalPaid += amt;
-          const agencyId = String(t.locationId ?? "");
-          if (agencyId) byAgency[agencyId] = (byAgency[agencyId] ?? 0) + amt;
-          const sid = String(t.sessionId ?? "");
-          const sourceType = String(t.sourceType ?? "");
-          if (sourceType === "guichet" && (!sid || sid.trim().length === 0)) {
-            if (agencyId) txWithoutSessionByAgency[agencyId] = (txWithoutSessionByAgency[agencyId] ?? 0) + 1;
-          }
-          if (agencyId && sid) {
-            bySession[agencyId] = bySession[agencyId] ?? {};
-            bySession[agencyId][sid] = (bySession[agencyId][sid] ?? 0) + amt;
-          }
-        });
-        cashPaidTotalRef.current = totalPaid;
-        cashPaidByAgencyRef.current = byAgency;
-        cashPaidBySessionRef.current = bySession;
-        // pendingGuichet = encaissé (cashTx) - validé agence (sessions)
-        pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
-        // par agence
-        const pendingByAgency: Record<string, number> = {};
-        const validatedByAgency = validatedAgencyByAgencyRef.current;
-        Object.keys(byAgency).forEach((aid) => {
-          pendingByAgency[aid] = (byAgency[aid] ?? 0) - (validatedByAgency[aid] ?? 0);
-        });
-        Object.keys(validatedByAgency).forEach((aid) => {
-          if (pendingByAgency[aid] === undefined) pendingByAgency[aid] = 0 - (validatedByAgency[aid] ?? 0);
-        });
-        // Build snapshot.byAgency + snapshot.bySession + inconsistencies
-        const out: MoneyPositionsSnapshot["byAgency"] = {};
-        const outSessions: MoneyPositionsSnapshot["bySession"] = {};
-        const inconsistencies: MoneyPositionsSnapshot["inconsistencies"] = [];
-        const centralByAgency = centralisedByAgencyRef.current;
-        const cashByAgency = cashPaidByAgencyRef.current;
-        Object.keys({ ...cashByAgency, ...validatedByAgency, ...centralByAgency }).forEach((aid) => {
-          const cashPaid = cashByAgency[aid] ?? 0;
-          const val = validatedByAgency[aid] ?? 0;
-          const pend = pendingByAgency[aid] ?? 0;
-          const cent = centralByAgency[aid] ?? 0;
-          out[aid] = { cashPaid, validatedAgency: val, pendingGuichet: pend, centralised: cent };
-          if (pend < 0) inconsistencies.push({ agencyId: aid, type: "NEGATIVE_PENDING", value: pend });
-        });
-        Object.keys(txWithoutSessionByAgency).forEach((aid) => {
-          inconsistencies.push({ agencyId: aid, type: "TX_WITHOUT_SESSION", count: txWithoutSessionByAgency[aid] ?? 0 });
-        });
-
-        // per session (guichet ↔ validated_agency matching via shiftId/sessionId)
+    const applyCashPayload = (
+      totalPaid: number,
+      byAgency: Record<string, number>,
+      bySession: Record<string, Record<string, number>>,
+      txWithoutSessionByAgency: Record<string, number>
+    ) => {
+      cashPaidTotalRef.current = totalPaid;
+      cashPaidByAgencyRef.current = byAgency;
+      cashPaidBySessionRef.current = bySession;
+      pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
+      const validatedByAgency = validatedAgencyByAgencyRef.current;
+      const pendingByAgency: Record<string, number> = {};
+      Object.keys(byAgency).forEach((aid) => {
+        pendingByAgency[aid] = (byAgency[aid] ?? 0) - (validatedByAgency[aid] ?? 0);
+      });
+      Object.keys(validatedByAgency).forEach((aid) => {
+        if (pendingByAgency[aid] === undefined) pendingByAgency[aid] = 0 - (validatedByAgency[aid] ?? 0);
+      });
+      const out: MoneyPositionsSnapshot["byAgency"] = {};
+      const outSessions: MoneyPositionsSnapshot["bySession"] = {};
+      const inconsistencies: MoneyPositionsSnapshot["inconsistencies"] = [];
+      const centralByAgency = centralisedByAgencyRef.current;
+      const cashByAgency = byAgency;
+      Object.keys({ ...cashByAgency, ...validatedByAgency, ...centralByAgency }).forEach((aid) => {
+        const cashPaid = cashByAgency[aid] ?? 0;
+        const val = validatedByAgency[aid] ?? 0;
+        const pend = pendingByAgency[aid] ?? 0;
+        const cent = centralByAgency[aid] ?? 0;
+        out[aid] = { cashPaid, validatedAgency: val, pendingGuichet: pend, centralised: cent };
+        if (pend < 0) inconsistencies.push({ agencyId: aid, type: "NEGATIVE_PENDING", value: pend });
+      });
+      Object.keys(txWithoutSessionByAgency).forEach((aid) => {
+        inconsistencies.push({ agencyId: aid, type: "TX_WITHOUT_SESSION", count: txWithoutSessionByAgency[aid] ?? 0 });
+      });
+      const hasCashSessionInfo = Object.keys(bySession).length > 0;
+      if (hasCashSessionInfo) {
         const validatedSessions = validatedAgencyBySessionRef.current;
         const centralSessions = centralisedBySessionRef.current;
         Object.keys({ ...bySession, ...validatedSessions, ...centralSessions }).forEach((aid) => {
@@ -291,25 +284,141 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
           allSessionIds.forEach((sid) => {
             const cashPaid = cashS[sid] ?? 0;
             const validatedAgency = valS[sid] ?? 0;
-            const pendingGuichet = cashPaid - validatedAgency;
-            const centralised = centS[sid] ?? 0;
-            outSessions[aid][sid] = { cashPaid, validatedAgency, pendingGuichet, centralised };
+            outSessions[aid][sid] = {
+              cashPaid,
+              validatedAgency,
+              pendingGuichet: cashPaid - validatedAgency,
+              centralised: centS[sid] ?? 0,
+            };
             if (validatedAgency > 0 && cashPaid === 0) {
               inconsistencies.push({ agencyId: aid, type: "VALIDATED_WITHOUT_TX", sessionId: sid });
             }
           });
         });
-        byAgencyRef.current = out;
-        bySessionRef.current = outSessions;
-        inconsistenciesRef.current = inconsistencies;
-        setLoading(false);
-        scheduleCommit();
-      },
-      (err) => {
-        setError(err?.message ?? "Erreur onSnapshot cashTransactions");
-        setLoading(false);
       }
-    );
+      byAgencyRef.current = out;
+      bySessionRef.current = outSessions;
+      inconsistenciesRef.current = inconsistencies;
+      setLoading(false);
+      scheduleCommit();
+    };
+
+    const recomputeValidatedAgencyTotals = () => {
+      // "Validé agence" = validation agence (shiftReports) + validations online (payments.status=validated)
+      const totalValidated =
+        validatedAgencyShiftOnlyRef.current +
+        paymentsConfirmedRef.current +
+        validatedAgencyOnlineRef.current;
+      const byAgencyMerged: Record<string, number> = {
+        ...validatedAgencyByAgencyShiftOnlyRef.current,
+      };
+      Object.entries(paymentsConfirmedByAgencyRef.current).forEach(([aid, amt]) => {
+        byAgencyMerged[aid] = (byAgencyMerged[aid] ?? 0) + (Number(amt) || 0);
+      });
+      Object.entries(validatedAgencyByAgencyOnlineRef.current).forEach(([aid, amt]) => {
+        byAgencyMerged[aid] = (byAgencyMerged[aid] ?? 0) + (Number(amt) || 0);
+      });
+
+      validatedAgencyRef.current = totalValidated;
+      validatedAgencyByAgencyRef.current = byAgencyMerged;
+      // Les validations online n'ont pas de session guichet: on garde le détail session basé sur shiftReports.
+      validatedAgencyBySessionRef.current = validatedAgencyBySessionShiftOnlyRef.current;
+      pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
+    };
+
+    let unsubCash: () => void;
+    // Phase 3 : si USE_PAYMENTS_AS_SOURCE, source = financialTransactions (payment_received) ; cashTransactions non utilisés.
+    if (USE_PAYMENTS_AS_SOURCE) {
+      unsubCash = onSnapshot(
+        qMovementsPayment,
+        (snap) => {
+          let totalPaid = 0;
+          let onlineValidated = 0;
+          const byAgency: Record<string, number> = {};
+          const byAgencyOnline: Record<string, number> = {};
+          const bySession: Record<string, Record<string, number>> = {};
+          snap.docs.forEach((d) => {
+            const m = d.data() as {
+              amount?: number;
+              agencyId?: string;
+              sourceSessionId?: string;
+              sourceType?: string;
+              paymentChannel?: string;
+              source?: string;
+            };
+            // Le KPI "pendingGuichet" doit rester aligné sur encaissements guichet/online.
+            // Les paiements courrier (sourceType="courrier") alimentent le ledger mais ne doivent pas polluer ce KPI.
+            const st = String(m?.sourceType ?? m?.paymentChannel ?? m?.source ?? "");
+            if (st !== "guichet" && st !== "online") return;
+            const amt = Number(m?.amount ?? 0) || 0;
+            totalPaid += amt;
+            const agencyId = String(m?.agencyId ?? "");
+            if (agencyId) byAgency[agencyId] = (byAgency[agencyId] ?? 0) + amt;
+            if (st === "online") {
+              onlineValidated += amt;
+              if (agencyId) byAgencyOnline[agencyId] = (byAgencyOnline[agencyId] ?? 0) + amt;
+            }
+            const sid = String(m?.sourceSessionId ?? "");
+            if (agencyId && sid) {
+              bySession[agencyId] = bySession[agencyId] ?? {};
+              bySession[agencyId][sid] = (bySession[agencyId][sid] ?? 0) + amt;
+            }
+          });
+          validatedAgencyOnlineRef.current = onlineValidated;
+          validatedAgencyByAgencyOnlineRef.current = byAgencyOnline;
+          recomputeValidatedAgencyTotals();
+          applyCashPayload(totalPaid, byAgency, bySession, {});
+        },
+        (err) => {
+          setError(err?.message ?? "Erreur onSnapshot financialTransactions (payment_received)");
+          setLoading(false);
+        }
+      );
+    } else {
+      unsubCash = onSnapshot(
+        qCashTx,
+        (snap) => {
+          let totalPaid = 0;
+          let onlineValidated = 0;
+          const byAgency: Record<string, number> = {};
+          const byAgencyOnline: Record<string, number> = {};
+          const bySession: Record<string, Record<string, number>> = {};
+          const txWithoutSessionByAgency: Record<string, number> = {};
+          snap.docs.forEach((d) => {
+            const t = d.data() as any;
+            const status = String(t.status ?? "");
+            const locType = String(t.locationType ?? "");
+            if (status !== CASH_TRANSACTION_STATUS.PAID) return;
+            if (locType !== LOCATION_TYPE.AGENCE && locType !== LOCATION_TYPE.ESCALE) return;
+            const amt = Number(t.amount ?? 0) || 0;
+            totalPaid += amt;
+            const agencyId = String(t.locationId ?? "");
+            if (agencyId) byAgency[agencyId] = (byAgency[agencyId] ?? 0) + amt;
+            const sid = String(t.sessionId ?? "");
+            const sourceType = String(t.sourceType ?? "");
+            if (sourceType === "online") {
+              onlineValidated += amt;
+              if (agencyId) byAgencyOnline[agencyId] = (byAgencyOnline[agencyId] ?? 0) + amt;
+            }
+            if (sourceType === "guichet" && (!sid || sid.trim().length === 0)) {
+              if (agencyId) txWithoutSessionByAgency[agencyId] = (txWithoutSessionByAgency[agencyId] ?? 0) + 1;
+            }
+            if (agencyId && sid) {
+              bySession[agencyId] = bySession[agencyId] ?? {};
+              bySession[agencyId][sid] = (bySession[agencyId][sid] ?? 0) + amt;
+            }
+          });
+          validatedAgencyOnlineRef.current = onlineValidated;
+          validatedAgencyByAgencyOnlineRef.current = byAgencyOnline;
+          recomputeValidatedAgencyTotals();
+          applyCashPayload(totalPaid, byAgency, bySession, txWithoutSessionByAgency);
+        },
+        (err) => {
+          setError(err?.message ?? "Erreur onSnapshot cashTransactions");
+          setLoading(false);
+        }
+      );
+    }
 
     const unsubValidatedAgency = onSnapshot(
       qShiftReportsValidatedAgency,
@@ -331,11 +440,10 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
             bySession[agencyId][sid] = (bySession[agencyId][sid] ?? 0) + amt;
           }
         });
-        validatedAgencyRef.current = validatedAgency;
-        validatedAgencyByAgencyRef.current = byAgency;
-        validatedAgencyBySessionRef.current = bySession;
-        // Recalcul pending = encaissé - validé
-        pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
+        validatedAgencyShiftOnlyRef.current = validatedAgency;
+        validatedAgencyByAgencyShiftOnlyRef.current = byAgency;
+        validatedAgencyBySessionShiftOnlyRef.current = bySession;
+        recomputeValidatedAgencyTotals();
         // NB: byAgencyRef + inconsistenciesRef are rebuilt on cash snapshot (which is fine; cash changes more often).
         setLoading(false);
         scheduleCommit();
@@ -361,10 +469,60 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
       }
     );
 
+    // Lecture payments (confirmés sur la période) — flux unifié, en parallèle de cashTransactions / shiftReports
+    const paymentsRef = collection(db, "companies", companyId, "payments");
+    const qPayments = query(
+      paymentsRef,
+      where("status", "==", "validated"),
+      where("validatedAt", ">=", startTs),
+      where("validatedAt", "<=", endTs),
+      orderBy("validatedAt", "asc")
+    );
+    const unsubPayments = onSnapshot(
+      qPayments,
+      (snap) => {
+        let total = 0;
+        const byAgency: Record<string, number> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data() as { amount?: number; agencyId?: string };
+          const amount = Number(data?.amount ?? 0) || 0;
+          total += amount;
+          const aid = String(data?.agencyId ?? "");
+          if (aid) byAgency[aid] = (byAgency[aid] ?? 0) + amount;
+        });
+        paymentsConfirmedRef.current = total;
+        paymentsConfirmedByAgencyRef.current = byAgency;
+        recomputeValidatedAgencyTotals();
+        // Migration progressive : fallback sur payments si cashTransactions indisponibles.
+        if (cashPaidTotalRef.current <= 0 && total > 0) {
+          cashPaidTotalRef.current = total;
+          pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
+          const validatedByAgency = validatedAgencyByAgencyRef.current;
+          const out: MoneyPositionsSnapshot["byAgency"] = {};
+          Object.keys({ ...byAgency, ...validatedByAgency }).forEach((aid) => {
+            const cashPaid = byAgency[aid] ?? 0;
+            const val = validatedByAgency[aid] ?? 0;
+            const pend = cashPaid - val;
+            const cent = centralisedByAgencyRef.current[aid] ?? 0;
+            out[aid] = { cashPaid, validatedAgency: val, pendingGuichet: pend, centralised: cent };
+          });
+          byAgencyRef.current = out;
+        }
+        setLoading(false);
+        scheduleCommit();
+      },
+      (err) => {
+        console.warn("[GlobalMoneyPositions] payments snapshot:", err?.message);
+        setLoading(false);
+        scheduleCommit();
+      }
+    );
+
     return () => {
       unsubCash();
       unsubValidatedAgency();
       unsubCentralAccounts();
+      unsubPayments();
       if (unsubCentralMovements) unsubCentralMovements();
       if (scheduleRef.current != null) {
         window.clearTimeout(scheduleRef.current);

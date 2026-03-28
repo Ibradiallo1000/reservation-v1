@@ -127,6 +127,9 @@ export async function closeCashSession(
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("Session introuvable.");
   const data = snap.data() as CashSessionDoc;
+  if (data.status === CASH_SESSION_STATUS.SUSPENDED) {
+    throw new Error("Session suspendue. Déblocage requis avant toute action.");
+  }
   if (data.status !== CASH_SESSION_STATUS.OPEN) throw new Error("Seule une session ouverte peut être clôturée.");
   if (data.agentId !== userId) throw new Error("Seul l'agent qui a ouvert la session peut la clôturer.");
   const totalExpected = getTotalExpected(data);
@@ -170,6 +173,9 @@ export async function validateCashSession(
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Session introuvable.");
     const data = snap.data() as CashSessionDoc;
+    if (data.status === CASH_SESSION_STATUS.SUSPENDED) {
+      throw new Error("Session suspendue. Validation impossible tant que la suspension est active.");
+    }
     if (data.status !== CASH_SESSION_STATUS.CLOSED) {
       throw new Error("Seule une session clôturée peut être validée.");
     }
@@ -195,6 +201,9 @@ export async function rejectCashSession(
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("Session introuvable.");
   const data = snap.data() as CashSessionDoc;
+  if (data.status === CASH_SESSION_STATUS.SUSPENDED) {
+    throw new Error("Session suspendue. Rejet impossible tant que la suspension est active.");
+  }
   if (data.status !== CASH_SESSION_STATUS.CLOSED) {
     throw new Error("Seule une session clôturée peut être rejetée.");
   }
@@ -202,6 +211,35 @@ export async function rejectCashSession(
     status: "REJECTED" as CashSessionStatus,
     rejectionReason: rejectionReason ?? null,
     validatedBy: userId,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Supervision safety action: suspend a session without deleting data or posting ledger movements. */
+export async function suspendCashSession(
+  companyId: string,
+  agencyId: string,
+  sessionId: string,
+  userId: string,
+  reason: string
+): Promise<void> {
+  const why = reason.trim();
+  if (why.length < 8) throw new Error("Motif de suspension trop court (8 caractères min).");
+  const ref = cashSessionRef(companyId, agencyId, sessionId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Session introuvable.");
+  const data = snap.data() as CashSessionDoc;
+  if (data.status === CASH_SESSION_STATUS.VALIDATED || data.status === CASH_SESSION_STATUS.REJECTED) {
+    throw new Error("Session déjà clôturée comptablement.");
+  }
+  if (data.status === CASH_SESSION_STATUS.SUSPENDED) {
+    throw new Error("Session déjà suspendue.");
+  }
+  await updateDoc(ref, {
+    status: CASH_SESSION_STATUS.SUSPENDED,
+    suspendedAt: Timestamp.now(),
+    suspendedBy: userId,
+    suspensionReason: why,
     updatedAt: serverTimestamp(),
   });
 }

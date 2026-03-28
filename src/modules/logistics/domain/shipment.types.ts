@@ -25,6 +25,17 @@ export type PaymentStatus =
   | "PAID_ORIGIN"
   | "PAID_DESTINATION";
 
+/**
+ * Suivi transport (lien tripInstance), distinct de {@link ShipmentStatus} / currentStatus.
+ * — Sans tripInstanceId à la création → PENDING_ASSIGNMENT
+ * — Avec tripInstanceId → ASSIGNED (puis IN_TRANSIT / ARRIVED selon évolutions futures)
+ */
+export type ShipmentTransportStatus =
+  | "PENDING_ASSIGNMENT"
+  | "ASSIGNED"
+  | "IN_TRANSIT"
+  | "ARRIVED";
+
 export interface ShipmentSender {
   name: string;
   phone: string;
@@ -58,6 +69,22 @@ export interface Shipment {
   vehicleId?: string;
   /** Optional link to trip instance (real execution of the trip). When set, shipment is attached to that instance. */
   tripInstanceId?: string | null;
+  /** État du rattachement au transport (tripInstance), indépendant du workflow colis (currentStatus). */
+  transportStatus?: ShipmentTransportStatus;
+  /**
+   * Contrôle agent sur un arrivage.
+   * — À la création : `false`.
+   * — Quand le transport enregistre une arrivée physique (ex. transportStatus ou flux ARRIVED côté transport) : passer à `true` pour file d’arrivages / contrôle (phase 2).
+   */
+  needsValidation?: boolean;
+  /** Dernière instance de trajet remplacée lors d’une réaffectation (audit). */
+  previousTripInstanceId?: string | null;
+  reassignedAt?: unknown;
+  reassignedBy?: string;
+  /** Anomalie signalée à l’arrivage (contrôle agent) — phase transport / arrivages. */
+  arrivalAnomalyFlag?: boolean;
+  arrivalAnomalyAt?: unknown;
+  arrivalAnomalyBy?: string;
   createdAt: unknown;
   createdBy: string;
   /** Courier session id (agency-scoped); required when creating from courrier module */
@@ -66,6 +93,16 @@ export interface Shipment {
   agentCode?: string;
   /** Nature of package (e.g. "Documents", "Colis") — required in courier UI */
   nature?: string;
+  /** Id public pour URL /track/{id} (QR) — unique, non secret. */
+  trackingPublicId?: string;
+  /** Secret pour valider l’accès au suivi (?token=). Jamais dans publicShipmentTrack. */
+  trackingToken?: string;
+  /** Code de retrait communiqué au client (remise par tiers possible). */
+  pickupCode?: string;
+  /** Flag d'usage unique du code de retrait. */
+  pickupCodeUsed?: boolean;
+  /** Valeur du code saisi lors de la remise (traçabilité). */
+  pickupCodeUsedValue?: string | null;
   /** Amount collected at destination when paymentType is DESTINATION */
   destinationCollectedAmount?: number;
 }

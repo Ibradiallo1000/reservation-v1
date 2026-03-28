@@ -5,13 +5,45 @@ import type { Transaction } from "firebase/firestore";
 import type { Timestamp } from "firebase/firestore";
 import { doc, serverTimestamp, increment } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
+import { DEFAULT_AGENCY_TIMEZONE, resolveAgencyTimezone } from "@/shared/date/dateUtilsTz";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 const COLLECTION = "dailyStats";
 
-/** Format timestamp as YYYY-MM-DD for dailyStats document ID. */
+/**
+ * Champs d’identité écrits sur chaque merge dailyStats.
+ * `timezone` (IANA) est optionnel mais recommandé : même fuseau que celui utilisé pour calculer `date` (id document).
+ */
+function dailyStatsIdentity(
+  companyId: string,
+  agencyId: string,
+  date: string,
+  ianaTimezone?: string
+): Record<string, unknown> {
+  return {
+    companyId,
+    agencyId,
+    date,
+    ...(ianaTimezone ? { timezone: ianaTimezone } : {}),
+  };
+}
+
+/**
+ * Clé document dailyStats/{YYYY-MM-DD} : instant Firestore interprété dans le fuseau de l’agence.
+ * Doit être identique en lecture (UI) et en écriture (transactions).
+ */
+export function timestampToDailyStatsDateKey(ts: Timestamp, ianaTimezone: string): string {
+  return dayjs(ts.toDate()).tz(ianaTimezone).format("YYYY-MM-DD");
+}
+
+/** @deprecated Utiliser timestampToDailyStatsDateKey(ts, tz) — équivalent défaut Bamako. */
 export function toDailyStatsDate(t: Timestamp): string {
-  const d = t.toDate();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return timestampToDailyStatsDateKey(t, DEFAULT_AGENCY_TIMEZONE);
 }
 
 function dailyStatsRef(companyId: string, agencyId: string, date: string) {
@@ -47,13 +79,12 @@ export function updateDailyStatsOnReservationCreated(
   agencyId: string,
   date: string,
   passengers: number,
-  seats: number
+  seats: number,
+  ianaTimezone?: string
 ): void {
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     totalPassengers: increment(passengers),
     totalSeats: increment(seats),
@@ -69,13 +100,12 @@ export function updateDailyStatsOnSessionClosed(
   tx: Transaction,
   companyId: string,
   agencyId: string,
-  date: string
+  date: string,
+  ianaTimezone?: string
 ): void {
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     closedSessions: increment(1),
     createdAt: serverTimestamp(),
@@ -92,14 +122,13 @@ export function updateDailyStatsOnSessionValidatedByAgency(
   companyId: string,
   agencyId: string,
   date: string,
-  ticketRevenue: number
+  ticketRevenue: number,
+  ianaTimezone?: string
 ): void {
   if (ticketRevenue <= 0) return;
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     ticketRevenueAgency: increment(ticketRevenue),
     createdAt: serverTimestamp(),
@@ -116,14 +145,13 @@ export function updateDailyStatsOnSessionValidatedByCompany(
   companyId: string,
   agencyId: string,
   date: string,
-  ticketRevenue: number
+  ticketRevenue: number,
+  ianaTimezone?: string
 ): void {
   if (ticketRevenue <= 0) return;
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     ticketRevenueCompany: increment(ticketRevenue),
     ticketRevenue: increment(ticketRevenue),
@@ -143,13 +171,12 @@ export function updateDailyStatsOnSessionValidated(
   companyId: string,
   agencyId: string,
   date: string,
-  ticketRevenue: number
+  ticketRevenue: number,
+  ianaTimezone?: string
 ): void {
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     ticketRevenue: increment(ticketRevenue),
     totalRevenue: increment(ticketRevenue),
@@ -164,20 +191,20 @@ export function updateDailyStatsOnSessionValidated(
  * Increments ticketRevenue and totalRevenue by `amount`. Use for en_ligne reservations; guichet
  * revenue is added via updateDailyStatsOnSessionValidated. Idempotency: call only once per
  * reservation (caller must set ticketRevenueCountedInDailyStats on the reservation).
+ * Guichet : revenus via validation session (`updateDailyStatsOnSessionValidated*`).
  */
 export function addTicketRevenueToDailyStats(
   tx: Transaction,
   companyId: string,
   agencyId: string,
   date: string,
-  amount: number
+  amount: number,
+  ianaTimezone?: string
 ): void {
   if (amount <= 0) return;
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     ticketRevenue: increment(amount),
     totalRevenue: increment(amount),
@@ -195,14 +222,13 @@ export function updateDailyStatsOnCourierSessionValidated(
   companyId: string,
   agencyId: string,
   date: string,
-  courierRevenue: number
+  courierRevenue: number,
+  ianaTimezone?: string
 ): void {
   if (courierRevenue <= 0) return;
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     courierRevenue: increment(courierRevenue),
     totalRevenue: increment(courierRevenue),
@@ -211,8 +237,53 @@ export function updateDailyStatsOnCourierSessionValidated(
   }, { merge: true });
 }
 
-/** Format a date for dailyStats document ID (YYYY-MM-DD). Accepts Firestore Timestamp or Date. */
-export function formatDateForDailyStats(value: unknown): string {
+/** Comptable agence a validé la session courrier (VALIDATED_AGENCY). */
+export function updateDailyStatsOnCourierSessionValidatedByAgency(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  date: string,
+  courierRevenue: number,
+  ianaTimezone?: string
+): void {
+  if (courierRevenue <= 0) return;
+  const ref = dailyStatsRef(companyId, agencyId, date);
+  tx.set(ref, {
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
+    ...baseIncrements(),
+    courierRevenueAgency: increment(courierRevenue),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/** Chef d'agence : VALIDATED_AGENCY → VALIDATED (revenus compagnie / total). */
+export function updateDailyStatsOnCourierSessionValidatedByCompany(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  date: string,
+  courierRevenue: number,
+  ianaTimezone?: string
+): void {
+  if (courierRevenue <= 0) return;
+  const ref = dailyStatsRef(companyId, agencyId, date);
+  tx.set(ref, {
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
+    ...baseIncrements(),
+    courierRevenue: increment(courierRevenue),
+    courierRevenueCompany: increment(courierRevenue),
+    totalRevenue: increment(courierRevenue),
+    validatedSessions: increment(1),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+/**
+ * Clé YYYY-MM-DD pour dailyStats à partir d’un instant (Timestamp / Date / string) dans le fuseau agence.
+ */
+export function formatDateForDailyStats(value: unknown, ianaTimezone: string = DEFAULT_AGENCY_TIMEZONE): string {
   let d: Date;
   if (!value) {
     d = new Date();
@@ -225,10 +296,12 @@ export function formatDateForDailyStats(value: unknown): string {
   } else {
     d = new Date();
   }
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return dayjs(d).tz(ianaTimezone).format("YYYY-MM-DD");
+}
+
+/** Fuseau agence depuis le document Firestore `agences/{id}` (lecture transaction ou getDoc). */
+export function dailyStatsTimezoneFromAgencyData(data: { timezone?: string | null } | undefined): string {
+  return resolveAgencyTimezone(data ?? null);
 }
 
 /**
@@ -238,13 +311,12 @@ export function updateDailyStatsOnBoardingClosed(
   tx: Transaction,
   companyId: string,
   agencyId: string,
-  date: string
+  date: string,
+  ianaTimezone?: string
 ): void {
   const ref = dailyStatsRef(companyId, agencyId, date);
   tx.set(ref, {
-    companyId,
-    agencyId,
-    date,
+    ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     boardingClosedCount: increment(1),
     createdAt: serverTimestamp(),

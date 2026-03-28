@@ -1,23 +1,19 @@
 /**
  * Cohérence financière TELIYA — source de vérité et détection d'écarts.
- * Règles : Ventes → createdAt (reservations), Encaissements → paidAt (cashTransactions liées),
- * Revenus validés → validatedAt (reservations). dailyStats = vue dérivée uniquement.
+ * Règles : Ventes → createdAt (reservations), Encaissements → cashTransactions filtrées par createdAt + fuseau (pas le champ string paidAt),
+ * Ancien KPI réservations `validatedAt` : utilitaire d’audit uniquement ; liquidité et encaissements = ledger (`accounts` + `financialTransactions`).
  */
 
 import { collectionGroup, query, where, getDocs, orderBy, limit, Timestamp, doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import {
-  getStartOfDayInBamako,
-  getEndOfDayInBamako,
+  DEFAULT_AGENCY_TIMEZONE,
+  getStartOfDayForDate,
+  getEndOfDayForDate,
   normalizeDateToYYYYMMDD,
 } from "@/shared/date/dateUtilsTz";
 import { isSoldReservation, getNetworkCapacityOnly } from "@/modules/compagnie/networkStats/networkStatsService";
-import {
-  getCashTransactionsByPaidAtRange,
-  getCashTransactionsByDateRange,
-  getCashTransactionsByPaidAtExact,
-  type CashTransactionDocWithId,
-} from "@/modules/compagnie/cash/cashService";
+import { getCashTransactionsByPaidAtRange, type CashTransactionDocWithId } from "@/modules/compagnie/cash/cashService";
 import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
 
 export interface FinancialPeriod {
@@ -31,10 +27,11 @@ export interface FinancialPeriod {
 export async function getTotalSales(
   companyId: string,
   period: FinancialPeriod,
-  agencyId?: string
-): Promise<{ total: number; tickets: number }> {
-  const periodStart = getStartOfDayInBamako(period.dateFrom);
-  const periodEnd = getEndOfDayInBamako(period.dateTo);
+  agencyId?: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
+): Promise<{ total: number; tickets: number; reservationCount: number }> {
+  const periodStart = getStartOfDayForDate(period.dateFrom, timeZone);
+  const periodEnd = getEndOfDayForDate(period.dateTo, timeZone);
   const startTs = Timestamp.fromDate(periodStart);
   const endTs = Timestamp.fromDate(periodEnd);
 
@@ -52,27 +49,30 @@ export async function getTotalSales(
   const snap = await getDocs(q);
   let total = 0;
   let tickets = 0; // somme des places (seatsGo), pas le nombre de réservations
+  let reservationCount = 0;
   snap.docs.forEach((d) => {
     const data = d.data();
     const statut = (data.statut ?? data.status ?? "").toString();
     if (isSoldReservation(statut)) {
+      reservationCount += 1;
       tickets += Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1;
       total += Number(data.montant ?? data.amount ?? 0) || 0;
     }
   });
-  return { total, tickets };
+  return { total, tickets, reservationCount };
 }
 
 /** Ventes réseau (réservations vendues, createdAt). Alias explicite pour usage commun. */
 export async function getNetworkSales(
   companyId: string,
   period: FinancialPeriod,
-  agencyId?: string
-): Promise<{ total: number; tickets: number }> {
-  return getTotalSales(companyId, period, agencyId);
+  agencyId?: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
+): Promise<{ total: number; tickets: number; reservationCount: number }> {
+  return getTotalSales(companyId, period, agencyId, timeZone);
 }
 
-/** Encaissements réseau (cashTransactions paidAt, liées à réservation). */
+/** Encaissements réseau (cashTransactions status paid, période = createdAt + fuseau). */
 export async function getNetworkCash(
   companyId: string,
   period: FinancialPeriod,
@@ -81,22 +81,24 @@ export async function getNetworkCash(
   return getTotalCash(companyId, period, options);
 }
 
-/** Revenus validés (réservations avec validatedAt dans la période). */
+/** Réservations avec validatedAt dans la période (hors ledger — audit / ancien reporting). */
 export async function getNetworkValidated(
   companyId: string,
   period: FinancialPeriod,
-  agencyId?: string
+  agencyId?: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<{ total: number; tickets: number }> {
-  return getValidatedRevenue(companyId, period, agencyId);
+  return getValidatedRevenue(companyId, period, agencyId, timeZone);
 }
 
 /** Billets réseau = somme des places (seatsGo) des réservations vendues (createdAt). */
 export async function getNetworkTickets(
   companyId: string,
   period: FinancialPeriod,
-  agencyId?: string
+  agencyId?: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<number> {
-  const res = await getTotalSales(companyId, period, agencyId);
+  const res = await getTotalSales(companyId, period, agencyId, timeZone);
   return res.tickets;
 }
 
@@ -104,10 +106,11 @@ export async function getNetworkTickets(
 export async function getNetworkOccupancy(
   companyId: string,
   period: FinancialPeriod,
-  agencyId?: string
+  agencyId?: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<number | null> {
   const [sales, capacity] = await Promise.all([
-    getTotalSales(companyId, period, agencyId),
+    getTotalSales(companyId, period, agencyId, timeZone),
     getNetworkCapacityOnly(companyId, period.dateFrom, period.dateTo),
   ]);
   if (!capacity || capacity <= 0) return null;
@@ -123,35 +126,38 @@ export interface TotalCashResult {
 }
 
 /**
- * Encaissements (source : cashTransactions paid, par paidAt, uniquement celles liées à une réservation valide).
+ * Encaissements (source : cashTransactions status paid, chargées via createdAt + timeZone, pas le champ string paidAt).
  * Si includeOrphans = false (défaut), n'inclut que les transactions dont la réservation existe et est vendue.
  */
 export async function getTotalCash(
   companyId: string,
   period: FinancialPeriod,
-  options: { agencyId?: string; includeOrphans?: boolean } = {}
+  options: { agencyId?: string; includeOrphans?: boolean; timeZone?: string } = {}
 ): Promise<TotalCashResult> {
-  const { agencyId, includeOrphans = false } = options;
+  const { agencyId, includeOrphans = false, timeZone = DEFAULT_AGENCY_TIMEZONE } = options;
 
   const dateFrom = normalizeDateToYYYYMMDD(period.dateFrom);
   const dateTo = normalizeDateToYYYYMMDD(period.dateTo);
 
-  // Test brutal : toujours utiliser la requête exacte (paidAt == dateFrom) pour afficher les encaissements.
-  let list: CashTransactionDocWithId[] = await getCashTransactionsByPaidAtExact(companyId, dateFrom);
+  let list: CashTransactionDocWithId[] = await getCashTransactionsByPaidAtRange(
+    companyId,
+    dateFrom,
+    dateTo,
+    timeZone
+  );
 
-  // Log debug : comparer dateFrom/dateTo avec paidAt des documents pour diagnostiquer les mismatches.
   const firstTransaction = list[0];
   // eslint-disable-next-line no-console
   console.log("[TELIYA getTotalCash]", {
     dateFrom,
     dateTo,
+    timeZone,
     resultsCount: list.length,
     sample: firstTransaction
       ? {
-          id: (firstTransaction as any).id,
-          paidAt: (firstTransaction as any).paidAt,
-          date: (firstTransaction as any).date,
-          amount: (firstTransaction as any).amount,
+          id: firstTransaction.id,
+          amount: firstTransaction.amount,
+          createdAt: (firstTransaction as { createdAt?: unknown }).createdAt,
         }
       : null,
   });
@@ -210,15 +216,16 @@ export async function getTotalCash(
 }
 
 /**
- * Revenus validés (source : réservations avec validatedAt dans la période).
+ * Montants réservations avec validatedAt dans la période (audit — pas la liquidité ledger).
  */
 export async function getValidatedRevenue(
   companyId: string,
   period: FinancialPeriod,
-  agencyId?: string
+  agencyId?: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<{ total: number; tickets: number }> {
-  const periodStart = getStartOfDayInBamako(period.dateFrom);
-  const periodEnd = getEndOfDayInBamako(period.dateTo);
+  const periodStart = getStartOfDayForDate(period.dateFrom, timeZone);
+  const periodEnd = getEndOfDayForDate(period.dateTo, timeZone);
   const startTs = Timestamp.fromDate(periodStart);
   const endTs = Timestamp.fromDate(periodEnd);
 
@@ -260,13 +267,13 @@ export async function detectFinancialInconsistencies(
   companyId: string,
   period: FinancialPeriod
 ): Promise<FinancialInconsistencies> {
-  const periodStart = getStartOfDayInBamako(period.dateFrom);
-  const periodEnd = getEndOfDayInBamako(period.dateTo);
+  const periodStart = getStartOfDayForDate(period.dateFrom, DEFAULT_AGENCY_TIMEZONE);
+  const periodEnd = getEndOfDayForDate(period.dateTo, DEFAULT_AGENCY_TIMEZONE);
   const startTs = Timestamp.fromDate(periodStart);
   const endTs = Timestamp.fromDate(periodEnd);
 
   const [salesRes, cashRes, reservationsSnap, cashList] = await Promise.all([
-    getTotalSales(companyId, period),
+    getTotalSales(companyId, period, undefined, DEFAULT_AGENCY_TIMEZONE),
     getTotalCash(companyId, period, { includeOrphans: false }),
     getDocs(
       query(
@@ -278,9 +285,7 @@ export async function detectFinancialInconsistencies(
         limit(5000)
       )
     ),
-    getCashTransactionsByPaidAtRange(companyId, period.dateFrom, period.dateTo).catch(() =>
-      getCashTransactionsByDateRange(companyId, period.dateFrom, period.dateTo)
-    ),
+    getCashTransactionsByPaidAtRange(companyId, period.dateFrom, period.dateTo),
   ]);
 
   const soldReservations = reservationsSnap.docs.filter((d) => {

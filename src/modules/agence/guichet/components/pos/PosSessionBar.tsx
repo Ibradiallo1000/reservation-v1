@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { AGENCY_KPI_TIME } from "@/modules/agence/shared/agencyKpiTimeContract";
 import {
   Power, Pause, Play, RefreshCw, XCircle, LogOut, User2, Timer, WifiOff,
 } from "lucide-react";
@@ -31,7 +32,7 @@ const STATUS_MAP: Record<
   CounterStatus,
   { label: string; dot: string; bg: string; text: string }
 > = {
-  active:  { label: "Comptoir ouvert",        dot: "bg-emerald-500", bg: "bg-emerald-50",  text: "text-emerald-800" },
+  active:  { label: "Actif",                  dot: "bg-emerald-500", bg: "bg-emerald-50",  text: "text-emerald-800" },
   paused:  { label: "En pause",               dot: "bg-amber-500",   bg: "bg-amber-50",    text: "text-amber-800" },
   pending: { label: "Activation en attente",   dot: "bg-blue-500",    bg: "bg-blue-50",     text: "text-blue-800" },
   closed:  { label: "Comptoir fermé",          dot: "bg-gray-400",    bg: "bg-gray-100",    text: "text-gray-600" },
@@ -72,7 +73,10 @@ export const PosSessionBar: React.FC<Props> = ({
   }, [sessionStartedAt, status]);
 
   return (
-    <div className="sticky top-0 z-20 bg-white border-b border-gray-200 shadow-sm">
+    <div
+      className="sticky top-0 z-20 border-b border-gray-200/60 shadow-sm"
+      style={{ backgroundImage: "var(--agency-gradient-header)" }}
+    >
       <div className="max-w-[1600px] mx-auto px-4 lg:px-6">
         <div className="h-16 flex items-center gap-4">
           {/* Brand */}
@@ -86,7 +90,7 @@ export const PosSessionBar: React.FC<Props> = ({
             )}
             <div className="min-w-0 hidden sm:block">
               <p className="text-sm font-bold truncate" style={{ color: primaryColor }}>{companyName}</p>
-              <p className="text-[11px] text-gray-500 truncate">{agencyName}</p>
+              <p className="text-[11px] truncate" style={{ color: secondaryColor }}>{agencyName}</p>
             </div>
           </div>
 
@@ -119,10 +123,15 @@ export const PosSessionBar: React.FC<Props> = ({
                 <span className="text-gray-500">Billets</span>
                 <span className="font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded-md">{sessionTickets}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-gray-500">Recette</span>
-                <span className="font-bold rounded-md px-2 py-0.5" style={{ background: `${primaryColor}15`, color: primaryColor }}>
-                  {sessionRevenue}
+              <div className="flex flex-col items-end gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-gray-500">Recette</span>
+                  <span className="font-bold rounded-md px-2 py-0.5" style={{ background: `${primaryColor}15`, color: primaryColor }}>
+                    {sessionRevenue}
+                  </span>
+                </div>
+                <span className="text-[10px] text-gray-400 max-w-[14rem] text-right leading-tight">
+                  {AGENCY_KPI_TIME.SESSION_POSTE}
                 </span>
               </div>
             </div>

@@ -4,7 +4,7 @@ import React from "react";
 import { Navigate, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
-import { LayoutDashboard, ClipboardCheck } from "lucide-react";
+import { LayoutDashboard, ClipboardCheck, Radio } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
 import type { Company } from "@/types/companyTypes";
@@ -12,10 +12,16 @@ import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts } from "
 
 const BOARDING_SECTIONS: NavSection[] = [
   { label: "Départs du jour", icon: LayoutDashboard, path: "/agence/boarding", end: true },
+  { label: "Activité en direct", icon: Radio, path: "/agence/boarding/live" },
   { label: "Scan / Liste", icon: ClipboardCheck, path: "/agence/boarding/scan" },
 ];
 
-const ALLOWED_BOARDING_ROLES = ["chefEmbarquement", "chefAgence", "admin_compagnie"] as const;
+const ALLOWED_BOARDING_ROLES = [
+  "chefEmbarquement",
+  "escale_agent",
+  "escale_manager",
+  "admin_compagnie",
+] as const;
 
 const BoardingLayout: React.FC = () => {
   const { user, company, logout } = useAuth() as { user: { role?: string | string[]; displayName?: string; nom?: string; email?: string }; company: unknown; logout: () => Promise<void> };
@@ -33,7 +39,8 @@ const BoardingLayout: React.FC = () => {
 
   if (!canUseBoarding) {
     if (has("agency_fleet_controller")) return <Navigate to="/agence/fleet" replace />;
-    if (has("chefAgence") || has("admin_compagnie")) return <Navigate to="/agence/dashboard" replace />;
+    if (has("chefAgence") || has("superviseur")) return <Navigate to="/agence/activite" replace />;
+    if (has("admin_compagnie")) return <Navigate to="/agence/activite" replace />;
     return <Navigate to="/login" replace />;
   }
 

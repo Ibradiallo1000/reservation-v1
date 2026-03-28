@@ -1,7 +1,7 @@
 // ✅ src/pages/AgenceRecettesPage.tsx
 
 import React, { useEffect, useState } from 'react';
-import { collection, addDoc, getDocs, query, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, limit, orderBy, query, Timestamp, where } from 'firebase/firestore';
 import { db } from '../../../../firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import jsPDF from 'jspdf';
@@ -16,6 +16,7 @@ import { format, parseISO } from 'date-fns';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton } from '@/ui';
 import { Receipt } from 'lucide-react';
+import { OperationalHintRow } from '@/modules/agence/components/OperationalDataHint';
 
 interface Recette {
   id?: string;
@@ -59,11 +60,33 @@ const AgenceRecettesPage: React.FC = () => {
   // Charger les recettes
   const fetchRecettes = async () => {
     if (!user?.companyId || !user?.agencyId) return;
-    const recettesRef = collection(db, 'companies', user.companyId, 'agences', user.agencyId, 'recettes');
-    const snap = await getDocs(query(recettesRef));
-    const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Recette));
+    const txRef = collection(db, 'companies', user.companyId, 'financialTransactions');
+    const snap = await getDocs(
+      query(
+        txRef,
+        where('agencyId', '==', user.agencyId),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+      )
+    );
+    const list = snap.docs.map((d) => {
+      const x = d.data() as any;
+      const created = x.createdAt?.toDate?.() ?? new Date();
+      return {
+        id: d.id,
+        libelle: String(x.description || x.referenceType || x.type || 'transaction'),
+        montant: Number(x.amount || 0),
+        type: String(x.type || 'sale'),
+        commentaire: String(x.status || ''),
+        date: created.toISOString().split('T')[0],
+        createdAt: x.createdAt ?? Timestamp.now(),
+        guichetierId: String(x.performedBy || ''),
+        guichetierNom: String(x.performedBy || '—'),
+      } as Recette;
+    });
     setRecettes(list);
-    const somme = list.reduce((acc, r) => acc + (r.montant || 0), 0);
+    let somme = 0;
+    for (const r of list) somme += Number(r.montant || 0);
     setTotal(somme);
   };
 
@@ -186,6 +209,11 @@ const AgenceRecettesPage: React.FC = () => {
           </div>
         }
       />
+
+      <OperationalHintRow>
+        Les recettes saisies ici sont un <strong>registre interne à l’agence</strong>. Elles ne remplacent pas les écrans
+        comptables tant qu’elles n’ont pas été intégrées selon la procédure de la compagnie.
+      </OperationalHintRow>
 
       <SectionCard title="Nouvelle recette">
       <form onSubmit={handleAdd} className="grid md:grid-cols-2 gap-4 mb-6"

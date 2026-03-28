@@ -11,6 +11,7 @@ import type { Shipment } from "../domain/shipment.types";
 import type { ShipmentStatus } from "../domain/shipment.types";
 import type { ShipmentEvent, ShipmentEventType } from "../domain/logisticsEvents.types";
 import { shipmentRef, eventsRef } from "../domain/firestorePaths";
+import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 
 /** Event types that imply a shipment status change */
 const EVENT_TO_STATUS: Partial<Record<ShipmentEventType, ShipmentStatus>> = {
@@ -62,4 +63,6 @@ export async function recordShipmentEvent(params: RecordShipmentEventParams): Pr
     };
     tx.set(eventDoc, event);
   });
+
+  await afterLogisticsShipmentChanged(params.companyId, params.shipmentId, "recordShipmentEvent");
 }

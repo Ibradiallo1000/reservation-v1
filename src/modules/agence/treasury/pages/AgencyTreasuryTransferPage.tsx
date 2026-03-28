@@ -1,7 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { SectionCard, ActionButton } from "@/ui";
-import { getAccount, listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
+import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
+import {
+  ensureCompanyBankAccount,
+  getAccount,
+  listAccounts,
+} from "@/modules/compagnie/treasury/financialAccounts";
+import { getAgencyOperationalAvailableCash } from "@/modules/agence/comptabilite/agencyCashAuditService";
+import { listCompanyBanks } from "@/modules/compagnie/treasury/companyBanks";
 import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
 import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
 import { collection, getDocs } from "firebase/firestore";
@@ -36,6 +43,8 @@ const TRANSFER_STATUS_LABELS: Record<string, string> = {
 };
 
 export default function AgencyTreasuryTransferPage() {
+  const { pathname } = useLocation();
+  const isStandaloneComptaTreasury = pathname.startsWith("/agence/comptabilite/treasury");
   const { user } = useAuth() as any;
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
@@ -48,6 +57,7 @@ export default function AgencyTreasuryTransferPage() {
     currentBalance: number;
     currency: string;
   } | null>(null);
+  const [availableAgencyCash, setAvailableAgencyCash] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [toAccountId, setToAccountId] = useState("");
@@ -63,15 +73,58 @@ export default function AgencyTreasuryTransferPage() {
       setLoading(false);
       return;
     }
-    Promise.all([
-      getAccount(companyId, agencyCashAccountId(agencyId)),
-      listAccounts(companyId, { agencyId: null, accountType: "company_bank" }),
-    ])
-      .then(([cashAccount, banks]) => {
-        setAgencyCashAccount(cashAccount);
-        setCompanyBankAccounts(banks);
-      })
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    (async () => {
+      try {
+        /** Banques configurées dans companyBanks : garantir le compte miroir financialAccounts (id company_bank_<id>). */
+        const metaBanks = await listCompanyBanks(companyId);
+        await Promise.all(
+          metaBanks.map((b) =>
+            ensureCompanyBankAccount(
+              companyId,
+              b.id,
+              b.name,
+              b.currency?.trim() ? b.currency : "XOF"
+            )
+          )
+        );
+        const [cashAccount, banks, ops] = await Promise.all([
+          getAccount(companyId, agencyCashAccountId(agencyId)),
+          listAccounts(companyId, { agencyId: null, accountType: "company_bank" }),
+          getAgencyOperationalAvailableCash(companyId, agencyId).catch(() => null),
+        ]);
+        if (!cancelled) {
+          setAgencyCashAccount(cashAccount);
+          setCompanyBankAccounts(banks);
+          const mirror = Number(cashAccount?.currentBalance ?? 0);
+          const fromLedger = Number(ops?.availableCash ?? 0);
+          setAvailableAgencyCash(cashAccount != null ? mirror : fromLedger);
+        }
+      } catch (e) {
+        console.error("[AgencyTreasuryTransferPage] chargement comptes", e);
+        if (!cancelled) {
+          setAgencyCashAccount(null);
+          setCompanyBankAccounts([]);
+          const msg =
+            e && typeof e === "object" && "code" in e
+              ? String(
+                  (e as { code?: string; message?: string }).code ??
+                    (e as { message?: string }).message
+                )
+              : e instanceof Error
+                ? e.message
+                : "Erreur inconnue";
+          toast.error(
+            `Impossible de charger la caisse ou les banques. Vérifiez la connexion et les règles Firestore (comptable agence). Détail : ${msg}`
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [companyId, agencyId]);
 
   useEffect(() => {
@@ -89,10 +142,6 @@ export default function AgencyTreasuryTransferPage() {
       .catch(() => setCompanyBankNameById({}));
   }, [companyId]);
 
-  const availableAgencyCash = useMemo(
-    () => agencyCashAccount?.currentBalance ?? 0,
-    [agencyCashAccount],
-  );
   const canInitiateTransfer = hasRole("agency_accountant") || hasRole("admin_compagnie");
   const canValidateTransfer = hasRole("chefAgence") || hasRole("superviseur") || hasRole("admin_compagnie");
 
@@ -226,11 +275,16 @@ export default function AgencyTreasuryTransferPage() {
   const recentRequests = useMemo(() => requests.slice(0, 12), [requests]);
 
   if (!companyId) {
-    return <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
+    const missing = <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
+    return isStandaloneComptaTreasury ? (
+      <StandardLayoutWrapper className="min-w-0">{missing}</StandardLayoutWrapper>
+    ) : (
+      missing
+    );
   }
 
-  return (
-    <div className="space-y-6">
+  const body = (
+    <div className="min-w-0 space-y-6">
       <SectionCard title="Versement caisse agence vers banque compagnie" icon={ArrowRightLeft}>
         {loading ? (
           <div className="py-8 text-center text-gray-500">Chargement des comptes...</div>
@@ -247,7 +301,7 @@ export default function AgencyTreasuryTransferPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Caisse agence (automatique)</label>
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
                   {agencyCashAccount
-                    ? `Caisse agence - ${formatCurrency(agencyCashAccount.currentBalance, agencyCashAccount.currency)}`
+                    ? `Caisse agence : ${formatCurrency(availableAgencyCash, agencyCashAccount.currency)}`
                     : "Aucune caisse agence configurée"}
                 </div>
               </div>
@@ -371,5 +425,11 @@ export default function AgencyTreasuryTransferPage() {
         )}
       </SectionCard>
     </div>
+  );
+
+  return isStandaloneComptaTreasury ? (
+    <StandardLayoutWrapper className="min-w-0">{body}</StandardLayoutWrapper>
+  ) : (
+    body
   );
 }

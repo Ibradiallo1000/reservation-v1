@@ -45,6 +45,7 @@ interface Props {
   totalPrice: number;
   canValidate: boolean;
   isProcessing: boolean;
+  processingMessage?: string;
   onValidate: () => void;
   formatMoney: (n: number) => string;
   primaryColor: string;
@@ -64,7 +65,7 @@ export const SalePanel: React.FC<Props> = ({
   selectedTrip, canSell, status,
   nomClient, onNomChange, telephone, onTelChange,
   placesAller, onPlacesAllerChange,
-  totalPrice, canValidate, isProcessing, onValidate,
+  totalPrice, canValidate, isProcessing, processingMessage, onValidate,
   formatMoney, primaryColor, secondaryColor, validationHint,
   activationByEscaleManager = false,
   clientSuggestions = [],
@@ -128,7 +129,7 @@ export const SalePanel: React.FC<Props> = ({
     : formatMoney(totalPrice);
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full min-h-0 max-h-[calc(100vh-10rem)]">
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col h-full">
       {/* Header */}
       <div className="px-4 py-3 border-b border-gray-100 shrink-0" style={{ background: `${primaryColor}08` }}>
         <div className="flex items-center gap-1.5">
@@ -139,8 +140,8 @@ export const SalePanel: React.FC<Props> = ({
       </div>
 
       {/* Zone formulaire scrollable + Total + Bouton fixe en bas */}
-      <div className="flex-1 min-h-0 flex flex-col p-4" onKeyDown={handleKeyDown}>
-        <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1 -mr-1">
+      <div className="flex-1 flex flex-col p-3 sm:p-4 min-w-0" onKeyDown={handleKeyDown}>
+        <div className="space-y-3">
         {/* Activation warning */}
         {!canSell && (
           <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
@@ -156,16 +157,16 @@ export const SalePanel: React.FC<Props> = ({
         {/* Selected trip summary */}
         {selectedTrip ? (
           <div className="rounded-lg border-2 p-3" style={{ borderColor: `${primaryColor}40`, backgroundColor: `${primaryColor}04` }}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-semibold text-sm text-gray-900">{selectedTrip.departure} → {selectedTrip.arrival}</p>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-semibold text-sm text-gray-900 truncate">{selectedTrip.departure} → {selectedTrip.arrival}</p>
                 <p className="text-[11px] text-gray-500 mt-0.5">
                   {new Date(selectedTrip.date + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
                 </p>
               </div>
-              <div className="text-right">
-                <span className="text-base font-bold" style={{ color: primaryColor }}>{selectedTrip.time}</span>
-                <p className="text-[11px] text-gray-500">{formatMoney(selectedTrip.price)}/place</p>
+              <div className="text-right shrink-0">
+                <span className="text-sm sm:text-base font-bold" style={{ color: primaryColor }}>{selectedTrip.time}</span>
+                <p className="text-[10px] sm:text-[11px] text-gray-500">{formatMoney(selectedTrip.price)}/place</p>
               </div>
             </div>
             {selectedTrip.remainingSeats !== undefined && (
@@ -261,7 +262,7 @@ export const SalePanel: React.FC<Props> = ({
               <span className="text-xs font-medium text-gray-600">Passagers supplémentaires</span>
             </div>
             {additionalPassengers.map((p, i) => (
-              <div key={i} className="flex gap-2">
+              <div key={i} className="flex flex-col sm:flex-row gap-2">
                 <input
                   value={p.name}
                   onChange={(e) => {
@@ -292,7 +293,7 @@ export const SalePanel: React.FC<Props> = ({
                   type="tel"
                   inputMode="numeric"
                   maxLength={11}
-                  className="w-28 border border-gray-200 rounded-lg px-2.5 py-2 text-xs"
+                  className="w-full sm:w-28 border border-gray-200 rounded-lg px-2.5 py-2 text-xs"
                 />
               </div>
             ))}
@@ -325,10 +326,10 @@ export const SalePanel: React.FC<Props> = ({
         </div>
 
         {/* Total + CTA toujours visibles en bas */}
-        <div className="shrink-0 space-y-1.5 mt-3 pt-3 border-t border-gray-100">
+        <div className="shrink-0 space-y-1.5 mt-3 pt-3 border-t border-gray-100 min-w-0">
           <div className="rounded-lg p-3" style={{ background: `${primaryColor}08` }}>
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <span className="text-xs font-medium text-gray-600">Total à encaisser</span>
                 {tariffMultiplier !== 1 && (
                   <p className="text-[10px] text-gray-400">
@@ -336,7 +337,7 @@ export const SalePanel: React.FC<Props> = ({
                   </p>
                 )}
               </div>
-              <span className="text-2xl font-bold tracking-tight" style={{ color: primaryColor }}>
+              <span className="text-xl sm:text-2xl font-bold tracking-tight break-words" style={{ color: primaryColor }}>
                 {formatMoney(totalPrice)}
               </span>
             </div>
@@ -354,7 +355,7 @@ export const SalePanel: React.FC<Props> = ({
           >
             {isProcessing ? (
               <span className="inline-flex items-center gap-1.5">
-                <Loader2 className="w-4 h-4 animate-spin" /> Traitement…
+                <Loader2 className="w-4 h-4 animate-spin" /> Traitement...
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5">
@@ -362,6 +363,11 @@ export const SalePanel: React.FC<Props> = ({
               </span>
             )}
           </button>
+          {isProcessing && (
+            <p className="text-[11px] text-center text-amber-700 px-1 font-medium">
+              {processingMessage || "Encaissement en cours..."}
+            </p>
+          )}
         </div>
       </div>
     </div>

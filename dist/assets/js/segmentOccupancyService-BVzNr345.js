@@ -1,0 +1,1 @@
+import"./vendor-C7I_1BwS.js";import{a8 as c}from"../index-BrmyjamI.js";function r(t){return(t??"").trim().toLowerCase()}async function m(t,s,d,p){const o=await c(t,s);if(o.length<2)return null;const u=r(d),a=r(p),n=o.find(i=>r(i.city??"")===u),e=o.find(i=>r(i.city??"")===a);return!n||!e||n.order>=e.order?null:{originStopOrder:n.order,destinationStopOrder:e.order}}export{m as g};

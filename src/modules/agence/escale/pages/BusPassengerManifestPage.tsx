@@ -3,28 +3,30 @@
  * Accessible par escale_agent, escale_manager, chefAgence.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, orderBy, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, EmptyState, table, tableRowClassName } from "@/ui";
-import { listTripInstancesByRouteIdAndDate } from "@/modules/compagnie/tripInstances/tripInstanceService";
 import {
-  getPassengersOnBoard,
-  getPassengersToDrop,
-  detectOvertravelPassengers,
+  tripInstanceDeparture,
+  tripInstanceArrival,
+  tripInstanceTime,
+} from "@/modules/compagnie/tripInstances/tripInstanceTypes";
+import {
   type ManifestPassenger,
 } from "@/modules/compagnie/manifest/passengerManifestService";
 import { markDropped } from "@/modules/compagnie/dropoff/dropoffService";
 import type { PassengerToDrop } from "@/modules/compagnie/dropoff/dropoffService";
-import { getNextSegmentInfo } from "@/modules/compagnie/connections/connectionsService";
-import { getTripProgress } from "@/modules/compagnie/tripInstances/tripProgressService";
-import { ClipboardList, Loader2, UserMinus, AlertTriangle, Bus, Link2 } from "lucide-react";
+import { ClipboardList, Loader2, UserMinus, AlertTriangle, Link2 } from "lucide-react";
+import { toLocalDateStr } from "@/shared/date/dayFilterUtils";
 
 export default function BusPassengerManifestPage() {
   const { user } = useAuth();
   const [agencyRouteId, setAgencyRouteId] = useState<string | null>(null);
   const [agencyStopOrder, setAgencyStopOrder] = useState<number | null>(null);
-  const [tripInstances, setTripInstances] = useState<Array<{ id: string; departureTime: string; routeDeparture?: string; routeArrival?: string }>>([]);
+  const [tripInstances, setTripInstances] = useState<
+    Array<{ id: string; time: string; departure: string; arrival: string; agencyId: string }>
+  >([]);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
   const [onBoard, setOnBoard] = useState<ManifestPassenger[]>([]);
   const [toDrop, setToDrop] = useState<PassengerToDrop[]>([]);
@@ -32,10 +34,7 @@ export default function BusPassengerManifestPage() {
   const [loading, setLoading] = useState(true);
   const [loadingManifest, setLoadingManifest] = useState(false);
   const [updatingDropoffId, setUpdatingDropoffId] = useState<string | null>(null);
-  const [nextSegmentByDropId, setNextSegmentByDropId] = useState<Record<string, { routeLabel: string; departureTime: string } | null>>({});
-  const [currentBusDelayMinutes, setCurrentBusDelayMinutes] = useState<number | null>(null);
-
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalDateStr(new Date());
 
   const loadAgencyAndTrips = useCallback(async () => {
     if (!user?.companyId || !user?.agencyId) {
@@ -58,15 +57,27 @@ export default function BusPassengerManifestPage() {
       }
       setAgencyRouteId(routeId);
       setAgencyStopOrder(stopOrder);
-      const list = await listTripInstancesByRouteIdAndDate(user.companyId, routeId, today);
+      const tripRef = collection(db, "companies", user.companyId, "tripInstances");
+      const snap = await getDocs(
+        query(
+          tripRef,
+          where("routeId", "==", routeId),
+          where("date", ">=", today),
+          where("date", "<=", today),
+          orderBy("date", "asc"),
+          orderBy("time", "asc")
+        )
+      );
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
       setTripInstances(
         list
           .filter((ti) => (ti as { status?: string }).status !== "cancelled")
           .map((ti) => ({
             id: ti.id,
-            departureTime: (ti as { departureTime?: string }).departureTime ?? "",
-            routeDeparture: (ti as { routeDeparture?: string }).routeDeparture ?? (ti as { departureCity?: string }).departureCity ?? "",
-            routeArrival: (ti as { routeArrival?: string }).routeArrival ?? (ti as { arrivalCity?: string }).arrivalCity ?? "",
+            time: tripInstanceTime(ti),
+            departure: tripInstanceDeparture(ti),
+            arrival: tripInstanceArrival(ti),
+            agencyId: String((ti as any).agencyId ?? ""),
           }))
       );
       if (list.length > 0 && !selectedTripId) setSelectedTripId(list[0].id);
@@ -86,55 +97,48 @@ export default function BusPassengerManifestPage() {
       setOnBoard([]);
       setToDrop([]);
       setOvertravel([]);
-      setNextSegmentByDropId({});
-      setCurrentBusDelayMinutes(null);
       return;
     }
     setLoadingManifest(true);
     try {
-      const [board, drop, over, progressList] = await Promise.all([
-        getPassengersOnBoard(user.companyId, selectedTripId),
-        agencyStopOrder != null
-          ? getPassengersToDrop(user.companyId, selectedTripId, agencyStopOrder)
-          : Promise.resolve([]),
-        agencyStopOrder != null
-          ? detectOvertravelPassengers(user.companyId, selectedTripId, agencyStopOrder)
-          : Promise.resolve([]),
-        getTripProgress(user.companyId, selectedTripId),
-      ]);
-      setOnBoard(board);
-      setToDrop(drop);
-      setOvertravel(over);
-
-      const atThisStop = agencyStopOrder != null ? progressList.find((p) => p.stopOrder === agencyStopOrder) : null;
-      setCurrentBusDelayMinutes(atThisStop?.delayMinutes ?? null);
-
-      const nextMap: Record<string, { routeLabel: string; departureTime: string } | null> = {};
-      await Promise.all(
-        drop
-          .filter((r) => r.connectionId && r.tripInstanceId != null && r.destinationStopOrder != null)
-          .map(async (r) => {
-            const info = await getNextSegmentInfo(
-              user.companyId,
-              r.connectionId!,
-              r.tripInstanceId!,
-              r.destinationStopOrder!
-            );
-            nextMap[r.id] = info ? { routeLabel: info.routeLabel, departureTime: info.departureTime } : null;
-          })
+      const trip = tripInstances.find((t) => t.id === selectedTripId);
+      if (!trip?.agencyId) {
+        setOnBoard([]);
+        setToDrop([]);
+        setOvertravel([]);
+        return;
+      }
+      const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
+      const snap = await getDocs(
+        query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
       );
-      setNextSegmentByDropId(nextMap);
+      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any), agencyId: trip.agencyId }));
+      const board = rows.filter((r) => (r.boardingStatus ?? "pending") === "boarded");
+      const drop = rows.filter(
+        (r) =>
+          agencyStopOrder != null &&
+          (r.boardingStatus ?? "pending") === "boarded" &&
+          (r.dropoffStatus ?? "pending") !== "dropped" &&
+          Number(r.destinationStopOrder ?? -1) === agencyStopOrder
+      );
+      const over = rows.filter(
+        (r) =>
+          agencyStopOrder != null &&
+          (r.boardingStatus ?? "pending") === "boarded" &&
+          Number(r.destinationStopOrder ?? 9999) < agencyStopOrder
+      );
+      setOnBoard(board as ManifestPassenger[]);
+      setToDrop(drop as PassengerToDrop[]);
+      setOvertravel(over as ManifestPassenger[]);
     } catch (e) {
       console.error("[Manifest] load manifest error:", e);
       setOnBoard([]);
       setToDrop([]);
       setOvertravel([]);
-      setNextSegmentByDropId({});
-      setCurrentBusDelayMinutes(null);
     } finally {
       setLoadingManifest(false);
     }
-  }, [user?.companyId, selectedTripId, agencyStopOrder]);
+  }, [user?.companyId, selectedTripId, agencyStopOrder, tripInstances]);
 
   useEffect(() => {
     loadManifest();
@@ -242,7 +246,7 @@ export default function BusPassengerManifestPage() {
           >
             {tripInstances.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.routeDeparture} → {t.routeArrival} — {t.departureTime}
+                {t.departure} → {t.arrival} — {t.time}
               </option>
             ))}
           </select>
@@ -258,7 +262,7 @@ export default function BusPassengerManifestPage() {
         <>
           {/* 1. Passagers à bord */}
           <SectionCard
-            title={`1. Passagers à bord — ${selectedTrip ? `${selectedTrip.routeDeparture} → ${selectedTrip.routeArrival} ${selectedTrip.departureTime}` : ""}`}
+            title={`1. Passagers à bord — ${selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} ${selectedTrip.time}` : ""}`}
             className="mb-6"
             noPad
           >
@@ -301,9 +305,7 @@ export default function BusPassengerManifestPage() {
                   </thead>
                   <tbody className={table.body}>
                     {toDrop.map((r) => {
-                      const nextSeg = nextSegmentByDropId[r.id];
                       const isConnection = !!r.connectionId;
-                      const delayAlert = isConnection && currentBusDelayMinutes != null && currentBusDelayMinutes > 0;
                       return (
                         <tr key={r.id} className={tableRowClassName()}>
                           <td className={table.td}>{r.nomClient || "—"}</td>
@@ -316,18 +318,7 @@ export default function BusPassengerManifestPage() {
                                   <Link2 className="w-3.5 h-3.5" />
                                   Passager en correspondance
                                 </span>
-                                {nextSeg && (
-                                  <span className="text-gray-600 dark:text-gray-400">
-                                    <Bus className="w-3 h-3 inline mr-0.5" />
-                                    Correspondance vers {nextSeg.routeLabel} — {nextSeg.departureTime}
-                                  </span>
-                                )}
-                                {delayAlert && (
-                                  <span className="font-medium text-amber-600 dark:text-amber-400">
-                                    <AlertTriangle className="w-3 h-3 inline mr-0.5" />
-                                    Correspondance potentiellement manquée
-                                  </span>
-                                )}
+                                <span className="text-gray-600 dark:text-gray-400">Vérifier correspondance</span>
                               </div>
                             )}
                             {!isConnection && "—"}

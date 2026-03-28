@@ -91,7 +91,7 @@ export default function ManagerReportsPage() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Rapports"
-        subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — synthèse de conformité des postes`}
+        subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — suivi validation + performance`}
         right={
           <div className="flex flex-wrap items-center gap-2">
             <DateFilterBar
@@ -107,11 +107,21 @@ export default function ManagerReportsPage() {
         }
       />
 
-      <div className="grid grid-cols-3 gap-4">
-        <MetricCard label="Rapports validés chef" value={fullyApproved.length} valueColorVar="#4f46e5" />
-        <MetricCard label="Rapports en attente chef" value={pendingChefApproval.length} valueColorVar="#b45309" />
-        <MetricCard label="Taux validation chef" value={`${validationRate}%`} valueColorVar="#059669" />
-      </div>
+      <SectionCard title="Validation tracking" icon={FileBarChart2}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <MetricCard label="Rapports validés chef" value={fullyApproved.length} valueColorVar="#4f46e5" />
+          <MetricCard label="Rapports en attente chef" value={pendingChefApproval.length} valueColorVar="#b45309" />
+          <MetricCard label="Taux validation chef" value={`${validationRate}%`} valueColorVar="#059669" />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Performance overview" icon={FileBarChart2}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <MetricCard label="Sessions analysées" value={shifts.length} valueColorVar="#2563eb" />
+          <MetricCard label="Sessions non approuvées" value={pendingChefApproval.length} valueColorVar="#b45309" />
+          <MetricCard label="Sessions finalisées" value={fullyApproved.length} valueColorVar="#059669" />
+        </div>
+      </SectionCard>
 
       <SectionCard title="Rapports validés (comptable + chef)" icon={FileBarChart2} noPad>
         {fullyApproved.length === 0 ? (

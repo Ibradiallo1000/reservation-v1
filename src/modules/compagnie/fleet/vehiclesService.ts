@@ -12,14 +12,26 @@ import {
   limit,
   orderBy,
   startAfter,
+  documentId,
   Timestamp,
   arrayUnion,
+  deleteField,
   type DocumentSnapshot,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeCity } from "@/shared/utils/normalizeCity";
 import type { VehicleDoc, VehicleStatus } from "./vehicleTypes";
 import { VEHICLES_COLLECTION, VEHICLE_STATUS, CANONICAL_VEHICLE_STATUS } from "./vehicleTypes";
+import {
+  assertValidFleetStatus,
+  fleetStatusToLegacyFirestoreFields,
+  inferFleetStatus,
+  isValidFleetStatus,
+  legacyVehicleStatusToFleetStatus,
+  VEHICLE_FLEET_STATUS,
+  type VehicleFleetStatus,
+} from "./vehicleFleetStatus";
 import { normalizePlate } from "./plateValidation";
 import { normalizeModel, ensureVehicleModel } from "./vehicleModelsService";
 import {
@@ -79,11 +91,55 @@ type CourierBatchDoc = {
   status?: string;
 };
 
+const VEHICLE_DATA_DEBUG =
+  typeof import.meta !== "undefined" && Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
+
+const LEGACY_VEHICLE_STATUS_SET = new Set<string>(Object.values(VEHICLE_STATUS));
+
 function normalizeTripKey(raw: string): string {
   return String(raw ?? "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "-");
+}
+
+/** Fusion villeActuelle / currentCity + normalisation ; logs Phase 1 en dev. */
+function applyNormalizedCityAndFleetToRaw(
+  data: Record<string, unknown>,
+  context?: { docId?: string }
+): Record<string, unknown> {
+  const villeActuelle = String(
+    (data as { villeActuelle?: string }).villeActuelle ??
+      (data as { ville_actuelle?: string }).ville_actuelle ??
+      ""
+  ).trim();
+  let cityRaw = String(data.currentCity ?? "").trim();
+  if (!cityRaw && villeActuelle) cityRaw = villeActuelle;
+  const currentCity = normalizeCity(cityRaw);
+  const next: Record<string, unknown> = { ...data, currentCity };
+  if (data.destinationCity !== undefined) {
+    if (data.destinationCity === null || data.destinationCity === "") {
+      next.destinationCity = data.destinationCity;
+    } else {
+      next.destinationCity = normalizeCity(String(data.destinationCity));
+    }
+  }
+
+  if (VEHICLE_DATA_DEBUG) {
+    const id = context?.docId ?? "?";
+    if (!currentCity) {
+      console.warn(`[vehicle-data] Véhicule sans ville (currentCity vide après normalisation) — id=${id}`);
+    }
+    const st = data.status != null ? String(data.status).trim() : "";
+    if (st && !LEGACY_VEHICLE_STATUS_SET.has(st)) {
+      console.warn(`[vehicle-data] Statut legacy non reconnu — id=${id} status=${st}`);
+    }
+    if (data.fleetStatus != null && !isValidFleetStatus(String(data.fleetStatus))) {
+      console.warn(`[vehicle-data] fleetStatus invalide en base — id=${id} fleetStatus=${String(data.fleetStatus)}`);
+    }
+  }
+
+  return next;
 }
 
 function buildAffectationTripKey(aff: AffectationDoc): string {
@@ -202,16 +258,21 @@ async function assertBusNumberAvailable(
 }
 
 /** Derive technicalStatus/operationalStatus from legacy status for backward compatibility. */
-function normalizeVehicleDoc(data: Record<string, unknown>): Record<string, unknown> {
-  const status = data.status as string | undefined;
-  const hasNew = data.technicalStatus != null && data.operationalStatus != null;
-  if (hasNew) return data;
+function normalizeVehicleDoc(data: Record<string, unknown>, docId?: string): Record<string, unknown> {
+  const prepared = applyNormalizedCityAndFleetToRaw(data, { docId });
+  const status = prepared.status as string | undefined;
+  const hasNew = prepared.technicalStatus != null && prepared.operationalStatus != null;
+  if (hasNew) {
+    const fleetStatus = inferFleetStatus(prepared) as VehicleFleetStatus;
+    return { ...prepared, fleetStatus };
+  }
   if (!status) {
-    return {
-      ...data,
+    const merged = {
+      ...prepared,
       technicalStatus: TECHNICAL_STATUS.NORMAL,
       operationalStatus: OPERATIONAL_STATUS.GARAGE,
     };
+    return { ...merged, fleetStatus: inferFleetStatus(merged) as VehicleFleetStatus };
   }
   let technicalStatus: TechnicalStatus = TECHNICAL_STATUS.NORMAL;
   let operationalStatus: OperationalStatus = OPERATIONAL_STATUS.GARAGE;
@@ -244,7 +305,8 @@ function normalizeVehicleDoc(data: Record<string, unknown>): Record<string, unkn
           : operationalStatus === OPERATIONAL_STATUS.EN_TRANSIT
             ? "ON_TRIP"
             : "AVAILABLE";
-  return { ...data, technicalStatus, operationalStatus, canonicalStatus };
+  const merged = { ...prepared, technicalStatus, operationalStatus, canonicalStatus };
+  return { ...merged, fleetStatus: inferFleetStatus(merged) as VehicleFleetStatus };
 }
 
 export type ListVehiclesOrderBy = "plate" | "technicalStatus" | "updatedAt";
@@ -256,7 +318,7 @@ export async function listVehicles(companyId: string, max = 500): Promise<(Vehic
       .filter((d) => (d.data() as any).isArchived !== true)
       .slice(0, max)
       .map((d) => {
-        const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+        const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
         return { id: d.id, ...normalized } as VehicleDoc & { id: string };
       });
 
@@ -292,7 +354,7 @@ export async function listVehiclesPaginated(
   const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true);
   const hasMore = docs.length > pageSize;
   const list = docs.slice(0, pageSize).map((d) => {
-    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
     return { id: d.id, ...normalized } as VehicleDoc & { id: string };
   });
   const lastId = list.length > 0 ? list[list.length - 1].id : null;
@@ -309,17 +371,18 @@ export async function listVehiclesByCity(
   options: { limitCount?: number; startAfterDoc?: DocumentSnapshot | null } = {}
 ): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
   const limitCount = options.limitCount ?? DEFAULT_PAGE_SIZE;
+  const cityKey = normalizeCity(currentCity);
   const ref = vehiclesRef(companyId);
   let q = query(
     ref,
-    where("currentCity", "==", currentCity),
+    where("currentCity", "==", cityKey),
     orderBy("updatedAt", "desc"),
     limit(limitCount + 1)
   );
   if (options.startAfterDoc) {
     q = query(
       ref,
-      where("currentCity", "==", currentCity),
+      where("currentCity", "==", cityKey),
       orderBy("updatedAt", "desc"),
       startAfter(options.startAfterDoc),
       limit(limitCount + 1)
@@ -328,7 +391,7 @@ export async function listVehiclesByCity(
   const snap = await getDocs(q);
   const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
   const list = docs.map((d) => {
-    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
     return { id: d.id, ...normalized } as VehicleDoc & { id: string };
   });
   const hasMore = snap.docs.length > limitCount;
@@ -362,12 +425,28 @@ export async function listVehiclesByCurrentAgency(
   const snap = await getDocs(q);
   const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
   const list = docs.map((d) => {
-    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
     return { id: d.id, ...normalized } as VehicleDoc & { id: string };
   });
   const hasMore = snap.docs.length > limitCount;
   const lastDoc = docs.length > 0 ? snap.docs[docs.length - 1] ?? null : null;
   return { vehicles: list, lastDoc: hasMore ? lastDoc : null, hasMore };
+}
+
+/** Lecture défensive : champs ville alignés sur le canon (minuscule, sans espace). */
+export function withNormalizedVehicleCityFields<T extends VehicleDoc & { id: string }>(v: T): T {
+  return {
+    ...v,
+    currentCity: normalizeCity(v.currentCity ?? ""),
+    destinationCity:
+      v.destinationCity == null || v.destinationCity === ""
+        ? v.destinationCity
+        : normalizeCity(String(v.destinationCity)),
+  } as T;
+}
+
+function mapVehiclesWithNormalizedCities(list: (VehicleDoc & { id: string })[]): (VehicleDoc & { id: string })[] {
+  return list.map((v) => withNormalizedVehicleCityFields(v));
 }
 
 /** List vehicles available in a city (currentCity + GARAGE + NORMAL). Indexed query; no full-fleet load. Requires Firestore index: vehicles (currentCity ASC, operationalStatus ASC, technicalStatus ASC, updatedAt DESC). */
@@ -378,11 +457,12 @@ export async function listVehiclesAvailableInCity(
 ): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
   const limitCount = options.limitCount ?? DEFAULT_PAGE_SIZE;
   const ref = vehiclesRef(companyId);
-  const cityNorm = (currentCity ?? "").trim().toLowerCase();
+  const cityKey = normalizeCity(currentCity);
+  const cityNorm = cityKey;
   try {
     let q = query(
       ref,
-      where("currentCity", "==", currentCity),
+      where("currentCity", "==", cityKey),
       where("operationalStatus", "==", OPERATIONAL_STATUS.GARAGE),
       where("technicalStatus", "==", TECHNICAL_STATUS.NORMAL),
       orderBy("updatedAt", "desc"),
@@ -391,7 +471,7 @@ export async function listVehiclesAvailableInCity(
     if (options.startAfterDoc) {
       q = query(
         ref,
-        where("currentCity", "==", currentCity),
+        where("currentCity", "==", cityKey),
         where("operationalStatus", "==", OPERATIONAL_STATUS.GARAGE),
         where("technicalStatus", "==", TECHNICAL_STATUS.NORMAL),
         orderBy("updatedAt", "desc"),
@@ -402,13 +482,13 @@ export async function listVehiclesAvailableInCity(
     const snap = await getDocs(q);
     const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
     const list = docs.map((d) => {
-      const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+      const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
       return { id: d.id, ...normalized } as VehicleDoc & { id: string };
     });
     if (list.length > 0) {
       const hasMore = snap.docs.length > limitCount;
       const lastDoc = docs.length > 0 ? docs[docs.length - 1] ?? null : null;
-      return { vehicles: list, lastDoc: hasMore ? lastDoc : null, hasMore };
+      return { vehicles: mapVehiclesWithNormalizedCities(list), lastDoc: hasMore ? lastDoc : null, hasMore };
     }
   } catch {
     // Fallback below: tolerate missing index / legacy data shape.
@@ -422,7 +502,7 @@ export async function listVehiclesAvailableInCity(
     const tech = (v.technicalStatus ?? TECHNICAL_STATUS.NORMAL) as TechnicalStatus;
     if (op !== OPERATIONAL_STATUS.GARAGE || tech !== TECHNICAL_STATUS.NORMAL) return false;
     const sameAgency = options.agencyId ? (v as any).currentAgencyId === options.agencyId : false;
-    const vCity = String((v as any).currentCity ?? "").trim().toLowerCase();
+    const vCity = normalizeCity(String((v as any).currentCity ?? ""));
     const sameCity = cityNorm ? vCity === cityNorm : true;
     // Robust selection:
     // - keep agency-owned vehicles even when city field is stale,
@@ -431,7 +511,11 @@ export async function listVehiclesAvailableInCity(
     if (options.agencyId && !(v as any).currentAgencyId) return sameCity;
     return !options.agencyId && sameCity;
   });
-  return { vehicles: filtered.slice(0, limitCount), lastDoc: null, hasMore: filtered.length > limitCount };
+  return {
+    vehicles: mapVehiclesWithNormalizedCities(filtered.slice(0, limitCount)),
+    lastDoc: null,
+    hasMore: filtered.length > limitCount,
+  };
 }
 
 /** List vehicles in transit to a city (destinationCity + ON_TRIP / EN_TRANSIT). Uses legacy status for backward compatibility. Requires index: vehicles (destinationCity ASC, status ASC, updatedAt DESC). */
@@ -441,10 +525,11 @@ export async function listVehiclesInTransitToCity(
   options: { limitCount?: number; startAfterDoc?: DocumentSnapshot | null } = {}
 ): Promise<{ vehicles: (VehicleDoc & { id: string })[]; lastDoc: DocumentSnapshot | null; hasMore: boolean }> {
   const limitCount = options.limitCount ?? DEFAULT_PAGE_SIZE;
+  const destKey = normalizeCity(destinationCity);
   const ref = vehiclesRef(companyId);
   let q = query(
     ref,
-    where("destinationCity", "==", destinationCity),
+    where("destinationCity", "==", destKey),
     where("status", "==", VEHICLE_STATUS.EN_TRANSIT),
     orderBy("updatedAt", "desc"),
     limit(limitCount + 1)
@@ -452,7 +537,7 @@ export async function listVehiclesInTransitToCity(
   if (options.startAfterDoc) {
     q = query(
       ref,
-      where("destinationCity", "==", destinationCity),
+      where("destinationCity", "==", destKey),
       where("status", "==", VEHICLE_STATUS.EN_TRANSIT),
       orderBy("updatedAt", "desc"),
       startAfter(options.startAfterDoc),
@@ -462,7 +547,7 @@ export async function listVehiclesInTransitToCity(
   const snap = await getDocs(q);
   const docs = snap.docs.filter((d) => (d.data() as any).isArchived !== true).slice(0, limitCount);
   const list = docs.map((d) => {
-    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+    const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
     return { id: d.id, ...normalized } as VehicleDoc & { id: string };
   });
   const hasMore = snap.docs.length > limitCount;
@@ -481,8 +566,10 @@ export async function setVehicleOnTripStart(
     canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
     status: VEHICLE_STATUS.EN_TRANSIT,
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
     currentTripId: tripId,
-    destinationCity: arrivalCity || null,
+    destinationCity: arrivalCity ? normalizeCity(arrivalCity) : null,
     updatedAt: serverTimestamp(),
   });
 }
@@ -498,7 +585,9 @@ export async function setVehicleOnTripEnd(
     canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
     status: VEHICLE_STATUS.GARAGE,
     operationalStatus: OPERATIONAL_STATUS.GARAGE,
-    currentCity: arrivalCity || "",
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
+    currentCity: normalizeCity(arrivalCity || ""),
     destinationCity: null,
     lastTripId: tripId,
     currentTripId: null,
@@ -509,7 +598,7 @@ export async function setVehicleOnTripEnd(
 export async function getVehicle(companyId: string, vehicleId: string): Promise<(VehicleDoc & { id: string }) | null> {
   const d = await getDoc(vehicleRef(companyId, vehicleId));
   if (!d.exists()) return null;
-  const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>);
+  const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
   return { id: d.id, ...normalized } as VehicleDoc & { id: string };
 }
 
@@ -518,8 +607,10 @@ export async function updateVehicleStatus(
   vehicleId: string,
   status: VehicleStatus
 ): Promise<void> {
+  const fleetStatus = legacyVehicleStatusToFleetStatus(status);
   await updateDoc(vehicleRef(companyId, vehicleId), {
     status,
+    fleetStatus,
     updatedAt: serverTimestamp(),
   });
 }
@@ -530,11 +621,17 @@ export async function updateVehicleCity(
   currentCity: string,
   destinationCity?: string
 ): Promise<void> {
+  const snap = await getDoc(vehicleRef(companyId, vehicleId));
+  const raw = (snap.data() as Record<string, unknown>) ?? {};
   const payload: Record<string, unknown> = {
-    currentCity,
+    currentCity: normalizeCity(currentCity),
     updatedAt: serverTimestamp(),
   };
-  if (destinationCity !== undefined) payload.destinationCity = destinationCity || null;
+  if (destinationCity !== undefined) {
+    payload.destinationCity = destinationCity ? normalizeCity(destinationCity) : null;
+  }
+  const mergedForFleet = { ...raw, ...payload };
+  payload.fleetStatus = inferFleetStatus(mergedForFleet);
   await updateDoc(vehicleRef(companyId, vehicleId), payload);
 }
 
@@ -545,7 +642,10 @@ export async function declareTransit(
 ): Promise<void> {
   await updateDoc(vehicleRef(companyId, vehicleId), {
     status: "EN_TRANSIT",
-    destinationCity: destinationCity || null,
+    operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
+    destinationCity: destinationCity ? normalizeCity(destinationCity) : null,
     updatedAt: serverTimestamp(),
   });
 }
@@ -553,6 +653,9 @@ export async function declareTransit(
 export async function declareMaintenance(companyId: string, vehicleId: string): Promise<void> {
   await updateDoc(vehicleRef(companyId, vehicleId), {
     status: "EN_MAINTENANCE",
+    technicalStatus: TECHNICAL_STATUS.MAINTENANCE,
+    operationalStatus: OPERATIONAL_STATUS.GARAGE,
+    fleetStatus: VEHICLE_FLEET_STATUS.MAINTENANCE,
     destinationCity: null,
     updatedAt: serverTimestamp(),
   });
@@ -561,6 +664,9 @@ export async function declareMaintenance(companyId: string, vehicleId: string): 
 export async function declareAccident(companyId: string, vehicleId: string): Promise<void> {
   await updateDoc(vehicleRef(companyId, vehicleId), {
     status: "ACCIDENTE",
+    technicalStatus: TECHNICAL_STATUS.ACCIDENTE,
+    operationalStatus: OPERATIONAL_STATUS.GARAGE,
+    fleetStatus: VEHICLE_FLEET_STATUS.MAINTENANCE,
     destinationCity: null,
     updatedAt: serverTimestamp(),
   });
@@ -581,7 +687,7 @@ export async function assignVehicle(
   if (!v) throw new Error("Véhicule introuvable");
   const op = (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
   const tech = (v.technicalStatus ?? TECHNICAL_STATUS.NORMAL) as TechnicalStatus;
-  const cityMatch = (v.currentCity ?? "").trim().toLowerCase() === (agencyCity ?? "").trim().toLowerCase();
+  const cityMatch = normalizeCity(v.currentCity ?? "") === normalizeCity(agencyCity ?? "");
   const agencyMatch = String((v as any).currentAgencyId ?? "").trim() === String(agencyId ?? "").trim();
   if (op !== OPERATIONAL_STATUS.GARAGE || tech !== TECHNICAL_STATUS.NORMAL || !(cityMatch || agencyMatch)) {
     throw new Error("Véhicule non assignable : doit être GARAGE, NORMAL et dans la ville de l'agence.");
@@ -618,8 +724,9 @@ export async function assignVehicle(
     operationalStatus: OPERATIONAL_STATUS.AFFECTE,
     status: VEHICLE_STATUS.EN_SERVICE,
     canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
+    fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
     currentTripId: affectationId,
-    destinationCity: payload.arrivalCity || null,
+    destinationCity: payload.arrivalCity ? normalizeCity(payload.arrivalCity) : null,
     statusHistory: arrayUnion(statusEntry),
     defaultDriverName: payload.driverName ?? "",
     defaultDriverPhone: payload.driverPhone ?? "",
@@ -678,6 +785,7 @@ export async function cancelAffectation(
     await updateDoc(vehicleRef(companyId, aff.vehicleId), {
       operationalStatus: OPERATIONAL_STATUS.GARAGE,
       status: VEHICLE_STATUS.GARAGE,
+      fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
       statusHistory: arrayUnion(entry),
       updatedAt: serverTimestamp(),
     });
@@ -719,7 +827,9 @@ export async function confirmDeparture(
   await updateDoc(vehicleRef(companyId, vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
     status: VEHICLE_STATUS.EN_TRANSIT,
-    destinationCity: destinationCity || null,
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
+    destinationCity: destinationCity ? normalizeCity(destinationCity) : null,
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),
   });
@@ -742,7 +852,8 @@ export async function confirmArrival(
   if (!canChangeOperationalStatus(op, OPERATIONAL_STATUS.GARAGE)) {
     throw new Error("Transition opérationnelle non autorisée.");
   }
-  const newCity = (dest && typeof dest === "string" ? dest : String(dest ?? "")).trim() || v.currentCity;
+  const newCityRaw = (dest && typeof dest === "string" ? dest : String(dest ?? "")).trim() || v.currentCity;
+  const newCity = normalizeCity(newCityRaw);
   const entry: StatusHistoryEntry = {
     field: "operationalStatus",
     from: op,
@@ -754,6 +865,8 @@ export async function confirmArrival(
   await updateDoc(vehicleRef(companyId, vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.GARAGE,
     status: VEHICLE_STATUS.GARAGE,
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
     currentCity: newCity,
     destinationCity: null,
     statusHistory: arrayUnion(entry),
@@ -795,7 +908,9 @@ export async function confirmDepartureAffectation(
   await updateDoc(vehicleRef(companyId, aff.vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
     status: VEHICLE_STATUS.EN_TRANSIT,
-    destinationCity: aff.arrivalCity || null,
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
+    destinationCity: aff.arrivalCity ? normalizeCity(aff.arrivalCity) : null,
     canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
     currentTripId: affectationId,
     statusHistory: arrayUnion(entry),
@@ -838,8 +953,8 @@ export async function confirmArrivalAffectation(
   const v = await getVehicle(companyId, aff.vehicleId);
   if (!v) throw new Error("Véhicule introuvable.");
   const op = (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
-  const dest = (v.destinationCity ?? "").trim().toLowerCase();
-  const cityMatch = dest === (agencyCity ?? "").trim().toLowerCase();
+  const dest = normalizeCity(String(v.destinationCity ?? ""));
+  const cityMatch = dest === normalizeCity(agencyCity ?? "");
   if (op !== OPERATIONAL_STATUS.EN_TRANSIT || !cityMatch) {
     throw new Error("Véhicule doit être EN_TRANSIT et la destination doit être la ville de cette agence.");
   }
@@ -858,7 +973,9 @@ export async function confirmArrivalAffectation(
   await updateDoc(vehicleRef(companyId, aff.vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.GARAGE,
     status: VEHICLE_STATUS.GARAGE,
-    currentCity: agencyCity.trim(),
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
+    currentCity: normalizeCity(agencyCity),
     destinationCity: null,
     canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
     currentTripId: null,
@@ -947,9 +1064,11 @@ export async function emergencyReplaceVehicleOnTrip(
   await updateDoc(vehicleRef(companyId, replacementVehicleId), {
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
     status: VEHICLE_STATUS.EN_TRANSIT,
+    technicalStatus: TECHNICAL_STATUS.NORMAL,
+    fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
     canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
     currentTripId: newAffectationId,
-    destinationCity: active.data.arrivalCity || null,
+    destinationCity: active.data.arrivalCity ? normalizeCity(String(active.data.arrivalCity)) : null,
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),
   });
@@ -988,10 +1107,14 @@ export async function setTechnicalStatus(
           ? VEHICLE_STATUS.HORS_SERVICE
           : VEHICLE_STATUS.GARAGE;
   const nextOperational = (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
+  let fleetStatus: VehicleFleetStatus = VEHICLE_FLEET_STATUS.DISPONIBLE;
+  if (technicalStatus !== TECHNICAL_STATUS.NORMAL) fleetStatus = VEHICLE_FLEET_STATUS.MAINTENANCE;
+  else if (nextOperational === OPERATIONAL_STATUS.EN_TRANSIT) fleetStatus = VEHICLE_FLEET_STATUS.EN_TRANSIT;
   await updateDoc(vehicleRef(companyId, vehicleId), {
     technicalStatus,
     canonicalStatus: canonicalStatusFromStates(technicalStatus, nextOperational),
     status: legacyStatus,
+    fleetStatus,
     ...(technicalStatus !== TECHNICAL_STATUS.NORMAL ? { destinationCity: null } : {}),
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),
@@ -1006,6 +1129,7 @@ export async function createVehicle(
   if (!data.insuranceExpiryDate || !data.inspectionExpiryDate || !data.vignetteExpiryDate) {
     throw new Error("Les dates d'expiration assurance, contrôle technique et vignette sont obligatoires.");
   }
+  const incomingFleetRaw = (data as { fleetStatus?: string }).fleetStatus;
   const busNumber = normalizeBusNumber(String((data as any).busNumber ?? (data as any).fleetNumber ?? ""));
   if (!busNumber) {
     throw new Error("Le numero bus est obligatoire (001 a 999).");
@@ -1013,14 +1137,42 @@ export async function createVehicle(
   await assertBusNumberAvailable(companyId, busNumber);
   const ref = doc(vehiclesRef(companyId));
   const now = Timestamp.now();
-  const legacyStatus = data.status ?? VEHICLE_STATUS.GARAGE;
+  const currentCityNorm = normalizeCity(String(data.currentCity ?? ""));
+  const destRaw = data.destinationCity;
+  const destinationNorm =
+    destRaw === undefined
+      ? undefined
+      : destRaw === null || String(destRaw).trim() === ""
+        ? null
+        : normalizeCity(String(destRaw));
+
+  let legacyStatus = data.status ?? VEHICLE_STATUS.GARAGE;
   let technicalStatus: TechnicalStatus = TECHNICAL_STATUS.NORMAL;
   let operationalStatus: OperationalStatus = OPERATIONAL_STATUS.GARAGE;
-  if (legacyStatus === VEHICLE_STATUS.EN_MAINTENANCE) technicalStatus = TECHNICAL_STATUS.MAINTENANCE;
-  else if (legacyStatus === VEHICLE_STATUS.ACCIDENTE) technicalStatus = TECHNICAL_STATUS.ACCIDENTE;
-  else if (legacyStatus === VEHICLE_STATUS.HORS_SERVICE) technicalStatus = TECHNICAL_STATUS.HORS_SERVICE;
-  else if (legacyStatus === VEHICLE_STATUS.EN_TRANSIT) operationalStatus = OPERATIONAL_STATUS.EN_TRANSIT;
-  else if (legacyStatus === VEHICLE_STATUS.EN_SERVICE) operationalStatus = OPERATIONAL_STATUS.AFFECTE;
+  let fleetStatus: VehicleFleetStatus;
+
+  if (incomingFleetRaw != null && String(incomingFleetRaw).trim() !== "") {
+    const fs = assertValidFleetStatus(String(incomingFleetRaw));
+    const leg = fleetStatusToLegacyFirestoreFields(fs);
+    legacyStatus = leg.status;
+    technicalStatus = leg.technicalStatus;
+    operationalStatus = leg.operationalStatus;
+    fleetStatus = leg.fleetStatus;
+  } else {
+    if (legacyStatus === VEHICLE_STATUS.EN_MAINTENANCE) technicalStatus = TECHNICAL_STATUS.MAINTENANCE;
+    else if (legacyStatus === VEHICLE_STATUS.ACCIDENTE) technicalStatus = TECHNICAL_STATUS.ACCIDENTE;
+    else if (legacyStatus === VEHICLE_STATUS.HORS_SERVICE) technicalStatus = TECHNICAL_STATUS.HORS_SERVICE;
+    else if (legacyStatus === VEHICLE_STATUS.EN_TRANSIT) operationalStatus = OPERATIONAL_STATUS.EN_TRANSIT;
+    else if (legacyStatus === VEHICLE_STATUS.EN_SERVICE) operationalStatus = OPERATIONAL_STATUS.AFFECTE;
+    fleetStatus = inferFleetStatus({
+      status: legacyStatus,
+      technicalStatus,
+      operationalStatus,
+      currentCity: currentCityNorm,
+      destinationCity: destinationNorm,
+    } as Record<string, unknown>);
+  }
+
   const plateStored = (data.plateNumber ?? "").trim();
   const modelLabel = await ensureVehicleModel(companyId, data.model ?? "", {
     createdBy: meta?.createdBy,
@@ -1029,6 +1181,8 @@ export async function createVehicle(
   const plateNormalized = normalizePlate(data.plateNumber ?? "");
   const payload = {
     ...data,
+    currentCity: currentCityNorm,
+    ...(destinationNorm !== undefined ? { destinationCity: destinationNorm } : {}),
     busNumber,
     busNumberNormalized: busNumber,
     // Legacy compatibility for existing queries/data.
@@ -1043,6 +1197,7 @@ export async function createVehicle(
     status: legacyStatus,
     technicalStatus,
     operationalStatus,
+    fleetStatus,
     createdBy: meta?.createdBy ?? null,
     createdByRole: meta?.createdByRole ?? null,
     sourceModule: meta?.sourceModule ?? "garage_dashboard",
@@ -1155,6 +1310,8 @@ export async function updateVehicle(
   if (!(v as any).sourceModule) updates.sourceModule = "garage_dashboard";
   if (!(v as any).plateNumberNormalized) updates.plateNumberNormalized = normalizePlate(String((v as any).plateNumber ?? ""));
   updates.modelNormalized = normalizeModel(String((updates.model ?? (v as any).model ?? "") as string));
+  const mergedForFleet: Record<string, unknown> = { ...(v as unknown as Record<string, unknown>), ...updates };
+  updates.fleetStatus = inferFleetStatus(mergedForFleet);
   await updateDoc(vehicleRef(companyId, vehicleId), updates);
 }
 
@@ -1238,6 +1395,22 @@ export async function backfillVehiclesMetadata(
     }
     if (!(vehicle as any).plateNumberNormalized) patch.plateNumberNormalized = plate;
     if (!(vehicle as any).modelNormalized) patch.modelNormalized = model;
+    const curNorm = normalizeCity(String((vehicle as any).currentCity ?? ""));
+    if (curNorm !== String((vehicle as any).currentCity ?? "")) {
+      patch.currentCity = curNorm;
+    }
+    const dc = (vehicle as any).destinationCity;
+    if (dc !== undefined && dc !== null && String(dc).trim() !== "") {
+      const dn = normalizeCity(String(dc));
+      if (dn !== String(dc)) {
+        patch.destinationCity = dn;
+      }
+    }
+    const mergedFleetInput = { ...(vehicle as unknown as Record<string, unknown>), ...patch };
+    const inferredFs = inferFleetStatus(mergedFleetInput);
+    if (String((vehicle as any).fleetStatus ?? "") !== inferredFs) {
+      patch.fleetStatus = inferredFs;
+    }
     const technical = ((vehicle as any).technicalStatus ?? TECHNICAL_STATUS.NORMAL) as TechnicalStatus;
     const operational = ((vehicle as any).operationalStatus ?? OPERATIONAL_STATUS.GARAGE) as OperationalStatus;
     const expectedCanonical = canonicalStatusFromStates(technical, operational);
@@ -1273,6 +1446,188 @@ export async function backfillVehiclesMetadata(
   return { scanned, updated, skipped };
 }
 
+export type VehiclesPhase1MigrationResult = {
+  scanned: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+};
+
+/**
+ * Migration one-shot : villes normalisées (minuscule, sans espace), fleetStatus recalculé,
+ * suppression des champs legacy villeActuelle / ville_actuelle s’ils existent.
+ * Parcourt la collection par pages (orderBy documentId).
+ */
+export async function migrateVehiclesPhase1Normalization(companyId: string): Promise<VehiclesPhase1MigrationResult> {
+  const ref = vehiclesRef(companyId);
+  const PAGE = 450;
+  let lastDoc: DocumentSnapshot | null = null;
+  let scanned = 0;
+  let updated = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  while (true) {
+    let q = query(ref, orderBy(documentId()), limit(PAGE));
+    if (lastDoc) {
+      q = query(ref, orderBy(documentId()), startAfter(lastDoc), limit(PAGE));
+    }
+    const snap = await getDocs(q);
+    if (snap.empty) break;
+
+    let batch = writeBatch(db);
+    let batchOps = 0;
+
+    for (const d of snap.docs) {
+      scanned += 1;
+      try {
+        const raw = d.data() as Record<string, unknown>;
+        const cityFrom = String(raw.currentCity ?? raw.villeActuelle ?? raw.ville_actuelle ?? "").trim();
+        const currentCity = normalizeCity(cityFrom);
+
+        let destNorm: string | null | undefined = undefined;
+        if (raw.destinationCity !== undefined) {
+          if (raw.destinationCity === null || String(raw.destinationCity).trim() === "") {
+            destNorm = null;
+          } else {
+            destNorm = normalizeCity(String(raw.destinationCity));
+          }
+        }
+
+        const merged: Record<string, unknown> = {
+          ...raw,
+          currentCity,
+          ...(raw.destinationCity !== undefined ? { destinationCity: destNorm } : {}),
+        };
+        const fleetStatus = inferFleetStatus(merged);
+
+        const patch: Record<string, unknown> = {};
+        if (String(raw.currentCity ?? "") !== currentCity) {
+          patch.currentCity = currentCity;
+        }
+        if (raw.destinationCity !== undefined) {
+          const prev = raw.destinationCity;
+          const prevNorm =
+            prev === null || String(prev).trim() === "" ? null : normalizeCity(String(prev));
+          if (prevNorm !== destNorm) {
+            patch.destinationCity = destNorm ?? null;
+          }
+        }
+        if (String(raw.fleetStatus ?? "") !== fleetStatus) {
+          patch.fleetStatus = fleetStatus;
+        }
+        if (Object.prototype.hasOwnProperty.call(raw, "villeActuelle")) {
+          patch.villeActuelle = deleteField();
+        }
+        if (Object.prototype.hasOwnProperty.call(raw, "ville_actuelle")) {
+          patch.ville_actuelle = deleteField();
+        }
+
+        if (Object.keys(patch).length === 0) {
+          skipped += 1;
+        } else {
+          patch.updatedAt = serverTimestamp();
+          batch.update(vehicleRef(companyId, d.id), patch);
+          batchOps += 1;
+          updated += 1;
+          if (batchOps >= 450) {
+            await batch.commit();
+            batch = writeBatch(db);
+            batchOps = 0;
+          }
+        }
+      } catch (e) {
+        errors.push(`${d.id}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    if (batchOps > 0) {
+      await batch.commit();
+    }
+
+    lastDoc = snap.docs[snap.docs.length - 1] ?? null;
+    if (snap.docs.length < PAGE) {
+      break;
+    }
+  }
+
+  return { scanned, updated, skipped, errors };
+}
+
+export type VehiclesPhase1VerificationResult = {
+  scanned: number;
+  clean: boolean;
+  cityNotNormalizedIds: string[];
+  invalidFleetStatus: Array<{ id: string; fleetStatus: string }>;
+  legacyCityFieldIds: string[];
+  destinationNotNormalizedIds: string[];
+};
+
+/**
+ * Contrôle post-migration : villes stockées normalisées, fleetStatus valide, pas de clés villeActuelle / ville_actuelle.
+ * Lecture brute Firestore (pas via normalizeVehicleDoc).
+ */
+export async function verifyVehiclesPhase1Normalization(companyId: string): Promise<VehiclesPhase1VerificationResult> {
+  const ref = vehiclesRef(companyId);
+  const PAGE = 450;
+  let lastDoc: DocumentSnapshot | null = null;
+  let scanned = 0;
+  const cityNotNormalizedIds: string[] = [];
+  const invalidFleetStatus: Array<{ id: string; fleetStatus: string }> = [];
+  const legacyCityFieldIds: string[] = [];
+  const destinationNotNormalizedIds: string[] = [];
+
+  while (true) {
+    let q = query(ref, orderBy(documentId()), limit(PAGE));
+    if (lastDoc) {
+      q = query(ref, orderBy(documentId()), startAfter(lastDoc), limit(PAGE));
+    }
+    const snap = await getDocs(q);
+    if (snap.empty) break;
+
+    for (const d of snap.docs) {
+      scanned += 1;
+      const raw = d.data() as Record<string, unknown>;
+      const cc = raw.currentCity;
+      if (cc != null && String(cc).trim() !== "" && String(cc) !== normalizeCity(String(cc))) {
+        cityNotNormalizedIds.push(d.id);
+      }
+      const fs = raw.fleetStatus;
+      if (fs != null && String(fs).trim() !== "" && !isValidFleetStatus(String(fs))) {
+        invalidFleetStatus.push({ id: d.id, fleetStatus: String(fs) });
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(raw, "villeActuelle") ||
+        Object.prototype.hasOwnProperty.call(raw, "ville_actuelle")
+      ) {
+        legacyCityFieldIds.push(d.id);
+      }
+      const dest = raw.destinationCity;
+      if (dest != null && String(dest).trim() !== "" && String(dest) !== normalizeCity(String(dest))) {
+        destinationNotNormalizedIds.push(d.id);
+      }
+    }
+
+    lastDoc = snap.docs[snap.docs.length - 1] ?? null;
+    if (snap.docs.length < PAGE) break;
+  }
+
+  const clean =
+    cityNotNormalizedIds.length === 0 &&
+    invalidFleetStatus.length === 0 &&
+    legacyCityFieldIds.length === 0 &&
+    destinationNotNormalizedIds.length === 0;
+
+  return {
+    scanned,
+    clean,
+    cityNotNormalizedIds,
+    invalidFleetStatus,
+    legacyCityFieldIds,
+    destinationNotNormalizedIds,
+  };
+}
+
 /** Phase 1 Soft Delete: archive vehicle (no document deletion). Only if operationalStatus === GARAGE and no active affectation. Sets isArchived=true, archivedAt, archivedBy, appends statusHistory. */
 export async function archiveVehicle(
   companyId: string,
@@ -1300,10 +1655,12 @@ export async function archiveVehicle(
     role,
     timestamp: now,
   };
+  const fleetStatus = inferFleetStatus(v as unknown as Record<string, unknown>);
   await updateDoc(vehicleRef(companyId, vehicleId), {
     isArchived: true,
     archivedAt: serverTimestamp(),
     archivedBy: userId,
+    fleetStatus,
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),
   });

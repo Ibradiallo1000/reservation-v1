@@ -1,0 +1,33 @@
+---
+description: Standards produit — lisibilité, cohérence, domaines, fiabilité, UX
+alwaysApply: true
+---
+
+# Standards d’implémentation (référence projet)
+
+Appliquer systématiquement aux nouvelles fonctionnalités et aux corrections UX.
+
+## 1. Lisibilité
+
+- Un responsable doit comprendre l’écran en **moins de cinq secondes**.
+- **Texte simple**, phrases courtes, vocabulaire métier transport / guichet (pas de jargon technique).
+- **Ne pas afficher** d’identifiants techniques, clés brutes (ex. `YYYY-MM-DD` seul, IDs Firestore) dans l’interface : préférer une formulation ou une date lisible (ex. jour + date en français).
+
+## 2. Cohérence
+
+- **Une donnée = une source de vérité** (Firestore, service dédié, etc.) ; ne pas dupliquer la logique métier sans synchronisation claire.
+- **Une action = un effet clair** : pas d’effet surprise ou double effet derrière un seul libellé.
+
+## 3. Séparation des domaines
+
+- **Activité** (sessions, postes, planning opérationnel visible) **≠ Caisse** (soldes, sessions de caisse, recettes) : ne pas mélanger libellés, données ou navigation entre ces domaines sur un même écran sans intention explicite produit.
+
+## 4. Fiabilité
+
+- Données **temps réel** : préférer abonnements / requêtes alignés sur le modèle de données réel ; afficher un **état d’erreur** ou vide honnête si la source échoue.
+- **Aucune valeur fictive** ou placeholder présentée comme réelle (pas de chiffres « exemple », pas de succès simulé).
+
+## 5. UX
+
+- Tout **bouton ou lien cliquable** doit mener à un **écran, une action ou un contenu réel** (navigation, modal utile, téléchargement, etc.).
+- Éviter les **éléments décoratifs** qui ressemblent à une action (cartes « cliquables » sans cible, badges sans sens métier).

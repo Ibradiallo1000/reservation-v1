@@ -13,6 +13,8 @@ export interface CustomUser {
 
   agencyId?: string;
   agencyName?: string;
+  /** Fuseau IANA chargé depuis l'agence (KPI jour agence). */
+  agencyTimezone?: string;
 
   lastLogin?: Date | null;
   permissions?: string[];

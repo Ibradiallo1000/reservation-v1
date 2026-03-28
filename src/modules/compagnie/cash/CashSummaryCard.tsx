@@ -5,12 +5,12 @@
 import React, { useEffect, useState, useCallback } from "react";
 import {
   getCashTransactionsByLocation,
-  getCashTotalByLocation,
   getLastClosureByLocation,
   createCashClosure,
 } from "./cashService";
+import { getLedgerBalances } from "@/modules/compagnie/treasury/financialTransactions";
 import type { CashTransactionDocWithId, CashClosureDocWithId } from "./cashTypes";
-import { getTodayBamako } from "@/shared/date/dateUtilsTz";
+import { getTodayForTimezone, resolveAgencyTimezone } from "@/shared/date/dateUtilsTz";
 import { SectionCard, ActionButton } from "@/ui";
 import { Wallet, Receipt, Lock, Loader2 } from "lucide-react";
 
@@ -27,6 +27,8 @@ export interface CashSummaryCardProps {
   formatCurrency: (n: number) => string;
   /** Date à afficher (YYYY-MM-DD). Par défaut : aujourd'hui. */
   date?: string;
+  /** Fuseau IANA (`agency.timezone`). Défaut = Bamako si absent. */
+  ianaTimezone?: string;
 }
 
 export function CashSummaryCard({
@@ -37,8 +39,10 @@ export function CashSummaryCard({
   createdBy,
   formatCurrency,
   date: dateProp,
+  ianaTimezone,
 }: CashSummaryCardProps) {
-  const today = getTodayBamako();
+  const tz = resolveAgencyTimezone({ timezone: ianaTimezone });
+  const today = getTodayForTimezone(tz);
   const date = dateProp ?? today;
   const [transactions, setTransactions] = useState<CashTransactionDocWithId[]>([]);
   const [total, setTotal] = useState(0);
@@ -53,13 +57,13 @@ export function CashSummaryCard({
     if (!companyId || !locationId) return;
     setLoading(true);
     try {
-      const [txList, totalAmount, last] = await Promise.all([
-        getCashTransactionsByLocation(companyId, locationId, date),
-        getCashTotalByLocation(companyId, locationId, date),
+      const [txList, ledger, last] = await Promise.all([
+        getCashTransactionsByLocation(companyId, locationId, date, tz),
+        getLedgerBalances(companyId, locationId),
         getLastClosureByLocation(companyId, locationId),
       ]);
       setTransactions(txList);
-      setTotal(totalAmount);
+      setTotal(ledger.cash);
       setLastClosure(last);
     } catch (e) {
       console.error("[CashSummaryCard] load:", e);
@@ -122,13 +126,21 @@ export function CashSummaryCard({
     <>
       <SectionCard title={cardTitle}>
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-            <Receipt className="w-4 h-4" />
-            <span>Ventes du jour : {transactions.length} transaction(s)</span>
+          <div className="flex flex-wrap items-center gap-2 text-gray-600 dark:text-gray-400">
+            <Receipt className="w-4 h-4 shrink-0" />
+            <span>
+              Mouvements terrain (cashTransactions) : {transactions.length} ligne(s)
+            </span>
+            <span
+              className="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-950"
+              title="Donnée opérationnelle — ne remplace pas la comptabilité"
+            >
+              Donnée opérationnelle · non comptabilisée
+            </span>
           </div>
           <div className="flex items-center gap-2 text-lg font-semibold">
             <Wallet className="w-5 h-5" />
-            <span>Montant en caisse : {formatCurrency(total)}</span>
+            <span>Solde espèces (comptabilité / ledger) : {formatCurrency(total)}</span>
           </div>
           {lastClosure && (
             <div className="text-sm text-gray-500 dark:text-gray-400">
@@ -154,7 +166,7 @@ export function CashSummaryCard({
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg max-w-md w-full p-6 space-y-4">
             <h3 className="text-lg font-semibold">Clôture de caisse — {date}</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Montant attendu (somme des ventes du jour) : <strong>{formatCurrency(total)}</strong>
+              Montant attendu (solde espèces ledger affiché) : <strong>{formatCurrency(total)}</strong>
             </p>
             <div>
               <label className="block text-sm font-medium mb-1">Montant déclaré</label>

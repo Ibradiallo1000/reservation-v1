@@ -21,6 +21,7 @@ import {
   closeCashSession,
   validateCashSession,
   rejectCashSession,
+  suspendCashSession,
   listCashSessions,
 } from "./cashSessionService";
 import {
@@ -30,8 +31,12 @@ import {
   getTotalCounted,
   type CashSessionDocWithId,
 } from "./cashSessionTypes";
+import { OperationalHintRow } from "@/modules/agence/components/OperationalDataHint";
+import { createChefIncident } from "@/modules/agence/manager/incidentStore";
 
-export default function CashSessionsPage() {
+export type CashSessionsPageProps = { embedded?: boolean };
+
+export default function CashSessionsPage({ embedded = false }: CashSessionsPageProps = {}) {
   const { user } = useAuth();
   const money = useFormatCurrency();
   const companyId = user?.companyId ?? "";
@@ -40,6 +45,8 @@ export default function CashSessionsPage() {
   const userRole = (user as { role?: string })?.role ?? "";
   const isAccountant =
     userRole === "agency_accountant" || userRole === "admin_compagnie";
+  const isChefSupervisor =
+    userRole === "chefAgence" || userRole === "superviseur" || userRole === "admin_compagnie";
 
   const [sessions, setSessions] = useState<CashSessionDocWithId[]>([]);
   const [openSessions, setOpenSessions] = useState<CashSessionDocWithId[]>([]);
@@ -52,6 +59,9 @@ export default function CashSessionsPage() {
   const [rejectReason, setRejectReason] = useState("");
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [suspendingId, setSuspendingId] = useState<string | null>(null);
+  const [suspendReason, setSuspendReason] = useState("");
+  const [suspendConfirmOpen, setSuspendConfirmOpen] = useState(false);
 
   const load = async () => {
     if (!companyId || !agencyId) return;
@@ -151,6 +161,36 @@ export default function CashSessionsPage() {
     }
   };
 
+  const handleSuspend = async (sessionId: string) => {
+    const reason = suspendReason.trim();
+    if (!reason) {
+      toast.error("Motif requis.");
+      return;
+    }
+    setProcessing(true);
+    try {
+      await suspendCashSession(companyId, agencyId, sessionId, userId, reason);
+      createChefIncident(companyId, agencyId, {
+        status: "open",
+        severity: "critical",
+        createdBy: { id: userId, name: (user as any)?.displayName ?? undefined },
+        reason,
+        relatedSessionId: sessionId,
+        source: "cash",
+        type: "suspension",
+      });
+      toast.success("Session suspendue.");
+      setSuspendingId(null);
+      setSuspendReason("");
+      setSuspendConfirmOpen(false);
+      load();
+    } catch (e: unknown) {
+      toast.error((e as Error)?.message ?? "Impossible de suspendre");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const totalDiscrepancy = sessions
     .filter((s) => s.status === CASH_SESSION_STATUS.CLOSED && s.discrepancy != null)
     .reduce((sum, s) => sum + (Number(s.discrepancy) ?? 0), 0);
@@ -158,12 +198,24 @@ export default function CashSessionsPage() {
   const canClose = (s: CashSessionDocWithId) =>
     s.status === CASH_SESSION_STATUS.OPEN && s.agentId === userId;
 
-  return (
-    <StandardLayoutWrapper>
+  const sessionsBody = (
+    <>
+      {!embedded && (
       <PageHeader
         title="Contrôle caisse"
-        subtitle="Sessions caisse par agent (guichet / courrier)"
+        subtitle="Sessions terrain par agent (guichet / courrier) — non comptabilisées"
       />
+      )}
+      {embedded && (
+        <p className="text-xs text-gray-500 mb-3 dark:text-slate-400">
+          Contrôle terrain (complément du ledger). La validation comptable des clôtures se fait selon les rôles.
+        </p>
+      )}
+
+      <OperationalHintRow>
+        Les sessions et écarts ci-dessous servent au <strong>contrôle terrain</strong> ; la comptabilité officielle reste le{" "}
+        <strong>ledger</strong> (financialTransactions / comptes).
+      </OperationalHintRow>
 
       <div className="grid gap-4 md:grid-cols-3 mb-6">
         <MetricCard
@@ -288,7 +340,19 @@ export default function CashSessionsPage() {
                           "—"
                         )}
                       </td>
-                      <td className="p-2">{s.status}</td>
+                      <td className="p-2">
+                        <span
+                          className={
+                            s.status === CASH_SESSION_STATUS.SUSPENDED
+                              ? "inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800 dark:bg-red-950/30 dark:text-red-200"
+                              : s.status === CASH_SESSION_STATUS.CLOSED
+                                ? "inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+                                : "inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 dark:bg-slate-800 dark:text-slate-200"
+                          }
+                        >
+                          {s.status}
+                        </span>
+                      </td>
                       <td className="p-2 text-right">
                         {s.status === CASH_SESSION_STATUS.OPEN && canClose(s) && (
                           <ActionButton
@@ -322,6 +386,24 @@ export default function CashSessionsPage() {
                             >
                               <XCircle className="w-4 h-4 mr-1" />
                               Rejeter
+                            </ActionButton>
+                          </span>
+                        )}
+                        {(s.status === CASH_SESSION_STATUS.OPEN ||
+                          (s.status === CASH_SESSION_STATUS.CLOSED && Math.abs(Number(s.discrepancy ?? 0)) > 0.01)) &&
+                          isChefSupervisor && (
+                          <span className="flex gap-1 justify-end mt-1">
+                            <ActionButton
+                              size="sm"
+                              variant="danger"
+                              onClick={() => {
+                                setSuspendingId(s.id);
+                                setSuspendReason("");
+                                setSuspendConfirmOpen(true);
+                              }}
+                              disabled={processing}
+                            >
+                              Suspendre
                             </ActionButton>
                           </span>
                         )}
@@ -398,6 +480,47 @@ export default function CashSessionsPage() {
               </div>
             )}
 
+            {suspendConfirmOpen && suspendingId && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+                <div className="w-full max-w-md rounded-xl border-2 border-red-300 bg-red-50 p-5 shadow-xl dark:border-red-700 dark:bg-red-950/25">
+                  <div className="text-base font-semibold text-red-900 dark:text-red-100">Action critique - Suspension</div>
+                  <p className="mt-1 text-sm text-red-800 dark:text-red-200">
+                    This will block all operations for this session.
+                  </p>
+                  <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">
+                    Motif obligatoire
+                  </label>
+                  <textarea
+                    value={suspendReason}
+                    onChange={(e) => setSuspendReason(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm min-h-[96px] dark:border-red-700 dark:bg-slate-900 dark:text-slate-100"
+                    placeholder="Incohérence détectée, vérification comptable requise…"
+                  />
+                  <div className="mt-4 flex justify-end gap-2">
+                    <ActionButton
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setSuspendConfirmOpen(false);
+                        setSuspendingId(null);
+                        setSuspendReason("");
+                      }}
+                    >
+                      Annuler
+                    </ActionButton>
+                    <ActionButton
+                      size="sm"
+                      variant="danger"
+                      onClick={() => handleSuspend(suspendingId)}
+                      disabled={processing}
+                    >
+                      Confirmer suspension
+                    </ActionButton>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {sessions.length === 0 && !loading && (
               <p className="text-muted-foreground py-4">
                 Aucune session caisse. Ouvrez une session pour commencer.
@@ -406,6 +529,12 @@ export default function CashSessionsPage() {
           </>
         )}
       </SectionCard>
-    </StandardLayoutWrapper>
+    </>
+  );
+
+  return embedded ? (
+    <div className="space-y-4">{sessionsBody}</div>
+  ) : (
+    <StandardLayoutWrapper>{sessionsBody}</StandardLayoutWrapper>
   );
 }

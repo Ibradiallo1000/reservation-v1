@@ -40,7 +40,9 @@ type AffectationRow = {
   status: string;
 };
 
-const AgenceFleetOperationsPage: React.FC = () => {
+export type AgenceFleetOperationsPageProps = { embedded?: boolean };
+
+const AgenceFleetOperationsPage: React.FC<AgenceFleetOperationsPageProps> = ({ embedded = false }) => {
   const { user } = useAuth() as {
     user: { companyId?: string; agencyId?: string; ville?: string; uid?: string; role?: string };
   };
@@ -223,20 +225,24 @@ const AgenceFleetOperationsPage: React.FC = () => {
   };
 
   if (!companyId || !agencyId) {
-    return (
+    return embedded ? (
+      <p className="text-gray-600 py-4">Compagnie ou agence introuvable.</p>
+    ) : (
       <StandardLayoutWrapper>
         <p className="text-gray-600">Compagnie ou agence introuvable.</p>
       </StandardLayoutWrapper>
     );
   }
 
-  return (
-    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
+  const body = (
+    <>
+      {!embedded && (
       <PageHeader
         title="Exploitation"
         subtitle={`Agence : ${agencyCity || "—"}. Affectez les véhicules et confirmez départs / arrivées.`}
         icon={Truck}
       />
+      )}
 
       {error && (
         <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm dark:bg-red-900/20 dark:border-red-800">
@@ -450,7 +456,13 @@ const AgenceFleetOperationsPage: React.FC = () => {
           </div>
         </div>
       )}
-    </StandardLayoutWrapper>
+    </>
+  );
+
+  return embedded ? (
+    <div className="space-y-4 max-w-4xl">{body}</div>
+  ) : (
+    <StandardLayoutWrapper maxWidthClass="max-w-4xl">{body}</StandardLayoutWrapper>
   );
 };
 

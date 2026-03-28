@@ -205,7 +205,7 @@ const CompagnieLayout: React.FC = () => {
       path: `${basePath}/audit-controle`,
       badge: pendingCeoExpensesCount || undefined,
     },
-    { label: "Validation chef comptable", icon: ShieldCheck, path: `${basePath}/comptabilite/validation` },
+    { label: "Validation chef d'agence", icon: ShieldCheck, path: `${basePath}/comptabilite/validation` },
     { label: "Clients", icon: Users, path: `${basePath}/customers` },
     { label: "Avis Clients", icon: MessageSquare, path: `${basePath}/avis-clients`, badge: pendingReviewsCount },
     { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },

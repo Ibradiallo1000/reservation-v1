@@ -16,7 +16,10 @@ import {
 
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
-import { resolveReservationById } from '@/modules/compagnie/public/utils/resolveReservation';
+import {
+  readPendingReservationPointer,
+  reservationNestedRef,
+} from '@/modules/compagnie/public/utils/pendingReservation';
 import { Download, Printer, Home } from 'lucide-react';
 import ReservationStepHeader from '@/modules/compagnie/public/components/ReservationStepHeader';
 import html2pdf from 'html2pdf.js';
@@ -31,6 +34,8 @@ import { getEffectiveStatut } from '@/utils/reservationStatusUtils';
 import { getDisplayPhone } from '@/utils/phoneUtils';
 import type { ReservationStatus } from '@/types/reservation';
 import { getSlugFromSubdomain } from '@/modules/compagnie/public/utils/subdomain';
+import { ensurePendingOnlinePaymentFromReservation } from '@/services/paymentService';
+import { loadPublicCompanyInfoSessionThenFirestore } from '@/modules/compagnie/public/utils/loadPublicCompanyInfo';
 
 interface Reservation {
   id: string;
@@ -84,6 +89,7 @@ const ReceiptEnLignePage: React.FC = () => {
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
+  const [companyLoadError, setCompanyLoadError] = useState<string>('');
   const [agencyName, setAgencyName] = useState<string>('Agence');
   const [agencyLatitude, setAgencyLatitude] = useState<number | null>(null);
   const [agencyLongitude, setAgencyLongitude] = useState<number | null>(null);
@@ -94,6 +100,8 @@ const ReceiptEnLignePage: React.FC = () => {
   const isOnline = useOnlineStatus();
 
   const receiptRef = useRef<HTMLDivElement>(null);
+
+  const receiptState = (location.state || {}) as { companyId?: string; agencyId?: string };
 
   const primaryColor = companyInfo?.couleurPrimaire ?? '#8b3a2f';
   const secondaryColor = companyInfo?.couleurSecondaire ?? '#f59e0b';
@@ -113,7 +121,23 @@ const ReceiptEnLignePage: React.FC = () => {
       setNotFound(false);
       setLoadError('');
       try {
-        const { ref: resRef } = await resolveReservationById(slug, id);
+        let companyId = receiptState.companyId ?? readPendingReservationPointer()?.companyId;
+        let agencyId = receiptState.agencyId ?? readPendingReservationPointer()?.agencyId;
+        if (!companyId || !agencyId) {
+          const prSnap = await getDoc(doc(db, 'publicReservations', id));
+          if (prSnap.exists()) {
+            const p = prSnap.data() as Record<string, unknown>;
+            companyId = String(p.companyId ?? companyId ?? '');
+            agencyId = String(p.agencyId ?? agencyId ?? '');
+          }
+        }
+        if (!companyId || !agencyId) {
+          setLoadError('Impossible d’afficher le reçu. Retournez à l’accueil ou ouvrez le lien billet complet.');
+          setNotFound(true);
+          setLoading(false);
+          return;
+        }
+        const resRef = reservationNestedRef(db, companyId, agencyId, id);
         unsub = onSnapshot(resRef, (snap) => {
           if (!snap.exists()) {
             setNotFound(true);
@@ -137,7 +161,13 @@ const ReceiptEnLignePage: React.FC = () => {
             heure: (data.heure as string) ?? '',
             montant: Number(data.montant ?? data.montant_total ?? 0),
             referenceCode: data.referenceCode as string | undefined,
-            statut: data.statut as ReservationStatus | undefined,
+            statut: (data.status === 'payé' || data.status === 'paye'
+              ? (data.ticketValidatedAt ? 'confirme' : 'verification')
+              : data.status === 'en_attente'
+                ? 'en_attente_paiement'
+                : data.status === 'annulé' || data.status === 'annule'
+                  ? 'annule'
+                  : (data.statut as ReservationStatus | undefined)),
             canal: (data.canal as string) ?? 'en_ligne',
             seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
             createdAt: data.createdAt,
@@ -168,39 +198,72 @@ const ReceiptEnLignePage: React.FC = () => {
     return () => {
       if (unsub) unsub();
     };
-  }, [id, slug, isOnline, reloadKey]);
+  }, [id, slug, isOnline, reloadKey, receiptState.companyId, receiptState.agencyId]);
 
-  /* LOAD COMPANY */
+  // Backfill caisse digitale :
+  // Si la réservation est déjà en `preuve_recue`/`verification` mais qu’aucun document
+  // `companies/{companyId}/payments/{reservationId}` n’existe, on crée le paiement pending online.
   useEffect(() => {
-    if (!reservation?.companyId || companyInfo) return;
+    if (!reservation?.id) return;
+    if (!reservation?.companyId || !reservation?.agencyId) return;
+    const s = String(reservation.statut || '').toLowerCase();
+    if (!['preuve_recue', 'verification', 'verif', 'vérif'].some((k) => s.includes(k))) return;
 
-    const fetchCompany = async () => {
+    (async () => {
       try {
-        const snap = await getDoc(doc(db, 'companies', reservation.companyId));
-        if (!snap.exists()) return;
-        const d = snap.data() as any;
-        setCompanyInfo({
-          id: snap.id,
-          name: d.nom || d.name,
-          couleurPrimaire: d.couleurPrimaire || d.primaryColor,
-          couleurSecondaire: d.couleurSecondaire || d.secondaryColor,
-          logoUrl: d.logoUrl,
-          slug: d.slug,
-          telephone: d.telephone,
+        await ensurePendingOnlinePaymentFromReservation({
+          companyId: reservation.companyId,
+          agencyId: String(reservation.agencyId),
+          reservationId: reservation.id,
+          montant: Number(reservation.montant) || 0,
+          paymentMethodLabel: reservation.preuveVia ?? (reservation as any).modePaiement,
         });
-      } catch {
-        setLoadError(
-          !isOnline
-            ? 'Connexion indisponible. Impossible de charger les infos compagnie.'
-            : 'Erreur lors du chargement des informations de la compagnie.'
-        );
-      } finally {
-        setLoading(false);
+      } catch (e) {
+        // Backfill best-effort: on ne casse pas l’affichage du reçu.
+        console.warn('[ReceiptEnLignePage] ensurePendingOnlinePaymentFromReservation failed', e);
       }
-    };
+    })();
+  }, [reservation]);
 
-    fetchCompany();
-  }, [reservation?.companyId, companyInfo, isOnline]);
+  /* LOAD COMPANY — sessionStorage (même id) puis Firestore ; erreur bloquante si échec */
+  useEffect(() => {
+    if (!reservation?.companyId) return;
+
+    let cancelled = false;
+    setCompanyLoadError('');
+    setCompanyInfo(null);
+
+    (async () => {
+      try {
+        const r = await loadPublicCompanyInfoSessionThenFirestore(reservation.companyId);
+        if (cancelled) return;
+        if (!r.ok) {
+          setCompanyLoadError(r.message);
+          return;
+        }
+        const i = r.info;
+        setCompanyInfo({
+          id: i.id,
+          name: i.name,
+          couleurPrimaire: i.couleurPrimaire ?? i.primaryColor,
+          couleurSecondaire: i.couleurSecondaire ?? i.secondaryColor,
+          logoUrl: i.logoUrl,
+          slug: i.slug,
+          telephone: i.telephone,
+        });
+      } catch (e) {
+        if (!cancelled) {
+          setCompanyLoadError(
+            e instanceof Error ? e.message : 'Erreur lors du chargement des informations de la compagnie.'
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reservation?.companyId, reloadKey]);
 
   /* AGENCY name + coords (for itinéraire) */
   useEffect(() => {
@@ -320,6 +383,30 @@ const ReceiptEnLignePage: React.FC = () => {
           style={{ backgroundColor: primaryColor }}
         >
           Retour à l’accueil
+        </button>
+      </div>
+    );
+  }
+
+  if (companyLoadError) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen p-6">
+        <h1 className="text-xl font-semibold text-gray-800 mb-2">Informations compagnie indisponibles</h1>
+        <p className="text-gray-500 text-center mb-4 max-w-md">{companyLoadError}</p>
+        <button
+          type="button"
+          onClick={() => setReloadKey((v) => v + 1)}
+          className="px-4 py-2 rounded-lg font-medium text-white"
+          style={{ backgroundColor: primaryColor }}
+        >
+          Réessayer
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate(homePath)}
+          className="mt-3 px-4 py-2 rounded-lg text-sm text-gray-600 border border-gray-200 hover:bg-gray-50"
+        >
+          Retour à l&apos;accueil
         </button>
       </div>
     );

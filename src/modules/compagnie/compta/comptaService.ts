@@ -1,54 +1,42 @@
 /**
  * Module Comptabilité TELIYA — lecture des mouvements et calculs (Grand livre, Balance, Compte de résultat).
- * Utilise les collections financialAccounts et financialMovements.
+ * Utilise les comptes + journal ledger financialTransactions.
  */
 
-import {
-  collection,
-  query,
-  orderBy,
-  getDocs,
-  where,
-  limit,
-  Timestamp,
-} from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+import { Timestamp } from "firebase/firestore";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
+import { listFinancialTransactionsByPeriod } from "@/modules/compagnie/treasury/financialTransactions";
 import type { ComptaMovementRow, BalanceLine, CompteDeResultatData } from "./comptaTypes";
 
-const MOVEMENTS_COLLECTION = "financialMovements";
 const MAX_MOVEMENTS = 2000;
-
-function movementsRef(companyId: string) {
-  return collection(db, `companies/${companyId}/${MOVEMENTS_COLLECTION}`);
-}
 
 /** Charge les mouvements financiers (optionnel: filtre par dates). */
 export async function listMovements(
   companyId: string,
   options?: { dateFrom?: Date; dateTo?: Date; accountId?: string }
 ): Promise<ComptaMovementRow[]> {
-  const constraints: Parameters<typeof query>[1][] = [orderBy("performedAt", "asc"), limit(MAX_MOVEMENTS)];
-  if (options?.dateFrom) constraints.unshift(where("performedAt", ">=", Timestamp.fromDate(options.dateFrom)));
-  if (options?.dateTo) constraints.unshift(where("performedAt", "<=", Timestamp.fromDate(options.dateTo)));
-
-  const q = query(movementsRef(companyId), ...constraints);
-  const snap = await getDocs(q);
-  let rows: ComptaMovementRow[] = snap.docs.map((d) => {
-    const data = d.data();
+  const start = options?.dateFrom ?? new Date(0);
+  const end = options?.dateTo ?? new Date("2100-01-01T00:00:00.000Z");
+  const tx = await listFinancialTransactionsByPeriod(
+    companyId,
+    Timestamp.fromDate(start),
+    Timestamp.fromDate(end)
+  );
+  let rows: ComptaMovementRow[] = tx.slice(0, MAX_MOVEMENTS).map((d) => {
+    const amountAbs = Math.abs(Number(d.amount ?? 0));
     return {
       id: d.id,
-      performedAt: data.performedAt ?? Timestamp.now(),
-      fromAccountId: data.fromAccountId ?? null,
-      toAccountId: data.toAccountId ?? null,
-      amount: Number(data.amount ?? 0),
-      currency: String(data.currency ?? ""),
-      movementType: data.movementType ?? "",
-      referenceType: data.referenceType ?? "",
-      referenceId: data.referenceId ?? "",
-      entryType: data.entryType === "credit" ? "credit" : "debit",
-      agencyId: data.agencyId ?? "",
-      notes: data.notes ?? null,
+      performedAt: d.performedAt ?? Timestamp.now(),
+      fromAccountId: d.debitAccountId ?? null,
+      toAccountId: d.creditAccountId ?? null,
+      amount: amountAbs,
+      currency: String(d.currency ?? ""),
+      movementType: String(d.type ?? ""),
+      referenceType: String(d.referenceType ?? ""),
+      referenceId: String(d.referenceId ?? ""),
+      entryType: d.type === "payment_received" ? "credit" : "debit",
+      agencyId: String(d.agencyId ?? ""),
+      notes: (d.metadata?.notes as string | null | undefined) ?? null,
     };
   });
 
@@ -146,8 +134,8 @@ export async function getCompteDeResultat(
 ): Promise<CompteDeResultatData> {
   const movements = await listMovements(companyId, { dateFrom, dateTo });
 
-  const revenueTypes = ["revenue_cash", "revenue_online"];
-  const chargeTypes = ["expense_payment", "payable_payment", "salary_payment"];
+  const revenueTypes = ["payment_received"];
+  const chargeTypes = ["expense", "refund"];
 
   const byTypeRevenus: Record<string, number> = {};
   const byTypeCharges: Record<string, number> = {};

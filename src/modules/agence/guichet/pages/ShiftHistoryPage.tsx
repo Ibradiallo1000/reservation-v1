@@ -17,6 +17,7 @@ import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Download, Printer, Eye, X, ShieldCheck, Stamp } from 'lucide-react';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { OperationalHintRow } from '@/modules/agence/components/OperationalDataHint';
 
 /* ----------------------- Types ----------------------- */
 type ValidStamp = {
@@ -275,6 +276,10 @@ const ShiftHistoryPage: React.FC = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
+        <OperationalHintRow>
+          Montants et billets : <strong>sessions</strong> et <strong>réservations</strong> guichet —{" "}
+          <strong>données terrain, non comptabilisées</strong> (pas le grand livre).
+        </OperationalHintRow>
         <div className="bg-white rounded-xl shadow border overflow-hidden">
           {/* Entête tableau */}
           <div className="px-4 py-3 flex items-center justify-between border-b">
@@ -306,7 +311,7 @@ const ShiftHistoryPage: React.FC = () => {
                   <th className="px-3 py-2 text-left">Session</th>
                   <th className="px-3 py-2 text-left">Statut</th>
                   <th className="px-3 py-2 text-right">Billets</th>
-                  <th className="px-3 py-2 text-right">Montant</th>
+                  <th className="px-3 py-2 text-right">Montant (terrain)</th>
                   <th className="px-3 py-2 text-right">Dépôt</th>
                   <th className="px-3 py-2 text-right">Écart</th>
                   <th className="px-3 py-2 text-left">Cpta</th>
@@ -507,7 +512,7 @@ const ShiftHistoryPage: React.FC = () => {
                               <th className="px-3 py-2 text-left">Client</th>
                               <th className="px-3 py-2 text-left">Tél.</th>
                               <th className="px-3 py-2 text-right">Billets</th>
-                              <th className="px-3 py-2 text-right">Montant</th>
+                              <th className="px-3 py-2 text-right">Montant (terrain)</th>
                               <th className="px-3 py-2 text-left">Paiement</th>
                               <th className="px-3 py-2 text-left">Réf.</th>
                             </tr>

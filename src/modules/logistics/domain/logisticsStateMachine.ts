@@ -6,9 +6,9 @@
 import type { ShipmentStatus } from "./shipment.types";
 
 /** Allowed transitions: from -> to[] */
-/** Phase 1: CREATED -> ARRIVED allowed for manual simulation when no batch/vehicle yet */
+/** Flux courrier unique : CREATED → IN_TRANSIT → ARRIVED → … */
 const TRANSITIONS: Record<ShipmentStatus, readonly ShipmentStatus[]> = {
-  CREATED: ["STORED", "CANCELLED", "ARRIVED"],
+  CREATED: ["STORED", "CANCELLED", "IN_TRANSIT"],
   STORED: ["ASSIGNED", "CANCELLED"],
   ASSIGNED: ["IN_TRANSIT"],
   IN_TRANSIT: ["ARRIVED", "LOST"],

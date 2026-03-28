@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { SectionCard, ActionButton } from "@/ui";
+import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
 import { createExpense, EXPENSE_CATEGORIES } from "@/modules/compagnie/treasury/expenses";
 import { getAccount } from "@/modules/compagnie/treasury/financialAccounts";
+import { getAgencyOperationalAvailableCash } from "@/modules/agence/comptabilite/agencyCashAuditService";
 import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
 import { db } from "@/firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
@@ -32,6 +33,7 @@ export default function AgencyTreasuryNewOperationPage() {
   const treasuryBasePath = pathname.startsWith("/agence/comptabilite/treasury")
     ? "/agence/comptabilite/treasury"
     : "/agence/treasury";
+  const isStandaloneComptaTreasury = pathname.startsWith("/agence/comptabilite/treasury");
 
   const [operation, setOperation] = useState<OperationKind>("expense");
   const [loading, setLoading] = useState(true);
@@ -46,6 +48,7 @@ export default function AgencyTreasuryNewOperationPage() {
     currentBalance: number;
     currency: string;
   } | null>(null);
+  const [availableCash, setAvailableCash] = useState<number>(0);
 
   useEffect(() => {
     if (!companyId) {
@@ -58,9 +61,16 @@ export default function AgencyTreasuryNewOperationPage() {
       setLoading(false);
       return;
     }
-    getAccount(companyId, agencyCashAccountId(defaultAgencyId))
-      .then((cashAccount) => {
+    Promise.all([
+      getAccount(companyId, agencyCashAccountId(defaultAgencyId)),
+      getAgencyOperationalAvailableCash(companyId, defaultAgencyId).catch(() => null),
+    ])
+      .then(([cashAccount, ops]) => {
         setAgencyCashAccount(cashAccount);
+        const mirror = Number(cashAccount?.currentBalance ?? 0);
+        const fromLedger = Number(ops?.availableCash ?? 0);
+        /** Même source que createExpense (financialAccounts) ; le solde ledger seul peut rester à 0 si miroir désynchronisé. */
+        setAvailableCash(cashAccount != null ? mirror : fromLedger);
       })
       .finally(() => setLoading(false));
   }, [companyId, defaultAgencyId]);
@@ -108,7 +118,7 @@ export default function AgencyTreasuryNewOperationPage() {
       toast.error("Description et montant valides requis.");
       return;
     }
-    if (numericAmount > agencyCashAccount.currentBalance) {
+    if (numericAmount > availableCash) {
       toast.error("Montant supérieur au cash disponible en caisse.");
       return;
     }
@@ -135,11 +145,16 @@ export default function AgencyTreasuryNewOperationPage() {
   };
 
   if (!companyId) {
-    return <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
+    const missing = <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
+    return isStandaloneComptaTreasury ? (
+      <StandardLayoutWrapper className="min-w-0">{missing}</StandardLayoutWrapper>
+    ) : (
+      missing
+    );
   }
 
-  return (
-    <div className="space-y-6">
+  const body = (
+    <div className="min-w-0 space-y-6">
       <SectionCard title="Nouvelle opération de trésorerie agence" icon={PlusCircle}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <button
@@ -186,7 +201,7 @@ export default function AgencyTreasuryNewOperationPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Source (caisse agence)</label>
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
                   {agencyCashAccount
-                    ? `Caisse agence - ${formatCurrency(agencyCashAccount.currentBalance, agencyCashAccount.currency)}`
+                    ? `Caisse agence : ${formatCurrency(availableCash, agencyCashAccount.currency)}`
                     : "Aucune caisse agence configurée"}
                 </div>
               </div>
@@ -217,7 +232,7 @@ export default function AgencyTreasuryNewOperationPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Disponible en caisse: {formatCurrency(agencyCashAccount?.currentBalance ?? 0, agencyCashAccount?.currency ?? "XOF")}
+                  Disponible en caisse: {formatCurrency(availableCash, agencyCashAccount?.currency ?? "XOF")}
                 </p>
               </div>
             </div>
@@ -258,5 +273,11 @@ export default function AgencyTreasuryNewOperationPage() {
         </SectionCard>
       )}
     </div>
+  );
+
+  return isStandaloneComptaTreasury ? (
+    <StandardLayoutWrapper className="min-w-0">{body}</StandardLayoutWrapper>
+  ) : (
+    body
   );
 }

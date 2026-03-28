@@ -1,7 +1,7 @@
 // src/shared/layout/InternalLayout.tsx
 // Unified layout for ALL internal back-office spaces.
 // Automatically switches between sidebar (>4 items) and horizontal tabs (<=4).
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   NavLink,
   Outlet,
@@ -11,6 +11,7 @@ import { LogOut, Menu, X, User, PanelLeftClose, PanelLeftOpen, ChevronDown, Chev
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DESIGN } from "@/app/design-system";
+import { buildAgencyChromeStyleVars } from "@/shared/theme/agencySurfaceGradients";
 
 /* ================================================================
    PUBLIC TYPES
@@ -256,6 +257,11 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
     return initial;
   });
 
+  const chromeStyle = useMemo(
+    () => buildAgencyChromeStyleVars(primary, secondary, isDark),
+    [primary, secondary, isDark]
+  );
+
   useEffect(() => {
     sections.forEach((s) => {
       if (s.children?.length && isSectionOrChildActive(pathname, s)) {
@@ -458,7 +464,10 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   );
 
   return (
-    <div className="h-screen overflow-hidden bg-gray-50 dark:bg-slate-900">
+    <div
+      className="h-screen overflow-hidden"
+      style={{ ...chromeStyle, backgroundImage: "var(--agency-gradient-page)" }}
+    >
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
@@ -475,7 +484,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
             DESIGN.zIndex.sidebar,
             collapsed ? DESIGN.layout.sidebarWidthCollapsed : DESIGN.layout.sidebarWidth,
           )}
-          style={{ backgroundColor: primary }}
+          style={{ backgroundImage: "var(--agency-gradient-sidebar)" }}
         >
           {sidebarContent}
         </aside>
@@ -487,7 +496,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
             DESIGN.zIndex.sidebar,
             mobileOpen ? "translate-x-0" : "-translate-x-full",
           )}
-          style={{ backgroundColor: primary }}
+          style={{ backgroundImage: "var(--agency-gradient-sidebar)" }}
         >
           <button
             onClick={() => setMobileOpen(false)}
@@ -501,17 +510,19 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         {/* Main content */}
         <div
           className={cn(
-            "flex-1 flex flex-col min-w-0 transition-all duration-300",
+            "flex min-w-0 flex-1 flex-col transition-all duration-300",
             collapsed ? "lg:ml-20" : "lg:ml-64",
           )}
+          style={{ backgroundImage: "var(--agency-gradient-page)" }}
         >
           {/* Header */}
           <header
             className={cn(
-              "sticky top-0 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 shadow-sm flex items-center px-3 sm:px-4 md:px-6 gap-2 sm:gap-4 min-w-0",
+              "sticky top-0 flex min-w-0 items-center gap-2 border-b border-gray-200/60 px-3 shadow-sm dark:border-slate-600/50 sm:gap-4 sm:px-4 md:px-6",
               DESIGN.zIndex.header,
               DESIGN.layout.headerHeight,
             )}
+            style={{ backgroundImage: "var(--agency-gradient-header)" }}
           >
             <button
               onClick={() => setMobileOpen(true)}
@@ -588,15 +599,23 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
   mainClassName,
 }) => {
   const { isDark, cycleTheme } = useTheme();
+  const chromeStyle = useMemo(
+    () => buildAgencyChromeStyleVars(primary, secondary, isDark),
+    [primary, secondary, isDark]
+  );
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-slate-900">
+    <div
+      className="min-h-screen"
+      style={{ ...chromeStyle, backgroundImage: "var(--agency-gradient-page)" }}
+    >
       {/* Header */}
       <header
         className={cn(
-          "sticky top-0 border-b border-gray-200 dark:border-slate-700 bg-white/90 dark:bg-slate-800/90 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:supports-[backdrop-filter]:bg-slate-800/70",
+          "sticky top-0 border-b border-gray-200/60 dark:border-slate-600/50",
           DESIGN.zIndex.header,
         )}
+        style={{ backgroundImage: "var(--agency-gradient-header)" }}
       >
         <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3")}>
           {/* Brand */}
@@ -666,7 +685,10 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
         </div>
 
         {/* Tab navigation */}
-        <div className="border-t border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <div
+          className="border-t border-gray-200/60 dark:border-slate-600/50"
+          style={{ backgroundImage: "var(--agency-gradient-subheader)" }}
+        >
           <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-2")}>
             <div className="flex flex-wrap gap-2 overflow-x-auto pb-1 -mb-1 scrollbar-thin">
               {sections.map(({ label, icon: Icon, path, badge, end }) => (

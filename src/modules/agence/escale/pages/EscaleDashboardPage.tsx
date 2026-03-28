@@ -20,7 +20,12 @@ import {
 } from "@/modules/compagnie/cash/cashService";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
 import { listTripInstancesByRouteIdAndDate } from "@/modules/compagnie/tripInstances/tripInstanceService";
-import { getRemainingSeats } from "@/modules/compagnie/tripInstances/segmentOccupancyService";
+import {
+  tripInstanceSeatCapacity,
+  tripInstanceDeparture,
+  tripInstanceArrival,
+  tripInstanceTime,
+} from "@/modules/compagnie/tripInstances/tripInstanceTypes";
 import {
   getTripProgress,
   getLastProgressFromList,
@@ -38,6 +43,7 @@ import { parseIndexUrlFromError } from "@/utils/firestoreErrorHandler";
 import { FirestoreIndexLink } from "@/shared/components/FirestoreIndexLink";
 import { DayFilterBar } from "@/shared/date/DayFilterBar";
 import { getSelectedDateStr, toLocalDateStr, type DayPreset } from "@/shared/date/dayFilterUtils";
+import { resolveAgencyTimezone } from "@/shared/date/dateUtilsTz";
 
 function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
   const [h, m] = timeStr.split(":").map(Number);
@@ -57,7 +63,6 @@ export default function EscaleDashboardPage() {
   const [route, setRoute] = useState<RouteDocWithId | null>(null);
   const [stop, setStop] = useState<RouteStopDocWithId | null>(null);
   const [instances, setInstances] = useState<TripInstanceDocWithId[]>([]);
-  const [remainingByInstanceId, setRemainingByInstanceId] = useState<Record<string, number>>({});
   const [progressStatusByInstanceId, setProgressStatusByInstanceId] = useState<
     Record<string, "en_route" | "arrived" | "departed">
   >({});
@@ -113,7 +118,8 @@ export default function EscaleDashboardPage() {
         setLoading(false);
         return;
       }
-      const ad = agencySnap.data() as { type?: string; routeId?: string; stopOrder?: number };
+      const ad = agencySnap.data() as { type?: string; routeId?: string; stopOrder?: number; timezone?: string };
+      const escaleTz = resolveAgencyTimezone(ad);
       const typ = (ad.type ?? "principale").toLowerCase();
       const routeId = ad.routeId ?? null;
       const stopOrder = ad.stopOrder ?? null;
@@ -145,11 +151,10 @@ export default function EscaleDashboardPage() {
 
       const [list, total, lastClosure] = await Promise.all([
         listTripInstancesByRouteIdAndDate(user.companyId, routeId, selectedDateStr),
-        getCashTotalByLocation(user.companyId, user.agencyId, selectedDateStr),
+        getCashTotalByLocation(user.companyId, user.agencyId, selectedDateStr, escaleTz),
         getLastClosureByLocation(user.companyId, user.agencyId),
       ]);
-      const txList = await getCashTransactionsByLocation(user.companyId, user.agencyId, selectedDateStr);
-      const remainingById: Record<string, number> = {};
+      const txList = await getCashTransactionsByLocation(user.companyId, user.agencyId, selectedDateStr, escaleTz);
       const progressById: Record<string, "en_route" | "arrived" | "departed"> = {};
       const lastProgressById: Record<string, { city: string; departed: boolean; delayMinutes?: number | null } | null> = {};
       const progressAtStopById: Record<string, ProgressStopDocWithId | null> = {};
@@ -157,7 +162,6 @@ export default function EscaleDashboardPage() {
       const escaleStopOrder = stopOrder ?? null;
       await Promise.all(
         list.map(async (ti) => {
-          remainingById[ti.id] = await getRemainingSeats(user.companyId, ti.id);
           if (escaleStopOrder != null) {
             let progressList = await getTripProgress(user.companyId, ti.id);
             await ensureAutoDepartForStopIfNeeded(user.companyId, ti.id, escaleStopOrder);
@@ -180,7 +184,6 @@ export default function EscaleDashboardPage() {
       );
       setInstances(list);
       setOriginDepartedByInstanceId(originDepartedById);
-      setRemainingByInstanceId(remainingById);
       setProgressStatusByInstanceId(progressById);
       setLastProgressByInstanceId(lastProgressById);
       setProgressAtStopByInstanceId(progressAtStopById);
@@ -194,7 +197,6 @@ export default function EscaleDashboardPage() {
       const isPermission = typeof msg === "string" && (msg.includes("Missing or insufficient") || (e as { code?: string })?.code === "permission-denied");
       setError(isPermission ? "Permissions Firestore insuffisantes. Vérifiez que les règles incluent les rôles escale et que l’utilisateur a un document users/{uid} avec role et agencyId." : msg);
       setInstances([]);
-      setRemainingByInstanceId({});
       setProgressStatusByInstanceId({});
       setLastProgressByInstanceId({});
       setProgressAtStopByInstanceId({});
@@ -253,14 +255,13 @@ export default function EscaleDashboardPage() {
   );
 
   const rows = instances.map((ti) => {
-    const capacity = (ti as { seatCapacity?: number; capacitySeats?: number }).seatCapacity ?? (ti as { capacitySeats?: number }).capacitySeats ?? 0;
-    const reserved = (ti as { reservedSeats?: number }).reservedSeats ?? 0;
-    const remaining = remainingByInstanceId[ti.id] ?? capacity - reserved;
-    const departureTime = (ti as { departureTime?: string }).departureTime ?? "";
+    const capacity = tripInstanceSeatCapacity(ti);
+    const remaining = Math.max(0, Number((ti as { remainingSeats?: number }).remainingSeats ?? 0));
+    const departureTime = tripInstanceTime(ti);
     const offsetMin = stop?.estimatedArrivalOffsetMinutes ?? 0;
-    const timeAtStop = addMinutesToTime(departureTime, offsetMin);
-    const origin = (ti as { departureCity?: string; routeDeparture?: string }).departureCity ?? (ti as { routeDeparture?: string }).routeDeparture ?? "";
-    const dest = (ti as { arrivalCity?: string; routeArrival?: string }).arrivalCity ?? (ti as { routeArrival?: string }).routeArrival ?? "";
+    const timeAtStop = addMinutesToTime(departureTime || "00:00", offsetMin);
+    const origin = tripInstanceDeparture(ti);
+    const dest = tripInstanceArrival(ti);
     const progressStatus = progressStatusByInstanceId[ti.id] ?? "en_route";
     const lastProgress = lastProgressByInstanceId[ti.id] ?? null;
     const progressAtStop = progressAtStopByInstanceId[ti.id] ?? null;
@@ -606,6 +607,7 @@ export default function EscaleDashboardPage() {
             createdBy={user?.uid ?? ""}
             formatCurrency={money}
             date={selectedDateStr}
+            ianaTimezone={resolveAgencyTimezone({ timezone: (user as { agencyTimezone?: string })?.agencyTimezone })}
           />
         </div>
       )}

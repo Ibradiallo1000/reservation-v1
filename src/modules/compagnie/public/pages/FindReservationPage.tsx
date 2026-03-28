@@ -12,6 +12,7 @@ import { Phone, Calendar, MapPin } from 'lucide-react';
 import type { Company } from '@/types/companyTypes';
 import { normalizePhone } from '@/utils/phoneUtils';
 import { getPublicPathBase } from '../utils/subdomain';
+import { isReservationAwaitingPayment } from '../utils/onlineReservationStatus';
 
 const formatCity = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s);
 
@@ -28,6 +29,7 @@ type ReservationRow = {
   heure?: string;
   montant?: number;
   statut?: string;
+  status?: string;
   createdAt?: Timestamp | { seconds: number };
 };
 
@@ -55,7 +57,7 @@ function StatusBadge({ statut, t }: { statut?: string; t: (key: string) => strin
   const s = (statut || '').toLowerCase();
   let bg = 'bg-gray-100 text-gray-800';
   let text = statut || '—';
-  if (s === 'en_attente_paiement') {
+  if (s === 'en_attente_paiement' || s === 'en_attente') {
     bg = 'bg-orange-100 text-orange-800';
     text = t('ticketStatusAwaitingPayment');
   } else if (s === 'preuve_recue') {
@@ -136,6 +138,7 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
             heure: r.heure as string,
             montant: (r.montant as number) ?? (r.montant_total as number),
             statut: r.statut as string,
+            status: r.status as string | undefined,
             createdAt,
           });
         }
@@ -246,15 +249,24 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
                     <div className="text-lg font-bold" style={{ color: primaryColor }}>
                       {money(r.montant ?? 0)}
                     </div>
-                    <StatusBadge statut={r.statut} t={t} />
+                    <StatusBadge statut={r.status || r.statut} t={t} />
                   </div>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-gray-100">
-                  {(r.statut || '').toLowerCase() === 'en_attente_paiement' && (
+                  {(isReservationAwaitingPayment(r.status) ||
+                    ['en_attente', 'en_attente_paiement'].includes(String(r.statut || '').toLowerCase())) && (
                     <button
                       type="button"
-                      onClick={() => navigate(pathBase ? `/${pathBase}/upload-preuve/${r.id}` : `/upload-preuve/${r.id}`, { replace: false })}
+                      onClick={() =>
+                        navigate(
+                          pathBase ? `/${pathBase}/upload-preuve/${r.id}` : `/upload-preuve/${r.id}`,
+                          {
+                            replace: false,
+                            state: { companyId: r.companyId, agencyId: r.agencyId },
+                          }
+                        )
+                      }
                       className="w-full rounded-xl py-2.5 text-sm font-semibold text-white transition hover:opacity-95"
                       style={{
                         background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`,

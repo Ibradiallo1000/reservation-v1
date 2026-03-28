@@ -3,7 +3,6 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, collection, query, where } from 'firebase/firestore';
-import { resolveReservationById } from '../utils/resolveReservation';
 import { db } from '@/firebaseConfig';
 import { Check, Phone } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
@@ -14,6 +13,11 @@ import { fr } from 'date-fns/locale';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { getDisplayPhone } from '@/utils/phoneUtils';
 import { getPublicPathBase } from '../utils/subdomain';
+import { isReservationAwaitingPayment } from '../utils/onlineReservationStatus';
+import {
+  fetchReservationFromNestedPath,
+  readPendingReservationPointer,
+} from '../utils/pendingReservation';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import 'react-lazy-load-image-component/src/effects/blur.css';
 
@@ -87,9 +91,11 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
     companyId?: string;
     agencyId?: string;
   };
-  const reservationId = state.reservationId ?? reservationIdFromPath;
-  const companyId = state.companyId;
-  const agencyId = state.agencyId;
+  const pendingStored = readPendingReservationPointer();
+  const reservationId =
+    state.reservationId ?? reservationIdFromPath ?? pendingStored?.reservationId;
+  let companyId = state.companyId ?? pendingStored?.companyId;
+  let agencyId = state.agencyId ?? pendingStored?.agencyId;
 
   const [reservation, setReservation] = useState<ReservationRow | null>(null);
   const [company, setCompany] = useState<CompanyInfo | null>(null);
@@ -109,17 +115,29 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
     setLoading(true);
     setError(null);
     try {
-      const r = await resolveReservationById(slug, reservationId);
-      const cid = r.companyId;
-      const aid = r.agencyId;
-      const snap = r.snapshot;
+      let cid = companyId ?? '';
+      let aid = agencyId ?? '';
+      if (!cid || !aid) {
+        const prSnap = await getDoc(doc(db, 'publicReservations', reservationId));
+        if (prSnap.exists()) {
+          const p = prSnap.data() as Record<string, unknown>;
+          cid = String(p.companyId ?? cid);
+          aid = String(p.agencyId ?? aid);
+        }
+      }
+      if (!cid || !aid) {
+        setError('Données de réservation manquantes. Retournez à l’accueil ou retrouvez votre réservation.');
+        setLoading(false);
+        return;
+      }
+
+      const snap = await fetchReservationFromNestedPath(db, cid, aid, reservationId);
       if (!snap) {
         setError('Réservation introuvable. Utilisez le lien reçu par email ou le lien de votre billet.');
         setLoading(false);
         return;
       }
-      const statut = String(snap.statut || '').toLowerCase();
-      if (statut !== 'en_attente_paiement') {
+      if (!isReservationAwaitingPayment(snap.status)) {
         setError('Cette réservation n’est plus en attente de paiement.');
         setLoading(false);
         return;
@@ -142,7 +160,7 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         heure: toStr(snap.heure),
         montant: Number(snap.montant ?? (snap as any).montant_total ?? 0),
         seatsGo: Number(snap.seatsGo ?? 1),
-        statut: toStr(snap.statut),
+        statut: toStr(snap.status),
       });
 
       const compSnap = await getDoc(doc(db, 'companies', cid));
@@ -175,6 +193,13 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         }
       });
       setPaymentMethods(pms);
+      console.log('[PaymentMethodPage] reservation', {
+        id: reservationId,
+        statut: toStr(snap.statut),
+        montant: Number(snap.montant ?? 0),
+      });
+      console.log('[PaymentMethodPage] company', compSnap.exists() ? { id: compSnap.id } : null);
+      console.log('[PaymentMethodPage] paymentMethods keys', Object.keys(pms));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur de chargement.');
     } finally {
@@ -230,11 +255,6 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       slug: company.slug,
     };
 
-    try {
-      sessionStorage.setItem('reservationDraft', JSON.stringify(draft));
-      sessionStorage.setItem('companyInfo', JSON.stringify(companyInfo));
-    } catch { /* quota / private */ }
-
     const ussd = method.ussdPattern
       ?.replace('MERCHANT', method.merchantNumber || '')
       .replace('AMOUNT', String(reservation.montant));
@@ -247,7 +267,13 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       } catch { /* ignore */ }
       navigate(uploadPreuvePath, {
         replace: false,
-        state: { draft, companyInfo, paymentMethodKey: key },
+        state: {
+          draft,
+          companyInfo,
+          paymentMethodKey: key,
+          companyId: reservation.companyId,
+          agencyId: reservation.agencyId,
+        },
       });
       window.location.href = `tel:${encodeURIComponent(ussd)}`;
       return;
@@ -255,7 +281,13 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
 
     navigate(uploadPreuvePath, {
       replace: false,
-      state: { draft, companyInfo, paymentMethodKey: key },
+      state: {
+        draft,
+        companyInfo,
+        paymentMethodKey: key,
+        companyId: reservation.companyId,
+        agencyId: reservation.agencyId,
+      },
     });
 
     if (method.url) {

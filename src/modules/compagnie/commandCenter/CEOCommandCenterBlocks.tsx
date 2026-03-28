@@ -15,8 +15,10 @@ export type BlocksAtoEData = {
   globalCourierRevenue: number;
   globalTotalRevenue: number;
   pendingRevenue: number;
-  validatedAgencyAmount: number;
-  centralisedAmount: number;
+  /** Solde mobile money (ledger) — obligatoire, pas d’agrégat de secours. */
+  ledgerMobileMoneyAmount: number;
+  /** Solde banque / agrégat compagnie (ledger ou comptes entreprise). */
+  ledgerBankOrCompanyAmount: number;
   financialPosition: { netPosition: number };
   pendingPayablesAmount: number;
   pendingPayablesCount: number;
@@ -62,8 +64,8 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
     globalCourierRevenue,
     globalTotalRevenue,
     pendingRevenue,
-    validatedAgencyAmount,
-    centralisedAmount,
+    ledgerMobileMoneyAmount,
+    ledgerBankOrCompanyAmount,
     financialPosition,
     pendingPayablesAmount,
     pendingPayablesCount,
@@ -166,14 +168,14 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
             </div>
           </div>
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
-            <div className="text-xs text-gray-700">Validé agence</div>
-            <div className="text-base font-bold text-emerald-700">{money(validatedAgencyAmount)}</div>
-            <div className="text-[11px] text-slate-500">Sessions validées par le comptable agence.</div>
+            <div className="text-xs text-gray-700">Mobile money (ledger)</div>
+            <div className="text-base font-bold text-emerald-700">{money(ledgerMobileMoneyAmount)}</div>
+            <div className="text-[11px] text-slate-500">Solde comptes type=mobile_money (accounts).</div>
           </div>
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
-            <div className="text-xs text-gray-700">Centralisé (banque / mobile money)</div>
-            <div className="text-base font-bold text-slate-900">{money(centralisedAmount)}</div>
-            <div className="text-[11px] text-slate-500">Soldes des comptes entreprise.</div>
+            <div className="text-xs text-gray-700">Banque (ledger)</div>
+            <div className="text-base font-bold text-slate-900">{money(ledgerBankOrCompanyAmount)}</div>
+            <div className="text-[11px] text-slate-500">Comptes type=bank (niveau compagnie).</div>
           </div>
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
             <div className="text-xs text-gray-700">Engagements fournisseurs</div>

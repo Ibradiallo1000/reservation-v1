@@ -5,6 +5,7 @@ import {
 import { db } from '@/firebaseConfig';
 import { ShieldCheck, Clock4 } from 'lucide-react';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { OperationalSourceBadge } from '@/modules/agence/components/OperationalDataHint';
 
 type AgencyTheme = { primary: string; secondary: string };
 type ShiftStatus = 'pending'|'active'|'paused'|'closed'|'validated';
@@ -138,10 +139,14 @@ export const ShiftsControlWidget: React.FC<{
 
   return (
     <div className="space-y-3">
-      <div className="text-lg font-bold flex items-center gap-2">
+      <div className="text-lg font-bold flex flex-wrap items-center gap-2">
         <Clock4 className="h-5 w-5" />
         Contrôle des postes
+        <OperationalSourceBadge />
       </div>
+      <p className="text-xs text-gray-500">
+        Montants temps réel : <strong>réservations</strong> du poste — non comptabilisés.
+      </p>
 
       <div className="rounded-xl border bg-white p-4 shadow-sm">
         {rows.length === 0 ? (
@@ -167,7 +172,7 @@ export const ShiftsControlWidget: React.FC<{
                       <div className="text-gray-600">
                         {liveStat ? (
                           <>
-                            Billets : <b>{liveStat.tickets}</b> • Montant : <b>{money(liveStat.amount)}</b>
+                            Billets : <b>{liveStat.tickets}</b> • Montant terrain : <b>{money(liveStat.amount)}</b>
                           </>
                         ) : (
                           'Calcul en cours…'

@@ -55,7 +55,11 @@ const cx = (...xs: (string | false | null | undefined)[]) =>
   xs.filter(Boolean).join(" ");
 
 /* ------------------------------ Page ----------------------------------- */
-const CompagnieReservationsPage: React.FC = () => {
+type CompagnieReservationsPageProps = {
+  embedded?: boolean;
+};
+
+const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ embedded = false }) => {
   const { user, company } = useAuth();
   const money = useFormatCurrency();
   const { companyId: companyIdFromUrl } = useParams();
@@ -290,37 +294,39 @@ const CompagnieReservationsPage: React.FC = () => {
   /* ----------------------------- Rendering ------------------------------ */
   if (!companyId) {
     return (
-      <StandardLayoutWrapper>
+      <div>
         <PageHeader title="Réservations" />
-        <p className="text-sm text-muted-foreground">
-          Impossible d'identifier la compagnie (companyId manquant).
-        </p>
-      </StandardLayoutWrapper>
+        <p className="text-sm text-muted-foreground">Impossible d'identifier la compagnie (companyId manquant).</p>
+      </div>
     );
   }
 
   const headerActions = (
     <>
-      <PeriodFilterBar
-        period={period}
-        customStart={customStart || undefined}
-        customEnd={customEnd || undefined}
-        onPeriodChange={(kind, start, end) => {
-          setPeriod(kind);
-          setCustomStart(start ?? "");
-          setCustomEnd(end ?? "");
-          setCurrentPage(1);
-          setSelectedAgencyId(null);
-        }}
-      />
-      <button
-        onClick={() => setShowFilters((s) => !s)}
-        className="ml-2 flex items-center px-3 py-1 rounded-full text-sm border bg-gray-200 text-gray-800 hover:bg-gray-300"
-        title="Filtres & période personnalisée"
-      >
-        <FaFilter className="mr-2" />
-        Filtres
-      </button>
+      {!embedded && (
+        <>
+          <PeriodFilterBar
+            period={period}
+            customStart={customStart || undefined}
+            customEnd={customEnd || undefined}
+            onPeriodChange={(kind, start, end) => {
+              setPeriod(kind);
+              setCustomStart(start ?? "");
+              setCustomEnd(end ?? "");
+              setCurrentPage(1);
+              setSelectedAgencyId(null);
+            }}
+          />
+          <button
+            onClick={() => setShowFilters((s) => !s)}
+            className="ml-2 flex items-center px-3 py-1 rounded-full text-sm border bg-gray-200 text-gray-800 hover:bg-gray-300"
+            title="Filtres & période personnalisée"
+          >
+            <FaFilter className="mr-2" />
+            Filtres
+          </button>
+        </>
+      )}
       {selectedAgencyId && (
         <>
           <button
@@ -348,13 +354,15 @@ const CompagnieReservationsPage: React.FC = () => {
     { label: "Réservations" },
   ];
 
-  return (
-    <StandardLayoutWrapper>
+  const content = (
+    <>
       <PageHeader
-        title={`Réservations — ${label}`}
+        title={embedded ? "Réservations du réseau" : "Réservations"}
         breadcrumb={breadcrumb}
         subtitle={selectedAgencyId ? findAgencyDisplay(selectedAgencyId) : undefined}
         right={headerActions}
+        primaryColorVar=""
+        titleClassName="text-gray-900 dark:text-white"
       />
         {/* Filtres détails (départ, arrivée, canal) — affichés quand une agence est sélectionnée */}
         {showFilters && selectedAgencyId && (
@@ -417,6 +425,7 @@ const CompagnieReservationsPage: React.FC = () => {
                 const guichet = group.reservations.filter((r) => r.canal === "guichet").length;
                 const enLigne = billets - guichet;
                 const pGuichet = billets ? Math.round((guichet / billets) * 100) : 0;
+                const pEnLigne = billets ? 100 - pGuichet : 0;
                 const todayStart = getStartOfDayBamako();
                 const todayEnd = getEndOfDayBamako();
                 const hasActivityToday = group.reservations.some(
@@ -500,7 +509,7 @@ const CompagnieReservationsPage: React.FC = () => {
                       </div>
                       <div className="flex justify-between text-xs text-gray-600 mt-1">
                         <span>En ligne</span>
-                        <span>{enLigne}/{billets} ({100 - pGuichet}%)</span>
+                        <span>{enLigne}/{billets} ({pEnLigne}%)</span>
                       </div>
                     </div>
                   </div>
@@ -629,8 +638,10 @@ const CompagnieReservationsPage: React.FC = () => {
             )}
           </>
         )}
-    </StandardLayoutWrapper>
+    </>
   );
+
+  return embedded ? <div className="mt-8">{content}</div> : <StandardLayoutWrapper>{content}</StandardLayoutWrapper>;
 };
 
 export default CompagnieReservationsPage;

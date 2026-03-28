@@ -24,7 +24,7 @@ test.describe("Courrier flow", () => {
     if (url.includes("/agence/courrier")) {
       await pwExpect(page).toHaveURL(/\/agence\/courrier(\/session)?/);
       await pwExpect(
-        page.getByRole("heading", { name: /Session Courrier/i }).or(page.getByText(/Session|Courrier|Créer une session/)).first()
+        page.getByRole("heading", { name: /Poste courrier/i }).or(page.getByText(/Courrier|Créer une session|Nouvel envoi/)).first()
       ).toBeVisible({ timeout: 10000 });
     } else {
       await pwExpect(page).toHaveURL(/\/(login|agence)/);

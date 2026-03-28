@@ -23,6 +23,7 @@ import {
   cancelAffectation,
 } from "@/modules/compagnie/fleet/vehiclesService";
 import { getAgencyCityFromDoc } from "@/modules/agence/utils/agencyCity";
+import { normalizeCity } from "@/shared/utils/normalizeCity";
 import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
 import { getPhoneRuleFromCountry, sanitizeLocalPhone } from "@/utils/phoneCountryRules";
 
@@ -120,7 +121,9 @@ const STATUS_CONFIG: Record<DepartureStatus, { label: string; status: StatusVari
   cancelled: { label: "Annulé",      status: "danger" },
 };
 
-export default function ManagerOperationsPage() {
+export type ManagerOperationsPageProps = { embedded?: boolean };
+
+export default function ManagerOperationsPage({ embedded = false }: ManagerOperationsPageProps = {}) {
   const { user, company } = useAuth() as any;
   const phoneRule = useMemo(() => getPhoneRuleFromCountry((company as any)?.pays), [company]);
   const delayThreshold: number = (company as any)?.delayThresholdMinutes ?? 30;
@@ -513,7 +516,9 @@ export default function ManagerOperationsPage() {
     if (!companyId || !agencyCity) return;
     setAvailableVehiclesLoading(true);
     try {
-      const { vehicles: list } = await listVehiclesAvailableInCity(companyId, agencyCity, { agencyId });
+      const { vehicles: list } = await listVehiclesAvailableInCity(companyId, normalizeCity(agencyCity), {
+        agencyId,
+      });
       const activeIds = new Set(
         affectations.filter((a) => a.status === AFFECTATION_STATUS.AFFECTE || a.status === AFFECTATION_STATUS.DEPART_CONFIRME).map((a) => a.vehicleId)
       );
@@ -768,14 +773,22 @@ export default function ManagerOperationsPage() {
     }
   }, [companyId, agencyId, user, loadFleetStats, loadIncomingTransit]);
 
-  if (loading) return <StandardLayoutWrapper><p className={typography.muted}>Chargement…</p></StandardLayoutWrapper>;
+  if (loading) {
+    return embedded ? (
+      <div className="py-4"><p className={typography.muted}>Chargement…</p></div>
+    ) : (
+      <StandardLayoutWrapper><p className={typography.muted}>Chargement…</p></StandardLayoutWrapper>
+    );
+  }
 
-  return (
-    <StandardLayoutWrapper>
+  const inner = (
+    <>
+      {!embedded && (
       <PageHeader
         title="Opérations"
         subtitle={`${format(new Date(), "EEEE d MMMM yyyy", { locale: fr })} — pilotage des départs et de la flotte`}
       />
+      )}
 
       {/* Fleet overview — synchronisé véhicules + affectations */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -1174,6 +1187,8 @@ export default function ManagerOperationsPage() {
           </div>
         </div>
       )}
-    </StandardLayoutWrapper>
+    </>
   );
+
+  return embedded ? <div className="space-y-4">{inner}</div> : <StandardLayoutWrapper>{inner}</StandardLayoutWrapper>;
 }

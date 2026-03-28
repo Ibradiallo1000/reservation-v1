@@ -12,8 +12,11 @@ import {
   updateVehicle,
   archiveVehicle,
   backfillVehiclesMetadata,
+  migrateVehiclesPhase1Normalization,
+  verifyVehiclesPhase1Normalization,
   suggestNextBusNumber,
 } from "@/modules/compagnie/fleet/vehiclesService";
+import { normalizeCity } from "@/shared/utils/normalizeCity";
 import type { ListVehiclesOrderBy } from "@/modules/compagnie/fleet/vehiclesService";
 import { getActiveAffectationByVehicle } from "@/modules/compagnie/fleet/affectationService";
 import type { VehicleStatus } from "@/modules/compagnie/fleet/vehicleTypes";
@@ -329,6 +332,7 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
   const [archiveConfirmVehicle, setArchiveConfirmVehicle] = useState<VehicleRow | null>(null);
   const [archiveSaving, setArchiveSaving] = useState(false);
   const [backfillRunning, setBackfillRunning] = useState(false);
+  const [phase1MigrationRunning, setPhase1MigrationRunning] = useState(false);
 
   const handleArchiveClick = (v: VehicleRow) => {
     if (v.operationalStatus !== OPERATIONAL_STATUS.GARAGE) return;
@@ -372,6 +376,37 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
       toast.error(message);
     } finally {
       setBackfillRunning(false);
+    }
+  };
+
+  const handlePhase1VehicleMigration = async () => {
+    if (!companyId || phase1MigrationRunning) return;
+    const ok = window.confirm(
+      "Migration Phase 1 (unique recommandée) : normalisation des villes, recalcul fleetStatus, suppression des champs villeActuelle / ville_actuelle. Continuer ?"
+    );
+    if (!ok) return;
+    setPhase1MigrationRunning(true);
+    setError(null);
+    try {
+      const result = await migrateVehiclesPhase1Normalization(companyId);
+      console.log("Vehicles migration result:", result);
+      const verification = await verifyVehiclesPhase1Normalization(companyId);
+      console.log("Vehicles phase1 post-migration verification:", verification);
+      toast.success(
+        `Migration Phase 1 terminée : ${result.updated} mis à jour, ${result.skipped} inchangés, ${result.scanned} parcourus. Erreurs : ${result.errors.length}.`
+      );
+      if (!verification.clean) {
+        toast.warning("Vérification : des écarts subsistent — détails dans la console (F12).");
+      } else {
+        toast.success("Vérification : base véhicules cohérente (villes, statuts, pas de clés legacy).");
+      }
+      await load(currentPage);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Erreur durant la migration Phase 1.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setPhase1MigrationRunning(false);
     }
   };
 
@@ -514,7 +549,8 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
       );
     }
     if (cityFilter) {
-      list = list.filter((v) => (v.currentCity ?? "") === cityFilter);
+      const key = normalizeCity(cityFilter);
+      list = list.filter((v) => normalizeCity(v.currentCity ?? "") === key);
     }
     const getUpdatedTime = (row: VehicleRow): number => {
       const u = row.updatedAt;
@@ -553,14 +589,24 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
       {/* Recherche, filtre ville, tri */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         {canManageFleet && (
-          <button
-            type="button"
-            onClick={handleBackfillVehicles}
-            disabled={backfillRunning}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
-          >
-            {backfillRunning ? "Mise a jour en cours..." : "Completer vehicules existants"}
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={handleBackfillVehicles}
+              disabled={backfillRunning}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+            >
+              {backfillRunning ? "Mise a jour en cours..." : "Completer vehicules existants"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handlePhase1VehicleMigration()}
+              disabled={phase1MigrationRunning || backfillRunning}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-sm hover:bg-amber-100 disabled:opacity-50"
+            >
+              {phase1MigrationRunning ? "Migration Phase 1…" : "Migration Phase 1 (villes / statuts)"}
+            </button>
+          </>
         )}
         <input
           type="text"

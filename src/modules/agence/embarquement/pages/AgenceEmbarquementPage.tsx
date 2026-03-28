@@ -29,7 +29,7 @@ import {
   incrementBoardingStatsEmbarked,
   setBoardingStatsClosed,
 } from "@/modules/agence/aggregates/boardingStats";
-import { updateDailyStatsOnBoardingClosed } from "@/modules/agence/aggregates/dailyStats";
+import { dailyStatsTimezoneFromAgencyData, updateDailyStatsOnBoardingClosed } from "@/modules/agence/aggregates/dailyStats";
 import {
   updateAgencyLiveStateOnBoardingOpened,
   updateAgencyLiveStateOnBoardingClosed,
@@ -40,6 +40,25 @@ import { getEffectiveStatut, canEmbarkWithScan, RESERVATION_STATUT_QUERY_BOARDAB
 import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
 import { ensureProgressArrival, markOriginDeparture, ensureAutoDepartIfNeeded, getTripProgress, ORIGIN_STOP_ORDER } from "@/modules/compagnie/tripInstances/tripProgressService";
 import { findTripInstanceBySlot } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { vehicleRef } from "@/modules/compagnie/fleet/vehiclesService";
+import {
+  BOARDING_SESSION_IN_USE_MSG,
+  boardingEmbarkDedupDocRef,
+  closeBoardingSessionLock,
+  countExpectedReservationsForTripSlot,
+  getVehicleCapacity,
+  listBoardingTripAssignmentsForDate,
+  startBoardingSessionLock,
+  type TripAssignmentDoc,
+} from "@/modules/agence/planning/tripAssignmentService";
+import {
+  clearBoardingSlotSnapshot,
+  getOrCreateBoardingClientInstanceId,
+  loadBoardingSlotSnapshot,
+  persistBoardingSlotSnapshot,
+  snapshotMatchesSelection,
+  type BoardingSlotSnapshotV1,
+} from "@/modules/agence/embarquement/boardingSlotSnapshot";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { Plane, CheckCircle, AlertTriangle } from "lucide-react";
 import {
@@ -47,8 +66,10 @@ import {
   getUnsyncedBoardingQueue,
   markBoardingQueueSynced,
 } from "@/modules/agence/embarquement/boardingQueue";
+import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 
 const FAST_BOARDING_OVERLAY_DURATION_MS = 1200;
+const INVALID_RESERVATION_STATUT = "invalide";
 
 /* ===================== Types ===================== */
 type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
@@ -265,13 +286,29 @@ async function findReservationByCode(
 
 /* ===================== Page ===================== */
 interface AgenceEmbarquementPageProps {
-  /** Phase 3: when set, boarding is blocked when embarked count exceeds this */
+  /** Capacité sièges : priorité à cette valeur (ex. flux boarding/scan depuis tripAssignment). */
   vehicleCapacity?: number | null;
+  /** Statut tripAssignment affiché en badge (flux scan). Sinon déduit de la sélection locale. */
+  boardingAssignmentStatus?: "planned" | "validated";
 }
-const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicleCapacity = null }) => {
+const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
+  vehicleCapacity = null,
+  boardingAssignmentStatus: boardingAssignmentStatusProp,
+}) => {
   const { user, company } = useAuth() as any;
   const location = useLocation() as {
-    state?: { trajet?: string; date?: string; heure?: string; agencyId?: string; tripId?: string; departure?: string; arrival?: string };
+    state?: {
+      trajet?: string;
+      date?: string;
+      heure?: string;
+      agencyId?: string;
+      tripId?: string;
+      departure?: string;
+      arrival?: string;
+      assignmentId?: string;
+      vehicleId?: string;
+      assignmentStatus?: "planned" | "validated";
+    };
   };
 
   // Use global Teliya brand variables so this page matches the unified agency theme
@@ -290,8 +327,18 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicle
     location.state?.date || toLocalISO(new Date())
   );
 
-  const [trajetsDuJour, setTrajetsDuJour] = useState<WeeklyTrip[]>([]);
+  const [weeklyForDay, setWeeklyForDay] = useState<WeeklyTrip[]>([]);
+  const [dayAssignments, setDayAssignments] = useState<Array<TripAssignmentDoc & { id: string }>>([]);
+  const [activeBoardingAssignment, setActiveBoardingAssignment] = useState<{
+    id: string;
+    vehicleId: string;
+    status: "planned" | "validated";
+  } | null>(null);
+  const [resolvedVehicleCapacity, setResolvedVehicleCapacity] = useState<number | null>(null);
   const [selectedTrip, setSelectedTrip] = useState<SelectedTrip | null>(null);
+
+  const capacityLimit = vehicleCapacity != null ? vehicleCapacity : resolvedVehicleCapacity;
+  const assignmentStatusBadge = boardingAssignmentStatusProp ?? activeBoardingAssignment?.status ?? null;
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -304,6 +351,22 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicle
   const lastScanRef = useRef<number>(0);
   const lastAlertRef = useRef<number>(0);
   const offlineScannedIds = useRef<Set<string>>(new Set());
+  /** Snapshot créneau (Phase 3.5) — offline : vérité pour scan / file d’attente. */
+  const boardingSlotSnapshotRef = useRef<BoardingSlotSnapshotV1 | null>(null);
+  /** Assignment effectif pour contrôles embarquement (offline → snapshot uniquement). */
+  const effectiveBoardingAssignmentRef = useRef<{
+    id: string;
+    vehicleId: string;
+    status: "planned" | "validated";
+  } | null>(null);
+  /** Verrou Firestore tenu par cette instance (libération au changement de créneau / clôture). */
+  const lockHeldRef = useRef<{ companyId: string; agencyId: string; assignmentId: string; clientId: string } | null>(
+    null
+  );
+  const activeAssignmentIdRef = useRef<string | null>(null);
+  activeAssignmentIdRef.current = activeBoardingAssignment?.id ?? null;
+  /** Évite de réimposer le snapshot local après que l’utilisateur ait désélectionné le créneau (hors ligne). */
+  const offlineHydratedKeyRef = useRef<string>("");
 
   // Online status for offline boarding queue
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" && navigator.onLine);
@@ -316,6 +379,174 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({ vehicle
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
     };
+  }, []);
+
+  /** Phase 3.5 — assignment effectif : hors ligne = snapshot local uniquement. */
+  useEffect(() => {
+    if (
+      !isOnline &&
+      boardingSlotSnapshotRef.current &&
+      companyId &&
+      selectedAgencyId &&
+      boardingSlotSnapshotRef.current.companyId === companyId &&
+      boardingSlotSnapshotRef.current.agencyId === selectedAgencyId
+    ) {
+      const s = boardingSlotSnapshotRef.current;
+      effectiveBoardingAssignmentRef.current = {
+        id: s.assignmentId,
+        vehicleId: s.vehicleId,
+        status: s.assignmentStatus,
+      };
+      return;
+    }
+    effectiveBoardingAssignmentRef.current = activeBoardingAssignment;
+  }, [isOnline, activeBoardingAssignment, companyId, selectedAgencyId]);
+
+  /** Phase 3.5 — capacité véhicule depuis snapshot si hors ligne. */
+  useEffect(() => {
+    if (!isOnline && boardingSlotSnapshotRef.current?.vehicleCapacity != null) {
+      setResolvedVehicleCapacity(boardingSlotSnapshotRef.current.vehicleCapacity ?? null);
+    }
+  }, [isOnline]);
+
+  /** Phase 3.5 — changement date/agence : libérer verrou et réinitialiser créneau. */
+  const dateAgencyKeyRef = useRef<string>("");
+  useEffect(() => {
+    if (!companyId) return;
+    const key = `${selectedDate}|${selectedAgencyId ?? ""}`;
+    const prevKey = dateAgencyKeyRef.current;
+    if (!prevKey) {
+      dateAgencyKeyRef.current = key;
+      return;
+    }
+    if (prevKey === key) return;
+    const pipeIdx = prevKey.indexOf("|");
+    const oldAgencyOnly = pipeIdx >= 0 ? prevKey.slice(pipeIdx + 1) : "";
+    dateAgencyKeyRef.current = key;
+    const held = lockHeldRef.current;
+    if (held && isOnline) {
+      void closeBoardingSessionLock(held.companyId, held.agencyId, held.assignmentId, held.clientId).catch(() => {});
+      lockHeldRef.current = null;
+    }
+    setActiveBoardingAssignment(null);
+    boardingSlotSnapshotRef.current = null;
+    offlineHydratedKeyRef.current = "";
+    if (oldAgencyOnly) clearBoardingSlotSnapshot(companyId, oldAgencyOnly);
+  }, [selectedDate, selectedAgencyId, companyId, isOnline]);
+
+  /** Phase 3.5 — reprise hors ligne : une restauration auto par (agence, date, assignment) tant que le snapshot existe. */
+  useEffect(() => {
+    if (isOnline || !companyId || !selectedAgencyId) {
+      offlineHydratedKeyRef.current = "";
+      return;
+    }
+    const snap = loadBoardingSlotSnapshot(companyId, selectedAgencyId);
+    if (!snap || snap.date !== selectedDate) {
+      offlineHydratedKeyRef.current = "";
+      return;
+    }
+    const hk = `${companyId}|${selectedAgencyId}|${snap.date}|${snap.assignmentId}`;
+    if (offlineHydratedKeyRef.current === hk) return;
+    offlineHydratedKeyRef.current = hk;
+    boardingSlotSnapshotRef.current = snap;
+    setActiveBoardingAssignment({
+      id: snap.assignmentId,
+      vehicleId: snap.vehicleId,
+      status: snap.assignmentStatus,
+    });
+    setSelectedTrip((prev) => {
+      if (prev) return prev;
+      return {
+        id: snap.tripId || undefined,
+        departure: snap.departure ?? "",
+        arrival: snap.arrival ?? "",
+        heure: snap.heure,
+      };
+    });
+  }, [isOnline, companyId, selectedAgencyId, selectedDate]);
+
+  /** Phase 3.5 — verrou Firestore + snapshot persistant (en ligne). */
+  useEffect(() => {
+    if (!isOnline || !companyId || !selectedAgencyId || !uid || !activeBoardingAssignment?.id || !selectedTrip?.heure) {
+      return;
+    }
+    const targetAssignmentId = activeBoardingAssignment.id;
+    const targetVehicleId = activeBoardingAssignment.vehicleId;
+    const targetStatus = activeBoardingAssignment.status;
+    const clientId = getOrCreateBoardingClientInstanceId();
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        await startBoardingSessionLock(companyId, selectedAgencyId, targetAssignmentId, uid, clientId);
+        if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
+        const cap = await getVehicleCapacity(companyId, targetVehicleId);
+        if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
+        const snap: BoardingSlotSnapshotV1 = {
+          v: 1,
+          companyId,
+          agencyId: selectedAgencyId,
+          assignmentId: targetAssignmentId,
+          vehicleId: targetVehicleId,
+          tripId: selectedTrip.id ?? "",
+          departure: selectedTrip.departure,
+          arrival: selectedTrip.arrival,
+          date: selectedDate,
+          heure: selectedTrip.heure,
+          assignmentStatus: targetStatus,
+          clientInstanceId: clientId,
+          savedAt: Date.now(),
+          vehicleCapacity: cap,
+        };
+        persistBoardingSlotSnapshot(snap);
+        boardingSlotSnapshotRef.current = snap;
+        lockHeldRef.current = {
+          companyId,
+          agencyId: selectedAgencyId,
+          assignmentId: targetAssignmentId,
+          clientId,
+        };
+      } catch (e: unknown) {
+        const msg = String((e as Error)?.message ?? e);
+        if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
+        if (msg.includes(BOARDING_SESSION_IN_USE_MSG)) {
+          alert(BOARDING_SESSION_IN_USE_MSG);
+        } else {
+          alert(msg || "Impossible de démarrer la session d’embarquement.");
+        }
+        setActiveBoardingAssignment(null);
+        boardingSlotSnapshotRef.current = null;
+        clearBoardingSlotSnapshot(companyId, selectedAgencyId);
+        lockHeldRef.current = null;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isOnline,
+    companyId,
+    selectedAgencyId,
+    uid,
+    activeBoardingAssignment?.id,
+    activeBoardingAssignment?.vehicleId,
+    activeBoardingAssignment?.status,
+    selectedTrip?.id,
+    selectedTrip?.heure,
+    selectedDate,
+  ]);
+
+  /** Phase 3.5 — fermeture onglet : libérer le verrou. */
+  useEffect(() => {
+    const onPageHide = () => {
+      const held = lockHeldRef.current;
+      if (!held) return;
+      void closeBoardingSessionLock(held.companyId, held.agencyId, held.assignmentId, held.clientId);
+      lockHeldRef.current = null;
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
   }, []);
 
   // Fast boarding overlay (success / error for 1.2s; success can show "Embarqué (hors ligne)" + détail passager + alerte dépassement)
@@ -414,7 +645,26 @@ useEffect(() => {
   });
 }, [companyId, selectedAgencyId]);
 
-  /* ---------- Affectation liée au trajet (Phase 1: document affectation par trajet) ---------- */
+  /* ---------- Capacité depuis tripAssignment.vehicleId si non fournie par le parent ---------- */
+  useEffect(() => {
+    if (vehicleCapacity != null) {
+      setResolvedVehicleCapacity(null);
+      return;
+    }
+    if (!companyId || !activeBoardingAssignment?.vehicleId) {
+      setResolvedVehicleCapacity(null);
+      return;
+    }
+    let cancelled = false;
+    getVehicleCapacity(companyId, activeBoardingAssignment.vehicleId).then((c) => {
+      if (!cancelled) setResolvedVehicleCapacity(c);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [vehicleCapacity, companyId, activeBoardingAssignment?.vehicleId]);
+
+  /* ---------- Véhicule : plaque depuis flotte (tripAssignment) + équipage affectation si dispo ---------- */
   useEffect(() => {
     setAssign({});
     if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate) return;
@@ -422,26 +672,53 @@ useEffect(() => {
     const arr = (selectedTrip.arrival ?? "").trim();
     const heure = (selectedTrip.heure ?? "").trim();
     if (!dep || !arr) return;
-    getAffectationForBoarding(companyId, selectedAgencyId, dep, arr, selectedDate, heure)
-      .then((a) => {
-        if (a) {
-          setAssign({
-            bus: (a as any).vehicleModel ?? "",
-            immat: (a as any).vehiclePlate ?? "",
-            chauffeur: (a as any).driverName ?? "",
-            chauffeurPhone: (a as any).driverPhone ?? "",
-            chef: (a as any).convoyeurName ?? "",
-            chefPhone: (a as any).convoyeurPhone ?? "",
-          });
+    let cancelled = false;
+    (async () => {
+      let immat = "";
+      let bus = "";
+      if (activeBoardingAssignment?.vehicleId) {
+        try {
+          const vs = await getDoc(vehicleRef(companyId, activeBoardingAssignment.vehicleId));
+          if (vs.exists() && !cancelled) {
+            const vd = vs.data() as { plateNumber?: string; model?: string };
+            immat = String(vd.plateNumber ?? "");
+            bus = String(vd.model ?? "");
+          }
+        } catch {
+          /* ignore */
         }
-      })
-      .catch(() => {});
-  }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
+      }
+      const a = await getAffectationForBoarding(companyId, selectedAgencyId, dep, arr, selectedDate, heure).catch(
+        () => null
+      );
+      if (cancelled) return;
+      if (a || immat || bus) {
+        setAssign({
+          bus: bus || ((a as any)?.vehicleModel ?? ""),
+          immat: immat || ((a as any)?.vehiclePlate ?? ""),
+          chauffeur: (a as any)?.driverName ?? "",
+          chauffeurPhone: (a as any)?.driverPhone ?? "",
+          chef: (a as any)?.convoyeurName ?? "",
+          chefPhone: (a as any)?.convoyeurPhone ?? "",
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, selectedAgencyId, selectedTrip, selectedDate, activeBoardingAssignment?.vehicleId]);
 
-  /* ---------- Pré-remplissage navigation ---------- */
+  /* ---------- Pré-remplissage navigation (boarding/scan : tripAssignment obligatoire) ---------- */
   useEffect(() => {
     const st = location.state;
     if (st?.agencyId) setSelectedAgencyId(st.agencyId);
+    if (st?.assignmentId && st?.vehicleId) {
+      setActiveBoardingAssignment({
+        id: String(st.assignmentId),
+        vehicleId: String(st.vehicleId),
+        status: st.assignmentStatus === "planned" ? "planned" : "validated",
+      });
+    }
     if (!st?.trajet && !st?.departure) return;
     const dep = st?.departure ?? (st?.trajet ? st.trajet.split("→").map((s: string) => s.trim())[0] : "") ?? "";
     const arr = st?.arrival ?? (st?.trajet ? st.trajet.split("→").map((s: string) => s.trim())[1] : "") ?? "";
@@ -456,23 +733,28 @@ useEffect(() => {
     if (st?.date) setSelectedDate(st.date);
   }, [location.state]);
 
-  /* ---------- WeeklyTrips du jour ---------- */
+  /* ---------- Grille du jour : weeklyTrips + tripAssignments (source vérité véhicule) ---------- */
   useEffect(() => {
     const load = async () => {
-      if (!companyId || !selectedAgencyId) { setTrajetsDuJour([]); return; }
+      if (!companyId || !selectedAgencyId) {
+        setWeeklyForDay([]);
+        setDayAssignments([]);
+        return;
+      }
 
-      const weeklyTripsRef = collection(
-        db,
-        `companies/${companyId}/agences/${selectedAgencyId}/weeklyTrips`
-      );
-      const snap = await getDocs(weeklyTripsRef);
+      const weeklyTripsRef = collection(db, `companies/${companyId}/agences/${selectedAgencyId}/weeklyTrips`);
+      const [snap, assignments] = await Promise.all([
+        getDocs(weeklyTripsRef),
+        listBoardingTripAssignmentsForDate(companyId, selectedAgencyId, selectedDate),
+      ]);
 
       const dayName = weekdayFR(new Date(selectedDate));
       const trips = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as any) }) as WeeklyTrip)
         .filter((t) => t.active && t.horaires?.[dayName]?.length > 0);
 
-      setTrajetsDuJour(trips);
+      setWeeklyForDay(trips);
+      setDayAssignments(assignments);
 
       if (selectedTrip && !selectedTrip.id) {
         const found = trips.find(
@@ -487,7 +769,7 @@ useEffect(() => {
       }
     };
     void load();
-  }, [companyId, selectedAgencyId, selectedDate]); // eslint-disable-line
+  }, [companyId, selectedAgencyId, selectedDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- Écoute temps réel réservations (inclut EMBARQUÉ/ABSENT) ---------- */
   /* When scanOn is true, skip listener to improve scan performance (< 500ms goal). */
@@ -512,7 +794,7 @@ useEffect(() => {
         if (aRep !== bRep) return aRep ? -1 : 1; // reports d'abord
         return (a.nomClient || "").localeCompare(b.nomClient || "");
       });
-      setReservations(list);
+      setReservations(list.filter((r) => String(r.statut ?? "").toLowerCase() !== INVALID_RESERVATION_STATUT));
       setIsLoading(false);
     };
 
@@ -565,6 +847,10 @@ useEffect(() => {
         alert("Sélectionne la date et le trajet avant d’embarquer.");
         return;
       }
+      if (statut === "embarqué" && !effectiveBoardingAssignmentRef.current) {
+        alert("Ce trajet n’a pas encore de véhicule assigné.");
+        return;
+      }
 
       const resRef = doc(
         db,
@@ -572,7 +858,7 @@ useEffect(() => {
       );
 
       // Phase 3: capacity check before transaction (tx.get() does not support queries)
-      if (statut === "embarqué" && vehicleCapacity != null && vehicleCapacity > 0) {
+      if (statut === "embarqué" && capacityLimit != null && capacityLimit > 0) {
         const qEmb = query(
           collection(db, `companies/${companyId}/agences/${agencyIdToUse}/reservations`),
           where("date", "==", selectedDate),
@@ -590,7 +876,7 @@ useEffect(() => {
         const dataPre = resSnap.exists() ? (resSnap.data() as { boardingStatus?: string; statutEmbarquement?: string; seatsGo?: number }) : null;
         const alreadyEmbarked = dataPre ? getEffectiveBoardingStatus(dataPre) === "boarded" : false;
         const addSeats = alreadyEmbarked ? 0 : (dataPre?.seatsGo ?? 1);
-        if (seatsEmbarques + addSeats > vehicleCapacity) {
+        if (seatsEmbarques + addSeats > capacityLimit) {
           throw new Error("Capacité véhicule atteinte");
         }
       }
@@ -603,6 +889,36 @@ useEffect(() => {
           const resData = resSnap.exists() ? (resSnap.data() as { tripInstanceId?: string; trajetId?: string }) : {};
           const tripInstanceId = resData.tripInstanceId ?? resData.trajetId ?? selectedTrip?.id;
           if (tripInstanceId) await ensureProgressArrival(companyId, tripInstanceId, stopOrder);
+        }
+      }
+
+      let prefetchedLiveExpected: number | null = null;
+      if (statut === "embarqué" && companyId && agencyIdToUse) {
+        const aidPre = effectiveBoardingAssignmentRef.current?.id;
+        if (aidPre) {
+          try {
+            const asrefPre = doc(
+              db,
+              `companies/${companyId}/agences/${agencyIdToUse}/tripAssignments/${aidPre}`
+            );
+            const asnapPre = await getDoc(asrefPre);
+            if (asnapPre.exists()) {
+              const ldPre = asnapPre.data() as TripAssignmentDoc;
+              if (ldPre.liveStatus?.boardingStartedAt == null) {
+                prefetchedLiveExpected = await countExpectedReservationsForTripSlot(
+                  companyId,
+                  agencyIdToUse,
+                  {
+                    tripId: ldPre.tripId,
+                    date: ldPre.date,
+                    heure: String(ldPre.heure ?? "").trim(),
+                  }
+                );
+              }
+            }
+          } catch {
+            /* recalcul optionnel */
+          }
         }
       }
 
@@ -688,8 +1004,41 @@ useEffect(() => {
             throw new Error("Billet pour un autre départ (date/heure/trajet non concordants).");
           }
 
-          // Phase 4.5: boardingStats + capacity check inside transaction (embarqué only)
+          const lockRef = doc(
+            db,
+            `companies/${companyId}/agences/${agencyIdToUse}/boardingLocks/${reservationId}`
+          );
+          const lockSnap = await tx.get(lockRef);
+
+          // Phase 4.5 — embarqué : ordre verrou / dédup → stats / live (évite double comptage)
           if (statut === "embarqué") {
+            const addSeats =
+              getEffectiveBoardingStatus(data as { boardingStatus?: string; statutEmbarquement?: string }) ===
+              "boarded"
+                ? 0
+                : Number(data.seatsGo) || 1;
+            if (addSeats === 0) {
+              throw new Error("Déjà embarqué");
+            }
+            if (lockSnap.exists()) {
+              throw new Error("Déjà embarqué");
+            }
+
+            const liveAid = effectiveBoardingAssignmentRef.current?.id;
+            let embarkDedupRef: ReturnType<typeof boardingEmbarkDedupDocRef> | null = null;
+            if (liveAid) {
+              embarkDedupRef = boardingEmbarkDedupDocRef(
+                companyId,
+                agencyIdToUse,
+                liveAid,
+                reservationId
+              );
+              const dedupSnap = await tx.get(embarkDedupRef);
+              if (dedupSnap.exists()) {
+                throw new Error("Déjà embarqué");
+              }
+            }
+
             const tripKey = boardingStatsKey(selDep ?? "", selArr ?? "", selHr ?? "", selectedDate);
             const statsRef = getBoardingStatsRef(companyId, agencyIdToUse, tripKey);
             const statsSnap = await tx.get(statsRef);
@@ -698,35 +1047,58 @@ useEffect(() => {
                 tripId: selectedTrip?.id ?? (data.trajetId as string | null) ?? null,
                 date: selectedDate,
                 heure: (selectedTrip?.heure ?? data.heure ?? "") as string,
-                vehicleCapacity: vehicleCapacity ?? 0,
+                vehicleCapacity: capacityLimit ?? 0,
               });
               updateAgencyLiveStateOnBoardingOpened(tx, companyId, agencyIdToUse);
             }
             const currentEmbarked = statsSnap.exists()
               ? ((statsSnap.data() as { embarkedSeats?: number }).embarkedSeats ?? 0)
               : 0;
-            const addSeats = getEffectiveBoardingStatus(data as { boardingStatus?: string; statutEmbarquement?: string }) === "boarded"
-              ? 0
-              : (Number(data.seatsGo) || 1);
             if (vehicleCapacity != null && vehicleCapacity > 0 && currentEmbarked + addSeats > vehicleCapacity) {
               throw new Error("Capacité véhicule atteinte");
             }
             incrementBoardingStatsEmbarked(tx, companyId, agencyIdToUse, tripKey, addSeats);
-          }
 
-          // verrou uniquement pour EMBARQUÉ (évite double-scan)
-          if (getEffectiveBoardingStatus(data as { boardingStatus?: string; statutEmbarquement?: string }) === "boarded" && statut === "embarqué") {
-            throw new Error("Déjà embarqué");
-          }
-          const lockRef = doc(
-            db,
-            `companies/${companyId}/agences/${agencyIdToUse}/boardingLocks/${reservationId}`
-          );
-          const lockSnap = await tx.get(lockRef);
-          if (lockSnap.exists() && statut === "embarqué") {
-            throw new Error("Déjà embarqué");
-          }
-          if (statut === "embarqué" && !lockSnap.exists()) {
+            if (liveAid) {
+              const asgRef = doc(
+                db,
+                `companies/${companyId}/agences/${agencyIdToUse}/tripAssignments/${liveAid}`
+              );
+              const asgSnap = await tx.get(asgRef);
+              if (asgSnap.exists()) {
+                const asg = asgSnap.data() as TripAssignmentDoc;
+                if (asg.status === "planned" || asg.status === "validated") {
+                  const ls = asg.liveStatus;
+                  const prevBoarded = ls?.boardedCount ?? 0;
+                  const isFirstEmbark = ls?.boardingStartedAt == null;
+                  const expected =
+                    isFirstEmbark && prefetchedLiveExpected != null
+                      ? prefetchedLiveExpected
+                      : (ls?.expectedCount ?? 0);
+                  const nextBoarded = prevBoarded + addSeats;
+                  const startedAt =
+                    ls?.boardingStartedAt != null ? ls.boardingStartedAt : serverTimestamp();
+                  tx.update(asgRef, {
+                    liveStatus: {
+                      boardedCount: nextBoarded,
+                      expectedCount: expected,
+                      status: "boarding",
+                      boardingStartedAt: startedAt,
+                    },
+                    updatedAt: serverTimestamp(),
+                  });
+                }
+              }
+            }
+
+            if (embarkDedupRef) {
+              tx.set(embarkDedupRef, {
+                reservationId,
+                tripAssignmentId: liveAid,
+                scannedAt: serverTimestamp(),
+              });
+            }
+
             tx.set(lockRef, {
               reservationId,
               by: uid,
@@ -771,6 +1143,25 @@ useEffect(() => {
           });
         });
 
+        if (statut === "embarqué") {
+          logAgentHistoryEvent({
+            companyId,
+            agencyId: agencyIdToUse,
+            agentId: uid,
+            agentName: (user as { displayName?: string | null })?.displayName ?? null,
+            role: String((user as { role?: string })?.role ?? "agency_boarding_officer"),
+            type: "BOARDING_SCANNED",
+            referenceId: reservationId,
+            status: "VALIDE",
+            createdBy: uid,
+            metadata: {
+              tripId: selectedTrip?.id ?? null,
+              date: selectedDate,
+              heure: selectedTrip?.heure ?? null,
+            },
+          });
+        }
+
         if (!options?.suppressAlert) {
           try { new Audio("/beep.mp3").play(); } catch {}
         }
@@ -792,7 +1183,19 @@ useEffect(() => {
         console.error("[EMBARK][ERROR]", e);
       }
     },
-    [companyId, selectedAgencyId, uid, selectedTrip?.id, selectedTrip?.departure, selectedTrip?.arrival, selectedTrip?.heure, selectedDate, vehicleCapacity]
+    [
+      companyId,
+      selectedAgencyId,
+      uid,
+      user,
+      selectedTrip?.id,
+      selectedTrip?.departure,
+      selectedTrip?.arrival,
+      selectedTrip?.heure,
+      selectedDate,
+      capacityLimit,
+      agencyInfo,
+    ]
   );
 
   /* ---------- Sync offline boarding queue when connection returns ---------- */
@@ -804,7 +1207,15 @@ useEffect(() => {
         const list = await getUnsyncedBoardingQueue();
         for (const rec of list) {
           if (cancelled) break;
+          const prevEff = effectiveBoardingAssignmentRef.current;
           try {
+            if (rec.assignmentId && rec.vehicleId) {
+              effectiveBoardingAssignmentRef.current = {
+                id: rec.assignmentId,
+                vehicleId: rec.vehicleId,
+                status: rec.assignmentStatus === "planned" ? "planned" : "validated",
+              };
+            }
             await updateStatut(rec.reservationId, "embarqué", rec.agencyId, { suppressAlert: true });
             if (rec.id != null) await markBoardingQueueSynced(rec.id);
           } catch (e: unknown) {
@@ -812,6 +1223,8 @@ useEffect(() => {
             if (msg.includes("Déjà embarqué") && rec.id != null) {
               await markBoardingQueueSynced(rec.id);
             }
+          } finally {
+            effectiveBoardingAssignmentRef.current = prevEff;
           }
         }
       } catch (err) {
@@ -1090,7 +1503,13 @@ useEffect(() => {
         });
 
         // Phase 4.5: dailyStats, boardingStats, agencyLiveState
-        updateDailyStatsOnBoardingClosed(tx, companyId, selectedAgencyId, selectedDate);
+        updateDailyStatsOnBoardingClosed(
+          tx,
+          companyId,
+          selectedAgencyId,
+          selectedDate,
+          dailyStatsTimezoneFromAgencyData(agencyInfo as { timezone?: string } | undefined)
+        );
         const tripKey = boardingStatsKey(selectedTrip.departure, selectedTrip.arrival, selectedTrip.heure, selectedDate);
         const absentSeats = reservations
           .filter((r) => getEffectiveBoardingStatus(r) !== "boarded")
@@ -1202,6 +1621,42 @@ useEffect(() => {
 
       await batch.commit();
 
+      const held = lockHeldRef.current;
+      if (held && isOnline) {
+        await closeBoardingSessionLock(held.companyId, held.agencyId, held.assignmentId, held.clientId).catch(() => {});
+        lockHeldRef.current = null;
+      }
+      if (companyId && selectedAgencyId) {
+        clearBoardingSlotSnapshot(companyId, selectedAgencyId);
+        boardingSlotSnapshotRef.current = null;
+      }
+
+      if (activeBoardingAssignment?.id && companyId && selectedAgencyId) {
+        try {
+          const aref = doc(
+            db,
+            `companies/${companyId}/agences/${selectedAgencyId}/tripAssignments/${activeBoardingAssignment.id}`
+          );
+          const asnap = await getDoc(aref);
+          if (asnap.exists()) {
+            const ad = asnap.data() as TripAssignmentDoc;
+            const ls = ad.liveStatus;
+            const livePatch: Record<string, unknown> = {
+              boardedCount: ls?.boardedCount ?? 0,
+              expectedCount: ls?.expectedCount ?? 0,
+              status: "completed",
+            };
+            if (ls?.boardingStartedAt != null) livePatch.boardingStartedAt = ls.boardingStartedAt;
+            await updateDoc(aref, {
+              liveStatus: livePatch,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch (err) {
+          console.warn("[LIVE] mark completed", err);
+        }
+      }
+
       alert("Clôture effectuée. Absents marqués et reprogrammés (si possible).");
     } catch (e: any) {
       if (String(e?.message || e) === "DEJA_CLOTURE") {
@@ -1211,7 +1666,18 @@ useEffect(() => {
         alert("Erreur lors de la clôture.");
       }
     }
-  }, [companyId, selectedAgencyId, uid, selectedTrip, selectedDate, reservations, tripKey]);
+  }, [
+    companyId,
+    selectedAgencyId,
+    uid,
+    selectedTrip,
+    selectedDate,
+    reservations,
+    tripKey,
+    agencyInfo,
+    isOnline,
+    activeBoardingAssignment?.id,
+  ]);
 
   /* ---------- Offline: resolve from cached list (no Firestore) ---------- */
   const findFromCache = useCallback(
@@ -1236,6 +1702,11 @@ useEffect(() => {
       const code = extractCode(scanCode);
       if (!code) return;
 
+      if (!effectiveBoardingAssignmentRef.current) {
+        showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
+        return;
+      }
+
       if (!isOnline) {
         const found = findFromCache(code);
         if (found) {
@@ -1244,6 +1715,7 @@ useEffect(() => {
             return;
           }
           offlineScannedIds.current.add(found.resId);
+          const eff = effectiveBoardingAssignmentRef.current;
           await addToBoardingQueue({
             reservationId: found.resId,
             agencyId: found.agencyId,
@@ -1251,6 +1723,9 @@ useEffect(() => {
             tripId: selectedTrip?.id ?? null,
             date: selectedDate ?? "",
             heure: selectedTrip?.heure ?? null,
+            assignmentId: eff?.id,
+            vehicleId: eff?.vehicleId,
+            assignmentStatus: eff?.status,
           });
           showFastBoardSuccess(true);
           setScanCode("");
@@ -1335,6 +1810,11 @@ useEffect(() => {
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
+              if (!code) return;
+              if (!effectiveBoardingAssignmentRef.current) {
+                showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
+                return;
+              }
               if (!isOnline) {
                 const found = findFromCache(code);
                 if (found) {
@@ -1343,6 +1823,7 @@ useEffect(() => {
                     return;
                   }
                   offlineScannedIds.current.add(found.resId);
+                  const eff = effectiveBoardingAssignmentRef.current;
                   await addToBoardingQueue({
                     reservationId: found.resId,
                     agencyId: found.agencyId,
@@ -1350,6 +1831,9 @@ useEffect(() => {
                     tripId: selectedTrip?.id ?? null,
                     date: selectedDate ?? "",
                     heure: selectedTrip?.heure ?? null,
+                    assignmentId: eff?.id,
+                    vehicleId: eff?.vehicleId,
+                    assignmentStatus: eff?.status,
                   });
                   showFastBoardSuccess(true);
                 } else {
@@ -1407,6 +1891,11 @@ useEffect(() => {
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
+              if (!code) return;
+              if (!effectiveBoardingAssignmentRef.current) {
+                showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
+                return;
+              }
               if (!isOnline) {
                 const found = findFromCache(code);
                 if (found) {
@@ -1415,6 +1904,7 @@ useEffect(() => {
                     return;
                   }
                   offlineScannedIds.current.add(found.resId);
+                  const eff = effectiveBoardingAssignmentRef.current;
                   await addToBoardingQueue({
                     reservationId: found.resId,
                     agencyId: found.agencyId,
@@ -1422,6 +1912,9 @@ useEffect(() => {
                     tripId: selectedTrip?.id ?? null,
                     date: selectedDate ?? "",
                     heure: selectedTrip?.heure ?? null,
+                    assignmentId: eff?.id,
+                    vehicleId: eff?.vehicleId,
+                    assignmentStatus: eff?.status,
                   });
                   showFastBoardSuccess(true);
                 } else {
@@ -1496,6 +1989,7 @@ useEffect(() => {
       const seats = r.seatsGo ?? 1;
       totalRes += 1;
       totalSeats += seats;
+      if (String(r.statut ?? "").toLowerCase() === INVALID_RESERVATION_STATUT) continue;
       if (r.statutEmbarquement === "embarqué") seatsEmbarques += seats;
       if (r.statutEmbarquement === "absent") seatsAbsents += seats;
     }
@@ -1516,36 +2010,168 @@ useEffect(() => {
     [selectedDate]
   );
 
-  const trajetButtons = useMemo(() => {
-    if (!trajetsDuJour.length) return [] as JSX.Element[];
-    return trajetsDuJour.flatMap((trip) =>
-      (trip.horaires[dayName] || []).map((h) => {
-        const active =
-          selectedTrip?.departure === trip.departure &&
-          selectedTrip?.arrival === trip.arrival &&
-          selectedTrip?.heure === h;
-        return (
-          <button
-            key={`${trip.id}_${h}`}
-            onClick={() =>
-              setSelectedTrip({
-                id: trip.id,
-                departure: trip.departure,
-                arrival: trip.arrival,
-                heure: h,
-              })
-            }
-            className={`px-3 py-2 rounded-lg text-sm font-medium shadow-sm ${
-              active ? "text-white" : "bg-gray-200 text-gray-700"
-            }`}
-            style={active ? { background: primary } : undefined}
-          >
-            {trip.departure} → {trip.arrival} à {h}
-          </button>
-        );
-      })
+  const departureRows = useMemo(() => {
+    const assignMap = new Map(
+      dayAssignments
+        .filter((a) => a.status === "planned" || a.status === "validated")
+        .map((a) => [`${a.tripId}|${String(a.heure).trim()}`, a])
     );
-  }, [trajetsDuJour, dayName, selectedTrip]);
+    const rows: Array<{
+      key: string;
+      tripId: string;
+      departure: string;
+      arrival: string;
+      heure: string;
+      assignmentId?: string;
+      vehicleId?: string;
+      assignmentStatus?: "planned" | "validated";
+      hasAssignment: boolean;
+    }> = [];
+    const covered = new Set<string>();
+    weeklyForDay.forEach((trip) => {
+      for (const h of trip.horaires[dayName] || []) {
+        const k = `${trip.id}|${h}`;
+        covered.add(k);
+        const a = assignMap.get(k);
+        rows.push({
+          key: k,
+          tripId: trip.id,
+          departure: trip.departure,
+          arrival: trip.arrival,
+          heure: h,
+          assignmentId: a?.id,
+          vehicleId: a?.vehicleId,
+          assignmentStatus:
+            a?.status === "validated" ? "validated" : a?.status === "planned" ? "planned" : undefined,
+          hasAssignment: !!(a && (a.status === "planned" || a.status === "validated")),
+        });
+      }
+    });
+    dayAssignments.forEach((a) => {
+      if (a.status !== "planned" && a.status !== "validated") return;
+      const k = `${a.tripId}|${String(a.heure).trim()}`;
+      if (covered.has(k)) return;
+      covered.add(k);
+      const trip = weeklyForDay.find((t) => t.id === a.tripId);
+      rows.push({
+        key: `asg_${a.id}`,
+        tripId: a.tripId,
+        departure: trip?.departure ?? a.tripId,
+        arrival: trip?.arrival ?? "—",
+        heure: a.heure,
+        assignmentId: a.id,
+        vehicleId: a.vehicleId,
+        assignmentStatus: a.status === "validated" ? "validated" : "planned",
+        hasAssignment: true,
+      });
+    });
+    rows.sort((a, b) => {
+      const t = a.heure.localeCompare(b.heure);
+      if (t !== 0) return t;
+      return `${a.departure}${a.arrival}`.localeCompare(`${b.departure}${b.arrival}`);
+    });
+    return rows;
+  }, [weeklyForDay, dayAssignments, dayName]);
+
+  const trajetButtons = useMemo(() => {
+    if (!departureRows.length) return [] as JSX.Element[];
+    return departureRows.map((row) => {
+      const active =
+        selectedTrip?.departure === row.departure &&
+        selectedTrip?.arrival === row.arrival &&
+        selectedTrip?.heure === row.heure &&
+        selectedTrip?.id === row.tripId;
+      return (
+        <button
+          key={row.key}
+          type="button"
+          onClick={async () => {
+            setSelectedTrip({
+              id: row.tripId,
+              departure: row.departure,
+              arrival: row.arrival,
+              heure: row.heure,
+            });
+            if (!row.hasAssignment || !row.assignmentId || !row.vehicleId || !row.assignmentStatus) {
+              const held = lockHeldRef.current;
+              if (held && isOnline) {
+                await closeBoardingSessionLock(held.companyId, held.agencyId, held.assignmentId, held.clientId).catch(() => {});
+                lockHeldRef.current = null;
+              }
+              boardingSlotSnapshotRef.current = null;
+              offlineHydratedKeyRef.current = "";
+              setActiveBoardingAssignment(null);
+              if (companyId && selectedAgencyId) clearBoardingSlotSnapshot(companyId, selectedAgencyId);
+              return;
+            }
+            if (!companyId || !selectedAgencyId) return;
+            if (!isOnline) {
+              const snap = loadBoardingSlotSnapshot(companyId, selectedAgencyId);
+              if (
+                snap &&
+                snapshotMatchesSelection(snap, {
+                  companyId,
+                  agencyId: selectedAgencyId,
+                  assignmentId: row.assignmentId,
+                  date: selectedDate,
+                })
+              ) {
+                boardingSlotSnapshotRef.current = snap;
+                setActiveBoardingAssignment({
+                  id: snap.assignmentId,
+                  vehicleId: snap.vehicleId,
+                  status: snap.assignmentStatus,
+                });
+              } else {
+                alert(
+                  "Hors ligne : chargez ce créneau une fois en ligne, ou reconnectez-vous pour verrouiller l’embarquement."
+                );
+                setActiveBoardingAssignment(null);
+              }
+              return;
+            }
+            const held = lockHeldRef.current;
+            if (held && held.assignmentId !== row.assignmentId) {
+              await closeBoardingSessionLock(held.companyId, held.agencyId, held.assignmentId, held.clientId).catch(() => {});
+              lockHeldRef.current = null;
+            }
+            setActiveBoardingAssignment({
+              id: row.assignmentId,
+              vehicleId: row.vehicleId,
+              status: row.assignmentStatus,
+            });
+          }}
+          className={`px-3 py-2 rounded-lg text-sm font-medium shadow-sm flex flex-col items-start gap-1 ${
+            active ? "text-white" : row.hasAssignment ? "bg-gray-200 text-gray-700" : "bg-gray-100 text-gray-400 border border-dashed border-gray-300"
+          }`}
+          style={active ? { background: primary } : undefined}
+        >
+          <span>
+            {row.departure} → {row.arrival} à {row.heure}
+          </span>
+          <span className="flex flex-wrap items-center gap-1 text-[11px] font-normal opacity-95">
+            {row.hasAssignment && row.assignmentStatus ? (
+              <span
+                className={`px-1.5 py-0.5 rounded ${
+                  row.assignmentStatus === "validated"
+                    ? active
+                      ? "bg-white/20"
+                      : "bg-emerald-100 text-emerald-800"
+                    : active
+                      ? "bg-white/20"
+                      : "bg-amber-100 text-amber-900"
+                }`}
+              >
+                {row.assignmentStatus === "validated" ? "Validé" : "Planifié"}
+              </span>
+            ) : (
+              <span className={active ? "text-white/90" : "text-amber-700"}>Aucun véhicule planifié pour ce trajet</span>
+            )}
+          </span>
+        </button>
+      );
+    });
+  }, [departureRows, selectedTrip, primary, companyId, selectedAgencyId, isOnline, selectedDate]);
 
   if (!user) {
     return (
@@ -1558,7 +2184,21 @@ useEffect(() => {
   return (
     <StandardLayoutWrapper>
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <PageHeader title="Liste d'embarquement" subtitle={selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedDate} ${selectedTrip.heure}` : undefined} icon={Plane} />
+        <PageHeader
+          title="Liste d'embarquement"
+          subtitle={
+            selectedTrip
+              ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedDate} ${selectedTrip.heure}${
+                  assignmentStatusBadge
+                    ? assignmentStatusBadge === "validated"
+                      ? " • Validé (logistique)"
+                      : " • Planifié"
+                    : ""
+                }`
+              : undefined
+          }
+          icon={Plane}
+        />
         <div
           className="flex items-center gap-2 shrink-0 rounded-full px-3 py-1.5 text-sm font-medium"
           style={{
@@ -1722,12 +2362,17 @@ useEffect(() => {
           <div className="flex flex-wrap gap-2">
             {!selectedAgencyId ? (
               <div className="text-gray-500 dark:text-gray-200">Choisissez d’abord une agence.</div>
-            ) : trajetsDuJour.length === 0 ? (
-              <div className="text-gray-500 dark:text-gray-200">Aucun trajet planifié pour cette date</div>
+            ) : departureRows.length === 0 ? (
+              <div className="text-gray-500 dark:text-gray-200">Aucun créneau hebdomadaire pour cette date</div>
             ) : (
               trajetButtons
             )}
           </div>
+          {selectedTrip && !activeBoardingAssignment ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+              Ce trajet n’a pas encore de véhicule assigné (tripAssignment). Embarquement et scan sont désactivés jusqu’à planification.
+            </div>
+          ) : null}
         </div>
 
         {/* Infos départ + actions */}
@@ -1756,15 +2401,19 @@ useEffect(() => {
               <div className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white font-medium">
                 <span className="opacity-90">Absent:</span> <b>{totals.seatsAbsents}</b>
               </div>
-              {vehicleCapacity != null && (
+              {capacityLimit != null && (
                 <div className="px-2 py-1 rounded bg-blue-50 dark:bg-slate-700 border border-blue-200 dark:border-slate-600">
-                  <span className="text-gray-500 dark:text-gray-200">Capacité véhicule:</span> <b className="text-gray-900 dark:text-white">{vehicleCapacity}</b> places
-                  {vehicleCapacity > 0 && (
-                    <span className="ml-1 text-sm"> — Remplissage: {Math.round((totals.seatsEmbarques / vehicleCapacity) * 100)}%</span>
+                  <span className="text-gray-500 dark:text-gray-200">Capacité véhicule:</span>{" "}
+                  <b className="text-gray-900 dark:text-white">{capacityLimit}</b> places
+                  {capacityLimit > 0 && (
+                    <span className="ml-1 text-sm">
+                      {" "}
+                      — Remplissage: {Math.round((totals.seatsEmbarques / capacityLimit) * 100)}%
+                    </span>
                   )}
                 </div>
               )}
-              {vehicleCapacity != null && vehicleCapacity > 0 && totals.seatsEmbarques >= vehicleCapacity && (
+              {capacityLimit != null && capacityLimit > 0 && totals.seatsEmbarques >= capacityLimit && (
                 <div className="px-2 py-1 rounded bg-amber-100 border border-amber-300 text-amber-800 text-sm font-medium">
                   Capacité atteinte
                 </div>
@@ -1811,7 +2460,7 @@ useEffect(() => {
                 scanOn ? "bg-emerald-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-slate-700 dark:text-gray-200"
               }`}
               title="Activer le scanner (QR / code-barres)"
-              disabled={!selectedTrip || !selectedAgencyId}
+              disabled={!selectedTrip || !selectedAgencyId || !activeBoardingAssignment}
             >
               {scanOn ? "Scanner ON" : "Scanner OFF"}
             </button>
@@ -1874,7 +2523,7 @@ useEffect(() => {
               type="submit"
               className="px-3 py-2 rounded-lg text-white text-sm"
               style={{ background: primary }}
-              disabled={!selectedAgencyId && !userAgencyId}
+              disabled={(!selectedAgencyId && !userAgencyId) || !activeBoardingAssignment}
             >
               Valider
             </button>

@@ -7,7 +7,7 @@ import {
 } from 'firebase/firestore';
 import type { Unsubscribe } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
-import { resolveReservationById, resolveReservationByToken } from '../utils/resolveReservation';
+import { resolveReservationByToken } from '../utils/resolveReservation';
 import { SectionCard, StatusBadge } from '@/ui';
 import {
   ChevronLeft, MapPin, Clock, Calendar, CheckCircle, XCircle, Loader2,
@@ -28,6 +28,15 @@ import { showTicketDirect as showTicketDirectUtil, canViewReceiptPage } from '@/
 import { getDisplayPhone } from '@/utils/phoneUtils';
 import { useTranslation } from 'react-i18next';
 import { getPublicPathBase } from '../utils/subdomain';
+import { ensurePendingOnlinePaymentFromReservation } from '@/services/paymentService';
+import { loadPublicCompanyInfoSessionThenFirestore } from '../utils/loadPublicCompanyInfo';
+import { commitProofReceivedWithSeatBooking } from '@/modules/compagnie/tripInstances/onlineReservationProofCommit';
+import {
+  clearPendingReservation,
+  readPendingReservationPointer,
+  pendingReservationIdMatches,
+} from '../utils/pendingReservation';
+import { toast } from 'sonner';
 
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
@@ -80,43 +89,30 @@ interface CompanyInfo {
 }
 
 /* ====== Mémoire locale ====== */
-const PENDING_KEY = 'pendingReservation';
 const STEP_KEY = (slug?: string) => `mb:lastStep:${slug || ''}`;
 
-const readPending = () => {
-  try { const raw = localStorage.getItem(PENDING_KEY); return raw ? JSON.parse(raw) : null; }
-  catch { return null; }
-};
-
-// 🔴 CORRECTION CRITIQUE : Fonction de nettoyage améliorée
 const clearPending = () => {
-  try { 
-    localStorage.removeItem(PENDING_KEY); 
-    console.log('🧹 pendingReservation nettoyé du localStorage');
-  } catch (e) {
-    console.error('Erreur lors du nettoyage localStorage:', e);
-  }
-  
-  try { 
+  clearPendingReservation();
+  try {
     sessionStorage.removeItem('reservationDraft');
-    console.log('🧹 reservationDraft nettoyé du sessionStorage');
-  } catch (e) {
-    console.error('Erreur lors du nettoyage sessionStorage:', e);
+    sessionStorage.removeItem('companyInfo');
+  } catch {
+    /* ignore */
   }
-  
-  // Nettoyage supplémentaire des clés obsolètes
   try {
     const keysToRemove = [
       'currentReservation',
       'lastReservationId',
       'pending_payment',
-      'mb_pending'
+      'mb_pending',
     ];
-    keysToRemove.forEach(key => {
+    keysToRemove.forEach((key) => {
       localStorage.removeItem(key);
       sessionStorage.removeItem(key);
     });
-  } catch (e) {}
+  } catch {
+    /* ignore */
+  }
 };
 
 const PAYMENT_METHODS = {
@@ -166,6 +162,7 @@ const ReservationDetailsPage: React.FC = () => {
   const [agencyLongitude, setAgencyLongitude] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
+  const [companyLoadError, setCompanyLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
   const [width, height] = useWindowSize();
@@ -188,13 +185,12 @@ const ReservationDetailsPage: React.FC = () => {
 
   /** Construit un objet Reservation depuis le snapshot publicReservations (pas d'accès direct à reservations pour le public). */
   const mapPublicSnapshotToReservation = useCallback((data: Record<string, unknown>, reservationId: string): Reservation => {
-    const s = String((data.statut ?? '') || '').toLowerCase();
+    const lifecycle = String((data.status ?? '') || '').toLowerCase();
     let normalizedStatus: ReservationStatus = 'en_attente_paiement';
-    if (['preuve_recue', 'verif', 'vérif'].some(k => s.includes(k))) normalizedStatus = 'verification';
-    else if (['pay', 'confirm', 'valid'].some(k => s.includes(k))) normalizedStatus = 'confirme';
-    else if (['refuse', 'refusé', 'reject', 'rejeté'].some(k => s.includes(k))) normalizedStatus = 'refuse';
-    else if (['annule', 'cancel', 'cancelled'].some(k => s.includes(k))) normalizedStatus = 'annule';
-    else if (s === 'en_attente_paiement' || s.includes('attente_paiement')) normalizedStatus = 'en_attente_paiement';
+    if (lifecycle === 'en_attente') normalizedStatus = 'en_attente_paiement';
+    else if (lifecycle === 'payé' || lifecycle === 'paye') {
+      normalizedStatus = data.ticketValidatedAt ? 'confirme' : 'verification';
+    } else if (lifecycle === 'annulé' || lifecycle === 'annule') normalizedStatus = 'annule';
 
     return {
       id: reservationId,
@@ -233,6 +229,8 @@ const ReservationDetailsPage: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
+        setCompanyLoadError(null);
+        setCompanyInfo(null);
 
         let ref: DocumentReference;
         let hardId = id || '';
@@ -240,11 +238,38 @@ const ReservationDetailsPage: React.FC = () => {
         let snapshot: Record<string, unknown> | undefined;
 
         if (id) {
-          const r = await resolveReservationById(slug, id);
-          ref = r.ref;
-          publicToken = r.publicToken;
-          snapshot = r.snapshot;
-          hardId = r.hardId ?? id;
+          const loc = (location.state || {}) as { companyId?: string; agencyId?: string };
+          let companyId = loc.companyId ?? readPendingReservationPointer()?.companyId;
+          let agencyId = loc.agencyId ?? readPendingReservationPointer()?.agencyId;
+          if (!companyId || !agencyId) {
+            const prSnap = await getDoc(doc(db, 'publicReservations', id));
+            if (prSnap.exists()) {
+              const p = prSnap.data() as Record<string, unknown>;
+              companyId = String(p.companyId ?? companyId ?? '');
+              agencyId = String(p.agencyId ?? agencyId ?? '');
+              publicToken = (p.token ?? p.publicToken) as string | undefined;
+            }
+          }
+          if (!companyId || !agencyId) {
+            setError('Réservation introuvable.');
+            setLoading(false);
+            return;
+          }
+          ref = doc(db, 'companies', companyId, 'agences', agencyId, 'reservations', id);
+          hardId = id;
+          const nestedSnap = await getDoc(ref);
+          if (nestedSnap.exists()) {
+            const nd = nestedSnap.data() as Record<string, unknown>;
+            snapshot = {
+              ...nd,
+              reservationId: id,
+              companyId,
+              agencyId,
+            };
+            if (!publicToken && typeof nd.publicToken === 'string') {
+              publicToken = nd.publicToken;
+            }
+          }
         } else if (token) {
           const r = await resolveReservationByToken(slug, token);
           ref = r.ref;
@@ -279,19 +304,25 @@ const ReservationDetailsPage: React.FC = () => {
           setAgencyLongitude(Number.isFinite(lng) ? lng : null);
         } catch {}
         try {
-          const cSnap = await getDoc(doc(db, 'companies', companyId));
-          if (cSnap.exists()) {
-            const d = cSnap.data() as any;
+          const companyRes = await loadPublicCompanyInfoSessionThenFirestore(companyId);
+          if (!companyRes.ok) {
+            setCompanyLoadError(companyRes.message);
+          } else {
+            const i = companyRes.info;
             setCompanyInfo({
-              id: cSnap.id,
-              name: d?.name || d?.nom,
-              primaryColor: d?.primaryColor,
-              secondaryColor: d?.secondaryColor,
-              couleurPrimaire: d?.couleurPrimaire,
-              logoUrl: d?.logoUrl
+              id: i.id,
+              name: i.name,
+              primaryColor: i.primaryColor,
+              secondaryColor: i.secondaryColor,
+              couleurPrimaire: i.couleurPrimaire,
+              logoUrl: i.logoUrl,
             });
           }
-        } catch {}
+        } catch (e) {
+          setCompanyLoadError(
+            e instanceof Error ? e.message : 'Erreur lors du chargement des informations compagnie.'
+          );
+        }
 
         setLoading(false);
 
@@ -301,11 +332,30 @@ const ReservationDetailsPage: React.FC = () => {
             const data = snap.data() as Record<string, unknown>;
             const resId = (data.reservationId as string) ?? hardId;
             setReservation(mapPublicSnapshotToReservation(data, resId));
-            const pend = readPending();
-            const statut = String((data.statut ?? '') || '').toLowerCase();
-            if (['confirme', 'annule', 'refuse'].some(x => statut.includes(x)) && pend?.id === resId) clearPending();
+            const pend = readPendingReservationPointer();
+            const st = String(data.status ?? '').toLowerCase();
+            if (
+              (st === 'annulé' || st === 'annule' || data.ticketValidatedAt) &&
+              pendingReservationIdMatches(pend, resId)
+            ) {
+              clearPending();
+            }
           }, (e) => {
             console.error('publicReservations onSnapshot:', e);
+          });
+        } else if (id && reservationRef.current) {
+          unsub = onSnapshot(reservationRef.current, (snap) => {
+            if (!snap.exists()) return;
+            const data = snap.data() as Record<string, unknown>;
+            setReservation(mapPublicSnapshotToReservation(data, snap.id));
+            const pend = readPendingReservationPointer();
+            const st = String(data.status ?? '').toLowerCase();
+            if (
+              (st === 'annulé' || st === 'annule' || data.ticketValidatedAt) &&
+              pendingReservationIdMatches(pend, snap.id)
+            ) {
+              clearPending();
+            }
           });
         }
 
@@ -322,7 +372,7 @@ const ReservationDetailsPage: React.FC = () => {
     })();
 
     return () => { unsub?.(); };
-  }, [id, token, slug, mapPublicSnapshotToReservation]);
+  }, [id, token, slug, location.state, mapPublicSnapshotToReservation]);
 
   // 🎉 Confetti pour paiement confirmé
   useEffect(() => {
@@ -337,7 +387,7 @@ const ReservationDetailsPage: React.FC = () => {
     }
   }, [reservation?.statut, reservation?.id]);
 
-  /* Chargement des moyens de paiement (pour section preuve, en_attente_paiement uniquement) */
+  /* Chargement des moyens de paiement (section preuve : en attente de paiement en ligne) */
   useEffect(() => {
     if (!reservation?.companyId || reservation?.statut !== 'en_attente_paiement') return;
     let cancelled = false;
@@ -374,8 +424,7 @@ const ReservationDetailsPage: React.FC = () => {
       setProofError('Indiquez la référence reçue (au moins 4 caractères)');
       return;
     }
-    const currentStatut = (reservation.statut || '').toLowerCase();
-    if (currentStatut !== 'en_attente_paiement') {
+    if (reservation.statut !== 'en_attente_paiement') {
       setProofError('Cette réservation a expiré ou a déjà été traitée.');
       return;
     }
@@ -383,20 +432,37 @@ const ReservationDetailsPage: React.FC = () => {
     setProofError(null);
     try {
       const inputReference = (proofMessage || '').trim();
-      await updateDoc(ref, {
-        statut: 'preuve_recue',
+      await commitProofReceivedWithSeatBooking(db, ref, {
+        status: 'payé',
         paymentReference: inputReference,
         proofSubmittedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
       });
       const tok = publicTokenRef.current;
       if (tok) {
         await updateDoc(doc(db, 'publicReservations', tok), {
-          statut: 'preuve_recue',
+          status: 'payé',
           paymentReference: inputReference,
           updatedAt: serverTimestamp(),
         });
       }
+      const pathParts = ref.path.split('/');
+      const companyIdResolved = reservation.companyId || pathParts[1] || '';
+      const agencyIdResolved = reservation.agencyId || pathParts[3] || '';
+      const ensure = await ensurePendingOnlinePaymentFromReservation({
+        companyId: companyIdResolved,
+        agencyId: agencyIdResolved,
+        reservationId: reservation.id,
+        montant: Number(reservation.montant) || 0,
+        paymentMethodLabel: paymentMethodKey,
+      });
+      if (!ensure.ok) {
+        console.warn('[ReservationDetailsPage] ensurePendingOnlinePaymentFromReservation', ensure.error);
+        toast.error('Preuve enregistrée, mais la caisse digitale n’a pas reçu l’entrée paiement.', {
+          description: ensure.error ?? 'Vérifiez les règles/index Firestore « payments » et redéployez l’app.',
+          duration: 12_000,
+        });
+      }
+      clearPending();
       setProofMessage('');
       setProofError(null);
     } catch (e: any) {
@@ -513,6 +579,35 @@ const ReservationDetailsPage: React.FC = () => {
           <p className="text-xs text-gray-500 mt-4 pt-4 border-t border-gray-200">
             💡 Conseil : Videz le cache de votre navigateur si le problème persiste.
           </p>
+        </SectionCard>
+      </div>
+    );
+  }
+
+  if (companyLoadError || !companyInfo) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{ background: '#f8fafc' }}>
+        <SectionCard title="Informations compagnie indisponibles" icon={XCircle} className="max-w-md w-full shadow-md">
+          <p className="text-gray-600 mb-5 text-center">
+            {companyLoadError ||
+              'Impossible de charger les informations de la compagnie. Réessayez ou reprenez depuis l’accueil.'}
+          </p>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="w-full px-5 py-3 rounded-lg text-sm font-semibold shadow-sm bg-blue-600 text-white hover:bg-blue-700"
+            >
+              Réessayer
+            </button>
+            <button
+              type="button"
+              onClick={handleGoBack}
+              className="w-full px-5 py-2.5 rounded-lg text-sm font-medium text-gray-600 border border-gray-200 hover:bg-gray-50 transition-colors"
+            >
+              Retour
+            </button>
+          </div>
         </SectionCard>
       </div>
     );
@@ -676,7 +771,7 @@ const ReservationDetailsPage: React.FC = () => {
           </SectionCard>
         </motion.div>
 
-        {/* Section paiement / justificatif (en_attente_paiement uniquement) */}
+        {/* Section paiement / justificatif (en attente paiement en ligne) */}
         {reservation.canal === 'en_ligne' && reservation.statut === 'en_attente_paiement' && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }}>
             <SectionCard title="Justificatif de paiement" icon={CreditCard} className="shadow-md">

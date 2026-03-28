@@ -18,7 +18,11 @@ service cloud.firestore {
       return isAuth() && getUserRole() == 'guichetier';
     }
     function isBoardingOfficer() {
-      return isAuth() && (getUserRole() == 'agency_boarding_officer' || getUserRole() == 'embarquement');
+      return isAuth() && (
+        getUserRole() == 'agency_boarding_officer' ||
+        getUserRole() == 'embarquement' ||
+        getUserRole() == 'chefEmbarquement'
+      );
     }
     function isFleetController() {
       return isAuth() && getUserRole() == 'agency_fleet_controller';
@@ -47,7 +51,7 @@ service cloud.firestore {
         || (isAgencyManager() && oldS == 'annulation_en_attente' && newS == 'annule')
         || (isComptable() && oldS == 'annule' && newS == 'rembourse')
         || (isBoardingOfficer() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'embarque')
-        || ((getUserRole() == 'admin_compagnie' || getUserRole() == 'company_accountant' || isAgencyManager() || isComptable()) && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
+        || ((getUserRole() == 'admin_compagnie' || getUserRole() == 'company_accountant' || isAgencyManager() || isComptable() || getUserRole() == 'operator_digital') && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
     }
     /* Phase B — contrôleur embarquement : ne peut modifier que statut, statutEmbarquement, controleurId, checkInTime, auditLog, updatedAt */
     function boardingOfficerAllowedKeysOnly() {
@@ -87,6 +91,61 @@ service cloud.firestore {
         : '';
       return docCompanyId != '' ? docCompanyId : tokenCompanyId;
     }
+
+    /**
+     * Agence rattachée à la compagnie (guichet / escale / chef) — évite les 403 quand
+     * users/{uid}.companyId est absent ou désynchronisé mais agencyId est correct.
+     */
+    function userAgencyBelongsToCompany(companyId) {
+      return isAuth() && getUserAgencyId() != ''
+        && exists(/databases/$(database)/documents/companies/$(companyId)/agences/$(getUserAgencyId()));
+    }
+    /** Écriture trésorerie / paiements guichet : même agence que le payload. */
+    function canWriteAgencyScopedFinance(companyId) {
+      return userAgencyBelongsToCompany(companyId) && (
+        isGuichetier() ||
+        getUserRole() == 'escale_agent' ||
+        getUserRole() == 'escale_manager' ||
+        (getUserRole() == 'chefAgence' && getUserAgencyId() != '') ||
+        getUserRole() == 'agency_accountant'
+      );
+    }
+    /**
+     * Comptable agence : création idempotente du compte miroir company_bank_* (ensureCompanyBankAccount),
+     * nécessaire pour lister la banque dans « versement caisse → banque ». Pas d’écriture ledger arbitraire.
+     */
+    function agencyAccountantCanCreateCompanyBankMirror(companyId, accountId) {
+      return getUserRole() == 'agency_accountant'
+        && userCompanyId() == companyId
+        && userAgencyBelongsToCompany(companyId)
+        && accountId.matches('company_bank_.+')
+        && request.resource.data.get('accountType', '') == 'company_bank'
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('currentBalance', -1) == 0
+        && request.resource.data.get('isActive', false) == true
+        && (request.resource.data.get('agencyId', '') == '' || request.resource.data.agencyId == null);
+    }
+    function guichetValidatedPaymentCreate(companyId) {
+      return request.resource.data.get('status', '') == 'validated'
+        && request.resource.data.get('channel', '') == 'guichet'
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('validatedBy', '') == request.auth.uid
+        && request.resource.data.get('amount', 0) > 0
+        && request.resource.data.get('amount', 0) < 100000000
+        && request.resource.data.get('currency', 'XOF') == 'XOF';
+    }
+    function financialTxAgencyStaffPayload(companyId) {
+      let t = request.resource.data.get('type', '');
+      let amt = request.resource.data.get('amount', 0);
+      return request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && (
+          (t == 'refund' && amt < 0 && amt > -100000000)
+          || (amt > 0 && amt < 100000000)
+        );
+    }
+
     function canWriteTripCosts(isCreate) {
       let role = getUserRole();
       return isAuth() && (
@@ -104,6 +163,66 @@ service cloud.firestore {
     function canReadFleet() {
       return isFleetController() || isAgencyManager() || isBoardingOfficer() || isResponsableLogistique();
     }
+    /** Phase 3.5 — verrou embarquement sur tripAssignments (boardingSession uniquement). */
+    function tripAssignmentCoreUnchangedForBoarding() {
+      return request.resource.data.tripId == resource.data.tripId
+        && request.resource.data.date == resource.data.date
+        && request.resource.data.heure == resource.data.heure
+        && request.resource.data.vehicleId == resource.data.vehicleId
+        && request.resource.data.agencyId == resource.data.agencyId
+        && request.resource.data.status == resource.data.status;
+    }
+    function canWriteTripAssignmentBoardingSession(companyId, agencyId) {
+      return isAuth() && userCompanyId() == companyId && getUserAgencyId() == agencyId && (
+        isBoardingOfficer()
+        || getUserRole() == 'escale_agent'
+        || getUserRole() == 'escale_manager'
+      );
+    }
+    function tripAssignmentBoardingSessionActivateOk() {
+      let next = request.resource.data.boardingSession;
+      let prev = resource.data.get('boardingSession', {});
+      return next.keys().hasAll(['startedBy', 'startedAt', 'status', 'clientInstanceId'])
+        && next.startedBy == request.auth.uid
+        && next.status == 'active'
+        && next.clientInstanceId is string
+        && (
+          prev.get('status', '') != 'active'
+          || (
+            prev.get('status', '') == 'active'
+            && prev.get('clientInstanceId', '') == next.clientInstanceId
+            && prev.get('startedBy', '') == request.auth.uid
+          )
+        );
+    }
+    function tripAssignmentBoardingSessionCloseOk() {
+      let prev = resource.data.get('boardingSession', {});
+      let next = request.resource.data.boardingSession;
+      return prev.get('status', '') == 'active'
+        && next.status == 'closed'
+        && next.clientInstanceId == prev.get('clientInstanceId', '')
+        && next.startedBy == prev.get('startedBy', '')
+        && next.startedAt == prev.get('startedAt', '')
+        && next.keys().hasAll(['startedBy', 'startedAt', 'status', 'clientInstanceId', 'closedAt']);
+    }
+    /** Phase 4 — liveStatus (supervision embarquement). */
+    function canWriteTripAssignmentLiveStatus(companyId, agencyId) {
+      return isAuth() && userCompanyId() == companyId && getUserAgencyId() == agencyId && (
+        isBoardingOfficer()
+        || getUserRole() == 'escale_agent'
+        || getUserRole() == 'escale_manager'
+        || getUserRole() == 'admin_compagnie'
+      );
+    }
+    function tripAssignmentLiveStatusShapeOk() {
+      let next = request.resource.data.liveStatus;
+      return next.keys().hasAll(['boardedCount', 'expectedCount', 'status'])
+        && next.boardedCount is int
+        && next.boardedCount >= 0
+        && next.expectedCount is int
+        && next.expectedCount >= 0
+        && (next.status == 'waiting' || next.status == 'boarding' || next.status == 'completed');
+    }
     /* Read access for company data: same company, platform admin, or responsable_logistique (same company). */
     function canReadCompanyData(companyId) {
       return isAuth() && (
@@ -112,6 +231,20 @@ service cloud.firestore {
         getUserRole() == 'admin_compagnie' ||
         (isResponsableLogistique() && userCompanyId() == companyId)
       );
+    }
+
+    /**
+     * Réservation en ligne en attente de preuve (upload preuve / transaction sièges).
+     * Flux actuel : statut "en_attente" + hold ; ancien alias : "en_attente_paiement".
+     */
+    function reservationAwaitingOnlinePaymentProof() {
+      let s = resource.data.get('statut', '');
+      return s == 'en_attente_paiement'
+        || s == 'en_attente'
+        || (s is string && (
+          s.toLowerCase().replace(' ', '_') == 'en_attente_paiement'
+          || s.toLowerCase().replace(' ', '_') == 'en_attente'
+        ));
     }
 
     /* =====================
@@ -203,10 +336,14 @@ service cloud.firestore {
           && request.resource.data.get('departureTime', '') != ''
           && request.resource.data.get('departureCity', '') != ''
           && request.resource.data.get('arrivalCity', '') != '';
+        /* Public : réservation de sièges (création résa guichet + commit preuve en ligne avec segments). */
         allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
           || (request.auth == null
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reservedSeats', 'passengerCount', 'updatedAt'])
-            && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0));
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['reservedSeats', 'remainingSeats', 'passengerCount', 'updatedAt', 'segments'])
+            && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0)
+            && request.resource.data.get('passengerCount', 0) >= resource.data.get('passengerCount', 0)
+            && request.resource.data.get('remainingSeats', 999999) <= resource.data.get('remainingSeats', 999999));
         allow delete: if false;
         /* Progression bus par escale (arrivée/départ). Lecture: public. Écriture: chefAgence, escale_manager, escale_agent, admin_platforme uniquement. */
         match /progress/{stopOrder} {
@@ -223,8 +360,28 @@ service cloud.firestore {
 
       /* Caisse (cashTransactions, cashClosures, cashRefunds, cashTransfers). Read/write: same company, platform admin, or escale user whose agency is in this company. */
       match /cashTransactions/{txId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
-        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          escaleUserCanReadCompany(companyId) ||
+          canWriteAgencyScopedFinance(companyId)
+        );
+        allow create, update: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          escaleUserCanReadCompany(companyId) ||
+          canWriteAgencyScopedFinance(companyId)
+        );
+        allow delete: if false;
+      }
+
+      /* Virtual sessions (online cash): companies/{companyId}/virtualSessions/{sessionId}
+         Created/updated idempotently by cashService.ensureVirtualSession(). */
+      match /virtualSessions/{sessionId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create, update: if isAuth() && (
+          userCompanyId() == companyId || getUserRole() == 'admin_platforme'
+        );
         allow delete: if false;
       }
       match /cashClosures/{closureId} {
@@ -283,6 +440,73 @@ service cloud.firestore {
           );
         }
 
+        /* Affectations trajet + date + heure → véhicule (planifié par chef/superviseur, validé par logistique). */
+        match /tripAssignments/{assignmentId} {
+          allow get, list: if isAuth() && userCompanyId() == companyId && (
+            (getUserAgencyId() == agencyId && (
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'superviseur' ||
+              getUserRole() == 'chefEmbarquement' ||
+              getUserRole() == 'agency_boarding_officer' ||
+              getUserRole() == 'embarquement' ||
+              getUserRole() == 'escale_agent' ||
+              getUserRole() == 'escale_manager' ||
+              getUserRole() == 'agency_fleet_controller'
+            ))
+            || getUserRole() == 'admin_compagnie'
+            || (isResponsableLogistique() && userCompanyId() == companyId)
+          );
+          allow create: if isAuth() && userCompanyId() == companyId && (
+            (getUserAgencyId() == agencyId && (getUserRole() == 'chefAgence' || getUserRole() == 'superviseur'))
+            || getUserRole() == 'admin_compagnie'
+          )
+            && request.resource.data.keys().hasAll(['tripId', 'date', 'heure', 'vehicleId', 'agencyId', 'status', 'liveStatus'])
+            && request.resource.data.agencyId == agencyId
+            && request.resource.data.status == 'planned'
+            && request.resource.data.tripId is string
+            && request.resource.data.date is string
+            && request.resource.data.heure is string
+            && request.resource.data.vehicleId is string
+            && request.resource.data.liveStatus.keys().hasAll(['boardedCount', 'expectedCount', 'status'])
+            && request.resource.data.liveStatus.boardedCount == 0
+            && request.resource.data.liveStatus.status == 'waiting'
+            && request.resource.data.liveStatus.expectedCount is int
+            && request.resource.data.liveStatus.expectedCount >= 0;
+          allow update: if isAuth() && userCompanyId() == companyId && (
+            (
+              getUserAgencyId() == agencyId &&
+              (getUserRole() == 'chefAgence' || getUserRole() == 'superviseur' || getUserRole() == 'admin_compagnie') &&
+              resource.data.status == 'planned' &&
+              request.resource.data.status == 'planned'
+            )
+            || (
+              resource.data.status == 'planned' &&
+              request.resource.data.status == 'validated' &&
+              (
+                (getUserAgencyId() == agencyId && getUserRole() == 'agency_fleet_controller') ||
+                getUserRole() == 'admin_compagnie' ||
+                (isResponsableLogistique() && userCompanyId() == companyId)
+              )
+            )
+            || (
+              canWriteTripAssignmentBoardingSession(companyId, agencyId)
+              && tripAssignmentCoreUnchangedForBoarding()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['boardingSession', 'updatedAt'])
+              && (
+                tripAssignmentBoardingSessionActivateOk()
+                || tripAssignmentBoardingSessionCloseOk()
+              )
+            )
+            || (
+              canWriteTripAssignmentLiveStatus(companyId, agencyId)
+              && tripAssignmentCoreUnchangedForBoarding()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['liveStatus', 'updatedAt'])
+              && tripAssignmentLiveStatusShapeOk()
+            )
+          );
+          allow delete: if false;
+        }
+
         match /reservations/{reservationId} {
 
           /* 🔓 Création publique. Lecture réservée aux utilisateurs compagnie ; accès billet public = via publicReservations (doc id = publicToken) uniquement. */
@@ -299,7 +523,7 @@ service cloud.firestore {
           allow update: if (
             request.auth == null &&
             resource.data.canal == "en_ligne" &&
-            resource.data.statut == "en_attente_paiement" &&
+            reservationAwaitingOnlinePaymentProof() &&
             (
               request.resource.data.diff(resource.data).changedKeys().hasOnly(["publicToken", "publicUrl"])
               || request.resource.data.diff(resource.data).changedKeys().hasOnly(["publicToken", "publicUrl", "updatedAt"])
@@ -312,25 +536,48 @@ service cloud.firestore {
           ============================= */
           allow update: if (
             (resource.data.get('canal', '') == '' || (resource.data.get('canal', '') is string && resource.data.get('canal', '').toLowerCase().replace(' ', '_') == "en_ligne")) &&
-            (resource.data.get('statut', '') == "en_attente_paiement" || (resource.data.get('statut', '') is string && resource.data.get('statut', '').toLowerCase() == "en_attente_paiement")) &&
+            reservationAwaitingOnlinePaymentProof() &&
             (request.resource.data.get('statut', '') == "preuve_recue" || (request.resource.data.get('statut', '') is string && request.resource.data.get('statut', '').toLowerCase() == "preuve_recue"))
           );
           allow update: if (
-            resource.data.get('statut', '') == "en_attente_paiement" &&
+            reservationAwaitingOnlinePaymentProof() &&
             request.resource.data.get('statut', '') == "preuve_recue"
           );
 
-          /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ; contrôleur embarquement : champs restreints */
+          /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ;
+             contrôleur embarquement : champs restreints.
+             operator_digital : peut valider/refuser même si shiftId est présent/validé, mais
+             pour les updates "non-statut" on limite les clés autorisées (cash/paiement). */
           allow update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
-            (resource.data.get('shiftId', '') == '' ||
-            !exists(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)) ||
-            get(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)).data.get('status', '') != 'validated')
+            (
+              getUserRole() == 'operator_digital' ||
+              /* Validation finale chef/compta : autoriser le marquage validatedAt/updatedAt
+                 même si le shift est déjà VALIDATED (sans changement de statut réservation). */
+              (
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny(['statut']) &&
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validatedAt', 'updatedAt']) &&
+                (isAgencyManager() || isComptable() || getUserRole() == 'admin_platforme')
+              ) ||
+              (resource.data.get('shiftId', '') == '' ||
+              !exists(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)) ||
+              get(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(resource.data.shiftId)).data.get('status', '') != 'validated')
+            )
             && (
-              !request.resource.data.diff(resource.data).affectedKeys().hasAny(['statut'])
-              || (validReservationStatutTransition() && (
-                !isBoardingOfficer()
-                || boardingOfficerAllowedKeysOnly()
-              ))
+              (
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny(['statut'])
+                ? (getUserRole() != 'operator_digital'
+                  || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                    'cashTransactionId', 'paymentStatus', 'paymentMethod'
+                  ]))
+                : true
+              )
+              && (
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny(['statut'])
+                || (validReservationStatutTransition() && (
+                  !isBoardingOfficer()
+                  || boardingOfficerAllowedKeysOnly()
+                ))
+              )
             )
           );
         }
@@ -340,11 +587,16 @@ service cloud.firestore {
             || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
           allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'
             || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
+          /* Pause billetterie (active → paused) : uniquement le guichetier titulaire du poste (pas le comptable). */
           allow update: if isAuth() && (
             (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
               resource.data.status != 'validated' &&
-              (request.resource.data.status != 'validated' || isComptable()) &&
-              (request.resource.data.status != 'closed' || (isGuichetier() && resource.data.userId == request.auth.uid))
+              (resource.data.status != 'active' || request.resource.data.status != 'paused'
+                || (isGuichetier() && resource.data.userId == request.auth.uid && getUserAgencyId() == agencyId)) &&
+              (request.resource.data.status != 'closed' || (isGuichetier() && resource.data.userId == request.auth.uid && getUserAgencyId() == agencyId)) &&
+              /* CLOSED → validated_agency : comptable d'agence (validateSessionByAccountant) ou chef / admin compagnie */
+              (request.resource.data.status != 'validated_agency' || ((isAgencyManager() || isComptable()) && getUserAgencyId() == agencyId)) &&
+              (request.resource.data.status != 'validated' || (isAgencyManager() && getUserAgencyId() == agencyId))
             )
             || (isEscaleManager() && agencyId == getUserAgencyId() && resource.data.status == 'pending' && request.resource.data.status == 'active')
           );
@@ -358,7 +610,8 @@ service cloud.firestore {
             || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
           allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             resource.data.get('status', '') != 'validated' &&
-            (request.resource.data.get('status', '') != 'validated' || isComptable())
+            (request.resource.data.get('status', '') != 'validated_agency' || ((isAgencyManager() || isComptable()) && getUserAgencyId() == agencyId)) &&
+            (request.resource.data.get('status', '') != 'validated' || (isAgencyManager() && getUserAgencyId() == agencyId))
           )
           || (isEscaleManager() && agencyId == getUserAgencyId());
           allow delete: if false;
@@ -386,6 +639,37 @@ service cloud.firestore {
 
         match /boardingLocks/{lockId} {
           allow get, list, create: if (isBoardingOfficer() || isAgencyManager()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update, delete: if false;
+        }
+
+        /* Phase 4.5 — idempotence compteur live (un doc par affectation + réservation). Création seule, pas de MAJ. */
+        match /boardingEmbarkDedup/{dedupId} {
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          /* Même périmètre que liveStatus (escale + boarding) et que boardingLogs/boardingLocks (chef / contrôleur). */
+          allow create: if isAuth() && (
+              ((isBoardingOfficer() || isAgencyManager()) && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+              || canWriteTripAssignmentLiveStatus(companyId, agencyId)
+            )
+            && request.resource.data.keys().hasOnly(['reservationId', 'tripAssignmentId', 'scannedAt'])
+            && request.resource.data.reservationId is string
+            && request.resource.data.tripAssignmentId is string
+            && request.resource.data.scannedAt is timestamp;
+          allow update, delete: if false;
+        }
+
+        /** Journal centralisé des actions agents (lecture : supervision ; écriture : opérationnels). */
+        match /agentHistory/{eventId} {
+          allow get, list: if isAuth() && userCompanyId() == companyId && getUserAgencyId() == agencyId && (
+            isComptable() || isAgencyManager()
+            || getUserRole() == 'superviseur'
+            || getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme'
+          );
+          allow create: if isAuth() && userCompanyId() == companyId && getUserAgencyId() == agencyId && (
+            isGuichetier() || isComptable() || isAgencyManager() || isBoardingOfficer()
+            || getUserRole() == 'agentCourrier' || getUserRole() == 'superviseur'
+            || getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager'
+            || getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme'
+          );
           allow update, delete: if false;
         }
 
@@ -429,6 +713,19 @@ service cloud.firestore {
         match /cashReceipts/{receiptId} {
           allow get, list, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
+        }
+
+        /* Ledger-based cash control snapshots (no financial impact). Accountant compares physical cash vs ledger solde. */
+        match /cashAudits/{auditId} {
+          allow get, list, create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update, delete: if false;
+        }
+
+        /* Écritures comptables encaissement (une par validation de session guichet / courrier). Immutable après création. */
+        match /comptaEncaissements/{entryId} {
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update, delete: if false;
         }
 
         /* Agency cash movements (comptabilité). Authenticated read/write. */
@@ -480,7 +777,12 @@ service cloud.firestore {
          - Update: only allowed fields; forbid changing accountType, agencyId, companyId.
       ============================================================ */
       match /financialAccounts/{accountId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId));
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          escaleUserCanReadCompany(companyId) ||
+          canWriteAgencyScopedFinance(companyId)
+        );
         allow create: if isAuth() && (
           (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || escaleUserCanReadCompany(companyId)) && (
             getUserRole() == 'admin_compagnie' ||
@@ -490,8 +792,13 @@ service cloud.firestore {
             ((getUserRole() == 'escale_manager' || getUserRole() == 'escale_agent') && request.resource.data.get('accountType', '') == 'agency_cash' && request.resource.data.get('agencyId', '') == getUserAgencyId())
           )
           || (getUserRole() == 'chefAgence' && request.resource.data.get('accountType', '') == 'agency_cash' && request.resource.data.get('agencyId', '') == getUserAgencyId() && request.resource.data.get('companyId', '') == companyId)
+          || agencyAccountantCanCreateCompanyBankMirror(companyId, accountId)
         );
-        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+        allow update: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        ) && (
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['accountName', 'isActive', 'description', 'updatedAt'])
           ||
@@ -502,15 +809,32 @@ service cloud.firestore {
       }
       /* Treasury — immutable ledger: no update/delete. Phase 6: reconciliationStatus update allowed for admin_compagnie | company_accountant only. */
       match /financialMovements/{movementId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        );
+        allow create: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          (canWriteAgencyScopedFinance(companyId) && request.resource.data.get('agencyId', '') == getUserAgencyId())
+        );
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'company_accountant')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reconciliationStatus', 'updatedAt']);
         allow delete: if false;
       }
       match /expenses/{expenseId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if isAuth() && (
+          getUserRole() == 'admin_platforme' ||
+          (userCompanyId() == companyId && (
+            getUserRole() == 'admin_compagnie' ||
+            ((getUserRole() == 'chefAgence' || getUserRole() == 'agency_accountant')
+              && request.resource.data.get('agencyId', '') == getUserAgencyId()) ||
+            ((getUserRole() == 'company_accountant' || getUserRole() == 'financial_director')
+              && (request.resource.data.get('agencyId', '') == '' || request.resource.data.agencyId == null))
+          ))
+        );
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
@@ -523,8 +847,64 @@ service cloud.firestore {
       }
       /* Idempotency sentinels for financialMovements (Phase 6): prevent duplicate movements. Create/get only. */
       match /financialMovementIdempotency/{key} {
-        allow get, create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow get, create: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        );
         allow update, delete: if false;
+      }
+
+      /* Financial transactions ledger (Phase robuste)
+         - financialTransactions: immutable entries (create/read), optional status-only update by finance roles
+         - financialTransactionIdempotency: idempotence sentinels for tx writes
+         - accounts: ledger balances updated atomically by transaction service
+      */
+      match /financialTransactions/{transactionId} {
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        );
+        allow create: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          (canWriteAgencyScopedFinance(companyId) && financialTxAgencyStaffPayload(companyId))
+        );
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'company_accountant' ||
+          getUserRole() == 'financial_director'
+        ) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'metadata']);
+        allow delete: if false;
+      }
+
+      match /financialTransactionIdempotency/{key} {
+        allow get, create: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        );
+        allow update, delete: if false;
+      }
+
+      match /accounts/{accountId} {
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        );
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || canWriteAgencyScopedFinance(companyId));
+        allow update: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        )
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'balance', 'updatedAt', 'currency', 'accountType', 'type', 'label',
+            'includeInLiquidity', 'id', 'companyId', 'agencyId', 'createdAt'
+          ]);
+        allow delete: if false;
       }
 
       /*
@@ -607,7 +987,9 @@ service cloud.firestore {
 
       /* Vehicles (company-level). Read: company, platform, responsable_logistique. Write: fleet roles only (not responsable_logistique). */
       match /vehicles/{vehicleId} {
-        allow get, list: if canReadCompanyData(companyId);
+        allow get, list: if canReadCompanyData(companyId)
+          || (isBoardingOfficer() && userAgencyBelongsToCompany(companyId))
+          || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && userAgencyBelongsToCompany(companyId));
         allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           canModifyFleet() || isResponsableLogistique()
         );
@@ -683,9 +1065,61 @@ service cloud.firestore {
         allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
-      /* Company payments (subscription, etc.). Authenticated read/write. */
+      /* Audit trail confirm/reject/refund (createPayment → logPaymentAction). */
+      match /paymentLogs/{logId} {
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId)
+        );
+        allow create: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          (canWriteAgencyScopedFinance(companyId) && request.resource.data.get('userId', '') == request.auth.uid)
+        );
+        allow update, delete: if false;
+      }
+
+      /**
+       * Paiements unifiés (guichet + online) — companies/{companyId}/payments
+       * - Lecture / mise à jour : même tenant (userCompanyId) ou admin plateforme.
+       * - Création visiteur (avec ou sans auth) : pending + channel online + companyId cohérent
+       *   (évite l’échec si l’utilisateur est connecté avec un autre tenant que la compagnie du billet).
+       */
       match /payments/{paymentId} {
-        allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        /** Visiteur (auth ou anonyme) : création pending+online pour la caisse digitale. */
+        function visitorOnlinePendingPaymentCreate() {
+          return request.resource.data.get('status', '') == 'pending'
+            && request.resource.data.get('channel', '') == 'online'
+            && request.resource.data.get('companyId', '') == companyId
+            && request.resource.data.get('reservationId', '') == paymentId
+            && request.resource.data.get('agencyId', '') != ''
+            && request.resource.data.get('amount', 0) > 0
+            && request.resource.data.get('amount', 0) < 100000000
+            && request.resource.data.get('currency', 'XOF') == 'XOF';
+        }
+        /* get : staff ; visiteur = doc online dont l’id == reservationId (ou doc absent pour getDoc idempotent). */
+        allow get: if resource == null
+          || (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+          || (resource.data.get('companyId', '') == companyId
+            && resource.data.get('reservationId', '') == paymentId
+            && resource.data.get('channel', '') == 'online');
+        allow list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+          || visitorOnlinePendingPaymentCreate()
+          || (canWriteAgencyScopedFinance(companyId) && guichetValidatedPaymentCreate(companyId));
+        /* setDoc sur doc existant = update : idempotence (double envoi preuve / course). */
+        allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+          || (
+            resource.data.get('status', '') == 'pending'
+            && resource.data.get('channel', '') == 'online'
+            && resource.data.get('companyId', '') == companyId
+            && resource.data.get('reservationId', '') == paymentId
+            && visitorOnlinePendingPaymentCreate()
+            && request.resource.data.get('amount', 0) == resource.data.get('amount', -1)
+            && request.resource.data.get('agencyId', '') == resource.data.get('agencyId', '')
+          );
+        allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
       /* Subscription (plan) — required for useCapabilities / menus. CEO and company users must read. */
@@ -723,6 +1157,14 @@ service cloud.firestore {
         getUserRole() == 'admin_platforme' ||
         resource.data.get('companyId', '') == userCompanyId()
       );
+    }
+
+    /* Suivi colis public : lecture pour tous ; écriture par utilisateurs de la même compagnie (sync depuis l’app). */
+    match /publicShipmentTrack/{trackId} {
+      allow get, list: if true;
+      allow create: if isAuth() && userCompanyId() == request.resource.data.companyId;
+      allow update: if isAuth() && userCompanyId() == resource.data.companyId;
+      allow delete: if false;
     }
 
     /* =====================

@@ -1,6 +1,6 @@
 /**
  * Réservations réseau (audit CEO) : fusion Performance Réseau + Opérations Réseau.
- * Affiche : réservations réseau, CA par agence, billets vendus, tableau agences, synthèse opérationnelle.
+ * Affiche : réservations réseau, CA, remplissage et synthèse opérationnelle (source unique : getReservationsInRange).
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
@@ -15,7 +15,7 @@ import {
 import { db } from "@/firebaseConfig";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import { Link } from "react-router-dom";
-import { TrendingUp, Building2, Ticket, Calendar, Users, Truck, ClipboardList, ChevronRight } from "lucide-react";
+import { TrendingUp, Building2, Ticket, Calendar, Users, Truck } from "lucide-react";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard } from "@/ui";
 import { TimeFilterBar, RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
@@ -31,8 +31,7 @@ import { PageOfflineState } from "@/shared/ui/PageStates";
 import {
   getReservationsInRange,
   buildChartDataFromReservations,
-  isSoldReservation,
-  isCancelledReservation,
+  isPaidReservation,
   getNetworkCapacityOnly,
 } from "@/modules/compagnie/networkStats/networkStatsService";
 import { getNetworkOperationalStats } from "@/modules/compagnie/networkStats/networkOperationalService";
@@ -47,6 +46,7 @@ import { Percent } from "lucide-react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
+import CompagnieReservationsPage from "./CompagnieReservationsPage";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -61,6 +61,9 @@ export default function ReservationsReseauPage() {
   const navigate = useNavigate();
   const isOnline = useOnlineStatus();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
+  const userRoles: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [String(user.role)] : [];
+  const isFinanceView = userRoles.some((r) => ["company_accountant", "financial_director"].includes(String(r)));
+  const isCeoVisual = userRoles.some((r) => String(r) === "admin_compagnie");
   const money = useFormatCurrency();
   const globalPeriod = useGlobalPeriodContext();
   const globalSnapshot = useGlobalDataSnapshot();
@@ -150,25 +153,12 @@ export default function ReservationsReseauPage() {
     activeAgencies: number;
     comparisonLabel: string;
   } | null>(null);
-  /** Couche unique : snapshot global (même état que CEO / Finances). */
-  const networkMetrics = React.useMemo(
-    () => ({
-      salesTotal: globalSnapshot.snapshot.sales,
-      tickets: globalSnapshot.snapshot.tickets,
-      occupancy: globalSnapshot.snapshot.occupancy,
-    }),
-    [globalSnapshot.snapshot.sales, globalSnapshot.snapshot.tickets, globalSnapshot.snapshot.occupancy]
-  );
-  const networkMetricsLoading = globalSnapshot.loading;
-
   const startStr = globalPeriod.startDate;
   const endStr = globalPeriod.endDate;
   const periodStart = getStartOfDayInBamako(startStr);
   const periodEnd = getEndOfDayInBamako(endStr);
 
-  // KPI réseau : snapshot global unique (pas de fetch local).
-
-  // 1) Réservations pour détail (graphique, tableau agences)
+  // Chargement réservations période (graphique, KPI, cartes embedded, remplissage).
   useEffect(() => {
     if (!companyId) {
       setReservationsInRange([]);
@@ -179,9 +169,6 @@ export default function ReservationsReseauPage() {
     getReservationsInRange(companyId, periodStart, periodEnd)
       .then((list) => {
         setReservationsInRange(list);
-        if (typeof console !== "undefined" && console.log) {
-          console.log("reservationsInRange (single source)", list.length, list);
-        }
       })
       .catch(() => setReservationsInRange([]))
       .finally(() => setReservationsLoading(false));
@@ -204,7 +191,7 @@ export default function ReservationsReseauPage() {
     }).catch(() => {});
   }, [companyId]);
 
-  // Capacité réseau (affichage détail uniquement ; remplissage vient de getNetworkOccupancy)
+  // Capacité réseau (remplissage = sièges réservés / capacité, dérivé avec reservationsInRange)
   useEffect(() => {
     if (!companyId) return;
     getNetworkCapacityOnly(companyId, startStr, endStr)
@@ -234,56 +221,62 @@ export default function ReservationsReseauPage() {
   }, [companyId, range, dateFrom, dateTo]);
 
   // ——— Tout dérivé de reservationsInRange (aucune autre requête) ———
-  const paidReservations = useMemo(
-    () =>
-      reservationsInRange.filter(
-        (r) => isSoldReservation(r.statut)
-      ),
+  const paidReservationsInRange = useMemo(
+    () => reservationsInRange.filter((r) => isPaidReservation(r.statut)),
     [reservationsInRange]
   );
 
   const billetsVendus = useMemo(
-    () => paidReservations.reduce((sum, r) => sum + r.seatsGo, 0),
-    [paidReservations]
+    () => paidReservationsInRange.length,
+    [paidReservationsInRange]
   );
-  const caTotal = useMemo(() => paidReservations.reduce((sum, r) => sum + r.montant, 0), [paidReservations]);
+  const caTotal = useMemo(
+    () => paidReservationsInRange.reduce((sum, r) => sum + (Number(r.montant) || 0), 0),
+    [paidReservationsInRange]
+  );
   const activeAgenciesCount = useMemo(
-    () => new Set(paidReservations.map((r) => r.agencyId).filter(Boolean)).size,
-    [paidReservations]
+    () => new Set(paidReservationsInRange.map((r) => r.agencyId).filter(Boolean)).size,
+    [paidReservationsInRange]
   );
 
   const todayBamako = getTodayBamako();
   const reservationsTodayCount = useMemo(() => {
-    return reservationsInRange.filter((r) => {
+    return paidReservationsInRange.filter((r) => {
       const dateKeyBamako = dayjs(r.createdAt).tz("Africa/Bamako").format("YYYY-MM-DD");
-      return dateKeyBamako === todayBamako && isSoldReservation(r.statut);
+      return dateKeyBamako === todayBamako;
     }).length;
-  }, [reservationsInRange, todayBamako]);
+  }, [paidReservationsInRange, todayBamako]);
 
   const perAgency = useMemo(() => {
     const map = new Map<string, { id: string; nom: string; revenus: number; billets: number }>();
     agencies.forEach((a) => map.set(a.id, { id: a.id, nom: a.nom, revenus: 0, billets: 0 }));
-    paidReservations.forEach((r) => {
+    paidReservationsInRange.forEach((r) => {
       const curr = map.get(r.agencyId);
       if (curr) {
         curr.revenus += r.montant;
-        curr.billets += r.seatsGo;
+        curr.billets += 1;
       } else {
-        map.set(r.agencyId, { id: r.agencyId, nom: r.agencyId, revenus: r.montant, billets: r.seatsGo });
+        map.set(r.agencyId, { id: r.agencyId, nom: r.agencyId, revenus: r.montant, billets: 1 });
       }
     });
     return Array.from(map.values());
-  }, [agencies, paidReservations]);
+  }, [agencies, paidReservationsInRange]);
 
   const chartData = useMemo(
-    () => buildChartDataFromReservations(reservationsInRange, startStr, endStr),
-    [reservationsInRange, startStr, endStr]
+    () => buildChartDataFromReservations(paidReservationsInRange, startStr, endStr),
+    [paidReservationsInRange, startStr, endStr]
   );
 
-  const rankingByCa = useMemo(
-    () => [...perAgency].sort((a, b) => b.revenus - a.revenus),
-    [perAgency]
+  /** Places réservées (sièges) — même liste que les KPI, pour remplissage = sièges / capacité. */
+  const seatsReservedInPeriod = useMemo(
+    () => paidReservationsInRange.reduce((s, r) => s + (Number(r.seatsGo) || 1), 0),
+    [paidReservationsInRange]
   );
+  const fillRatePctFromReservations = useMemo(() => {
+    const cap = capacity ?? 0;
+    if (cap <= 0) return null;
+    return Math.round((seatsReservedInPeriod / cap) * 100);
+  }, [capacity, seatsReservedInPeriod]);
 
   const REVENUE_DROP_RISK_THRESHOLD = 15;
   const healthyAgencies = useMemo(
@@ -319,7 +312,7 @@ export default function ReservationsReseauPage() {
   }, [companyId]);
 
   const capaciteReseau = capacity ?? 0;
-  const statsLoading = reservationsLoading || networkMetricsLoading;
+  const statsLoading = reservationsLoading;
 
   if (!companyId) {
     return (
@@ -338,11 +331,13 @@ export default function ReservationsReseauPage() {
   ];
 
   return (
-    <StandardLayoutWrapper>
+    <StandardLayoutWrapper className={isFinanceView && !isCeoVisual ? "bg-gray-50 dark:bg-slate-900 rounded-xl p-4 border border-gray-200 dark:border-slate-700" : undefined}>
       <PageHeader
         title="Réservations réseau"
         breadcrumb={breadcrumb}
-        subtitle={`Ventes, billets (places) et tableau agences — Période : ${periodLabel}`}
+        subtitle={`Ventes, réservations et remplissage (sièges / capacité) — Période : ${periodLabel}`}
+        primaryColorVar={isFinanceView && !isCeoVisual ? "" : undefined}
+        titleClassName={isFinanceView && !isCeoVisual ? "text-gray-900 dark:text-white" : undefined}
         right={
           <div className="flex flex-wrap items-center gap-3">
             <TimeFilterBar
@@ -374,58 +369,65 @@ export default function ReservationsReseauPage() {
         <PageOfflineState message="Connexion instable: certains blocs peuvent être retardés." />
       )}
 
-      {/* Synthèse opérationnelle — réservations aujourd'hui dérivées de reservationsInRange */}
-      <SectionCard title="Synthèse opérationnelle (aujourd'hui)" icon={Calendar} className="mb-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard
-            label="Réservations aujourd'hui"
-            value={reservationsLoading ? "—" : String(reservationsTodayCount)}
-            icon={Calendar}
-          />
-          <MetricCard label="Sessions ouvertes" value={reservationsLoading ? "—" : (sessionsOpen ?? "—")} icon={Users} />
-          <MetricCard label="Véhicules disponibles" value="—" icon={Truck} />
-          <MetricCard label="Flotte totale" value="—" icon={Truck} />
-        </div>
-      </SectionCard>
-
-      {/* Taux de remplissage réseau + État du réseau (stratégique pour transporteurs) */}
-      <SectionCard title="Taux de remplissage réseau" icon={Percent} className="mb-6">
-        {statsLoading ? (
-          <div className="flex flex-wrap items-center gap-4 text-gray-500">Chargement…</div>
-        ) : (
-          <>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <MetricCard label="Billets (places)" value={String(networkMetrics.tickets)} icon={Ticket} />
-              <MetricCard label="Capacité réseau" value={String(capaciteReseau)} icon={TrendingUp} />
+      {!isFinanceView && (
+        <>
+          {/* Synthèse opérationnelle — réservations aujourd'hui dérivées de reservationsInRange */}
+          <SectionCard title="Synthèse opérationnelle (aujourd'hui)" icon={Calendar} className="mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <MetricCard
-                label="Remplissage"
-                value={networkMetrics.occupancy != null ? `${networkMetrics.occupancy} %` : "—"}
-                icon={Percent}
-                valueColorVar={networkMetrics.occupancy != null && networkMetrics.occupancy >= 50 ? "var(--teliya-primary)" : undefined}
+                label="Réservations aujourd'hui"
+                value={reservationsLoading ? "—" : String(reservationsTodayCount)}
+                icon={Calendar}
               />
+              <MetricCard label="Sessions ouvertes" value={reservationsLoading ? "—" : (sessionsOpen ?? "—")} icon={Users} />
+              <MetricCard label="Véhicules disponibles" value="—" icon={Truck} />
+              <MetricCard label="Flotte totale" value="—" icon={Truck} />
             </div>
-            {/* Indicateur réseau global pour le CEO */}
-            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-600">
-              <span className="text-sm font-medium text-gray-700 dark:text-slate-300">État du réseau : </span>
-              {networkMetrics.occupancy == null ? (
-                <span className="text-gray-500 dark:text-slate-400">—</span>
-              ) : networkMetrics.occupancy < 20 ? (
-                <span className="inline-flex items-center gap-1.5 font-medium text-red-600 dark:text-red-400">
-                  <span aria-hidden>🔴</span> Réseau en alerte
-                </span>
-              ) : networkMetrics.occupancy < 40 ? (
-                <span className="inline-flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
-                  <span aria-hidden>🟠</span> Activité faible
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400">
-                  <span aria-hidden>🟢</span> Réseau sain
-                </span>
-              )}
-            </div>
-          </>
-        )}
-      </SectionCard>
+          </SectionCard>
+
+          {/* Taux de remplissage réseau + État du réseau (stratégique pour transporteurs) */}
+          <SectionCard title="Taux de remplissage réseau" icon={Percent} className="mb-6">
+            {statsLoading ? (
+              <div className="flex flex-wrap items-center gap-4 text-gray-500">Chargement…</div>
+            ) : (
+              <>
+                <p className="text-xs text-gray-500 dark:text-slate-400 mb-3">
+                  Même source que les KPIs : réservations payées de la période. Remplissage = sièges réservés / capacité.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <MetricCard label="Réservations" value={String(billetsVendus)} icon={Ticket} />
+                  <MetricCard label="Capacité réseau" value={String(capaciteReseau)} icon={TrendingUp} />
+                  <MetricCard
+                    label="Remplissage"
+                    value={fillRatePctFromReservations != null ? `${fillRatePctFromReservations} %` : "—"}
+                    icon={Percent}
+                    valueColorVar={fillRatePctFromReservations != null && fillRatePctFromReservations >= 50 ? "var(--teliya-primary)" : undefined}
+                  />
+                </div>
+                {/* Indicateur réseau global pour le CEO */}
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-600">
+                  <span className="text-sm font-medium text-gray-700 dark:text-slate-300">État du réseau : </span>
+                  {fillRatePctFromReservations == null ? (
+                    <span className="text-gray-500 dark:text-slate-400">—</span>
+                  ) : fillRatePctFromReservations < 20 ? (
+                    <span className="inline-flex items-center gap-1.5 font-medium text-red-600 dark:text-red-400">
+                      <span aria-hidden>🔴</span> Réseau en alerte
+                    </span>
+                  ) : fillRatePctFromReservations < 40 ? (
+                    <span className="inline-flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
+                      <span aria-hidden>🟠</span> Activité faible
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400">
+                      <span aria-hidden>🟢</span> Réseau sain
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+          </SectionCard>
+        </>
+      )}
 
       {/* KPIs période — couche unique (aligné CEO / Finances) */}
       {statsLoading ? (
@@ -439,21 +441,17 @@ export default function ReservationsReseauPage() {
           <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
             <MetricCard
               label="Ventes"
-              value={money(networkMetrics.salesTotal)}
+              value={money(caTotal)}
               icon={TrendingUp}
               valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
-              variation={prevStats ? calculateChange(networkMetrics.salesTotal, prevStats.totalRevenue) : undefined}
-              variationLabel={prevStats?.comparisonLabel}
             />
           </Link>
           <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
             <MetricCard
-              label="Billets (places)"
-              value={String(networkMetrics.tickets)}
+              label="Réservations"
+              value={String(billetsVendus)}
               icon={Ticket}
               valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
-              variation={prevStats ? calculateChange(networkMetrics.tickets, prevStats.totalTickets) : undefined}
-              variationLabel={prevStats?.comparisonLabel}
             />
           </Link>
           <Link to={`${basePath}/parametres`} className="block">
@@ -462,8 +460,6 @@ export default function ReservationsReseauPage() {
               value={`${activeAgenciesCount} / ${agencies.length || "—"}`}
               icon={Building2}
               valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
-              variation={prevStats ? calculateChange(activeAgenciesCount, prevStats.activeAgencies) : undefined}
-              variationLabel={prevStats?.comparisonLabel}
             />
           </Link>
         </div>
@@ -500,128 +496,34 @@ export default function ReservationsReseauPage() {
         </CardContent>
       </Card>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Tableau agences (CA période)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {reservationsLoading ? (
-            <p className="text-sm text-gray-500 dark:text-slate-400">Chargement…</p>
-          ) : rankingByCa.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-slate-400">Aucune donnée pour la période.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 dark:border-slate-600">
-                    <th className="text-left py-2 text-gray-900 dark:text-white">Rang</th>
-                    <th className="text-left py-2 text-gray-900 dark:text-white">Agence</th>
-                    <th className="text-left py-2 text-gray-900 dark:text-white">Statut</th>
-                    <th className="text-right py-2 text-gray-900 dark:text-white">Billets</th>
-                    <th className="text-right py-2 text-gray-900 dark:text-white">CA</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rankingByCa.map((a, i) => {
-                    const isActive = a.revenus > 0;
-                    return (
-                      <tr key={a.id} className="border-b border-gray-100 dark:border-slate-700">
-                        <td className="py-2 font-medium text-gray-900 dark:text-slate-200">{i + 1}</td>
-                        <td className="py-2 text-gray-900 dark:text-slate-200">{a.nom || "Agence inconnue"}</td>
-                        <td className="py-2">
-                          {isActive ? (
-                            <span className="font-medium text-emerald-600 dark:text-emerald-400">🟢 active</span>
-                          ) : (
-                            <span className="font-medium text-amber-600 dark:text-amber-400">🟠 inactive</span>
-                          )}
-                        </td>
-                        <td className="py-2 text-right text-gray-900 dark:text-slate-200">{a.billets}</td>
-                        <td className="py-2 text-right text-gray-900 dark:text-slate-200">{money(a.revenus)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {!isFinanceView && (
+        <>
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Santé du réseau</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <NetworkHealthSummary
+                totalAgencies={agencies.length}
+                healthyAgencies={healthyAgencies}
+                atRiskAgencies={atRiskAgencies}
+                trend={trend}
+              />
+            </CardContent>
+          </Card>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Santé du réseau</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <NetworkHealthSummary
-            totalAgencies={agencies.length}
-            healthyAgencies={healthyAgencies}
-            atRiskAgencies={atRiskAgencies}
-            trend={trend}
-          />
-        </CardContent>
-      </Card>
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Alertes par agence</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CriticalAlertsPanel alerts={criticalAlerts} loading={reservationsLoading} />
+            </CardContent>
+          </Card>
+        </>
+      )}
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Alertes par agence</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <CriticalAlertsPanel alerts={criticalAlerts} loading={reservationsLoading} />
-        </CardContent>
-      </Card>
-
-      <SectionCard title="Actions rapides" icon={ClipboardList}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <button
-            type="button"
-            onClick={() => navigate(`${basePath}/reservations-reseau/reservations`)}
-            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 hover:bg-gray-50/50 dark:hover:bg-slate-700/50 transition text-left group"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center">
-                <ClipboardList className="w-6 h-6 text-gray-600 dark:text-slate-400" />
-              </div>
-              <div>
-                <div className="font-semibold text-gray-900 dark:text-white">Voir les réservations</div>
-                <div className="text-sm text-gray-500 dark:text-slate-400">Gérer toutes les réservations</div>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-600 dark:group-hover:text-slate-300" />
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(`${basePath}/flotte?tab=exploitation`)}
-            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 hover:bg-gray-50/50 dark:hover:bg-slate-700/50 transition text-left group"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center">
-                <Truck className="w-6 h-6 text-gray-600 dark:text-slate-400" />
-              </div>
-              <div>
-                <div className="font-semibold text-gray-900 dark:text-white">Voir les trajets du jour</div>
-                <div className="text-sm text-gray-500 dark:text-slate-400">Bus et affectations</div>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-600 dark:group-hover:text-slate-300" />
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(`${basePath}/payment-approvals`)}
-            className="flex items-center justify-between p-5 rounded-lg border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 hover:bg-gray-50/50 dark:hover:bg-slate-700/50 transition text-left group"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center">
-                <Ticket className="w-6 h-6 text-gray-600 dark:text-slate-400" />
-              </div>
-              <div>
-                <div className="font-semibold text-gray-900 dark:text-white">Voir les preuves de paiement</div>
-                <div className="text-sm text-gray-500 dark:text-slate-400">Approbations en attente</div>
-              </div>
-            </div>
-            <ChevronRight className="w-5 h-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-600 dark:group-hover:text-slate-300" />
-          </button>
-        </div>
-      </SectionCard>
+      <CompagnieReservationsPage embedded />
     </StandardLayoutWrapper>
   );
 }

@@ -14,6 +14,19 @@
 const normalizeStatut = (s?: string) =>
   (s ?? "").toString().toLowerCase().trim().replace(/\s+/g, "_");
 
+export function normalizeStatus(s?: string): string {
+  return normalizeStatut(s);
+}
+
+export function normalizeChannel(channel?: string): string {
+  const n = (channel ?? "").toString().toLowerCase().trim().replace(/[\s-]+/g, "_");
+  if (n === "guichet" || n === "cash") return "guichet";
+  if (n === "online" || n === "mobile_money" || n === "wave" || n === "orange" || n === "moov") return "online";
+  if (n === "bank" || n === "banque") return "bank";
+  if (n === "courrier" || n === "courier") return "courrier";
+  return n;
+}
+
 /**
  * Convention unique sans accent. Statuts officiels : en_attente_paiement, preuve_recue, confirme, paye, annule, refuse.
  * À utiliser pour toute comparaison ou logique métier sur reservation.statut.
@@ -49,7 +62,8 @@ export type ReservationStatut =
   | "annulation_en_attente"
   | "rembourse"
   | "embarque"
-  | "expire";
+  | "expire"
+  | "invalide";
 
 /** Statuts valides (canonical). Alias en_attente, verification acceptés en lecture via canonicalStatut. */
 const VALID_STATUTS = new Set<string>([
@@ -62,6 +76,7 @@ const VALID_STATUTS = new Set<string>([
   "rembourse",
   "embarque",
   "expire",
+  "invalide",
   "refuse",
   "verification",
   "en_attente",
@@ -139,6 +154,9 @@ const RECEIPT_ACCESS_EXTRA = new Set(["preuve_recue", "verification"]);
 /** Statuts à ne pas afficher dans le portefeuille (Mes Billets) */
 const WALLET_HIDDEN = new Set(["en_attente_paiement"]);
 
+/** Excluded from KPIs and financial analytics aggregations. */
+const ANALYTICS_HIDDEN = new Set(["invalide", "annule", "annulation_en_attente", "refuse"]);
+
 /** Sections du portefeuille */
 export type WalletSectionId =
   | "a_venir"
@@ -170,6 +188,8 @@ export function getWalletDisplayState(statut?: string): WalletDisplayState | nul
     return { label: "Voyage effectué", section: "voyages_effectues" };
   if (s === "annule" || s === "refuse")
     return { label: "Annulé", section: "annules" };
+  if (s === "invalide")
+    return { label: "Réservation invalide", section: "annules" };
   if (s === "rembourse")
     return { label: "Remboursé", section: "annules" };
   if (s === "expire")
@@ -207,6 +227,11 @@ export function isTicketValidForQR(statut?: string): boolean {
 export function canEmbarkWithScan(effectiveStatut?: string): boolean {
   const s = canonicalStatut(effectiveStatut);
   return s === "confirme" || s === "paye";
+}
+
+export function isReservationIncludedInAnalytics(statut?: string): boolean {
+  const s = canonicalStatut(statut);
+  return !ANALYTICS_HIDDEN.has(s);
 }
 
 /**

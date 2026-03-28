@@ -11,7 +11,6 @@ import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
 export type GlobalDataSnapshot = {
   sales: number;
   cash: number;
-  validated: number;
   tickets: number;
   occupancy: number | null;
   lastUpdatedAt: Date | null;
@@ -31,7 +30,6 @@ const GlobalDataSnapshotContext = React.createContext<Ctx | null>(null);
 const DEFAULT_SNAPSHOT: GlobalDataSnapshot = {
   sales: 0,
   cash: 0,
-  validated: 0,
   tickets: 0,
   occupancy: null,
   lastUpdatedAt: null,
@@ -69,8 +67,6 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
       ...prev,
       sales,
       cash,
-      // validated requires validatedAt listener; not included in realtime sources by design for now
-      validated: prev.validated,
       tickets,
       occupancy,
       lastUpdatedAt: new Date(),
@@ -91,7 +87,7 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
     computeAndSetSnapshot();
   }, [computeAndSetSnapshot]);
 
-  // Realtime listeners (single global provider): reservations(createdAt) + cashTransactions(paidAt)
+  // Realtime: reservations + cashTransactions — les deux filtrés sur createdAt (ne jamais filtrer sur paidAt string).
   React.useEffect(() => {
     if (!companyId) return;
     setError(null);
@@ -99,26 +95,25 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
     setLoading(true); // only for the initial attach
     const start = getStartOfDayInBamako(period.startDate);
     const end = getEndOfDayInBamako(period.endDate);
+    const startTs = Timestamp.fromDate(start);
+    const endTs = Timestamp.fromDate(end);
 
     const qRes = query(
       collectionGroup(db, "reservations"),
       where("companyId", "==", companyId),
-      where("createdAt", ">=", Timestamp.fromDate(start)),
-      where("createdAt", "<=", Timestamp.fromDate(end)),
+      where("createdAt", ">=", startTs),
+      where("createdAt", "<=", endTs),
       orderBy("createdAt", "asc")
     );
 
     // cashTransactions est sous companies/{companyId}/cashTransactions (pas de champ companyId dans le doc).
     const cashRef = collection(db, "companies", companyId, "cashTransactions");
-    const qCash =
-      period.startDate === period.endDate
-        ? query(cashRef, where("paidAt", "==", period.startDate))
-        : query(
-            cashRef,
-            where("paidAt", ">=", period.startDate),
-            where("paidAt", "<=", period.endDate),
-            orderBy("paidAt", "asc")
-          );
+    const qCash = query(
+      cashRef,
+      where("createdAt", ">=", startTs),
+      where("createdAt", "<=", endTs),
+      orderBy("createdAt", "asc")
+    );
 
     // Capacity isn't realtime-critical; fetch once per period.
     capacityRef.current = null;

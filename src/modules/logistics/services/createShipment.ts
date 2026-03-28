@@ -8,13 +8,22 @@
 import { doc, runTransaction, serverTimestamp, Timestamp } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { PaymentType, PaymentStatus, ShipmentSender, ShipmentReceiver } from "../domain/shipment.types";
-import { addToExpectedBalance } from "@/modules/agence/cashControl/cashSessionService";
 import type { ShipmentEvent } from "../domain/logisticsEvents.types";
 import { shipmentRef, shipmentsRef, eventsRef } from "../domain/firestorePaths";
 import { courierSessionRef } from "../domain/courierSessionPaths";
 import { incrementParcelCount } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { generateTrackingPublicId, generateTrackingToken } from "../utils/shipmentTrackingCrypto";
+import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
+import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
+import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
+import { createPayment, getPaymentByReservationId, confirmPayment } from "@/services/paymentService";
 
 const SHIPMENT_SEQ_PAD = 5;
+
+function generatePickupCode(): string {
+  // 6 digits, lisible au téléphone (terrain).
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
 
 export type CreateShipmentParams = {
   companyId: string;
@@ -45,15 +54,44 @@ export type CreateShipmentParams = {
   paymentMethod?: "cash" | "mobile_money" | "bank";
   /** Optional link to trip instance. When set, shipment is attached to that instance and parcelCount is incremented. */
   tripInstanceId?: string | null;
+  /** Code de retrait (si absent, généré automatiquement). */
+  pickupCode?: string;
+  offlineMeta?: {
+    mode: "online" | "offline";
+    transactionId?: string;
+    deviceId?: string;
+    createdAt?: number;
+  };
 };
 
-export type CreateShipmentResult = { shipmentId: string; shipmentNumber?: string };
+export type CreateShipmentResult = {
+  shipmentId: string;
+  shipmentNumber?: string;
+  trackingPublicId: string;
+  trackingToken: string;
+};
 
 export async function createShipment(params: CreateShipmentParams): Promise<CreateShipmentResult> {
   const shipmentId =
     params.shipmentId ?? doc(shipmentsRef(db, params.companyId)).id;
 
+  if (params.sessionId) {
+    const total = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
+    if (total <= 0) {
+      throw new Error("Montant d'encaissement obligatoire à l'origine (frais + assurance > 0).");
+    }
+    if (params.paymentType !== "ORIGIN" || params.paymentStatus !== "PAID_ORIGIN") {
+      throw new Error("Paiement à l'origine obligatoire pour les envois en session courrier.");
+    }
+  }
+
   let shipmentNumber: string | undefined;
+  const trackingPublicId = generateTrackingPublicId();
+  const trackingToken = generateTrackingToken();
+
+  const hasTripInstance =
+    params.tripInstanceId != null && String(params.tripInstanceId).trim() !== "";
+  const pickupCode = String(params.pickupCode ?? generatePickupCode()).trim();
 
   await runTransaction(db, async (tx) => {
     const sRef = shipmentRef(db, params.companyId, shipmentId);
@@ -116,11 +154,20 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       currentLocationAgencyId: params.originAgencyId,
       batchId: undefined,
       vehicleId: undefined,
+      transportStatus: hasTripInstance ? "ASSIGNED" : "PENDING_ASSIGNMENT",
+      needsValidation: false,
       createdAt: serverTimestamp(),
       createdBy: params.createdBy,
       ...(params.sessionId != null && { sessionId: params.sessionId }),
       ...(params.agentCode != null && { agentCode: params.agentCode }),
-      ...(params.tripInstanceId != null && { tripInstanceId: params.tripInstanceId }),
+      ...(hasTripInstance && { tripInstanceId: params.tripInstanceId }),
+      creationMode: params.offlineMeta?.mode ?? "online",
+      offlineTransactionId: params.offlineMeta?.transactionId ?? null,
+      offlineDeviceId: params.offlineMeta?.deviceId ?? null,
+      offlineCreatedAt: params.offlineMeta?.createdAt ?? null,
+      trackingPublicId,
+      trackingToken,
+      pickupCode,
     });
 
     const eventsCol = eventsRef(db, params.companyId);
@@ -135,26 +182,111 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     tx.set(eventDoc, event);
   });
 
-  // Cash control: when paid at origin, add to open COURRIER cash session for this agent (if any)
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.originAgencyId,
+    agentId: params.createdBy,
+    role: "agentCourrier",
+    type: "COLIS_CREATED",
+    referenceId: shipmentId,
+    status: "VALIDE",
+    createdBy: params.createdBy,
+    metadata: params.sessionId ? { courierSessionId: params.sessionId } : undefined,
+  });
+
+  if (!hasTripInstance) {
+    console.info("[createShipment] Shipment created without tripInstanceId (transportStatus=PENDING_ASSIGNMENT)", {
+      shipmentId,
+      companyId: params.companyId,
+      originAgencyId: params.originAgencyId,
+    });
+  }
+
+  // Encaissement à l'origine : Payment + financialTransactions (best effort, non bloquant UI).
   if (params.paymentStatus === "PAID_ORIGIN") {
     const amount = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
     if (amount > 0 && params.createdBy) {
-      const paymentMethod = params.paymentMethod ?? "cash";
-      addToExpectedBalance(
-        params.companyId,
-        params.originAgencyId,
-        params.createdBy,
-        "COURRIER",
-        amount,
-        paymentMethod
-      ).catch(() => {});
+      void (async () => {
+        try {
+          let ledgerWrittenViaConfirmPayment = false;
+          const existing = await getPaymentByReservationId(params.companyId, shipmentId);
+          if (!existing) {
+            await createPayment({
+              reservationId: shipmentId,
+              companyId: params.companyId,
+              agencyId: params.originAgencyId,
+              amount,
+              currency: "XOF",
+              channel: "courrier",
+              provider: "cash",
+              status: "validated",
+              validatedBy: params.createdBy,
+            });
+          } else if (existing.status === "validated") {
+            // déjà enregistré
+          } else if (existing.status === "pending") {
+            await confirmPayment(params.companyId, existing.id, params.createdBy);
+            ledgerWrittenViaConfirmPayment = true;
+          }
+
+          if (!ledgerWrittenViaConfirmPayment) {
+            const pm =
+              params.paymentMethod === "mobile_money"
+                ? "mobile_money"
+                : params.paymentMethod === "bank"
+                  ? "card"
+                  : "cash";
+            await createFinancialTransaction({
+              companyId: params.companyId,
+              type: "payment_received",
+              source: "courrier",
+              paymentChannel: "courrier",
+              paymentMethod: pm,
+              paymentProvider: pm === "mobile_money" ? "wave" : "cash",
+              amount,
+              currency: "XOF",
+              agencyId: params.originAgencyId,
+              reservationId: shipmentId,
+              referenceType: "payment",
+              referenceId: shipmentId,
+              metadata: {
+                channel: "courrier",
+                mode: params.offlineMeta?.mode ?? "online",
+                offlineTransactionId: params.offlineMeta?.transactionId ?? null,
+                offlineDeviceId: params.offlineMeta?.deviceId ?? null,
+                ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
+              },
+            });
+            logAgentHistoryEvent({
+              companyId: params.companyId,
+              agencyId: params.originAgencyId,
+              agentId: params.createdBy,
+              role: "agentCourrier",
+              type: "PAYMENT_RECEIVED",
+              referenceId: shipmentId,
+              amount,
+              status: "VALIDE",
+              createdBy: params.createdBy,
+              metadata: {
+                paymentMethod: pm,
+                ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
+              },
+            });
+          }
+        } catch (err) {
+          console.warn("[createShipment] create Payment+ledger courrier failed:", err);
+        }
+      })();
     }
   }
 
   // Trip instance aggregation: increment parcelCount when shipment is attached to an instance
-  if (params.tripInstanceId) {
+  if (hasTripInstance && params.tripInstanceId) {
     incrementParcelCount(params.companyId, params.tripInstanceId, 1).catch(() => {});
   }
 
-  return { shipmentId, shipmentNumber };
+  // Do not block receipt rendering on public mirror sync.
+  void afterLogisticsShipmentChanged(params.companyId, shipmentId, "createShipment");
+
+  return { shipmentId, shipmentNumber, trackingPublicId, trackingToken };
 }

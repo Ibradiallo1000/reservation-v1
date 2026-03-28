@@ -1,4 +1,4 @@
-// Treasury — Financial accounts. Balance MUST only be updated via financialMovements (increment in transaction).
+// Treasury — Financial accounts (compat layer for UI/account selection).
 import {
   collection,
   doc,
@@ -93,14 +93,21 @@ export async function listAccounts(
 ): Promise<{ id: string; agencyId: string | null; accountType: string; accountName: string; currentBalance: number; currency: string }[]> {
   const ref = collection(db, `companies/${companyId}/${COLLECTION}`);
   const constraints = [where("isActive", "==", true)];
-  if (options?.agencyId !== undefined) {
+  /**
+   * Firestore : where("agencyId", "==", null) n'inclut pas les documents où le champ agencyId est absent
+   * (données legacy / import). Pour les comptes « niveau compagnie » filtrés par accountType, on interroge
+   * sans contrainte agencyId puis on filtre côté client.
+   */
+  const filterCompanyLevelInMemory =
+    options?.agencyId === null && options?.accountType != null;
+  if (options?.agencyId !== undefined && !filterCompanyLevelInMemory) {
     if (options.agencyId === null) constraints.push(where("agencyId", "==", null));
     else constraints.push(where("agencyId", "==", options.agencyId));
   }
   if (options?.accountType) constraints.push(where("accountType", "==", options.accountType));
   const q = query(ref, ...constraints);
   const snap = await getDocs(q);
-  return snap.docs.map((d) => {
+  let rows = snap.docs.map((d) => {
     const data = d.data();
     return {
       id: d.id,
@@ -111,4 +118,8 @@ export async function listAccounts(
       currency: data.currency ?? "",
     };
   });
+  if (filterCompanyLevelInMemory) {
+    rows = rows.filter((r) => r.agencyId == null);
+  }
+  return rows;
 }

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { MapPin, ArrowRight, Search } from "lucide-react";
+import { MapPin, Search } from "lucide-react";
 
 interface Props {
   departure: string;
@@ -9,8 +9,15 @@ interface Props {
   primaryColor: string;
   /** Affiche une seule ligne "Départ : X" au lieu de répéter dans la page parente */
   showDepartureLabel?: boolean;
+  /** Libellé accessibilité du groupe (ex. « Ville d'arrivée ») */
+  groupAriaLabel?: string;
+  /** Champ de filtre des villes (désactiver si peu de destinations) */
+  showSearch?: boolean;
 }
 
+/**
+ * Sélection de ville : une seule présentation — bandeau horizontal de boutons compacts (h-8) + scroll.
+ */
 export const DestinationTiles: React.FC<Props> = ({
   departure,
   arrivals,
@@ -18,6 +25,8 @@ export const DestinationTiles: React.FC<Props> = ({
   onSelect,
   primaryColor,
   showDepartureLabel = false,
+  groupAriaLabel = "Villes de destination",
+  showSearch = true,
 }) => {
   const [search, setSearch] = useState("");
 
@@ -29,34 +38,44 @@ export const DestinationTiles: React.FC<Props> = ({
 
   if (arrivals.length === 0) {
     return (
-      <div className="rounded-2xl border-2 border-dashed border-gray-200 p-8 text-center">
-        <MapPin className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-        <p className="text-sm text-gray-500">Départ : <strong>{departure || "—"}</strong></p>
-        <p className="text-sm text-gray-400 mt-2">Aucune destination configurée. Contactez l&apos;administrateur.</p>
+      <div className="rounded-lg border border-dashed border-gray-200 px-2 py-2 text-center dark:border-gray-600">
+        <p className="text-xs text-gray-500">
+          Départ : <strong>{departure || "—"}</strong>
+        </p>
+        <p className="mt-0.5 text-[11px] text-gray-400">
+          Aucune destination configurée. Contactez l&apos;administrateur.
+        </p>
       </div>
     );
   }
 
   return (
-    <div>
+    <div className="min-h-0 min-w-0">
       {showDepartureLabel && (
-        <p className="text-sm text-gray-500 mb-2">
-          Départ : <strong className="text-gray-900">{departure || "—"}</strong>
+        <p className="mb-1 truncate text-[11px] text-gray-500 dark:text-gray-400">
+          Départ : <strong className="text-gray-900 dark:text-gray-100">{departure || "—"}</strong>
         </p>
       )}
-      <div className="relative mb-3">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Rechercher une destination..."
-          className="w-full pl-9 pr-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:border-transparent"
-          style={{ ["--tw-ring-color" as string]: `${primaryColor}40` }}
-          autoComplete="off"
-        />
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2.5">
+      {showSearch ? (
+        <div className="relative mb-1.5">
+          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filtrer les villes…"
+            aria-label={`Rechercher une ville (${groupAriaLabel})`}
+            className="h-8 w-full rounded-md border border-gray-300 py-0 pl-8 pr-2 text-xs focus:border-transparent focus:outline-none focus:ring-1 dark:border-gray-600 dark:bg-gray-950"
+            style={{ ["--tw-ring-color" as string]: `${primaryColor}55` }}
+            autoComplete="off"
+          />
+        </div>
+      ) : null}
+      <div
+        className="-mx-0.5 flex flex-nowrap gap-1 overflow-x-auto px-0.5 pb-0.5 scrollbar-none"
+        role="group"
+        aria-label={groupAriaLabel}
+      >
         {filteredArrivals.map((city) => {
           const active = selected.toLowerCase() === city.toLowerCase();
           return (
@@ -64,36 +83,23 @@ export const DestinationTiles: React.FC<Props> = ({
               key={city}
               type="button"
               onClick={() => onSelect(city)}
-              className={`group relative flex items-center gap-3 px-4 py-3.5 rounded-xl border-2 transition-all duration-200 text-left ${
+              className={`h-8 shrink-0 rounded-md border px-2.5 text-xs font-semibold transition-colors ${
                 active
-                  ? "border-current shadow-md scale-[1.02]"
-                  : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm"
+                  ? "border-current text-white"
+                  : "border-gray-200 bg-white text-gray-900 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100"
               }`}
-              style={active ? { borderColor: primaryColor, backgroundColor: `${primaryColor}08` } : undefined}
+              style={
+                active ? { borderColor: primaryColor, backgroundColor: primaryColor } : undefined
+              }
+              title={city}
             >
-              <div
-                className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-                  active ? "text-white" : "bg-gray-100 text-gray-400 group-hover:bg-gray-200"
-                }`}
-                style={active ? { backgroundColor: primaryColor } : undefined}
-              >
-                <ArrowRight className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <p
-                  className={`font-semibold truncate ${active ? "" : "text-gray-900"}`}
-                  style={active ? { color: primaryColor } : undefined}
-                >
-                  {city}
-                </p>
-                <p className="text-[11px] text-gray-400 truncate">{departure} → {city}</p>
-              </div>
+              {city}
             </button>
           );
         })}
       </div>
       {filteredArrivals.length === 0 && search.trim() && (
-        <p className="text-sm text-amber-600 mt-2">Aucune ville ne correspond à « {search} ». Modifiez la recherche ou choisissez une autre destination.</p>
+        <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Aucune ville « {search} »</p>
       )}
     </div>
   );

@@ -18,6 +18,7 @@ import CompanyPaymentSettingsPage from '@/modules/compagnie/pages/CompanyPayment
 import ParametresBanques from '@/modules/compagnie/components/parametres/ParametresBanques';
 import CompagnieAgencesPage from '@/modules/compagnie/pages/CompagnieAgencesPage';
 import FinancialSettingsPage from '@/modules/compagnie/settings/FinancialSettingsPage';
+import ParametresCourierColis from '@/modules/compagnie/components/parametres/ParametresCourierColis';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { StandardLayoutWrapper, PageHeader } from '@/ui';
@@ -40,7 +41,8 @@ type TabKey =
   | 'medias'
   | 'moyens-paiement'
   | 'banques'
-  | 'seuils-depenses';
+  | 'seuils-depenses'
+  | 'courrier-colis';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'agences', label: 'Agences' },
@@ -55,6 +57,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'moyens-paiement', label: 'Moyens de paiement' },
   { key: 'banques', label: 'Banques' },
   { key: 'seuils-depenses', label: 'Seuil de dépenses' },
+  { key: 'courrier-colis', label: 'Courrier & colis' },
 ];
 
 const CompagnieParametresTabsPage: React.FC = () => {
@@ -145,6 +148,9 @@ const CompagnieParametresTabsPage: React.FC = () => {
 
       case 'seuils-depenses':
         return <FinancialSettingsPage />;
+
+      case 'courrier-colis':
+        return <ParametresCourierColis companyId={companyId} />;
 
       default:
         return null;

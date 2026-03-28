@@ -4,6 +4,7 @@ import type { Timestamp } from "firebase/firestore";
 
 /**
  * companies/{companyId}/agences/{agencyId}/dailyStats/{YYYY-MM-DD}
+ * La clé YYYY-MM-DD est le jour calendaire dans `agency.timezone` (alignée lecture UI / écriture agrégats).
  * totalRevenue = ticketRevenue + courierRevenue (for global revenue).
  */
 export interface DailyStatsDoc {

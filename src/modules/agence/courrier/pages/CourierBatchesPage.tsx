@@ -7,8 +7,8 @@ import React, { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { db } from "@/firebaseConfig";
-import { collection, getDoc, getDocs, onSnapshot, query, where } from "firebase/firestore";
-import { agencyBatchesRef, agencyBatchRef, shipmentRef, shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
+import { collection, getDocs, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import { agencyBatchesRef, agencyBatchRef, shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import type { CourierBatch } from "@/modules/logistics/domain/courierBatch.types";
 import type { Shipment } from "@/modules/logistics/domain/shipment.types";
 import {
@@ -84,7 +84,6 @@ export default function CourierBatchesPage() {
 
   const [batches, setBatches] = useState<BatchWithId[]>([]);
   const [shipmentsCreated, setShipmentsCreated] = useState<Shipment[]>([]);
-  const [agencies, setAgencies] = useState<{ id: string; nomAgence?: string; nom?: string }[]>([]);
   const [fleetVehicles, setFleetVehicles] = useState<{ id: string; plateNumber?: string }[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [batchDetail, setBatchDetail] = useState<BatchWithId | null>(null);
@@ -117,7 +116,9 @@ export default function CourierBatchesPage() {
     const q = query(
       shipmentsRef(db, companyId),
       where("originAgencyId", "==", agencyId),
-      where("currentStatus", "==", "CREATED")
+      where("currentStatus", "==", "CREATED"),
+      orderBy("createdAt", "desc"),
+      limit(50)
     );
     const unsub = onSnapshot(q, (snap) => {
       setShipmentsCreated(snap.docs.map((d) => ({ ...d.data(), shipmentId: d.id } as Shipment)));
@@ -127,9 +128,6 @@ export default function CourierBatchesPage() {
 
   useEffect(() => {
     if (!companyId) return;
-    getDocs(collection(db, "companies", companyId, "agences")).then((snap) => {
-      setAgencies(snap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string; nomAgence?: string; nom?: string })));
-    });
     getDocs(collection(db, "companies", companyId, "fleetVehicles")).then((snap) => {
       setFleetVehicles(snap.docs.map((d) => ({ id: d.id, ...d.data() } as { id: string; plateNumber?: string })));
     });
@@ -155,16 +153,26 @@ export default function CourierBatchesPage() {
       }
       const b = { id: snap.id, ...snap.data() } as BatchWithId;
       setBatchDetail(b);
-      if (b.shipmentIds.length === 0) {
-        setBatchShipments([]);
-        return;
-      }
-      Promise.all(b.shipmentIds.map((sid) => getDoc(shipmentRef(db, companyId, sid)))).then((docs) => {
-        setBatchShipments(docs.filter((d) => d.exists()).map((d) => ({ ...d.data(), shipmentId: d.id } as Shipment)));
-      });
     });
     return () => unsub();
   }, [companyId, agencyId, selectedBatchId]);
+
+  useEffect(() => {
+    if (!companyId || !selectedBatchId) {
+      setBatchShipments([]);
+      return;
+    }
+    const qShipments = query(
+      shipmentsRef(db, companyId),
+      where("batchId", "==", selectedBatchId),
+      orderBy("createdAt", "desc"),
+      limit(50)
+    );
+    const unsub = onSnapshot(qShipments, (shipSnap) => {
+      setBatchShipments(shipSnap.docs.map((d) => ({ ...d.data(), shipmentId: d.id } as Shipment)));
+    });
+    return () => unsub();
+  }, [companyId, selectedBatchId]);
 
   const byStatus = useMemo(() => {
     const d: Record<string, BatchWithId[]> = { DRAFT: [], READY: [], DEPARTED: [], CLOSED: [] };
@@ -174,7 +182,7 @@ export default function CourierBatchesPage() {
     return d;
   }, [batches]);
 
-  const agencyName = (id: string) => agencies.find((a) => a.id === id)?.nomAgence ?? agencies.find((a) => a.id === id)?.nom ?? id;
+  const agencyName = (id: string) => id || "—";
 
   const handleCreateBatch = async (e: React.FormEvent) => {
     e.preventDefault();

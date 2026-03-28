@@ -1,7 +1,5 @@
 /**
- * Teliya Logistics Engine — Mark shipment as ARRIVED at destination (Phase 1 simulation).
- * When no batch/vehicle: CREATED or IN_TRANSIT → ARRIVED at destination agency.
- * Only allowed when shipment.destinationAgencyId === agencyId.
+ * Teliya Logistics Engine — IN_TRANSIT → ARRIVED à l'agence de destination.
  */
 
 import { doc, runTransaction, serverTimestamp } from "firebase/firestore";
@@ -10,6 +8,7 @@ import { canShipmentTransition } from "../domain/logisticsStateMachine";
 import type { Shipment } from "../domain/shipment.types";
 import type { ShipmentEvent } from "../domain/logisticsEvents.types";
 import { shipmentRef, eventsRef } from "../domain/firestorePaths";
+import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 
 export type MarkShipmentArrivedParams = {
   companyId: string;
@@ -30,8 +29,8 @@ export async function markShipmentArrived(params: MarkShipmentArrivedParams): Pr
       throw new Error("Cet envoi ne peut être marqué arrivé que par l'agence de destination.");
     }
     const from = shipment.currentStatus;
-    if (from !== "CREATED" && from !== "IN_TRANSIT") {
-      throw new Error(`Envoi en statut ${from}. Seuls CREATED ou IN_TRANSIT peuvent être marqués arrivés (simulation Phase 1).`);
+    if (from !== "IN_TRANSIT") {
+      throw new Error(`Envoi en statut ${from}. Seul IN_TRANSIT peut être marqué arrivé à destination.`);
     }
     if (!canShipmentTransition(from, "ARRIVED")) {
       throw new Error("Transition non autorisée.");
@@ -53,4 +52,6 @@ export async function markShipmentArrived(params: MarkShipmentArrivedParams): Pr
     };
     tx.set(eventDoc, event);
   });
+
+  await afterLogisticsShipmentChanged(params.companyId, params.shipmentId, "markShipmentArrived");
 }

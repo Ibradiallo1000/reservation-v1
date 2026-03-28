@@ -4,6 +4,7 @@ import { Skeleton } from "@/shared/ui/skeleton";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { OperationalSourceBadge } from "@/modules/agence/components/OperationalDataHint";
 
 interface TopTrajet {
   id: string;     // peut être redondant si la même liaison revient — on ne s'en sert plus pour l'agrégation
@@ -62,7 +63,11 @@ export const TopTrajetsCard = ({
   return (
     <Card className="shadow-md border border-gray-200 bg-white">
       <CardHeader>
-        <CardTitle style={{ color: theme.colors.primary }}>Top trajets</CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle style={{ color: theme.colors.primary }}>Top trajets</CardTitle>
+          <OperationalSourceBadge />
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">Montants : réservations — terrain, non comptabilisés.</p>
       </CardHeader>
       <CardContent>
         {topData.rows.length === 0 ? (

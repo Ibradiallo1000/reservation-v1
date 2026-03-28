@@ -17,7 +17,11 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { SHIFT_REPORTS_COLLECTION, SHIFT_STATUS, VALIDATION_LEVEL } from '../constants/sessionLifecycle';
-import { toDailyStatsDate, updateDailyStatsOnSessionValidatedByAgency } from '../aggregates/dailyStats';
+import {
+  timestampToDailyStatsDateKey,
+  updateDailyStatsOnSessionValidatedByAgency,
+  dailyStatsTimezoneFromAgencyData,
+} from '../aggregates/dailyStats';
 import { updateAgencyLiveStateOnSessionValidated } from '../aggregates/agencyLiveState';
 
 export type DayRange = { start: Date; end: Date };
@@ -135,7 +139,7 @@ export async function listReportsValidatedByAgencyForCompany(
 
 /**
  * Validation comptable agence (même flux que validateSessionByAccountant). CLOSED → VALIDATED_AGENCY.
- * Pas de mouvement trésorerie (réservé au chef comptable via validateSessionByHeadAccountant).
+ * Contrôle / audit uniquement — aucune écriture financière (ledger ou trésorerie) à cette étape ni au chef comptable.
  */
 export async function validateReportClient(opts: {
   companyId: string;
@@ -147,10 +151,10 @@ export async function validateReportClient(opts: {
   const { companyId, agencyId, shiftId, accountant, note = '' } = opts;
   const rRef = doc(db, `companies/${companyId}/agences/${agencyId}/${SHIFT_REPORTS_COLLECTION}/${shiftId}`);
   const sRef = doc(db, `companies/${companyId}/agences/${agencyId}/shifts/${shiftId}`);
+  const agencyRef = doc(db, `companies/${companyId}/agences/${agencyId}`);
 
   await runTransaction(db, async (tx) => {
-    const rSnap = await tx.get(rRef);
-    const sSnap = await tx.get(sRef);
+    const [rSnap, sSnap, agencySnap] = await Promise.all([tx.get(rRef), tx.get(sRef), tx.get(agencyRef)]);
     if (!rSnap.exists()) throw new Error('Rapport introuvable');
     if (!sSnap.exists()) throw new Error('Poste introuvable');
 
@@ -203,8 +207,9 @@ export async function validateReportClient(opts: {
 
     const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
     const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
-    const statsDate = toDailyStatsDate(closedAt);
-    updateDailyStatsOnSessionValidatedByAgency(tx, companyId, agencyId, statsDate, totalRevenue);
+    const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
+    const statsDate = timestampToDailyStatsDateKey(closedAt, agencyTz);
+    updateDailyStatsOnSessionValidatedByAgency(tx, companyId, agencyId, statsDate, totalRevenue, agencyTz);
     updateAgencyLiveStateOnSessionValidated(tx, companyId, agencyId);
   });
 }

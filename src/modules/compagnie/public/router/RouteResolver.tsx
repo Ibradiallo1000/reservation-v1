@@ -11,7 +11,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import { resolveReservationById } from "../utils/resolveReservation";
+import { getPendingReservation } from "../utils/pendingReservation";
 
 import PageNotFound from "@/shared/ui/PageNotFound";
 import ErrorBoundary from "@/shared/core/ErrorBoundary";
@@ -73,21 +73,6 @@ const RESERVED = new Set([
 
 /** cache mémoire par session — clé = slug (path ou subdomain) */
 const memoryCache = new Map<string, Company>();
-
-const PENDING_RESERVATION_KEY = "pendingReservation";
-
-/** Lit et parse pendingReservation depuis localStorage (sans effet de bord). */
-function readPendingReservation(): { slug: string; id: string; companyId?: string; agencyId?: string; status?: string } | null {
-  try {
-    const raw = localStorage.getItem(PENDING_RESERVATION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || typeof (parsed as any).id !== "string" || typeof (parsed as any).slug !== "string") return null;
-    return parsed as { slug: string; id: string; companyId?: string; agencyId?: string; status?: string };
-  } catch {
-    return null;
-  }
-}
 
 /* ---------------------------------------------------------------------------------- */
 
@@ -253,55 +238,49 @@ export default function RouteResolver() {
     };
   }, [slug]);
 
-  // Recovery: when on company homepage, if pendingReservation exists and is en_attente_paiement, show modal (not inline banner)
+  // Recovery: when on company homepage, if pendingReservation points to a réservation encore en_attente sur Firestore, show modal
   const [recoveryChecked, setRecoveryChecked] = useState(false);
-  const [pendingRecovery, setPendingRecovery] = useState<{ reservationId: string } | null>(null);
+  const [pendingRecovery, setPendingRecovery] = useState<{
+    reservationId: string;
+    companyId: string;
+    agencyId: string;
+  } | null>(null);
   const [pendingRecoveryDismissed, setPendingRecoveryDismissed] = useState(false);
   useEffect(() => {
     if (recoveryChecked || loading || notFound || error || subPath !== null || !slug || !company) return;
-    const pending = readPendingReservation();
-    if (!pending || !pending.id || !pending.slug) {
-      setRecoveryChecked(true);
-      return;
-    }
-    if (pending.slug !== slug) {
-      setRecoveryChecked(true);
-      return;
-    }
     let alive = true;
     (async () => {
       try {
-        if (!pending.companyId || !pending.agencyId) {
-          setRecoveryChecked(true);
-          return;
-        }
-        const r = await resolveReservationById(pending.slug, pending.id);
+        const reservation = await getPendingReservation(db);
         if (!alive) return;
-        const snapshot = r.snapshot;
-        if (!snapshot) {
-          try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
+        if (!reservation) {
           setRecoveryChecked(true);
           return;
         }
-        const status = (String(snapshot.statut ?? "")).toLowerCase();
-        if (status !== "en_attente_paiement") {
-          try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
+        const resSlug = String(
+          (reservation.companySlug as string) || (reservation.slug as string) || ""
+        ).trim();
+        if (resSlug && resSlug !== slug) {
           setRecoveryChecked(true);
           return;
         }
-        setPendingRecovery({ reservationId: pending.id });
-        setRecoveryChecked(true);
-      } catch {
-        if (alive) {
-          try { localStorage.removeItem(PENDING_RESERVATION_KEY); } catch { /* ignore */ }
+        if (String(reservation.companyId) !== company.id) {
           setRecoveryChecked(true);
+          return;
         }
+        setPendingRecovery({
+          reservationId: reservation.id,
+          companyId: String(reservation.companyId),
+          agencyId: String(reservation.agencyId),
+        });
       } finally {
         if (alive) setRecoveryChecked(true);
       }
     })();
-    return () => { alive = false; };
-  }, [loading, notFound, error, subPath, slug, company, navigate]);
+    return () => {
+      alive = false;
+    };
+  }, [loading, notFound, error, subPath, slug, company]);
 
   /* ---------- states ---------- */
   if (loading) return null;
@@ -431,7 +410,20 @@ export default function RouteResolver() {
                 <div className="flex flex-col gap-3">
                   <button
                     type="button"
-                    onClick={() => navigate(pathBase ? `/${pathBase}/upload-preuve/${pendingRecovery.reservationId}` : `/upload-preuve/${pendingRecovery.reservationId}`, { replace: true })}
+                    onClick={() =>
+                      navigate(
+                        pathBase
+                          ? `/${pathBase}/upload-preuve/${pendingRecovery.reservationId}`
+                          : `/upload-preuve/${pendingRecovery.reservationId}`,
+                        {
+                          replace: true,
+                          state: {
+                            companyId: pendingRecovery.companyId,
+                            agencyId: pendingRecovery.agencyId,
+                          },
+                        }
+                      )
+                    }
                     className="w-full rounded-xl py-3 px-4 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
                     style={{ backgroundColor: primaryColor }}
                   >

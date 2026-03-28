@@ -1,11 +1,18 @@
 import {
-  doc, getDoc, runTransaction, serverTimestamp, collection, arrayUnion,
+  doc,
+  getDoc,
+  runTransaction,
+  serverTimestamp,
+  collection,
+  arrayUnion,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { canonicalStatut, isValidTransition } from "@/utils/reservationStatusUtils";
 import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
-import { decrementReservedSeats } from "@/modules/compagnie/tripInstances/tripInstanceService";
-import { createCashRefund, markCashTransactionRefunded } from "@/modules/compagnie/cash/cashService";
+import {
+  releaseSeatsOnTripInstanceInTransaction,
+  tripInstanceRef,
+} from "@/modules/compagnie/tripInstances/tripInstanceService";
 
 /** Champs éditables par le guichet */
 export type ReservationEditable = Partial<{
@@ -34,18 +41,6 @@ export type ModifyOptions = {
   requestedByName?: string | null;
 };
 
-/** Journal d’audit (pour sécurité & traçabilité) */
-async function writeAuditLog(basePath: string, payload: any) {
-  const logsRef = collection(db, `${basePath}/reservationLogs`);
-  const id = doc(logsRef); // auto-id
-  await runTransaction(db, async (tx) => {
-    tx.set(id, {
-      ...payload,
-      createdAt: serverTimestamp(),
-    });
-  });
-}
-
 /** Annuler un billet (statut → "annule", canonique). Phase B : transition + auditLog obligatoire. Libère les places sur le tripInstance si présent. */
 export async function cancelReservation(
   companyId: string,
@@ -55,27 +50,22 @@ export async function cancelReservation(
 ) {
   const base = `companies/${companyId}/agences/${agencyId}`;
   const ref = doc(db, `${base}/reservations/${reservationId}`);
-  let tripInstanceId: string | null = null;
-  let seatsToRelease = 0;
-  let refundAmount = 0;
-  let cashTransactionIdToRefund: string | null = null;
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Réservation introuvable.");
-    const data = snap.data() as any;
+    const data = snap.data() as Record<string, unknown>;
     const oldStatut = String(data.statut ?? "");
 
-    if (canonicalStatut(oldStatut) === "annule") return; // idempotent
+    if (canonicalStatut(oldStatut) === "annule") return;
 
     if (!isValidTransition(oldStatut, "annule")) {
       throw new Error(`Transition non autorisée vers annule depuis: ${oldStatut}`);
     }
 
-    tripInstanceId = data.tripInstanceId ?? null;
-    seatsToRelease = (data.seatsGo ?? 0) + (data.seatsReturn ?? 0);
-    refundAmount = Number(data.montant ?? 0) || 0;
-    cashTransactionIdToRefund = data.cashTransactionId ?? null;
+    const tripInstanceId = (data.tripInstanceId as string | null) ?? null;
+    const seatsToRelease =
+      Number(data.seatsGo ?? 0) + Number(data.seatsReturn ?? 0);
 
     const auditEntry = buildStatutTransitionPayload(oldStatut, "annule", {
       userId: requestedByUid,
@@ -95,38 +85,28 @@ export async function cancelReservation(
       auditLog: arrayUnion(auditEntry),
     });
 
-    await writeAuditLog(base, {
+    const logRef = doc(collection(db, `${base}/reservationLogs`));
+    tx.set(logRef, {
       type: "CANCEL",
       reservationId,
       prev: { statut: data.statut },
       next: { statut: "annule" },
       reason: reason || "",
       by: { uid: requestedByUid, name: requestedByName || null },
+      createdAt: serverTimestamp(),
     });
+
+    if (tripInstanceId && seatsToRelease > 0) {
+      const tiRef = tripInstanceRef(companyId, tripInstanceId);
+      const tiSnap = await tx.get(tiRef);
+      releaseSeatsOnTripInstanceInTransaction(tx, tiRef, tiSnap, seatsToRelease, {
+        originStopOrder: data.originStopOrder as number | null | undefined,
+        destinationStopOrder: data.destinationStopOrder as number | null | undefined,
+        depart: String(data.depart ?? ""),
+        arrivee: String(data.arrivee ?? ""),
+      });
+    }
   });
-
-  if (tripInstanceId && seatsToRelease > 0) {
-    decrementReservedSeats(companyId, tripInstanceId, seatsToRelease).catch((err) => {
-      console.error("[cancelReservation] decrementReservedSeats failed:", err);
-    });
-  }
-
-  if (refundAmount > 0) {
-    createCashRefund({
-      companyId,
-      reservationId,
-      amount: refundAmount,
-      locationType: "agence",
-      locationId: agencyId,
-      createdBy: requestedByUid,
-      reason: reason ?? "Annulation",
-    }).catch((err) => console.error("[cancelReservation] createCashRefund failed:", err));
-  }
-  if (cashTransactionIdToRefund) {
-    markCashTransactionRefunded(companyId, cashTransactionIdToRefund).catch((err) =>
-      console.error("[cancelReservation] markCashTransactionRefunded failed:", err)
-    );
-  }
 }
 
 /** Modifier un billet (patch partiel et audité). */
@@ -189,16 +169,26 @@ export async function modifyReservation(
 
     tx.update(ref, next);
 
-    await writeAuditLog(base, {
+    const logRef = doc(collection(db, `${base}/reservationLogs`));
+    tx.set(logRef, {
       type: "MODIFY",
       reservationId,
       patch: safePatch,
       by: { uid: requestedByUid, name: requestedByName || null },
       prevSnapshot: {
-        date: prev.date, heure: prev.heure, depart: prev.depart, arrivee: prev.arrivee,
-        clientNom: prev.clientNom, telephone: prev.telephone, seatsGo: prev.seatsGo, seatsReturn: prev.seatsReturn,
-        montant: prev.montant, statut: prev.statut, statutEmbarquement: prev.statutEmbarquement,
+        date: prev.date,
+        heure: prev.heure,
+        depart: prev.depart,
+        arrivee: prev.arrivee,
+        clientNom: prev.clientNom,
+        telephone: prev.telephone,
+        seatsGo: prev.seatsGo,
+        seatsReturn: prev.seatsReturn,
+        montant: prev.montant,
+        statut: prev.statut,
+        statutEmbarquement: prev.statutEmbarquement,
       },
+      createdAt: serverTimestamp(),
     });
   });
 }

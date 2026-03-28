@@ -9,6 +9,7 @@ export type Role =
   | 'admin_compagnie'        // CEO (technique / propriétaire)
   | 'financial_director'     // DAF (superviseur comptable)
   | 'company_accountant'     // Comptable compagnie (opérationnel)
+  | 'operator_digital'       // Opérateur Caisse Digitale (validation paiements en ligne uniquement)
   | 'responsable_logistique' // Responsable logistique (flotte, véhicules, maintenance)
   | 'chef_garage'            // Alias garage (compat Firestore / routePermissions)
 
@@ -49,7 +50,8 @@ export type ModuleKey =
   | 'guichet'
   | 'embarquement'
   | 'boarding'
-  | 'fleet';
+  | 'fleet'
+  | 'trip_planning';
 
 
 /* ===================== PERMISSIONS ===================== */
@@ -71,6 +73,7 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'agences',
     'personnel',
     'parametres',
+    'trip_planning',
   ],
 
   // DAF → supervision financière & validation
@@ -102,6 +105,12 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'fleet',
   ],
 
+  // Opérateur Digital → validation paiements en ligne uniquement (pas comptabilité globale)
+  operator_digital: [
+    'dashboard',
+    'reservations',
+  ],
+
   /** ============ AGENCE ============ */
 
   chefAgence: [
@@ -109,8 +118,7 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'reservations',
     'finances',
     'guichet',
-    'embarquement',
-    'fleet',
+    'trip_planning',
     'personnel',
   ],
 
@@ -119,8 +127,7 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
     'reservations',
     'finances',
     'guichet',
-    'embarquement',
-    'fleet',
+    'trip_planning',
     'personnel',
   ],
 
@@ -149,6 +156,7 @@ export const permissionsByRole: Record<Role, readonly ModuleKey[]> = {
 
   agency_fleet_controller: [
     'fleet',
+    'trip_planning',
   ],
 
   escale_agent: [

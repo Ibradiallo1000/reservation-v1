@@ -21,6 +21,9 @@ import { formatDateLongFr } from "@/utils/dateFmt";
 import { getDateRangeForPeriod, isInRange, type PeriodKind } from "@/shared/date/periodUtils";
 import PeriodFilterBar from "@/shared/date/PeriodFilterBar";
 import { Wallet, Building2, TrendingUp, AlertCircle, Banknote, Smartphone, PiggyBank, Eye, EyeOff } from "lucide-react";
+import { ENABLE_RECONCILIATION } from "@/config/featureFlags";
+import { repairFinancialConsistency } from "@/services/reconciliationService";
+import { LEDGER_ACCOUNTS_COLLECTION } from "@/modules/compagnie/treasury/ledgerAccounts";
 
 const MOVEMENTS_LIMIT = 100;
 const LOW_BALANCE_THRESHOLD = 50000;
@@ -34,6 +37,8 @@ const ACCOUNT_TYPE_LABEL: Record<string, string> = {
 };
 const PIN_MAX_ATTEMPTS = 3;
 const PIN_LOCK_STEPS_MS = [60_000, 300_000, 900_000];
+const MOBILE_MONEY_ACCOUNT_TYPES = ["mobile_money", "company_mobile_money"];
+const RECONCILIATION_RUN_TTL_MS = 5 * 60 * 1000;
 
 async function sha256Hex(value: string): Promise<string> {
   if (typeof window !== "undefined" && window.crypto?.subtle) {
@@ -67,6 +72,20 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
   const [customEnd, setCustomEnd] = useState<string>("");
   const [unlockedBankIds, setUnlockedBankIds] = useState<Set<string>>(new Set());
   const [pinLoading, setPinLoading] = useState(false);
+  const [showLastMovementsDetail, setShowLastMovementsDetail] = useState(false);
+
+  useEffect(() => {
+    if (!companyId || !ENABLE_RECONCILIATION) return;
+    const storageKey = `treasury-repair:last-run:${companyId}`;
+    const now = Date.now();
+    const lastRun = Number(localStorage.getItem(storageKey) || 0);
+    if (Number.isFinite(lastRun) && now - lastRun < RECONCILIATION_RUN_TTL_MS) return;
+    localStorage.setItem(storageKey, String(now));
+
+    repairFinancialConsistency(companyId).catch((err) => {
+      console.warn("[CEOTreasuryPage] repairFinancialConsistency failed:", err);
+    });
+  }, [companyId]);
 
   useEffect(() => {
     if (!companyId) {
@@ -110,19 +129,28 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
     if (!companyId) return;
     setLoading(true);
     const q = query(
-      collection(db, `companies/${companyId}/financialAccounts`),
-      where("isActive", "==", true)
+      collection(db, `companies/${companyId}/${LEDGER_ACCOUNTS_COLLECTION}`)
     );
     const unsub = onSnapshot(q, (snap) => {
       setAccounts(
         snap.docs.map((d) => {
           const data = d.data();
+          const typeRaw = String(data.type ?? "");
+          const agencyId = (data.agencyId as string | null | undefined) ?? null;
+          const accountType =
+            typeRaw === "cash"
+              ? "agency_cash"
+              : typeRaw === "mobile_money"
+                ? (agencyId ? "mobile_money" : "company_mobile_money")
+                : typeRaw === "bank"
+                  ? "company_bank"
+                  : "expense_reserve";
           return {
             id: d.id,
-            agencyId: data.agencyId ?? null,
-            accountType: data.accountType ?? "",
-            accountName: data.accountName ?? "",
-            currentBalance: Number(data.currentBalance ?? 0),
+            agencyId,
+            accountType,
+            accountName: String(data.label ?? d.id),
+            currentBalance: Number(data.balance ?? 0),
             currency: data.currency ?? "",
           };
         })
@@ -135,7 +163,7 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
   useEffect(() => {
     if (!companyId) return;
     const q = query(
-      collection(db, `companies/${companyId}/financialMovements`),
+      collection(db, `companies/${companyId}/financialTransactions`),
       orderBy("performedAt", "desc"),
       limit(MOVEMENTS_LIMIT)
     );
@@ -146,7 +174,7 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
           return {
             id: d.id,
             amount: Number(data.amount ?? 0),
-            movementType: data.movementType ?? "",
+            movementType: data.type ?? "",
             performedAt: data.performedAt,
             referenceId: data.referenceId ?? "",
             agencyId: data.agencyId ?? "",
@@ -158,9 +186,12 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
   }, [companyId]);
 
   const agencyNames = useMemo(() => new Map(agencies.map((a) => [a.id, a.nom])), [agencies]);
-  const getAgencyDisplayName = (agencyId: string) => {
+  const getAgencyDisplayName = (agencyId: string | null | undefined) => {
+    if (!agencyId) return "Niveau compagnie";
     const name = agencyNames.get(agencyId);
-    return name && name !== agencyId ? name : "Agence inconnue";
+    if (name && name !== agencyId) return name;
+    const shortId = agencyId.length > 8 ? `${agencyId.slice(0, 8)}…` : agencyId;
+    return `Agence archivée (${shortId})`;
   };
   const agencyNameById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -171,20 +202,14 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
   }, [agencies]);
 
   const displayAccounts = useMemo(
-    () =>
-      accounts.filter((a) => {
-        if (a.accountType !== "company_bank") return true;
-        if (!a.id.startsWith("company_bank_")) return false;
-        const bankId = a.id.slice("company_bank_".length);
-        return Boolean(companyBanksById[bankId]);
-      }),
+    () => accounts.filter((a) => a.accountType !== "expense_reserve"),
     [accounts, companyBanksById]
   );
   const hiddenLegacyBankCount = useMemo(
     () =>
       accounts.filter((a) => {
         if (a.accountType !== "company_bank") return false;
-        if (!a.id.startsWith("company_bank_")) return true;
+        if (!a.id.startsWith("company_bank_")) return false;
         const bankId = a.id.slice("company_bank_".length);
         return !companyBanksById[bankId];
       }).length,
@@ -223,19 +248,29 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
   const agencyWalletRows = useMemo(
     () =>
       accountRows.filter(
-        (a) => a.agencyId != null && (a.accountType === "agency_cash" || a.accountType === "mobile_money")
+        (a) =>
+          a.agencyId != null &&
+          (a.accountType === "agency_cash" || MOBILE_MONEY_ACCOUNT_TYPES.includes(a.accountType)) &&
+          (Number(a.currentBalance ?? 0) !== 0 || agencyNames.has(a.agencyId))
       ),
-    [accountRows]
+    [accountRows, agencyNames]
   );
   const reserveRows = useMemo(
     () => accountRows.filter((a) => a.accountType === "expense_reserve"),
     [accountRows]
   );
+  const orphanAgencySummary = useMemo(() => {
+    const orphanIds = Array.from(byAgency.keys()).filter((k) => k !== "_company" && !agencyNames.has(k));
+    const amount = orphanIds.reduce((sum, id) => sum + (byAgency.get(id) ?? 0), 0);
+    return { count: orphanIds.length, amount };
+  }, [byAgency, agencyNames]);
 
   const cashByType = useMemo(() => {
     const cash = displayAccounts.filter((a) => a.accountType === "agency_cash").reduce((s, a) => s + a.currentBalance, 0);
     const bank = displayAccounts.filter((a) => a.accountType === "agency_bank" || a.accountType === "company_bank").reduce((s, a) => s + a.currentBalance, 0);
-    const mobile = displayAccounts.filter((a) => a.accountType === "mobile_money").reduce((s, a) => s + a.currentBalance, 0);
+    const mobile = displayAccounts
+      .filter((a) => MOBILE_MONEY_ACCOUNT_TYPES.includes(a.accountType))
+      .reduce((s, a) => s + a.currentBalance, 0);
     const reserve = displayAccounts.filter((a) => a.accountType === "expense_reserve").reduce((s, a) => s + a.currentBalance, 0);
     return { cash, bank, mobile, reserve };
   }, [displayAccounts]);
@@ -510,14 +545,14 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
                   <td className="py-2 px-3 text-right font-semibold">{money(byAgency.get(a.id) ?? 0)}</td>
                 </tr>
               ))}
-              {Array.from(byAgency.keys())
-                .filter((k) => k !== "_company" && !agencyNames.has(k))
-                .map((agencyId) => (
-                  <tr key={agencyId} className="border-b dark:border-slate-700">
-                    <td className="py-2 px-3 text-gray-500">Agence inconnue</td>
-                    <td className="py-2 px-3 text-right">{money(byAgency.get(agencyId) ?? 0)}</td>
-                  </tr>
-                ))}
+              {orphanAgencySummary.count > 0 && (
+                <tr className="border-b dark:border-slate-700">
+                  <td className="py-2 px-3 text-amber-700 dark:text-amber-300">
+                    Agences archivées / supprimées ({orphanAgencySummary.count})
+                  </td>
+                  <td className="py-2 px-3 text-right">{money(orphanAgencySummary.amount)}</td>
+                </tr>
+              )}
               <tr className="bg-primary/10 dark:bg-primary/20">
                 <td className="py-2 px-3 font-semibold text-primary">Niveau compagnie</td>
                 <td className="py-2 px-3 text-right font-bold text-primary">{money(byAgency.get("_company") ?? 0)}</td>
@@ -672,26 +707,51 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
       )}
 
       <SectionCard title="Derniers mouvements" noPad>
-        <div className="overflow-x-auto max-h-64 overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="text-left py-1">Type</th>
-                <th className="text-right py-1">Montant</th>
-                <th className="text-left py-1">Agence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {movementsInPeriod.slice(0, 30).map((m) => (
-                <tr key={m.id} className="border-b">
-                  <td className="py-1">{m.movementType}</td>
-                  <td className="py-1 text-right">+{money(m.amount)}</td>
-                  <td className="py-1">{m.agencyId ? getAgencyDisplayName(m.agencyId) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3 dark:border-slate-800">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {movementsInPeriod.length === 0
+              ? "Aucun mouvement sur la période."
+              : `${Math.min(30, movementsInPeriod.length)} mouvement(s) — affichage optionnel.`}
+          </p>
+          <ActionButton
+            type="button"
+            variant="secondary"
+            className="shrink-0 text-sm py-1.5 px-3"
+            onClick={() => setShowLastMovementsDetail((v) => !v)}
+          >
+            {showLastMovementsDetail ? "Masquer les détails" : "Voir détails"}
+          </ActionButton>
         </div>
+        {showLastMovementsDetail ? (
+          <div className="overflow-x-auto max-h-64 overflow-y-auto px-4 pb-4 pt-2">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-1">Type</th>
+                  <th className="text-right py-1">Montant</th>
+                  <th className="text-left py-1">Agence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {movementsInPeriod.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="py-4 text-center text-gray-500">
+                      Aucun mouvement sur la période.
+                    </td>
+                  </tr>
+                ) : (
+                  movementsInPeriod.slice(0, 30).map((m) => (
+                    <tr key={m.id} className="border-b">
+                      <td className="py-1">{m.movementType}</td>
+                      <td className="py-1 text-right">+{money(m.amount)}</td>
+                      <td className="py-1">{m.agencyId ? getAgencyDisplayName(m.agencyId) : "—"}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </SectionCard>
 
       <SectionCard title="Dépenses récentes">

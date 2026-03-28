@@ -17,6 +17,7 @@ import {
 import { db } from "@/firebaseConfig";
 import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import { getTripInstance } from "./tripInstanceService";
+import { tripInstanceTime } from "./tripInstanceTypes";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
 import { listTripInstancesByDateRange } from "./tripInstanceService";
 
@@ -59,7 +60,7 @@ export type ProgressStopDocWithId = ProgressStopDoc & { id: string };
 
 /**
  * Calcule le retard en minutes : heure réelle d'arrivée - heure prévue.
- * Heure prévue = departureTime du tripInstance + estimatedArrivalOffsetMinutes du stop.
+ * Heure prévue = heure départ instance (`time` ou `departureTime`) + estimatedArrivalOffsetMinutes du stop.
  */
 export async function computeDelay(
   companyId: string,
@@ -70,7 +71,7 @@ export async function computeDelay(
   const ti = await getTripInstance(companyId, tripInstanceId);
   if (!ti) return null;
   const date = (ti as { date?: string }).date;
-  const departureTime = (ti as { departureTime?: string }).departureTime;
+  const departureTime = tripInstanceTime(ti);
   if (!date || !departureTime) return null;
   const routeId = (ti as { routeId?: string | null }).routeId ?? null;
   if (!routeId) return null;

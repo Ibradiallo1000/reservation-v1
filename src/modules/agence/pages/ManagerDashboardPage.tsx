@@ -1,25 +1,25 @@
 // src/modules/agence/pages/ManagerDashboardPage.tsx
 // Phase 4 + 4.5: Manager Command Center — uses dailyStats + agencyLiveState to reduce listeners.
 import React, { useEffect, useState, useMemo } from "react";
-import { collection, doc, query, where, onSnapshot, getDocs, limit } from "firebase/firestore";
+import { collection, doc, query, where, onSnapshot, limit } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { getAgencyLedgerPaymentReceivedTotalForPeriod } from "@/modules/agence/comptabilite/agencyCashAuditService";
+import {
+  getEndOfDay,
+  getStartOfDay,
+  getTodayForTimezone,
+  resolveAgencyTimezone,
+} from "@/shared/date/dateUtilsTz";
+import { AGENCY_KPI_TIME } from "@/modules/agence/shared/agencyKpiTimeContract";
 import { formatDateLongFr } from "@/utils/dateFmt";
-import type { DailyStatsDoc } from "../aggregates/types";
-import type { AgencyLiveStateDoc } from "../aggregates/types";
+import type { AgencyLiveStateDoc, DailyStatsDoc } from "../aggregates/types";
 import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, EmptyState, table, tableRowClassName } from "@/ui";
 import { LayoutDashboard } from "lucide-react";
 
 const SESSION_DURATION_WARNING_HOURS = 8;
-
-function toLocalISO(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-const weekdayFR = (d: Date) => d.toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
 
 type ShiftDoc = {
   id: string;
@@ -44,33 +44,27 @@ type ReservationDoc = {
   statutEmbarquement?: string;
 };
 
-type FleetVehicleDoc = {
-  id: string;
-  status: string;
-  currentAgencyId?: string | null;
-  destinationAgencyId?: string | null;
-  plateNumber?: string;
-};
-
-type BoardingClosureDoc = { id: string };
-
 const ManagerDashboardPage: React.FC = () => {
-  const { user } = useAuth() as { user: { companyId?: string; agencyId?: string } };
+  const { user } = useAuth() as {
+    user: { companyId?: string; agencyId?: string; agencyTimezone?: string };
+  };
+  const money = useFormatCurrency();
   const companyId = user?.companyId ?? null;
   const agencyId = user?.agencyId ?? null;
+  const agencyTz = useMemo(
+    () => resolveAgencyTimezone({ timezone: user?.agencyTimezone }),
+    [user?.agencyTimezone]
+  );
 
+  const [dailyStats, setDailyStats] = useState<DailyStatsDoc | null>(null);
   const [shifts, setShifts] = useState<ShiftDoc[]>([]);
   const [reservationsToday, setReservationsToday] = useState<ReservationDoc[]>([]);
-  const [dailyStats, setDailyStats] = useState<DailyStatsDoc | null>(null);
   const [agencyLiveState, setAgencyLiveState] = useState<AgencyLiveStateDoc | null>(null);
-  const [fleetVehicles, setFleetVehicles] = useState<FleetVehicleDoc[]>([]);
-  const [boardingClosures, setBoardingClosures] = useState<BoardingClosureDoc[]>([]);
-  const [weeklyTrips, setWeeklyTrips] = useState<Array<{ id: string; departure: string; arrival: string; horaires?: Record<string, string[]> }>>([]);
   const [loading, setLoading] = useState(true);
+  /** FINANCIAL_TRUTH (ledger) : encaissements jour Bamako. */
+  const [ledgerEncaissementsToday, setLedgerEncaissementsToday] = useState<number | null>(null);
 
-  const today = useMemo(() => toLocalISO(new Date()), []);
-  const dayName = useMemo(() => weekdayFR(new Date()), []);
-
+  const today = useMemo(() => getTodayForTimezone(agencyTz), [agencyTz]);
   useEffect(() => {
     if (!companyId || !agencyId) {
       setLoading(false);
@@ -107,39 +101,23 @@ const ManagerDashboardPage: React.FC = () => {
       setReservationsToday(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ReservationDoc, "id">) })))
     );
 
-    // Fleet: status-filtered to reduce reads (PART 4)
-    const qFleet = query(
-      collection(db, `companies/${companyId}/fleetVehicles`),
-      where("status", "in", ["garage", "assigned", "in_transit"]),
-      limit(200)
-    );
-    const unsubFleet = onSnapshot(qFleet, (snap) =>
-      setFleetVehicles(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<FleetVehicleDoc, "id">) })))
-    );
-
-    const unsubClosures = onSnapshot(
-      collection(db, `companies/${companyId}/agences/${agencyId}/boardingClosures`),
-      (snap) => setBoardingClosures(snap.docs.map((d) => ({ id: d.id })))
-    );
-
-    getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/weeklyTrips`)).then((snap) => {
-      setWeeklyTrips(
-        snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as { departure: string; arrival: string; horaires?: Record<string, string[]> }) }))
-          .filter((t) => (t.horaires?.[dayName]?.length ?? 0) > 0)
-      );
-    });
-
     setLoading(false);
     return () => {
       unsubDailyStats();
       unsubLiveState();
       unsubShifts();
       unsubRes();
-      unsubFleet();
-      unsubClosures();
     };
-  }, [companyId, agencyId, today, dayName]);
+  }, [companyId, agencyId, today]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    const dayStart = getStartOfDay(agencyTz);
+    const dayEndExclusive = new Date(getEndOfDay(agencyTz).getTime() + 1);
+    getAgencyLedgerPaymentReceivedTotalForPeriod(companyId, agencyId, dayStart, dayEndExclusive)
+      .then((r) => setLedgerEncaissementsToday(r.total))
+      .catch(() => setLedgerEncaissementsToday(null));
+  }, [companyId, agencyId, agencyTz]);
 
   // Prefer agencyLiveState when available (Phase 4.5); validated count stays from shifts (table consistency)
   const activeShiftsCount = agencyLiveState?.activeSessionsCount ?? shifts.filter((s) => s.status === "active" || s.status === "paused").length;
@@ -159,68 +137,23 @@ const ManagerDashboardPage: React.FC = () => {
     return map;
   }, [reservationsToday]);
 
-  // Phase 4.5: prefer dailyStats for KPIs
-  const totalRevenueToday = useMemo(() => {
-    if (dailyStats != null && dailyStats.totalRevenue != null) return Number(dailyStats.totalRevenue);
-    return reservationsToday.reduce((acc, r) => acc + (r.montant ?? 0), 0);
-  }, [dailyStats, reservationsToday]);
-  const totalPassengersToday = useMemo(() => {
-    if (dailyStats != null && dailyStats.totalPassengers != null) return Number(dailyStats.totalPassengers);
-    return reservationsToday.reduce((acc, r) => acc + (r.seatsGo ?? 1), 0);
-  }, [dailyStats, reservationsToday]);
-
-  const departuresToday = useMemo(() => {
-    const list: Array<{ tripId: string; departure: string; arrival: string; heure: string; capacity: number; embarked: number; closed: boolean }> = [];
-    weeklyTrips.forEach((t) => {
-      (t.horaires?.[dayName] ?? []).forEach((heure) => {
-        const key = `${t.departure}_${t.arrival}_${heure}_${today}`.replace(/\s+/g, "-");
-        const closed = boardingClosures.some((c) => c.id === key);
-        const resForSlot = reservationsToday.filter(
-          (r) => r.depart === t.departure && (r.arrivee ?? "") === t.arrival && r.heure === heure
-        );
-        const embarked = resForSlot.reduce((acc, r) => acc + (r.statutEmbarquement === "embarqué" ? (r.seatsGo ?? 1) : 0), 0);
-        const capacity = 50;
-        list.push({
-          tripId: t.id,
-          departure: t.departure,
-          arrival: t.arrival,
-          heure,
-          capacity,
-          embarked,
-          closed,
-        });
-      });
-    });
-    return list;
-  }, [weeklyTrips, dayName, today, reservationsToday, boardingClosures]);
-
-  const fleetByStatus = useMemo(() => {
-    const garage = fleetVehicles.filter((v) => v.status === "garage").length;
-    const assigned = fleetVehicles.filter((v) => v.status === "assigned").length;
-    const inTransit = agencyLiveState?.vehiclesInTransitCount ?? fleetVehicles.filter((v) => v.status === "in_transit").length;
-    const approaching = fleetVehicles.filter(
-      (v) =>
-        v.status === "in_transit" &&
-        agencyId &&
-        ((v.destinationAgencyId ?? v.currentAgencyId) === agencyId)
-    ).length;
-    return { garage, assigned, inTransit, approaching };
-  }, [fleetVehicles, agencyId, agencyLiveState?.vehiclesInTransitCount]);
+  /** T₄ : réservations dont la date de voyage = jour calendaire agence (Bamako), terrain uniquement. */
+  const totalRevenueToday = useMemo(
+    () => reservationsToday.reduce((acc, r) => acc + (r.montant ?? 0), 0),
+    [reservationsToday]
+  );
+  const totalPassengersToday = useMemo(
+    () => reservationsToday.reduce((acc, r) => acc + (r.seatsGo ?? 1), 0),
+    [reservationsToday]
+  );
 
   const alerts = useMemo(() => {
     const list: Array<{ type: string; message: string }> = [];
     closedShifts.forEach((s) => {
       list.push({ type: "session", message: `Session clôturée non validée : ${s.userName ?? s.id}` });
     });
-    const inTransitStaleThreshold = 12 * 60 * 60 * 1000;
-    const now = Date.now();
-    fleetVehicles
-      .filter((v) => v.status === "in_transit")
-      .forEach((v) => {
-        list.push({ type: "fleet", message: `Véhicule en transit depuis longtemps : ${v.plateNumber ?? v.id}` });
-      });
     return list;
-  }, [closedShifts, fleetVehicles]);
+  }, [closedShifts]);
 
   const topCashier = useMemo((): { shiftId: string; userName?: string; revenue: number } | null => {
     let best: { shiftId: string; userName?: string; revenue: number } | null = null;
@@ -259,10 +192,26 @@ const ManagerDashboardPage: React.FC = () => {
       />
 
       <SectionCard title="Sessions guichet">
+        <p className="text-xs text-gray-500 mb-3">{AGENCY_KPI_TIME.SESSION_POSTE}</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-          <MetricCard label="Actives" value={activeShiftsCount} valueColorVar="#059669" />
-          <MetricCard label="Clôturées (en attente validation)" value={closedPendingCount} valueColorVar="#d97706" />
-          <MetricCard label="Validées" value={validatedShiftsCount} valueColorVar="#475569" />
+          <MetricCard
+            label="Actives"
+            value={activeShiftsCount}
+            valueColorVar="#059669"
+            hint={AGENCY_KPI_TIME.SESSION_POSTE}
+          />
+          <MetricCard
+            label="Clôturées (en attente validation)"
+            value={closedPendingCount}
+            valueColorVar="#d97706"
+            hint={AGENCY_KPI_TIME.SESSION_POSTE}
+          />
+          <MetricCard
+            label="Validées"
+            value={validatedShiftsCount}
+            valueColorVar="#475569"
+            hint={AGENCY_KPI_TIME.SESSION_POSTE}
+          />
         </div>
         <div className={table.wrapper}>
           <table className={table.base}>
@@ -270,7 +219,7 @@ const ManagerDashboardPage: React.FC = () => {
               <tr>
                 <th className={table.th}>Guichetier</th>
                 <th className={table.th}>Statut</th>
-                <th className={table.thRight}>Revenu</th>
+                <th className={table.thRight}>Revenu (terrain, date voyage)</th>
                 <th className={table.th}>Alerte</th>
               </tr>
             </thead>
@@ -292,46 +241,6 @@ const ManagerDashboardPage: React.FC = () => {
         </div>
       </SectionCard>
 
-      <SectionCard title="Embarquement du jour">
-        <div className={table.wrapper}>
-          <table className={table.base}>
-            <thead className={table.head}>
-              <tr>
-                <th className={table.th}>Départ → Arrivée</th>
-                <th className={table.th}>Heure</th>
-                <th className={table.thRight}>Remplissage</th>
-                <th className={table.th}>Statut</th>
-              </tr>
-            </thead>
-            <tbody className={table.body}>
-              {departuresToday.length === 0 ? (
-                <tr><td colSpan={4} className="py-4 text-gray-500 text-center">Aucun départ planifié</td></tr>
-              ) : (
-                departuresToday.map((d, i) => (
-                  <tr key={i} className={tableRowClassName()}>
-                    <td className={table.td}>{d.departure} → {d.arrival}</td>
-                    <td className={table.td}>{d.heure}</td>
-                    <td className={table.tdRight}>
-                      {d.embarked} / {d.capacity} ({d.capacity ? Math.round((d.embarked / d.capacity) * 100) : 0}%)
-                    </td>
-                    <td className={table.td}>{d.closed ? "Clôturé" : "Ouvert"}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Flotte">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <MetricCard label="En garage" value={fleetByStatus.garage} valueColorVar="#4b5563" />
-          <MetricCard label="Affectés" value={fleetByStatus.assigned} valueColorVar="#d97706" />
-          <MetricCard label="En transit" value={fleetByStatus.inTransit} valueColorVar="#2563eb" />
-          <MetricCard label="Approchant cette agence" value={fleetByStatus.approaching} valueColorVar="#059669" />
-        </div>
-      </SectionCard>
-
       <SectionCard title="Alertes">
         {alerts.length === 0 ? (
           <EmptyState message="Aucune alerte." />
@@ -348,30 +257,49 @@ const ManagerDashboardPage: React.FC = () => {
       </SectionCard>
 
       <SectionCard title="Indicateurs du jour">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <MetricCard
-            label="Revenu total (aujourd'hui)"
-            value={totalRevenueToday.toFixed(0)}
-            valueColorVar="#4f46e5"
-          />
-          <MetricCard label="Passagers" value={totalPassengersToday} valueColorVar="#7c3aed" />
-          <MetricCard
-            label="Taux de remplissage"
-            value={
-              departuresToday.length > 0
-                ? `${Math.round(
-                    (departuresToday.reduce((a, d) => a + d.embarked, 0) /
-                      Math.max(1, departuresToday.reduce((a, d) => a + d.capacity, 0))) * 100
-                  )}%`
-                : "0%"
-            }
-            valueColorVar="#0d9488"
-          />
-          <MetricCard
-            label="Meilleur guichetier"
-            value={topCashier?.userName ?? "—"}
-            valueColorVar="#d97706"
-          />
+        <div className="space-y-6">
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-4 dark:border-indigo-900/40 dark:bg-indigo-950/20">
+            <p className="text-xs font-semibold text-indigo-900 dark:text-indigo-200 mb-3">
+              Bloc transport — ne pas comparer au ledger
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <MetricCard
+                label="CA réservations (jour)"
+                value={totalRevenueToday.toFixed(0)}
+                valueColorVar="#4f46e5"
+                hint={AGENCY_KPI_TIME.DATE_VOYAGE}
+              />
+              <MetricCard
+                label="Passagers"
+                value={totalPassengersToday}
+                valueColorVar="#7c3aed"
+                hint={AGENCY_KPI_TIME.DATE_VOYAGE}
+              />
+              <MetricCard
+                label="Taux de remplissage"
+                value="—"
+                valueColorVar="#0d9488"
+                hint="Capacité par bus : planification / embarquement (hors tableau manager)."
+              />
+              <MetricCard
+                label="Meilleur guichetier (revenu terrain)"
+                value={topCashier?.userName ?? "—"}
+                valueColorVar="#d97706"
+                hint={AGENCY_KPI_TIME.DATE_VOYAGE}
+              />
+            </div>
+          </div>
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50/40 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/20">
+            <p className="text-xs font-semibold text-emerald-900 dark:text-emerald-200 mb-3">
+              Bloc comptabilité — séparé du transport et des sessions
+            </p>
+            <MetricCard
+              label="Encaissements ledger (jour)"
+              value={ledgerEncaissementsToday != null ? money(ledgerEncaissementsToday) : "—"}
+              valueColorVar="#059669"
+              hint={AGENCY_KPI_TIME.LEDGER_BAMAKO}
+            />
+          </div>
         </div>
       </SectionCard>
     </StandardLayoutWrapper>

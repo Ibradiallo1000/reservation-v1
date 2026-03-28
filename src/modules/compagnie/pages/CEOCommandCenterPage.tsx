@@ -19,10 +19,9 @@ import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { useGlobalDataSnapshot } from "@/contexts/GlobalDataSnapshotContext";
 import { useGlobalMoneyPositions } from "@/contexts/GlobalMoneyPositionsContext";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
-import { format } from "date-fns";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { getDateRangeForPeriod, type PeriodKind } from "@/shared/date/periodUtils";
-import { getTodayBamako } from "@/shared/date/dateUtilsTz";
+import { getTodayBamako, getTodayForTimezone, resolveAgencyTimezone } from "@/shared/date/dateUtilsTz";
 import { Gauge } from "lucide-react";
 import { listClosedCashSessionsWithDiscrepancy } from "@/modules/agence/cashControl/cashSessionService";
 import type { CashSessionDocWithId } from "@/modules/agence/cashControl/cashSessionTypes";
@@ -38,7 +37,6 @@ import {
   TRIP_COSTS_COLLECTION,
 } from "@/core/intelligence";
 import { calculateCompanyCashPosition } from "@/core/finance";
-import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import { listUnpaidPayables } from "@/modules/compagnie/finance/payablesService";
 import { listVehicles } from "@/modules/compagnie/fleet/vehiclesService";
 import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
@@ -53,6 +51,7 @@ import { computeCeoGlobalStatus } from "@/modules/compagnie/commandCenter/ceoRis
 import { buildCeoDecisions, type DecisionEngineResult } from "@/modules/compagnie/commandCenter/decisionEngine";
 import { getDelayedBusesCountToday } from "@/modules/compagnie/tripInstances/tripProgressService";
 import { getNetworkOperationalStats } from "@/modules/compagnie/networkStats/networkOperationalService";
+import { getReservationsInRange, isPaidReservation } from "@/modules/compagnie/networkStats/networkStatsService";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { getPreviousPeriod, calculateChange } from "@/shared/date/periodComparisonUtils";
 import { getPeriodLabel } from "@/shared/date/periodUtils";
@@ -61,13 +60,13 @@ import {
   type UnifiedAgencyFinance,
 } from "@/modules/finance/services/unifiedFinanceService";
 import {
-  getNetworkSales,
-  getNetworkCash,
+  getAgencyLedgerLiquidityMap,
+  LEDGER_ACCOUNTS_COLLECTION,
+} from "@/modules/compagnie/treasury/ledgerAccounts";
+import {
   getNetworkOccupancy,
   type FinancialPeriod,
 } from "@/modules/finance/services/financialConsistencyService";
-const TODAY = format(new Date(), "yyyy-MM-dd");
-
 type DailyStatsDoc = {
   companyId?: string;
   agencyId?: string;
@@ -238,9 +237,9 @@ export default function CEOCommandCenterPage() {
   const [courierDiscrepancyList, setCourierDiscrepancyList] = useState<{ agencyId: string; session: CourierSessionWithId }[]>([]);
   const [delayedBusesCount, setDelayedBusesCount] = useState<number | null>(null);
   const [busesInProgressCount, setBusesInProgressCount] = useState<number | null>(null);
-  /** Couche unique : ventes (reservations createdAt), encaissements (cash paidAt), billets = sum(seatsGo), remplissage = seatsGo/capacity */
-  const salesTotal = globalSnapshot.snapshot.sales;
-  const cashTotal = globalSnapshot.snapshot.cash;
+  /** KPI activité : priorité finance unifiée (ledger), fallback snapshot global si indisponible. */
+  const snapshotSalesTotal = globalSnapshot.snapshot.sales;
+  const snapshotCashTotal = globalSnapshot.snapshot.cash;
   const ticketsCount = globalSnapshot.snapshot.tickets;
   const fillRatePct = globalSnapshot.snapshot.occupancy;
   const networkKpisLoading = globalSnapshot.loading;
@@ -256,13 +255,69 @@ export default function CEOCommandCenterPage() {
     activeAgencies: number;
     comparisonLabel: string;
   } | null>(null);
-  /** Finance unifiée : live / cash / validated */
+  const [reservationsInRange, setReservationsInRange] = useState<
+    Awaited<ReturnType<typeof getReservationsInRange>>
+  >([]);
+  /** Finance unifiée : ventes + ledger (liquidité / encaissements). */
   const [unifiedFinance, setUnifiedFinance] = useState<UnifiedAgencyFinance | null>(null);
   const [unifiedFinanceLoading, setUnifiedFinanceLoading] = useState(false);
+  /** Soldes caisse / mobile money par agence (documents accounts). */
+  const [agencyLedgerLiquidity, setAgencyLedgerLiquidity] = useState<
+    Record<string, { cash: number; mobileMoney: number }>
+  >({});
 
   const periodRange = React.useMemo(
     () => ({ startStr: globalPeriod.startDate, endStr: globalPeriod.endDate }),
     [globalPeriod.startDate, globalPeriod.endDate]
+  );
+
+  const agencyIdsKey = useMemo(() => agencies.map((a) => a.id).sort().join(","), [agencies]);
+
+  useEffect(() => {
+    if (!companyId || agencies.length === 0) {
+      setAgencyLedgerLiquidity({});
+      return;
+    }
+    let cancelled = false;
+    getAgencyLedgerLiquidityMap(
+      companyId,
+      agencies.map((a) => a.id)
+    )
+      .then((m) => {
+        if (!cancelled) setAgencyLedgerLiquidity(m);
+      })
+      .catch(() => {
+        if (!cancelled) setAgencyLedgerLiquidity({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, agencyIdsKey]);
+
+  const paidReservationsInRange = useMemo(
+    () => reservationsInRange.filter((r) => isPaidReservation(r.statut)),
+    [reservationsInRange]
+  );
+
+  const alignedSalesTotal = useMemo(
+    () => paidReservationsInRange.reduce((sum, r) => sum + (Number(r.montant) || 0), 0),
+    [paidReservationsInRange]
+  );
+  const activitySalesTotal = useMemo(
+    () => Number(unifiedFinance?.activity.sales.amountHint ?? alignedSalesTotal ?? snapshotSalesTotal ?? 0),
+    [unifiedFinance?.activity.sales.amountHint, alignedSalesTotal, snapshotSalesTotal]
+  );
+  const activityCashTotal = useMemo(
+    () => Number(unifiedFinance?.activity.encaissements.total ?? snapshotCashTotal ?? 0),
+    [unifiedFinance?.activity.encaissements.total, snapshotCashTotal]
+  );
+  const alignedReservationsCount = useMemo(
+    () => paidReservationsInRange.length,
+    [paidReservationsInRange]
+  );
+  const alignedActiveAgenciesCount = useMemo(
+    () => new Set(paidReservationsInRange.map((r) => r.agencyId).filter(Boolean)).size,
+    [paidReservationsInRange]
   );
 
   const loadRunIdRef = useRef(0);
@@ -286,7 +341,17 @@ export default function CEOCommandCenterPage() {
       });
   }, [companyId, periodRange.startStr, periodRange.endStr]);
 
-  // Finance unifiée : 3 niveaux (live, cash, validated)
+  // Alignement poste de pilotage sur la même source que "Réservations du réseau".
+  useEffect(() => {
+    if (!companyId) return;
+    const startDate = new Date(`${periodRange.startStr}T00:00:00`);
+    const endDate = new Date(`${periodRange.endStr}T23:59:59`);
+    getReservationsInRange(companyId, startDate, endDate)
+      .then(setReservationsInRange)
+      .catch(() => setReservationsInRange([]));
+  }, [companyId, periodRange.startStr, periodRange.endStr]);
+
+  // Finance unifiée (ledger + ventes)
   useEffect(() => {
     if (!companyId) return;
     const { startStr, endStr } = periodRange;
@@ -330,22 +395,24 @@ export default function CEOCommandCenterPage() {
       });
   }, [companyId]);
 
-  // Période précédente : comparaison ventes / billets (couche unique) + agences (opérationnel)
+  // Période précédente alignée sur la logique réservations réseau.
   useEffect(() => {
     if (!companyId) return;
     const startDate = new Date(periodRange.startStr + "T00:00:00");
     const endDate = new Date(periodRange.endStr + "T23:59:59");
     const { previousStart, previousEnd, comparisonLabel } = getPreviousPeriod(startDate, endDate, period);
-    const prevPeriod: FinancialPeriod = { dateFrom: previousStart, dateTo: previousEnd };
-    Promise.all([
-      getNetworkSales(companyId, prevPeriod),
-      getNetworkOperationalStats(companyId, previousStart, previousEnd),
-    ])
-      .then(([sales, operational]) => {
+    const prevStartDate = new Date(`${previousStart}T00:00:00`);
+    const prevEndDate = new Date(`${previousEnd}T23:59:59`);
+    Promise.all([getReservationsInRange(companyId, prevStartDate, prevEndDate)])
+      .then(([rows]) => {
+        const paid = rows.filter((r) => isPaidReservation(r.statut));
+        const totalRevenue = paid.reduce((sum, r) => sum + (Number(r.montant) || 0), 0);
+        const totalTickets = paid.length;
+        const activeAgencies = new Set(paid.map((r) => r.agencyId).filter(Boolean)).size;
         setPrevStats({
-          totalRevenue: sales.total,
-          totalTickets: sales.tickets,
-          activeAgencies: operational.activeAgencies,
+          totalRevenue,
+          totalTickets,
+          activeAgencies,
           comparisonLabel,
         });
       })
@@ -471,7 +538,10 @@ export default function CEOCommandCenterPage() {
         const [dailyResults, liveResults] = await Promise.all([
           Promise.all(
             ags.map(async (a) => {
-              const ds = await getDoc(doc(db, `companies/${companyId}/agences/${a.id}/dailyStats/${TODAY}`));
+              const agSnap = await getDoc(doc(db, "companies", companyId, "agences", a.id));
+              const tz = resolveAgencyTimezone(agSnap.data() as { timezone?: string } | undefined);
+              const todayKey = getTodayForTimezone(tz);
+              const ds = await getDoc(doc(db, `companies/${companyId}/agences/${a.id}/dailyStats/${todayKey}`));
               return ds.exists() ? ({ ...ds.data(), agencyId: a.id } as DailyStatsDoc) : null;
             })
           ),
@@ -515,12 +585,29 @@ export default function CEOCommandCenterPage() {
       let financialAccountsResult: { id: string; agencyId: string | null; accountType: string; currentBalance: number }[] = [];
       let unpaidPayablesResult: { id: string; agencyId: string; remainingAmount: number; status: string }[] = [];
       try {
-        const [accts, payables] = await Promise.all([
-          listAccounts(companyId),
+        const [ledgerAccountsSnap, payables] = await Promise.all([
+          getDocs(collection(db, "companies", companyId, LEDGER_ACCOUNTS_COLLECTION)),
           listUnpaidPayables(companyId, { limitCount: 300 }),
         ]);
         if (loadRunIdRef.current !== runId) return;
-        financialAccountsResult = accts.map((a) => ({ id: a.id, agencyId: a.agencyId, accountType: a.accountType, currentBalance: a.currentBalance }));
+        financialAccountsResult = ledgerAccountsSnap.docs
+          .map((d) => {
+            const row = d.data() as { agencyId?: string | null; type?: string; balance?: number };
+            const t = String(row.type ?? "").toLowerCase();
+            if (t !== "cash" && t !== "mobile_money" && t !== "bank") return null;
+            return {
+              id: d.id,
+              agencyId: row.agencyId ?? null,
+              accountType:
+                t === "cash"
+                  ? "agency_cash"
+                  : t === "mobile_money"
+                    ? "company_mobile_money"
+                    : "company_bank",
+              currentBalance: Number(row.balance ?? 0),
+            };
+          })
+          .filter((x): x is { id: string; agencyId: string | null; accountType: string; currentBalance: number } => x != null);
         unpaidPayablesResult = payables.map((p) => ({ id: p.id, agencyId: p.agencyId, remainingAmount: p.remainingAmount, status: p.status }));
       } catch {
         /* keep empty */
@@ -799,7 +886,7 @@ export default function CEOCommandCenterPage() {
   const revenueDropPercent = 0;
 
   /** Comptes pris en compte pour les seuils : banques, mobile money, réserves. On exclut agency_cash (une caisse par agence) pour éviter d'afficher "8 comptes" quand il y a 8 agences. */
-  const MAIN_ACCOUNT_TYPES = ["company_bank", "agency_bank", "mobile_money", "expense_reserve"];
+  const MAIN_ACCOUNT_TYPES = ["company_bank", "agency_bank", "mobile_money", "company_mobile_money", "expense_reserve"];
   const mainAccountsOnly = (a: { accountType: string; currentBalance: number }) =>
     MAIN_ACCOUNT_TYPES.includes(a.accountType) && a.currentBalance >= 0;
   const accountAndAgencyRisks = useMemo(
@@ -897,7 +984,7 @@ export default function CEOCommandCenterPage() {
       })),
       topAgenciesByRevenue,
       prevStats,
-      currentRevenue: salesTotal,
+      currentRevenue: activitySalesTotal,
       delayedBusesCount,
       fillRatePct,
       totalAgencies: agencies.length,
@@ -907,9 +994,9 @@ export default function CEOCommandCenterPage() {
       financialGap:
         unifiedFinance != null
           ? {
-              salesTotal: unifiedFinance.live.totalRevenue,
-              cashTotal: unifiedFinance.cash.total,
-              orphanAmount: unifiedFinance.cash.orphanAmount ?? 0,
+              salesTotal: unifiedFinance.activity.sales.amountHint,
+              cashTotal: unifiedFinance.activity.encaissements.total,
+              orphanAmount: 0,
             }
           : undefined,
       totalTickets: ticketsCount,
@@ -923,7 +1010,7 @@ export default function CEOCommandCenterPage() {
     courierDiscrepancyList,
     topAgenciesByRevenue,
     prevStats,
-    salesTotal,
+    activitySalesTotal,
     delayedBusesCount,
     fillRatePct,
     agencies.length,
@@ -1054,7 +1141,7 @@ export default function CEOCommandCenterPage() {
         </button>
       </div>
 
-      {salesTotal > 0 && cashTotal === 0 && (
+      {activitySalesTotal > 0 && activityCashTotal === 0 && (
         <div className="mb-3 rounded-lg border-2 border-red-300 dark:border-red-700 bg-red-50/70 dark:bg-red-900/30 p-3 text-sm text-red-900 dark:text-red-100">
           <strong>Ventes détectées sans encaissements — incohérence de flux.</strong>{" "}
           Des réservations ont été vendues sur la période mais aucun encaissement n&apos;a été détecté. Vérifier les
@@ -1062,14 +1149,14 @@ export default function CEOCommandCenterPage() {
         </div>
       )}
 
-      {salesTotal > 0 &&
-        cashTotal === 0 &&
+      {activitySalesTotal > 0 &&
+        activityCashTotal === 0 &&
         moneyPositions.snapshot.pendingGuichet === 0 &&
-        moneyPositions.snapshot.validatedAgency === 0 &&
-        moneyPositions.snapshot.centralised === 0 && (
+        !unifiedFinanceLoading &&
+        (unifiedFinance == null || unifiedFinance.realMoney.total <= 0) && (
         <div className="mb-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50/70 dark:bg-amber-900/30 p-3 text-xs text-amber-900 dark:text-amber-100">
           Aucune position d&apos;argent détectée alors qu&apos;il y a des ventes — problème probable de synchronisation
-          entre ventes et caisse (positions GUICHET / Validé agence / Centralisé).
+          entre ventes, caisse et ledger (comptes accounts).
         </div>
       )}
 
@@ -1083,7 +1170,7 @@ export default function CEOCommandCenterPage() {
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
           <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Positions d&apos;argent par agence</h3>
           <div className="text-xs text-slate-500 dark:text-slate-400">
-            GUICHET = cashTransactions(paidAt) − validé agence (shiftReports.validated_agency)
+            Guichet = encaissements non validés session ; Caisse / MM = soldes ledger par agence.
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -1091,16 +1178,27 @@ export default function CEOCommandCenterPage() {
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-700 text-xs text-slate-500">
                 <th className="text-left py-2 pr-3">Agence</th>
-                <th className="text-right py-2 px-3">Guichet</th>
-                <th className="text-right py-2 px-3">Validé agence</th>
-                <th className="text-right py-2 px-3">Centralisé</th>
+                <th className="text-right py-2 px-3">Guichet (session)</th>
+                <th className="text-right py-2 px-3">Caisse espèces (ledger)</th>
+                <th className="text-right py-2 px-3">Mobile money (ledger)</th>
               </tr>
             </thead>
             <tbody>
               {Object.entries(positionsByAgency)
-                .sort((a, b) => (b[1].pendingGuichet + b[1].validatedAgency) - (a[1].pendingGuichet + a[1].validatedAgency))
+                .sort((a, b) => {
+                  const la = agencyLedgerLiquidity[a[0]] ?? { cash: 0, mobileMoney: 0 };
+                  const lb = agencyLedgerLiquidity[b[0]] ?? { cash: 0, mobileMoney: 0 };
+                  return (
+                    b[1].pendingGuichet +
+                    lb.cash +
+                    lb.mobileMoney -
+                    (a[1].pendingGuichet + la.cash + la.mobileMoney)
+                  );
+                })
                 .slice(0, 12)
-                .map(([agencyId, v]) => (
+                .map(([agencyId, v]) => {
+                  const led = agencyLedgerLiquidity[agencyId] ?? { cash: 0, mobileMoney: 0 };
+                  return (
                   <React.Fragment key={agencyId}>
                     <tr className="border-b border-slate-100 dark:border-slate-800">
                       <td className="py-2 pr-3 font-medium text-slate-800 dark:text-slate-200">
@@ -1123,10 +1221,10 @@ export default function CEOCommandCenterPage() {
                         {money(v.pendingGuichet)}
                       </td>
                       <td className="py-2 px-3 text-right font-semibold text-emerald-700 dark:text-emerald-300">
-                        {money(v.validatedAgency)}
+                        {money(led.cash)}
                       </td>
                       <td className="py-2 px-3 text-right font-semibold text-slate-900 dark:text-slate-100">
-                        {money(v.centralised)}
+                        {money(led.mobileMoney)}
                       </td>
                     </tr>
                     {expandedAgencyId === agencyId && (
@@ -1142,8 +1240,8 @@ export default function CEOCommandCenterPage() {
                                   <tr className="text-slate-500">
                                     <th className="text-left py-1 pr-2">Session</th>
                                     <th className="text-right py-1 px-2">Guichet</th>
-                                    <th className="text-right py-1 px-2">Validé</th>
-                                    <th className="text-right py-1 pl-2">Centralisé</th>
+                                    <th className="text-right py-1 px-2">Validé session</th>
+                                    <th className="text-right py-1 pl-2">Agrégat session</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -1193,7 +1291,8 @@ export default function CEOCommandCenterPage() {
                       </tr>
                     )}
                   </React.Fragment>
-                ))}
+                );
+                })}
               {Object.keys(positionsByAgency).length === 0 && (
                 <tr>
                   <td colSpan={4} className="py-3 text-center text-slate-500">
@@ -1347,64 +1446,65 @@ export default function CEOCommandCenterPage() {
         </div>
       )}
 
-      {/* 5. FINANCE UNIFIÉE — Ventes / Encaissements / Revenus validés (une seule définition) */}
+      {/* 5. ACTIVITÉ (ledger journal — pas les soldes comptes) */}
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Activité période (financialTransactions + réservations)</div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
           <MetricCard
-            label="Ventes"
-            value={networkKpisLoading ? "—" : money(salesTotal)}
+            label="Ventes (réservations)"
+            value={unifiedFinanceLoading ? "—" : money(unifiedFinance?.activity.sales.amountHint ?? 0)}
             icon={TrendingUp}
             valueColorVar="#2563eb"
           />
-          <p className="text-xs text-gray-500 mt-1">réservations (createdAt)</p>
+          <p className="text-xs text-gray-500 mt-1">Source réservations createdAt uniquement (voir bloc KPI réseau ci-dessous pour comparaison).</p>
         </div>
         <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
           <MetricCard
             label="Encaissements"
-            value={networkKpisLoading ? "—" : money(cashTotal)}
+            value={unifiedFinanceLoading ? "—" : money(unifiedFinance?.activity.encaissements.total ?? 0)}
             icon={TrendingUp}
             valueColorVar="#16a34a"
           />
-          <p className="text-xs text-gray-500 mt-1">cashTransactions (paidAt)</p>
+          <p className="text-xs text-gray-500 mt-1">payment_received confirmés — pas un solde de caisse.</p>
         </div>
         <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
           <MetricCard
-            label="Revenus validés"
-            value={unifiedFinanceLoading ? "—" : money(unifiedFinance?.validated.totalRevenue ?? 0)}
+            label="CA net (ledger)"
+            value={unifiedFinanceLoading ? "—" : money(unifiedFinance?.activity.caNet ?? 0)}
             icon={TrendingUp}
             valueColorVar="#7c3aed"
           />
-          <p className="text-xs text-gray-500 mt-1">réservations (validatedAt) + courrier</p>
+          <p className="text-xs text-gray-500 mt-1">Encaissements − remboursements (même période)</p>
         </div>
       </div>
 
       {/* 6. KPI (secondaire — détail) */}
-      <p className="text-xs text-gray-500 mb-2">Indicateurs détaillés — période sélectionnée</p>
+      <p className="text-xs text-gray-500 mb-2">Indicateurs détaillés — période sélectionnée (réservations = commandes, remplissage = places/capacité)</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <Link to={`${base}/reservations-reseau?period=${periodParam}`} className="block">
           <MetricCard
             label={period === "day" ? "Ventes aujourd'hui" : "Ventes période"}
-            value={networkKpisLoading ? "—" : money(salesTotal)}
+            value={networkKpisLoading ? "—" : money(alignedSalesTotal)}
             icon={TrendingUp}
-            variation={prevStats ? calculateChange(salesTotal, prevStats.totalRevenue) : undefined}
+            variation={prevStats ? calculateChange(alignedSalesTotal, prevStats.totalRevenue) : undefined}
             variationLabel={prevStats?.comparisonLabel}
           />
         </Link>
         <Link to={`${base}/reservations-reseau`} className="block">
           <MetricCard
-            label="Billets (places)"
-            value={networkKpisLoading ? "—" : String(ticketsCount)}
+            label="Réservations"
+            value={networkKpisLoading ? "—" : String(alignedReservationsCount)}
             icon={Ticket}
-            variation={prevStats ? calculateChange(ticketsCount, prevStats.totalTickets) : undefined}
+            variation={prevStats ? calculateChange(alignedReservationsCount, prevStats.totalTickets) : undefined}
             variationLabel={prevStats?.comparisonLabel}
           />
         </Link>
         <Link to={`${base}/reservations-reseau#agences`} className="block">
           <MetricCard
             label="Agences actives"
-            value={networkKpisLoading ? "—" : `${agencesActivesFromCash} / ${agencies.length || "—"}`}
+            value={networkKpisLoading ? "—" : `${alignedActiveAgenciesCount} / ${agencies.length || "—"}`}
             icon={Building2}
-            variation={prevStats ? calculateChange(agencesActivesFromCash, prevStats.activeAgencies) : undefined}
+            variation={prevStats ? calculateChange(alignedActiveAgenciesCount, prevStats.activeAgencies) : undefined}
             variationLabel={prevStats?.comparisonLabel}
           />
         </Link>

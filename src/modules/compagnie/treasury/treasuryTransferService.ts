@@ -1,13 +1,10 @@
-// Phase C2 — Treasury transfer engine. All flows through financialMovements; no balance mutation without movement.
-import { runTransaction, Timestamp } from "firebase/firestore";
+// Treasury transfer engine — aligned on ledger financialTransactions/accounts.
+import { Timestamp, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { financialAccountRef } from "./financialAccounts";
-import {
-  recordMovementInTransaction,
-  ensureUniqueReferenceKeyInTransaction,
-  uniqueReferenceKey,
-} from "./financialMovements";
 import type { FinancialAccountType } from "./types";
+import { createFinancialTransaction } from "./financialTransactions";
+import { ledgerDocIdFromFinancialAccountData } from "./ledgerAccounts";
 
 export interface TransferBetweenAccountsParams {
   companyId: string;
@@ -51,64 +48,37 @@ export async function transferBetweenAccounts(
     throw new Error("Le compte source et le compte destination doivent être différents.");
   }
 
-  await runTransaction(db, async (tx) => {
-    const fromRef = financialAccountRef(params.companyId, params.fromAccountId);
-    const toRef = financialAccountRef(params.companyId, params.toAccountId);
-    const fromSnap = await tx.get(fromRef);
-    const toSnap = await tx.get(toRef);
-    if (!fromSnap.exists()) throw new Error("Compte source introuvable.");
-    if (!toSnap.exists()) throw new Error("Compte destination introuvable.");
-
-    const fromData = fromSnap.data() as { accountType?: string; agencyId?: string | null; currentBalance?: number; currency?: string };
-    const toData = toSnap.data() as { accountType?: string; agencyId?: string | null };
-    const fromType = (fromData.accountType ?? "") as FinancialAccountType;
-    const toType = (toData.accountType ?? "") as FinancialAccountType;
-    const fromAgencyId = fromData.agencyId ?? null;
-    const toAgencyId = toData.agencyId ?? null;
-
-    validateNoDirectAgencyCashToAgencyCash(fromType, fromAgencyId, toType, toAgencyId);
-
-    const balance = Number(fromData.currentBalance ?? 0);
-    if (balance < amount) throw new Error("Solde insuffisant sur le compte source.");
-    const currency = params.currency || (fromData.currency ?? "");
-
-    const transferKey = uniqueReferenceKey("internal_transfer", params.idempotencyKey);
-    await ensureUniqueReferenceKeyInTransaction(tx, params.companyId, transferKey);
-
-    const agencyId = fromAgencyId ?? toAgencyId ?? "";
-    const notes = (params.description ?? "Transfert interne").slice(0, 200);
-
-    await recordMovementInTransaction(tx, {
+  const fromSnap = await getDoc(financialAccountRef(params.companyId, params.fromAccountId));
+  const toSnap = await getDoc(financialAccountRef(params.companyId, params.toAccountId));
+  if (!fromSnap.exists()) throw new Error("Compte source introuvable.");
+  if (!toSnap.exists()) throw new Error("Compte destination introuvable.");
+  const fromData = fromSnap.exists()
+    ? (fromSnap.data() as { accountType?: string; agencyId?: string | null })
+    : {};
+  const toData = toSnap.exists()
+    ? (toSnap.data() as { accountType?: string; agencyId?: string | null })
+    : {};
+  const fromType = (fromData.accountType ?? "") as FinancialAccountType;
+  const toType = (toData.accountType ?? "") as FinancialAccountType;
+  validateNoDirectAgencyCashToAgencyCash(fromType, fromData.agencyId ?? null, toType, toData.agencyId ?? null);
+  const dId = ledgerDocIdFromFinancialAccountData(fromData);
+  const cId = ledgerDocIdFromFinancialAccountData(toData);
+  if (dId && cId) {
+    await createFinancialTransaction({
       companyId: params.companyId,
-      fromAccountId: params.fromAccountId,
-      toAccountId: null,
+      type: "transfer",
+      transferRoute: "internal_pair",
+      transferDebitLedgerDocId: dId,
+      transferCreditLedgerDocId: cId,
+      source: "mixed",
       amount,
-      currency,
-      movementType: "internal_transfer",
+      currency: params.currency,
+      agencyId: (fromData.agencyId as string | undefined) ?? (toData.agencyId as string | undefined) ?? null,
       referenceType: "internal_transfer",
-      referenceId: `${params.idempotencyKey}_debit`,
-      agencyId,
-      performedBy: params.performedBy,
-      performedByRole: params.performedByRole ?? null,
-      notes,
-      entryType: "debit",
+      referenceId: params.idempotencyKey,
+      metadata: { fromAccountId: params.fromAccountId, toAccountId: params.toAccountId },
     });
-    await recordMovementInTransaction(tx, {
-      companyId: params.companyId,
-      fromAccountId: null,
-      toAccountId: params.toAccountId,
-      amount,
-      currency,
-      movementType: "internal_transfer",
-      referenceType: "internal_transfer",
-      referenceId: `${params.idempotencyKey}_credit`,
-      agencyId,
-      performedBy: params.performedBy,
-      performedByRole: params.performedByRole ?? null,
-      notes,
-      entryType: "credit",
-    });
-  });
+  }
 }
 
 // --- WAVE 3: Deposit & withdrawal flows (single movement each, debit one account + credit another) ---
@@ -130,32 +100,25 @@ export async function agencyDepositToBank(params: AgencyDepositToBankParams): Pr
   const amount = Number(params.amount);
   if (amount <= 0) throw new Error("Le montant doit être strictement positif.");
 
-  await runTransaction(db, async (tx) => {
-    const fromRef = financialAccountRef(params.companyId, params.agencyCashAccountId);
-    const toRef = financialAccountRef(params.companyId, params.companyBankAccountId);
-    const fromSnap = await tx.get(fromRef);
-    const toSnap = await tx.get(toRef);
-    if (!fromSnap.exists()) throw new Error("Compte caisse agence introuvable.");
-    if (!toSnap.exists()) throw new Error("Compte banque compagnie introuvable.");
-    const fromData = fromSnap.data() as { agencyId?: string | null; currentBalance?: number };
-    const balance = Number(fromData.currentBalance ?? 0);
-    if (balance < amount) throw new Error("Solde insuffisant sur la caisse agence.");
-
-    await recordMovementInTransaction(tx, {
+  const fromSnap = await getDoc(financialAccountRef(params.companyId, params.agencyCashAccountId));
+  const aid = (fromSnap.data() as { agencyId?: string | null } | undefined)?.agencyId;
+  if (aid) {
+    await createFinancialTransaction({
       companyId: params.companyId,
-      fromAccountId: params.agencyCashAccountId,
-      toAccountId: params.companyBankAccountId,
+      type: "transfer",
+      transferRoute: "agency_cash_to_company_bank",
+      source: "bank",
       amount,
       currency: params.currency,
-      movementType: "deposit_to_bank",
+      agencyId: aid,
       referenceType: "agency_deposit",
       referenceId: params.idempotencyKey,
-      agencyId: fromData.agencyId ?? "",
-      performedBy: params.performedBy,
-      performedByRole: params.performedByRole ?? null,
-      notes: (params.description ?? "Dépôt agence vers banque").slice(0, 200),
+      metadata: {
+        fromAccountId: params.agencyCashAccountId,
+        toAccountId: params.companyBankAccountId,
+      },
     });
-  });
+  }
 }
 
 export interface BankWithdrawalToAgencyParams {
@@ -175,32 +138,24 @@ export async function bankWithdrawalToAgency(params: BankWithdrawalToAgencyParam
   const amount = Number(params.amount);
   if (amount <= 0) throw new Error("Le montant doit être strictement positif.");
 
-  await runTransaction(db, async (tx) => {
-    const fromRef = financialAccountRef(params.companyId, params.companyBankAccountId);
-    const toRef = financialAccountRef(params.companyId, params.agencyCashAccountId);
-    const toSnap = await tx.get(toRef);
-    const fromSnap = await tx.get(fromRef);
-    if (!fromSnap.exists()) throw new Error("Compte banque compagnie introuvable.");
-    if (!toSnap.exists()) throw new Error("Compte caisse agence introuvable.");
-    const balance = Number((fromSnap.data() as { currentBalance?: number }).currentBalance ?? 0);
-    if (balance < amount) throw new Error("Solde insuffisant sur le compte banque.");
-    const toData = toSnap.data() as { agencyId?: string | null };
-
-    await recordMovementInTransaction(tx, {
+  const toSnap = await getDoc(financialAccountRef(params.companyId, params.agencyCashAccountId));
+  const aid = (toSnap.data() as { agencyId?: string | null } | undefined)?.agencyId;
+  if (aid) {
+    await createFinancialTransaction({
       companyId: params.companyId,
-      fromAccountId: params.companyBankAccountId,
-      toAccountId: params.agencyCashAccountId,
+      type: "bank_withdrawal",
+      source: "bank",
       amount,
       currency: params.currency,
-      movementType: "withdrawal_from_bank",
+      agencyId: aid,
       referenceType: "bank_withdrawal",
       referenceId: params.idempotencyKey,
-      agencyId: toData.agencyId ?? "",
-      performedBy: params.performedBy,
-      performedByRole: params.performedByRole ?? null,
-      notes: (params.description ?? "Retrait banque vers caisse agence").slice(0, 200),
+      metadata: {
+        fromAccountId: params.companyBankAccountId,
+        toAccountId: params.agencyCashAccountId,
+      },
     });
-  });
+  }
 }
 
 export interface MobileToBankTransferParams {
@@ -220,31 +175,29 @@ export async function mobileToBankTransfer(params: MobileToBankTransferParams): 
   const amount = Number(params.amount);
   if (amount <= 0) throw new Error("Le montant doit être strictement positif.");
 
-  await runTransaction(db, async (tx) => {
-    const fromRef = financialAccountRef(params.companyId, params.mobileMoneyAccountId);
-    const toRef = financialAccountRef(params.companyId, params.companyBankAccountId);
-    const fromSnap = await tx.get(fromRef);
-    const toSnap = await tx.get(toRef);
-    if (!fromSnap.exists()) throw new Error("Compte mobile money introuvable.");
-    if (!toSnap.exists()) throw new Error("Compte banque compagnie introuvable.");
-    const balance = Number((fromSnap.data() as { currentBalance?: number }).currentBalance ?? 0);
-    if (balance < amount) throw new Error("Solde insuffisant sur le compte mobile money.");
-
-    await recordMovementInTransaction(tx, {
+  const fromSnap = await getDoc(financialAccountRef(params.companyId, params.mobileMoneyAccountId));
+  const fromData = fromSnap.exists()
+    ? (fromSnap.data() as { accountType?: string; agencyId?: string | null })
+    : {};
+  const dId = ledgerDocIdFromFinancialAccountData(fromData);
+  if (dId) {
+    await createFinancialTransaction({
       companyId: params.companyId,
-      fromAccountId: params.mobileMoneyAccountId,
-      toAccountId: params.companyBankAccountId,
+      type: "transfer",
+      transferRoute: "ledger_debit_to_company_bank",
+      transferDebitLedgerDocId: dId,
+      source: "mobile_money",
       amount,
       currency: params.currency,
-      movementType: "internal_transfer",
+      agencyId: fromData.agencyId ?? null,
       referenceType: "mobile_to_bank",
       referenceId: params.idempotencyKey,
-      agencyId: "",
-      performedBy: params.performedBy,
-      performedByRole: params.performedByRole ?? null,
-      notes: (params.description ?? "Virement mobile money vers banque").slice(0, 200),
+      metadata: {
+        fromAccountId: params.mobileMoneyAccountId,
+        toAccountId: params.companyBankAccountId,
+      },
     });
-  });
+  }
 }
 
 export interface MobileExpenseParams {
@@ -264,26 +217,25 @@ export async function recordMobileExpense(params: MobileExpenseParams): Promise<
   const amount = Number(params.amount);
   if (amount <= 0) throw new Error("Le montant doit être strictement positif.");
 
-  await runTransaction(db, async (tx) => {
-    const fromRef = financialAccountRef(params.companyId, params.mobileMoneyAccountId);
-    const fromSnap = await tx.get(fromRef);
-    if (!fromSnap.exists()) throw new Error("Compte mobile money introuvable.");
-    const balance = Number((fromSnap.data() as { currentBalance?: number }).currentBalance ?? 0);
-    if (balance < amount) throw new Error("Solde insuffisant sur le compte mobile money.");
-
-    await recordMovementInTransaction(tx, {
-      companyId: params.companyId,
-      fromAccountId: params.mobileMoneyAccountId,
-      toAccountId: null,
-      amount,
-      currency: params.currency,
-      movementType: "expense_payment",
-      referenceType: "mobile_expense",
-      referenceId: params.idempotencyKey,
-      agencyId: "",
-      performedBy: params.performedBy,
-      performedByRole: params.performedByRole ?? null,
+  const fromSnap = await getDoc(financialAccountRef(params.companyId, params.mobileMoneyAccountId));
+  const fromData = fromSnap.exists()
+    ? (fromSnap.data() as { accountType?: string; agencyId?: string | null })
+    : {};
+  const dId = ledgerDocIdFromFinancialAccountData(fromData);
+  if (!dId) throw new Error("Compte mobile money introuvable.");
+  await createFinancialTransaction({
+    companyId: params.companyId,
+    type: "expense",
+    expenseDebitLedgerDocId: dId,
+    source: "mobile_money",
+    amount,
+    currency: params.currency,
+    agencyId: fromData.agencyId ?? null,
+    referenceType: "mobile_expense",
+    referenceId: params.idempotencyKey,
+    metadata: {
+      expenseReferenceId: params.expenseReferenceId,
       notes: (params.description ?? `Dépense mobile - ref: ${params.expenseReferenceId}`).slice(0, 200),
-    });
+    },
   });
 }

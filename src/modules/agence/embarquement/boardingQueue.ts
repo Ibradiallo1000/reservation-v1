@@ -16,6 +16,10 @@ export interface BoardingQueueRecord {
   tripId: string | null;
   date: string;
   heure: string | null;
+  /** Phase 3.5 — alignement sync sur tripAssignment après retour en ligne. */
+  assignmentId?: string;
+  vehicleId?: string;
+  assignmentStatus?: "planned" | "validated";
   scannedAt: number;
   synced: boolean;
 }

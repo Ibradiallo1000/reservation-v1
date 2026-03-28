@@ -5,6 +5,7 @@
  */
 
 import {
+  doc,
   getDoc,
   updateDoc,
   arrayUnion,
@@ -15,7 +16,11 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { isValidTransition } from "@/utils/reservationStatusUtils";
-import { addTicketRevenueToDailyStats, formatDateForDailyStats } from "@/modules/agence/aggregates/dailyStats";
+import {
+  addTicketRevenueToDailyStats,
+  formatDateForDailyStats,
+  dailyStatsTimezoneFromAgencyData,
+} from "@/modules/agence/aggregates/dailyStats";
 
 export type StatutTransitionMeta = {
   userId: string;
@@ -74,15 +79,34 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Réservation introuvable.");
     const data = snap.data() as Record<string, unknown>;
+    const companyIdEarly = (data?.companyId ?? "") as string;
+    const agencyIdEarly = (data?.agencyId ?? "") as string;
+    const agencyRef =
+      companyIdEarly && agencyIdEarly ? doc(db, "companies", companyIdEarly, "agences", agencyIdEarly) : null;
+    const agencySnap = agencyRef ? await tx.get(agencyRef) : null;
+    const agencyTz = dailyStatsTimezoneFromAgencyData(
+      agencySnap?.data() as { timezone?: string } | undefined
+    );
+    const lifecycleStatus = data?.status as string | undefined;
+    const ticketValidatedAt = data?.ticketValidatedAt;
     const oldStatut = (data?.statut ?? "") as string;
 
-    if (!isValidTransition(oldStatut, newStatut)) {
+    /** Modèle SaaS : status en_attente | payé | annulé — validation billet = payé + ticketValidatedAt */
+    const isLifecycleModel =
+      lifecycleStatus === "en_attente" || lifecycleStatus === "payé" || lifecycleStatus === "annulé";
+
+    if (isLifecycleModel && newStatut === "confirme") {
+      if (lifecycleStatus !== "payé" || ticketValidatedAt != null) {
+        throw new Error("Cette réservation ne peut plus être confirmée.");
+      }
+    } else if (!isLifecycleModel && !isValidTransition(oldStatut, newStatut)) {
       throw new Error(`Transition non autorisée : ${oldStatut} → ${newStatut}`);
     }
 
-    const auditEntry = buildStatutTransitionPayload(oldStatut, newStatut, meta);
-    const companyId = (data?.companyId ?? "") as string;
-    const agencyId = (data?.agencyId ?? "") as string;
+    const auditOld = isLifecycleModel ? String(lifecycleStatus ?? "") : oldStatut;
+    const auditEntry = buildStatutTransitionPayload(auditOld, newStatut, meta);
+    const companyId = companyIdEarly;
+    const agencyId = agencyIdEarly;
     const canal = ((data?.canal ?? "") as string).toLowerCase();
     const alreadyCounted = Boolean(data?.ticketRevenueCountedInDailyStats);
     const montant = Number(data?.montant ?? 0);
@@ -98,14 +122,19 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
       const dateStr =
         (typeof data?.date === "string" && data.date.length >= 10
           ? (data.date as string).slice(0, 10)
-          : null) ?? formatDateForDailyStats(data?.createdAt);
+          : null) ?? formatDateForDailyStats(data?.createdAt, agencyTz);
       if (dateStr) {
-        addTicketRevenueToDailyStats(tx, companyId, agencyId, dateStr, montant);
+        addTicketRevenueToDailyStats(tx, companyId, agencyId, dateStr, montant, agencyTz);
       }
     }
 
     const updatePayload: Record<string, unknown> = {
-      statut: newStatut,
+      ...(isLifecycleModel
+        ? {
+            status: "payé",
+            ticketValidatedAt: serverTimestamp(),
+          }
+        : { statut: newStatut }),
       auditLog: arrayUnion(auditEntry),
       updatedAt: serverTimestamp(),
       ...extra,

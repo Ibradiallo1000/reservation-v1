@@ -1,4 +1,4 @@
-// Treasury — Financial traceability. Balance only via financialMovements.
+// Treasury — Financial traceability. Balance tracked in ledger accounts/transactions.
 import type { Timestamp } from "firebase/firestore";
 
 /** Phase C2: company_bank, company_mobile_money, agency_cash are primary. No agency-level banks for new setups. */
@@ -63,6 +63,10 @@ export const REFERENCE_TYPES = [
   "mobile_expense",
   "cash_session",
   "courier_session",
+  "payment",
+  "payment_refund",
+  /** Remboursement ledger : referenceId = id de la financialTransaction d'origine (payment_received). */
+  "financial_transaction",
 ] as const;
 
 export type ReferenceType = (typeof REFERENCE_TYPES)[number];
@@ -98,6 +102,83 @@ export interface FinancialMovementDoc {
   approvedByRole?: string | null;
   approvedAt?: Timestamp | null;
   updatedAt?: Timestamp;
+}
+
+export const FINANCIAL_TRANSACTION_TYPES = [
+  "payment_received",
+  "transfer",
+  "transfer_to_bank", // alias legacy → traité comme transfer
+  "expense",
+  "refund",
+  /** Remise validée : débit pending_cash → crédit caisse physique (écrit uniquement via applyRemittancePendingToAgencyCashInTransaction). */
+  "remittance",
+  /** Retrait banque compagnie → caisse agence (crédit agency_*_cash). */
+  "bank_withdrawal",
+] as const;
+
+export type FinancialTransactionType = (typeof FINANCIAL_TRANSACTION_TYPES)[number];
+
+export const FINANCIAL_TRANSACTION_SOURCES = [
+  "cash",
+  "mobile_money",
+  "bank",
+  "mixed",
+  "other",
+] as const;
+
+export type FinancialTransactionSource = (typeof FINANCIAL_TRANSACTION_SOURCES)[number];
+
+export const FINANCIAL_TRANSACTION_STATUSES = [
+  "pending",
+  "confirmed",
+  "failed",
+  /** @deprecated compat lecture */
+  "received",
+  "verified",
+  "rejected",
+  "refunded",
+] as const;
+
+export type FinancialTransactionStatus = (typeof FINANCIAL_TRANSACTION_STATUSES)[number];
+
+export const LEDGER_ACCOUNT_TYPES = ["mobile_money", "cash", "bank"] as const;
+export type LedgerAccountType = (typeof LEDGER_ACCOUNT_TYPES)[number];
+
+/** Instrument de paiement enregistré sur l’écriture ledger. */
+export const FINANCIAL_PAYMENT_METHODS = ["cash", "mobile_money", "card"] as const;
+export type FinancialPaymentMethod = (typeof FINANCIAL_PAYMENT_METHODS)[number];
+
+export interface FinancialTransactionDoc {
+  type: FinancialTransactionType;
+  /** @deprecated utiliser debitAccountId / creditAccountId */
+  source?: FinancialTransactionSource;
+  amount: number;
+  currency: string;
+  companyId: string;
+  agencyId?: string | null;
+  reservationId?: string | null;
+  accountType?: FinancialAccountType | null;
+  /** Identifiants docs companies/{companyId}/accounts/{id} */
+  debitAccountId?: string;
+  creditAccountId?: string;
+  /** @deprecated compat affichage / anciens exports */
+  debitAccountType?: LedgerAccountType;
+  creditAccountType?: LedgerAccountType;
+  /** Solde du compte crédité après écriture (indicatif). */
+  balanceAfter?: number;
+  status: FinancialTransactionStatus;
+  performedAt: Timestamp;
+  createdAt: Timestamp;
+  metadata?: Record<string, unknown> | null;
+  referenceType: ReferenceType | "cash_transfer";
+  referenceId: string;
+  uniqueReferenceKey: string;
+  /** Canal métier pour KPI (online / guichet). */
+  paymentChannel?: string | null;
+  /** Instrument de paiement. */
+  paymentMethod?: FinancialPaymentMethod | null;
+  /** Fournisseur (wave, orange, …) — ne pas confondre avec paymentMethod. */
+  paymentProvider?: string | null;
 }
 
 export function agencyCashAccountId(agencyId: string): string {

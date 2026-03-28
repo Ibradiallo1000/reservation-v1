@@ -6,7 +6,7 @@ export { TimeSlotGrid } from "./TimeSlotGrid";
 export type { TripSlot } from "./TimeSlotGrid";
 export { SalePanel, TARIFF_OPTIONS } from "./SalePanel";
 export type { ClientSuggestion, TariffOption } from "./SalePanel";
-export { RecentSales } from "./RecentSales";
+export { RecentSales, SALE_PENDING_UI_STATUT, SALE_SLOW_UI_STATUT, SALE_ERROR_UI_STATUT } from "./RecentSales";
 export type { SaleRow } from "./RecentSales";
 export { ClosedOverlay } from "./ClosedOverlay";
 export { SuccessToast } from "./SuccessToast";

@@ -17,6 +17,9 @@ export type PassengerForBoarding = {
   arrivee: string;
   seatsGo: number;
   boardingStatus: string;
+  journeyStatus?: string;
+  originStopOrder?: number | null;
+  destinationStopOrder?: number | null;
 };
 
 /**

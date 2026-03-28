@@ -9,6 +9,7 @@ import { canShipmentTransition } from "../domain/logisticsStateMachine";
 import type { Shipment } from "../domain/shipment.types";
 import type { ShipmentEvent } from "../domain/logisticsEvents.types";
 import { shipmentRef, eventsRef } from "../domain/firestorePaths";
+import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 
 export type MarkReadyForPickupParams = {
   companyId: string;
@@ -45,4 +46,6 @@ export async function markReadyForPickup(params: MarkReadyForPickupParams): Prom
     };
     tx.set(eventDoc, event);
   });
+
+  await afterLogisticsShipmentChanged(params.companyId, params.shipmentId, "markReadyForPickup");
 }

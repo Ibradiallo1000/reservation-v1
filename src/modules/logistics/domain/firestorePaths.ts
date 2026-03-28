@@ -72,3 +72,8 @@ export function agencyBatchesRef(db: Firestore, companyId: string, agencyId: str
 export function agencyBatchRef(db: Firestore, companyId: string, agencyId: string, batchId: string) {
   return doc(db, "companies", companyId, "agences", agencyId, "batches", batchId);
 }
+
+/** Suivi public colis (lecture anonyme + hash token). */
+export function publicShipmentTrackRef(db: Firestore, trackingPublicId: string) {
+  return doc(db, "publicShipmentTrack", trackingPublicId);
+}

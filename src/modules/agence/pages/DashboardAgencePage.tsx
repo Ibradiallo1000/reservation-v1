@@ -8,9 +8,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { PageErrorState, PageOfflineState } from '@/shared/ui/PageStates';
-import type { Reservation } from '@/types/index';
-import { toJSDate } from '@/utils/toJSDate';
-
 import {
   RevenueChart,
   ChannelsChart,
@@ -30,8 +27,28 @@ import {
 } from '@/ui';
 import { Ticket, DollarSign, Monitor, Store, FileDown } from 'lucide-react';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
 import { getUnifiedAgencyFinance, type UnifiedAgencyFinance } from '@/modules/finance/services/unifiedFinanceService';
+import {
+  getDateKeyInTimezone,
+  getEndOfDayForDate,
+  getStartOfDayForDate,
+  resolveAgencyTimezone,
+} from '@/shared/date/dateUtilsTz';
+import { AGENCY_KPI_TIME } from '@/modules/agence/shared/agencyKpiTimeContract';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+function rangeToAgencyKeys(startDate: Date, endDate: Date, ianaTimezone: string): { startKey: string; endKey: string } {
+  return {
+    startKey: getDateKeyInTimezone(startDate, ianaTimezone),
+    endKey: getDateKeyInTimezone(endDate, ianaTimezone),
+  };
+}
 
 /* ===================== Types & helpers ===================== */
 type DailyStat = { date: string; reservations: number; revenue: number };
@@ -71,6 +88,11 @@ const DashboardAgencePage: React.FC = () => {
     const roles = Array.isArray((user as { roles?: string[] })?.roles) ? (user as { roles?: string[] }).roles! : [role];
     return [...routePermissions.guichet, ...routePermissions.escaleDashboard].some((r) => roles.includes(r));
   }, [user]);
+
+  const agencyTz = useMemo(
+    () => resolveAgencyTimezone({ timezone: (user as { agencyTimezone?: string })?.agencyTimezone }),
+    [user]
+  );
 
   // Filtres de période
   const now = new Date();
@@ -120,16 +142,10 @@ const DashboardAgencePage: React.FC = () => {
 
     setIsLoading(true);
     setLoadError(null);
-    // ⚙️ Période en format YYYY-MM-DD pour le moteur réseau (Africa/Bamako)
-    const startKey = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-${String(
-      startDate.getDate()
-    ).padStart(2, "0")}`;
-    const endKey = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, "0")}-${String(
-      endDate.getDate()
-    ).padStart(2, "0")}`;
+    const { startKey, endKey } = rangeToAgencyKeys(startDate, endDate, agencyTz);
 
     try {
-      const agencyStats = await getAgencyStats(companyId, agencyId, startKey, endKey);
+      const agencyStats = await getAgencyStats(companyId, agencyId, startKey, endKey, agencyTz);
 
       const dailyStats: DailyStat[] = agencyStats.dailyChartData.map((p) => {
         // p.date est soit YYYY-MM-DD soit YYYY-MM-DDThh:00 → on formate en DD/MM pour l'affichage local
@@ -171,7 +187,7 @@ const DashboardAgencePage: React.FC = () => {
       );
       setIsLoading(false);
     }
-  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, isOnline]);
+  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, isOnline, agencyTz]);
 
   // Courier revenue for period (paid shipments only)
   useEffect(() => {
@@ -179,11 +195,14 @@ const DashboardAgencePage: React.FC = () => {
     const agencyId = agencyIdFromRoute || user?.agencyId;
     if (!companyId || !agencyId) return;
     const [startDate, endDate] = dateRange;
+    const { startKey: shipStart, endKey: shipEnd } = rangeToAgencyKeys(startDate, endDate, agencyTz);
+    const shipFrom = getStartOfDayForDate(shipStart, agencyTz);
+    const shipTo = getEndOfDayForDate(shipEnd, agencyTz);
     const q = query(
       shipmentsRef(db, companyId),
       where('originAgencyId', '==', agencyId),
-      where('createdAt', '>=', Timestamp.fromDate(startDate)),
-      where('createdAt', '<=', Timestamp.fromDate(endDate))
+      where('createdAt', '>=', Timestamp.fromDate(shipFrom)),
+      where('createdAt', '<=', Timestamp.fromDate(shipTo))
     );
     getDocs(q).then((snap) => {
       let sum = 0;
@@ -199,7 +218,7 @@ const DashboardAgencePage: React.FC = () => {
       setCourierRevenuePeriod(0);
       setStats((prev) => ({ ...prev, courierRevenue: 0 }));
     });
-  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, dateRange]);
+  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, dateRange, agencyTz]);
 
   useEffect(() => {
     fetchStats(dateRange[0], dateRange[1]);
@@ -211,14 +230,13 @@ const DashboardAgencePage: React.FC = () => {
     const companyId = user?.companyId;
     const agencyId = agencyIdFromRoute || user?.agencyId;
     if (!companyId || !agencyId) return;
-    const startKey = `${dateRange[0].getFullYear()}-${String(dateRange[0].getMonth() + 1).padStart(2, '0')}-${String(dateRange[0].getDate()).padStart(2, '0')}`;
-    const endKey = `${dateRange[1].getFullYear()}-${String(dateRange[1].getMonth() + 1).padStart(2, '0')}-${String(dateRange[1].getDate()).padStart(2, '0')}`;
+    const { startKey, endKey } = rangeToAgencyKeys(dateRange[0], dateRange[1], agencyTz);
     setUnifiedFinanceLoading(true);
-    getUnifiedAgencyFinance(companyId, agencyId, startKey, endKey)
+    getUnifiedAgencyFinance(companyId, agencyId, startKey, endKey, agencyTz)
       .then(setUnifiedFinance)
       .catch(() => setUnifiedFinance(null))
       .finally(() => setUnifiedFinanceLoading(false));
-  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, dateRange]);
+  }, [user?.companyId, user?.agencyId, agencyIdFromRoute, dateRange, agencyTz]);
 
   // Pagination “Top trajets”
   const [routePage, setRoutePage] = useState(1);
@@ -305,9 +323,19 @@ const DashboardAgencePage: React.FC = () => {
           </div>
         </SectionCard>
 
-        <div className="mt-2 mb-6 text-xs text-gray-500">
-          Chiffres réseau basés sur les réservations (en ligne + guichet), calculés par le moteur TELIYA
-          <span className="font-semibold"> networkStatsService</span>. Les chiffres de caisse restent gérés par les sessions guichet.
+        <div className="mt-2 mb-6 space-y-2 text-xs text-gray-600 dark:text-gray-400">
+          <p>
+            <span className="font-semibold">Création réservation (jour agence)</span> — billets / canaux via{" "}
+            <span className="font-mono text-[11px]">getAgencyStats</span>.{" "}
+            <span className="font-semibold">Colis</span> — création enregistrée sur la période (bornes fuseau agence).
+          </p>
+          <p>
+            <span className="font-semibold">Comptabilisé (ledger, jour agence)</span> — liquidité, encaissements et CA net (bloc 1–2
+            ci-dessous). Ne pas les comparer aux totaux « réservations » sans séparation.
+          </p>
+          <p>
+            La carte caisse : solde espèces ledger + trace opérationnelle du jour (autre temporalité).
+          </p>
         </div>
 
         {agencyId && user?.companyId && (
@@ -319,71 +347,118 @@ const DashboardAgencePage: React.FC = () => {
               canClose={canCloseCash}
               createdBy={user?.uid ?? ''}
               formatCurrency={money}
+              ianaTimezone={agencyTz}
             />
           </div>
         )}
 
-        {/* Finance unifiée : 3 niveaux */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-          <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Ventes temps réel</div>
-            <div className="text-xl font-bold mt-1" style={{ color: '#2563eb' }}>
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.live.totalRevenue ?? 0)}
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">1 — Argent réel (soldes accounts)</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Caisse espèces</div>
+            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.cash ?? 0)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Source : reservations + shipments (vendus / payés)</p>
+            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+          </div>
+          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Mobile money</div>
+            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.mobileMoney ?? 0)}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+          </div>
+          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Banque</div>
+            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.bank ?? 0)}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+          </div>
+          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Liquidité totale</div>
+            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.total ?? 0)}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+          </div>
+        </div>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+          2 — Activité (période) · ventes = {AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO} · encaissements ={" "}
+          {AGENCY_KPI_TIME.LEDGER_BAMAKO}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Ventes (réservations)</div>
+            <div className="text-xl font-bold mt-1" style={{ color: '#2563eb' }}>
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.activity.sales.amountHint ?? 0)}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              {unifiedFinanceLoading ? '—' : `${unifiedFinance?.activity.sales.reservationCount ?? 0} réservation(s) · ${unifiedFinance?.activity.sales.tickets ?? 0} place(s)`}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-1 font-medium">{AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}</p>
           </div>
           <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
             <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Encaissements</div>
             <div className="text-xl font-bold mt-1" style={{ color: '#16a34a' }}>
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.cash.total ?? 0)}
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.activity.encaissements.total ?? 0)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Source : cashTransactions (status paid)</p>
+            <p className="text-[11px] text-slate-500 mt-1 font-medium">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
           </div>
           <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Revenus validés</div>
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">CA net (ledger)</div>
             <div className="text-xl font-bold mt-1" style={{ color: '#7c3aed' }}>
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.validated.totalRevenue ?? 0)}
+              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.activity.caNet ?? 0)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Source : dailyStats (ticketRevenue + courierRevenue)</p>
+            <p className="text-[11px] text-slate-500 mt-1 font-medium">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
           </div>
         </div>
 
+        <div className="mb-3 rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2 text-xs text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-100">
+          Grille ci-dessous : <strong>terrain uniquement</strong> — ne pas comparer aux montants du ledger sans lire les blocs 1–2.
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <UIMetricCard
             label="Billets vendus"
             value={isLoading ? "—" : stats.sales}
             icon={Ticket}
             valueColorVar={theme.colors.secondary}
+            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
           />
           <UIMetricCard
-            label="Revenus billets"
+            label="Revenus billets (réservations)"
             value={isLoading ? "—" : money(stats.ticketRevenue)}
             icon={DollarSign}
             valueColorVar={theme.colors.primary}
+            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
           />
           <UIMetricCard
-            label="Revenus courrier"
+            label="Revenus courrier (colis)"
             value={isLoading ? "—" : money(stats.courierRevenue)}
             icon={DollarSign}
             valueColorVar={theme.colors.secondary}
+            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
           />
           <UIMetricCard
-            label="Revenus totaux"
+            label="Revenus totaux (terrain)"
             value={isLoading ? "—" : money(stats.ticketRevenue + stats.courierRevenue)}
             icon={DollarSign}
             valueColorVar={theme.colors.primary}
+            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
           />
           <UIMetricCard
             label="En ligne"
             value={isLoading ? "—" : (stats.channels.find(c => c.name==='En ligne')?.value ?? 0)}
             icon={Monitor}
             valueColorVar={theme.colors.primary}
+            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
           />
           <UIMetricCard
             label="Au guichet"
             value={isLoading ? "—" : (stats.channels.find(c => c.name==='Guichet')?.value ?? 0)}
             icon={Store}
             valueColorVar={theme.colors.secondary}
+            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
           />
         </div>
 

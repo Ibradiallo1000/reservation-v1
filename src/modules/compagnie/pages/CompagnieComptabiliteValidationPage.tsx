@@ -1,5 +1,5 @@
 /**
- * Validation chef comptable : sessions validées par l'agence en attente de validation compagnie.
+ * Validation finale chef d'agence : sessions validées par l'agence en attente du contrôle final.
  * Affiche la liste et boutons Valider / Rejeter.
  */
 import React, { useState, useEffect, useCallback } from "react";
@@ -17,6 +17,7 @@ import {
   validateSessionByHeadAccountant,
   rejectSessionByHeadAccountant,
 } from "@/modules/agence/services/sessionService";
+import { dispatchAgencyCashUiRefresh } from "@/modules/agence/constants/agencyCashUiRefresh";
 
 function formatTs(ts: unknown): string {
   if (!ts) return "—";
@@ -78,6 +79,7 @@ export default function CompagnieComptabiliteValidationPage() {
         shiftId: report.shiftId,
         validatedBy,
       });
+      dispatchAgencyCashUiRefresh();
       await load();
     } catch (e) {
       console.error("validateSessionByHeadAccountant", e);
@@ -112,7 +114,7 @@ export default function CompagnieComptabiliteValidationPage() {
   if (!companyId) {
     return (
       <StandardLayoutWrapper>
-        <PageHeader title="Validation chef comptable" />
+        <PageHeader title="Validation chef d'agence" />
         <p className="text-gray-500">Compagnie introuvable.</p>
       </StandardLayoutWrapper>
     );
@@ -121,8 +123,8 @@ export default function CompagnieComptabiliteValidationPage() {
   return (
     <StandardLayoutWrapper>
       <PageHeader
-        title="Validation chef comptable"
-        subtitle="Sessions validées par les agences — valider ou rejeter pour finaliser."
+        title="Validation chef d'agence"
+        subtitle="Sessions validées par le comptable agence — valider ou rejeter pour finaliser."
       />
       <SectionCard
         title="Sessions validées agence"
@@ -138,7 +140,7 @@ export default function CompagnieComptabiliteValidationPage() {
           <div className="py-8 text-center text-gray-500">Chargement...</div>
         ) : sessions.length === 0 ? (
           <div className="py-8 text-center text-gray-500">
-            Aucune session en attente de validation chef comptable.
+            Aucune session en attente de validation chef d'agence.
           </div>
         ) : (
           <div className="overflow-x-auto">

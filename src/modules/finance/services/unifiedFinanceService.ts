@@ -1,239 +1,169 @@
-/**
- * Service financier unifié TELIYA — 3 niveaux : temps réel (live), encaissements (cash), revenus validés (validated).
- * Source de vérité : Ventes → reservations (createdAt), Encaissements → cashTransactions (paidAt, liées à réservation),
- * Revenus validés → reservations (validatedAt). dailyStats = vue dérivée (conservée pour historique).
- */
-
-import { collectionGroup, query, where, getDocs, orderBy, limit, Timestamp } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
-import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
-import { isSoldReservation } from "@/modules/compagnie/networkStats/networkStatsService";
-import { getCashTransactionsByPaidAtRange, getCashTransactionsByDateRange } from "@/modules/compagnie/cash/cashService";
-import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
-import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
+import { Timestamp } from "firebase/firestore";
+import { getNetworkSales, type FinancialPeriod } from "./financialConsistencyService";
 import {
-  getTotalSales,
-  getTotalCash,
-  getValidatedRevenue,
-  type FinancialPeriod,
-} from "./financialConsistencyService";
+  getLedgerBalances,
+  listFinancialTransactionsByPeriod,
+  isConfirmedTransactionStatus,
+} from "@/modules/compagnie/treasury/financialTransactions";
+import {
+  DEFAULT_AGENCY_TIMEZONE,
+  getEndOfDayForDate,
+  getStartOfDayForDate,
+} from "@/shared/date/dateUtilsTz";
 
-const PAID_PAYMENT_STATUSES = ["PAID_ORIGIN", "PAID_DESTINATION"];
+/** Argent réel = uniquement somme des soldes `accounts` (ledger). */
+export interface UnifiedRealMoney {
+  cash: number;
+  mobileMoney: number;
+  bank: number;
+  total: number;
+}
 
-function isPaidShipment(status: string | undefined): boolean {
-  return status != null && PAID_PAYMENT_STATUSES.includes(status);
+/** Activité période = ventes (réservations) + mouvements `financialTransactions` (hors solde comptes). */
+export interface UnifiedActivity {
+  sales: { reservationCount: number; tickets: number; amountHint: number };
+  encaissements: { total: number };
+  caNet: number;
+  split: { paiementsEnLigne: number; paiementsGuichet: number };
 }
 
 export interface UnifiedAgencyFinance {
-  live: {
-    tickets: number;
-    courier: number;
-    /** Revenus billets (reservations vendues). */
-    liveTicketsRevenue: number;
-    /** Revenus courrier (shipments payés). */
-    liveCourierRevenue: number;
-    /** liveTicketsRevenue + liveCourierRevenue */
-    totalRevenue: number;
-  };
-  cash: {
-    /** Encaissements (transactions paid liées à une réservation valide). */
-    total: number;
-    /** Montant des transactions orphelines (non inclus dans total). */
-    orphanAmount?: number;
-  };
-  validated: {
-    totalRevenue: number;
-    /** Revenus validés par le comptable agence (ticketRevenueAgency + courierRevenueAgency). */
-    validatedAgency: number;
-    /** Revenus validés par le chef comptable (ticketRevenueCompany + courierRevenueCompany). */
-    validatedCompany: number;
-  };
+  realMoney: UnifiedRealMoney;
+  activity: UnifiedActivity;
 }
 
-/**
- * Calcule les 3 niveaux financiers pour une agence sur une plage de dates.
- * - live : reservations (createdAt, isSoldReservation) + shipments payés
- * - cash : cashTransactions paidAt, status paid, liées à une réservation valide (hors orphelines)
- * - validated : reservations (validatedAt) + dailyStats courier (dérivé)
- */
+function normalizeTxType(t: string | undefined): string {
+  if (t === "transfer_to_bank") return "transfer";
+  return String(t ?? "");
+}
+
+function isPaymentReceived(row: { type?: string }): boolean {
+  return normalizeTxType(row.type) === "payment_received";
+}
+
+function isRefund(row: { type?: string }): boolean {
+  return normalizeTxType(row.type) === "refund";
+}
+
+function splitEncaissementsByPaymentMethod(
+  rows: Array<{ type?: string; amount?: number; status?: string; paymentMethod?: string | null }>
+) {
+  let total = 0;
+  let online = 0;
+  let guichet = 0;
+  rows.forEach((r) => {
+    if (!isPaymentReceived(r) || !isConfirmedTransactionStatus(r.status as any)) return;
+    const amount = Number(r.amount) || 0;
+    total += amount;
+    const pm = String(r.paymentMethod ?? "").toLowerCase();
+    if (pm === "cash") guichet += amount;
+    else if (pm === "mobile_money" || pm === "card") online += amount;
+    else {
+      console.error(
+        "[unifiedFinance] payment_method_manquant_ou_invalide sur payment_received confirmé — exécuter migration transactions / corriger données.",
+        r
+      );
+    }
+  });
+  return { total, online, guichet };
+}
+
+function sumCaNet(rows: Array<{ type?: string; amount?: number; status?: string }>): number {
+  let received = 0;
+  let refunds = 0;
+  rows.forEach((r) => {
+    if (!isConfirmedTransactionStatus(r.status as any)) return;
+    const amount = Number(r.amount) || 0;
+    if (isPaymentReceived(r)) received += Math.max(0, amount);
+    if (isRefund(r)) refunds += Math.abs(amount);
+  });
+  return received - refunds;
+}
+
 export async function getUnifiedAgencyFinance(
   companyId: string,
   agencyId: string,
   dateFrom: string,
-  dateTo: string
+  dateTo: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<UnifiedAgencyFinance> {
   const period: FinancialPeriod = { dateFrom, dateTo };
-  const periodStart = getStartOfDayInBamako(dateFrom);
-  const periodEnd = getEndOfDayInBamako(dateTo);
-  const startTs = Timestamp.fromDate(periodStart);
-  const endTs = Timestamp.fromDate(periodEnd);
+  const start = Timestamp.fromDate(getStartOfDayForDate(period.dateFrom, timeZone));
+  const end = Timestamp.fromDate(getEndOfDayForDate(period.dateTo, timeZone));
 
-  const [salesRes, cashRes, validatedRes, shipmentsSnap, dailyStatsSnap] = await Promise.all([
-    getTotalSales(companyId, period, agencyId),
-    getTotalCash(companyId, period, { agencyId, includeOrphans: false }),
-    getValidatedRevenue(companyId, period, agencyId),
-    getDocs(
-      query(
-        shipmentsRef(db, companyId),
-        where("originAgencyId", "==", agencyId),
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "asc"),
-        limit(5000)
-      )
-    ),
-    getDocs(
-      query(
-        collectionGroup(db, "dailyStats"),
-        where("companyId", "==", companyId),
-        where("agencyId", "==", agencyId),
-        where("date", ">=", dateFrom),
-        where("date", "<=", dateTo),
-        limit(500)
-      )
-    ),
+  const [sales, txRows, liquidity] = await Promise.all([
+    getNetworkSales(companyId, period, agencyId, timeZone),
+    listFinancialTransactionsByPeriod(companyId, start, end, agencyId),
+    getLedgerBalances(companyId, agencyId),
   ]);
 
-  let liveCourierRevenue = 0;
-  shipmentsSnap.docs.forEach((d) => {
-    const s = d.data() as { paymentStatus?: string; transportFee?: number; insuranceAmount?: number };
-    if (isPaidShipment(s.paymentStatus)) {
-      liveCourierRevenue += Number(s.transportFee ?? 0) + Number(s.insuranceAmount ?? 0);
-    }
-  });
+  const enc = splitEncaissementsByPaymentMethod(txRows as any);
+  const net = sumCaNet(txRows as any);
 
-  let validatedCourierFromStats = 0;
-  let validatedAgencySum = 0;
-  let validatedCompanySum = 0;
-  dailyStatsSnap.docs.forEach((d) => {
-    const data = d.data();
-    validatedCourierFromStats += Number(data.courierRevenue ?? 0);
-    validatedAgencySum += Number(data.ticketRevenueAgency ?? 0) + Number(data.courierRevenueAgency ?? 0);
-    validatedCompanySum += Number(data.ticketRevenueCompany ?? 0) + Number(data.courierRevenueCompany ?? 0);
-  });
-
-  const validatedTotal = validatedRes.total + validatedCourierFromStats;
-  const liveTotalRevenue = salesRes.total + liveCourierRevenue;
-
-  const result: UnifiedAgencyFinance = {
-    live: {
-      tickets: salesRes.tickets,
-      courier: liveCourierRevenue,
-      liveTicketsRevenue: salesRes.total,
-      liveCourierRevenue,
-      totalRevenue: liveTotalRevenue,
+  return {
+    realMoney: {
+      cash: liquidity.cash,
+      mobileMoney: liquidity.mobileMoney,
+      bank: liquidity.bank,
+      total: liquidity.total,
     },
-    cash: { total: cashRes.total, orphanAmount: cashRes.orphanAmount },
-    validated: {
-      totalRevenue: validatedTotal,
-      validatedAgency: validatedAgencySum,
-      validatedCompany: validatedCompanySum,
+    activity: {
+      sales: {
+        reservationCount: sales.reservationCount,
+        tickets: sales.tickets,
+        amountHint: sales.total,
+      },
+      encaissements: { total: enc.total },
+      caNet: net,
+      split: { paiementsEnLigne: enc.online, paiementsGuichet: enc.guichet },
     },
   };
-
-  if (typeof console !== "undefined" && console.log) {
-    console.log("[unifiedFinanceService] getUnifiedAgencyFinance", {
-      source: "reservations + cashTransactions(paidAt) + validatedAt + dailyStats(courier)",
-      companyId,
-      agencyId,
-      dateFrom,
-      dateTo,
-      live: result.live,
-      cash: result.cash,
-      validated: result.validated,
-    });
-  }
-
-  return result;
 }
 
-/**
- * Agrège les 3 niveaux financiers au niveau compagnie (toutes agences).
- * Même logique de source de vérité : createdAt (ventes), paidAt (encaissements liés), validatedAt (validé).
- */
 export async function getUnifiedCompanyFinance(
   companyId: string,
   dateFrom: string,
   dateTo: string
 ): Promise<UnifiedAgencyFinance> {
   const period: FinancialPeriod = { dateFrom, dateTo };
-  const periodStart = getStartOfDayInBamako(dateFrom);
-  const periodEnd = getEndOfDayInBamako(dateTo);
-  const startTs = Timestamp.fromDate(periodStart);
-  const endTs = Timestamp.fromDate(periodEnd);
+  const start = Timestamp.fromDate(getStartOfDayForDate(period.dateFrom, DEFAULT_AGENCY_TIMEZONE));
+  const end = Timestamp.fromDate(getEndOfDayForDate(period.dateTo, DEFAULT_AGENCY_TIMEZONE));
 
-  const [salesRes, cashRes, validatedRes, shipmentsSnap, dailyStatsSnap] = await Promise.all([
-    getTotalSales(companyId, period),
-    getTotalCash(companyId, period, { includeOrphans: false }),
-    getValidatedRevenue(companyId, period),
-    getDocs(
-      query(
-        shipmentsRef(db, companyId),
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "asc"),
-        limit(5000)
-      )
-    ),
-    getDocs(
-      query(
-        collectionGroup(db, "dailyStats"),
-        where("companyId", "==", companyId),
-        where("date", ">=", dateFrom),
-        where("date", "<=", dateTo),
-        limit(2000)
-      )
-    ),
+  const [sales, txRows, liquidity] = await Promise.all([
+    getNetworkSales(companyId, period, undefined, DEFAULT_AGENCY_TIMEZONE),
+    listFinancialTransactionsByPeriod(companyId, start, end),
+    getLedgerBalances(companyId),
   ]);
 
-  let liveCourierRevenue = 0;
-  shipmentsSnap.docs.forEach((d) => {
-    const s = d.data() as { paymentStatus?: string; transportFee?: number; insuranceAmount?: number };
-    if (isPaidShipment(s.paymentStatus)) {
-      liveCourierRevenue += Number(s.transportFee ?? 0) + Number(s.insuranceAmount ?? 0);
-    }
-  });
+  const enc = splitEncaissementsByPaymentMethod(txRows as any);
+  const net = sumCaNet(txRows as any);
 
-  let validatedCourierFromStats = 0;
-  let validatedAgencySum = 0;
-  let validatedCompanySum = 0;
-  dailyStatsSnap.docs.forEach((d) => {
-    const data = d.data();
-    validatedCourierFromStats += Number(data.courierRevenue ?? 0);
-    validatedAgencySum += Number(data.ticketRevenueAgency ?? 0) + Number(data.courierRevenueAgency ?? 0);
-    validatedCompanySum += Number(data.ticketRevenueCompany ?? 0) + Number(data.courierRevenueCompany ?? 0);
-  });
-
-  const validatedTotal = validatedRes.total + validatedCourierFromStats;
-  const liveTotalRevenue = salesRes.total + liveCourierRevenue;
-
-  const result: UnifiedAgencyFinance = {
-    live: {
-      tickets: salesRes.tickets,
-      courier: liveCourierRevenue,
-      liveTicketsRevenue: salesRes.total,
-      liveCourierRevenue,
-      totalRevenue: liveTotalRevenue,
+  return {
+    realMoney: {
+      cash: liquidity.cash,
+      mobileMoney: liquidity.mobileMoney,
+      bank: liquidity.bank,
+      total: liquidity.total,
     },
-    cash: { total: cashRes.total, orphanAmount: cashRes.orphanAmount },
-    validated: {
-      totalRevenue: validatedTotal,
-      validatedAgency: validatedAgencySum,
-      validatedCompany: validatedCompanySum,
+    activity: {
+      sales: {
+        reservationCount: sales.reservationCount,
+        tickets: sales.tickets,
+        amountHint: sales.total,
+      },
+      encaissements: { total: enc.total },
+      caNet: net,
+      split: { paiementsEnLigne: enc.online, paiementsGuichet: enc.guichet },
     },
   };
+}
 
-  if (typeof console !== "undefined" && console.log) {
-    console.log("[unifiedFinanceService] getUnifiedCompanyFinance", {
-      source: "reservations + cashTransactions(paidAt) + validatedAt + dailyStats(courier)",
-      companyId,
-      dateFrom,
-      dateTo,
-      live: result.live,
-      cash: result.cash,
-      validated: result.validated,
-    });
-  }
-
-  return result;
+/** @deprecated Utiliser getUnifiedAgencyFinance / getUnifiedCompanyFinance */
+export async function getSalesKpiFromReservations(
+  companyId: string,
+  period: FinancialPeriod,
+  agencyId?: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
+) {
+  return getNetworkSales(companyId, period, agencyId, timeZone);
 }

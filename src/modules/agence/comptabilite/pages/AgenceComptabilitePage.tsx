@@ -1,12 +1,12 @@
 // src/pages/AgenceComptabilitePage.tsx
-// Comptabilité d'agence (contrôle des postes, réceptions, rapports, caisse, réconciliation)
+// Comptabilité d'agence — Ventes, Versements, Caisse, Comparaison, Contrôle, Corrections (UI)
 // ============================================================================
 // RESPONSABLE : Comptable d'agence
-// OBJECTIF : Contrôle financier des opérations de vente en guichet ET en ligne
+// OBJECTIF : Contrôle financier des opérations de vente en billetterie ET en ligne
 // FONCTIONNALITÉS :
-// 1. Contrôle des postes de vente (activation/pause/clôture)
+// 1. Ventes : postes billetterie, rapports détaillés, sessions courrier
 // 2. Réception et validation des remises de caisse
-// 3. Consultation des rapports détaillés (guichet + ligne)
+// 3. Encaissements terrain vs ventes ; caisse ledger ; contrôle comptage ; corrections (orientation)
 // 4. Gestion de la caisse d'agence (entrées/sorties/soldes)
 // 5. Réconciliation des ventes vs encaissements
 // ============================================================================
@@ -14,24 +14,28 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection, doc, getDoc, getDocs, onSnapshot, orderBy, query,
-  runTransaction, Timestamp, updateDoc, where, writeBatch
+  runTransaction, Timestamp, updateDoc, where, writeBatch, limit
 } from 'firebase/firestore';
 import { cn } from '@/lib/utils';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
-import { activateSession, pauseSession, continueSession, validateSessionByAccountant } from '@/modules/agence/services/sessionService';
+import { activateSession, continueSession, validateSessionByAccountant } from '@/modules/agence/services/sessionService';
 import { activateCourierSession, validateCourierSession } from '@/modules/logistics/services/courierSessionService';
+import { getCourierSessionLedgerTotal } from '@/modules/logistics/services/courierSessionLedger';
 import type { CourierSession } from '@/modules/logistics/domain/courierSession.types';
 import { courierSessionsRef } from '@/modules/logistics/domain/courierSessionPaths';
+import { shipmentsRef } from '@/modules/logistics/domain/firestorePaths';
 import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
+import { agencyChromePageRootStyle } from '@/shared/theme/agencySurfaceGradients';
 import {
-  Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4,
+  Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4, Scale,
   Download, FileText, HandIcon, LogOut, MapPin, Package, Pause, Play, Plus, StopCircle, Bell,
   Ticket, Wallet, Info as InfoIcon, Shield, Receipt, BarChart3,
   RefreshCw, TrendingUp, CreditCard, Smartphone
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import type { LucideIcon } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { StandardLayoutWrapper, SectionCard, ActionButton, MetricCard, StatusBadge, EmptyState as UIEmptyState } from '@/ui';
 import { typography } from '@/ui/foundation';
@@ -42,7 +46,38 @@ import AgencyTreasuryTransferPage from '@/modules/agence/treasury/pages/AgencyTr
 import AgencyTreasuryNewPayablePage from '@/modules/agence/treasury/pages/AgencyTreasuryNewPayablePage';
 import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
 import { getCashTransactionsByLocation } from '@/modules/compagnie/cash/cashService';
-import { getTodayBamako } from '@/shared/date/dateUtilsTz';
+import type { AgencyCashPosition } from '@/modules/agence/comptabilite/agencyCashAuditService';
+import {
+  getAgencyCashLedgerPeriodSummary,
+  getAgencyCashPosition,
+  listAgencyCashAudits,
+  validateAgencyCash,
+} from '@/modules/agence/comptabilite/agencyCashAuditService';
+import { listComptaEncaissementsInRange } from '@/modules/agence/comptabilite/comptaEncaissementsService';
+import { dispatchAgencyCashUiRefresh } from '@/modules/agence/constants/agencyCashUiRefresh';
+import {
+  getEndOfDay,
+  getEndOfDayForDate,
+  getStartOfDay,
+  getStartOfDayForDate,
+  getTodayForTimezone,
+  normalizeDateToYYYYMMDD,
+  resolveAgencyTimezone,
+} from '@/shared/date/dateUtilsTz';
+import { getPaymentsByDateRange } from '@/services/paymentService';
+import { AGENCY_KPI_TIME } from '@/modules/agence/shared/agencyKpiTimeContract';
+import { fetchAgencyStaffProfile } from '@/modules/agence/services/agencyStaffProfileService';
+import { parseShiftStatusFromFirestore } from '@/modules/agence/constants/sessionLifecycle';
+import {
+  COMPTA_TAB_ORDER,
+  type ComptaTabKey,
+  canManipulateAgencyCashInComptabilite,
+  canRunAgencyCashControlAudit,
+  getAllowedComptaTabs,
+  getDefaultComptaTab,
+  logComptabiliteTabDenied,
+  normalizeUserRoles,
+} from '@/modules/agence/comptabilite/agencyComptabiliteTabAccess';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -50,6 +85,11 @@ import { getTodayBamako } from '@/shared/date/dateUtilsTz';
    ============================================================================ */
 
 type ShiftStatus = 'pending' | 'active' | 'paused' | 'closed' | 'validated_agency' | 'validated';
+
+/** Cache vendeur pour l’UI comptable (évite GUEST si le code est sur l’équipe agence). */
+type ComptaUserCacheEntry = { name?: string; email?: string; code?: string; profileLookupDone?: boolean };
+
+type CourierSessionDoc = CourierSession & { id: string };
 
 type ShiftDoc = {
   id: string;
@@ -99,6 +139,21 @@ type TicketRow = {
   encaissement?: 'agence' | 'compagnie'; // NOUVEAU : source d'encaissement
 };
 
+/** Ligne tableau rapport détaillé courrier (colis liés à une session). */
+type CourierShipmentReportRow = {
+  id: string;
+  shipmentNumber: string;
+  senderName: string;
+  senderPhone: string;
+  receiverName: string;
+  receiverPhone: string;
+  nature: string;
+  transportFee: number;
+  paymentStatus: string;
+  currentStatus: string;
+  createdAt?: unknown;
+};
+
 type AccountantProfile = {
   id: string;
   displayName?: string;
@@ -124,6 +179,26 @@ type ShiftAgg = {
    ============================================================================ */
 
 type CashDay = { dateISO: string; entrees: number; sorties: number; solde: number };
+
+/** Une ligne par jour calendaire (évite clés React dupliquées et correspond au libellé « Historique par jour »). */
+function aggregateCashDaysByDate(rows: CashDay[]): CashDay[] {
+  const map = new Map<string, { entrees: number; sorties: number }>();
+  for (const r of rows) {
+    const cur = map.get(r.dateISO) ?? { entrees: 0, sorties: 0 };
+    cur.entrees += r.entrees;
+    cur.sorties += r.sorties;
+    map.set(r.dateISO, cur);
+  }
+  return Array.from(map.entries())
+    .map(([dateISO, agg]) => ({
+      dateISO,
+      entrees: agg.entrees,
+      sorties: agg.sorties,
+      solde: agg.entrees - agg.sorties,
+    }))
+    .sort((a, b) => (a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : 0));
+}
+
 type TreasuryModalView = 'new-operation' | 'transfer' | 'new-payable' | null;
 
 /* ============================================================================
@@ -141,6 +216,11 @@ type ReconciliationData = {
   ventesEnLigne: {
     reservations: number;
     tickets: number;
+    montant: number;
+  };
+  /** Paiements courrier validés (entité Payment), filtrés par jour Bamako sur createdAt — hors cashTransactions POS. */
+  courrier: {
+    operations: number;
     montant: number;
   };
   // Encaissements
@@ -168,20 +248,184 @@ const fmtD  = (dISO?: string) => {
   return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric' });
 };
 
+/** Saisie montant avec virgule ou point (contrôle caisse). */
+const parseLooseAmount = (s: string) => {
+  const t = s.trim().replace(/\s/g, '').replace(/,/g, '.');
+  return Number(t);
+};
+
+const auditValidatedAtToDate = (v: unknown): Date | null => {
+  if (v == null) return null;
+  if (v instanceof Timestamp) return v.toDate();
+  if (typeof v === 'object' && 'toDate' in (v as object) && typeof (v as { toDate: () => Date }).toDate === 'function') {
+    try {
+      return (v as { toDate: () => Date }).toDate();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const fmtClockFr = (v: unknown) => {
+  const d = auditValidatedAtToDate(v);
+  return d ? d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—';
+};
+
+const paymentStatusLabelFr = (s: string) => {
+  const u = String(s || '').toUpperCase();
+  if (u === 'UNPAID') return 'Non payé';
+  if (u === 'PAID_ORIGIN') return 'Payé (origine)';
+  if (u === 'PAID_DESTINATION') return 'Payé (destination)';
+  return s || '—';
+};
+
+const courierStatusToBadge: Record<string, 'active' | 'pending' | 'success' | 'warning' | 'neutral'> = {
+  PENDING: 'pending',
+  ACTIVE: 'active',
+  CLOSED: 'warning',
+  VALIDATED: 'success',
+};
+
+/** Relief 3D + survol « levé » (ombres neutres, bordure / fond teintés via style) */
+const COMPTA_POST_CARD_3D = cn(
+  'group relative overflow-hidden rounded-2xl border-2 p-5 outline-none transition-all duration-300 ease-out',
+  'shadow-[0_7px_0_rgb(15_23_42/0.1),0_18px_40px_-10px_rgb(15_23_42/0.3),inset_0_2px_0_rgb(255_255_255/0.98),inset_0_-5px_14px_rgb(15_23_42/0.05)]',
+  'hover:-translate-y-1.5 hover:shadow-[0_10px_0_rgb(15_23_42/0.08),0_28px_56px_-14px_rgb(15_23_42/0.35),inset_0_2px_0_rgb(255_255_255/1),inset_0_-5px_16px_rgb(15_23_42/0.06)]',
+  'active:translate-y-0 active:scale-[0.995] active:shadow-[0_4px_0_rgb(15_23_42/0.11),0_10px_24px_-8px_rgb(15_23_42/0.22),inset_0_4px_10px_rgb(15_23_42/0.07)]'
+);
+
+function comptaPostCardTintStyle(theme: { primary: string; secondary: string }): React.CSSProperties {
+  return {
+    borderColor: `${theme.primary}7A`,
+    backgroundImage: `linear-gradient(152deg, ${theme.primary}40 0%, #ffffff 36%, ${theme.secondary}30 78%, #eef2f7 100%)`,
+  };
+}
+
+const COMPTA_AMOUNT_PANEL_3D = cn(
+  'mb-5 rounded-xl border-2 p-3',
+  'bg-gradient-to-br from-white via-white to-gray-100/95',
+  'shadow-[inset_0_4px_12px_rgb(15_23_42/0.08),inset_0_-2px_0_rgb(255_255_255/0.85),0_4px_0_rgb(15_23_42/0.07)]'
+);
+
+/**
+ * Carte session courrier (compta agence) — même structure visuelle que le poste billetterie (SectionShifts).
+ */
+const CourierComptaSessionCard: React.FC<{
+  session: CourierSessionDoc;
+  theme: { primary: string; secondary: string };
+  usersCache: Record<string, ComptaUserCacheEntry>;
+  stats: { total: number; paid: number };
+  ledgerAmount?: number;
+  statusLabel: string;
+  startField: unknown;
+  endField: unknown;
+  footer?: React.ReactNode;
+  afterAmountBlock?: React.ReactNode;
+}> = ({
+  session,
+  theme,
+  usersCache,
+  stats,
+  ledgerAmount,
+  statusLabel,
+  startField,
+  endField,
+  footer,
+  afterAmountBlock,
+}) => {
+  const money = useFormatCurrency();
+  const ui = usersCache[session.agentId] || {};
+  const name = (ui.name && ui.name.trim()) || session.agentId;
+  const codeRaw = String(ui.code || session.agentCode || '').trim();
+  const code = codeRaw || '—';
+  const badgeStatus = courierStatusToBadge[session.status] ?? 'neutral';
+  const amount = Number(ledgerAmount ?? 0);
+
+  return (
+    <div className={COMPTA_POST_CARD_3D} style={comptaPostCardTintStyle(theme)}>
+      <div
+        className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+        style={{
+          background: `linear-gradient(125deg, ${theme.primary}22 0%, transparent 42%, ${theme.secondary}18 100%)`,
+        }}
+      />
+      <div className="relative">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Agent (courrier)</div>
+            <div className="font-semibold text-gray-900 truncate">
+              {name} <span className="text-gray-500 text-sm ml-2">({code})</span>
+            </div>
+          </div>
+          <StatusBadge status={badgeStatus}>{statusLabel}</StatusBadge>
+        </div>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <InfoCard label="Colis (session)" value={String(stats.total)} />
+          <InfoCard label="Colis payés" value={String(stats.paid)} />
+          <InfoCard label="Début" value={fmtClockFr(startField)} />
+          <InfoCard label="Fin" value={fmtClockFr(endField)} />
+        </div>
+        <div
+          className={COMPTA_AMOUNT_PANEL_3D}
+          style={{ borderColor: `${theme.primary}55` }}
+        >
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Total encaissé</div>
+          <div className="text-xl font-bold drop-shadow-sm" style={{ color: theme.primary }}>
+            {ledgerAmount === undefined ? '…' : money(amount)}
+          </div>
+        </div>
+        {afterAmountBlock}
+        {footer != null && footer !== false ? (
+          <div className="flex justify-end w-full flex-col sm:flex-row sm:items-center gap-2">{footer}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
 /* ============================================================================
    SECTION : COMPOSANT PRINCIPAL
    Description : Page principale de comptabilité d'agence avec réconciliation
    ============================================================================ */
 
+/** Anciens signets et URLs : `receptions` → Versements ; `reconciliation` → Comparaison ventes / caisse */
+const LEGACY_TAB_TO_CANONICAL: Record<string, ComptaTabKey> = {
+  controle: 'ventes',
+  rapports: 'ventes',
+  courrier: 'ventes',
+  reconciliation: 'audit',
+  encaissements: 'audit',
+  comparaison: 'audit',
+  receptions: 'versements',
+};
+
+function resolveComptaTabParam(raw: string | null): ComptaTabKey {
+  if (!raw) return 'ventes';
+  const mapped = LEGACY_TAB_TO_CANONICAL[raw];
+  if (mapped) return mapped;
+  if ((COMPTA_TAB_ORDER as readonly string[]).includes(raw)) return raw as ComptaTabKey;
+  return 'ventes';
+}
+
 const AgenceComptabilitePage: React.FC = () => {
   console.log('[AgenceCompta] Initialisation de la page de comptabilité');
   
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, company, logout } = useAuth() as any;
   const theme = useCompanyTheme(company) || { primary: '#EA580C', secondary: '#F97316' };
   const money = useFormatCurrency();
   const currencySymbol = useCurrencySymbol();
   const [darkMode] = useAgencyDarkMode();
+  const comptaRootChromeStyle = useMemo(
+    () => agencyChromePageRootStyle(theme.primary, theme.secondary, darkMode),
+    [theme.primary, theme.secondary, darkMode]
+  );
+  const agencyTz = useMemo(
+    () => resolveAgencyTimezone({ timezone: user?.agencyTimezone }),
+    [user?.agencyTimezone]
+  );
 
   /* ============================================================================
      SECTION : ÉTATS REACT - HEADER ET BRANDING
@@ -197,23 +441,57 @@ const AgenceComptabilitePage: React.FC = () => {
      Description : Gestion des onglets et profil comptable
      ============================================================================ */
   
-  const [tab, setTab] = useState<'controle' | 'receptions' | 'rapports' | 'caisse' | 'reconciliation' | 'courrier'>('controle');
+  const setComptaTab = useCallback(
+    (t: ComptaTabKey) => {
+      setSearchParams({ tab: t }, { replace: true });
+    },
+    [setSearchParams]
+  );
   const [accountant, setAccountant] = useState<AccountantProfile | null>(null);
   const [accountantCode, setAccountantCode] = useState<string>('Comptable');
   const [userRole, setUserRole] = useState<string>('');
   const prevCourierPendingCountRef = useRef(0);
 
+  const rbacRoles = useMemo(() => {
+    const fromAuth = normalizeUserRoles(user?.role);
+    if (fromAuth.length && fromAuth[0] !== 'unauthenticated') return fromAuth;
+    return normalizeUserRoles(userRole);
+  }, [user?.role, userRole]);
+
+  const allowedTabs = useMemo(() => getAllowedComptaTabs(rbacRoles), [rbacRoles]);
+  const canManipulateCash = useMemo(() => canManipulateAgencyCashInComptabilite(rbacRoles), [rbacRoles]);
+  const canRunCashAudit = useMemo(() => canRunAgencyCashControlAudit(rbacRoles), [rbacRoles]);
+
+  const tabParam = searchParams.get('tab');
+  const requestedTab = resolveComptaTabParam(tabParam);
+  const tab: ComptaTabKey = allowedTabs.includes(requestedTab)
+    ? requestedTab
+    : getDefaultComptaTab(allowedTabs);
+
+  useEffect(() => {
+    if (allowedTabs.length === 0) return;
+    if (!allowedTabs.includes(requestedTab)) {
+      logComptabiliteTabDenied(requestedTab, rbacRoles);
+      const fallback = getDefaultComptaTab(allowedTabs);
+      setSearchParams({ tab: fallback }, { replace: true });
+    }
+  }, [requestedTab, allowedTabs, rbacRoles, setSearchParams]);
+
   /* ============================================================================
      SECTION : ÉTATS REACT - SESSIONS COURRIER (séparé du Guichet)
      Description : Listes et saisies pour l'onglet Courrier uniquement
      ============================================================================ */
-  type CourierSessionDoc = CourierSession & { id: string };
   const [pendingCourierSessions, setPendingCourierSessions] = useState<CourierSessionDoc[]>([]);
   const [activeCourierSessions, setActiveCourierSessions] = useState<CourierSessionDoc[]>([]);
   const [closedCourierSessions, setClosedCourierSessions] = useState<CourierSessionDoc[]>([]);
   const [validatedCourierSessions, setValidatedCourierSessions] = useState<CourierSessionDoc[]>([]);
+  const [courierValidatedAgencySessions, setCourierValidatedAgencySessions] = useState<CourierSessionDoc[]>([]);
   const [receptionInputsCourier, setReceptionInputsCourier] = useState<Record<string, { countedAmount: string }>>({});
   const [savingCourierSessionIds, setSavingCourierSessionIds] = useState<Record<string, boolean>>({});
+  const [courierLedgerBySessionId, setCourierLedgerBySessionId] = useState<Record<string, number>>({});
+  /** Colis rattachés à la session (temps réel), pour aligner l’UI sur le poste billetterie. */
+  const [courierSessionStats, setCourierSessionStats] = useState<Record<string, { total: number; paid: number }>>({});
+  const courierStatsUnsubsRef = useRef<Record<string, () => void>>({});
 
   /* ============================================================================
      SECTION : ÉTATS REACT - POSTES DE VENTE
@@ -239,6 +517,11 @@ const AgenceComptabilitePage: React.FC = () => {
   const [dedupCollapsed, setDedupCollapsed] = useState<number>(0);
   const [reportFilter, setReportFilter] = useState<'all' | 'guichet' | 'en_ligne'>('all');
 
+  const [courierReportRows, setCourierReportRows] = useState<CourierShipmentReportRow[]>([]);
+  const [loadingCourierReport, setLoadingCourierReport] = useState(false);
+  const [selectedCourierSessionForReport, setSelectedCourierSessionForReport] = useState('');
+  const [courierReportPaymentFilter, setCourierReportPaymentFilter] = useState<'all' | 'paid' | 'unpaid'>('all');
+
   /* ============================================================================
      SECTION : ÉTATS REACT - RÉCEPTIONS
      Description : Gestion des saisies pour la réception d'espèces
@@ -252,12 +535,21 @@ const AgenceComptabilitePage: React.FC = () => {
      Description : Cache utilisateurs et statistiques en temps réel
      ============================================================================ */
   
-  const [usersCache, setUsersCache] = useState<Record<string, { name?: string; email?: string; code?: string }>>({});
+  const [usersCache, setUsersCache] = useState<Record<string, ComptaUserCacheEntry>>({});
+  const usersCacheRef = useRef<Record<string, ComptaUserCacheEntry>>({});
+  usersCacheRef.current = usersCache;
   const [liveStats, setLiveStats] = useState<Record<string, { reservations: number; tickets: number; amount: number }>>({});
   const liveUnsubsRef = useRef<Record<string, () => void>>({});
+  /** Pointe vers le dernier `reloadCash` (défini plus bas) pour rafraîchir la caisse après validation sans recharger la page. */
+  const reloadCashRef = useRef<(() => Promise<void>) | null>(null);
 
-  /* Total agence aujourd'hui (en ligne + guichet), même source que le poste de pilotage / CEO */
-  const [agencyStatsToday, setAgencyStatsToday] = useState<{ totalTickets: number; totalRevenue: number } | null>(null);
+  /* OPERATIONAL (métier) : réservations vendues jour — pas la vérité financière ledger. */
+  const [agencyStatsToday, setAgencyStatsToday] = useState<{
+    totalTickets: number;
+    totalRevenue: number;
+    onlineTickets: number;
+    counterTickets: number;
+  } | null>(null);
 
   /* ============================================================================
      SECTION : ÉTATS REACT - AGRÉGATS COMPTABLES (ÉTENDU)
@@ -279,17 +571,44 @@ const AgenceComptabilitePage: React.FC = () => {
   const [rangeFrom, setRangeFrom] = useState<string>('');
   const [rangeTo, setRangeTo] = useState<string>('');
   const [days, setDays] = useState<CashDay[]>([]);
+  /** DOCUMENTARY journal (cashReceipts / cashMovements) — not financial truth. */
   const [totIn, setTotIn] = useState(0);
   const [totOut, setTotOut] = useState(0);
+  /** Flux période : entrées (comptaEncaissements) + sorties (ledger) filtrés par createdAt / performedAt. */
+  const [ledgerPeriodCash, setLedgerPeriodCash] = useState<AgencyCashPosition | null>(null);
+  const [ledgerPeriodError, setLedgerPeriodError] = useState<string | null>(null);
+  /** Stock global : indépendant du filtre mois / plage (toutes périodes). */
+  const [cashGlobalPosition, setCashGlobalPosition] = useState<AgencyCashPosition | null>(null);
   const [loadingCash, setLoadingCash] = useState(false);
   const [treasuryModalView, setTreasuryModalView] = useState<TreasuryModalView>(null);
+
+  /** Caisse théorique (ledger financialTransactions) + audits de contrôle */
+  const [ledgerCashPosition, setLedgerCashPosition] = useState<AgencyCashPosition | null>(null);
+  const [loadingLedgerCash, setLoadingLedgerCash] = useState(false);
+  const [cashAuditActualInput, setCashAuditActualInput] = useState('');
+  const [savingCashAudit, setSavingCashAudit] = useState(false);
+  const [cashAudits, setCashAudits] = useState<
+    Awaited<ReturnType<typeof listAgencyCashAudits>>
+  >([]);
+  const [loadingCashAudits, setLoadingCashAudits] = useState(false);
 
   /* ============================================================================
      SECTION : ÉTATS REACT - RÉCONCILIATION
      Description : Données pour la réconciliation des ventes vs encaissements
      ============================================================================ */
-  
-  const [reconciliationData, setReconciliationData] = useState<ReconciliationData | null>(null);
+
+  const defaultReconciliationData: ReconciliationData = {
+    ventesGuichet: { reservations: 0, tickets: 0, montant: 0 },
+    ventesEnLigne: { reservations: 0, tickets: 0, montant: 0 },
+    courrier: { operations: 0, montant: 0 },
+    encaissementsEspeces: 0,
+    encaissementsMobileMoney: 0,
+    encaissementsTotal: 0,
+    ecart: 0,
+  };
+  const [reconciliationData, setReconciliationData] = useState<ReconciliationData>(defaultReconciliationData);
+  const [reconciliationLoaded, setReconciliationLoaded] = useState(false);
+  const [showReconciliationDetails, setShowReconciliationDetails] = useState(false);
   const [loadingReconciliation, setLoadingReconciliation] = useState(false);
   const [reconciliationDate, setReconciliationDate] = useState<string>(() => {
     const today = new Date();
@@ -304,6 +623,10 @@ const AgenceComptabilitePage: React.FC = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [treasuryModalView]);
+
+  useEffect(() => {
+    if (!canManipulateCash && treasuryModalView) setTreasuryModalView(null);
+  }, [canManipulateCash, treasuryModalView]);
 
   /* ============================================================================
      SECTION : INITIALISATION DU HEADER ET PROFIL COMPTABLE
@@ -364,7 +687,11 @@ const AgenceComptabilitePage: React.FC = () => {
      Description : Uniformisation des données de poste depuis Firestore
      ============================================================================ */
   
-  const normalizeShift = (id: string, r: any): ShiftDoc => ({
+  const normalizeShift = (id: string, r: any): ShiftDoc => {
+    /** Même règle que le guichet : uniquement `shifts/{id}.status` Firestore. */
+    const status = parseShiftStatusFromFirestore(r as Record<string, unknown>) as ShiftStatus;
+    console.log('session status', status);
+    return {
     id,
     userId: r.userId || r.openedById || '',
     userName: r.userName || r.openedByName || r.userEmail || '',
@@ -372,7 +699,7 @@ const AgenceComptabilitePage: React.FC = () => {
     userCode: r.userCode || r.openedByCode || '',
     companyId: r.companyId,
     agencyId: r.agencyId,
-    status: r.status,
+    status,
     startTime: r.startTime || r.startAt || r.openedAt,
     endTime: r.endTime || r.endAt || r.closedAt,
     totalTickets: r.totalTickets ?? r.tickets,
@@ -390,7 +717,8 @@ const AgenceComptabilitePage: React.FC = () => {
     mmExpected: r.mmExpected,
     mmReceived: r.mmReceived,
     comptable: r.comptable,
-  });
+  };
+  };
 
   /* ============================================================================
      SECTION : ABONNEMENT AUX POSTES DE VENTE
@@ -411,27 +739,45 @@ const AgenceComptabilitePage: React.FC = () => {
       
       const all = snap.docs.map(d => normalizeShift(d.id, d.data()));
 
-      // Cache des informations utilisateur
-      const needed = Array.from(new Set(all.map(s => s.userId).filter(uid => !!uid && !usersCache[uid])));
+      // Cache vendeur : users/{uid} puis équipe agence (même logique que le guichet)
+      const needed = Array.from(
+        new Set(
+          all
+            .map((s) => s.userId)
+            .filter((uid) => {
+              if (!uid) return false;
+              const c = usersCacheRef.current[uid];
+              if (!c) return true;
+              return !c.profileLookupDone;
+            })
+        )
+      );
       if (needed.length) {
-        console.log(`[AgenceCompta] Chargement de ${needed.length} utilisateur(s) manquant(s)`);
-        const entries = await Promise.all(needed.map(async uid => {
-          try {
-            const us = await getDoc(doc(db, 'users', uid));
-            if (!us.exists()) return [uid, {}] as const;
-            const ud = us.data() as any;
-            return [uid, {
-              name: ud.displayName || ud.nom || ud.email || '',
-              email: ud.email || '',
-              code: ud.staffCode || ud.codeCourt || ud.code || '',
-            }] as const;
-          } catch (error) {
-            // Some roles cannot read other users' profile docs; keep UI functional with empty fallback.
-            console.warn('[AgenceCompta] Profil utilisateur non lisible:', uid, error);
-            return [uid, {}] as const;
-          }
-        }));
-        setUsersCache(prev => Object.fromEntries([...Object.entries(prev), ...entries]));
+        console.log(`[AgenceCompta] Chargement de ${needed.length} utilisateur(s) (profil vendeur)`);
+        const entries = await Promise.all(
+          needed.map(async (uid) => {
+            try {
+              const profile = await fetchAgencyStaffProfile(user.companyId, user.agencyId, uid);
+              return [
+                uid,
+                {
+                  name: profile.name || '',
+                  email: profile.email || '',
+                  code: profile.code || '',
+                  profileLookupDone: true,
+                },
+              ] as const;
+            } catch (error) {
+              console.warn('[AgenceCompta] Profil vendeur non résolu:', uid, error);
+              return [uid, { profileLookupDone: true }] as const;
+            }
+          })
+        );
+        setUsersCache((prev) => {
+          const next = { ...prev, ...Object.fromEntries(entries) };
+          usersCacheRef.current = next;
+          return next;
+        });
       }
 
       // Tri par temps
@@ -464,14 +810,23 @@ const AgenceComptabilitePage: React.FC = () => {
     };
   }, [user?.companyId, user?.agencyId]);
 
-  /* Total agence aujourd'hui (en ligne + guichet) — même source que poste de pilotage / CEO */
+  /* KPI jour : statistiques réservations / ventes (fuseau agence). */
   useEffect(() => {
     if (!user?.companyId || !user?.agencyId) return;
-    const todayKey = getTodayBamako();
-    getAgencyStats(user.companyId, user.agencyId, todayKey, todayKey)
-      .then((stats) => setAgencyStatsToday({ totalTickets: stats.totalTickets, totalRevenue: stats.totalRevenue }))
-      .catch(() => setAgencyStatsToday(null));
-  }, [user?.companyId, user?.agencyId]);
+    const todayKey = getTodayForTimezone(agencyTz);
+    getAgencyStats(user.companyId, user.agencyId, todayKey, todayKey, agencyTz)
+      .then((stats) => {
+        setAgencyStatsToday({
+          totalTickets: stats.totalTickets,
+          totalRevenue: stats.totalRevenue,
+          onlineTickets: stats.onlineTickets,
+          counterTickets: stats.counterTickets,
+        });
+      })
+      .catch(() => {
+        setAgencyStatsToday(null);
+      });
+  }, [user?.companyId, user?.agencyId, agencyTz]);
 
   /* ============================================================================
      SECTION : ABONNEMENT SESSIONS COURRIER (temps réel, séparé du Guichet)
@@ -491,10 +846,134 @@ const AgenceComptabilitePage: React.FC = () => {
       setPendingCourierSessions(all.filter(s => s.status === 'PENDING').sort((a, b) => byTime(b) - byTime(a)));
       setActiveCourierSessions(all.filter(s => s.status === 'ACTIVE').sort((a, b) => byTime(b) - byTime(a)));
       setClosedCourierSessions(all.filter(s => s.status === 'CLOSED').sort((a, b) => byTime(b) - byTime(a)));
+      setCourierValidatedAgencySessions(
+        all.filter((s) => s.status === 'VALIDATED_AGENCY').sort((a, b) => byTime(b) - byTime(a))
+      );
       setValidatedCourierSessions(all.filter(s => s.status === 'VALIDATED').sort((a, b) => byTime(b) - byTime(a)));
     });
     return () => unsub();
   }, [user?.companyId, user?.agencyId]);
+
+  const courierShipmentWatchKey = useMemo(
+    () =>
+      [...new Set([
+        ...pendingCourierSessions.map((s) => s.id),
+        ...activeCourierSessions.map((s) => s.id),
+        ...closedCourierSessions.map((s) => s.id),
+      ])].sort().join(','),
+    [pendingCourierSessions, activeCourierSessions, closedCourierSessions]
+  );
+
+  useEffect(() => {
+    if (!user?.companyId) return;
+    const wanted = new Set(
+      courierShipmentWatchKey ? courierShipmentWatchKey.split(',').filter(Boolean) : []
+    );
+    const cur = courierStatsUnsubsRef.current;
+    for (const id of Object.keys(cur)) {
+      if (!wanted.has(id)) {
+        try {
+          cur[id]();
+        } catch {
+          /* ignore */
+        }
+        delete cur[id];
+      }
+    }
+    for (const id of wanted) {
+      if (cur[id]) continue;
+      const qSh = query(shipmentsRef(db, user.companyId), where('sessionId', '==', id));
+      cur[id] = onSnapshot(
+        qSh,
+        (snap) => {
+          let paid = 0;
+          for (const d of snap.docs) {
+            const ps = (d.data() as { paymentStatus?: string }).paymentStatus;
+            if (ps && ps !== 'UNPAID') paid += 1;
+          }
+          setCourierSessionStats((p) => ({ ...p, [id]: { total: snap.docs.length, paid } }));
+        },
+        () => {}
+      );
+    }
+  }, [user?.companyId, courierShipmentWatchKey]);
+
+  const courierAgentWatchKey = useMemo(
+    () =>
+      [...new Set([
+        ...pendingCourierSessions.map((s) => s.agentId),
+        ...activeCourierSessions.map((s) => s.agentId),
+        ...closedCourierSessions.map((s) => s.agentId),
+        ...courierValidatedAgencySessions.map((s) => s.agentId),
+      ].filter(Boolean))].sort().join(','),
+    [pendingCourierSessions, activeCourierSessions, closedCourierSessions, courierValidatedAgencySessions]
+  );
+
+  useEffect(() => {
+    if (!user?.companyId || !user?.agencyId || !courierAgentWatchKey) return;
+    const agentIds = courierAgentWatchKey.split(',').filter(Boolean);
+    const needed = agentIds.filter((uid) => {
+      const c = usersCacheRef.current[uid];
+      return !c || !c.profileLookupDone;
+    });
+    if (!needed.length) return;
+    void (async () => {
+      const entries = await Promise.all(
+        needed.map(async (uid) => {
+          try {
+            const profile = await fetchAgencyStaffProfile(user.companyId!, user.agencyId!, uid);
+            return [
+              uid,
+              {
+                name: profile.name || '',
+                email: profile.email || '',
+                code: profile.code || '',
+                profileLookupDone: true,
+              },
+            ] as const;
+          } catch {
+            return [uid, { profileLookupDone: true }] as const;
+          }
+        })
+      );
+      setUsersCache((prev) => {
+        const next = { ...prev, ...Object.fromEntries(entries) };
+        usersCacheRef.current = next;
+        return next;
+      });
+    })();
+  }, [user?.companyId, user?.agencyId, courierAgentWatchKey]);
+
+  useEffect(() => {
+    if (!user?.companyId) return;
+    let cancelled = false;
+    const ids = [
+      ...new Set([
+        ...pendingCourierSessions.map(s => s.id),
+        ...closedCourierSessions.map(s => s.id),
+        ...validatedCourierSessions.map(s => s.id),
+        ...activeCourierSessions.map(s => s.id),
+      ]),
+    ];
+    if (ids.length === 0) {
+      setCourierLedgerBySessionId({});
+      return;
+    }
+    void (async () => {
+      const next: Record<string, number> = {};
+      for (const id of ids) {
+        try {
+          next[id] = await getCourierSessionLedgerTotal(user.companyId!, id);
+        } catch {
+          next[id] = 0;
+        }
+      }
+      if (!cancelled) setCourierLedgerBySessionId(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.companyId, closedCourierSessions, validatedCourierSessions, activeCourierSessions]);
 
   // Toast "Nouvelle demande d'activation Courrier" quand PENDING passe de 0 à > 0 (comptable uniquement)
   useEffect(() => {
@@ -608,6 +1087,29 @@ const AgenceComptabilitePage: React.FC = () => {
     })().catch((e) => console.error('[AgenceCompta] Erreur agrégats réceptions:', e));
   }, [closedShifts, user?.companyId, user?.agencyId]);
 
+  /** Préremplit « Montant reçu » avec l’attendu espèces pour éviter une validation à 0 (champ vide → Number('') === 0). */
+  useEffect(() => {
+    const pending = closedShifts.filter((s) => s.status === 'closed');
+    if (pending.length === 0) return;
+    setReceptionInputs((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const s of pending) {
+        if (Object.prototype.hasOwnProperty.call(next, s.id)) continue;
+        const payBy = s.payBy || {};
+        const agg = aggByShift[s.id];
+        const expected = Number(
+          s.totalCash ?? agg?.cashExpected ?? payBy['espèces'] ?? s.cashExpected ?? 0
+        );
+        if (expected > 0) {
+          next[s.id] = { cashReceived: String(Math.round(expected)) };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [closedShifts, aggByShift]);
+
   /* ============================================================================
      SECTION : ACTIONS SUR LES POSTES
      Description : Gestion du cycle de vie des postes (activation/pause/continuer)
@@ -627,15 +1129,6 @@ const AgenceComptabilitePage: React.FC = () => {
       alert((error instanceof Error ? error.message : 'Erreur lors de l\'activation du poste'));
     }
   },[user?.companyId, user?.agencyId, accountant]);
-
-  const pauseShift = useCallback(async (id:string) => {
-    if(!user?.companyId||!user?.agencyId) return;
-    try {
-      await pauseSession(user.companyId, user.agencyId, id);
-    } catch (error: unknown) {
-      console.error(`[AgenceCompta] Erreur pause poste ${id}:`, error);
-    }
-  },[user?.companyId, user?.agencyId]);
 
   const continueShift = useCallback(async (id:string) => {
     if(!user?.companyId||!user?.agencyId) return;
@@ -669,16 +1162,19 @@ const AgenceComptabilitePage: React.FC = () => {
     
     setSavingShiftIds(p => ({ ...p, [shift.id]: true }));
 
-    const inputs = receptionInputs[shift.id] || { cashReceived: '0' };
+    const inputs = receptionInputs[shift.id] ?? { cashReceived: '' };
     const toAmount = (s: string) => {
-      const clean = (s || '').replace(/[^\d.,]/g, '').replace(',', '.');
+      const raw = String(s ?? '').trim();
+      if (raw === '') return NaN;
+      const clean = raw.replace(/[^\d.,]/g, '').replace(',', '.');
+      if (clean === '' || clean === '.') return NaN;
       const n = Number(clean);
       return Number.isFinite(n) && n >= 0 ? n : NaN;
     };
 
-    const cashRcv = toAmount(inputs.cashReceived || '');
+    const cashRcv = toAmount(inputs.cashReceived ?? '');
     if (!Number.isFinite(cashRcv)) {
-      alert('Montant espèces reçu invalide.');
+      alert('Saisissez le montant espèces reçu (champ obligatoire). Le montant attendu est affiché sur la carte du poste.');
       setSavingShiftIds(p => ({ ...p, [shift.id]: false }));
       return;
     }
@@ -693,9 +1189,16 @@ const AgenceComptabilitePage: React.FC = () => {
         accountantDeviceFingerprint: getDeviceFingerprint(),
       });
 
+      try {
+        await reloadCashRef.current?.();
+      } catch (reErr) {
+        console.warn('[AgenceCompta] Rafraîchissement caisse après validation:', reErr);
+      }
+      dispatchAgencyCashUiRefresh();
+
       setReceptionInputs(prev => ({ ...prev, [shift.id]: { cashReceived: '' } }));
       if (computedDifference !== 0) {
-        alert(`Validation enregistrée. Écart (reçu - attendu) : ${computedDifference >= 0 ? '+' : ''}${computedDifference.toFixed(0)} ${currencySymbol}`);
+        alert(`Validation enregistrée. Écart (reçu − montant attendu) : ${computedDifference >= 0 ? '+' : ''}${computedDifference.toFixed(0)} ${currencySymbol}`);
       } else {
         alert('Validation enregistrée ✓');
       }
@@ -747,9 +1250,15 @@ const AgenceComptabilitePage: React.FC = () => {
         validatedAmount: counted,
         validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
       });
+      try {
+        await reloadCashRef.current?.();
+      } catch (reErr) {
+        console.warn('[AgenceCompta] Rafraîchissement caisse après validation courrier:', reErr);
+      }
+      dispatchAgencyCashUiRefresh();
       setReceptionInputsCourier(prev => ({ ...prev, [session.id]: { countedAmount: '' } }));
       if (difference !== 0) {
-        alert(`Validation enregistrée. Écart (compté - attendu) : ${difference >= 0 ? '+' : ''}${difference.toFixed(0)} ${currencySymbol}`);
+        alert(`Validation enregistrée. Écart (compté − montant attendu) : ${difference >= 0 ? '+' : ''}${difference.toFixed(0)} ${currencySymbol}`);
       } else {
         alert('Validation enregistrée ✓');
       }
@@ -792,64 +1301,84 @@ const AgenceComptabilitePage: React.FC = () => {
       const userCode = sDoc.userCode || sDoc.openedByCode || '';
 
       const start = startRaw ? new Date(startRaw.getTime() - 5 * 60 * 1000) : null;
-      const end   = endRaw   ? new Date(endRaw.getTime()   + 6 * 60 * 60 * 1000) : null;
+      /** Fin de fenêtre : clôture + marge, ou maintenant si le poste est encore ouvert (sinon aucune vente « en ligne » sur la période). */
+      const rangeEnd = endRaw
+        ? new Date(endRaw.getTime() + 6 * 60 * 60 * 1000)
+        : new Date();
 
-      // Réservations attachées au shift (TOUS les canaux)
+      const isOnlineCanal = (c: string) =>
+        c === 'en_ligne' || c === 'online' || c === 'web';
+
+      // Réservations explicitement liées au shift (souvent guichet ; l’en ligne a rarement ce shiftId)
       const snap1 = await getDocs(query(
         rRef,
-        where('shiftId','==', shiftId),
-        orderBy('createdAt','asc')
+        where('shiftId', '==', shiftId),
+        orderBy('createdAt', 'asc')
       ));
 
       let extraDocs: any[] = [];
-      // Orphelins guichet uniquement (même vendeur, sans shiftId) — les postes listés sont des sessions guichet
-      if (start && end) {
+      let onlineWindowDocs: any[] = [];
+      // Même fenêtre horaire que le poste : orphelins guichet (même vendeur) + ventes en ligne agence
+      if (start) {
         const snapAll = await getDocs(query(
           rRef,
-          where('createdAt','>=', Timestamp.fromDate(start)),
-          orderBy('createdAt','asc')
+          where('createdAt', '>=', Timestamp.fromDate(start)),
+          orderBy('createdAt', 'asc')
         ));
-        extraDocs = snapAll.docs.filter(d => {
+        extraDocs = snapAll.docs.filter((d) => {
           const r = d.data() as any;
           const dt = r.createdAt?.toDate?.() ?? new Date(0);
-          const inRange = dt >= start && dt <= end;
+          const inRange = dt >= start && dt <= rangeEnd;
           const canal = String(r.canal || '').toLowerCase();
-          // Ne pas inclure les réservations en ligne dans le rapport d'un poste guichet
-          if (canal === 'en_ligne') return false;
+          if (isOnlineCanal(canal)) return false;
           const sameSeller =
-            (!!userId   && r.guichetierId   === userId) ||
+            (!!userId && r.guichetierId === userId) ||
             (!!userCode && r.guichetierCode === userCode);
           const noShiftId = !r.shiftId || r.shiftId === '';
           return inRange && (canal === 'guichet' || canal === '') && sameSeller && noShiftId;
         });
+
+        onlineWindowDocs = snapAll.docs.filter((d) => {
+          const r = d.data() as any;
+          const dt = r.createdAt?.toDate?.() ?? new Date(0);
+          const inRange = dt >= start && dt <= rangeEnd;
+          const canal = String(r.canal || '').toLowerCase();
+          return inRange && isOnlineCanal(canal);
+        });
       }
 
-      const mk = (d:any) => {
+      const mk = (d: any) => {
         const r = d.data() as any;
-        const canal = String(r.canal || '').toLowerCase();
+        const canalRaw = String(r.canal || '').toLowerCase();
+        const isOnline = isOnlineCanal(canalRaw);
+        const canal = isOnline ? 'en_ligne' : canalRaw;
         const encaissement = canal === 'guichet' || canal === '' ? 'agence' : 'compagnie';
-        
+
         return {
-          id: d.id, 
-          referenceCode: r.referenceCode, 
-          date: r.date, 
+          id: d.id,
+          referenceCode: r.referenceCode,
+          date: r.date,
           heure: r.heure,
-          depart: r.depart, 
-          arrivee: r.arrivee, 
-          nomClient: r.nomClient, 
+          depart: r.depart,
+          arrivee: r.arrivee,
+          nomClient: r.nomClient,
           telephone: r.telephone,
-          seatsGo: r.seatsGo || 1, 
-          seatsReturn: r.seatsReturn || 0, 
+          seatsGo: r.seatsGo || 1,
+          seatsReturn: r.seatsReturn || 0,
           montant: r.montant || 0,
-          paiement: r.paiement, 
-          createdAt: r.createdAt, 
-          guichetierCode: r.guichetierCode || '', 
-          canal: r.canal,
-          encaissement, // NOUVEAU : source d'encaissement
+          paiement: r.paiement,
+          createdAt: r.createdAt,
+          guichetierCode: r.guichetierCode || '',
+          canal,
+          encaissement,
         } as TicketRow;
       };
 
-      const rawDocs = [...snap1.docs, ...extraDocs];
+      const byId = new Map<string, (typeof snap1.docs)[0]>();
+      for (const d of [...snap1.docs, ...extraDocs, ...onlineWindowDocs]) {
+        if (!byId.has(d.id)) byId.set(d.id, d);
+      }
+      const rawDocs = [...byId.values()];
       const raw = rawDocs.map(mk);
 
       // Déduplication basée sur les références uniques
@@ -883,6 +1412,60 @@ const AgenceComptabilitePage: React.FC = () => {
     }
   }, [user?.companyId, user?.agencyId]);
 
+  const loadCourierReportForSession = useCallback(
+    async (sessionId: string) => {
+      if (!user?.companyId || !sessionId) {
+        setCourierReportRows([]);
+        setSelectedCourierSessionForReport('');
+        return;
+      }
+      setLoadingCourierReport(true);
+      setSelectedCourierSessionForReport(sessionId);
+      try {
+        const snap = await getDocs(
+          query(shipmentsRef(db, user.companyId), where('sessionId', '==', sessionId))
+        );
+        const rows: CourierShipmentReportRow[] = snap.docs.map((d) => {
+          const r = d.data() as Record<string, unknown>;
+          const sender = (r.sender as { name?: string; phone?: string }) || {};
+          const receiver = (r.receiver as { name?: string; phone?: string }) || {};
+          return {
+            id: d.id,
+            shipmentNumber: String(r.shipmentNumber || d.id),
+            senderName: String(sender.name || '—'),
+            senderPhone: String(sender.phone || ''),
+            receiverName: String(receiver.name || '—'),
+            receiverPhone: String(receiver.phone || ''),
+            nature: String(r.nature || '—'),
+            transportFee: Number(r.transportFee ?? 0),
+            paymentStatus: String(r.paymentStatus || 'UNPAID'),
+            currentStatus: String(r.currentStatus || '—'),
+            createdAt: r.createdAt,
+          };
+        });
+        rows.sort((a, b) => {
+          const ta =
+            a.createdAt && typeof (a.createdAt as { toMillis?: () => number }).toMillis === 'function'
+              ? (a.createdAt as { toMillis: () => number }).toMillis()
+              : 0;
+          const tb =
+            b.createdAt && typeof (b.createdAt as { toMillis?: () => number }).toMillis === 'function'
+              ? (b.createdAt as { toMillis: () => number }).toMillis()
+              : 0;
+          return ta - tb;
+        });
+        setCourierReportRows(rows);
+      } catch (e) {
+        console.error('[AgenceCompta] Rapport courrier:', e);
+        alert('Erreur lors du chargement des colis de la session');
+        setCourierReportRows([]);
+      } finally {
+        setLoadingCourierReport(false);
+      }
+    },
+    [user?.companyId]
+  );
+
   /* ============================================================================
      SECTION : CALCULS DES TOTAUX (ÉTENDU POUR FILTRES)
      Description : Agrégation des montants pour les rapports et statistiques
@@ -912,6 +1495,21 @@ const AgenceComptabilitePage: React.FC = () => {
     return agg;
   }, [tickets]);
 
+  const courierReportFilteredRows = useMemo(() => {
+    if (courierReportPaymentFilter === 'all') return courierReportRows;
+    if (courierReportPaymentFilter === 'paid')
+      return courierReportRows.filter((r) => r.paymentStatus && r.paymentStatus !== 'UNPAID');
+    return courierReportRows.filter((r) => !r.paymentStatus || r.paymentStatus === 'UNPAID');
+  }, [courierReportRows, courierReportPaymentFilter]);
+
+  const courierReportTotals = useMemo(
+    () => ({
+      colis: courierReportFilteredRows.length,
+      fraisTransport: courierReportFilteredRows.reduce((s, r) => s + (Number(r.transportFee) || 0), 0),
+    }),
+    [courierReportFilteredRows]
+  );
+
   const liveTotalsGlobal = useMemo(() => {
     let reservations = 0, tickets = 0, amount = 0;
     for (const s of [...activeShifts, ...pausedShifts]) {
@@ -926,18 +1524,13 @@ const AgenceComptabilitePage: React.FC = () => {
     return { reservations, tickets, amount };
   }, [activeShifts, pausedShifts, liveStats]);
 
-  /* ============================================================================
-     SECTION : KPI COURRIER (séparé du Guichet, pour onglet Courrier uniquement)
-     ============================================================================ */
-  const courierKpis = useMemo(() => {
-    const totalCAValidated = validatedCourierSessions.reduce((sum, s) => sum + (Number(s.expectedAmount) || 0), 0);
-    return {
-      pendingCount: pendingCourierSessions.length,
-      activeCount: activeCourierSessions.length,
-      closedCount: closedCourierSessions.length,
-      totalCAValidated,
-    };
-  }, [pendingCourierSessions.length, activeCourierSessions.length, closedCourierSessions.length, validatedCourierSessions]);
+  /** Billetterie (postes clôturés) + courrier (sessions clôturées) : à traiter sous l’onglet Versements. */
+  const receptionsBilletteriePendingCount = useMemo(
+    () => closedShifts.filter((s) => s.status === 'closed').length,
+    [closedShifts]
+  );
+  const receptionsPendingTotal =
+    receptionsBilletteriePendingCount + closedCourierSessions.length;
 
   /* ============================================================================
      SECTION : GESTION DE LA CAISSE - CONFIGURATION
@@ -965,137 +1558,247 @@ const AgenceComptabilitePage: React.FC = () => {
     
     if (!user?.companyId || !user?.agencyId) return;
     setLoadingCash(true);
+    setLedgerPeriodError(null);
+
+    /** Stock caisse : ne dépend pas de la période (solde ledger + cumul encaissements / sorties tout temps). */
+    try {
+      const globalPos = await getAgencyCashPosition(user.companyId, user.agencyId);
+      setCashGlobalPosition(globalPos);
+      console.log('[AgenceCompta][caisse] solde global (hors période):', {
+        soldeLedger: globalPos.soldeCash,
+        cumulEncaissementsToutTemps: globalPos.totalCashIn,
+        cumulSortiesToutTemps: globalPos.totalCashOut,
+      });
+    } catch (globalErr) {
+      console.warn('[AgenceCompta] Solde global caisse:', globalErr);
+      setCashGlobalPosition(null);
+    }
 
     try {
-      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashReceipts`);
-      const mRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/cashMovements`);
+      // Sorties caisse : financialTransactions. Entrées comptables : comptaEncaissements (validation session).
+      const txRef = collection(db, `companies/${user.companyId}/financialTransactions`);
+      let snap;
+      try {
+        const qTx = query(
+          txRef,
+          where("agencyId", "==", user.agencyId),
+          where("createdAt", ">=", Timestamp.fromDate(currentRange.from)),
+          where("createdAt", "<", Timestamp.fromDate(currentRange.to)),
+          orderBy("createdAt", "desc"),
+          limit(50)
+        );
+        snap = await getDocs(qTx);
+      } catch (rangeErr) {
+        // Fallback robuste: certains jeux de données historiques ont des createdAt manquants
+        // ou des index/règles partiels sur la requête bornée.
+        console.warn("[AgenceCompta] reloadCash range query failed, fallback agency-only:", rangeErr);
+        const qFallback = query(
+          txRef,
+          where("agencyId", "==", user.agencyId),
+          orderBy("createdAt", "desc"),
+          limit(200)
+        );
+        snap = await getDocs(qFallback);
+      }
 
-      const qR = query(rRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
-      const qM = query(mRef, where('createdAt', '>=', Timestamp.fromDate(currentRange.from)), orderBy('createdAt', 'asc'));
+      const txRows: CashDay[] = snap.docs
+        .map((d) => d.data() as Record<string, unknown>)
+        .map((tx) => {
+          const createdAt = (tx.createdAt as Timestamp | undefined)?.toDate?.() ?? null;
+          return { tx, createdAt };
+        })
+        .filter(
+          (x): x is { tx: Record<string, unknown>; createdAt: Date } =>
+            x.createdAt instanceof Date &&
+            x.createdAt >= currentRange.from &&
+            x.createdAt < currentRange.to
+        )
+        .map(({ tx, createdAt }) => {
+          const amount = Math.max(0, Number(tx.amount ?? 0));
+          const type = String(tx.type ?? "").toLowerCase();
+          const source = String(tx.source ?? "").toLowerCase();
 
-      const safeGetDocs = async (label: string, qRef: ReturnType<typeof query>) => {
-        try {
-          return await getDocs(qRef);
-        } catch (err) {
-          const code = (err as { code?: string } | null)?.code;
-          const message = String((err as { message?: string } | null)?.message ?? "");
-          const permissionDenied = code === "permission-denied" || message.includes("Missing or insufficient permissions");
-          if (permissionDenied) {
-            console.warn(`[AgenceCompta] Accès refusé à ${label}, fallback sans crash UI.`);
-            return null;
-          }
-          throw err;
-        }
-      };
+          /** Entrées : uniquement via comptaEncaissements (pas les lignes ledger ici). */
+          const isOut =
+            type === "expense" ||
+            type === "payment_sent" ||
+            type === "transfer" ||
+            type === "transfer_to_bank" ||
+            type === "adjustment" ||
+            source === "cashout";
 
-      const shiftsRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
-      const toEnd = new Date(currentRange.to.getTime() - 1);
-      const qVA = query(
-        shiftsRef,
-        where('status', '==', 'validated_agency'),
-        where('validatedAt', '>=', Timestamp.fromDate(currentRange.from)),
-        where('validatedAt', '<=', Timestamp.fromDate(toEnd)),
-        orderBy('validatedAt', 'asc')
-      );
-      const qV = query(
-        shiftsRef,
-        where('status', '==', 'validated'),
-        where('validatedAt', '>=', Timestamp.fromDate(currentRange.from)),
-        where('validatedAt', '<=', Timestamp.fromDate(toEnd)),
-        orderBy('validatedAt', 'asc')
-      );
+          const entrees = 0;
+          const sorties = isOut ? amount : 0;
 
-      const [sr, sm, sVa, sV] = await Promise.all([
-        safeGetDocs("cashReceipts", qR),
-        safeGetDocs("cashMovements", qM),
-        safeGetDocs("shifts(validated_agency)", qVA),
-        safeGetDocs("shifts(validated)", qV),
-      ]);
-
-      const map: Record<string, { in: number; out: number }> = {};
-      const shiftIdsAlreadyCredited = new Set<string>();
-
-      // Agrégation des entrées (reçus de caisse)
-      sr?.forEach(d => {
-        const r = d.data() as any;
-        const dt = r.createdAt?.toDate?.() ?? new Date();
-        if (dt < currentRange.from || dt >= currentRange.to) return;
-        const key = dt.toISOString().split('T')[0];
-        const inc = Number(r.cashReceived || 0);
-        if (!map[key]) map[key] = { in: 0, out: 0 };
-        map[key].in += Math.max(0, inc);
-        if (r.shiftId) shiftIdsAlreadyCredited.add(r.shiftId);
-      });
-
-      // Entrées issues des sessions validées (agence ou chef) dans la période, non déjà comptées via cashReceipts
-      const addValidatedShiftEntries = (snap: Awaited<ReturnType<typeof getDocs>> | null) => {
-        snap?.forEach(d => {
-          if (shiftIdsAlreadyCredited.has(d.id)) return;
-          const r = d.data() as any;
-          const dt = r.validatedAt?.toDate?.() ?? new Date();
-          if (dt < currentRange.from || dt >= currentRange.to) return;
-          const key = dt.toISOString().split('T')[0];
-          const inc = Number(r.amount ?? r.totalRevenue ?? r.validationAudit?.receivedCashAmount ?? 0);
-          if (inc <= 0) return;
-          if (!map[key]) map[key] = { in: 0, out: 0 };
-          map[key].in += inc;
+          return {
+            dateISO: createdAt.toISOString().split("T")[0],
+            entrees,
+            sorties,
+            solde: entrees - sorties,
+          };
         });
-      };
-      addValidatedShiftEntries(sVa);
-      addValidatedShiftEntries(sV);
 
-      // Agrégation des sorties (dépenses et transferts)
-      sm?.forEach(d => {
-        const r = d.data() as any;
-        const dt = r.createdAt?.toDate?.() ?? new Date();
-        if (dt < currentRange.from || dt >= currentRange.to) return;
-        const key = dt.toISOString().split('T')[0];
-        const kind = String(r.kind || '');
-        const amount = Number(r.amount || 0);
-        if (!map[key]) map[key] = { in: 0, out: 0 };
-        if (kind === 'depense' || kind === 'transfert_banque') {
-          map[key].out += Math.max(0, amount);
-        } else if (kind === 'entree_manual') {
-          map[key].in += Math.max(0, amount);
-        }
-      });
+      let comptaRows: CashDay[] = [];
+      try {
+        const enc = await listComptaEncaissementsInRange(
+          user.companyId,
+          user.agencyId,
+          currentRange.from,
+          currentRange.to,
+          500
+        );
+        comptaRows = enc
+          .map((e) => {
+            const raw = e.createdAt as Timestamp | undefined;
+            const dt = raw?.toDate?.() ?? null;
+            if (!(dt instanceof Date)) return null;
+            const m = Math.max(0, Number(e.montant ?? 0));
+            return {
+              dateISO: dt.toISOString().split("T")[0],
+              entrees: m,
+              sorties: 0,
+              solde: m,
+            };
+          })
+          .filter((x): x is CashDay => x != null);
+      } catch (encErr) {
+        console.warn("[AgenceCompta] comptaEncaissements (période):", encErr);
+      }
 
-      const sortedKeys = Object.keys(map).sort();
-      let running = 0;
-      const rows: CashDay[] = [];
-      let IN = 0, OUT = 0;
-      
-      for (const k of sortedKeys) {
-        const e = map[k].in || 0;
-        const s = map[k].out || 0;
-        if (e === 0 && s === 0) continue;
-        running += e - s;
-        IN += e; OUT += s;
-        rows.push({ dateISO: k, entrees: e, sorties: s, solde: running });
+      const rows = aggregateCashDaysByDate([...txRows, ...comptaRows]);
+      let totalIn = 0;
+      let totalOut = 0;
+      for (const r of rows) {
+        totalIn += r.entrees;
+        totalOut += r.sorties;
       }
 
       setDays(rows);
-      setTotIn(IN);
-      setTotOut(OUT);
-      
-      console.log('[AgenceCompta] Données de caisse chargées:', { 
-        jours: rows.length, 
-        entrées: IN, 
-        sorties: OUT, 
-        solde: IN - OUT 
+      setTotIn(totalIn);
+      setTotOut(totalOut);
+
+      let periodSummary: AgencyCashPosition | null = null;
+      try {
+        periodSummary = await getAgencyCashLedgerPeriodSummary(
+          user.companyId,
+          user.agencyId,
+          currentRange.from,
+          currentRange.to
+        );
+        setLedgerPeriodCash(periodSummary);
+      } catch (periodErr) {
+        console.warn("[AgenceCompta] Période caisse ledger:", periodErr);
+        setLedgerPeriodCash(null);
+      }
+
+      const netPeriode = periodSummary
+        ? periodSummary.totalCashIn - periodSummary.totalCashOut
+        : totalIn - totalOut;
+      console.log("[AgenceCompta] Données de caisse chargées:", {
+        jours: rows.length,
+        entreesPeriode: periodSummary?.totalCashIn ?? totalIn,
+        sortiesPeriode: periodSummary?.totalCashOut ?? totalOut,
+        netFluxPeriode: netPeriode,
+        entrées_documentaire_fallback: totalIn,
+        sorties_documentaire_fallback: totalOut,
       });
     } catch (error) {
-      console.error('[AgenceCompta] Erreur lors du chargement de la caisse:', error);
-      alert('Erreur lors du chargement des données de caisse');
+      console.error('[AgenceCompta] Erreur lors du chargement de la caisse (période / journal):', error);
+      setLedgerPeriodCash(null);
+      setDays([]);
+      setTotIn(0);
+      setTotOut(0);
+      setLedgerPeriodError("Impossible de charger les mouvements de la période. Le solde global reste affiché si disponible.");
+      console.log("[AgenceCompta][caisse] erreur période — entrees/sorties période indisponibles");
     } finally {
       setLoadingCash(false);
     }
   }, [user?.companyId, user?.agencyId, currentRange]);
 
+  reloadCashRef.current = reloadCash;
+
   useEffect(() => { 
     console.log('[AgenceCompta] Déclenchement du chargement de la caisse');
     void reloadCash(); 
   }, [reloadCash]);
+
+  const reloadLedgerCashAudit = useCallback(async () => {
+    if (!user?.companyId || !user?.agencyId) return;
+    setLoadingLedgerCash(true);
+    setLoadingCashAudits(true);
+    try {
+      const [pos, audits] = await Promise.all([
+        getAgencyCashPosition(user.companyId, user.agencyId),
+        listAgencyCashAudits(user.companyId, user.agencyId, 50),
+      ]);
+      setLedgerCashPosition(pos);
+      setCashAudits(audits);
+    } catch (error) {
+      console.error('[AgenceCompta] Contrôle caisse ledger:', error);
+      toast.error('Impossible de charger le montant attendu (ventes) de la caisse.');
+    } finally {
+      setLoadingLedgerCash(false);
+      setLoadingCashAudits(false);
+    }
+  }, [user?.companyId, user?.agencyId]);
+
+  useEffect(() => {
+    if (tab !== 'audit') return;
+    if (!user?.companyId || !user?.agencyId) return;
+    void reloadLedgerCashAudit();
+  }, [tab, user?.companyId, user?.agencyId, reloadLedgerCashAudit]);
+
+  const cashAuditGapPreview = useMemo(() => {
+    const actual = parseLooseAmount(cashAuditActualInput);
+    const th = ledgerCashPosition?.soldeCash;
+    if (!Number.isFinite(actual) || th === undefined || !Number.isFinite(th)) return null;
+    return actual - th;
+  }, [cashAuditActualInput, ledgerCashPosition?.soldeCash]);
+
+  const handleValidateAgencyCash = useCallback(async () => {
+    if (!canRunAgencyCashControlAudit(rbacRoles)) {
+      toast.error('Seul le chef d’agence (ou un administrateur) peut enregistrer un contrôle de caisse.');
+      return;
+    }
+    if (!user?.companyId || !user?.agencyId || !user?.uid) {
+      toast.error('Session ou profil incomplet.');
+      return;
+    }
+    const actual = parseLooseAmount(cashAuditActualInput);
+    if (!Number.isFinite(actual) || actual < 0) {
+      toast.error('Montant réel invalide.');
+      return;
+    }
+    setSavingCashAudit(true);
+    try {
+      await validateAgencyCash({
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        actualAmount: actual,
+        validatedBy: {
+          id: user.uid,
+          name: accountant?.displayName ?? user.email ?? null,
+        },
+      });
+      toast.success('Contrôle de caisse enregistré.');
+      setCashAuditActualInput('');
+      await reloadLedgerCashAudit();
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : 'Échec de la validation.');
+    } finally {
+      setSavingCashAudit(false);
+    }
+  }, [
+    user?.companyId,
+    user?.agencyId,
+    user?.uid,
+    user?.email,
+    accountant?.displayName,
+    cashAuditActualInput,
+    reloadLedgerCashAudit,
+    rbacRoles,
+  ]);
 
   /* ============================================================================
      SECTION : RÉCONCILIATION DES VENTES vs ENCAISSEMENTS
@@ -1110,15 +1813,15 @@ const AgenceComptabilitePage: React.FC = () => {
     setLoadingReconciliation(true);
 
     try {
-      // Source de vérité : cashTransactions (même source que totaux session / closeSession)
+      // operational data, not financial truth — cashTransactions (sessions / closeSession), not ledger
       const dateStr = reconciliationDate.trim() || new Date().toISOString().split('T')[0];
       let list: Array<{ id: string; sourceType?: string; locationId?: string; amount?: number; seats?: number; paymentMethod?: string; status?: string }>;
       try {
-        list = await getCashTransactionsByLocation(user.companyId, user.agencyId, dateStr);
+        list = await getCashTransactionsByLocation(user.companyId, user.agencyId, dateStr, agencyTz);
       } catch (idxErr) {
-        console.warn('[AgenceCompta] getCashTransactionsByLocation (date) failed, trying paidAt range', idxErr);
+        console.warn('[AgenceCompta] getCashTransactionsByLocation (createdAt) failed, trying createdAt range fallback', idxErr);
         const { getCashTransactionsByPaidAtRange } = await import('@/modules/compagnie/cash/cashService');
-        const all = await getCashTransactionsByPaidAtRange(user.companyId, dateStr, dateStr);
+        const all = await getCashTransactionsByPaidAtRange(user.companyId, dateStr, dateStr, agencyTz);
         list = all.filter((t: { locationId?: string }) => t.locationId === user.agencyId);
       }
 
@@ -1151,31 +1854,53 @@ const AgenceComptabilitePage: React.FC = () => {
       const encaissementsTotal = encaissementsEspeces + encaissementsMobileMoney;
       const ecart = ventesGuichet.montant - encaissementsTotal;
 
+      const dayKey = normalizeDateToYYYYMMDD(dateStr);
+      let courrierOps = 0;
+      let courrierMontant = 0;
+      try {
+        const from = getStartOfDayForDate(dayKey, agencyTz);
+        const to = getEndOfDayForDate(dayKey, agencyTz);
+        const payments = await getPaymentsByDateRange(user.companyId, from, to);
+        for (const p of payments) {
+          if (p.agencyId !== user.agencyId) continue;
+          if (p.channel !== 'courrier') continue;
+          if (p.status !== 'validated') continue;
+          courrierOps += 1;
+          courrierMontant += Number(p.amount) || 0;
+        }
+      } catch (courrierErr) {
+        console.warn('[AgenceCompta] Paiements courrier (jour):', courrierErr);
+      }
+
       setReconciliationData({
         ventesGuichet,
         ventesEnLigne,
+        courrier: { operations: courrierOps, montant: courrierMontant },
         encaissementsEspeces,
         encaissementsMobileMoney,
         encaissementsTotal,
         ecart,
       });
+      setReconciliationLoaded(true);
 
       console.log('[AgenceCompta] Réconciliation calculée (cashTransactions):', {
         ventesGuichet,
         ventesEnLigne,
+        courrier: { operations: courrierOps, montant: courrierMontant },
         encaissementsTotal,
         ecart,
       });
     } catch (error) {
       console.error('[AgenceCompta] Erreur lors du chargement de la réconciliation:', error);
+      setReconciliationLoaded(false);
       alert('Erreur lors du chargement de la réconciliation');
     } finally {
       setLoadingReconciliation(false);
     }
-  }, [user?.companyId, user?.agencyId, reconciliationDate]);
+  }, [user?.companyId, user?.agencyId, reconciliationDate, agencyTz]);
   
   useEffect(() => {
-    if (tab === 'reconciliation') {
+    if (tab === 'audit') {
       loadReconciliation();
     }
   }, [tab, reconciliationDate, loadReconciliation]);
@@ -1190,37 +1915,70 @@ const AgenceComptabilitePage: React.FC = () => {
     [activeShifts, pausedShifts, closedShifts, validatedAgencyShifts, validatedShifts]
   );
 
+  const findCourierSession = useCallback(
+    (id?: string) =>
+      [
+        ...pendingCourierSessions,
+        ...activeCourierSessions,
+        ...closedCourierSessions,
+        ...validatedCourierSessions,
+      ].find((s) => s.id === id),
+    [pendingCourierSessions, activeCourierSessions, closedCourierSessions, validatedCourierSessions]
+  );
+
+  const courierSessionsForReportOptions = useMemo(
+    () => [
+      ...pendingCourierSessions.map((s) => ({ s, statutFr: 'En attente' as const })),
+      ...activeCourierSessions.map((s) => ({ s, statutFr: 'En service' as const })),
+      ...closedCourierSessions.map((s) => ({ s, statutFr: 'Clôturé' as const })),
+      ...validatedCourierSessions.map((s) => ({ s, statutFr: 'Validé' as const })),
+    ],
+    [pendingCourierSessions, activeCourierSessions, closedCourierSessions, validatedCourierSessions]
+  );
+
   /* ============================================================================
      SECTION : RENDU PRINCIPAL
      Description : Interface utilisateur de la page de comptabilité
      ============================================================================ */
   
   return (
-    <div className={`min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 ${darkMode ? 'agency-dark' : ''}`}>
+    <div
+      className={`min-h-screen min-w-0 w-full overflow-x-hidden ${darkMode ? 'agency-dark' : ''}`}
+      style={comptaRootChromeStyle}
+    >
       {/* ============================================================================
          HEADER : EN-TÊTE AVEC BRANDING ET NAVIGATION
          Description : Logo, nom d'entreprise, onglets et informations comptable
          ============================================================================ */}
       
       <div className="sticky top-0 z-10 shadow-sm">
-        {/* Barre globale */}
-        <div className="h-16" style={{ backgroundColor: theme?.primary ?? '#EA580C' }}>
-          <div className="max-w-7xl mx-auto h-full px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-3">
+        {/* Barre globale — même chrome dégradé que InternalLayout */}
+        <div
+          className="h-16 border-b border-gray-200/60"
+          style={{ backgroundImage: 'var(--agency-gradient-header)' }}
+        >
+          <div className="max-w-7xl mx-auto min-w-0 h-full px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-3">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               {companyLogo ? (
                 <img
                   src={companyLogo}
                   alt="Logo compagnie"
-                  className="h-10 w-10 rounded-lg object-contain border border-white/30 bg-white/10"
+                  className="h-10 w-10 rounded-lg object-contain border border-gray-200 bg-white p-0.5"
                 />
               ) : (
-                <div className="h-10 w-10 rounded-lg border border-white/30 bg-white/10 grid place-items-center">
-                  <Building2 className="h-5 w-5 text-white" />
+                <div className="h-10 w-10 rounded-lg border border-gray-200 bg-white grid place-items-center">
+                  <Building2 className="h-5 w-5 text-gray-500" />
                 </div>
               )}
               <div className="min-w-0">
-                <div className="text-xs sm:text-sm font-semibold text-white truncate" title={companyName}>{companyName}</div>
-                <div className="hidden sm:flex text-xs text-white/85 items-center gap-1.5 truncate">
+                <div
+                  className="text-xs sm:text-sm font-semibold text-gray-900 truncate"
+                  style={{ color: theme?.primary }}
+                  title={companyName}
+                >
+                  {companyName}
+                </div>
+                <div className="hidden sm:flex text-xs text-gray-500 items-center gap-1.5 truncate">
                   <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
                   <span className="truncate">{agencyName}</span>
                 </div>
@@ -1228,13 +1986,26 @@ const AgenceComptabilitePage: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-1 sm:gap-2">
+              {(userRole === 'agency_accountant' ||
+                userRole === 'chefAgence' ||
+                userRole === 'superviseur' ||
+                userRole === 'admin_compagnie') && (
+                <Link
+                  to="/agence/comptabilite/journal-agents"
+                  className="hidden sm:inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                >
+                  Journal agents
+                </Link>
+              )}
               <button
                 type="button"
-                className="relative inline-flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-lg border border-white/30 bg-white/10 text-white hover:bg-white/20 transition-colors"
+                className="relative inline-flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
                 title="Notifications"
               >
                 <Bell className="h-4 w-4" />
-                {userRole === 'agency_accountant' && pendingCourierSessions.length > 0 && (
+                {userRole === 'agency_accountant' &&
+                  allowedTabs.includes('versements') &&
+                  pendingCourierSessions.length > 0 && (
                   <span className="absolute -top-1 -right-1 min-w-[1rem] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-4 text-center">
                     {pendingCourierSessions.length > 99 ? '99+' : pendingCourierSessions.length}
                   </span>
@@ -1242,15 +2013,18 @@ const AgenceComptabilitePage: React.FC = () => {
               </button>
 
               {accountant && (
-                <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-white/30 bg-white/10 text-white">
-                  <div className="h-7 w-7 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold">
+                <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-800">
+                  <div
+                    className="h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                    style={{ backgroundColor: theme?.primary }}
+                  >
                     {accountant.displayName?.charAt(0) || 'C'}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-xs font-medium truncate">
+                    <div className="text-xs font-medium truncate text-gray-900">
                       {(accountant.displayName || accountant.email || '—')}
                     </div>
-                    <div className="text-[11px] text-white/80 truncate">
+                    <div className="text-[11px] text-gray-500 truncate">
                       {accountantCode || '—'}
                     </div>
                   </div>
@@ -1263,7 +2037,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   await logout();
                   navigate('/login');
                 }}
-                className="inline-flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-sm rounded-lg border border-white/30 bg-white/10 text-white hover:bg-white/20 transition-colors"
+                className="inline-flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
                 title="Déconnexion"
               >
                 <LogOut className="h-4 w-4" />
@@ -1274,52 +2048,63 @@ const AgenceComptabilitePage: React.FC = () => {
         </div>
 
         {/* Barre de navigation module */}
-        <div className="border-b border-slate-200 bg-slate-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2">
-            <div className="flex gap-2 overflow-x-auto whitespace-nowrap pb-1">
-              <TabButton
-                active={tab==='controle'}
-                onClick={()=>setTab('controle')}
-                label="Contrôle"
-                icon={<Activity className="h-4 w-4" />}
-                theme={theme}
-              />
-              <TabButton
-                active={tab==='receptions'}
-                onClick={()=>setTab('receptions')}
-                label="Réceptions"
-                icon={<HandIcon className="h-4 w-4" />}
-                theme={theme}
-              />
-              <TabButton
-                active={tab==='rapports'}
-                onClick={()=>setTab('rapports')}
-                label="Rapports"
-                icon={<BarChart3 className="h-4 w-4" />}
-                theme={theme}
-              />
-              <TabButton
-                active={tab==='caisse'}
-                onClick={()=>setTab('caisse')}
-                label="Caisse"
-                icon={<Banknote className="h-4 w-4" />}
-                theme={theme}
-              />
-              <TabButton
-                active={tab==='reconciliation'}
-                onClick={()=>setTab('reconciliation')}
-                label="Réconciliation"
-                icon={<RefreshCw className="h-4 w-4" />}
-                theme={theme}
-              />
-              <TabButton
-                active={tab==='courrier'}
-                onClick={()=>setTab('courrier')}
-                label="Courrier"
-                icon={<Package className="h-4 w-4" />}
-                theme={theme}
-                badgeCount={userRole === 'agency_accountant' ? pendingCourierSessions.length : 0}
-              />
+        <div
+          className="border-b border-gray-200/60"
+          style={{ backgroundImage: 'var(--agency-gradient-subheader)' }}
+        >
+          <div className="max-w-7xl mx-auto min-w-0 px-4 sm:px-6 py-2">
+            <div className="flex min-w-0 gap-2 overflow-x-auto whitespace-nowrap pb-1 [-webkit-overflow-scrolling:touch]">
+              {allowedTabs.includes('ventes') && (
+                <TabButton
+                  active={tab === 'ventes'}
+                  onClick={() => setComptaTab('ventes')}
+                  label="Ventes"
+                  icon={<Ticket className="h-4 w-4" />}
+                  theme={theme}
+                  badgeCount={
+                    userRole === 'agency_accountant' && allowedTabs.includes('ventes')
+                      ? pendingCourierSessions.length
+                      : 0
+                  }
+                />
+              )}
+              {allowedTabs.includes('versements') && (
+                <TabButton
+                  active={tab === 'versements'}
+                  onClick={() => setComptaTab('versements')}
+                  label="Versements"
+                  icon={<HandIcon className="h-4 w-4" />}
+                  theme={theme}
+                  badgeCount={userRole === 'agency_accountant' ? receptionsPendingTotal : 0}
+                />
+              )}
+              {allowedTabs.includes('caisse') && (
+                <TabButton
+                  active={tab === 'caisse'}
+                  onClick={() => setComptaTab('caisse')}
+                  label="Caisse"
+                  icon={<Banknote className="h-4 w-4" />}
+                  theme={theme}
+                />
+              )}
+              {allowedTabs.includes('audit') && (
+                <TabButton
+                  active={tab === 'audit'}
+                  onClick={() => setComptaTab('audit')}
+                  label="Contrôle"
+                  icon={<Scale className="h-4 w-4" />}
+                  theme={theme}
+                />
+              )}
+              {allowedTabs.includes('corrections') && (
+                <TabButton
+                  active={tab === 'corrections'}
+                  onClick={() => setComptaTab('corrections')}
+                  label="Corrections"
+                  icon={<Shield className="h-4 w-4" />}
+                  theme={theme}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -1330,288 +2115,128 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Contenu des différents onglets
          ============================================================================ */}
       
-      <StandardLayoutWrapper>
+      <StandardLayoutWrapper className="min-w-0">
+        {userRole === 'agency_accountant' &&
+          allowedTabs.includes('versements') &&
+          receptionsPendingTotal > 0 &&
+          tab !== 'versements' && (
+            <div className="mb-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <Bell className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden />
+                <div className="min-w-0 text-sm text-amber-950">
+                  <div className="font-semibold">Versements à valider</div>
+                  <p className="mt-0.5 text-amber-900/90">
+                    {receptionsPendingTotal} session
+                    {receptionsPendingTotal > 1 ? 's' : ''} fermée
+                    {receptionsPendingTotal > 1 ? 's' : ''} en attente
+                    {receptionsBilletteriePendingCount > 0 && closedCourierSessions.length > 0
+                      ? ' (guichet et courrier)'
+                      : receptionsBilletteriePendingCount > 0
+                        ? ' (guichet)'
+                        : closedCourierSessions.length > 0
+                          ? ' (courrier)'
+                          : ''}
+                    . Ouvrez l’onglet <strong>Versements</strong>.
+                  </p>
+                </div>
+              </div>
+              <ActionButton
+                type="button"
+                className="w-full shrink-0 sm:w-auto"
+                onClick={() => setComptaTab('versements')}
+              >
+                Ouvrir Versements
+              </ActionButton>
+            </div>
+          )}
+
         {/* ============================================================================
-           ONGLET : CONTRÔLE DES POSTES
-           Description : Gestion des postes de vente en temps réel
+           ONGLET : VENTES — activité du jour, postes, rapports, courrier
            ============================================================================ */}
         
-        {tab === 'controle' && (
+        {tab === 'ventes' && (
           <div className="space-y-6">
-            {/* KPI Globaux — Total agence (aujourd'hui), en ligne + guichet, même source que poste de pilotage */}
-            <p className="text-xs text-gray-500">Total agence aujourd'hui (en ligne + guichet), même source que le poste de pilotage et le CEO.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-              <MetricCard
-                label="Billets vendus"
-                value={agencyStatsToday !== null ? agencyStatsToday.totalTickets.toString() : liveTotalsGlobal.tickets.toString()}
-                icon={Ticket}
-                valueColorVar={theme?.primary}
-              />
-              <MetricCard
-                label="Chiffre d'affaires"
-                value={agencyStatsToday !== null ? money(agencyStatsToday.totalRevenue) : money(liveTotalsGlobal.amount)}
-                icon={Wallet}
-                valueColorVar={theme?.primary}
-              />
-              <MetricCard
-                label="Réservations"
-                value={agencyStatsToday !== null ? agencyStatsToday.totalTickets.toString() : liveTotalsGlobal.reservations.toString()}
-                icon={Activity}
-                valueColorVar={theme?.primary}
-              />
+            <div className="w-full overflow-x-auto sm:overflow-x-visible pb-1 -mx-1 px-1 sm:mx-0 sm:px-0">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 lg:gap-6 min-w-0 w-full [&>*]:min-w-0">
+                <MetricCard
+                  label="Guichets en service"
+                  value={activeShifts.length.toString()}
+                  icon={Play}
+                  valueColorVar={theme?.primary}
+                  hint="Postes guichet ouverts maintenant"
+                />
+                <MetricCard
+                  label="Billets vendus (jour)"
+                  value={agencyStatsToday !== null ? agencyStatsToday.totalTickets.toString() : "—"}
+                  icon={Ticket}
+                  valueColorVar={theme?.primary}
+                  hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
+                />
+                <MetricCard
+                  label="Montant des ventes (jour)"
+                  value={agencyStatsToday !== null ? money(agencyStatsToday.totalRevenue) : "—"}
+                  icon={Wallet}
+                  valueColorVar={theme?.primary}
+                  hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
+                />
+                <MetricCard
+                  label="Ventes en ligne (jour)"
+                  value={agencyStatsToday !== null ? agencyStatsToday.onlineTickets.toString() : "—"}
+                  icon={Activity}
+                  valueColorVar={theme?.primary}
+                  hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
+                />
+              </div>
             </div>
-
-            {/* Stats rapides */}
-            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 sm:gap-4">
-              <MetricCard label="En attente" value={pendingShifts.length} icon={Clock4} valueColorVar="#4f46e5" />
-              <MetricCard label="En service" value={activeShifts.length} icon={Play} valueColorVar="#059669" />
-              <MetricCard label="En pause" value={pausedShifts.length} icon={Pause} valueColorVar="#d97706" />
-              <MetricCard label="Clôturés" value={closedShifts.length} icon={StopCircle} valueColorVar="#e11d48" />
-              <MetricCard label="Validé agence" value={validatedAgencyShifts.length} icon={CheckCircle2} valueColorVar="#0d9488" />
-              <MetricCard label="Validés" value={validatedShifts.length} icon={CheckCircle2} valueColorVar="#64748b" />
-            </div>
-
-            {/* Postes en attente */}
-            <SectionShifts
-              title="Postes en attente d'activation"
-              hint="Le guichetier est connecté mais ne peut pas vendre tant que vous n'activez pas."
-              icon={<Clock4 className="h-5 w-5" />}
-              list={pendingShifts}
-              usersCache={usersCache}
-              liveStats={{}}
-              theme={theme}
-              actions={(s) => (
-                <ActionButton onClick={() => activateShift(s.id)}>
-                  <Play className="h-4 w-4 mr-2" />
-                  Activer le poste
-                </ActionButton>
-              )}
-            />
 
             {/* Postes en service */}
             <SectionShifts
               title="Postes en service"
-              hint="Statistiques mises à jour en direct."
-              icon={<Play className="h-5 w-5" />}
+              icon={Play}
               list={activeShifts}
               usersCache={usersCache}
               liveStats={liveStats}
               theme={theme}
-              actions={(s) => (
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <ActionButton variant="secondary" onClick={() => pauseShift(s.id)}>
-                    <Pause className="h-4 w-4 mr-2" /> 
-                    Pause
-                  </ActionButton>
-                  <span className="text-xs text-gray-500 self-center">Clôture par le guichetier uniquement.</span>
-                </div>
-              )}
+              actions={() => null}
             />
 
-            {/* Postes en pause */}
-            <SectionShifts
-              title="Postes en pause"
-              hint="Peuvent être remis en service."
-              icon={<Pause className="h-5 w-5" />}
-              list={pausedShifts}
-              usersCache={usersCache}
-              liveStats={liveStats}
-              theme={theme}
-              actions={(s) => (
-                <div className="flex flex-col sm:flex-row gap-2">
+            {pendingShifts.length > 0 ? (
+              <SectionShifts
+                title="Postes en attente d'activation"
+                hint="Le vendeur billetterie est connecté mais ne peut pas vendre tant que vous n'activez pas."
+                icon={Clock4}
+                list={pendingShifts}
+                usersCache={usersCache}
+                liveStats={{}}
+                theme={theme}
+                actions={(s) => (
+                  <ActionButton onClick={() => activateShift(s.id)}>
+                    <Play className="h-4 w-4 mr-2" />
+                    Activer le poste
+                  </ActionButton>
+                )}
+              />
+            ) : null}
+
+            {pausedShifts.length > 0 ? (
+              <SectionShifts
+                title="Postes en pause"
+                hint="Peuvent être remis en service. Clôture par le vendeur uniquement."
+                icon={Pause}
+                list={pausedShifts}
+                usersCache={usersCache}
+                liveStats={liveStats}
+                theme={theme}
+                actions={(s) => (
                   <ActionButton onClick={() => continueShift(s.id)}>
                     <Play className="h-4 w-4 mr-2" />
                     Continuer
                   </ActionButton>
-                  <span className="text-xs text-gray-500 self-center">Clôture par le guichetier uniquement.</span>
-                </div>
-              )}
-            />
-          </div>
-        )}
+                )}
+              />
+            ) : null}
 
-        {/* ============================================================================
-           ONGLET : RÉCEPTIONS DE CAISSE
-           Description : Validation des remises d'espèces des postes clôturés
-           ============================================================================ */}
-        
-        {tab === 'receptions' && (
-          <div className="space-y-6">
-            <SectionCard title="Réceptions de caisse à valider" help="Validez la remise d'espèces des postes clôturés par les guichetiers.">
-            {(() => {
-              const toReceive = closedShifts.filter(s => s.status === 'closed');
-              
-              if (toReceive.length === 0) {
-                return (
-                  <UIEmptyState message="Aucune réception en attente — Toutes les remises de caisse ont été validées." />
-                );
-              }
-              
-              return (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                  {toReceive.map(s => {
-                    const payBy = s.payBy || {};
-                    const inputs = receptionInputs[s.id] || { cashReceived: '' };
-
-                    const agg = aggByShift[s.id];
-                    const reservationsAgg = agg?.reservations ?? s.totalReservations ?? 0;
-                    const ticketsAgg = agg?.tickets ?? s.totalTickets ?? 0;
-                    const amountAgg = agg?.amount ?? s.totalAmount ?? 0;
-                    const expectedCash = s.totalCash ?? agg?.cashExpected ?? (payBy['espèces'] ?? s.cashExpected ?? 0);
-                    const cashExpectedAgg = expectedCash;
-                    const mmExpectedAgg = agg?.mmExpected ?? (payBy['mobile_money'] ?? s.mmExpected ?? 0);
-                    const onlineAmountAgg = agg?.onlineAmount ?? 0;
-
-                    const cashReceived = Number((inputs.cashReceived || '').replace(/[^\d.]/g,''));
-                    const ecart = (Number.isFinite(cashReceived) ? cashReceived : 0) - (cashExpectedAgg || 0);
-                    const disableValidate = !Number.isFinite(cashReceived) || cashReceived < 0;
-                    const hasDifference = Number.isFinite(cashReceived) && ecart !== 0;
-
-                    const ui = usersCache[s.userId] || {};
-                    const name = ui.name || s.userName || s.userEmail || s.userId;
-                    const code = ui.code || s.userCode || '—';
-
-                    return (
-                      <div key={s.id} className="group relative">
-                        <div className="absolute inset-0 bg-gradient-to-br from-white to-gray-50 rounded-xl transform group-hover:scale-[1.02] transition-all duration-300"></div>
-                        <div className="relative rounded-xl border border-gray-200 bg-white/80 p-5 shadow-sm hover:shadow-md transition-all duration-300">
-                          {/* En-tête du poste */}
-                          <div className="flex items-start justify-between gap-3 mb-4">
-                            <div className="min-w-0">
-                              <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Guichetier</div>
-                              <div className="font-semibold text-gray-900 truncate">
-                                {name} 
-                                <span className="text-gray-500 text-sm ml-2">({code})</span>
-                              </div>
-                            </div>
-                            <div className="flex-shrink-0">
-                              <div className="px-3 py-1 rounded-full bg-gradient-to-r from-amber-50 to-amber-100 border border-amber-200">
-                                <div className="text-xs font-medium text-amber-800">À valider</div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Statistiques du poste */}
-                          <div className="grid grid-cols-2 gap-4 mb-4">
-                            <InfoCard label="Réservations" value={reservationsAgg.toString()} />
-                            <InfoCard label="Billets" value={ticketsAgg.toString()} />
-                            <InfoCard label="Montant total" value={money(amountAgg)} emphasis />
-                            <InfoCard label="Espèces attendu" value={money(cashExpectedAgg)} emphasis />
-                            <InfoCard label="Mobile Money" value={money(mmExpectedAgg)} />
-                            <InfoCard label="En ligne" value={money(onlineAmountAgg)} />
-                          </div>
-
-                          {/* Période */}
-                          <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50">
-                            <div className="text-xs text-gray-600 mb-1">Période de vente</div>
-                            <div className="text-sm font-medium text-gray-900">
-                              {s.startTime ? fmtDT(new Date(s.startTime.toDate?.() ?? s.startTime)) : '—'} 
-                              <span className="mx-2 text-gray-400">→</span>
-                              {s.endTime ? fmtDT(new Date(s.endTime.toDate?.() ?? s.endTime)) : '—'}
-                            </div>
-                          </div>
-
-                          {/* Saisie de réception */}
-                          <div className="space-y-3">
-                            <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-2">
-                                Espèces reçues <span className="text-red-500">*</span>
-                              </label>
-                              <div className="relative">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  inputMode="numeric"
-                                  className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent text-lg font-medium"
-                                  style={{ outlineColor: theme.primary }}
-                                  placeholder="0"
-                                  value={inputs.cashReceived}
-                                  onChange={e => setReceptionInput(s.id, e.target.value)}
-                                />
-                                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">
-                                  {currencySymbol}
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className={`p-3 rounded-xl border ${hasDifference ? 'ring-2 ring-red-400' : ''}`} style={{ 
-                              borderColor: ecart === 0 ? '#d1fae5' : ecart > 0 ? '#bbf7d0' : '#fecaca',
-                              backgroundColor: ecart === 0 ? '#f0fdf4' : ecart > 0 ? '#dcfce7' : '#fef2f2'
-                            }}>
-                              <div className="text-xs font-medium text-gray-700 mb-1">Écart (reçu - attendu)</div>
-                              <div className={`text-lg font-bold ${ecart === 0 ? 'text-emerald-700' : ecart > 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                {Number.isFinite(ecart) ? money(ecart) : '—'}
-                              </div>
-                              {hasDifference && (
-                                <div className="mt-2 text-xs font-medium text-red-700">Écart à justifier avant validation.</div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Actions */}
-                          <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                            <ActionButton 
-                              variant="secondary"
-                              onClick={() => { setTab('rapports'); loadReportForShift(s.id); }}
-                              className="w-full sm:w-auto"
-                            >
-                              <FileText className="h-4 w-4 mr-2" /> 
-                              Voir le détail
-                            </ActionButton>
-                            <ActionButton 
-                              disabled={disableValidate || !!savingShiftIds[s.id]} 
-                              onClick={() => validateReception(s)} 
-                              className="w-full sm:w-auto"
-                            >
-                              <CheckCircle2 className="h-4 w-4 mr-2" /> 
-                              {savingShiftIds[s.id] ? 'Validation...' : 'Valider la réception'}
-                            </ActionButton>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
-            </SectionCard>
-
-            {/* Postes validés agence (visibles pour le chef, en attente validation compagnie) */}
-            {validatedAgencyShifts.length > 0 && (
-              <SectionCard
-                title="Validé agence (en attente validation chef)"
-                help="Sessions déjà validées par le comptable agence ; en attente de validation par le chef comptable."
-              >
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {validatedAgencyShifts.map((s) => {
-                    const ui = usersCache[s.userId] || {};
-                    const name = ui.name || s.userName || s.userEmail || s.userId;
-                    const code = ui.code || s.userCode || '—';
-                    return (
-                      <div key={s.id} className="rounded-xl border border-teal-200 bg-teal-50/30 p-4">
-                        <div className="font-semibold text-gray-900">{name} <span className="text-gray-500 text-sm">({code})</span></div>
-                        <div className="text-sm text-gray-600 mt-1">
-                          {s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} → {s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleString('fr-FR') : '—'}
-                        </div>
-                        <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(s.totalAmount ?? s.totalRevenue ?? 0)}</div>
-                        <div className="mt-2 text-xs text-teal-700">Validé agence · En attente chef comptable</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </SectionCard>
-            )}
-          </div>
-        )}
-
-        {/* ============================================================================
-           ONGLET : RAPPORTS
-           Description : Consultation détaillée des ventes par poste (tous canaux)
-           ============================================================================ */}
-        
-        {tab === 'rapports' && (
-          <div className="space-y-6">
-            {/* Sélecteur de poste et filtres */}
+            {/* —— Rapports détaillés (ex-onglet Rapports) —— */}
             <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-3">
                 <div className="flex items-center gap-3">
@@ -1619,8 +2244,11 @@ const AgenceComptabilitePage: React.FC = () => {
                     <BarChart3 className="h-5 w-5 text-blue-600" />
                   </div>
                   <div>
-                    <div className="text-lg font-bold text-gray-900">Rapports détaillés par poste</div>
-                    <div className="text-sm text-gray-600">Analyse complète des ventes (guichet + en ligne)</div>
+                    <div className="text-lg font-bold text-gray-900">Détail par poste guichet</div>
+                    <div className="text-sm text-gray-600">
+                      Ventes du poste choisi + les réservations <strong>en ligne</strong> de l’agence sur la même période
+                      (ouverture du poste → clôture, ou maintenant si le poste est encore ouvert).
+                    </div>
                   </div>
                 </div>
                 <div className="w-full sm:w-96">
@@ -1634,7 +2262,7 @@ const AgenceComptabilitePage: React.FC = () => {
                     {[...activeShifts, ...pausedShifts, ...closedShifts, ...validatedAgencyShifts, ...validatedShifts].map(s => {
                       const ui   = usersCache[s.userId] || {};
                       const name = ui.name || s.userName || s.userEmail || s.userId;
-                      const code = ui.code || s.userCode || '—';
+                      const code = ui.code || s.userCode || 'GUEST';
                       const start = s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime) : null;
                       const end   = s.endTime   ? new Date(s.endTime.toDate?.()   ?? s.endTime)   : null;
 
@@ -1687,7 +2315,7 @@ const AgenceComptabilitePage: React.FC = () => {
                       className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${reportFilter === 'guichet' ? 'bg-emerald-50 text-emerald-700' : 'text-gray-600 hover:bg-gray-100'}`}
                       onClick={() => setReportFilter('guichet')}
                     >
-                      Guichet
+                      Billetterie
                     </button>
                     <button
                       className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${reportFilter === 'en_ligne' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}
@@ -1700,16 +2328,16 @@ const AgenceComptabilitePage: React.FC = () => {
               </div>
             </div>
 
-            {/* KPI du rapport */}
+            {/* KPI du rapport (opérationnel) */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-              <MetricCard label="Billets vendus" value={totals.billets.toString()} icon={Ticket} valueColorVar={theme?.primary} />
-              <MetricCard label="Chiffre d'affaires" value={money(totals.montant)} icon={Wallet} valueColorVar={theme?.primary} />
-              <MetricCard label="Réservations" value={tickets.length.toString()} icon={Activity} valueColorVar={theme?.primary} />
+              <MetricCard label="Billets vendus (terrain)" value={totals.billets.toString()} icon={Ticket} valueColorVar={theme?.primary} hint={AGENCY_KPI_TIME.SESSION_POSTE} />
+              <MetricCard label="Montant total des ventes" value={money(totals.montant)} icon={Wallet} valueColorVar={theme?.primary} hint={AGENCY_KPI_TIME.SESSION_POSTE} />
+              <MetricCard label="Lignes réservations" value={tickets.length.toString()} icon={Activity} valueColorVar={theme?.primary} hint={AGENCY_KPI_TIME.SESSION_POSTE} />
             </div>
 
             {/* Tableau détaillé */}
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between mb-5">
+              <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-lg font-bold text-gray-900">Détail des réservations</div>
                 <div className="text-sm text-gray-600">
                   {tickets.length} ligne{tickets.length > 1 ? 's' : ''}
@@ -1726,9 +2354,9 @@ const AgenceComptabilitePage: React.FC = () => {
               ) : !tickets.length ? (
                 <UIEmptyState message="Aucune donnée disponible — Sélectionnez un poste pour afficher son rapport détaillé" />
               ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-200">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                <div className="min-w-0 overflow-hidden rounded-xl border border-gray-200">
+                  <div className="overflow-x-auto [-webkit-overflow-scrolling:touch]">
+                    <table className="w-full min-w-[44rem] text-sm">
                       <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
                         <tr>
                           <Th>Date/Heure</Th>
@@ -1768,7 +2396,7 @@ const AgenceComptabilitePage: React.FC = () => {
                                 <Td>
                                   <div className="flex flex-col gap-1">
                                     <span className={`text-xs px-2 py-1 rounded-full ${canalColor} font-medium`}>
-                                      {t.canal === 'en_ligne' ? 'En ligne' : 'Guichet'}
+                                      {t.canal === 'en_ligne' ? 'En ligne' : 'Billetterie'}
                                     </span>
                                     <span className={`text-xs px-2 py-0.5 rounded-full ${encaissementColor}`}>
                                       {encaissementText}
@@ -1806,6 +2434,1058 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {/* —— Courrier (ex-onglet Courrier) —— */}
+            <SectionCard title="Paiements courrier" icon={Package}>
+            <div className="space-y-6">
+            <SectionCard
+              title="Sessions actives"
+              icon={Play}
+              right={
+                <StatusBadge status="neutral">
+                  {activeCourierSessions.length} session{activeCourierSessions.length > 1 ? 's' : ''}
+                </StatusBadge>
+              }
+            >
+              {activeCourierSessions.length === 0 ? (
+                <UIEmptyState message="Aucune session courrier en cours." />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {activeCourierSessions.map((s) => (
+                    <CourierComptaSessionCard
+                      key={s.id}
+                      session={s}
+                      theme={theme}
+                      usersCache={usersCache}
+                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0 }}
+                      ledgerAmount={courierLedgerBySessionId[s.id]}
+                      statusLabel="En service"
+                      startField={s.openedAt ?? s.createdAt}
+                      endField={null}
+                    />
+                  ))}
+                </div>
+              )}
+            </SectionCard>
+
+            {pendingCourierSessions.length > 0 ? (
+              <SectionCard
+                title="Sessions en attente d'activation"
+                icon={Clock4}
+                description="L'agent a créé une session ; activez-la pour qu'il puisse enregistrer des envois."
+                right={
+                  <StatusBadge status="neutral">
+                    {pendingCourierSessions.length} session{pendingCourierSessions.length > 1 ? 's' : ''}
+                  </StatusBadge>
+                }
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {pendingCourierSessions.map((s) => (
+                    <CourierComptaSessionCard
+                      key={s.id}
+                      session={s}
+                      theme={theme}
+                      usersCache={usersCache}
+                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0 }}
+                      ledgerAmount={courierLedgerBySessionId[s.id] ?? 0}
+                      statusLabel="En attente"
+                      startField={s.createdAt}
+                      endField={null}
+                      footer={
+                        <ActionButton onClick={() => activateCourierSessionAction(s.id)}>
+                          <Play className="h-4 w-4 mr-2" />
+                          Activer le poste
+                        </ActionButton>
+                      }
+                    />
+                  ))}
+                </div>
+              </SectionCard>
+            ) : null}
+
+            </div>
+            </SectionCard>
+
+            {/* Rapports détaillés par session courrier */}
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-violet-50/40">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-violet-50 to-purple-100 flex items-center justify-center">
+                    <Package className="h-5 w-5 text-violet-700" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-gray-900">Rapports détaillés par session courrier</div>
+                    <div className="text-sm text-gray-600">
+                      Liste des colis enregistrés sur la session sélectionnée (même base que les paiements courrier).
+                    </div>
+                  </div>
+                </div>
+                <div className="w-full sm:w-[28rem]">
+                  <select
+                    className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm"
+                    style={{ outlineColor: theme.primary }}
+                    value={selectedCourierSessionForReport}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setCourierReportPaymentFilter('all');
+                      void loadCourierReportForSession(v);
+                    }}
+                  >
+                    <option value="">— Sélectionnez une session courrier —</option>
+                    {courierSessionsForReportOptions.map(({ s, statutFr }) => {
+                      const ui = usersCache[s.agentId] || {};
+                      const name = (ui.name && ui.name.trim()) || s.agentId;
+                      const code = String(ui.code || s.agentCode || '').trim() || '—';
+                      const opened = auditValidatedAtToDate(s.openedAt ?? s.createdAt);
+                      const closed = auditValidatedAtToDate(s.closedAt);
+                      const periode = `${opened ? opened.toLocaleDateString('fr-FR') : '?'} → ${closed ? closed.toLocaleDateString('fr-FR') : '—'}`;
+                      return (
+                        <option key={s.id} value={s.id}>
+                          {`${name} (${code}) • ${periode} • ${statutFr}`}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
+
+              {selectedCourierSessionForReport ? (
+                <>
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-4 mb-4">
+                    {(() => {
+                      const cs = findCourierSession(selectedCourierSessionForReport);
+                      const o = cs ? auditValidatedAtToDate(cs.openedAt ?? cs.createdAt) : null;
+                      const c = cs ? auditValidatedAtToDate(cs.closedAt) : null;
+                      const ledgerVal = courierLedgerBySessionId[selectedCourierSessionForReport];
+                      return (
+                        <div className="text-sm text-gray-600 space-y-1">
+                          <div>
+                            Période session : {fmtDT(o)} → {c ? fmtDT(c) : '—'}
+                          </div>
+                          {ledgerVal !== undefined && (
+                            <div className="text-violet-900 font-medium">
+                              Montant attendu (ventes) : {money(Number(ledgerVal) || 0)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="text-sm font-medium text-gray-700">Paiement colis :</div>
+                      <div className="flex rounded-xl border border-gray-300 p-1">
+                        <button
+                          type="button"
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${courierReportPaymentFilter === 'all' ? 'bg-violet-50 text-violet-800' : 'text-gray-600 hover:bg-gray-100'}`}
+                          onClick={() => setCourierReportPaymentFilter('all')}
+                        >
+                          Tous
+                        </button>
+                        <button
+                          type="button"
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${courierReportPaymentFilter === 'paid' ? 'bg-emerald-50 text-emerald-800' : 'text-gray-600 hover:bg-gray-100'}`}
+                          onClick={() => setCourierReportPaymentFilter('paid')}
+                        >
+                          Payés
+                        </button>
+                        <button
+                          type="button"
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${courierReportPaymentFilter === 'unpaid' ? 'bg-amber-50 text-amber-900' : 'text-gray-600 hover:bg-gray-100'}`}
+                          onClick={() => setCourierReportPaymentFilter('unpaid')}
+                        >
+                          Non payés
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6">
+                    <MetricCard
+                      label="Colis (lignes)"
+                      value={courierReportTotals.colis.toString()}
+                      icon={Package}
+                      valueColorVar={theme?.primary}
+                      hint={AGENCY_KPI_TIME.SESSION_POSTE}
+                    />
+                    <MetricCard
+                      label="Frais transport (somme)"
+                      value={money(courierReportTotals.fraisTransport)}
+                      icon={Wallet}
+                      valueColorVar={theme?.primary}
+                      hint={AGENCY_KPI_TIME.SESSION_POSTE}
+                    />
+                    <MetricCard
+                      label="Colis en base (session)"
+                      value={courierReportRows.length.toString()}
+                      icon={Activity}
+                      valueColorVar={theme?.primary}
+                      hint={AGENCY_KPI_TIME.SESSION_POSTE}
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                    <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-lg font-bold text-gray-900">Détail des colis</div>
+                      <div className="text-sm text-gray-600">
+                        {courierReportFilteredRows.length} ligne{courierReportFilteredRows.length > 1 ? 's' : ''}
+                        {courierReportPaymentFilter !== 'all' ? ' (filtré)' : ''}
+                      </div>
+                    </div>
+                    {loadingCourierReport ? (
+                      <div className="flex items-center justify-center py-12">
+                        <div className="text-center">
+                          <div className="h-12 w-12 border-4 border-gray-200 border-t-violet-500 rounded-full animate-spin mx-auto mb-3" />
+                          <div className="text-gray-600">Chargement des colis…</div>
+                        </div>
+                      </div>
+                    ) : courierReportFilteredRows.length === 0 ? (
+                      <UIEmptyState message="Aucun colis pour cette session (ou aucun ne correspond au filtre)." />
+                    ) : (
+                      <div className="min-w-0 overflow-x-auto rounded-xl border border-gray-200 [-webkit-overflow-scrolling:touch]">
+                        <table className="min-w-[48rem] divide-y divide-gray-200 text-sm">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <Th>Date</Th>
+                              <Th>N° colis</Th>
+                              <Th>Expéditeur</Th>
+                              <Th>Destinataire</Th>
+                              <Th>Nature</Th>
+                              <Th align="right">Frais</Th>
+                              <Th>Paiement</Th>
+                              <Th>Statut</Th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100 bg-white">
+                            {courierReportFilteredRows.map((row) => {
+                              const created = auditValidatedAtToDate(row.createdAt);
+                              return (
+                                <tr key={row.id} className="hover:bg-gray-50/80">
+                                  <Td>{created ? fmtDT(created) : '—'}</Td>
+                                  <Td className="font-mono text-xs">{row.shipmentNumber}</Td>
+                                  <Td>
+                                    <div className="font-medium">{row.senderName}</div>
+                                    {row.senderPhone ? (
+                                      <div className="text-xs text-gray-500">{row.senderPhone}</div>
+                                    ) : null}
+                                  </Td>
+                                  <Td>
+                                    <div className="font-medium">{row.receiverName}</div>
+                                    {row.receiverPhone ? (
+                                      <div className="text-xs text-gray-500">{row.receiverPhone}</div>
+                                    ) : null}
+                                  </Td>
+                                  <Td>{row.nature}</Td>
+                                  <Td align="right" className="font-semibold">
+                                    {money(row.transportFee)}
+                                  </Td>
+                                  <Td>
+                                    <span
+                                      className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                        row.paymentStatus === 'UNPAID'
+                                          ? 'bg-amber-50 text-amber-900'
+                                          : 'bg-emerald-50 text-emerald-800'
+                                      }`}
+                                    >
+                                      {paymentStatusLabelFr(row.paymentStatus)}
+                                    </span>
+                                  </Td>
+                                  <Td className="text-xs text-gray-700">{row.currentStatus}</Td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-2 text-sm text-gray-500">
+                  {courierSessionsForReportOptions.length === 0
+                    ? 'Aucune session courrier pour cette agence.'
+                    : 'Choisissez une session pour afficher les colis liés.'}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* ============================================================================
+           ONGLET : VERSEMENTS — valider les sessions fermées (guichet + courrier)
+           ============================================================================ */}
+        
+        {tab === 'versements' && (
+          <div className="space-y-6">
+            {receptionsPendingTotal > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-950">
+                <span className="font-semibold">À traiter : </span>
+                {receptionsBilletteriePendingCount > 0 ? (
+                  <span>
+                    {receptionsBilletteriePendingCount} guichet
+                    {receptionsBilletteriePendingCount > 1 ? 's' : ''} à valider
+                  </span>
+                ) : null}
+                {receptionsBilletteriePendingCount > 0 && closedCourierSessions.length > 0 ? (
+                  <span className="text-amber-800/80"> · </span>
+                ) : null}
+                {closedCourierSessions.length > 0 ? (
+                  <span>
+                    {closedCourierSessions.length} session courrier clôturée
+                    {closedCourierSessions.length > 1 ? 's' : ''}
+                  </span>
+                ) : null}
+              </div>
+            )}
+
+            {(() => {
+              const toReceive = closedShifts.filter((s) => s.status === 'closed');
+              const hasBilletterieReception = toReceive.length > 0;
+              const hasCourrierReception = closedCourierSessions.length > 0;
+
+              return (
+                <>
+                  {!hasBilletterieReception && !hasCourrierReception ? (
+                    <SectionCard title="Versements à valider" icon={HandIcon}>
+                      <UIEmptyState message="Rien à valider pour le moment — guichet et courrier sont à jour." />
+                    </SectionCard>
+                  ) : null}
+
+                  {hasBilletterieReception ? (
+            <SectionCard title="Guichet — sessions fermées" help="Comparez le montant attendu (ventes) et le montant reçu, puis validez le versement.">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                  {toReceive.map(s => {
+                    const payBy = s.payBy || {};
+                    const inputs = receptionInputs[s.id] || { cashReceived: '' };
+
+                    const agg = aggByShift[s.id];
+                    const reservationsAgg = agg?.reservations ?? s.totalReservations ?? 0;
+                    const ticketsAgg = agg?.tickets ?? s.totalTickets ?? 0;
+                    const amountAgg = agg?.amount ?? s.totalAmount ?? 0;
+                    const expectedCash = s.totalCash ?? agg?.cashExpected ?? (payBy['espèces'] ?? s.cashExpected ?? 0);
+                    const cashExpectedAgg = expectedCash;
+
+                    const rawCashIn = String(inputs.cashReceived ?? '').trim();
+                    const cashReceived =
+                      rawCashIn === ''
+                        ? NaN
+                        : Number(rawCashIn.replace(/[^\d.,]/g, '').replace(',', '.'));
+                    const ecart = (Number.isFinite(cashReceived) ? cashReceived : 0) - (cashExpectedAgg || 0);
+                    const disableValidate =
+                      rawCashIn === '' || !Number.isFinite(cashReceived) || cashReceived < 0;
+                    const hasDifference = Number.isFinite(cashReceived) && ecart !== 0;
+
+                    const ui = usersCache[s.userId] || {};
+                    const name = ui.name || s.userName || s.userEmail || s.userId;
+                    const code = ui.code || s.userCode || 'GUEST';
+
+                    return (
+                      <div key={s.id} className="group relative">
+                        <div className="absolute inset-0 bg-gradient-to-br from-white to-gray-50 rounded-xl transform group-hover:scale-[1.02] transition-all duration-300"></div>
+                        <div className="relative rounded-xl border border-gray-200 bg-white/80 p-5 shadow-sm hover:shadow-md transition-all duration-300">
+                          {/* En-tête du poste */}
+                          <div className="flex items-start justify-between gap-3 mb-4">
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Vendeur (billetterie)</div>
+                              <div className="font-semibold text-gray-900 truncate">
+                                {name} 
+                                <span className="text-gray-500 text-sm ml-2">({code})</span>
+                              </div>
+                            </div>
+                            <div className="flex-shrink-0">
+                              <div className="px-3 py-1 rounded-full bg-gradient-to-r from-amber-50 to-amber-100 border border-amber-200">
+                                <div className="text-xs font-medium text-amber-800">À valider</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Statistiques du poste */}
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                            <InfoCard label="Réservations" value={reservationsAgg.toString()} />
+                            <InfoCard label="Billets" value={ticketsAgg.toString()} />
+                            <InfoCard label="Total ventes (poste)" value={money(amountAgg)} emphasis />
+                            <InfoCard label="Montant attendu (ventes)" value={money(cashExpectedAgg)} emphasis />
+                          </div>
+
+                          {/* Période */}
+                          <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50">
+                            <div className="text-xs text-gray-600 mb-1">Période de vente</div>
+                            <div className="text-sm font-medium text-gray-900">
+                              {s.startTime ? fmtDT(new Date(s.startTime.toDate?.() ?? s.startTime)) : '—'} 
+                              <span className="mx-2 text-gray-400">→</span>
+                              {s.endTime ? fmtDT(new Date(s.endTime.toDate?.() ?? s.endTime)) : '—'}
+                            </div>
+                          </div>
+
+                          {/* Saisie de réception */}
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-2">
+                                Montant reçu <span className="text-red-500">*</span>
+                              </label>
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  inputMode="numeric"
+                                  className="w-full border border-gray-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:ring-2 focus:border-transparent text-lg font-medium"
+                                  style={{ outlineColor: theme.primary }}
+                                  placeholder="0"
+                                  value={inputs.cashReceived}
+                                  onChange={e => setReceptionInput(s.id, e.target.value)}
+                                />
+                                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">
+                                  {currencySymbol}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className={`p-3 rounded-xl border ${hasDifference ? 'ring-2 ring-red-400' : ''}`} style={{ 
+                              borderColor: ecart === 0 ? '#d1fae5' : ecart > 0 ? '#bbf7d0' : '#fecaca',
+                              backgroundColor: ecart === 0 ? '#f0fdf4' : ecart > 0 ? '#dcfce7' : '#fef2f2'
+                            }}>
+                              <div className="text-xs font-medium text-gray-700 mb-1">Écart</div>
+                              <div className={`text-lg font-bold ${ecart === 0 ? 'text-emerald-700' : ecart > 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                {Number.isFinite(ecart) ? money(ecart) : '—'}
+                              </div>
+                              {hasDifference && (
+                                <div className="mt-2 text-xs font-medium text-red-700">Écart à justifier avant validation.</div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                            {allowedTabs.includes('ventes') && (
+                            <ActionButton 
+                              variant="secondary"
+                              onClick={() => { setComptaTab('ventes'); loadReportForShift(s.id); }}
+                              className="w-full sm:w-auto"
+                            >
+                              <FileText className="h-4 w-4 mr-2" /> 
+                              Voir le détail
+                            </ActionButton>
+                            )}
+                            <ActionButton 
+                              disabled={disableValidate || !!savingShiftIds[s.id]} 
+                              onClick={() => validateReception(s)} 
+                              className="w-full sm:w-auto"
+                            >
+                              <CheckCircle2 className="h-4 w-4 mr-2" /> 
+                              {savingShiftIds[s.id] ? 'Validation...' : 'Valider le versement'}
+                            </ActionButton>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+            </SectionCard>
+                  ) : null}
+
+                  {hasCourrierReception ? (
+            <SectionCard
+              title="Courrier — sessions fermées"
+              icon={StopCircle}
+              description="Montant attendu (ventes) d’après les colis payés. Saisissez le montant compté, puis validez."
+              right={
+                <StatusBadge status="neutral">
+                  {closedCourierSessions.length} session{closedCourierSessions.length > 1 ? 's' : ''}
+                </StatusBadge>
+              }
+            >
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {closedCourierSessions.map((s) => {
+                    const input = receptionInputsCourier[s.id] || { countedAmount: '' };
+                    const counted = Number(String(input.countedAmount).replace(/[^\d.,]/g, '').replace(',', '.'));
+                    const ledger = courierLedgerBySessionId[s.id];
+                    const ledgerNum = Number(ledger);
+                    const ecart = Number.isFinite(counted) && Number.isFinite(ledgerNum) ? counted - ledgerNum : NaN;
+                    return (
+                      <CourierComptaSessionCard
+                        key={s.id}
+                        session={s}
+                        theme={theme}
+                        usersCache={usersCache}
+                        stats={courierSessionStats[s.id] ?? { total: 0, paid: 0 }}
+                        ledgerAmount={courierLedgerBySessionId[s.id]}
+                        statusLabel="Clôturé"
+                        startField={s.openedAt ?? s.createdAt}
+                        endField={s.closedAt}
+                        afterAmountBlock={
+                          <div className="space-y-3 mb-4">
+                            <InfoCard
+                              label="Écart (compté − montant attendu)"
+                              value={Number.isFinite(ecart) ? money(ecart) : '—'}
+                            />
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-2">Montant compté</label>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                                placeholder="0"
+                                value={input.countedAmount}
+                                onChange={(e) => setReceptionInputCourier(s.id, e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        }
+                        footer={
+                          <ActionButton
+                            disabled={!Number.isFinite(counted) || counted < 0 || !!savingCourierSessionIds[s.id]}
+                            onClick={() => validateCourierSessionAction(s)}
+                          >
+                            <CheckCircle2 className="h-4 w-4 mr-2" />
+                            {savingCourierSessionIds[s.id] ? 'Validation...' : 'Valider le versement'}
+                          </ActionButton>
+                        }
+                      />
+                    );
+                  })}
+                </div>
+            </SectionCard>
+                  ) : null}
+                </>
+              );
+            })()}
+
+            {/* Postes validés agence (visibles pour le chef d'agence, en attente de son contrôle final) */}
+            {(validatedAgencyShifts.length > 0 || courierValidatedAgencySessions.length > 0) && (
+              <SectionCard
+                title="Validé agence (en attente validation chef)"
+                help="Sessions déjà validées par le comptable agence ; en attente de validation par le chef d'agence."
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {validatedAgencyShifts.map((s) => {
+                    const ui = usersCache[s.userId] || {};
+                    const name = ui.name || s.userName || s.userEmail || s.userId;
+                    const code = ui.code || s.userCode || 'GUEST';
+                    return (
+                      <div key={s.id} className="rounded-xl border border-teal-200 bg-teal-50/30 p-4">
+                        <div className="font-semibold text-gray-900">{name} <span className="text-gray-500 text-sm">({code})</span></div>
+                        <div className="text-sm text-gray-600 mt-1">
+                          {s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} → {s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleString('fr-FR') : '—'}
+                        </div>
+                        <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(s.totalAmount ?? s.totalRevenue ?? 0)}</div>
+                        <div className="mt-2 text-xs text-teal-700">Billetterie · Validé agence · En attente chef d'agence</div>
+                      </div>
+                    );
+                  })}
+                  {courierValidatedAgencySessions.map((s) => {
+                    const ui = usersCache[s.agentId] || {};
+                    const name = ui.name || s.agentId;
+                    const code = ui.code || s.agentCode || '—';
+                    return (
+                      <div key={`courier-va-${s.id}`} className="rounded-xl border border-violet-200 bg-violet-50/30 p-4">
+                        <div className="font-semibold text-gray-900">Courrier · {name} <span className="text-gray-500 text-sm">({code})</span></div>
+                        <div className="text-sm text-gray-600 mt-1">
+                          {s.openedAt ? new Date((s.openedAt as { toDate?: () => Date }).toDate?.() ?? s.openedAt as Date).toLocaleString('fr-FR') : '—'}
+                          {' → '}
+                          {s.closedAt ? new Date((s.closedAt as { toDate?: () => Date }).toDate?.() ?? s.closedAt as Date).toLocaleString('fr-FR') : '—'}
+                        </div>
+                        <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(Number(s.validatedAmount ?? 0))}</div>
+                        <div className="mt-2 text-xs text-violet-800">Courrier · Validé agence · En attente chef d'agence</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </SectionCard>
+            )}
+          </div>
+        )}
+
+        {/* ============================================================================
+           ONGLET : CONTRÔLE — caisse réelle vs solde attendu
+           ============================================================================ */}
+        {tab === 'audit' && (
+          <div className="space-y-6">
+            <div className="text-sm text-gray-700">
+              Commencez par vérifier l’écart, puis validez la caisse.
+            </div>
+            {/* ============================================================================
+               SECTION 1 : RÉSUMÉ AUTOMATIQUE (ventes vs caisse)
+               ============================================================================ */}
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
+                    <RefreshCw className="h-6 w-6 text-amber-600" />
+                  </div>
+                  <div>
+                    <div className="text-xl font-bold text-gray-900">Résumé ventes et caisse</div>
+                    <div className="text-sm text-gray-600">
+                      Vérifiez que l'argent en caisse correspond aux ventes avant de valider.
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-medium text-gray-700">Date :</div>
+                  <input
+                    type="date"
+                    className="border border-gray-300 rounded-xl px-4 py-2.5 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm"
+                    style={{ outlineColor: theme.primary }}
+                    value={reconciliationDate}
+                    onChange={(e) => setReconciliationDate(e.target.value)}
+                  />
+                  <ActionButton variant="secondary" onClick={loadReconciliation} disabled={loadingReconciliation}>
+                    {loadingReconciliation ? 'Chargement...' : 'Actualiser'}
+                  </ActionButton>
+                </div>
+              </div>
+
+              {loadingReconciliation ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <div className="h-12 w-12 border-4 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-3"></div>
+                    <div className="text-gray-600">Chargement…</div>
+                  </div>
+                </div>
+              ) : !reconciliationLoaded ? (
+                <UIEmptyState message="Choisissez une date pour afficher la comparaison." />
+              ) : (
+                <>
+                  {/* SECTION 1 — RÉSULTAT */}
+                  <div className="w-full">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                      <div>
+                        <div className="text-xs sm:text-sm font-semibold text-gray-500 uppercase tracking-wider">
+                          Écart de caisse
+                        </div>
+                        <div className="mt-1 text-lg font-bold text-gray-900">SECTION 1 — RÉSULTAT</div>
+                      </div>
+                      <div
+                        className={`text-2xl sm:text-3xl font-bold leading-tight ${
+                          reconciliationData.ecart === 0 ? 'text-emerald-700' : 'text-rose-700'
+                        }`}
+                      >
+                        {money(reconciliationData.ecart)}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                        <div className="text-xs text-gray-500 uppercase tracking-wide">Total ventes</div>
+                        <div className="text-lg font-bold text-gray-900">
+                          {money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                        <div className="text-xs text-gray-500 uppercase tracking-wide">Total en caisse</div>
+                        <div className="text-lg font-bold text-gray-900">{money(reconciliationData.encaissementsTotal)}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tableau détaillé */}
+                  <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                    <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="text-lg font-bold text-gray-900">SECTION 2 — DÉTAILS</div>
+                        <div className="text-sm text-gray-600">Ventes vs caisse</div>
+                      </div>
+                      <ActionButton
+                        type="button"
+                        variant="secondary"
+                        className="w-full shrink-0 sm:w-auto"
+                        onClick={() => setShowReconciliationDetails((v) => !v)}
+                      >
+                        {showReconciliationDetails ? 'Masquer les détails' : 'Voir les détails'}
+                      </ActionButton>
+                    </div>
+                    <div
+                      className={cn(
+                        'min-w-0 overflow-hidden rounded-xl border border-gray-200',
+                        !showReconciliationDetails && 'hidden'
+                      )}
+                    >
+                      <div className="overflow-x-auto [-webkit-overflow-scrolling:touch]">
+                      <table className="w-full min-w-[36rem] text-sm">
+                        <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
+                          <tr>
+                            <Th>Catégorie</Th>
+                            <Th align="right">Réservations</Th>
+                            <Th align="right">Billets</Th>
+                            <Th align="right">Montant</Th>
+                            <Th align="right">Commentaire</Th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {/* VENTES */}
+                          <tr className="bg-gradient-to-r from-blue-50/30 to-indigo-50/30">
+                            <Td colSpan={5}>
+                              <div className="text-sm font-bold text-blue-700 uppercase tracking-wider py-2">
+                                VENTES DE L'AGENCE
+                              </div>
+                            </Td>
+                          </tr>
+
+                          {/* Billetterie */}
+                          <tr className="hover:bg-gray-50/50">
+                            <Td>
+                              <div className="flex items-center gap-2">
+                                <div className="h-6 w-6 rounded-md bg-emerald-100 flex items-center justify-center">
+                                  <Wallet className="h-3 w-3 text-emerald-600" />
+                                </div>
+                                <span className="font-medium">Ventes billetterie</span>
+                              </div>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium">{reconciliationData.ventesGuichet.reservations}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium">{reconciliationData.ventesGuichet.tickets}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-bold text-gray-900">{money(reconciliationData.ventesGuichet.montant)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
+                                À encaisser en caisse
+                              </span>
+                            </Td>
+                          </tr>
+
+                          {/* En ligne */}
+                          <tr className="hover:bg-gray-50/50">
+                            <Td>
+                              <div className="flex items-center gap-2">
+                                <div className="h-6 w-6 rounded-md bg-indigo-100 flex items-center justify-center">
+                                  <CreditCard className="h-3 w-3 text-indigo-600" />
+                                </div>
+                                <span className="font-medium">Ventes en ligne</span>
+                              </div>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium">{reconciliationData.ventesEnLigne.reservations}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium">{reconciliationData.ventesEnLigne.tickets}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-bold text-gray-900">{money(reconciliationData.ventesEnLigne.montant)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-indigo-100 text-indigo-700">
+                                Encaissé en ligne
+                              </span>
+                            </Td>
+                          </tr>
+
+                          {/* Courrier */}
+                          <tr className="hover:bg-gray-50/50">
+                            <Td>
+                              <div className="flex items-center gap-2">
+                                <div className="h-6 w-6 rounded-md bg-violet-100 flex items-center justify-center">
+                                  <Package className="h-3 w-3 text-violet-600" />
+                                </div>
+                                <span className="font-medium">Courrier (colis payés)</span>
+                              </div>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-medium">{reconciliationData.courrier.operations}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="text-gray-400">—</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="font-bold text-gray-900">{money(reconciliationData.courrier.montant)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-violet-100 text-violet-800">
+                                Paiements courrier
+                              </span>
+                            </Td>
+                          </tr>
+
+                          {/* Total ventes billets uniquement */}
+                          <tr className="border-t-2 border-gray-300">
+                            <Td className="font-bold text-gray-900">Total billets (billetterie + ligne)</Td>
+                            <Td align="right" className="font-bold text-gray-900">
+                              {reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}
+                            </Td>
+                            <Td align="right" className="font-bold text-gray-900">
+                              {reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets}
+                            </Td>
+                            <Td align="right" className="font-bold text-gray-900">
+                              {money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                                Hors courrier
+                              </span>
+                            </Td>
+                          </tr>
+
+                          {/* ENCAISSEMENTS */}
+                          <tr className="bg-gradient-to-r from-emerald-50/30 to-green-50/30">
+                            <Td colSpan={5}>
+                              <div className="text-sm font-bold text-emerald-700 uppercase tracking-wider py-2">
+                                ENCAISSEMENTS DANS LA CAISSE
+                              </div>
+                            </Td>
+                          </tr>
+
+                          {/* Espèces */}
+                          <tr className="hover:bg-gray-50/50">
+                            <Td>
+                              <div className="flex items-center gap-2">
+                                <div className="h-6 w-6 rounded-md bg-amber-100 flex items-center justify-center">
+                                  <Banknote className="h-3 w-3 text-amber-600" />
+                                </div>
+                                <span className="font-medium">Espèces reçues</span>
+                              </div>
+                            </Td>
+                            <Td align="right">—</Td>
+                            <Td align="right">—</Td>
+                            <Td align="right">
+                              <span className="font-bold text-gray-900">{money(reconciliationData.encaissementsEspeces)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                                Caisse agence
+                              </span>
+                            </Td>
+                          </tr>
+
+                          {/* Mobile Money */}
+                          <tr className="hover:bg-gray-50/50">
+                            <Td>
+                              <div className="flex items-center gap-2">
+                                <div className="h-6 w-6 rounded-md bg-purple-100 flex items-center justify-center">
+                                  <Smartphone className="h-3 w-3 text-purple-600" />
+                                </div>
+                                <span className="font-medium">Mobile Money</span>
+                              </div>
+                            </Td>
+                            <Td align="right">—</Td>
+                            <Td align="right">—</Td>
+                            <Td align="right">
+                              <span className="font-bold text-gray-900">{money(reconciliationData.encaissementsMobileMoney)}</span>
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700">
+                                Compte compagnie
+                              </span>
+                            </Td>
+                          </tr>
+
+                          {/* Total encaissements */}
+                          <tr className="border-t-2 border-gray-300">
+                            <Td className="font-bold text-gray-900">TOTAL ENCAISSÉS</Td>
+                            <Td align="right">—</Td>
+                            <Td align="right">—</Td>
+                            <Td align="right" className="font-bold text-gray-900">
+                              {money(reconciliationData.encaissementsTotal)}
+                            </Td>
+                            <Td align="right">
+                              <span className="text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
+                                Argent réellement reçu
+                              </span>
+                            </Td>
+                          </tr>
+
+                          {/* ÉCART */}
+                          <tr
+                            className={`${
+                              reconciliationData.ecart === 0
+                                ? 'bg-gradient-to-r from-emerald-50/30 to-green-50/30'
+                                : reconciliationData.ecart > 0
+                                  ? 'bg-gradient-to-r from-rose-50/30 to-red-50/30'
+                                  : 'bg-gradient-to-r from-amber-50/30 to-orange-50/30'
+                            }`}
+                          >
+                            <Td colSpan={5}>
+                              <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                                <div className="min-w-0 text-sm font-bold text-gray-900">
+                                  Écart (ventes billets − caisse guichet)
+                                </div>
+                                <div
+                                  className={`min-w-0 text-xl font-bold ${
+                                    reconciliationData.ecart === 0
+                                      ? 'text-emerald-700'
+                                      : reconciliationData.ecart > 0
+                                        ? 'text-rose-700'
+                                        : 'text-amber-700'
+                                  }`}
+                                >
+                                  {money(reconciliationData.ecart)}
+                                  {reconciliationData.ecart === 0 ? (
+                                    <span className="ml-2 text-sm font-medium text-emerald-600">✓ Équilibre parfait</span>
+                                  ) : reconciliationData.ecart > 0 ? (
+                                    <span className="ml-2 text-sm font-medium text-rose-600">⚠️ Manque dans la caisse</span>
+                                  ) : (
+                                    <span className="ml-2 text-sm font-medium text-amber-600">ℹ️ Excédent en caisse</span>
+                                  )}
+                                </div>
+                              </div>
+                            </Td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-slate-50/50">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
+                    <Scale className="h-6 w-6 text-slate-700" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-gray-900">Contrôle de caisse</div>
+                    <div className="text-sm text-gray-600">
+                      Vérifiez que l'argent en caisse correspond aux ventes avant de valider.
+                    </div>
+                  </div>
+                </div>
+                <ActionButton
+                  variant="secondary"
+                  type="button"
+                  onClick={() => void reloadLedgerCashAudit()}
+                  disabled={loadingLedgerCash || loadingCashAudits}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Actualiser
+                </ActionButton>
+              </div>
+
+              {ledgerCashPosition?.capped && (
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Vérifiez que l'argent en caisse correspond aux ventes avant de valider.
+                </div>
+              )}
+
+              {!canRunCashAudit && (
+                <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+                  Vérifiez que l'argent en caisse correspond aux ventes avant de valider.
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-gray-800">SECTION 3 — VALIDATION</div>
+                  <p className="text-[11px] text-slate-500">Montant attendu (ventes) sur la période sélectionnée.</p>
+                  {loadingLedgerCash ? (
+                    <div className="text-sm text-gray-500">Chargement…</div>
+                  ) : ledgerCashPosition ? (
+                    <>
+                      <div className="text-2xl font-bold text-gray-900">{money(ledgerCashPosition.soldeCash)}</div>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
+                        <div>Entrées (guichet et courrier)</div>
+                        <div className="text-right font-medium text-emerald-700">{money(ledgerCashPosition.totalCashIn)}</div>
+                        <div>Sorties caisse (dépenses, transferts…)</div>
+                        <div className="text-right font-medium text-rose-700">{money(ledgerCashPosition.totalCashOut)}</div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-sm text-gray-500">—</div>
+                  )}
+
+                  <div className="pt-2 border-t border-gray-100 space-y-2">
+                    <label className="block text-sm font-medium text-gray-700">Montant en caisse</label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      readOnly={!canRunCashAudit}
+                      className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white shadow-sm focus:outline-none focus:ring-2 focus:border-transparent text-sm disabled:bg-gray-50 disabled:text-gray-500"
+                      style={{ outlineColor: theme.primary }}
+                      placeholder="0"
+                      value={cashAuditActualInput}
+                      onChange={(e) => setCashAuditActualInput(e.target.value)}
+                      disabled={!canRunCashAudit}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-gray-500 uppercase tracking-wide">Écart</div>
+                      <div
+                        className={`text-lg font-bold ${
+                          cashAuditGapPreview === null
+                            ? 'text-gray-400'
+                            : cashAuditGapPreview === 0
+                              ? 'text-emerald-700'
+                              : cashAuditGapPreview > 0
+                                ? 'text-amber-700'
+                                : 'text-rose-700'
+                        }`}
+                      >
+                        {cashAuditGapPreview === null ? '—' : money(cashAuditGapPreview)}
+                      </div>
+                    </div>
+                    <ActionButton
+                      type="button"
+                      onClick={() => void handleValidateAgencyCash()}
+                      disabled={
+                        !canRunCashAudit ||
+                        savingCashAudit ||
+                        loadingLedgerCash ||
+                        ledgerCashPosition == null ||
+                        !cashAuditActualInput.trim()
+                      }
+                    >
+                      {savingCashAudit ? 'Enregistrement…' : 'Valider la caisse'}
+                    </ActionButton>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-200 bg-white p-4 min-h-[200px]">
+                  <div className="text-sm font-semibold text-gray-800 mb-3">Historique des contrôles</div>
+                  {loadingCashAudits ? (
+                    <div className="text-sm text-gray-500">Chargement…</div>
+                  ) : cashAudits.length === 0 ? (
+                    <UIEmptyState message="Aucun contrôle enregistré pour cette agence." />
+                  ) : (
+                    <div className="max-h-72 min-w-0 overflow-x-auto overflow-y-auto rounded-lg border border-gray-100 [-webkit-overflow-scrolling:touch]">
+                      <table className="w-full min-w-[40rem] text-sm">
+                        <thead className="bg-gray-50 sticky top-0">
+                          <tr>
+                            <Th>Date</Th>
+                            <Th align="right">Montant attendu (ventes)</Th>
+                            <Th align="right">Montant en caisse</Th>
+                            <Th align="right">Écart</Th>
+                            <Th>Par</Th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {cashAudits.map((a) => {
+                            const dt = auditValidatedAtToDate(a.validatedAt);
+                            const who = a.validatedBy?.name || a.validatedBy?.id || '—';
+                            return (
+                              <tr key={a.id} className="hover:bg-gray-50/80">
+                                <Td>{dt ? fmtDT(dt) : '—'}</Td>
+                                <Td align="right">{money(a.expectedAmount)}</Td>
+                                <Td align="right">{money(a.actualAmount)}</Td>
+                                <Td align="right">
+                                  <span
+                                    className={
+                                      a.difference === 0
+                                        ? 'text-emerald-700 font-medium'
+                                        : a.difference > 0
+                                          ? 'text-amber-700 font-medium'
+                                          : 'text-rose-700 font-medium'
+                                    }
+                                  >
+                                    {money(a.difference)}
+                                  </span>
+                                </Td>
+                                <Td className="text-xs text-gray-600 max-w-[140px] truncate">
+                                  <span title={who}>{who}</span>
+                                </Td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1816,6 +3496,15 @@ const AgenceComptabilitePage: React.FC = () => {
         
         {tab === 'caisse' && (
           <div className="space-y-6">
+            {!canManipulateCash && (
+              <div
+                className="rounded-xl border border-slate-200 bg-slate-50/90 px-4 py-3 text-sm text-slate-800"
+                role="status"
+              >
+                Consultation seule : les dépenses, versements vers la compagnie et paiements fournisseurs sont réservés au{' '}
+                <strong>comptable d’agence</strong> (ou à un administrateur).
+              </div>
+            )}
             {/* En-tête et filtres */}
             <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
@@ -1823,33 +3512,34 @@ const AgenceComptabilitePage: React.FC = () => {
                   <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-emerald-50 to-green-50 flex items-center justify-center">
                     <Banknote className="h-6 w-6 text-emerald-600" />
                   </div>
-                  <div>
-                    <div className="text-xl font-bold text-gray-900">Caisse d'agence</div>
-                    <div className="text-sm text-gray-600">Gestion des mouvements financiers</div>
-                  </div>
+                  <div className="text-xl font-bold text-gray-900">Caisse de l’agence</div>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <ActionButton 
-                    onClick={() => setTreasuryModalView('new-operation')}
-                    className="whitespace-nowrap"
-                  >
-                    <Plus className="h-4 w-4 mr-2" /> 
-                    Initier dépense caisse
-                  </ActionButton>
-                  <ActionButton
-                    variant="secondary"
-                    onClick={() => setTreasuryModalView('transfer')}
-                    className="whitespace-nowrap"
-                  >
-                    Initier versement compagnie
-                  </ActionButton>
-                  <ActionButton
-                    variant="secondary"
-                    onClick={() => setTreasuryModalView('new-payable')}
-                    className="whitespace-nowrap"
-                  >
-                    Créer payable fournisseur
-                  </ActionButton>
+                  {canManipulateCash && (
+                    <>
+                      <ActionButton
+                        onClick={() => setTreasuryModalView('new-operation')}
+                        className="whitespace-nowrap"
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Dépense caisse
+                      </ActionButton>
+                      <ActionButton
+                        variant="secondary"
+                        onClick={() => setTreasuryModalView('transfer')}
+                        className="whitespace-nowrap"
+                      >
+                        Versement compagnie
+                      </ActionButton>
+                      <ActionButton
+                        variant="secondary"
+                        onClick={() => setTreasuryModalView('new-payable')}
+                        className="whitespace-nowrap"
+                      >
+                        Paiement fournisseur
+                      </ActionButton>
+                    </>
+                  )}
                   <ActionButton
                     variant="secondary"
                     onClick={() => exportCsv(days, currencySymbol)}
@@ -1922,17 +3612,64 @@ const AgenceComptabilitePage: React.FC = () => {
               </div>
             </div>
 
-            {/* KPI de caisse */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-              <MetricCard label="Entrées totales" value={money(totIn)} icon={Wallet} valueColorVar={theme?.primary} />
-              <MetricCard label="Sorties totales" value={money(totOut)} icon={AlertTriangle} valueColorVar="#b91c1c" />
-              <MetricCard label="Solde de période" value={money(totIn - totOut)} icon={Banknote} valueColorVar={theme?.primary} />
+              <MetricCard
+                label="Caisse disponible (global)"
+                value={
+                  loadingCash && cashGlobalPosition == null
+                    ? '…'
+                    : money(cashGlobalPosition?.soldeCash ?? 0)
+                }
+                icon={Banknote}
+                valueColorVar={theme?.primary}
+              />
+              <MetricCard
+                label="Entrées espèces (période)"
+                value={
+                  loadingCash
+                    ? '…'
+                    : ledgerPeriodError
+                      ? '—'
+                      : money(ledgerPeriodCash?.totalCashIn ?? 0)
+                }
+                icon={Wallet}
+                valueColorVar={theme?.primary}
+              />
+              <MetricCard
+                label="Sorties espèces (période)"
+                value={
+                  loadingCash
+                    ? '…'
+                    : ledgerPeriodError
+                      ? '—'
+                      : money(ledgerPeriodCash?.totalCashOut ?? 0)
+                }
+                icon={AlertTriangle}
+                valueColorVar="#b91c1c"
+              />
             </div>
 
-            {/* Journal de caisse */}
+            {cashGlobalPosition?.capped && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Solde global : agrégation tronquée (limite de lecture) — le montant peut être incomplet.
+              </div>
+            )}
+
+            {ledgerPeriodError && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+                {ledgerPeriodError}
+              </div>
+            )}
+
+            {ledgerPeriodCash?.capped && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Flux période : historique tronqué (limite d’affichage) — entrées / sorties période peuvent être sous-estimées.
+              </div>
+            )}
+
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between mb-5">
-                <div className="text-lg font-bold text-gray-900">Journal des mouvements</div>
+              <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-lg font-bold text-gray-900">Historique par jour</div>
                 <div className="text-sm text-gray-600">
                   {days.length} jour{days.length > 1 ? 's' : ''} avec activité
                 </div>
@@ -1942,21 +3679,21 @@ const AgenceComptabilitePage: React.FC = () => {
                 <div className="flex items-center justify-center py-12">
                   <div className="text-center">
                     <div className="h-12 w-12 border-4 border-gray-200 border-t-emerald-500 rounded-full animate-spin mx-auto mb-3"></div>
-                    <div className="text-gray-600">Chargement des données de caisse...</div>
+                    <div className="text-gray-600">Chargement des données de caisse…</div>
                   </div>
                 </div>
               ) : days.length === 0 ? (
                 <UIEmptyState message="Aucun mouvement enregistré sur la période sélectionnée" />
               ) : (
-                <div className="overflow-hidden rounded-xl border border-gray-200">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                <div className="min-w-0 overflow-hidden rounded-xl border border-gray-200">
+                  <div className="overflow-x-auto [-webkit-overflow-scrolling:touch]">
+                    <table className="w-full min-w-[28rem] text-sm">
                       <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
                         <tr>
                           <Th>Date</Th>
                           <Th align="right">Entrées</Th>
                           <Th align="right">Sorties</Th>
-                          <Th align="right">Solde journalier</Th>
+                          <Th align="right">Net jour (période)</Th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
@@ -1989,10 +3726,12 @@ const AgenceComptabilitePage: React.FC = () => {
                       {/* Pied de tableau avec totaux */}
                       <tfoot className="bg-gradient-to-r from-gray-50 to-gray-100/80 border-t-2 border-gray-300">
                         <tr>
-                          <Td className="font-bold text-gray-900">TOTAUX</Td>
+                          <Td className="font-bold text-gray-900">TOTAUX (période)</Td>
                           <Td align="right" className="font-bold text-emerald-700">{money(totIn)}</Td>
                           <Td align="right" className="font-bold text-rose-700">{money(totOut)}</Td>
-                          <Td align="right" className="font-bold text-gray-900">{money(totIn - totOut)}</Td>
+                          <Td align="right" className="font-bold text-gray-900">
+                            {money(totIn - totOut)}
+                          </Td>
                         </tr>
                       </tfoot>
                     </table>
@@ -2004,11 +3743,10 @@ const AgenceComptabilitePage: React.FC = () => {
         )}
 
         {/* ============================================================================
-           ONGLET : RÉCONCILIATION
-           Description : Vue cohérente billets vendus vs argent encaissé
+           ONGLET : COMPARAISON ventes (billets) et caisse guichet
            ============================================================================ */}
         
-        {tab === 'reconciliation' && (
+        {false && (
           <div className="space-y-6">
             {/* En-tête et sélecteur de date */}
             <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
@@ -2018,8 +3756,10 @@ const AgenceComptabilitePage: React.FC = () => {
                     <RefreshCw className="h-6 w-6 text-amber-600" />
                   </div>
                   <div>
-                    <div className="text-xl font-bold text-gray-900">Réconciliation des ventes</div>
-                    <div className="text-sm text-gray-600">Cohérence billets vendus vs argent encaissé</div>
+                    <div className="text-xl font-bold text-gray-900">Comparaison ventes et caisse</div>
+                    <div className="text-sm text-gray-600">
+                      Billetterie et ventes en ligne d’un côté, espèces et mobile money passés en caisse guichet de l’autre. Le courrier est indiqué à part.
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -2038,35 +3778,49 @@ const AgenceComptabilitePage: React.FC = () => {
               </div>
               
               <div className="text-sm text-gray-600">
-                Compare les billets vendus par votre agence avec l'argent réellement encaissé
+                Pour la date choisie : ventes de <strong>billets</strong> (guichet + en ligne) comparées à l’argent <strong>passé en caisse</strong> (espèces et mobile money guichet).
+                Le <strong>courrier</strong> est affiché séparément ({AGENCY_KPI_TIME.WORKFLOW_PAIEMENT.toLowerCase()}).
+                L’écart des cartes concerne uniquement les <strong>billets</strong> vs caisse guichet. Pour le détail courrier, voir l’onglet <strong>Ventes</strong>.
               </div>
             </div>
 
-            {/* Tableau de réconciliation */}
+            {/* Tableau encaissements / ventes */}
             {loadingReconciliation ? (
               <div className="flex items-center justify-center py-12">
                 <div className="text-center">
                   <div className="h-12 w-12 border-4 border-gray-200 border-t-amber-500 rounded-full animate-spin mx-auto mb-3"></div>
-                  <div className="text-gray-600">Chargement de la réconciliation...</div>
+                  <div className="text-gray-600">Chargement…</div>
                 </div>
               </div>
-            ) : !reconciliationData ? (
-              <UIEmptyState message="Aucune donnée disponible — Sélectionnez une date pour voir la réconciliation" />
+            ) : !reconciliationLoaded ? (
+              <UIEmptyState message="Choisissez une date pour afficher la comparaison." />
             ) : (
               <>
-                {/* KPI de réconciliation */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-                  <MetricCard label="Billets vendus" value={(reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets).toString()} icon={Ticket} valueColorVar={theme?.primary} />
-                  <MetricCard label="Chiffre d'affaires total" value={money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)} icon={TrendingUp} valueColorVar={theme?.primary} />
-                  <MetricCard label="Écart de caisse" value={money(reconciliationData.ecart)} icon={reconciliationData.ecart === 0 ? CheckCircle2 : AlertTriangle} critical={reconciliationData.ecart !== 0} criticalMessage={reconciliationData.ecart !== 0 ? (reconciliationData.ecart > 0 ? "Caisse en déficit" : "Excédent") : undefined} valueColorVar={reconciliationData.ecart === 0 ? theme?.primary : undefined} />
+                <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs text-slate-700">
+                  <span className="font-semibold">Billets / montants vente :</span> {AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}.{" "}
+                  <span className="font-semibold">Courrier :</span> {AGENCY_KPI_TIME.WORKFLOW_PAIEMENT}.{" "}
+                  <span className="font-semibold">Écart caisse :</span> {AGENCY_KPI_TIME.SESSION_POSTE} — ce sont trois lectures différentes.
                 </div>
+                {/* KPI encaissements — 4 cartes sur une ligne */}
+                <div className="w-full overflow-x-auto sm:overflow-x-visible pb-1 -mx-1 px-1 sm:mx-0 sm:px-0">
+                  <div className="grid grid-cols-4 gap-2 sm:gap-4 lg:gap-6 min-w-[36rem] sm:min-w-0 w-full [&>*]:min-w-0">
+                    <MetricCard label="Billets vendus (terrain)" value={(reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets).toString()} icon={Ticket} valueColorVar={theme?.primary} hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO} />
+                    <MetricCard label="Montant ventes billets" value={money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)} icon={TrendingUp} valueColorVar={theme?.primary} hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO} />
+                    <MetricCard label="Courrier (jour)" value={money(reconciliationData.courrier.montant)} icon={Package} valueColorVar={theme?.primary} hint={AGENCY_KPI_TIME.WORKFLOW_PAIEMENT} />
+                    <MetricCard label="Écart (ventes billets − caisse guichet)" value={money(reconciliationData.ecart)} icon={reconciliationData.ecart === 0 ? CheckCircle2 : AlertTriangle} critical={reconciliationData.ecart !== 0} criticalMessage={reconciliationData.ecart !== 0 ? (reconciliationData.ecart > 0 ? "Manque en caisse" : "Excédent en caisse") : undefined} valueColorVar={reconciliationData.ecart === 0 ? theme?.primary : undefined} hint={AGENCY_KPI_TIME.SESSION_POSTE} />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Courrier : {reconciliationData.courrier.operations} paiement{reconciliationData.courrier.operations > 1 ? 's' : ''} validé{reconciliationData.courrier.operations > 1 ? 's' : ''} sur la date (création du paiement, fuseau Bamako).
+                </p>
 
                 {/* Tableau détaillé */}
                 <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                  <div className="text-lg font-bold text-gray-900 mb-5">Réconciliation détaillée</div>
+                  <div className="text-lg font-bold text-gray-900 mb-5">Détail de la journée</div>
                   
-                  <div className="overflow-hidden rounded-xl border border-gray-200">
-                    <table className="w-full text-sm">
+                  <div className="min-w-0 overflow-hidden rounded-xl border border-gray-200">
+                    <div className="overflow-x-auto [-webkit-overflow-scrolling:touch]">
+                    <table className="w-full min-w-[36rem] text-sm">
                       <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
                         <tr>
                           <Th>Catégorie</Th>
@@ -2086,14 +3840,14 @@ const AgenceComptabilitePage: React.FC = () => {
                           </Td>
                         </tr>
                         
-                        {/* Guichet */}
+                        {/* Billetterie */}
                         <tr className="hover:bg-gray-50/50">
                           <Td>
                             <div className="flex items-center gap-2">
                               <div className="h-6 w-6 rounded-md bg-emerald-100 flex items-center justify-center">
                                 <Wallet className="h-3 w-3 text-emerald-600" />
                               </div>
-                              <span className="font-medium">Ventes guichet</span>
+                              <span className="font-medium">Ventes billetterie</span>
                             </div>
                           </Td>
                           <Td align="right">
@@ -2137,10 +3891,36 @@ const AgenceComptabilitePage: React.FC = () => {
                             </span>
                           </Td>
                         </tr>
+
+                        {/* Courrier (paiements colis) */}
+                        <tr className="hover:bg-gray-50/50">
+                          <Td>
+                            <div className="flex items-center gap-2">
+                              <div className="h-6 w-6 rounded-md bg-violet-100 flex items-center justify-center">
+                                <Package className="h-3 w-3 text-violet-600" />
+                              </div>
+                              <span className="font-medium">Courrier (colis payés)</span>
+                            </div>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-medium">{reconciliationData.courrier.operations}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="text-gray-400">—</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="font-bold text-gray-900">{money(reconciliationData.courrier.montant)}</span>
+                          </Td>
+                          <Td align="right">
+                            <span className="text-xs px-2 py-1 rounded-full bg-violet-100 text-violet-800">
+                              Paiements courrier
+                            </span>
+                          </Td>
+                        </tr>
                         
-                        {/* Total ventes */}
+                        {/* Total ventes billets uniquement */}
                         <tr className="border-t-2 border-gray-300">
-                          <Td className="font-bold text-gray-900">TOTAL VENTES AGENCE</Td>
+                          <Td className="font-bold text-gray-900">Total billets (billetterie + ligne)</Td>
                           <Td align="right" className="font-bold text-gray-900">
                             {reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}
                           </Td>
@@ -2152,7 +3932,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           </Td>
                           <Td align="right">
                             <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700">
-                              Billets consommés
+                              Hors courrier
                             </span>
                           </Td>
                         </tr>
@@ -2228,11 +4008,11 @@ const AgenceComptabilitePage: React.FC = () => {
                         {/* ÉCART */}
                         <tr className={`${reconciliationData.ecart === 0 ? 'bg-gradient-to-r from-emerald-50/30 to-green-50/30' : reconciliationData.ecart > 0 ? 'bg-gradient-to-r from-rose-50/30 to-red-50/30' : 'bg-gradient-to-r from-amber-50/30 to-orange-50/30'}`}>
                           <Td colSpan={5}>
-                            <div className="flex items-center justify-between py-3">
-                              <div className="text-sm font-bold text-gray-900">
-                                ÉCART (Ventes guichet - Encaissements)
+                            <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="min-w-0 text-sm font-bold text-gray-900">
+                                Écart (ventes billets − caisse guichet)
                               </div>
-                              <div className={`text-xl font-bold ${reconciliationData.ecart === 0 ? 'text-emerald-700' : reconciliationData.ecart > 0 ? 'text-rose-700' : 'text-amber-700'}`}>
+                              <div className={`min-w-0 text-xl font-bold ${reconciliationData.ecart === 0 ? 'text-emerald-700' : reconciliationData.ecart > 0 ? 'text-rose-700' : 'text-amber-700'}`}>
                                 {money(reconciliationData.ecart)}
                                 {reconciliationData.ecart === 0 && (
                                   <span className="ml-2 text-sm font-medium text-emerald-600">✓ Équilibre parfait</span>
@@ -2249,16 +4029,18 @@ const AgenceComptabilitePage: React.FC = () => {
                         </tr>
                       </tbody>
                     </table>
+                    </div>
                   </div>
                   
                   {/* Résumé */}
                   <div className="mt-6 p-4 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
                     <div className="text-sm font-medium text-gray-700 mb-2">Résumé de la journée</div>
                     <div className="text-sm text-gray-600 space-y-1">
-                      <div>• <span className="font-medium">{reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}</span> réservations effectuées</div>
+                      <div>• <span className="font-medium">{reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}</span> réservations billets</div>
                       <div>• <span className="font-medium">{reconciliationData.ventesGuichet.tickets + reconciliationData.ventesEnLigne.tickets}</span> billets vendus</div>
-                      <div>• <span className="font-medium">{money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}</span> chiffre d'affaires généré</div>
-                      <div>• <span className="font-medium">{money(reconciliationData.encaissementsTotal)}</span> réellement encaissés dans la caisse</div>
+                      <div>• <span className="font-medium">{money(reconciliationData.ventesGuichet.montant + reconciliationData.ventesEnLigne.montant)}</span> chiffre d’affaires billets</div>
+                      <div>• <span className="font-medium">{reconciliationData.courrier.operations}</span> paiement{reconciliationData.courrier.operations > 1 ? 's' : ''} courrier · <span className="font-medium">{money(reconciliationData.courrier.montant)}</span></div>
+                      <div>• <span className="font-medium">{money(reconciliationData.encaissementsTotal)}</span> passé en caisse guichet (espèces + mobile money)</div>
                     </div>
                   </div>
                 </div>
@@ -2267,180 +4049,37 @@ const AgenceComptabilitePage: React.FC = () => {
           </div>
         )}
 
-        {/* ============================================================================
-           ONGLET : COURRIER (sessions courrier, séparé du Guichet)
-           Description : Activation PENDING → ACTIVE ; validation CLOSED → VALIDATED
-           ============================================================================ */}
-        {tab === 'courrier' && (
+        {tab === 'corrections' && (
           <div className="space-y-6">
-            <SectionCard title="Sessions courrier" help="Activation des sessions en attente et validation des sessions clôturées.">
-            {/* KPI Courrier */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <MetricCard label="En attente" value={courierKpis.pendingCount} icon={Clock4} valueColorVar="#4f46e5" />
-              <MetricCard label="Actives" value={courierKpis.activeCount} icon={Play} valueColorVar="#059669" />
-              <MetricCard label="Clôturées" value={courierKpis.closedCount} icon={StopCircle} valueColorVar="#e11d48" />
-              <MetricCard label="Total CA Courrier (validées)" value={money(courierKpis.totalCAValidated)} icon={Wallet} valueColorVar={theme?.primary} />
-            </div>
-
-            {/* Sessions PENDING */}
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-xl bg-indigo-50 flex items-center justify-center">
-                    <Clock4 className="h-5 w-5 text-indigo-600" />
-                  </div>
-                  <div>
-                    <div className="text-lg font-bold text-gray-900">Sessions en attente d&apos;activation</div>
-                    <div className="text-sm text-gray-600">L&apos;agent a créé une session ; activez-la pour qu&apos;il puisse enregistrer des envois.</div>
-                  </div>
-                </div>
-                <span className="text-sm font-medium px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">
-                  {pendingCourierSessions.length} session{pendingCourierSessions.length > 1 ? 's' : ''}
-                </span>
-              </div>
-              {pendingCourierSessions.length === 0 ? (
-                <UIEmptyState message="Aucune session courrier en attente d'activation." />
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {pendingCourierSessions.map(s => (
-                    <div key={s.id} className="rounded-xl border border-gray-200 bg-white p-5">
-                      <div className="flex items-start justify-between gap-3 mb-4">
-                        <div>
-                          <div className="text-xs text-gray-500 uppercase tracking-wider">Agent</div>
-                          <div className="font-semibold text-gray-900">{s.agentCode || s.agentId}</div>
-                        </div>
-                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">En attente</span>
-                      </div>
-                      <div className="text-xs text-gray-500 mb-3">
-                        Créée le {s.createdAt ? fmtDT((s.createdAt as { toDate: () => Date }).toDate?.()) : '—'}
-                      </div>
-                      <ActionButton onClick={() => activateCourierSessionAction(s.id)}>
-                        <Play className="h-4 w-4 mr-2" />
-                        Activer
-                      </ActionButton>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Sessions ACTIVE */}
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center">
-                    <Play className="h-5 w-5 text-emerald-600" />
-                  </div>
-                  <div>
-                    <div className="text-lg font-bold text-gray-900">Sessions actives</div>
-                    <div className="text-sm text-gray-600">L&apos;agent peut enregistrer des envois. Clôture par l&apos;agent uniquement.</div>
-                  </div>
-                </div>
-                <span className="text-sm font-medium px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">
-                  {activeCourierSessions.length} session{activeCourierSessions.length > 1 ? 's' : ''}
-                </span>
-              </div>
-              {activeCourierSessions.length === 0 ? (
-                <UIEmptyState message="Aucune session courrier en cours." />
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {activeCourierSessions.map(s => (
-                    <div key={s.id} className="rounded-xl border border-gray-200 bg-white p-5">
-                      <div className="flex items-start justify-between gap-3 mb-4">
-                        <div>
-                          <div className="text-xs text-gray-500 uppercase tracking-wider">Agent</div>
-                          <div className="font-semibold text-gray-900">{s.agentCode || s.agentId}</div>
-                        </div>
-                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        Ouverte le {s.openedAt ? fmtDT((s.openedAt as { toDate: () => Date }).toDate?.()) : '—'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Sessions CLOSED — validation avec montant compté */}
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-xl bg-rose-50 flex items-center justify-center">
-                    <StopCircle className="h-5 w-5 text-rose-600" />
-                  </div>
-                  <div>
-                    <div className="text-lg font-bold text-gray-900">Sessions clôturées à valider</div>
-                    <div className="text-sm text-gray-600">Saisissez le montant compté et validez la réception.</div>
-                  </div>
-                </div>
-                <span className="text-sm font-medium px-3 py-1.5 rounded-full bg-gray-100 text-gray-700">
-                  {closedCourierSessions.length} session{closedCourierSessions.length > 1 ? 's' : ''}
-                </span>
-              </div>
-              {closedCourierSessions.length === 0 ? (
-                <UIEmptyState message="Aucune réception en attente — Toutes les sessions clôturées ont été validées." />
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {closedCourierSessions.map(s => {
-                    const input = receptionInputsCourier[s.id] || { countedAmount: '' };
-                    const counted = Number(String(input.countedAmount).replace(/[^\d.,]/g, '').replace(',', '.'));
-                    const expected = Number(s.expectedAmount) || 0;
-                    const ecart = Number.isFinite(counted) ? counted - expected : 0;
-                    return (
-                      <div key={s.id} className="rounded-xl border border-gray-200 bg-white p-5">
-                        <div className="flex items-start justify-between gap-3 mb-4">
-                          <div>
-                            <div className="text-xs text-gray-500 uppercase tracking-wider">Agent</div>
-                            <div className="font-semibold text-gray-900">{s.agentCode || s.agentId}</div>
-                          </div>
-                          <span className="px-3 py-1 rounded-full text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200">Clôturée</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 mb-4">
-                          <InfoCard label="Montant attendu" value={money(expected)} emphasis />
-                          <InfoCard label="Écart" value={Number.isFinite(counted) ? money(ecart) : '—'} />
-                        </div>
-                        <div className="mb-4">
-                          <label className="block text-xs font-medium text-gray-700 mb-2">Montant compté</label>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                            placeholder="0"
-                            value={input.countedAmount}
-                            onChange={e => setReceptionInputCourier(s.id, e.target.value)}
-                          />
-                        </div>
-                        <ActionButton
-                          disabled={!Number.isFinite(counted) || counted < 0 || !!savingCourierSessionIds[s.id]}
-                          onClick={() => validateCourierSessionAction(s)}
-                        >
-                          <CheckCircle2 className="h-4 w-4 mr-2" />
-                          {savingCourierSessionIds[s.id] ? 'Validation...' : 'Valider'}
-                        </ActionButton>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <SectionCard
+              title="Corrections exceptionnelles"
+              help="Réservé aux cas rares : toujours avec la compagnie."
+            >
+              <p className="text-sm text-gray-700 leading-relaxed">
+                Aucune correction de solde ou d’historique ne se fait depuis cet écran. En cas d’erreur (saisie, versement, session),
+                contactez le <strong>comptable compagnie</strong> ou l’<strong>admin compagnie</strong>.
+              </p>
             </SectionCard>
           </div>
         )}
 
-        {treasuryModalView && (
-          <div className="fixed inset-0 z-50 bg-black/50 p-4 sm:p-6" role="dialog" aria-modal="true">
-            <div className="mx-auto h-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl">
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
-                <div className="text-sm sm:text-base font-semibold text-gray-900">
-                  {treasuryModalView === 'new-operation' && 'Initiation dépense caisse'}
-                  {treasuryModalView === 'transfer' && 'Initiation versement caisse vers banque compagnie'}
-                  {treasuryModalView === 'new-payable' && 'Création payable fournisseur'}
+        {treasuryModalView && canManipulateCash && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/50 p-0 sm:items-center sm:p-4 md:p-6"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="mx-auto w-full max-w-5xl max-h-[min(92dvh,920px)] overflow-y-auto overflow-x-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl">
+              <div className="sticky top-0 z-10 flex flex-col gap-2 border-b border-gray-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                <div className="min-w-0 text-sm font-semibold text-gray-900 sm:text-base">
+                  {treasuryModalView === 'new-operation' && 'Dépense caisse'}
+                  {treasuryModalView === 'transfer' && 'Versement vers la compagnie'}
+                  {treasuryModalView === 'new-payable' && 'Paiement fournisseur'}
                 </div>
                 <button
                   type="button"
                   onClick={() => setTreasuryModalView(null)}
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 sm:w-auto"
                 >
                   Fermer
                 </button>
@@ -2471,8 +4110,12 @@ const TabButton: React.FC<{
   icon: React.ReactNode;
   theme: { primary: string; secondary: string };
   badgeCount?: number;
-}> = ({ active, onClick, label, icon, theme, badgeCount = 0 }) => (
+  /** Infobulle (ex. libellé long sur onglet court). */
+  htmlTitle?: string;
+}> = ({ active, onClick, label, icon, theme, badgeCount = 0, htmlTitle }) => (
   <button
+    type="button"
+    title={htmlTitle}
     className={`
       flex shrink-0 items-center gap-2 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all relative border
       ${active 
@@ -2509,9 +4152,9 @@ const shiftStatusToBadge: Record<string, "active" | "pending" | "success" | "war
 const SectionShifts: React.FC<{
   title: string;
   hint?: string;
-  icon: React.ReactNode;
+  icon: LucideIcon;
   list: ShiftDoc[];
-  usersCache: Record<string, { name?: string; email?: string; code?: string }>;
+  usersCache: Record<string, ComptaUserCacheEntry>;
   liveStats: Record<string, { reservations: number; tickets: number; amount: number }>;
   actions: (s: ShiftDoc) => React.ReactNode;
   theme: { primary: string; secondary: string };
@@ -2522,11 +4165,16 @@ const SectionShifts: React.FC<{
     paused: "En pause",
     closed: "Clôturé",
     pending: "En attente",
-    validated_agency: "Validé agence (en attente chef)",
+    validated_agency: "Validé agence (en attente chef d'agence)",
     validated: "Validé",
   };
   return (
-    <SectionCard title={title} help={hint} right={<StatusBadge status="neutral">{list.length} poste{list.length > 1 ? "s" : ""}</StatusBadge>}>
+    <SectionCard
+      title={title}
+      icon={icon}
+      description={hint}
+      right={<StatusBadge status="neutral">{list.length} poste{list.length > 1 ? "s" : ""}</StatusBadge>}
+    >
       {list.length === 0 ? (
         <UIEmptyState message={`Aucun ${title.toLowerCase()} — Aucun poste dans cet état pour le moment`} />
       ) : (
@@ -2534,7 +4182,7 @@ const SectionShifts: React.FC<{
           {list.map((s) => {
             const ui = usersCache[s.userId] || {};
             const name = ui.name || s.userName || s.userEmail || s.userId;
-            const code = ui.code || s.userCode || "—";
+            const code = ui.code || s.userCode || "GUEST";
             const live = liveStats[s.id];
             const reservations = live?.reservations ?? s.totalReservations ?? 0;
             const tickets = live?.tickets ?? s.totalTickets ?? 0;
@@ -2542,18 +4190,17 @@ const SectionShifts: React.FC<{
             const badgeStatus = shiftStatusToBadge[s.status] ?? "neutral";
 
             return (
-              <div
-                key={s.id}
-                className="group relative rounded-xl border border-gray-200 bg-white p-5 hover:border-gray-300 hover:shadow-md transition-all duration-300"
-              >
+              <div key={s.id} className={COMPTA_POST_CARD_3D} style={comptaPostCardTintStyle(theme)}>
                 <div
-                  className="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                  style={{ background: `linear-gradient(135deg, ${theme.primary}08, ${theme.secondary}08)` }}
+                  className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+                  style={{
+                    background: `linear-gradient(125deg, ${theme.primary}22 0%, transparent 42%, ${theme.secondary}18 100%)`,
+                  }}
                 />
                 <div className="relative">
                   <div className="flex items-start justify-between gap-3 mb-4">
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Guichetier</div>
+                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Vendeur (billetterie)</div>
                       <div className="font-semibold text-gray-900 truncate">
                         {name} <span className="text-gray-500 text-sm ml-2">({code})</span>
                       </div>
@@ -2566,9 +4213,12 @@ const SectionShifts: React.FC<{
                     <InfoCard label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
                     <InfoCard label="Fin" value={s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
                   </div>
-                  <div className="mb-5 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
-                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Montant total</div>
-                    <div className="text-xl font-bold" style={{ color: theme.primary }}>
+                  <div
+                    className={COMPTA_AMOUNT_PANEL_3D}
+                    style={{ borderColor: `${theme.primary}55` }}
+                  >
+                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Ventes du poste</div>
+                    <div className="text-xl font-bold drop-shadow-sm" style={{ color: theme.primary }}>
                       {money(amount)}
                     </div>
                   </div>

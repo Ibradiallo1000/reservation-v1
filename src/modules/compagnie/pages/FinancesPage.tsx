@@ -6,6 +6,8 @@ import React, { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { DollarSign, Wallet, Banknote } from "lucide-react";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
+import { TimeFilterBar, type RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
+import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import type { Company } from "@/types/companyTypes";
 import { useAuth } from "@/contexts/AuthContext";
@@ -29,6 +31,7 @@ type TabKey = typeof TAB_CA | typeof TAB_LIQUIDITES | typeof TAB_CAISSE;
 
 export default function FinancesPage() {
   const { user, company } = useAuth();
+  const globalPeriod = useGlobalPeriodContext();
   const { companyId: companyIdFromUrl } = useParams<{ companyId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
@@ -53,10 +56,54 @@ export default function FinancesPage() {
   }, [companyId]);
 
   const theme = useCompanyTheme((company as Company | null) ?? null);
+  const range: RangeKey =
+    globalPeriod.preset === "day"
+      ? "day"
+      : globalPeriod.preset === "month"
+        ? "month"
+        : "custom";
+  const customStart = globalPeriod.preset === "custom" ? globalPeriod.startDate : null;
+  const customEnd = globalPeriod.preset === "custom" ? globalPeriod.endDate : null;
 
   const setTab = (tab: TabKey) => {
     setActiveTab(tab);
-    setSearchParams({ tab }, { replace: true });
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", tab);
+    setSearchParams(next, { replace: true });
+  };
+  const setRange = (v: RangeKey) => {
+    if (v === "day") return globalPeriod.setPreset("day");
+    if (v === "month") return globalPeriod.setPreset("month");
+    if (v === "custom") return globalPeriod.setPreset("custom");
+    const now = new Date();
+    if (v === "prev_month") {
+      const firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const endPrev = new Date(firstOfThisMonth.getTime() - 1);
+      const startPrev = new Date(endPrev.getFullYear(), endPrev.getMonth(), 1);
+      const start = `${startPrev.getFullYear()}-${String(startPrev.getMonth() + 1).padStart(2, "0")}-${String(
+        startPrev.getDate()
+      ).padStart(2, "0")}`;
+      const end = `${endPrev.getFullYear()}-${String(endPrev.getMonth() + 1).padStart(2, "0")}-${String(
+        endPrev.getDate()
+      ).padStart(2, "0")}`;
+      return globalPeriod.setCustomRange(start, end);
+    }
+    if (v === "ytd") {
+      const start = `${now.getFullYear()}-01-01`;
+      const end = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      return globalPeriod.setCustomRange(start, end);
+    }
+    if (v === "12m") {
+      const endD = now;
+      const startD = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+      const start = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(
+        startD.getDate()
+      ).padStart(2, "0")}`;
+      const end = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, "0")}-${String(
+        endD.getDate()
+      ).padStart(2, "0")}`;
+      return globalPeriod.setCustomRange(start, end);
+    }
   };
 
   if (!companyId) {
@@ -73,6 +120,16 @@ export default function FinancesPage() {
       <PageHeader
         title="Finances"
         subtitle="Chiffre d'affaires, liquidités et caisse par point de vente."
+        right={
+          <TimeFilterBar
+            range={range}
+            setRange={setRange}
+            customStart={customStart}
+            setCustomStart={(v) => globalPeriod.setCustomRange(v ?? globalPeriod.startDate, globalPeriod.endDate)}
+            customEnd={customEnd}
+            setCustomEnd={(v) => globalPeriod.setCustomRange(globalPeriod.startDate, v ?? globalPeriod.endDate)}
+          />
+        }
       />
       <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3 mb-4">
         {TABS.map(({ key, label, icon: Icon }) => {

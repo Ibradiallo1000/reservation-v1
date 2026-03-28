@@ -1,0 +1,1 @@
+const e={LEDGER_BAMAKO:"Jour de l’agence (mouvements enregistrés)",SESSION_POSTE:"Session poste",CREATION_RESERVATION_BAMAKO:"Création réservation (jour agence)",WORKFLOW_PAIEMENT:"Paiements courrier"};export{e as A};

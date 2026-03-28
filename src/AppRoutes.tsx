@@ -22,12 +22,17 @@ const CookiesPage = lazy(() => import("@/modules/compagnie/public/pages/CookiesP
 const ReservationDetailsPage = lazy(() => import("./modules/compagnie/public/pages/ReservationDetailsPage"));
 const AdminParametresPlatformPage = lazy(() => import("./modules/plateforme/pages/AdminParametresPlatformPage"));
 const VueGlobale = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.VueGlobale })));
-const ReservationsEnLigne = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.ReservationsEnLigne })));
 const Finances = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Finances })));
 const Rapports = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Rapports })));
 const Parametres = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Parametres })));
 const DepensesPage = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.DepensesPage })));
 const ExpenseDashboard = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.ExpenseDashboard })));
+const DigitalCashReservationsPage = lazy(() =>
+  import("@/modules/compagnie/finances/pages/DigitalCashReservationsPage")
+);
+const FinancialConsistencyDiagnosticsPage = lazy(
+  () => import("@/modules/compagnie/finances/pages/FinancialConsistencyDiagnosticsPage")
+);
 const ComptaPage = lazy(() => import("@/modules/compagnie/compta/pages/ComptaPage"));
 const ReservationPrintPage = lazy(() => import("@/modules/agence/guichet/pages/ReservationPrintPage"));
 
@@ -37,6 +42,9 @@ const LoginPage = lazy(() => import("./modules/auth/pages/LoginPage"));
 const Register = lazy(() => import("./modules/auth/pages/Register"));
 const ListeVillesPage = lazy(() => import("./modules/plateforme/pages/ListeVillesPage"));
 const AcceptInvitationPage = lazy(() => import("./modules/auth/pages/AcceptInvitationPage"));
+const TrackShipmentFindPage = lazy(() => import("@/modules/logistics/pages/TrackShipmentFindPage"));
+const TrackShipmentPage = lazy(() => import("@/modules/logistics/pages/TrackShipmentPage"));
+const ScanShipmentPage = lazy(() => import("@/modules/logistics/pages/ScanShipmentPage"));
 
 const ReservationClientPage = lazy(() => import("./modules/compagnie/public/pages/ReservationClientPage"));
 const ClientMesReservationsPage = lazy(() => import("./modules/compagnie/public/pages/ClientMesReservationsPage"));
@@ -102,14 +110,13 @@ const TreasuryNewPayablePage = lazy(() => import("./modules/compagnie/treasury/p
 
 // ── Agency Manager (refactored) ──
 const ManagerShellPage = lazy(() => import("./modules/agence/manager/ManagerShellPage"));
-const ManagerCockpitPage = lazy(() => import("./modules/agence/manager/ManagerCockpitPage"));
-const ManagerOperationsPage = lazy(() => import("./modules/agence/manager/ManagerOperationsPage"));
-const ManagerFinancesPage = lazy(() => import("./modules/agence/manager/ManagerFinancesPage"));
-const AgencyManagerExpensesPage = lazy(() => import("./modules/agence/manager/AgencyManagerExpensesPage"));
 const ManagerTeamPage = lazy(() => import("./modules/agence/manager/ManagerTeamPage"));
 const ManagerReportsPage = lazy(() => import("./modules/agence/manager/ManagerReportsPage"));
+const AgencyActivityDomainPage = lazy(() => import("./modules/agence/manager/domains/AgencyActivityDomainPage"));
+const AgencyActivityLogPage = lazy(() => import("./modules/agence/manager/AgencyActivityLogPage"));
+const AgencyAgentHistoryPage = lazy(() => import("./modules/agence/manager/AgencyAgentHistoryPage"));
+const AgencyCashDomainPage = lazy(() => import("./modules/agence/manager/domains/AgencyCashDomainPage"));
 const AgenceTrajetsPage = lazy(() => import("./modules/agence/pages/AgenceTrajetsPage"));
-const AgencyTreasuryPage = lazy(() => import("./modules/agence/pages/AgencyTreasuryPage"));
 const AgencyTreasuryNewOperationPage = lazy(() => import("./modules/agence/treasury/pages/AgencyTreasuryNewOperationPage"));
 const AgencyTreasuryTransferPage = lazy(() => import("./modules/agence/treasury/pages/AgencyTreasuryTransferPage"));
 const AgencyTreasuryNewPayablePage = lazy(() => import("./modules/agence/treasury/pages/AgencyTreasuryNewPayablePage"));
@@ -128,6 +135,7 @@ const CashSessionsPage = lazy(() => import("./modules/agence/cashControl/CashSes
 const BoardingLayout = lazy(() => import("./modules/agence/boarding/BoardingLayout"));
 const BoardingDashboardPage = lazy(() => import("./modules/agence/boarding/BoardingDashboardPage"));
 const BoardingScanPage = lazy(() => import("./modules/agence/boarding/BoardingScanPage"));
+const BoardingLiveOpsPage = lazy(() => import("./modules/agence/boarding/BoardingLiveOpsPage"));
 const FleetLayout = lazy(() => import("./modules/agence/fleet/FleetLayout"));
 const FleetDashboardPage = lazy(() => import("./modules/agence/fleet/FleetDashboardPage"));
 const FleetAssignmentPage = lazy(() => import("./modules/agence/fleet/FleetAssignmentPage"));
@@ -135,13 +143,15 @@ const FleetVehiclesPage = lazy(() => import("./modules/agence/fleet/FleetVehicle
 const FleetCrewPage = lazy(() => import("./modules/agence/fleet/FleetCrewPage"));
 const FleetMovementLogPage = lazy(() => import("./modules/agence/fleet/FleetMovementLogPage"));
 const AgenceFleetOperationsPage = lazy(() => import("./modules/agence/fleet/AgenceFleetOperationsPage"));
+const TripPlanningPage = lazy(() => import("./modules/agence/planning/TripPlanningPage"));
 const CourierLayout = lazy(() => import("./modules/agence/courrier/layout/CourierLayout"));
 const CourierSessionPage = lazy(() => import("./modules/agence/courrier/pages/CourierSessionPage"));
 const CourierCreateShipmentPage = lazy(() => import("./modules/agence/courrier/pages/CourierCreateShipmentPage"));
 const CourierReceptionPage = lazy(() => import("./modules/agence/courrier/pages/CourierReceptionPage"));
 const CourierPickupPage = lazy(() => import("./modules/agence/courrier/pages/CourierPickupPage"));
-const CourierReportsPage = lazy(() => import("./modules/agence/courrier/pages/CourierReportsPage"));
 const CourierBatchesPage = lazy(() => import("@/modules/agence/courrier/pages/CourierBatchesPage"));
+const CourierReportsPage = lazy(() => import("@/modules/agence/courrier/pages/CourierReportsPage"));
+const CourierHistoriquePage = lazy(() => import("@/modules/agence/courrier/pages/CourierHistoriquePage"));
 const MediaPage = lazy(() => import("./modules/plateforme/pages/MediaPage"));
 const DebugAuthPage = lazy(() => import("@/shared/pages/DebugAuthPage"));
 
@@ -170,7 +180,7 @@ const landingTargetForRoles = (roles: unknown): string => {
   }
 
   if (hasAny(rolesArray, routePermissions.agenceShell)) {
-    return "/agence/dashboard";
+    return "/agence/activite";
   }
 
   // COMPAGNIE (CEO) — only with companyId; without it avoid /compagnie/command-center (parsed as companyId="command-center")
@@ -190,7 +200,7 @@ const landingTargetForRoles = (roles: unknown): string => {
 const ROLE_LANDING: Record<string, string> = {
   admin_platforme: "/admin/dashboard",
   agency_accountant: "/agence/comptabilite",
-  chefAgence: "/agence/dashboard",
+  chefAgence: "/agence/activite",
   chefEmbarquement: "/agence/boarding",
   agency_fleet_controller: "/agence/fleet",
   guichetier: "/agence/guichet",
@@ -219,6 +229,14 @@ function RoleLanding() {
     return <Navigate to={`/compagnie/${companyId}/accounting`} replace />;
   }
   if ((role === "company_accountant" || role === "financial_director") && !companyId) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // Operator digital → caisse digitale (validation paiements en ligne uniquement)
+  if (role === "operator_digital" && companyId) {
+    return <Navigate to={`/compagnie/${companyId}/digital-cash`} replace />;
+  }
+  if (role === "operator_digital" && !companyId) {
     return <Navigate to="/login" replace />;
   }
 
@@ -303,6 +321,25 @@ const AppRoutes = () => {
           element={<AcceptInvitationPage />}
         />
 
+        <Route path="/track" element={<TrackShipmentFindPage />} />
+        <Route path="/track/:trackingPublicId" element={<TrackShipmentPage />} />
+        <Route
+          path="/scan"
+          element={
+            <ProtectedRoute allowedRoles={routePermissions.courrier} withCurrency={false}>
+              <ScanShipmentPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/scan/:shipmentId"
+          element={
+            <ProtectedRoute allowedRoles={routePermissions.courrier} withCurrency={false}>
+              <ScanShipmentPage />
+            </ProtectedRoute>
+          }
+        />
+
         {/* ========= ADMIN ========= */}
         <Route
           path="/admin"
@@ -352,6 +389,18 @@ const AppRoutes = () => {
             <PrivateRoute allowedRoles={["admin_compagnie", "company_accountant", "financial_director", "admin_platforme"] as const}>
               <TenantGuard>
                 <NotificationsPage />
+              </TenantGuard>
+            </PrivateRoute>
+          }
+        />
+
+        {/* ========= CAISSE DIGITALE (operator_digital + admins) — pas company_accountant / financial_director ========= */}
+        <Route
+          path="/compagnie/:companyId/digital-cash"
+          element={
+            <PrivateRoute allowedRoles={routePermissions.digitalCash}>
+              <TenantGuard>
+                <DigitalCashReservationsPage />
               </TenantGuard>
             </PrivateRoute>
           }
@@ -456,7 +505,26 @@ const AppRoutes = () => {
           }
         >
           <Route index element={<VueGlobale />} />
-          <Route path="reservations-en-ligne" element={<ReservationsEnLigne />} />
+          <Route
+            path="reservations-reseau"
+            element={
+              <GlobalPeriodProvider>
+                <GlobalDataSnapshotProvider>
+                  <ReservationsReseauPage />
+                </GlobalDataSnapshotProvider>
+              </GlobalPeriodProvider>
+            }
+          />
+          <Route
+            path="reservations-reseau/reservations"
+            element={
+              <GlobalPeriodProvider>
+                <GlobalDataSnapshotProvider>
+                  <CompagnieReservationsPage />
+                </GlobalDataSnapshotProvider>
+              </GlobalPeriodProvider>
+            }
+          />
           <Route path="finances" element={<Finances />} />
           <Route path="compta" element={<ComptaPage />} />
           <Route path="expenses" element={<DepensesPage />} />
@@ -468,6 +536,10 @@ const AppRoutes = () => {
           <Route path="supplier-payments" element={<TreasurySupplierPaymentPage />} />
           <Route path="rapports" element={<Rapports />} />
           <Route path="parametres" element={<Parametres />} />
+          <Route
+            path="consistency-diagnostics"
+            element={<FinancialConsistencyDiagnosticsPage />}
+          />
         </Route>
 
         {/* ========= AGENCY MANAGER (refactored cockpit) + Courrier as nested collapsible ========= */}
@@ -481,27 +553,53 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         >
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<ManagerCockpitPage />} />
-          <Route path="operations" element={<ManagerOperationsPage />} />
+          <Route index element={<Navigate to="activite" replace />} />
+          <Route path="activite" element={<AgencyActivityDomainPage />} />
+          <Route path="activity-log" element={<AgencyActivityLogPage />} />
+          <Route path="caisse" element={<AgencyCashDomainPage />} />
+          <Route path="dashboard" element={<Navigate to="/agence/activite" replace />} />
+          <Route path="operations" element={<Navigate to="/agence/activite#activite-operations" replace />} />
           <Route path="trajets" element={<ProtectedRoute allowedRoles={routePermissions.agenceShell} withCurrency><AgenceTrajetsPage /></ProtectedRoute>} />
-          <Route path="finances" element={<ManagerFinancesPage />} />
+          <Route path="finances" element={<Navigate to="/agence/caisse#caisse-sessions" replace />} />
           <Route
             path="expenses-approval"
             element={
               <ProtectedRoute allowedRoles={routePermissions.validationsAgence}>
-                <AgencyManagerExpensesPage />
+                <Navigate to="/agence/caisse#caisse-depenses" replace />
               </ProtectedRoute>
             }
           />
-          <Route path="expenses" element={<Navigate to="expenses-approval" replace />} />
-          <Route path="treasury" element={<AgencyTreasuryPage />} />
+          <Route path="expenses" element={<Navigate to="/agence/caisse#caisse-depenses" replace />} />
+          <Route path="treasury" element={<Navigate to="/agence/caisse#caisse-tresorerie" replace />} />
           <Route path="treasury/new-operation" element={<AgencyTreasuryNewOperationPage />} />
           <Route path="treasury/transfer" element={<AgencyTreasuryTransferPage />} />
           <Route path="treasury/new-payable" element={<AgencyTreasuryNewPayablePage />} />
           <Route path="team" element={<ManagerTeamPage />} />
+          <Route
+            path="planification-trajets"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.tripPlanning} withCurrency>
+                <TripPlanningPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="reports" element={<ManagerReportsPage />} />
-          <Route path="fleet" element={<Outlet />}>
+          <Route
+            path="agent-history"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.agentHistory} withCurrency>
+                <AgencyAgentHistoryPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="fleet"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.fleet} withCurrency>
+                <Outlet />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<FleetDashboardPage />} />
             <Route path="operations" element={<AgenceFleetOperationsPage />} />
             <Route path="assignment" element={<FleetAssignmentPage />} />
@@ -521,9 +619,11 @@ const AppRoutes = () => {
             <Route path="session" element={<CourierSessionPage />} />
             <Route path="nouveau" element={<CourierCreateShipmentPage />} />
             <Route path="lots" element={<CourierBatchesPage />} />
-            <Route path="reception" element={<CourierReceptionPage />} />
+            <Route path="reception" element={<Navigate to="/agence/courrier/arrivages" replace />} />
+            <Route path="arrivages" element={<CourierReceptionPage />} />
             <Route path="remise" element={<CourierPickupPage />} />
             <Route path="rapport" element={<CourierReportsPage />} />
+            <Route path="historique" element={<CourierHistoriquePage />} />
           </Route>
         </Route>
 
@@ -537,6 +637,7 @@ const AppRoutes = () => {
           }
         >
           <Route index element={<BoardingDashboardPage />} />
+          <Route path="live" element={<BoardingLiveOpsPage />} />
           <Route path="scan" element={<BoardingScanPage />} />
         </Route>
 
@@ -562,20 +663,30 @@ const AppRoutes = () => {
           element={<ProtectedRoute allowedRoles={routePermissions.guichet} withCurrency><AgenceGuichetPage /></ProtectedRoute>}
         />
         <Route
+          path="/agence/comptabilite/journal-agents"
+          element={
+            <TenantGuard>
+              <ProtectedRoute allowedRoles={routePermissions.agentHistory} withCurrency>
+                <AgencyAgentHistoryPage />
+              </ProtectedRoute>
+            </TenantGuard>
+          }
+        />
+        <Route
           path="/agence/comptabilite"
           element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} withCurrency><AgenceComptabilitePage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/treasury/new-operation"
-          element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} withCurrency><AgencyTreasuryNewOperationPage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency><AgencyTreasuryNewOperationPage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/treasury/transfer"
-          element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} withCurrency><AgencyTreasuryTransferPage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency><AgencyTreasuryTransferPage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/treasury/new-payable"
-          element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} withCurrency><AgencyTreasuryNewPayablePage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency><AgencyTreasuryNewPayablePage /></ProtectedRoute>}
         />
         <Route
           path="/agence/cash-sessions"

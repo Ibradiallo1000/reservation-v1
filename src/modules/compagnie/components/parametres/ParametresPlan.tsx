@@ -9,6 +9,7 @@ import { Button } from "@/shared/ui/button";
 import { SectionCard, StatusBadge } from "@/ui";
 import type { StatusVariant } from "@/ui";
 import { CheckCircle2, Shield, Star, Zap, Crown } from "lucide-react";
+import GenerateTripInstancesPlanningCard from "@/modules/compagnie/components/parametres/GenerateTripInstancesPlanningCard";
 import {
   collection,
   doc,
@@ -348,6 +349,8 @@ const ParametresPlan: React.FC<Props> = ({ companyId }) => {
           </div>
         </SectionCard>
       )}
+
+      <GenerateTripInstancesPlanningCard companyId={companyId} />
     </div>
   );
 };

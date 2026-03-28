@@ -1,4 +1,12 @@
+export { getSegmentsForRoute } from "./tripInstanceSegments";
+
 /**
+ * @deprecated Pour l’affichage des places disponibles, utiliser le champ `remainingSeats` sur le document
+ * `tripInstance` (mis à jour par incrementReservedSeats / decrementReservedSeats) et
+ * `tripInstanceRemainingFromDoc()` depuis `tripInstanceTypes.ts`.
+ *
+ * Ce module reste disponible pour audit / diagnostics / logique segmentée avancée non couverte par le champ stocké.
+ *
  * Segment-based occupancy for trip instances with stops (escales).
  * remainingSeats = seatCapacity - max(segment occupancies).
  * Reservations carry originStopOrder and destinationStopOrder; when absent, we resolve from depart/arrivee when route has stops.
@@ -11,6 +19,15 @@ import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
 import { getReservedPlaces } from "./remainingPlacesUtils";
 
 const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "confirmé", "validé"];
+
+function reservationCountsAsConfirmedForSegments(docData: Record<string, unknown>): boolean {
+  const st = String(docData.status ?? "").toLowerCase();
+  if (st === "payé" || st === "paye") {
+    return docData.ticketValidatedAt != null;
+  }
+  const statut = (docData.statut ?? "").toString().toLowerCase();
+  return CONFIRMED_STATUTS.includes(statut);
+}
 
 function normalizeCity(city: string): string {
   return (city ?? "").trim().toLowerCase();
@@ -69,8 +86,7 @@ export async function computeSegmentOccupancy(
 
   for (let i = 0; i < resSnap.docs.length; i++) {
     const docData = resSnap.docs[i].data() as Record<string, unknown>;
-    const statut = (docData.statut ?? "").toString().toLowerCase();
-    if (!CONFIRMED_STATUTS.includes(statut)) continue;
+    if (!reservationCountsAsConfirmedForSegments(docData)) continue;
     const boardingStatus = (docData.boardingStatus ?? "pending").toString().toLowerCase();
     if (boardingStatus === "no_show") continue;
 
@@ -118,9 +134,9 @@ export async function getReservedSeatsForTripInstance(
     )
   );
   const list = resSnap.docs
-    .map((d) => d.data() as { statut?: string; boardingStatus?: string; seatsGo?: number; seatsReturn?: number; places?: number })
+    .map((d) => d.data() as Record<string, unknown>)
     .filter((r) => {
-      if (!CONFIRMED_STATUTS.includes((r.statut ?? "").toString().toLowerCase())) return false;
+      if (!reservationCountsAsConfirmedForSegments(r)) return false;
       if ((r.boardingStatus ?? "pending").toString().toLowerCase() === "no_show") return false;
       return true;
     });
@@ -128,6 +144,9 @@ export async function getReservedSeatsForTripInstance(
 }
 
 /**
+ * @deprecated Ne plus utiliser pour les listes UI — coûteux (collectionGroup reservations).
+ * Voir `tripInstance.remainingSeats` + `tripInstanceRemainingFromDoc`.
+ *
  * Remaining seats = seatCapacity - max(segment occupancies) si route avec stops,
  * sinon seatCapacity - somme des places des réservations (plus de fallback reservedSeats pour l’affichage).
  */

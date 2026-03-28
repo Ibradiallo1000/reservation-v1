@@ -1,44 +1,14 @@
 /**
- * Génération des trajets publics à partir des instances réelles.
- * Pour chaque weeklyTrip, on génère les instances sur les 14 prochains jours
- * uniquement si weeklyTrip.horaires[day] existe. Les jours et horaires affichés
- * sont dérivés de validTrips (aucune projection vide, cohérence agencyId/companyId).
+ * Liste des trajets publics à partir des tripInstances déjà créées (aucune écriture côté client).
+ * Requête unique sur la fenêtre [today, today+N], sans boucle par jour.
  */
 
-import { collection, getDocs, query, where } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
-import {
-  getOrCreateTripInstanceForSlot,
-  listTripInstancesByRouteAndDate,
-} from "./tripInstanceService";
-
-const DAYS: Record<number, string> = [
-  "dimanche",
-  "lundi",
-  "mardi",
-  "mercredi",
-  "jeudi",
-  "vendredi",
-  "samedi",
-];
+import { listTripInstancesByRouteAndDateRange } from "./tripInstanceService";
+import { fetchPendingOnlineHoldSeatsMap, onlineHoldCompositeKey } from "./onlineReservationHolds";
+import { tripInstanceRemainingFromDoc } from "./tripInstanceTypes";
 
 function toYMD(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-export interface WeeklyTripLike {
-  id: string;
-  departure?: string;
-  depart?: string;
-  arrival?: string;
-  arrivee?: string;
-  departureCity?: string;
-  arrivalCity?: string;
-  horaires?: Record<string, string[]>;
-  places?: number;
-  seats?: number;
-  price?: number;
-  routeId?: string | null;
 }
 
 export interface ValidTrip {
@@ -48,182 +18,117 @@ export interface ValidTrip {
   departure: string;
   arrival: string;
   price: number;
-  places: number;
   remainingSeats: number;
   agencyId: string;
-  companyId: string;
-  routeId?: string | null;
+  /** Pour segments / bookSeats (aligné guichet). */
+  routeId?: string;
 }
 
 export interface BuildValidTripsParams {
   companyId: string;
   depNorm: string;
   arrNorm: string;
-  /** Normalise une chaîne pour comparaison (ex: trim + lowercase). */
-  normalize: (s: string) => string;
-  /** Liste des agences (au moins { id }). */
-  agences: Array<{ id: string }>;
+  /** Conservé pour compatibilité des appelants ; non utilisé. */
+  normalize?: (s: string) => string;
   /** Nombre de jours à couvrir à partir d'aujourd'hui (défaut 14). */
   daysAhead?: number;
-  /** Pour filtrer les créneaux passés aujourd'hui. Retourne true si (dateStr, time) est passé. */
-  isPastTime?: (dateStr: string, time: string) => boolean;
-  /** Calcule les places restantes pour une instance. Si absent, utilise capacity - reservedSeats. */
-  getRemaining?: (companyId: string, instanceId: string, ti: Record<string, unknown>) => Promise<number>;
-}
-
-/** Slot à créer : (agence, weekly, date, heure) */
-interface SlotToCreate {
-  agencyId: string;
-  weekly: WeeklyTripLike;
-  dateStr: string;
-  heure: string;
+  /** Nombre max de résultats renvoyés par la requête unique (défaut 100). */
+  limitCount?: number;
+  /** Curseur pour charger la page suivante. */
+  startAfterCursor?: { date: string; time: string; id: string } | null;
 }
 
 /**
- * Pour chaque weeklyTrip (par agence), génère les instances réelles sur les jours
- * où horaires[day] existe. Puis construit validTrips avec remaining > 0 et non passés.
- * Optimisé : chargement weeklyTrips en parallèle, création des slots en parallèle, listing par date en parallèle.
+ * Lit uniquement les tripInstances existantes (ville départ / arrivée / date).
+ * Aucune création : si le planning n’a pas été matérialisé en instances, la liste est vide.
  */
 export async function buildValidTripsFromWeeklyTrips(
   params: BuildValidTripsParams
-): Promise<{ validTrips: ValidTrip[]; dates: string[] }> {
+): Promise<{
+  validTrips: ValidTrip[];
+  dates: string[];
+  hasMore: boolean;
+  nextCursor: { date: string; time: string; id: string } | null;
+}> {
   const {
     companyId,
     depNorm,
     arrNorm,
-    normalize,
-    agences,
-    daysAhead = 14,
-    isPastTime = () => false,
-    getRemaining,
+    /** Aligné guichet (AgenceGuichetPage DAYS_IN_ADVANCE). */
+    daysAhead = 8,
+    // Limiter pour perf, mais éviter de cacher des trajets.
+    limitCount = 100,
+    startAfterCursor = null,
   } = params;
 
   const today = new Date();
   const todayYMD = toYMD(today);
-  const depNormN = normalize(depNorm);
-  const arrNormN = normalize(arrNorm);
+  const depCity = depNorm.trim();
+  const arrCity = arrNorm.trim();
 
-  // 1) Charger tous les weeklyTrips de toutes les agences en parallèle
-  const weeklySnapshots = await Promise.all(
-    agences.map((agence) =>
-      getDocs(
-        query(
-          collection(db, "companies", companyId, "agences", agence.id, "weeklyTrips"),
-          where("active", "==", true)
-        )
-      )
-    )
+  const to = new Date(today);
+  to.setDate(today.getDate() + Math.max(0, daysAhead));
+  const dateFrom = todayYMD;
+  const dateTo = toYMD(to);
+
+  const allInstances = await listTripInstancesByRouteAndDateRange(
+    companyId,
+    depCity,
+    arrCity,
+    dateFrom,
+    dateTo,
+    { limitCount, startAfterCursor: startAfterCursor ?? undefined }
   );
+  const holdMap = await fetchPendingOnlineHoldSeatsMap(companyId);
+  const validTrips: ValidTrip[] = allInstances
+    .filter((ti) => String((ti as { status?: unknown }).status ?? "").toLowerCase() !== "cancelled")
+    .filter((ti) => String(ti.date ?? "") >= todayYMD)
+    .map((ti) => {
+      const departure = String((ti as any).departureCity ?? (ti as any).departure ?? depCity).trim();
+      const arrival = String((ti as any).arrivalCity ?? (ti as any).arrival ?? arrCity).trim();
+      const time = String((ti as any).departureTime ?? (ti as any).time ?? "00:00").trim();
+      const baseRemaining = tripInstanceRemainingFromDoc(ti);
+      const holdKey = onlineHoldCompositeKey(String(ti.id), departure, arrival);
+      const held = holdMap.get(holdKey) ?? 0;
+      const remainingSeats = Math.max(0, baseRemaining - held);
+      return {
+        id: String(ti.id),
+        departure,
+        arrival,
+        date: String(ti.date ?? ""),
+        time,
+        price: Number((ti as { price?: unknown }).price ?? 0),
+        remainingSeats,
+        agencyId: String(ti.agencyId ?? ""),
+        routeId: (() => {
+          const r = (ti as { routeId?: unknown }).routeId;
+          if (r == null || r === "") return undefined;
+          const t = String(r).trim();
+          return t || undefined;
+        })(),
+      };
+    })
+    .filter((t) => t.remainingSeats > 0);
 
-  // 2) Construire la liste de tous les slots à créer (sans await)
-  const slotsToCreate: SlotToCreate[] = [];
-  const dateStrSet = new Set<string>();
-
-  for (let a = 0; a < agences.length; a++) {
-    const agence = agences[a];
-    const wSnap = weeklySnapshots[a];
-    const weekly = wSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as WeeklyTripLike));
-    for (const t of weekly) {
-      const tripDep = normalize(t.departureCity ?? t.departure ?? t.depart ?? "");
-      const tripArr = normalize(t.arrivalCity ?? t.arrival ?? t.arrivee ?? "");
-      if (tripDep !== depNormN || tripArr !== arrNormN) continue;
-
-      const horaires = t.horaires || {};
-      for (let i = 0; i < daysAhead; i++) {
-        const d = new Date(today);
-        d.setDate(d.getDate() + i);
-        const dateStr = toYMD(d);
-        const dayName = DAYS[d.getDay()];
-        const slots = horaires[dayName];
-        if (!Array.isArray(slots) || slots.length === 0) continue;
-
-        for (const heure of slots) {
-          if (dateStr === todayYMD && isPastTime(dateStr, heure)) continue;
-          slotsToCreate.push({ agencyId: agence.id, weekly: t, dateStr, heure });
-          dateStrSet.add(dateStr);
-        }
-      }
-    }
-  }
-
-  // 3) Créer toutes les instances en parallèle
-  await Promise.all(
-    slotsToCreate.map(({ agencyId, weekly, dateStr, heure }) =>
-      getOrCreateTripInstanceForSlot(companyId, {
-        agencyId,
-        departureCity: depNorm.trim(),
-        arrivalCity: arrNorm.trim(),
-        date: dateStr,
-        departureTime: heure,
-        seatCapacity: weekly.seats ?? weekly.places ?? 30,
-        price: weekly.price ?? null,
-        weeklyTripId: weekly.id,
-        routeId: weekly.routeId ?? null,
-      })
-    )
-  );
-
-  // 4) Lister les instances pour toutes les dates en parallèle
-  const dateStrArray = [...dateStrSet];
-  const instancesByDate = await Promise.all(
-    dateStrArray.map((dateStr) =>
-      listTripInstancesByRouteAndDate(companyId, depNorm, arrNorm, dateStr)
-    )
-  );
-
-  // 5) Construire validTrips (remaining en parallèle si getRemaining fourni)
-  const allInstances = instancesByDate.flat();
-  const withRemaining =
-    getRemaining != null
-      ? await Promise.all(
-          allInstances.map(async (ti) => {
-            const data = ti as unknown as Record<string, unknown>;
-            const remaining = await getRemaining(companyId, ti.id, data);
-            return { ti, data, remaining };
-          })
-        )
-      : allInstances.map((ti) => {
-          const data = ti as unknown as Record<string, unknown>;
-          const capacity = (data.seatCapacity ?? data.capacitySeats ?? 30) as number;
-          const reserved = (data.reservedSeats ?? 0) as number;
-          return { ti, data, remaining: Math.max(0, capacity - reserved) };
-        });
-
-  const validTrips: ValidTrip[] = [];
-  for (const { ti, data, remaining } of withRemaining) {
-    if (data.status === "cancelled") continue;
-    if (remaining <= 0) continue;
-    const dateStr = ti.date;
-    if (dateStr === todayYMD && isPastTime(dateStr, (data.departureTime as string) ?? "00:00"))
-      continue;
-
-    const capacity = (data.seatCapacity ?? data.capacitySeats ?? 30) as number;
-    validTrips.push({
-      id: ti.id,
-      date: ti.date,
-      time: (data.departureTime as string) ?? "",
-      departure: (data.departureCity ?? data.routeDeparture ?? depNorm) as string,
-      arrival: (data.arrivalCity ?? data.routeArrival ?? arrNorm) as string,
-      price: (data.price as number) ?? 0,
-      places: capacity,
-      remainingSeats: remaining,
-      agencyId: ti.agencyId,
-      companyId,
-      routeId: (data.routeId as string | null) ?? null,
-    });
-  }
-
-  validTrips.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
-  const dates = [...new Set(validTrips.map((t) => t.date))].sort();
+  const dates = validTrips.map((t) => t.date);
 
   if (import.meta.env?.DEV) {
     console.log(
-      "validTrips (trajets réels):",
+      "validTrips (instances existantes uniquement):",
       validTrips.length,
-      "dates dérivées:",
+      "dates:",
       dates.length,
       dates
     );
   }
-  return { validTrips, dates };
+  const last = allInstances[allInstances.length - 1];
+  const nextCursor = last
+    ? {
+        date: String(last.date ?? ""),
+        time: String((last as any).departureTime ?? (last as any).time ?? "00:00").trim(),
+        id: String(last.id),
+      }
+    : null;
+  const hasMore = allInstances.length >= limitCount;
+  return { validTrips, dates, hasMore, nextCursor };
 }

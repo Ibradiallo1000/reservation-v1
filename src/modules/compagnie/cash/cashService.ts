@@ -1,7 +1,11 @@
 /**
  * Service de gestion de caisse TELIYA.
- * cashTransactions = encaissements (vente billet → caisse locale).
+ * cashTransactions = trace opérationnelle terrain (audit guichet / sessions), pas la source de vérité du ledger.
+ * Écritures ledger (financialTransactions) : uniquement pour sourceType guichet ou transfer via createCashTransaction — jamais pour online (confirmPayment uniquement).
  * cashClosures = clôtures journalières (expectedAmount, declaredAmount, difference).
+ *
+ * Contrat requêtes : ne jamais utiliser `where` / `orderBy` sur le champ string `paidAt` (déprécié).
+ * Périodes et listes : `createdAt` (Timestamp) avec bornes dérivées du fuseau (`getCashTransactionsByPaidAtRange`, etc.).
  */
 
 import {
@@ -32,8 +36,15 @@ import {
   type CashTransferMethod,
 } from "./cashTypes";
 import { updateDoc } from "firebase/firestore";
-import { getTodayBamako, normalizeDateToYYYYMMDD } from "@/shared/date/dateUtilsTz";
+import {
+  DEFAULT_AGENCY_TIMEZONE,
+  formatDateKeyUtcFromDate,
+  getEndOfDayForDate,
+  getStartOfDayForDate,
+  normalizeDateToYYYYMMDD,
+} from "@/shared/date/dateUtilsTz";
 import { setDoc } from "firebase/firestore";
+import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 
 export type { CashTransactionDocWithId } from "./cashTypes";
 
@@ -70,18 +81,20 @@ export interface CreateCashTransactionParams {
   locationId: string;
   routeId?: string | null;
   createdBy: string;
-  /** Date réelle d'encaissement (YYYY-MM-DD). Source de vérité pour les encaissements. Si omis, utilise aujourd'hui (Bamako). */
+  /** @deprecated Ne pas s’en servir pour filtrer. Laisser vide : `paidAtAt` / `createdAt` serveur. */
   paidAt?: string;
-  /** @deprecated Utiliser paidAt. Conservé pour rétrocompat. */
+  /** @deprecated Même rôle que paidAt (rétrocompat écriture). Requêtes = createdAt + fuseau. */
   date?: string;
   /** Nombre de places (billets) — pour totaux session depuis caisse. */
   seats?: number;
   /** Libellé trajet (ex. "Bamako→Gao") pour rapports. */
   routeLabel?: string | null;
+  /** Référence vers financialAccounts (compte Wave, Orange Money, etc.). Traçabilité comptable. */
+  accountId?: string | null;
 }
 
-function virtualSessionIdForOnline(agencyId: string, paidAt: string): string {
-  return `virtual_online_${agencyId}_${paidAt}`;
+function virtualSessionIdForOnline(agencyId: string, legacyUtcDayKey: string): string {
+  return `virtual_online_${agencyId}_${legacyUtcDayKey}`;
 }
 
 async function ensureVirtualSession(companyId: string, sessionId: string, payload: Record<string, unknown>) {
@@ -91,11 +104,15 @@ async function ensureVirtualSession(companyId: string, sessionId: string, payloa
 
 /**
  * Crée une entrée de caisse (chaque réservation confirmée génère une cashTransaction).
- * paidAt = date réelle d'encaissement (vente). Ne pas utiliser la date du trajet.
+ * Instant réel : `createdAt` / `paidAtAt` (serveur). Champs `date` / `paidAt` = copie jour UTC héritée uniquement (affichage / rétrocompat), pas pour filtrer.
  */
 export async function createCashTransaction(params: CreateCashTransactionParams): Promise<string> {
-  const paidAtRaw = params.paidAt ?? params.date ?? getTodayBamako();
-  const paidAt = normalizeDateToYYYYMMDD(paidAtRaw);
+  const nowTs = Timestamp.now();
+  const explicitCalendar =
+    (params.paidAt != null && String(params.paidAt).trim() && normalizeDateToYYYYMMDD(params.paidAt)) ||
+    (params.date != null && String(params.date).trim() && normalizeDateToYYYYMMDD(params.date)) ||
+    null;
+  const legacyUtcDayKey = explicitCalendar ?? formatDateKeyUtcFromDate(nowTs.toDate());
   const sourceType = params.sourceType ?? "guichet";
 
   // SessionId obligatoire pour guichet (audit-proof). Online -> session virtuelle.
@@ -106,12 +123,11 @@ export async function createCashTransaction(params: CreateCashTransactionParams)
     }
   }
   if (sourceType === "online") {
-    // session virtuelle par agence et jour (paidAt)
-    sessionId = sessionId ?? virtualSessionIdForOnline(params.locationId, paidAt);
+    sessionId = sessionId ?? virtualSessionIdForOnline(params.locationId, legacyUtcDayKey);
     await ensureVirtualSession(params.companyId, sessionId, {
       companyId: params.companyId,
       agencyId: params.locationId,
-      paidAt,
+      paidAt: legacyUtcDayKey,
       sourceType: "online",
     });
   }
@@ -130,13 +146,48 @@ export async function createCashTransaction(params: CreateCashTransactionParams)
     locationId: params.locationId,
     routeId: params.routeId ?? null,
     createdBy: params.createdBy,
-    date: paidAt,
-    paidAt,
+    date: legacyUtcDayKey,
+    paidAt: legacyUtcDayKey,
     status: CASH_TRANSACTION_STATUS.PAID,
     seats: params.seats ?? null,
     routeLabel: params.routeLabel ?? null,
+    accountId: params.accountId ?? null,
     createdAt: serverTimestamp(),
+    paidAtAt: serverTimestamp(),
   });
+  // Online : aucune écriture ledger ici — obligatoirement paymentService.confirmPayment.
+  if (sourceType === "online") {
+    return docRef.id;
+  }
+  // Guichet / transfer : une écriture payment_received ledger par transaction de caisse.
+  if (sourceType === "guichet" || sourceType === "transfer") {
+    try {
+      await createFinancialTransaction({
+        companyId: params.companyId,
+        type: "payment_received",
+        source: sourceType,
+        paymentChannel: "guichet",
+        paymentMethod:
+          params.paymentMethod === "mobile_money"
+            ? "mobile_money"
+            : params.paymentMethod === "card"
+              ? "card"
+              : "cash",
+        amount: Number(params.amount) || 0,
+        currency: params.currency ?? "XOF",
+        agencyId: params.locationId,
+        reservationId: params.reservationId,
+        referenceType: "cash_session",
+        referenceId: docRef.id,
+        metadata: {
+          paymentMethod: params.paymentMethod ?? "cash",
+          sourceSessionId: sessionId,
+        },
+      });
+    } catch (err) {
+      console.warn("[cashService] createFinancialTransaction failed (cash transaction):", err);
+    }
+  }
   return docRef.id;
 }
 
@@ -191,13 +242,18 @@ export async function markCashTransactionOrphan(
 export async function getCashTransactionsByLocation(
   companyId: string,
   locationId: string,
-  date: string
+  date: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<CashTransactionDocWithId[]> {
   const ref = cashTransactionsRef(companyId);
+  const dNorm = normalizeDateToYYYYMMDD(date);
+  const start = Timestamp.fromDate(getStartOfDayForDate(dNorm, timeZone));
+  const end = Timestamp.fromDate(getEndOfDayForDate(dNorm, timeZone));
   const q = query(
     ref,
     where("locationId", "==", locationId),
-    where("date", "==", date),
+    where("createdAt", ">=", start),
+    where("createdAt", "<=", end),
     orderBy("createdAt", "asc")
   );
   const snap = await getDocs(q);
@@ -205,15 +261,16 @@ export async function getCashTransactionsByLocation(
 }
 
 /**
- * Montant total encaissé (non remboursé) pour un point de vente sur une date.
- * Ne compte que les transactions avec status !== 'refunded'.
+ * Montant total cashTransactions (non remboursé) pour un point de vente sur une date.
+ * Ne représente pas le solde ledger — pour la caisse physique utiliser getLedgerBalances(companyId, locationId).cash.
  */
 export async function getCashTotalByLocation(
   companyId: string,
   locationId: string,
-  date: string
+  date: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<number> {
-  const list = await getCashTransactionsByLocation(companyId, locationId, date);
+  const list = await getCashTransactionsByLocation(companyId, locationId, date, timeZone);
   return list.reduce((sum, t) => {
     if ((t as { status?: string }).status === CASH_TRANSACTION_STATUS.REFUNDED) return sum;
     return sum + (Number(t.amount) || 0);
@@ -283,86 +340,65 @@ export async function getClosuresByDate(
 }
 
 /**
- * Toutes les transactions d'une date pour la compagnie (tous points de vente).
+ * @deprecated Alias de `getCashTransactionsByPaidAtRange` (filtre `createdAt`, fuseau défaut Bamako).
+ * Ne pas réintroduire de requête sur le champ string `date` / `paidAt`.
  */
 export async function getCashTransactionsByDate(
   companyId: string,
   date: string
 ): Promise<CashTransactionDocWithId[]> {
-  const ref = cashTransactionsRef(companyId);
-  const q = query(ref, where("date", "==", date), orderBy("createdAt", "asc"));
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CashTransactionDocWithId));
+  return getCashTransactionsByPaidAtRange(companyId, date, date, DEFAULT_AGENCY_TIMEZONE);
 }
 
 /**
- * Transactions de caisse sur une plage de dates (champ "date" — rétrocompat).
- * Pour les encaissements par période, privilégier getCashTransactionsByPaidAtRange.
- * Requiert index : cashTransactions (date ASC).
+ * @deprecated Alias de `getCashTransactionsByPaidAtRange` (filtre `createdAt`, fuseau défaut Bamako).
+ * Aligné KPI réseau / cohérence : même fuseau que `getStartOfDayInBamako` lorsque la période UI est Bamako.
  */
 export async function getCashTransactionsByDateRange(
   companyId: string,
   dateFrom: string,
   dateTo: string
 ): Promise<CashTransactionDocWithId[]> {
-  const ref = cashTransactionsRef(companyId);
-  const q = query(
-    ref,
-    where("date", ">=", dateFrom),
-    where("date", "<=", dateTo),
-    orderBy("date", "asc"),
-    limit(5000)
-  );
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CashTransactionDocWithId));
+  return getCashTransactionsByPaidAtRange(companyId, dateFrom, dateTo, DEFAULT_AGENCY_TIMEZONE);
 }
 
 /**
- * Transactions de caisse par date réelle d'encaissement (paidAt).
- * Source de vérité pour les encaissements par période. Les documents sans paidAt
- * (données anciennes) ne sont pas retournés — exécuter la migration de backfill si besoin.
- * Requiert index : cashTransactions (paidAt ASC).
- * paidAt en base doit être au format "YYYY-MM-DD" strict pour matcher la plage.
- *
- * Recommandation future : migrer paidAt vers Firestore Timestamp pour requêtes et indexation
- * cohérentes (comparaisons de dates sans ambiguïté de timezone).
+ * Transactions de caisse sur une plage de jours calendaires dans `timeZone` (fuseau agence).
+ * Filtre sur `createdAt` (Timestamp) entre début et fin de journée locale.
+ * Le nom historique « PaidAt » ne doit pas suggérer un filtre sur le champ string `paidAt` (interdit).
  */
 export async function getCashTransactionsByPaidAtRange(
   companyId: string,
   dateFrom: string,
-  dateTo: string
+  dateTo: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<CashTransactionDocWithId[]> {
   const from = normalizeDateToYYYYMMDD(dateFrom);
   const to = normalizeDateToYYYYMMDD(dateTo);
   const ref = cashTransactionsRef(companyId);
-
-  // Firestore ne gère pas de manière fiable les ranges (>= / <=) sur des chaînes de date.
-  // Pour un seul jour (dateFrom === dateTo), utiliser l'égalité pour garantir les résultats.
-  const q =
-    from === to
-      ? query(ref, where("paidAt", "==", from), limit(5000))
-      : query(
-          ref,
-          where("paidAt", ">=", from),
-          where("paidAt", "<=", to),
-          orderBy("paidAt", "asc"),
-          limit(5000)
-        );
+  const start = Timestamp.fromDate(getStartOfDayForDate(from, timeZone));
+  const end = Timestamp.fromDate(getEndOfDayForDate(to, timeZone));
+  const q = query(
+    ref,
+    where("createdAt", ">=", start),
+    where("createdAt", "<=", end),
+    orderBy("createdAt", "asc"),
+    limit(5000)
+  );
 
   const snap = await getDocs(q);
   const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as CashTransactionDocWithId));
-  const first = list[0] as (CashTransactionDocWithId & { paidAt?: string }) | undefined;
+  const first = list[0];
   // eslint-disable-next-line no-console
   console.log("[TELIYA cash] getCashTransactionsByPaidAtRange", {
     dateFrom: from,
     dateTo: to,
+    timeZone,
     requestedDateFrom: dateFrom,
     requestedDateTo: dateTo,
     resultsCount: list.length,
-    samplePaidAt: first?.paidAt ?? first?.date,
-    sample: first
-      ? { id: first.id, paidAt: (first as any).paidAt, date: (first as any).date, amount: (first as any).amount }
-      : null,
+    sampleCreatedAt: first ? (first as { createdAt?: { toDate?: () => Date } }).createdAt : undefined,
+    sample: first ? { id: first.id, amount: first.amount } : null,
   });
   return list;
 }
@@ -395,30 +431,14 @@ export async function getCashTransactionsUnfilteredForDebug(
 }
 
 /**
- * Debug : requête avec filtre paidAt exact (pour tester si le souci vient du range >= <=).
+ * Transactions pour un jour calendaire dans le fuseau donné (bornes sur `createdAt`).
  */
 export async function getCashTransactionsByPaidAtExact(
   companyId: string,
-  dateStr: string
+  dateStr: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<CashTransactionDocWithId[]> {
-  const date = normalizeDateToYYYYMMDD(dateStr);
-  const ref = cashTransactionsRef(companyId);
-  const q = query(ref, where("paidAt", "==", date), limit(500));
-  const snap = await getDocs(q).catch(() => ({ docs: [] as any }));
-  const list = snap.docs.map((d: any) => ({ id: d.id, ...d.data() } as CashTransactionDocWithId));
-  // eslint-disable-next-line no-console
-  console.log("[TELIYA cash] getCashTransactionsByPaidAtExact", {
-    dateStr: date,
-    resultsCount: list.length,
-    sample: list[0]
-      ? {
-          id: (list[0] as any).id,
-          paidAt: (list[0] as any).paidAt,
-          amount: (list[0] as any).amount,
-        }
-      : null,
-  });
-  return list;
+  return getCashTransactionsByPaidAtRange(companyId, dateStr, dateStr, timeZone);
 }
 
 // ─────────────── Cash refunds ───────────────
@@ -516,6 +536,23 @@ export async function createCashTransfer(params: CreateCashTransferParams): Prom
     date,
     createdAt: serverTimestamp(),
   });
+  try {
+    await createFinancialTransaction({
+      companyId: params.companyId,
+      type: "transfer",
+      transferRoute: "agency_cash_to_company_bank",
+      source: String(params.transferMethod ?? "cash"),
+      amount: Number(params.amount) || 0,
+      agencyId: params.locationId,
+      referenceType: "cash_transfer",
+      referenceId: docRef.id,
+      metadata: {
+        locationType: params.locationType,
+      },
+    });
+  } catch (err) {
+    console.warn("[cashService] createFinancialTransaction failed (cash transfer):", err);
+  }
   return docRef.id;
 }
 

@@ -476,7 +476,7 @@ const Finances: React.FC = () => {
       <SectionCard
         title="Finances consolidées"
         icon={TrendingUp}
-        help={<span className="text-sm font-normal text-gray-500">Données consolidées pour la prise de décision</span>}
+        help={<span className="text-sm font-normal text-gray-500">Vue consolidée : activité opérationnelle + indicateurs de tendance</span>}
         right={
           <div className="flex items-center gap-2">
             <button onClick={handleRefresh} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium">
@@ -818,7 +818,7 @@ const Finances: React.FC = () => {
           <div className="text-sm text-gray-600">
             <span className="font-medium">Note :</span> 
             Les moyens de paiement (espèces, mobile money) peuvent être utilisés dans les deux canaux (guichet et en ligne).
-            Cette répartition montre comment l'argent est physiquement encaissé.
+            Cette répartition décrit l'activité d'encaissement (source opérationnelle), pas le solde des comptes ledger.
           </div>
         </div>
       </SectionCard>
@@ -920,7 +920,7 @@ const Finances: React.FC = () => {
           <div className="text-sm text-gray-700">
             <strong>Mode de calcul :</strong>
             <ul className="mt-2 space-y-1">
-              <li>• Chiffre d'affaires = Somme des transactions validées</li>
+              <li>• Chiffre d'affaires = agrégat opérationnel (dailyStats, avec fallback réservations payées)</li>
               <li>• Dépenses = Saisies individuelles par chaque agence</li>
               <li>• Bénéfice = CA - Dépenses (calculé uniquement si dépenses renseignées)</li>
               <li>• Marge = (Bénéfice / CA) × 100</li>

@@ -5,8 +5,20 @@ import {
 import { db } from "@/firebaseConfig";
 import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { useAuth } from "@/contexts/AuthContext";
-import { listAccounts, ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { listExpenses, PENDING_STATUSES } from "@/modules/compagnie/treasury/expenses";
+import { listCashSessions } from "@/modules/agence/cashControl/cashSessionService";
+import { CASH_SESSION_STATUS } from "@/modules/agence/cashControl/cashSessionTypes";
+import { listChefIncidents } from "@/modules/agence/manager/incidentStore";
+import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPaths";
+import {
+  reconcilePendingCashAgency,
+  PENDING_CASH_HIGH_THRESHOLD_FCFA,
+  PENDING_REMITTANCE_ALERT_HOURS,
+} from "@/modules/agence/comptabilite/pendingCashSafety";
+import {
+  ACTIVITY_DISCREPANCY_EPSILON,
+  courierSessionBusinessDiscrepancy,
+  guichetShiftBusinessDiscrepancy,
+} from "@/modules/agence/manager/agencyActivityTrackingService";
 
 /* ────────────────────────────────────────────────────────
    ALERT TYPES — designed for future extensibility.
@@ -16,7 +28,7 @@ import { listExpenses, PENDING_STATUSES } from "@/modules/compagnie/treasury/exp
    PERFORMANCE NOTE — Firestore listener inventory:
    This hook subscribes to 3 real-time listeners (shifts,
    today-reservations, boardingClosures) + 1 one-time fetch
-   (weeklyTrips) + 1 Promise-based fetch (accounts, expenses).
+   (weeklyTrips).
    Pages that also need this data share the shell's mount and
    will inherently create their own listeners because React
    snapshot hooks must be per-component. Future improvement:
@@ -64,14 +76,22 @@ export function useManagerAlerts(): ManagerAlertsResult {
   const userId: string = user?.uid ?? "";
 
   const [shifts, setShifts] = useState<any[]>([]);
-  const [cashPosition, setCashPosition] = useState(0);
-  const [todayRevenue, setTodayRevenue] = useState(0);
-  const [todayExpenses, setTodayExpenses] = useState(0);
   const [departures, setDepartures] = useState<Array<{
     key: string; departure: string; arrival: string; heure: string;
     embarked: number; capacity: number; closed: boolean;
   }>>([]);
   const [loading, setLoading] = useState(true);
+  const [cashExceptionCount, setCashExceptionCount] = useState(0);
+  const [courierDiscrepancyCount, setCourierDiscrepancyCount] = useState(0);
+  const [courierLitigeByAgentId, setCourierLitigeByAgentId] = useState<Record<string, number>>({});
+  const [openIncidentCount, setOpenIncidentCount] = useState(0);
+  const [pendingCashRecon, setPendingCashRecon] = useState<{
+    mismatch: boolean;
+    diff: number;
+    actualPendingBalance: number;
+    legacySessionCount: number;
+    pendingTooHigh: boolean;
+  } | null>(null);
 
   const tripsRef = useRef<any[]>([]);
   const [dismissedAlertIds, setDismissedAlertIds] = useState<Set<string>>(new Set());
@@ -109,7 +129,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
     /* Listener 1: shifts */
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/shifts`),
-        where("status", "in", ["active", "paused", "closed", "validated"]), limit(100)),
+        where("status", "in", ["active", "paused", "closed", "validated_agency", "validated"]), limit(100)),
       (s) => setShifts(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
     ));
 
@@ -133,7 +153,6 @@ export function useManagerAlerts(): ManagerAlertsResult {
       query(resRef, where("date", "==", today), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])),
       (snap) => {
         const reservations = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
-        setTodayRevenue(reservations.reduce((a: number, r: any) => a + (r.montant ?? 0), 0));
 
         const depList: typeof departures = [];
         tripsRef.current.forEach((t: any) => {
@@ -148,33 +167,102 @@ export function useManagerAlerts(): ManagerAlertsResult {
       },
     ));
 
-    /* One-time fetch: cash position + today's expenses */
-    const currency = (company as any)?.devise ?? "XOF";
-    const runEnsureAndList = () =>
-      ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as any)?.nom).then(() =>
-        listAccounts(companyId, { agencyId }).then((accs) =>
-          setCashPosition(accs.reduce((s, a) => s + a.currentBalance, 0))));
-
-    runEnsureAndList().catch((err: any) => {
-      const isPerm = (err?.code === "permission-denied" || err?.message?.includes("permission"));
-      if (isPerm) {
-        setTimeout(() => runEnsureAndList().catch(() => {}), 1500);
-      }
-    });
-
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-    listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 200 }).then((list) => {
-      const filtered = list.filter((e) => {
-        const d = (e as any).createdAt?.toDate?.() ?? new Date();
-        return d >= todayStart && d <= todayEnd;
-      });
-      setTodayExpenses(filtered.reduce((a, e) => a + e.amount, 0));
-    });
-
     setLoading(false);
     return () => unsubs.forEach((u) => u());
   }, [companyId, agencyId, company]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [closed, suspended] = await Promise.all([
+          listCashSessions(companyId, agencyId, { status: CASH_SESSION_STATUS.CLOSED, limitCount: 100 }),
+          listCashSessions(companyId, agencyId, { status: CASH_SESSION_STATUS.SUSPENDED, limitCount: 100 }),
+        ]);
+        if (cancelled) return;
+        const withGap = closed.filter((s) => Math.abs(Number(s.discrepancy ?? 0)) > 0.01).length;
+        setCashExceptionCount(withGap + suspended.length);
+      } catch {
+        if (!cancelled) setCashExceptionCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, agencyId]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snap = await getDocs(query(courierSessionsRef(db, companyId, agencyId), limit(300)));
+        if (cancelled) return;
+        const byAgent: Record<string, number> = {};
+        let count = 0;
+        snap.docs.forEach((d) => {
+          const x = d.data() as Record<string, unknown>;
+          if (
+            String(x.status ?? "") === "VALIDATED" &&
+            courierSessionBusinessDiscrepancy(x) > ACTIVITY_DISCREPANCY_EPSILON
+          ) {
+            count++;
+            const aid = String(x.agentId ?? "");
+            if (aid) byAgent[aid] = (byAgent[aid] ?? 0) + 1;
+          }
+        });
+        setCourierDiscrepancyCount(count);
+        setCourierLitigeByAgentId(byAgent);
+      } catch {
+        if (!cancelled) {
+          setCourierDiscrepancyCount(0);
+          setCourierLitigeByAgentId({});
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, agencyId]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    const refresh = () => {
+      const incidents = listChefIncidents(companyId, agencyId);
+      setOpenIncidentCount(incidents.filter((i) => i.status === "open").length);
+    };
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [companyId, agencyId]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    let cancelled = false;
+    const run = () => {
+      void reconcilePendingCashAgency(companyId, agencyId)
+        .then((r) => {
+          if (cancelled) return;
+          setPendingCashRecon({
+            mismatch: r.mismatch,
+            diff: r.diff,
+            actualPendingBalance: r.actualPendingBalance,
+            legacySessionCount: r.legacySessionCount,
+            pendingTooHigh: r.pendingTooHigh,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setPendingCashRecon(null);
+        });
+    };
+    run();
+    const id = setInterval(run, 90_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [companyId, agencyId, shifts.length]);
 
   const alerts = useMemo(() => {
     const list: ManagerAlert[] = [];
@@ -182,7 +270,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
 
     // Pending reports (finances)
     const closedPending = shifts.filter((s) => s.status === "closed");
-    const pendingApproval = shifts.filter((s) => s.status === "validated" && s.lockedComptable && !s.lockedChef);
+    const pendingApproval = shifts.filter((s) => s.status === "validated_agency");
 
     if (closedPending.length > 0) {
       list.push({
@@ -191,7 +279,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
         module: "finances",
         title: `${closedPending.length} rapport(s) en attente du comptable`,
         description: "Des sessions clôturées attendent la validation comptable.",
-        link: "/agence/finances",
+        link: "/agence/caisse#caisse-sessions",
       });
     }
     if (pendingApproval.length > 0) {
@@ -201,24 +289,53 @@ export function useManagerAlerts(): ManagerAlertsResult {
         module: "finances",
         title: `${pendingApproval.length} rapport(s) à approuver`,
         description: "Des rapports validés par le comptable attendent votre approbation.",
-        link: "/agence/finances",
+        link: "/agence/caisse#caisse-sessions",
       });
     }
+    const now = Date.now();
 
-    // Cash variance (finances) — always today-scoped, never date-filter dependent
-    const cashVariance = cashPosition - todayRevenue + todayExpenses;
-    if (cashVariance !== 0) {
+    if (closedPending.length > 0) {
+      const staleMs = PENDING_REMITTANCE_ALERT_HOURS * 3600_000;
+      const staleClosed = closedPending.filter((s) => {
+        const closedMs = s.closedAt?.toMillis?.() ?? s.endTime?.toMillis?.() ?? 0;
+        if (closedMs > 0) return now - closedMs > staleMs;
+        const startMs = s.startTime?.toMillis?.() ?? s.createdAt?.toMillis?.() ?? 0;
+        return startMs > 0 && now - startMs > staleMs;
+      });
+      if (staleClosed.length > 0) {
+        list.push({
+          id: `stale-compta-${idx++}`,
+          severity: "critical",
+          module: "finances",
+          title: `${staleClosed.length} session(s) bloquées en attente compta`,
+          description: `Aucune validation comptable depuis plus de ${PENDING_REMITTANCE_ALERT_HOURS} h après clôture (remise).`,
+          link: "/agence/caisse#caisse-sessions",
+        });
+      }
+    }
+
+    if (pendingCashRecon?.mismatch) {
       list.push({
-        id: `cash-variance-${idx++}`,
+        id: `pending-recon-mismatch-${idx++}`,
         severity: "critical",
         module: "finances",
-        title: "Écart de caisse détecté",
-        description: `La caisse présente un écart. Vérifiez les mouvements financiers.`,
-        link: "/agence/finances",
+        title: "Incohérence caisse « en attente de remise »",
+        description: `Écart détecté entre sessions non remises et solde pending (${Math.round(pendingCashRecon.diff).toLocaleString("fr-FR")} FCFA)${
+          pendingCashRecon.legacySessionCount > 0 ? " — données legacy possibles (cutoff audit)." : ""
+        }.`,
+        link: "/agence/caisse#caisse-sessions",
       });
     }
-
-    const now = Date.now();
+    if (pendingCashRecon?.pendingTooHigh) {
+      list.push({
+        id: `pending-balance-high-${idx++}`,
+        severity: "warning",
+        module: "finances",
+        title: "Montant pending caisse élevé",
+        description: `Solde pending : ${Math.round(pendingCashRecon.actualPendingBalance).toLocaleString("fr-FR")} FCFA (seuil : ${PENDING_CASH_HIGH_THRESHOLD_FCFA.toLocaleString("fr-FR")}).`,
+        link: "/agence/caisse#caisse-sessions",
+      });
+    }
 
     // No active counter (dashboard)
     const activeCount = shifts.filter((s) => s.status === "active").length;
@@ -229,7 +346,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
         module: "dashboard",
         title: "Aucun guichet actif",
         description: "Des départs sont ouverts mais aucun guichet n'est en service.",
-        link: "/agence/dashboard",
+        link: "/agence/activite",
       });
     }
 
@@ -253,7 +370,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
         description: delayedDeps.length <= 3
           ? delayedDeps.map((d) => `${d.departure} → ${d.arrival} ${d.heure}`).join(" · ")
           : `${delayedDeps.slice(0, 2).map((d) => `${d.departure} → ${d.arrival}`).join(", ")} et ${delayedDeps.length - 2} autre(s)`,
-        link: "/agence/operations",
+        link: "/agence/activite#activite-operations",
       });
     }
 
@@ -274,7 +391,78 @@ export function useManagerAlerts(): ManagerAlertsResult {
         description: lowOccDeps.length <= 3
           ? lowOccDeps.map((d) => `${d.departure} → ${d.arrival} ${d.heure}`).join(" · ")
           : `${lowOccDeps.slice(0, 2).map((d) => `${d.departure} → ${d.arrival}`).join(", ")} et ${lowOccDeps.length - 2} autre(s)`,
-        link: "/agence/operations",
+        link: "/agence/activite#activite-operations",
+      });
+    }
+    if (cashExceptionCount > 0) {
+      list.push({
+        id: `cash-exceptions-${idx++}`,
+        severity: "critical",
+        module: "finances",
+        title: `${cashExceptionCount} exception(s) de caisse`,
+        description: "Écarts ou sessions suspendues détectés.",
+        link: "/agence/caisse#caisse-controle",
+      });
+    }
+    if (courierDiscrepancyCount > 0) {
+      list.push({
+        id: `courier-discrepancies-${idx++}`,
+        severity: "critical",
+        module: "finances",
+        title: `${courierDiscrepancyCount} session(s) courrier avec litige`,
+        description: "Écart détecté entre montant compté et montant attendu.",
+        link: "/agence/activity-log",
+      });
+    }
+
+    const guichetLitigeSessions = shifts.filter(
+      (s) => guichetShiftBusinessDiscrepancy(s as Record<string, unknown>) > ACTIVITY_DISCREPANCY_EPSILON
+    );
+    if (guichetLitigeSessions.length > 0) {
+      list.push({
+        id: `guichet-activity-litiges-${idx++}`,
+        severity: "warning",
+        module: "dashboard",
+        title:
+          guichetLitigeSessions.length === 1
+            ? "1 session guichet avec écart (contrôle)"
+            : `${guichetLitigeSessions.length} sessions guichet avec écart (contrôle)`,
+        description: "Écart de caisse ou de déclaration — voir le journal d'activité.",
+        link: "/agence/activity-log",
+      });
+    }
+
+    const guichetLitigeByAgent: Record<string, number> = {};
+    guichetLitigeSessions.forEach((s) => {
+      const aid = String(s.userId ?? "");
+      if (aid) guichetLitigeByAgent[aid] = (guichetLitigeByAgent[aid] ?? 0) + 1;
+    });
+    const mergedLitigeByAgent: Record<string, number> = { ...courierLitigeByAgentId };
+    Object.entries(guichetLitigeByAgent).forEach(([aid, n]) => {
+      mergedLitigeByAgent[aid] = (mergedLitigeByAgent[aid] ?? 0) + n;
+    });
+    const repeatedLitigeAgents = Object.values(mergedLitigeByAgent).filter((n) => n >= 2).length;
+    if (repeatedLitigeAgents > 0) {
+      list.push({
+        id: `agents-repeated-litiges-${idx++}`,
+        severity: "critical",
+        module: "dashboard",
+        title:
+          repeatedLitigeAgents === 1
+            ? "1 agent avec écarts sur plusieurs sessions"
+            : `${repeatedLitigeAgents} agents avec écarts sur plusieurs sessions`,
+        description: "Plusieurs sessions présentent un écart pour le même agent (guichet et/ou courrier).",
+        link: "/agence/activity-log",
+      });
+    }
+    if (openIncidentCount > 0) {
+      list.push({
+        id: `open-incidents-${idx++}`,
+        severity: "warning",
+        module: "finances",
+        title: `${openIncidentCount} incident(s) ouverts`,
+        description: "Signalements chef en attente de traitement.",
+        link: "/agence/caisse#caisse-sessions",
       });
     }
 
@@ -293,12 +481,21 @@ export function useManagerAlerts(): ManagerAlertsResult {
           ? `1 session ouverte > ${SESSION_WARN_H}h`
           : `${longSessions.length} sessions ouvertes > ${SESSION_WARN_H}h`,
         description: longSessions.map((s) => s.userName ?? s.userId).join(", "),
-        link: "/agence/dashboard",
+        link: "/agence/activite",
       });
     }
 
     return list;
-  }, [shifts, cashPosition, todayRevenue, todayExpenses, departures, company]);
+  }, [
+    shifts,
+    departures,
+    company,
+    cashExceptionCount,
+    courierDiscrepancyCount,
+    courierLitigeByAgentId,
+    openIncidentCount,
+    pendingCashRecon,
+  ]);
 
   const visibleAlerts = useMemo(
     () => alerts.filter((a) => !dismissedAlertIds.has(a.id)),
@@ -342,11 +539,8 @@ export function useManagerAlerts(): ManagerAlertsResult {
     return counts;
   }, [visibleAlerts]);
 
-  /** Écart caisse (pour Decision Engine) : caisse - ventes du jour + dépenses du jour */
-  const cashVariance = useMemo(
-    () => cashPosition - todayRevenue + todayExpenses,
-    [cashPosition, todayRevenue, todayExpenses]
-  );
+  /** Non utilisé pour alertes (indicateur retiré). */
+  const cashVariance = 0;
 
   return {
     alerts: visibleAlerts,

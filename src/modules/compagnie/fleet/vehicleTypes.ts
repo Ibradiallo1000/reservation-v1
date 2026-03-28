@@ -44,6 +44,8 @@ export interface VehicleDoc {
   year: number;
   /** Nombre de places (siège). Optionnel pour rétrocompat. */
   capacity?: number;
+  /** Statut métier normalisé (Phase 1) : disponible | en_transit | maintenance. */
+  fleetStatus?: "disponible" | "en_transit" | "maintenance";
   /** Legacy: conservé pour rétrocompat. Déduit de technicalStatus/operationalStatus si absent. */
   status?: VehicleStatus;
   /** Canonical status for queries and UI. Preferred when present. */

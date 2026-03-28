@@ -22,10 +22,13 @@ import {
 import { db } from '@/firebaseConfig';
 import {
   SHIFT_STATUS,
+  CASH_SESSION_STATUS,
   SHIFT_REPORTS_COLLECTION,
   VALIDATION_LEVEL,
   canCloseShift,
   isShiftLocked,
+  mapCashToLegacy,
+  mapLegacyToCash,
   type ShiftStatusValue,
 } from '../constants/sessionLifecycle';
 import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
@@ -33,17 +36,54 @@ import {
   updateDailyStatsOnSessionClosed,
   updateDailyStatsOnSessionValidatedByAgency,
   updateDailyStatsOnSessionValidatedByCompany,
-  toDailyStatsDate,
+  timestampToDailyStatsDateKey,
+  dailyStatsTimezoneFromAgencyData,
 } from '../aggregates/dailyStats';
 import { updateAgencyLiveStateOnSessionOpened, updateAgencyLiveStateOnSessionClosed, updateAgencyLiveStateOnSessionValidated } from '../aggregates/agencyLiveState';
-import { recordMovementInTransaction } from '@/modules/compagnie/treasury/financialMovements';
-import { agencyCashAccountId } from '@/modules/compagnie/treasury/types';
-import { financialAccountRef } from '@/modules/compagnie/treasury/financialAccounts';
-import { getCashTransactionsBySessionId } from '@/modules/compagnie/cash/cashService';
+import {
+  applyRemittancePendingToAgencyCashInTransaction,
+  isConfirmedTransactionStatus,
+} from '@/modules/compagnie/treasury/financialTransactions';
+import {
+  PENDING_CASH_LEDGER_SYSTEM_VERSION,
+  type PendingCashRemittanceStatus,
+} from '@/modules/agence/comptabilite/pendingCashSafety';
+import { writeComptaEncaissementInTransaction } from '@/modules/agence/comptabilite/comptaEncaissementsService';
+import type { FinancialTransactionDoc } from '@/modules/compagnie/treasury/types';
+import { fetchAgencyStaffProfile } from '@/modules/agence/services/agencyStaffProfileService';
+import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
+
+type SessionAccountantHistoryLog = {
+  expectedCash: number;
+  receivedCash: number;
+  computedDiff: number;
+  sellerUid: string;
+  sellerName: string | null;
+};
+
+type SessionHeadValidationHistoryLog = {
+  sellerUid: string;
+  sellerName: string | null;
+  totalRevenue: number;
+};
 
 const SHIFTS_COLLECTION = 'shifts';
 const RESERVATIONS_COLLECTION = 'reservations';
 const CANAL_GUICHET = 'guichet';
+const FINANCIAL_TRANSACTIONS_COLLECTION = 'financialTransactions';
+const RESERVATION_LIMIT = 1000;
+
+export type CashSession = {
+  id: string;
+  agentId: string;
+  agencyId: string;
+  openingAmount: number;
+  expectedAmount: number;
+  actualAmount?: number;
+  status: typeof CASH_SESSION_STATUS[keyof typeof CASH_SESSION_STATUS];
+  openedAt: number;
+  closedAt?: number;
+};
 
 export type SessionAudit = {
   createdAt?: unknown;
@@ -61,6 +101,21 @@ export type CloseSessionTotals = {
   totalDigital: number;
   tickets: number;
   details: { trajet: string; billets: number; montant: number; heures: string[] }[];
+};
+
+type ReservationSessionRow = {
+  id: string;
+  depart?: string;
+  arrivee?: string;
+  seatsGo?: number;
+  seatsReturn?: number;
+  montant?: number;
+  statut?: string;
+};
+
+type SessionReservationAmountRow = {
+  montant?: number;
+  statut?: string;
 };
 
 function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
@@ -118,13 +173,14 @@ export async function createSession(params: {
   if (existing) return existing;
 
   const shiftsRef = collection(db, `companies/${params.companyId}/agences/${params.agencyId}/${SHIFTS_COLLECTION}`);
+  const initialLegacyStatus = SHIFT_STATUS.PENDING;
   const ref = await addDoc(shiftsRef, stripUndefined({
     companyId: params.companyId,
     agencyId: params.agencyId,
     userId: params.userId,
     userName: params.userName ?? null,
     userCode: params.userCode ?? 'GUEST',
-    status: SHIFT_STATUS.PENDING,
+    status: initialLegacyStatus,
     startAt: null,
     endAt: null,
     startTime: null,
@@ -140,6 +196,16 @@ export async function createSession(params: {
     managerValidated: false,
     accountantValidatedAt: null,
     managerValidatedAt: null,
+    openingAmount: 0,
+    expectedAmount: 0,
+    actualAmount: null,
+    ecart: 0,
+    hasDiscrepancy: false,
+    discrepancyFlagged: false,
+    discrepancyFlaggedAt: null,
+    cashStatus: mapLegacyToCash(initialLegacyStatus),
+    openedAt: Date.now(),
+    closedAtMs: null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }));
@@ -159,6 +225,20 @@ export async function activateSession(params: {
   const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
 
+  const preSnap = await getDoc(shiftRef);
+  if (!preSnap.exists()) throw new Error('Poste introuvable.');
+  const pre = preSnap.data() as Record<string, unknown>;
+  const sellerUid = String(pre.userId ?? '');
+  let resolvedUserCode = String(pre.userCode ?? '').trim();
+  let resolvedUserName = (pre.userName ?? null) as string | null;
+  if (sellerUid && (!resolvedUserCode || resolvedUserCode === 'GUEST')) {
+    const profile = await fetchAgencyStaffProfile(params.companyId, params.agencyId, sellerUid);
+    if (profile.code) resolvedUserCode = profile.code;
+    if (profile.name && (!resolvedUserName || !String(resolvedUserName).trim())) {
+      resolvedUserName = profile.name;
+    }
+  }
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(shiftRef);
     if (!snap.exists()) throw new Error('Poste introuvable.');
@@ -167,12 +247,19 @@ export async function activateSession(params: {
       throw new Error('Seul un poste en attente peut être activé.');
     }
     const now = Timestamp.now();
+    const nextLegacyStatus = SHIFT_STATUS.ACTIVE;
+    const userCodeToStore = resolvedUserCode || String(cur.userCode ?? '').trim() || 'GUEST';
+    const userNameToStore = resolvedUserName ?? (cur.userName ?? null);
     tx.update(shiftRef, stripUndefined({
-      status: SHIFT_STATUS.ACTIVE,
+      status: nextLegacyStatus,
       startAt: now,
       startTime: now,
       activatedAt: now,
       activatedBy: { id: params.activatedBy.id, name: params.activatedBy.name ?? null },
+      userCode: userCodeToStore,
+      userName: userNameToStore,
+      cashStatus: mapLegacyToCash(nextLegacyStatus),
+      ...(cur.openedAt == null ? { openedAt: Date.now() } : {}),
       updatedAt: serverTimestamp(),
     }));
     tx.set(reportRef, stripUndefined({
@@ -180,8 +267,8 @@ export async function activateSession(params: {
       companyId: params.companyId,
       agencyId: params.agencyId,
       userId: cur.userId,
-      userName: cur.userName ?? null,
-      userCode: cur.userCode ?? null,
+      userName: userNameToStore,
+      userCode: userCodeToStore,
       startAt: now,
       activatedAt: now,
       activatedBy: { id: params.activatedBy.id, name: params.activatedBy.name ?? null },
@@ -190,6 +277,23 @@ export async function activateSession(params: {
     }), { merge: true });
 
     updateAgencyLiveStateOnSessionOpened(tx, params.companyId, params.agencyId);
+  });
+
+  const sellerId = String(pre.userId ?? "");
+  const sellerDisplay = resolvedUserName ?? ((pre.userName ?? null) as string | null);
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: sellerId,
+    agentName: sellerDisplay,
+    role: "guichetier",
+    type: "SESSION_OPENED",
+    referenceId: params.shiftId,
+    status: "EN_COURS",
+    createdBy: params.activatedBy.id,
+    metadata: {
+      activatedByName: params.activatedBy.name ?? undefined,
+    },
   });
 }
 
@@ -243,41 +347,69 @@ export function isCurrentDeviceClaimed(shiftDoc: { deviceFingerprint?: string | 
   return shiftDoc.deviceFingerprint === getDeviceFingerprint();
 }
 
-/**
- * Calcule les totaux depuis la caisse (cashTransactions) — source de vérité financière.
- * 1 vente = 1 encaissement → totaux session = somme(cashTransactions.sessionId).
- */
-export async function closeSession(params: {
+function isSoldReservationStatus(statut: unknown): boolean {
+  const s = String(statut ?? '').toLowerCase().trim();
+  return s === 'paye' || s === 'payé' || s === 'confirme' || s === 'confirmé';
+}
+
+async function computeLedgerSessionTotalsFromReservations(params: {
   companyId: string;
   agencyId: string;
   shiftId: string;
-  userId: string;
-  deviceFingerprint?: string | null;
 }): Promise<CloseSessionTotals> {
-  const base = `companies/${params.companyId}/agences/${params.agencyId}`;
-  const shiftsRef = collection(db, `${base}/${SHIFTS_COLLECTION}`);
-  const shiftRef = doc(shiftsRef, params.shiftId);
-  const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
+  const reservationsRef = collection(
+    db,
+    `companies/${params.companyId}/agences/${params.agencyId}/${RESERVATIONS_COLLECTION}`
+  );
+  const reservationsSnap = await getDocs(
+    query(reservationsRef, where('createdInSessionId', '==', params.shiftId), limit(500))
+  );
+  const reservations = reservationsSnap.docs
+    .map((d) => ({ id: d.id, ...(d.data() as Omit<ReservationSessionRow, 'id'>) }))
+    .filter((r) => {
+      const s = String(r.statut ?? '').toLowerCase().trim();
+      if (s === 'invalide' || s === 'annule' || s === 'annulation_en_attente') return false;
+      return isSoldReservationStatus(r.statut);
+    });
 
-  const cashList = await getCashTransactionsBySessionId(params.companyId, params.shiftId);
+  const byRoute: Record<string, { billets: number; montant: number }> = {};
+  let tickets = 0;
+  for (const r of reservations) {
+    const seats = Number(r.seatsGo ?? 0) + Number(r.seatsReturn ?? 0);
+    tickets += seats;
+    const key = [r.depart, r.arrivee].filter(Boolean).join('→') || 'Sans trajet';
+    if (!byRoute[key]) byRoute[key] = { billets: 0, montant: 0 };
+    byRoute[key].billets += seats;
+  }
+
   let totalRevenue = 0;
   let totalCash = 0;
   let totalDigital = 0;
-  let tickets = 0;
-  const byRoute: Record<string, { billets: number; montant: number }> = {};
-  for (const c of cashList) {
-    const amount = Number(c.amount ?? 0);
-    const seats = Number(c.seats ?? 0);
-    totalRevenue += amount;
-    tickets += seats;
-    const pm = String(c.paymentMethod ?? '').toLowerCase();
-    if (pm === 'cash' || pm === 'espèces' || pm === 'especes') totalCash += amount;
-    else totalDigital += amount;
-    const key = (c.routeLabel && String(c.routeLabel).trim()) || 'Sans trajet';
-    if (!byRoute[key]) byRoute[key] = { billets: 0, montant: 0 };
-    byRoute[key].billets += seats;
-    byRoute[key].montant += amount;
+  for (const r of reservations) {
+    const txSnap = await getDocs(
+      query(
+        collection(db, `companies/${params.companyId}/${FINANCIAL_TRANSACTIONS_COLLECTION}`),
+        where('type', '==', 'payment_received'),
+        where('reservationId', '==', r.id),
+        limit(25)
+      )
+    );
+    let reservationLedger = 0;
+    for (const d of txSnap.docs) {
+      const row = d.data() as FinancialTransactionDoc;
+      if (!isConfirmedTransactionStatus(row.status)) continue;
+      const amt = Number(row.amount ?? 0);
+      if (amt <= 0) continue;
+      totalRevenue += amt;
+      reservationLedger += amt;
+      const pm = String(row.paymentMethod ?? '').toLowerCase();
+      if (pm === 'cash') totalCash += amt;
+      else totalDigital += amt;
+    }
+    const key = [r.depart, r.arrivee].filter(Boolean).join('→') || 'Sans trajet';
+    if (byRoute[key]) byRoute[key].montant += reservationLedger;
   }
+
   const details = Object.entries(byRoute).map(([trajet, v]) => ({
     trajet,
     billets: v.billets,
@@ -285,23 +417,104 @@ export async function closeSession(params: {
     heures: [] as string[],
   }));
 
-  let resultTotals: CloseSessionTotals = {
+  return {
     totalRevenue,
-    totalReservations: cashList.length,
+    totalReservations: reservations.length,
     totalCash,
     totalDigital,
     tickets,
     details,
   };
+}
+
+async function getReservationsBySession(params: {
+  companyId: string;
+  agencyId: string;
+  sessionId: string;
+}): Promise<Array<SessionReservationAmountRow & { id: string }>> {
+  const reservationsRef = collection(
+    db,
+    `companies/${params.companyId}/agences/${params.agencyId}/${RESERVATIONS_COLLECTION}`
+  );
+  const reservationsSnap = await getDocs(
+    query(
+      reservationsRef,
+      where('createdInSessionId', '==', params.sessionId),
+      where('canal', '==', CANAL_GUICHET),
+      limit(RESERVATION_LIMIT)
+    )
+  );
+  return reservationsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as SessionReservationAmountRow) }));
+}
+
+export async function calculateSessionTotals(params: {
+  companyId: string;
+  agencyId: string;
+  sessionId: string;
+}): Promise<number> {
+  const reservations = await getReservationsBySession(params);
+  const validReservations = reservations.filter((r) => {
+    const statut = String(r.statut ?? '').toLowerCase();
+    return statut !== 'annule' && statut !== 'annulation_en_attente' && statut !== 'invalide';
+  });
+  return validReservations.reduce((sum, r) => sum + Number(r.montant ?? 0), 0);
+}
+
+/**
+ * Calcule les totaux session depuis le ledger financialTransactions (source de vérité).
+ * 1 vente = 1 encaissement → totaux session = somme(payment_received par reservationId de la session).
+ */
+export async function closeSession(params: {
+  companyId: string;
+  agencyId: string;
+  shiftId: string;
+  userId: string;
+  deviceFingerprint?: string | null;
+  actualAmount?: number;
+  /**
+   * Réservé supervision chef d’agence : clôturer un poste ouvert sur l’appareil d’un agent
+   * (sinon l’empreinte ne correspond pas au poste du chef).
+   */
+  skipDeviceFingerprintCheck?: boolean;
+}): Promise<CloseSessionTotals> {
+  const base = `companies/${params.companyId}/agences/${params.agencyId}`;
+  const shiftsRef = collection(db, `${base}/${SHIFTS_COLLECTION}`);
+  const shiftRef = doc(shiftsRef, params.shiftId);
+  const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
+  const ledgerTotals = await computeLedgerSessionTotalsFromReservations({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    shiftId: params.shiftId,
+  });
+  const expectedAmount = await calculateSessionTotals({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    sessionId: params.shiftId,
+  });
+  const actualAmount = Number(params.actualAmount ?? expectedAmount);
+  const ecart = actualAmount - expectedAmount;
+  const hasDiscrepancy = Math.abs(ecart) > 0;
+  let resultTotals: CloseSessionTotals = ledgerTotals;
+
+  const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
+  let shiftAgentId = "";
+  let shiftAgentName: string | null = null;
 
   await runTransaction(db, async (tx) => {
-    const shiftSnap = await tx.get(shiftRef);
+    const [shiftSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(agencyRef)]);
     if (!shiftSnap.exists()) throw new Error('Poste introuvable.');
     const shiftData = shiftSnap.data() as Record<string, unknown>;
+    shiftAgentId = String(shiftData.userId ?? "");
+    shiftAgentName = (shiftData.userName ?? null) as string | null;
+    const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
     const status = shiftData.status as string;
     if (!canCloseShift(status)) throw new Error('État non clôturable.');
     if (isShiftLocked(status)) throw new Error('Poste déjà validé (verrouillé).');
-    if (shiftData.deviceFingerprint && shiftData.deviceFingerprint !== params.deviceFingerprint) {
+    if (
+      !params.skipDeviceFingerprintCheck &&
+      shiftData.deviceFingerprint &&
+      shiftData.deviceFingerprint !== params.deviceFingerprint
+    ) {
       throw new Error('Session ouverte sur un autre appareil.');
     }
 
@@ -318,13 +531,19 @@ export async function closeSession(params: {
       startAt,
       endAt: now,
       closedAt: now,
-      billets: tickets,
-      montant: totalRevenue,
-      totalRevenue,
-      totalReservations: cashList.length,
-      totalCash,
-      totalDigital,
-      details,
+      billets: ledgerTotals.tickets,
+      montant: ledgerTotals.totalRevenue,
+      totalRevenue: ledgerTotals.totalRevenue,
+      totalReservations: ledgerTotals.totalReservations,
+      totalCash: ledgerTotals.totalCash,
+      totalDigital: ledgerTotals.totalDigital,
+      expectedAmount,
+      actualAmount,
+      ecart,
+      hasDiscrepancy,
+      discrepancyFlagged: hasDiscrepancy,
+      discrepancyFlaggedAt: hasDiscrepancy ? serverTimestamp() : null,
+      details: ledgerTotals.details,
       accountantValidated: false,
       managerValidated: false,
       accountantValidatedAt: null,
@@ -334,32 +553,58 @@ export async function closeSession(params: {
       updatedAt: serverTimestamp(),
     }), { merge: true });
 
+    const nextLegacyStatus = SHIFT_STATUS.CLOSED;
     tx.update(shiftRef, stripUndefined({
-      status: SHIFT_STATUS.CLOSED,
+      status: nextLegacyStatus,
       endAt: now,
       endTime: now,
       closedAt: now,
-      tickets,
-      amount: totalRevenue,
-      totalRevenue,
-      totalReservations: cashList.length,
-      totalCash,
-      totalDigital,
+      tickets: ledgerTotals.tickets,
+      amount: ledgerTotals.totalRevenue,
+      totalRevenue: ledgerTotals.totalRevenue,
+      totalReservations: ledgerTotals.totalReservations,
+      totalCash: ledgerTotals.totalCash,
+      totalDigital: ledgerTotals.totalDigital,
+      expectedAmount,
+      actualAmount,
+      ecart,
+      hasDiscrepancy,
+      discrepancyFlagged: hasDiscrepancy,
+      discrepancyFlaggedAt: hasDiscrepancy ? serverTimestamp() : null,
+      cashStatus: mapLegacyToCash(nextLegacyStatus),
+      closedAtMs: Date.now(),
       updatedAt: serverTimestamp(),
     }));
 
-    const statsDate = toDailyStatsDate(now);
-    updateDailyStatsOnSessionClosed(tx, params.companyId, params.agencyId, statsDate);
+    const statsDate = timestampToDailyStatsDateKey(now, agencyTz);
+    updateDailyStatsOnSessionClosed(tx, params.companyId, params.agencyId, statsDate, agencyTz);
     updateAgencyLiveStateOnSessionClosed(tx, params.companyId, params.agencyId);
 
     resultTotals = {
-      totalRevenue,
-      totalReservations: cashList.length,
-      totalCash,
-      totalDigital,
-      tickets,
-      details,
+      totalRevenue: ledgerTotals.totalRevenue,
+      totalReservations: ledgerTotals.totalReservations,
+      totalCash: ledgerTotals.totalCash,
+      totalDigital: ledgerTotals.totalDigital,
+      tickets: ledgerTotals.tickets,
+      details: ledgerTotals.details,
     };
+  });
+
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: shiftAgentId || params.userId,
+    agentName: shiftAgentName,
+    role: "guichetier",
+    type: "SESSION_CLOSED",
+    referenceId: params.shiftId,
+    status: "EN_ATTENTE",
+    createdBy: params.userId,
+    metadata: {
+      expectedAmount,
+      declaredAmount: actualAmount,
+      difference: ecart,
+    },
   });
 
   return resultTotals;
@@ -384,28 +629,58 @@ export async function validateSessionByAccountant(params: {
   validatedBy: { id: string; name?: string | null };
   accountantDeviceFingerprint: string;
 }): Promise<{ computedDifference: number }> {
+  await authorizeActorInAgency({
+    userId: params.validatedBy.id,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    allowedRoles: ['agency_accountant', 'company_accountant', 'admin_compagnie', 'admin_platforme'],
+    deniedMessage: 'Validation non autorisee pour cet utilisateur.',
+  });
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
+  const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
 
-  let computedDifference = 0;
+  type AccountantTxOutcome = {
+    computedDifference: number;
+    accountantSessionLog: SessionAccountantHistoryLog | null;
+  };
 
-  await runTransaction(db, async (tx) => {
-    const sSnap = await tx.get(shiftRef);
-    const rSnap = await tx.get(reportRef);
+  const { computedDifference, accountantSessionLog } = await runTransaction(db, async (tx): Promise<AccountantTxOutcome> => {
+    const [sSnap, rSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(reportRef), tx.get(agencyRef)]);
     if (!sSnap.exists()) throw new Error('Poste introuvable.');
     if (!rSnap.exists()) throw new Error('Rapport introuvable.');
     const s = sSnap.data() as Record<string, unknown>;
     if ((s.status as string) === SHIFT_STATUS.VALIDATED) {
-      return;
+      return { computedDifference: 0, accountantSessionLog: null };
     }
     if ((s.status as string) === SHIFT_STATUS.VALIDATED_AGENCY) {
-      return; // déjà validé agence
+      return { computedDifference: 0, accountantSessionLog: null };
     }
     if ((s.status as string) !== SHIFT_STATUS.CLOSED) throw new Error('Seuls les postes clôturés peuvent être validés.');
+    if (!canProceedValidationWithDiscrepancy(Number(s.ecart ?? 0), false, Boolean(s.discrepancyOverrideConfirmed))) {
+      throw new Error('Session has discrepancy. Validation not allowed.');
+    }
 
-    const expectedCash = Number(s.totalCash ?? s.amount ?? 0);
-    computedDifference = params.receivedCashAmount - expectedCash;
+    const r = rSnap.data() as Record<string, unknown>;
+    const expectedCash = Math.max(
+      Number(s.totalCash ?? s.amount ?? 0),
+      Number(r.totalCash ?? r.expectedAmount ?? r.montant ?? 0)
+    );
+    if (expectedCash > 0 && params.receivedCashAmount <= 0) {
+      throw new Error(
+        `Montant reçu obligatoire : indiquez les espèces physiquement remises (attendu ${expectedCash.toFixed(0)} selon le poste / rapport). ` +
+          "Un montant à 0 n’est pas accepté lorsque des espèces sont attendues — vérifiez la saisie dans l’onglet Versements."
+      );
+    }
+    const computedDifference = params.receivedCashAmount - expectedCash;
+    const isPartialRemittance = params.receivedCashAmount + 0.01 < expectedCash;
+    const remittanceStatus: PendingCashRemittanceStatus = isPartialRemittance
+      ? 'partial_remittance'
+      : 'full_remittance';
+    const remittanceDiscrepancyAmount = isPartialRemittance
+      ? Math.max(0, expectedCash - params.receivedCashAmount)
+      : 0;
     const now = Timestamp.now();
 
     const validationAudit: ValidationAudit = {
@@ -416,10 +691,35 @@ export async function validateSessionByAccountant(params: {
       accountantDeviceFingerprint: params.accountantDeviceFingerprint,
     };
 
+    /**
+     * Ledger remise : avant tout update shift/rapport — Firestore exige tous les get avant tous les set/update.
+     * (applyRemittancePendingToAgencyCashInTransaction fait des lectures sur idempotency + comptes + miroir.)
+     */
+    const agencyCurrency = String((agencySnap.data() as { currency?: string })?.currency ?? 'XOF');
+    await applyRemittancePendingToAgencyCashInTransaction(
+      tx,
+      params.companyId,
+      params.agencyId,
+      params.receivedCashAmount,
+      agencyCurrency,
+      { referenceType: "shift", referenceId: params.shiftId },
+      `shift ${params.shiftId} validated by agency accountant`
+    );
+
+    const nextLegacyStatus = SHIFT_STATUS.VALIDATED_AGENCY;
     tx.update(shiftRef, stripUndefined({
-      status: SHIFT_STATUS.VALIDATED_AGENCY,
+      status: nextLegacyStatus,
       validatedAt: now,
       validationAudit,
+      accountantValidated: true,
+      accountantValidatedAt: now,
+      remittanceStatus,
+      remittanceDiscrepancyAmount,
+      pendingCashLedgerVersion: PENDING_CASH_LEDGER_SYSTEM_VERSION,
+      cashStatus: mapLegacyToCash(nextLegacyStatus),
+      discrepancyOverrideConfirmed: Math.abs(Number(s.ecart ?? 0)) > 0 ? true : Boolean(s.discrepancyOverrideConfirmed),
+      discrepancyOverrideBy: Math.abs(Number(s.ecart ?? 0)) > 0 ? params.validatedBy : (s.discrepancyOverrideBy ?? null),
+      discrepancyOverrideAt: Math.abs(Number(s.ecart ?? 0)) > 0 ? now : (s.discrepancyOverrideAt ?? null),
       updatedAt: serverTimestamp(),
     }));
     tx.update(reportRef, stripUndefined({
@@ -443,22 +743,76 @@ export async function validateSessionByAccountant(params: {
         createdAt: serverTimestamp(),
         validatedBy: params.validatedBy,
       });
+      writeComptaEncaissementInTransaction(tx, params.companyId, params.agencyId, {
+        sessionId: params.shiftId,
+        montant: params.receivedCashAmount,
+        source: 'guichet',
+      });
     }
 
     const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
     const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
-    const statsDate = toDailyStatsDate(closedAt);
+    const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
+    const statsDate = timestampToDailyStatsDateKey(closedAt, agencyTz);
     updateDailyStatsOnSessionValidatedByAgency(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
     updateAgencyLiveStateOnSessionValidated(tx, params.companyId, params.agencyId);
-    // Pas de mouvement trésorerie ici : réservé à la validation chef comptable (validateSessionByHeadAccountant).
+    // Pas de mouvement trésorerie ici : réservé à la validation finale chef d'agence (validateSessionByHeadAccountant).
+
+    return {
+      computedDifference,
+      accountantSessionLog: {
+        expectedCash,
+        receivedCash: params.receivedCashAmount,
+        computedDiff: computedDifference,
+        sellerUid: String(s.userId ?? ''),
+        sellerName: (s.userName ?? null) as string | null,
+      },
+    };
   });
+
+  if (accountantSessionLog) {
+    const v = params.validatedBy;
+    const metaBase = {
+      expectedAmount: accountantSessionLog.expectedCash,
+      declaredAmount: accountantSessionLog.receivedCash,
+      difference: accountantSessionLog.computedDiff,
+      shiftAgentId: accountantSessionLog.sellerUid,
+      shiftAgentName: accountantSessionLog.sellerName ?? undefined,
+    };
+    logAgentHistoryEvent({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      agentId: v.id,
+      agentName: v.name ?? null,
+      role: 'agency_accountant',
+      type: 'REMISSION_DONE',
+      referenceId: params.shiftId,
+      amount: params.receivedCashAmount,
+      status: 'VALIDE',
+      createdBy: v.id,
+      metadata: metaBase,
+    });
+    logAgentHistoryEvent({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      agentId: v.id,
+      agentName: v.name ?? null,
+      role: 'agency_accountant',
+      type: 'SESSION_VALIDATED',
+      referenceId: params.shiftId,
+      status: 'VALIDE',
+      createdBy: v.id,
+      metadata: { ...metaBase, validationLevel: 'agency_accountant' },
+    });
+  }
 
   return { computedDifference };
 }
 
 /**
- * Validation chef comptable (niveau compagnie) : VALIDATED_AGENCY → VALIDATED.
- * Enregistre validatedByCompanyAt, met à jour dailyStats (ticketRevenueCompany) et crée le mouvement trésorerie.
+ * Validation finale chef d'agence : VALIDATED_AGENCY → VALIDATED.
+ * Enregistre validatedByCompanyAt, met à jour dailyStats (ticketRevenueCompany).
+ * Pas de second mouvement caisse ici : la caisse physique a été créditée à la validation comptable agence (remise).
  */
 export async function validateSessionByHeadAccountant(params: {
   companyId: string;
@@ -466,30 +820,43 @@ export async function validateSessionByHeadAccountant(params: {
   shiftId: string;
   validatedBy: { id: string; name?: string | null };
 }): Promise<void> {
+  await authorizeActorInAgency({
+    userId: params.validatedBy.id,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    allowedRoles: ['chefAgence', 'admin_compagnie', 'admin_platforme'],
+    deniedMessage: 'Validation non autorisee pour cet utilisateur.',
+  });
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
+  const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
 
-  await runTransaction(db, async (tx) => {
-    const sSnap = await tx.get(shiftRef);
-    const rSnap = await tx.get(reportRef);
+  const headValidationLog = await runTransaction(db, async (tx): Promise<SessionHeadValidationHistoryLog | null> => {
+    const [sSnap, rSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(reportRef), tx.get(agencyRef)]);
     if (!sSnap.exists()) throw new Error('Poste introuvable.');
     if (!rSnap.exists()) throw new Error('Rapport introuvable.');
     const s = sSnap.data() as Record<string, unknown>;
     if ((s.status as string) === SHIFT_STATUS.VALIDATED) {
-      return;
+      return null;
     }
     if ((s.status as string) !== SHIFT_STATUS.VALIDATED_AGENCY) {
-      throw new Error('Seuls les postes validés par le comptable agence peuvent être validés par le chef comptable.');
+      throw new Error("Seuls les postes validés par le comptable agence peuvent être validés par le chef d'agence.");
+    }
+    if (!canProceedValidationWithDiscrepancy(Number(s.ecart ?? 0), false, Boolean(s.discrepancyOverrideConfirmed))) {
+      throw new Error('Session has discrepancy. Validation not allowed.');
     }
 
     const now = Timestamp.now();
     const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
-    const receivedCashAmount = Number((s.validationAudit as { receivedCashAmount?: number })?.receivedCashAmount ?? totalRevenue);
 
+    const nextLegacyStatus = SHIFT_STATUS.VALIDATED;
     tx.update(shiftRef, stripUndefined({
-      status: SHIFT_STATUS.VALIDATED,
+      status: nextLegacyStatus,
       validatedAt: now,
+      cashStatus: mapLegacyToCash(nextLegacyStatus),
+      managerValidated: true,
+      managerValidatedAt: now,
       updatedAt: serverTimestamp(),
     }));
     tx.update(reportRef, stripUndefined({
@@ -502,31 +869,15 @@ export async function validateSessionByHeadAccountant(params: {
     }));
 
     const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
-    const statsDate = toDailyStatsDate(closedAt);
-    updateDailyStatsOnSessionValidatedByCompany(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
+    const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
+    const statsDate = timestampToDailyStatsDateKey(closedAt, agencyTz);
+    updateDailyStatsOnSessionValidatedByCompany(tx, params.companyId, params.agencyId, statsDate, totalRevenue, agencyTz);
 
-    const agencyCashId = agencyCashAccountId(params.agencyId);
-    const agencyCashRef = financialAccountRef(params.companyId, agencyCashId);
-    const accountSnap = await tx.get(agencyCashRef);
-    if (accountSnap.exists() && receivedCashAmount > 0) {
-      const currency = (accountSnap.data() as { currency?: string }).currency ?? 'XOF';
-      await recordMovementInTransaction(tx, {
-        companyId: params.companyId,
-        fromAccountId: null,
-        toAccountId: agencyCashId,
-        amount: receivedCashAmount,
-        currency,
-        movementType: 'revenue_cash',
-        referenceType: 'shift',
-        referenceId: params.shiftId,
-        agencyId: params.agencyId,
-        performedBy: params.validatedBy.id,
-        performedAt: now,
-        notes: 'Validation chef comptable',
-        sourceType: "guichet",
-        sourceSessionId: params.shiftId,
-      });
-    }
+    return {
+      sellerUid: String(s.userId ?? ''),
+      sellerName: (s.userName ?? null) as string | null,
+      totalRevenue,
+    };
   });
 
   await setValidatedAtOnShiftReservations({
@@ -535,6 +886,27 @@ export async function validateSessionByHeadAccountant(params: {
     shiftId: params.shiftId,
     validatedAt: Timestamp.now(),
   });
+
+  if (headValidationLog) {
+    const v = params.validatedBy;
+    logAgentHistoryEvent({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      agentId: v.id,
+      agentName: v.name ?? null,
+      role: 'chefAgence',
+      type: 'SESSION_VALIDATED',
+      referenceId: params.shiftId,
+      amount: headValidationLog.totalRevenue,
+      status: 'VALIDE',
+      createdBy: v.id,
+      metadata: {
+        validationLevel: 'chef_agence',
+        shiftAgentId: headValidationLog.sellerUid,
+        shiftAgentName: headValidationLog.sellerName ?? undefined,
+      },
+    });
+  }
 }
 
 /**
@@ -567,7 +939,7 @@ async function setValidatedAtOnShiftReservations(params: {
 }
 
 /**
- * Rejet par le chef comptable : marque le rapport comme rejeté (reste VALIDATED_AGENCY, exclu de la liste de validation).
+ * Rejet par le chef d'agence : marque le rapport comme rejeté (reste VALIDATED_AGENCY, exclu de la liste de validation).
  */
 export async function rejectSessionByHeadAccountant(params: {
   companyId: string;
@@ -576,6 +948,13 @@ export async function rejectSessionByHeadAccountant(params: {
   rejectedBy: { id: string; name?: string | null };
   reason?: string;
 }): Promise<void> {
+  await authorizeActorInAgency({
+    userId: params.rejectedBy.id,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    allowedRoles: ['chefAgence', 'admin_compagnie', 'admin_platforme'],
+    deniedMessage: "Rejet non autorisé pour cet utilisateur.",
+  });
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
   const now = Timestamp.now();
@@ -585,19 +964,68 @@ export async function rejectSessionByHeadAccountant(params: {
     rejectionReason: params.reason ?? null,
     updatedAt: serverTimestamp(),
   }));
+
+  const r = params.rejectedBy;
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: r.id,
+    agentName: r.name ?? null,
+    role: 'chefAgence',
+    type: 'SESSION_REJECTED',
+    referenceId: params.shiftId,
+    status: 'REJETE',
+    createdBy: r.id,
+    metadata: params.reason ? { reason: params.reason } : undefined,
+  });
 }
 
+export type PauseSessionInput = {
+  companyId: string;
+  agencyId: string;
+  shiftId: string;
+  pausedBy: { id: string; name?: string | null };
+  /** Motif obligatoire (traçabilité supervision / terrain). */
+  reason: string;
+  /** Rôle métier de `pausedBy` pour le journal (défaut : guichetier). */
+  actorRole?: string;
+};
+
 /**
- * Pause / Reprise : uniquement si poste non verrouillé.
+ * Pause : uniquement si poste en service — ne clôture pas, n’écrit pas en financier.
+ * Écrit pausedAt, pausedBy, reason sur le document shift.
  */
-export async function pauseSession(companyId: string, agencyId: string, shiftId: string): Promise<void> {
-  const shiftRef = doc(db, `companies/${companyId}/agences/${agencyId}/${SHIFTS_COLLECTION}/${shiftId}`);
+export async function pauseSession(input: PauseSessionInput): Promise<void> {
+  const reason = String(input.reason ?? '').trim();
+  if (!reason) throw new Error('Le motif de pause est obligatoire.');
+  const shiftRef = doc(db, `companies/${input.companyId}/agences/${input.agencyId}/${SHIFTS_COLLECTION}/${input.shiftId}`);
   const snap = await getDoc(shiftRef);
   if (!snap.exists()) throw new Error('Poste introuvable.');
   const data = snap.data() as Record<string, unknown>;
   if (data.status !== SHIFT_STATUS.ACTIVE) throw new Error('Le poste doit être en service.');
   if (isShiftLocked(data.status as string)) throw new Error('Poste verrouillé.');
-  await updateDoc(shiftRef, { status: SHIFT_STATUS.PAUSED, updatedAt: serverTimestamp() });
+  const nextLegacyStatus = SHIFT_STATUS.PAUSED;
+  await updateDoc(shiftRef, {
+    status: nextLegacyStatus,
+    cashStatus: mapLegacyToCash(nextLegacyStatus),
+    pausedAt: serverTimestamp(),
+    pausedBy: { id: input.pausedBy.id, name: input.pausedBy.name ?? null },
+    reason,
+    updatedAt: serverTimestamp(),
+  });
+
+  logAgentHistoryEvent({
+    companyId: input.companyId,
+    agencyId: input.agencyId,
+    agentId: input.pausedBy.id,
+    agentName: input.pausedBy.name ?? null,
+    role: String(input.actorRole ?? 'guichetier').trim() || 'guichetier',
+    type: 'SESSION_PAUSED',
+    referenceId: input.shiftId,
+    status: 'EN_COURS',
+    createdBy: input.pausedBy.id,
+    metadata: { reason },
+  });
 }
 
 export async function continueSession(companyId: string, agencyId: string, shiftId: string): Promise<void> {
@@ -606,7 +1034,144 @@ export async function continueSession(companyId: string, agencyId: string, shift
   if (!snap.exists()) throw new Error('Poste introuvable.');
   const data = snap.data() as Record<string, unknown>;
   if (data.status !== SHIFT_STATUS.PAUSED) throw new Error('Le poste doit être en pause.');
-  await updateDoc(shiftRef, { status: SHIFT_STATUS.ACTIVE, updatedAt: serverTimestamp() });
+  const nextLegacyStatus = SHIFT_STATUS.ACTIVE;
+  await updateDoc(shiftRef, {
+    status: nextLegacyStatus,
+    cashStatus: mapLegacyToCash(nextLegacyStatus),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+async function resolveActorContext(user: {
+  id: string;
+  role?: string | null;
+  companyId: string;
+  agencyId: string;
+}): Promise<{ role: string; companyId: string; agencyId: string }> {
+  const userRef = doc(db, 'users', user.id);
+  const userSnap = await getDoc(userRef);
+  const userDoc = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : {};
+  const role = String(userDoc.role ?? user.role ?? '').trim();
+  const companyId = String(userDoc.companyId ?? userDoc.compagnieId ?? user.companyId ?? '').trim();
+  const agencyId = String(userDoc.agencyId ?? user.agencyId ?? '').trim();
+  if (!role) throw new Error('Role utilisateur introuvable.');
+  if (!companyId || companyId !== user.companyId) throw new Error('Contexte compagnie invalide.');
+  if (!agencyId || agencyId !== user.agencyId) throw new Error('Contexte agence invalide.');
+  return { role, companyId, agencyId };
+}
+
+function ensureAllowedRole(role: string, allowed: string[], message: string): void {
+  if (!allowed.includes(role)) throw new Error(message);
+}
+
+export async function authorizeActorInAgency(params: {
+  userId: string;
+  companyId: string;
+  agencyId: string;
+  allowedRoles: string[];
+  deniedMessage: string;
+}): Promise<void> {
+  const actor = await resolveActorContext({
+    id: params.userId,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+  });
+  ensureAllowedRole(actor.role, params.allowedRoles, params.deniedMessage);
+}
+
+function canProceedValidationWithDiscrepancy(
+  ecart: number,
+  overrideConfirmed: boolean | undefined,
+  persistedOverride: boolean
+): boolean {
+  if (Math.abs(ecart) <= 0) return true;
+  return Boolean(overrideConfirmed || persistedOverride);
+}
+
+export async function validateByManager(
+  sessionId: string,
+  user: { id: string; name?: string | null; role?: string | null; companyId: string; agencyId: string },
+  options?: { overrideConfirmed?: boolean }
+): Promise<void> {
+  const actor = await resolveActorContext(user);
+  ensureAllowedRole(actor.role, ['chefAgence', 'admin_compagnie', 'admin_platforme'], 'Seul un chef d’agence peut valider cette étape.');
+  const base = `companies/${actor.companyId}/agences/${actor.agencyId}`;
+  const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${sessionId}`);
+  const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${sessionId}`);
+  await runTransaction(db, async (tx) => {
+    const [sSnap, rSnap] = await Promise.all([tx.get(shiftRef), tx.get(reportRef)]);
+    if (!sSnap.exists()) throw new Error('Poste introuvable.');
+    if (!rSnap.exists()) throw new Error('Rapport introuvable.');
+    const s = sSnap.data() as Record<string, unknown>;
+    if ((s.status as string) !== SHIFT_STATUS.CLOSED) {
+      throw new Error('La session doit être fermée avant validation manager.');
+    }
+    const ecart = Number(s.ecart ?? 0);
+    const persistedOverride = Boolean(s.discrepancyOverrideConfirmed);
+    if (!canProceedValidationWithDiscrepancy(ecart, options?.overrideConfirmed, persistedOverride)) {
+      throw new Error('Session has discrepancy. Validation not allowed.');
+    }
+    const now = Timestamp.now();
+    const nextCashStatus = CASH_SESSION_STATUS.VALIDEE_MANAGER;
+    const nextLegacyStatus = mapCashToLegacy(nextCashStatus);
+    tx.update(shiftRef, {
+      status: nextLegacyStatus,
+      managerValidated: true,
+      managerValidatedAt: now,
+      cashStatus: nextCashStatus,
+      discrepancyOverrideConfirmed: Math.abs(ecart) > 0 ? true : persistedOverride,
+      discrepancyOverrideBy: Math.abs(ecart) > 0 ? { id: user.id, name: user.name ?? null, role: actor.role } : (s.discrepancyOverrideBy ?? null),
+      discrepancyOverrideAt: Math.abs(ecart) > 0 ? now : (s.discrepancyOverrideAt ?? null),
+      updatedAt: serverTimestamp(),
+    });
+    tx.update(reportRef, {
+      status: 'validated_agency',
+      managerValidated: true,
+      managerValidatedAt: now,
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+export async function validateByAccountant(
+  sessionId: string,
+  user: { id: string; name?: string | null; role?: string | null; companyId: string; agencyId: string },
+  _options?: { overrideConfirmed?: boolean }
+): Promise<void> {
+  const actor = await resolveActorContext(user);
+  ensureAllowedRole(actor.role, ['agency_accountant', 'company_accountant', 'admin_compagnie', 'admin_platforme'], 'Seul un comptable peut valider cette étape.');
+  const base = `companies/${actor.companyId}/agences/${actor.agencyId}`;
+  const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${sessionId}`);
+  const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${sessionId}`);
+  await runTransaction(db, async (tx) => {
+    const [sSnap, rSnap] = await Promise.all([tx.get(shiftRef), tx.get(reportRef)]);
+    if (!sSnap.exists()) throw new Error('Poste introuvable.');
+    if (!rSnap.exists()) throw new Error('Rapport introuvable.');
+    const s = sSnap.data() as Record<string, unknown>;
+    if ((s.status as string) !== SHIFT_STATUS.VALIDATED_AGENCY) {
+      throw new Error('La session doit être validée manager avant validation comptable.');
+    }
+    if (!canProceedValidationWithDiscrepancy(Number(s.ecart ?? 0), false, Boolean(s.discrepancyOverrideConfirmed))) {
+      throw new Error('Session has discrepancy. Validation not allowed.');
+    }
+    const now = Timestamp.now();
+    const nextCashStatus = CASH_SESSION_STATUS.VALIDEE_COMPTABLE;
+    const nextLegacyStatus = mapCashToLegacy(nextCashStatus);
+    tx.update(shiftRef, {
+      status: nextLegacyStatus,
+      accountantValidated: true,
+      accountantValidatedAt: now,
+      cashStatus: nextCashStatus,
+      validatedAt: now,
+      updatedAt: serverTimestamp(),
+    });
+    tx.update(reportRef, {
+      status: 'validated',
+      accountantValidated: true,
+      accountantValidatedAt: now,
+      updatedAt: serverTimestamp(),
+    });
+  });
 }
 
 export { SHIFT_REPORTS_COLLECTION, SHIFT_STATUS };

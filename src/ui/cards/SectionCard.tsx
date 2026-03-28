@@ -25,8 +25,12 @@ export interface SectionCardProps {
   noPad?: boolean;
   /** Optional help tooltip (render your own HelpTip in children or pass string for future use) */
   help?: React.ReactNode;
+  /** Subtitle under the title */
+  description?: React.ReactNode;
   /** Extra class for wrapper */
   className?: string;
+  /** Inline styles on the outer section (e.g. brand-tinted background) */
+  style?: React.CSSProperties;
 }
 
 export const SectionCard: React.FC<SectionCardProps> = ({
@@ -36,16 +40,35 @@ export const SectionCard: React.FC<SectionCardProps> = ({
   children,
   noPad = false,
   help,
+  description,
   className,
+  style,
 }) => (
-  <section className={cn(cardBase, className)}>
-    <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
-      <h2 className={cn(typography.sectionTitleCard, "flex items-center gap-2")}>
-        {Icon && <Icon className="h-5 w-5 text-gray-500 dark:text-gray-400" />}
-        {title}
-        {help}
-      </h2>
-      {right}
+  <section className={cn(cardBase, className)} style={style}>
+    <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+      <div className="flex min-w-0 flex-1 gap-3">
+        {Icon ? (
+          <Icon
+            className="mt-0.5 h-5 w-5 shrink-0 text-gray-500 dark:text-gray-400"
+            aria-hidden
+          />
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <h2
+            className={cn(
+              typography.sectionTitleCard,
+              "flex flex-wrap items-center gap-x-2 gap-y-0.5"
+            )}
+          >
+            <span>{title}</span>
+            {help}
+          </h2>
+          {description != null && description !== "" ? (
+            <p className="mt-1.5 text-sm text-gray-600 dark:text-gray-400">{description}</p>
+          ) : null}
+        </div>
+      </div>
+      {right ? <div className="shrink-0 pt-0.5">{right}</div> : null}
     </div>
     <div className={noPad ? "" : "p-5"}>{children}</div>
   </section>

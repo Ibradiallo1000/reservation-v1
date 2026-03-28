@@ -75,6 +75,8 @@ export interface Agence {
   telephone?: string;
   companyId: string;
   statut?: "active" | "inactive";
+  /** Fuseau IANA pour KPI / journées agence (ex. Africa/Bamako, Africa/Niamey). */
+  timezone?: string;
 }
 
 /** Alias pour compatibilité avec le code utilisant le nom anglais */
@@ -132,6 +134,8 @@ export type PlanType = "free" | "premium" | "pro" | "enterprise";
 export interface Company {
   id: string;
   nom: string;
+  /** Code court affiché sur bordereaux / colis (optionnel). */
+  code?: string;
   slug: string;
 
   /** Custom domain (e.g. "malitrans.com"). Resolved when hostname is not *.teliya.app */
@@ -197,6 +201,12 @@ export interface Company {
   featuredTrips?: any[];
 
   paymentConfig?: PaymentConfig;
+
+  /**
+   * Préfixe des références colis / courrier (ticket, étiquette) avant numéro séquentiel serveur.
+   * Ex. "COL" → COL-48227436. Lettres/chiffres uniquement ; si absent : ENV.
+   */
+  courierShipmentReferencePrefix?: string;
 
   createdAt?: Timestamp;
   updatedAt?: Timestamp;

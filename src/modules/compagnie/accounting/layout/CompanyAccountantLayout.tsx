@@ -90,88 +90,7 @@ const CompanyAccountantLayout: React.FC = () => {
 
   const theme = useCompanyTheme(currentCompany);
 
-  /* ===== Pending proof-of-payment badge ===== */
-  const [pendingCount, setPendingCount] = useState(0);
   const pendingExpensesCount = usePendingExpensesCount(currentCompanyId, user?.role);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const playedIds = useRef(new Set<string>());
-
-  useEffect(() => {
-    const initAudio = () => {
-      if (!audioRef.current) {
-        audioRef.current = new Audio("/notification.mp3");
-        audioRef.current.preload = "auto";
-      }
-      document.removeEventListener("click", initAudio);
-      document.removeEventListener("keydown", initAudio);
-    };
-    document.addEventListener("click", initAudio);
-    document.addEventListener("keydown", initAudio);
-    return () => {
-      document.removeEventListener("click", initAudio);
-      document.removeEventListener("keydown", initAudio);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!currentCompanyId) return;
-    const unsubs: Array<() => void> = [];
-    const countsByAgency = new Map<string, number>();
-
-    (async () => {
-      try {
-        const agencesSnap = await getDocs(
-          collection(db, "companies", currentCompanyId, "agences"),
-        );
-        agencesSnap.docs.forEach((agenceDoc) => {
-          const agencyId = agenceDoc.id;
-          const q = query(
-            collection(
-              db,
-              "companies",
-              currentCompanyId,
-              "agences",
-              agencyId,
-              "reservations",
-            ),
-            where("statut", "==", "preuve_recue"),
-          );
-          const unsub = onSnapshot(q, (snap) => {
-            countsByAgency.set(agencyId, snap.size);
-            setPendingCount(
-              Array.from(countsByAgency.values()).reduce((a, b) => a + b, 0),
-            );
-
-            snap.docChanges().forEach((change) => {
-              if (change.type === "added") {
-                const key = `${agencyId}_${change.doc.id}`;
-                const data = change.doc.data() as any;
-                const createdAt = data.createdAt?.toDate?.();
-                if (createdAt && Date.now() - createdAt.getTime() > 30_000) {
-                  playedIds.current.add(key);
-                  return;
-                }
-                if (!playedIds.current.has(key)) {
-                  if (audioRef.current) {
-                    try {
-                      audioRef.current.currentTime = 0;
-                      audioRef.current.play().catch(() => {});
-                    } catch {}
-                  }
-                  playedIds.current.add(key);
-                }
-              }
-            });
-          });
-          unsubs.push(unsub);
-        });
-      } catch (error) {
-        console.error("[AccountantLayout] Init error:", error);
-      }
-    })();
-
-    return () => unsubs.forEach((u) => u());
-  }, [currentCompanyId]);
 
   /* ===== Navigation — accountant-scoped only ===== */
   const basePath = `/compagnie/${currentCompanyId}/accounting`;
@@ -179,10 +98,9 @@ const CompanyAccountantLayout: React.FC = () => {
   const sections: NavSection[] = [
     { label: "Pilotage consolidé", icon: Globe, path: basePath, end: true },
     {
-      label: "Réservations",
+      label: "Réservations réseau",
       icon: CreditCard,
-      path: `${basePath}/reservations-en-ligne`,
-      badge: pendingCount,
+      path: `${basePath}/reservations-reseau`,
     },
     { label: "Finances consolidées", icon: TrendingUp, path: `${basePath}/finances` },
     { label: "Comptabilité", icon: BookOpen, path: `${basePath}/compta` },

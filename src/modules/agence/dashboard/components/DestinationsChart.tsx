@@ -4,6 +4,7 @@ import { Skeleton } from "@/shared/ui/skeleton";
 import { Badge } from "@/shared/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import { OperationalSourceBadge } from "@/modules/agence/components/OperationalDataHint";
 
 interface DestinationStat {
   name: string;
@@ -27,9 +28,15 @@ export const DestinationsChart = ({
   return (
     <Card className="shadow-md border border-gray-200 bg-white">
       <CardHeader>
-        <CardTitle style={{ color: theme.colors.primary }}>
-          Top villes de départ
-        </CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle style={{ color: theme.colors.primary }}>
+            Top villes de départ
+          </CardTitle>
+          <OperationalSourceBadge />
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Comptages issus des réservations — donnée opérationnelle.
+        </p>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">

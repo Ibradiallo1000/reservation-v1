@@ -22,6 +22,7 @@ type CompanyRoleCreate =
   | "admin_compagnie"        // CEO (technique)
   | "financial_director"     // DAF
   | "company_accountant"     // Comptable compagnie
+  | "operator_digital"       // Opérateur caisse en ligne
   | "responsable_logistique"; // Responsable logistique (flotte, véhicules)
 
 
@@ -30,6 +31,7 @@ type AnyRole =
   | "admin_compagnie"
   | "financial_director"
   | "company_accountant"
+  | "operator_digital"
   | "responsable_logistique"
   | "chef_agence"
   | "agency_accountant"
@@ -64,6 +66,7 @@ const ROLE_LABELS: Record<string, string> = {
   admin_compagnie: "CEO / Propriétaire",
   financial_director: "Directeur financier (DAF)",
   company_accountant: "Comptable (compagnie)",
+  operator_digital: "Opérateur digital (caisse en ligne)",
   responsable_logistique: "Responsable logistique (flotte)",
   chef_agence: "Chef d’agence",
   agency_accountant: "Comptable (agence)",
@@ -372,6 +375,7 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
            className="border p-3 rounded focus:ring-2"
           >
            <option value="company_accountant">Comptable (compagnie)</option>
+           <option value="operator_digital">Opérateur digital (caisse en ligne)</option>
            <option value="financial_director">Directeur financier (DAF)</option>
            <option value="responsable_logistique">Responsable logistique (flotte)</option>
           </select>
@@ -436,6 +440,7 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
                            className="border p-2 rounded"
                           >
                            <option value="company_accountant">Comptable (compagnie)</option>
+                           <option value="operator_digital">Opérateur digital (caisse en ligne)</option>
                            <option value="financial_director">Directeur financier (DAF)</option>
                            <option value="chef_agence">Chef d’agence</option>
                            <option value="responsable_logistique">Responsable logistique (flotte)</option>

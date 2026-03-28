@@ -1,4 +1,4 @@
-// Treasury — Expenses. When status → paid, record financialMovement transactionally.
+// Treasury — Expenses. When status → paid, record ledger transaction.
 // Phase 1: Multi-level approval (pending_manager → pending_accountant → pending_ceo → approved).
 import {
   collection,
@@ -16,14 +16,15 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import { recordMovementInTransaction } from "./financialMovements";
 import { financialAccountRef } from "./financialAccounts";
+import { ledgerDocIdFromFinancialAccountData } from "./ledgerAccounts";
 import {
   getExpenseApprovalThresholds,
   getInitialExpenseStatus,
 } from "@/modules/compagnie/settings/expenseApprovalSettings";
 import { createCompanyNotification, notifyCompanyRoles } from "@/shared/services/companyNotifications";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
+import { createFinancialTransaction } from "./financialTransactions";
 
 const EXPENSES_COLLECTION = "expenses";
 const EXPENSE_RESERVE_ACCOUNT_ID = "company_expense_reserve";
@@ -228,7 +229,7 @@ function effectiveStatus(data: ExpenseDoc): ExpenseStatus {
  * - pending_manager: agency_manager approves (if amount ≤ agencyManagerLimit → approved; else → pending_accountant).
  * - pending_accountant: company_accountant approves (if amount ≤ accountantLimit → approved; else → pending_ceo).
  * - pending_ceo: CEO approves → approved.
- * financialMovements are only created when status becomes "paid" (in payExpense).
+ * Ledger transaction is written when status becomes "paid" (in payExpense).
  */
 export async function approveExpense(
   companyId: string,
@@ -433,6 +434,9 @@ export async function payExpense(
   currency: string
 ): Promise<void> {
   const ref = expenseRef(companyId, expenseId);
+  let mirroredAmount = 0;
+  let mirroredAgencyId: string | null = null;
+  let mirroredAccountType = "";
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
@@ -448,46 +452,45 @@ export async function payExpense(
     const sourceSnap = await tx.get(sourceAccountRef);
     if (!sourceSnap.exists()) throw new Error("Compte source introuvable.");
     const balance = Number((sourceSnap.data() as { currentBalance?: number }).currentBalance ?? 0);
+    mirroredAmount = amount;
+    mirroredAgencyId = data.agencyId ?? null;
+    mirroredAccountType = String((sourceSnap.data() as { accountType?: string }).accountType ?? "");
     if (balance < amount) throw new Error("Solde insuffisant sur le compte source.");
 
-    const reserveRef = financialAccountRef(companyId, EXPENSE_RESERVE_ACCOUNT_ID);
-    const reserveSnap = await tx.get(reserveRef);
-    if (!reserveSnap.exists()) {
-      tx.set(reserveRef, {
-        companyId,
-        agencyId: null,
-        accountType: "expense_reserve",
-        accountName: "Réserve dépenses",
-        currency,
-        currentBalance: 0,
-        isActive: true,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
-
     const now = Timestamp.now();
-    await recordMovementInTransaction(tx, {
-      companyId,
-      fromAccountId: data.accountId,
-      toAccountId: EXPENSE_RESERVE_ACCOUNT_ID,
-      amount,
-      currency,
-      movementType: "expense_payment",
-      referenceType: "expense",
-      referenceId: expenseId,
-      agencyId: data.agencyId ?? "",
-      performedBy,
-      performedAt: now,
-      notes: data.description || null,
-    });
-
     tx.update(ref, {
       status: "paid",
       paidAt: now,
       updatedAt: serverTimestamp(),
     });
   });
+  try {
+    const paidSnap = await getDoc(ref);
+    if (!paidSnap.exists()) throw new Error("Dépense introuvable.");
+    const paid = paidSnap.data() as ExpenseDoc;
+    const sourceSnap = await getDoc(financialAccountRef(companyId, paid.accountId));
+    const debitLedgerId = ledgerDocIdFromFinancialAccountData(
+      sourceSnap.exists() ? (sourceSnap.data() as { accountType?: string; agencyId?: string | null }) : {}
+    );
+    if (!debitLedgerId) throw new Error("[expenses] Compte source sans mapping ledger.");
+    await createFinancialTransaction({
+      companyId,
+      type: "expense",
+      expenseDebitLedgerDocId: debitLedgerId,
+      source: mirroredAccountType.includes("bank")
+        ? "bank"
+        : mirroredAccountType.includes("mobile")
+          ? "mobile_money"
+          : "cash",
+      amount: mirroredAmount,
+      currency,
+      agencyId: mirroredAgencyId,
+      referenceType: "expense",
+      referenceId: expenseId,
+    });
+  } catch (err) {
+    console.warn("[expenses] createFinancialTransaction failed (expense):", err);
+  }
   try {
     const snap = await getDoc(ref);
     const data = snap.exists() ? (snap.data() as ExpenseDoc) : null;

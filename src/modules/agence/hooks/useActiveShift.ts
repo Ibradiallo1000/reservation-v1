@@ -31,7 +31,13 @@ import {
   SHIFT_REPORTS_COLLECTION,
 } from '@/modules/agence/services/sessionService';
 import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
-import { OPEN_SHIFT_STATUSES, type ShiftStatusValue } from '../constants/sessionLifecycle';
+import {
+  OPEN_SHIFT_STATUSES,
+  mapLegacyToCash,
+  parseShiftStatusFromFirestore,
+  type ShiftStatusValue,
+} from '../constants/sessionLifecycle';
+import { fetchAgencyStaffProfile } from '@/modules/agence/services/agencyStaffProfileService';
 
 export type ShiftStatus = 'none' | ShiftStatusValue;
 
@@ -58,6 +64,7 @@ export type ShiftDoc = {
   managerValidated?: boolean;
   accountantValidatedAt?: Timestamp | null;
   managerValidatedAt?: Timestamp | null;
+  cashStatus?: string;
   deviceFingerprint?: string | null;
   deviceClaimedAt?: unknown;
   sessionOwnerUid?: string | null;
@@ -66,6 +73,8 @@ export type ShiftDoc = {
 };
 
 function normalizeShift(id: string, data: Record<string, unknown>): ShiftDoc {
+  /** Source unique : `agences/.../shifts/{id}.status` (champ Firestore `status`). */
+  const normalizedStatus = parseShiftStatusFromFirestore(data) as Exclude<ShiftStatus, 'none'>;
   return {
     id,
     companyId: data.companyId as string,
@@ -73,7 +82,7 @@ function normalizeShift(id: string, data: Record<string, unknown>): ShiftDoc {
     userId: data.userId as string,
     userName: (data.userName ?? null) as string | null,
     userCode: (data.userCode ?? null) as string | null,
-    status: (data.status as Exclude<ShiftStatus, 'none'>) || 'pending',
+    status: normalizedStatus,
     startAt: (data.startAt ?? null) as Timestamp | null,
     endAt: (data.endAt ?? null) as Timestamp | null,
     startTime: (data.startTime ?? null) as Timestamp | null,
@@ -92,6 +101,7 @@ function normalizeShift(id: string, data: Record<string, unknown>): ShiftDoc {
     deviceFingerprint: (data.deviceFingerprint ?? null) as string | null,
     deviceClaimedAt: data.deviceClaimedAt ?? null,
     sessionOwnerUid: (data.sessionOwnerUid ?? null) as string | null,
+    cashStatus: mapLegacyToCash(normalizedStatus) as string,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
@@ -105,9 +115,9 @@ type Api = {
   loading: boolean;
   sessionLockedByOtherDevice: boolean;
   startShift: () => Promise<void>;
-  pauseShift: () => Promise<void>;
+  pauseShift: (reason: string) => Promise<void>;
   continueShift: () => Promise<void>;
-  closeShift: () => Promise<CloseSessionTotals | null>;
+  closeShift: (actualAmount?: number) => Promise<CloseSessionTotals | null>;
   refresh: () => Promise<void>;
 };
 
@@ -119,6 +129,7 @@ export function useActiveShift(): Api {
   const claimAttemptedRef = useRef<Set<string>>(new Set());
   const claimRejectedByServerRef = useRef<Set<string>>(new Set());
 
+  /** Dérivé uniquement du snapshot Firestore (via activeShift.status), jamais d’un state parallèle. */
   const status: ShiftStatus = activeShift?.status ?? 'none';
 
   useEffect(() => {
@@ -149,6 +160,7 @@ export function useActiveShift(): Api {
           const doc = snap.docs[0];
           const data = doc.data() as Record<string, unknown>;
           const normalized = normalizeShift(doc.id, data);
+          console.log('session status', normalized.status);
           setActiveShift(normalized);
           if (normalized.status === SHIFT_STATUS.ACTIVE || normalized.status === SHIFT_STATUS.PAUSED) {
             const claimedHere = isCurrentDeviceClaimed(normalized);
@@ -202,29 +214,53 @@ export function useActiveShift(): Api {
     if (!user?.companyId || !user?.agencyId || !user?.uid) throw new Error('Utilisateur invalide.');
     const existing = await getOpenShiftId(user.companyId, user.agencyId, user.uid);
     if (existing) return;
+    const profile = await fetchAgencyStaffProfile(user.companyId, user.agencyId, user.uid);
+    const codeFromProfile = profile.code?.trim();
+    const codeFromToken =
+      (user.staffCode || user.codeCourt || user.code || '').toString().trim();
+    const resolvedCode = codeFromProfile || codeFromToken || 'GUEST';
+    const resolvedName =
+      (profile.name && profile.name.trim()) ||
+      user.displayName ||
+      user.email ||
+      null;
     const id = await createSession({
       companyId: user.companyId,
       agencyId: user.agencyId,
       userId: user.uid,
-      userName: user.displayName || user.email || null,
-      userCode: (user.staffCode || user.codeCourt || user.code || 'GUEST') ?? null,
+      userName: resolvedName,
+      userCode: resolvedCode,
     });
     const ref = doc(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts/${id}`);
     const snap = await getDoc(ref);
-    if (snap.exists()) setActiveShift(normalizeShift(id, snap.data() as Record<string, unknown>));
+    if (snap.exists()) {
+      const n = normalizeShift(id, snap.data() as Record<string, unknown>);
+      console.log('session status', n.status);
+      setActiveShift(n);
+    }
   }, [user?.companyId, user?.agencyId, user?.uid, user?.displayName, user?.email, user?.staffCode, user?.codeCourt, user?.code]);
 
-  const pauseShift = useCallback(async () => {
+  const pauseShift = useCallback(async (reason: string) => {
     if (!activeShift) throw new Error('Aucun poste en cours.');
-    await pauseSession(activeShift.companyId, activeShift.agencyId, activeShift.id);
-  }, [activeShift]);
+    const r = String(reason ?? '').trim();
+    if (!r) throw new Error('Le motif de pause est obligatoire.');
+    if (!user?.uid) throw new Error('Utilisateur invalide.');
+    await pauseSession({
+      companyId: activeShift.companyId,
+      agencyId: activeShift.agencyId,
+      shiftId: activeShift.id,
+      pausedBy: { id: user.uid, name: user.displayName ?? user.email ?? null },
+      reason: r,
+      actorRole: 'guichetier',
+    });
+  }, [activeShift, user?.uid, user?.displayName, user?.email]);
 
   const continueShift = useCallback(async () => {
     if (!activeShift) throw new Error('Aucun poste en cours.');
     await continueSession(activeShift.companyId, activeShift.agencyId, activeShift.id);
   }, [activeShift]);
 
-  const closeShift = useCallback(async (): Promise<CloseSessionTotals | null> => {
+  const closeShift = useCallback(async (actualAmount?: number): Promise<CloseSessionTotals | null> => {
     if (!activeShift) throw new Error('Aucun poste en cours.');
     const fingerprint = getDeviceFingerprint();
     const totals = await closeSession({
@@ -233,6 +269,7 @@ export function useActiveShift(): Api {
       shiftId: activeShift.id,
       userId: activeShift.userId,
       deviceFingerprint: fingerprint,
+      actualAmount,
     });
     setActiveShift(null);
     return totals;

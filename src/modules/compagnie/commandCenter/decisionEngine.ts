@@ -802,7 +802,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         { label: "Vérifier d'abord les montants puis approuver", estimatedImpact: Math.round(impactAmount * 0.8), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
         { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
-      actionRoute: "/agence/finances",
+      actionRoute: "/agence/caisse#caisse-sessions",
       level: "danger",
     }));
   }
@@ -828,7 +828,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         { label: "Contrôler les prochaines sessions avant de régulariser", estimatedImpact: Math.round(absVariance * 0.5), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
         { label: "Ne rien faire", estimatedImpact: -absVariance, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
-      actionRoute: "/agence/finances",
+      actionRoute: "/agence/caisse#caisse-sessions",
       level: "danger",
     }));
   }
@@ -854,7 +854,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         { label: "Traiter manuellement les rapports prioritaires", estimatedImpact: Math.round(impactAmount * 0.6), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
         { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
-      actionRoute: "/agence/finances",
+      actionRoute: "/agence/caisse#caisse-sessions",
       level: "warning",
     }));
   }
@@ -907,7 +907,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         { label: "Informer les clients et reporter si besoin", estimatedImpact: Math.round(impactAmount * 0.3), risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
         { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
-      actionRoute: "/agence/operations",
+      actionRoute: "/agence/activite#activite-operations",
       level: "warning",
     }));
   }
@@ -937,7 +937,7 @@ export function buildManagerDecisions(input: ManagerDecisionInput): DecisionEngi
         { label: "Maintenir + promotion sur le créneau", estimatedImpact: 80000, risk: "medium", effort: "medium", timeToImpact: "short", feasibility: "high" },
         { label: "Ne rien faire", estimatedImpact: -impactAmount, risk: "high", effort: "low", timeToImpact: "immediate", feasibility: "low" },
       ],
-      actionRoute: "/agence/operations",
+      actionRoute: "/agence/activite#activite-operations",
       level: "warning",
     }));
   }

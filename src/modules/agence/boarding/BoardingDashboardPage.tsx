@@ -1,22 +1,17 @@
 // src/modules/agence/boarding/BoardingDashboardPage.tsx
-// Phase 3: Today's departures — boarding officer only sees this and scan.
+// Départs du jour : tripAssignments (planifié / validé) = source unique pour l’embarquement.
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDoc, getDocs } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState } from "@/ui";
 import { Plane } from "lucide-react";
+import { listBoardingTripAssignmentsForDate } from "@/modules/agence/planning/tripAssignmentService";
+import { vehicleRef } from "@/modules/compagnie/fleet/vehiclesService";
 
-type AgencyItem = { id: string; nom: string };
-type WeeklyTrip = {
-  id: string;
-  departure: string;
-  arrival: string;
-  horaires: Record<string, string[]>;
-  active: boolean;
-};
+type WeeklyTripLite = { id: string; departure: string; arrival: string };
 
 function toLocalISO(d: Date): string {
   const y = d.getFullYear();
@@ -24,7 +19,6 @@ function toLocalISO(d: Date): string {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
-const weekdayFR = (d: Date) => d.toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
 
 const BoardingDashboardPage: React.FC = () => {
   const { user, company } = useAuth() as { user: { companyId?: string; agencyId?: string }; company: unknown };
@@ -32,18 +26,23 @@ const BoardingDashboardPage: React.FC = () => {
   const companyId = user?.companyId ?? null;
   const userAgencyId = user?.agencyId ?? null;
 
-  const [agencies, setAgencies] = useState<AgencyItem[]>([]);
-  const [departures, setDepartures] = useState<Array<{
-    agencyId: string;
-    agencyNom: string;
-    tripId: string;
-    departure: string;
-    arrival: string;
-    heure: string;
-  }>>([]);
+  const [departures, setDepartures] = useState<
+    Array<{
+      agencyId: string;
+      agencyNom: string;
+      assignmentId: string;
+      tripId: string;
+      departure: string;
+      arrival: string;
+      heure: string;
+      date: string;
+      vehicleId: string;
+      assignmentStatus: "planned" | "validated";
+      plate: string;
+    }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const today = toLocalISO(new Date());
-  const dayName = weekdayFR(new Date());
 
   useEffect(() => {
     if (!companyId) {
@@ -55,42 +54,67 @@ const BoardingDashboardPage: React.FC = () => {
       setLoading(true);
       try {
         const agencesSnap = await getDocs(collection(db, `companies/${companyId}/agences`));
-        const agencyList: AgencyItem[] = agencesSnap.docs.map((d) => ({
+        const agencyList = agencesSnap.docs.map((d) => ({
           id: d.id,
           nom: (d.data() as { nom?: string; name?: string })?.nom ?? (d.data() as { name?: string })?.name ?? d.id,
         }));
-        setAgencies(agencyList);
 
         const agencyIds = userAgencyId ? [userAgencyId] : agencyList.map((a) => a.id);
         const list: typeof departures = [];
 
         for (const agencyId of agencyIds) {
-          const tripsSnap = await getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/weeklyTrips`));
           const agencyNom = agencyList.find((a) => a.id === agencyId)?.nom ?? agencyId;
-          const hours = (tripsSnap.docs
-            .map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) } as WeeklyTrip))
-            .filter((t) => t.active && (t.horaires?.[dayName]?.length ?? 0) > 0));
+          const tripsSnap = await getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/weeklyTrips`));
+          const tripById = new Map<string, WeeklyTripLite>();
+          tripsSnap.docs.forEach((d) => {
+            const data = d.data() as { departure?: string; arrival?: string };
+            tripById.set(d.id, {
+              id: d.id,
+              departure: String(data.departure ?? ""),
+              arrival: String(data.arrival ?? ""),
+            });
+          });
 
-          for (const t of hours) {
-            const horaires = (t.horaires?.[dayName] ?? []).slice().sort();
-            for (const heure of horaires) {
-              list.push({
-                agencyId,
-                agencyNom,
-                tripId: t.id,
-                departure: t.departure,
-                arrival: t.arrival,
-                heure,
-              });
-            }
+          const assignments = await listBoardingTripAssignmentsForDate(companyId, agencyId, today);
+          const plates = new Map<string, string>();
+          await Promise.all(
+            [...new Set(assignments.map((x) => x.vehicleId).filter(Boolean))].map(async (vid) => {
+              try {
+                const vs = await getDoc(vehicleRef(companyId, vid));
+                if (vs.exists()) {
+                  const p = (vs.data() as { plateNumber?: string })?.plateNumber ?? vid;
+                  plates.set(vid, String(p));
+                } else plates.set(vid, vid);
+              } catch {
+                plates.set(vid, vid);
+              }
+            })
+          );
+          for (const a of assignments) {
+            const st = a.status === "validated" ? "validated" : "planned";
+            const t = tripById.get(a.tripId);
+            list.push({
+              agencyId,
+              agencyNom,
+              assignmentId: a.id,
+              tripId: a.tripId,
+              departure: t?.departure ?? a.tripId,
+              arrival: t?.arrival ?? "",
+              heure: a.heure,
+              date: a.date,
+              vehicleId: a.vehicleId,
+              assignmentStatus: st,
+              plate: plates.get(a.vehicleId) ?? a.vehicleId,
+            });
           }
         }
+        list.sort((x, y) => (x.heure < y.heure ? -1 : x.heure > y.heure ? 1 : 0));
         setDepartures(list);
       } finally {
         setLoading(false);
       }
     })();
-  }, [companyId, userAgencyId, dayName]);
+  }, [companyId, userAgencyId, today]);
 
   const primaryColor = (company as { couleurPrimaire?: string })?.couleurPrimaire ?? "#0ea5e9";
 
@@ -98,46 +122,65 @@ const BoardingDashboardPage: React.FC = () => {
     <StandardLayoutWrapper maxWidthClass="max-w-4xl">
       <PageHeader
         title="Départs du jour"
-        subtitle={`${formatDateLongFr(new Date())} — Sélectionnez un départ pour ouvrir la liste d'embarquement.`}
+        subtitle={`${formatDateLongFr(new Date())} — Source : planification (tripAssignments). Planifié ou validé logistique.`}
         icon={Plane}
       />
       {loading ? (
         <p className="text-gray-600 dark:text-gray-200">Chargement…</p>
       ) : departures.length === 0 ? (
         <SectionCard title="Départs">
-          <EmptyState message="Aucun départ planifié pour aujourd'hui." />
+          <EmptyState message="Aucun départ planifié pour aujourd’hui (tripAssignments). Planifiez un véhicule par créneau ; la logistique peut valider avant embarquement." />
         </SectionCard>
       ) : (
         <SectionCard title="Départs du jour">
-        <ul className="space-y-2">
-          {departures.map((d) => (
-            <li key={`${d.agencyId}_${d.tripId}_${d.heure}`}>
-              <button
-                type="button"
-                onClick={() =>
-                  navigate("/agence/boarding/scan", {
-                    state: {
-                      agencyId: d.agencyId,
-                      date: today,
-                      trajet: `${d.departure} → ${d.arrival}`,
-                      heure: d.heure,
-                      tripId: d.tripId,
-                      departure: d.departure,
-                      arrival: d.arrival,
-                    },
-                  })
-                }
-                className="w-full text-left px-4 py-3 rounded-xl border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md flex items-center justify-between text-gray-900 dark:text-white"
-                style={{ borderLeftWidth: 4, borderLeftColor: primaryColor }}
-              >
-                <span className="font-medium">
-                  {d.departure} → {d.arrival} à {d.heure}
-                </span>
-                <span className="text-sm text-gray-500 dark:text-gray-200">{d.agencyNom}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+          <ul className="space-y-2">
+            {departures.map((d) => (
+              <li key={d.assignmentId}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate("/agence/boarding/scan", {
+                      state: {
+                        agencyId: d.agencyId,
+                        date: d.date,
+                        trajet: `${d.departure} → ${d.arrival}`,
+                        heure: d.heure,
+                        tripId: d.tripId,
+                        departure: d.departure,
+                        arrival: d.arrival,
+                        assignmentId: d.assignmentId,
+                        vehicleId: d.vehicleId,
+                        assignmentStatus: d.assignmentStatus,
+                      },
+                    })
+                  }
+                  className="w-full text-left px-4 py-3 rounded-xl border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-gray-900 dark:text-white"
+                  style={{ borderLeftWidth: 4, borderLeftColor: primaryColor }}
+                >
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <span className="font-medium">
+                      {d.departure} → {d.arrival} à {d.heure}
+                    </span>
+                    <span className="text-sm text-gray-600 dark:text-gray-300">
+                      Véhicule : <span className="font-mono font-medium">{d.plate}</span>
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <span
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        d.assignmentStatus === "validated"
+                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
+                          : "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"
+                      }`}
+                    >
+                      {d.assignmentStatus === "validated" ? "Validé" : "Planifié"}
+                    </span>
+                    <span className="text-sm text-gray-500 dark:text-gray-200">{d.agencyNom}</span>
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
         </SectionCard>
       )}
     </StandardLayoutWrapper>

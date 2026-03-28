@@ -25,9 +25,6 @@ import AccessDenied from "@/core/ui/AccessDenied";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { calculateChange } from "@/shared/date/periodComparisonUtils";
 import {
-  getNetworkSales,
-} from "@/modules/finance/services/financialConsistencyService";
-import {
   getUnifiedCompanyFinance,
   type UnifiedAgencyFinance,
 } from "@/modules/finance/services/unifiedFinanceService";
@@ -121,7 +118,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const { hasCapability, loading: capLoading } = useCapabilities();
 
-  /** Données dérivées uniquement (dailyStats) : jamais pour calcul principal ventes/cash/validated. */
+  /** Données dérivées uniquement (dailyStats) : jamais pour calcul principal ventes / ledger. */
   const [derivedDailyStats, setDerivedDailyStats] = useState<DailyStatsDoc[]>([]);
   const [discrepancies, setDiscrepancies] = useState<ShiftReportDoc[]>([]);
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
@@ -132,11 +129,6 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   >([]);
   const [liveUpdatedAt, setLiveUpdatedAt] = useState<Date | null>(null);
   const [currency, setCurrency] = useState("XOF");
-  const [comparisonStats, setComparisonStats] = useState<{
-    day: { current: number; prev: number; label: string };
-    week: { current: number; prev: number; label: string };
-    month: { current: number; prev: number; label: string };
-  } | null>(null);
   const [unifiedFinance, setUnifiedFinance] = useState<UnifiedAgencyFinance | null>(null);
   const [unifiedFinanceLoading, setUnifiedFinanceLoading] = useState(false);
   const globalSnapshot = useGlobalDataSnapshot();
@@ -232,7 +224,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
 
   const globalPeriod = useGlobalPeriodContext();
 
-  // Finance unifiée : 3 niveaux (live, cash, validated) — période globale unique
+  // Finance unifiée (ledger + ventes) — période globale unique
   useEffect(() => {
     if (!companyId) return;
     const { dateFrom, dateTo } = globalPeriod.toFinancialPeriod();
@@ -242,34 +234,6 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
       .catch(() => setUnifiedFinance(null))
       .finally(() => setUnifiedFinanceLoading(false));
   }, [companyId, globalPeriod.startDate, globalPeriod.endDate]);
-
-  // Comparaison période précédente : ventes (getNetworkSales), pas getNetworkStats
-  useEffect(() => {
-    if (!companyId) return;
-    const now = new Date();
-    const today = toDateKey(now);
-    const yesterday = toDateKey(subDays(now, 1));
-    const weekStart = toDateKey(subDays(now, 6));
-    const prevWeekStart = toDateKey(subDays(now, 13));
-    const monthStart = toDateKey(subDays(now, 29));
-    const prevMonthStart = toDateKey(subDays(now, 59));
-    Promise.all([
-      getNetworkSales(companyId, { dateFrom: today, dateTo: today }),
-      getNetworkSales(companyId, { dateFrom: yesterday, dateTo: yesterday }),
-      getNetworkSales(companyId, { dateFrom: weekStart, dateTo: today }),
-      getNetworkSales(companyId, { dateFrom: prevWeekStart, dateTo: toDateKey(subDays(now, 7)) }),
-      getNetworkSales(companyId, { dateFrom: monthStart, dateTo: today }),
-      getNetworkSales(companyId, { dateFrom: prevMonthStart, dateTo: toDateKey(subDays(now, 30)) }),
-    ])
-      .then(([currDay, prevDay, currWeek, prevWeek, currMonth, prevMonth]) => {
-        setComparisonStats({
-          day: { current: currDay.total, prev: prevDay.total, label: "Comparé à hier" },
-          week: { current: currWeek.total, prev: prevWeek.total, label: "Comparé aux 7 jours précédents" },
-          month: { current: currMonth.total, prev: prevMonth.total, label: "Comparé aux 30 jours précédents" },
-        });
-      })
-      .catch(() => setComparisonStats(null));
-  }, [companyId]);
 
   useEffect(() => {
     if (!companyId || agencies.length === 0) {
@@ -606,34 +570,100 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
           Rafraîchir
         </button>
       </div>
+
+      {!unifiedFinanceLoading && unifiedFinance && (
+        <div className="mb-4 space-y-4">
+          <section className="rounded-xl border-2 border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-4">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
+              1 — Argent réel (soldes <code className="text-[11px]">accounts</code>)
+            </h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mb-3">
+              Uniquement la somme des soldes ledger — pas les ventes ni les stats.
+            </p>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Caisse espèces</div>
+                <div className="font-semibold">{money(unifiedFinance.realMoney.cash)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Mobile money</div>
+                <div className="font-semibold">{money(unifiedFinance.realMoney.mobileMoney)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Banque</div>
+                <div className="font-semibold">{money(unifiedFinance.realMoney.bank)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Liquidité totale</div>
+                <div className="font-semibold">{money(unifiedFinance.realMoney.total)}</div>
+              </div>
+            </div>
+          </section>
+          <section className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 p-4">
+            <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-1">
+              2 — Activité (période globale)
+            </h3>
+            <p className="text-xs text-blue-800/80 dark:text-blue-200/80 mb-3">
+              Ventes = réservations (createdAt). Encaissements / CA net = <code className="text-[11px]">financialTransactions</code> confirmés.
+            </p>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Ventes (réservations)</div>
+                <div className="font-semibold">
+                  {unifiedFinance.activity.sales.reservationCount} résa · {money(unifiedFinance.activity.sales.amountHint)}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Encaissements</div>
+                <div className="font-semibold">{money(unifiedFinance.activity.encaissements.total)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">CA net</div>
+                <div className="font-semibold">{money(unifiedFinance.activity.caNet)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">Split (paymentMethod)</div>
+                <div className="font-semibold text-[12px]">
+                  Guichet {money(unifiedFinance.activity.split.paiementsGuichet)} · En ligne{" "}
+                  {money(unifiedFinance.activity.split.paiementsEnLigne)}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+      {unifiedFinanceLoading && (
+        <p className="mb-4 text-xs text-slate-500">Chargement de la synthèse ledger…</p>
+      )}
+
       <section className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">En attente validation (guichet)</div>
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">En attente validation (sessions)</div>
           <div className="text-xl font-bold mt-1" style={{ color: "#2563eb" }}>
             {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.pendingGuichet)}
           </div>
-          <p className="text-xs text-gray-500 mt-1">sessions clôturées non validées</p>
+          <p className="text-xs text-gray-500 mt-1">Indicateur opérationnel — pas un solde ledger.</p>
         </div>
         <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Validé agence</div>
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Caisse espèces (ledger)</div>
           <div className="text-xl font-bold mt-1" style={{ color: "#16a34a" }}>
-            {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.validatedAgency)}
+            {unifiedFinanceLoading || !unifiedFinance ? "—" : money(unifiedFinance.realMoney.cash)}
           </div>
-          <p className="text-xs text-gray-500 mt-1">sessions validées par comptable agence</p>
+          <p className="text-xs text-gray-500 mt-1">Comptes <code className="text-[10px]">type=cash</code> uniquement.</p>
         </div>
         <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Centralisé (banque / mobile money)</div>
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Mobile money (ledger)</div>
           <div className="text-xl font-bold mt-1" style={{ color: "#7c3aed" }}>
-            {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.centralised)}
+            {unifiedFinanceLoading || !unifiedFinance ? "—" : money(unifiedFinance.realMoney.mobileMoney)}
           </div>
-          <p className="text-xs text-gray-500 mt-1">financialAccounts (comptes entreprise)</p>
+          <p className="text-xs text-gray-500 mt-1">Comptes <code className="text-[10px]">type=mobile_money</code> uniquement.</p>
         </div>
       </section>
 
       <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-3 mb-3">
           <h2 className="text-lg font-semibold">Surveillance financière</h2>
-          <InfoHint text="Temps réel: ventes des sessions non validées du jour. Consolidé: ventes validées comptablement." />
+          <InfoHint text="Temps réel: ventes des sessions non validées du jour. Journalier: agrégat dailyStats (indicateur comptable historique, distinct du ledger)." />
         </div>
 
         {(criticalAlerts.length > 0 || warningAlerts.length > 0) && (
@@ -656,10 +686,10 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             </div>
             <div className="mt-1 text-xl font-bold text-primary">{money(liveSalesTotal)}</div>
           </div>
-          <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
+            <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
             <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">
-              <span>Consolidé validé</span>
-              <InfoHint text="Montant validé après contrôle comptable sur la journée en cours." />
+              <span>Stats journalières</span>
+              <InfoHint text="Revenu du jour issu des dailyStats (pas la source ledger — utile pour tendance)." />
             </div>
             <div className="mt-1 text-xl font-bold text-primary">{money(revenueToday.total)}</div>
           </div>

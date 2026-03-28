@@ -72,7 +72,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
     const s = (statut || "").toLowerCase();
     if (s === "confirme" || s === "paye") return t("ticketStatusPaymentValidated");
     if (s === "preuve_recue") return t("ticketStatusAwaitingValidation");
-    if (s === "en_attente_paiement") return t("ticketStatusAwaitingPayment");
+    if (s === "en_attente_paiement" || s === "en_attente") return t("ticketStatusAwaitingPayment");
     return t("ticketStatusAwaitingPayment");
   };
 

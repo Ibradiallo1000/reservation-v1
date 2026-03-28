@@ -14,7 +14,9 @@
     "generate-splash-screens": "node scripts/generate-splash-screens.js",
     "migrate:companies": "node scripts/migrate_companies.cjs",
     "backfill:reservation-company-id": "npx ts-node scripts/backfillReservationCompanyId.ts",
-    "backfill:reservation-company-id-once": "npx ts-node scripts/oneTimeBackfillReservationCompanyId.ts"
+    "backfill:reservation-company-id-once": "npx ts-node scripts/oneTimeBackfillReservationCompanyId.ts",
+    "backfill:trip-instance-remaining-seats": "npx ts-node scripts/backfillTripInstanceRemainingSeats.ts",
+    "migrate:trip-assignment-live-status": "npx ts-node scripts/migrateTripAssignmentLiveStatus.ts"
   },
   "dependencies": {
     "@emotion/babel-plugin": "^11.13.5",
@@ -48,6 +50,7 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^0.309.0",
     "node-fetch": "^3.3.2",
+    "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-colorful": "^5.6.1",
     "react-confetti": "^6.4.0",

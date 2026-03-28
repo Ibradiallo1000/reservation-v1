@@ -5,6 +5,12 @@
 
 import { db } from '@/firebaseConfig';
 import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { applyRemittancePendingToAgencyCashInTransaction } from '@/modules/compagnie/treasury/financialTransactions';
+import { writeComptaEncaissementInTransaction } from '@/modules/agence/comptabilite/comptaEncaissementsService';
+import {
+  PENDING_CASH_LEDGER_SYSTEM_VERSION,
+  type PendingCashRemittanceStatus,
+} from '@/modules/agence/comptabilite/pendingCashSafety';
 
 export type ValidateShiftWithDepositParams = {
   companyId: string;
@@ -32,11 +38,29 @@ export async function validateShiftWithDeposit(p: ValidateShiftWithDepositParams
     const depose = Number(p.declaredDeposit ?? 0);
     const diff = depose - attendu;
     const discrepancyType = diff === 0 ? null : diff < 0 ? 'manquant' : 'surplus';
+    const isPartialRemittance = depose + 0.01 < attendu;
+    const remittanceStatus: PendingCashRemittanceStatus = isPartialRemittance
+      ? 'partial_remittance'
+      : 'full_remittance';
+    const remittanceDiscrepancyAmount = isPartialRemittance ? Math.max(0, attendu - depose) : 0;
+
+    await applyRemittancePendingToAgencyCashInTransaction(
+      tx,
+      p.companyId,
+      p.agencyId,
+      depose,
+      'XOF',
+      { referenceType: 'shift', referenceId: p.shiftId },
+      `shift ${p.shiftId} validateShiftWithDeposit (legacy)`
+    );
 
     tx.update(ref, {
       declaredDeposit: depose,
       difference: diff,
       discrepancyType,
+      remittanceStatus,
+      remittanceDiscrepancyAmount,
+      pendingCashLedgerVersion: PENDING_CASH_LEDGER_SYSTEM_VERSION,
       discrepancyNote: p.discrepancyNote ?? null,
       discrepancyEvidenceUrl: p.discrepancyEvidenceUrl ?? null,
       status: 'validated',
@@ -49,5 +73,13 @@ export async function validateShiftWithDeposit(p: ValidateShiftWithDepositParams
       validatedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+
+    if (depose > 0) {
+      writeComptaEncaissementInTransaction(tx, p.companyId, p.agencyId, {
+        sessionId: p.shiftId,
+        montant: depose,
+        source: 'guichet',
+      });
+    }
   });
 }

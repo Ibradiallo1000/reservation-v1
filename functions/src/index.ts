@@ -906,6 +906,7 @@ export const deleteCompany = functions
    Runs daily at 02:00 UTC to handle subscription lifecycle.
 ======================================================= */
 import { runSubscriptionExpirationCheck } from "./scheduled/checkSubscriptionExpiration";
+import { runGenerateTripInstancesForAllCompanies } from "./scheduled/generateTripInstancesFromWeeklyTrips";
 
 export const checkSubscriptionExpiration = functions
   .runWith({ timeoutSeconds: 120, memory: "256MB" })
@@ -921,6 +922,17 @@ export const checkSubscriptionExpiration = functions
     } else {
       functions.logger.info("Subscription expiration check: no transitions needed.");
     }
+    return null;
+  });
+
+/** Tous les jours à minuit (Africa/Bamako) : tripInstances pour les 14 prochains jours (id déterministe). */
+export const scheduledGenerateTripInstancesFromWeeklyTrips = functions
+  .region("europe-west1")
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .pubsub.schedule("0 0 * * *")
+  .timeZone("Africa/Bamako")
+  .onRun(async () => {
+    await runGenerateTripInstancesForAllCompanies();
     return null;
   });
 

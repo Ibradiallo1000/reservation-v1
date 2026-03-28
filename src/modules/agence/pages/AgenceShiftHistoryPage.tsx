@@ -18,6 +18,7 @@ import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge, ActionButton, table, tableRowClassName, EmptyState } from '@/ui';
 import { History } from 'lucide-react';
+import { OperationalHintRow } from '@/modules/agence/components/OperationalDataHint';
 
 type Row = {
   id: string;
@@ -188,6 +189,11 @@ const AgenceShiftHistoryPage: React.FC = () => {
         }
       />
 
+      <OperationalHintRow>
+        Totaux « Ventes / Montant » : <strong>réservations</strong> liées aux sessions —{" "}
+        <strong>opérationnel, non comptable</strong>.
+      </OperationalHintRow>
+
       <SectionCard title="Filtres">
         <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
           <div className="sm:col-span-1">
@@ -231,7 +237,7 @@ const AgenceShiftHistoryPage: React.FC = () => {
                 <th className={table.th}>Fin</th>
                 <th className={table.thRight}>Ventes</th>
                 <th className={table.thRight}>Billets</th>
-                <th className={table.thRight}>Montant</th>
+                <th className={table.thRight}>Montant (terrain)</th>
                 <th className={table.thRight}>Actions</th>
               </tr>
             </thead>

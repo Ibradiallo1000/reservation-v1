@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import html2pdf from 'html2pdf.js';
 import { DEFAULT_TICKET_MESSAGES } from '@/constants/ticketMessages';
+import { SALE_PENDING_UI_STATUT, SALE_SLOW_UI_STATUT, SALE_ERROR_UI_STATUT } from '@/modules/agence/guichet/components/pos/RecentSales';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
 export interface ReservationData {
@@ -97,8 +98,14 @@ const ReceiptModal: React.FC<Props> = ({
     { locale: fr }
   );
 
+  const isPendingEncaissement = reservation.statut === SALE_PENDING_UI_STATUT;
+  const isSlowEncaissement = reservation.statut === SALE_SLOW_UI_STATUT;
+  const isErrorEncaissement = reservation.statut === SALE_ERROR_UI_STATUT;
+  const blockFinalTicket = isPendingEncaissement || isSlowEncaissement || isErrorEncaissement;
+
   const handlePDF = () => {
     if (!ref.current) return;
+    if (blockFinalTicket) return;
 
     html2pdf()
       .set({
@@ -138,9 +145,18 @@ const ReceiptModal: React.FC<Props> = ({
         <div className="no-print flex justify-between items-center px-4 py-3 border-b">
           <div className="font-semibold">{company.nom}</div>
           <div className="flex gap-2">
-            <button onClick={handlePDF}>PDF</button>
-            <button onClick={() => window.print()}>Imprimer</button>
-            <button onClick={onClose}>Fermer</button>
+            <button type="button" onClick={handlePDF} disabled={blockFinalTicket} title={blockFinalTicket ? "Disponible après validation" : undefined}>
+              PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              disabled={blockFinalTicket}
+              title={blockFinalTicket ? "Disponible après validation" : undefined}
+            >
+              Imprimer
+            </button>
+            <button type="button" onClick={onClose}>Fermer</button>
           </div>
         </div>
 
@@ -244,31 +260,45 @@ const ReceiptModal: React.FC<Props> = ({
 
           <hr />
 
-          {/* QR */}
-          <div
-            style={{
-              marginTop: '12px',
-              display: 'flex',
-              justifyContent: 'center'
-            }}
-          >
-           <QRCode
-             value={qrValue}
-             size={100}
-             level="H"
-             fgColor="#000000"
-           />
-         </div>
+          {blockFinalTicket ? (
+            <div
+              className={`no-print rounded-lg border px-3 py-2.5 text-center ${
+                isErrorEncaissement ? "border-red-300 bg-red-50 text-red-900" : "border-amber-300 bg-amber-50 text-amber-900"
+              }`}
+              style={{ marginTop: '12px', fontSize: '11px', lineHeight: 1.45 }}
+            >
+              <strong>{isErrorEncaissement ? "Encaissement en erreur" : "Encaissement en cours"}</strong>
+              <br />
+              {isErrorEncaissement
+                ? "La transaction n'a pas été validée. Veuillez relancer l'encaissement."
+                : isSlowEncaissement
+                  ? "Connexion lente, traitement en cours..."
+                  : "Validation du billet après confirmation serveur. N’utilisez pas ce document comme billet définitif."}
+            </div>
+          ) : (
+            <>
+              {/* QR — masqué tant que la transaction Firestore n’a pas réussi */}
+              <div
+                style={{
+                  marginTop: '12px',
+                  display: 'flex',
+                  justifyContent: 'center'
+                }}
+              >
+                <QRCode value={qrValue} size={100} level="H" fgColor="#000000" />
+              </div>
 
-         <div
-           style={{
-             textAlign: 'center',
-             fontSize: '10px',
-             marginTop: '6px'
-           }}
-         >
-          Validité : 1 mois à compter de la date d’émission.
-         </div>
+              <div
+                style={{
+                  textAlign: 'center',
+                  fontSize: '10px',
+                  marginTop: '6px'
+                }}
+              >
+                Validité : 1 mois à compter de la date d’émission.
+              </div>
+            </>
+          )}
 
           <hr />
 

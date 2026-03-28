@@ -5,6 +5,7 @@ import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActiveShift } from '@/modules/agence/hooks/useActiveShift';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import { OperationalHintRow } from '@/modules/agence/components/OperationalDataHint';
 
 const GuichetRapportPanel: React.FC = () => {
   const { user } = useAuth();
@@ -62,9 +63,6 @@ const GuichetRapportPanel: React.FC = () => {
   const totalCash = rows
     .filter((r) => r.paiement === 'espèces')
     .reduce((s, r) => s + (r.montant || 0), 0);
-  const totalMM = rows
-    .filter((r) => r.paiement === 'mobile_money')
-    .reduce((s, r) => s + (r.montant || 0), 0);
 
   return (
     <section className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-200">
@@ -77,6 +75,10 @@ const GuichetRapportPanel: React.FC = () => {
             Aucun poste actif détecté — affichage des ventes du jour.
           </p>
         )}
+        <OperationalHintRow>
+          Totaux calculés sur les <strong>réservations</strong> du poste ou du jour —{" "}
+          <strong>source terrain, non comptabilisée</strong>.
+        </OperationalHintRow>
       </div>
 
       {loading ? (
@@ -118,7 +120,7 @@ const GuichetRapportPanel: React.FC = () => {
             </tbody>
           </table>
 
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="p-3 rounded-lg bg-gray-50 border">
               <div className="text-xs text-gray-500">Total ventes</div>
               <div className="text-lg font-bold">
@@ -126,15 +128,9 @@ const GuichetRapportPanel: React.FC = () => {
               </div>
             </div>
             <div className="p-3 rounded-lg bg-gray-50 border">
-              <div className="text-xs text-gray-500">Espèces</div>
+              <div className="text-xs text-gray-500">Espèces (guichet)</div>
               <div className="text-lg font-bold">
                 {money(totalCash)}
-              </div>
-            </div>
-            <div className="p-3 rounded-lg bg-gray-50 border">
-              <div className="text-xs text-gray-500">Mobile Money</div>
-              <div className="text-lg font-bold">
-                {money(totalMM)}
               </div>
             </div>
           </div>

@@ -7,6 +7,7 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { CashSummaryCard } from "@/modules/compagnie/cash/CashSummaryCard";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { Wallet } from "lucide-react";
+import { OperationalHintRow } from "@/modules/agence/components/OperationalDataHint";
 import { DayFilterBar } from "@/shared/date/DayFilterBar";
 import { getSelectedDateStr, toLocalDateStr, type DayPreset } from "@/shared/date/dayFilterUtils";
 
@@ -36,6 +37,10 @@ export default function EscaleCaissePage() {
           onCustomDateChange={setCustomDate}
         />
       </div>
+      <OperationalHintRow>
+        La carte ci-dessous mélange <strong>solde espèces ledger</strong> et <strong>liste des transactions caisse terrain</strong>{" "}
+        (cashTransactions) — la liste est <strong>opérationnelle / non comptable</strong> seule pour la traçabilité guichet.
+      </OperationalHintRow>
       <div className="mt-4">
         <CashSummaryCard
           companyId={user.companyId}

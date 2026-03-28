@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import { OperationalSourceBadge } from "@/modules/agence/components/OperationalDataHint";
 import { X, Printer, CheckCircle2, Clock, Ticket, Banknote } from "lucide-react";
 
 interface SaleRow {
@@ -41,6 +42,7 @@ export const SessionSummaryModal: React.FC<Props> = ({
     const active = tickets.filter((t) => t.statutEmbarquement !== "annulé" && t.montant > 0);
     const canceled = tickets.filter((t) => t.statutEmbarquement === "annulé" || t.montant === 0);
     const totalSeats = active.reduce((a, t) => a + (t.seatsGo || 0) + (t.seatsReturn || 0), 0);
+    // operational data, not financial truth — session ticket rows, not financialTransactions
     const totalRevenue = active.reduce((a, t) => a + (t.montant || 0), 0);
 
     const byRoute: Record<string, { route: string; billets: number; montant: number }> = {};
@@ -92,7 +94,7 @@ export const SessionSummaryModal: React.FC<Props> = ({
             <div className="bg-gray-50 rounded-xl p-3 text-center">
               <Banknote className="w-5 h-5 mx-auto text-gray-400 mb-1" />
               <p className="text-2xl font-black" style={{ color: primaryColor }}>{formatMoney(summary.totalRevenue)}</p>
-              <p className="text-[11px] text-gray-500">Recette totale</p>
+              <p className="text-[11px] text-gray-500">Recette session (terrain)</p>
             </div>
             <div className="bg-gray-50 rounded-xl p-3 text-center">
               <Clock className="w-5 h-5 mx-auto text-gray-400 mb-1" />

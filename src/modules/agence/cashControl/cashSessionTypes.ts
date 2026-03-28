@@ -16,6 +16,7 @@ export type CashSessionType = (typeof CASH_SESSION_TYPE)[keyof typeof CASH_SESSI
 export const CASH_SESSION_STATUS = {
   OPEN: "OPEN",
   CLOSED: "CLOSED",
+  SUSPENDED: "SUSPENDED",
   VALIDATED: "VALIDATED",
   REJECTED: "REJECTED",
 } as const;
@@ -53,6 +54,9 @@ export interface CashSessionDoc {
   validatedAt?: Timestamp | null;
   validatedBy?: string | null;
   rejectionReason?: string | null;
+  suspendedAt?: Timestamp | null;
+  suspendedBy?: string | null;
+  suspensionReason?: string | null;
 }
 
 export type CashSessionDocWithId = CashSessionDoc & { id: string };

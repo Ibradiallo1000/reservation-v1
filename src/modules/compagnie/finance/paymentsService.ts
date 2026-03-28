@@ -3,8 +3,9 @@ import type { Transaction } from "firebase/firestore";
 import { runTransaction, serverTimestamp, Timestamp, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { financialAccountRef } from "@/modules/compagnie/treasury/financialAccounts";
-import { recordMovementInTransaction } from "@/modules/compagnie/treasury/financialMovements";
 import type { ReferenceType } from "@/modules/compagnie/treasury/types";
+import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
+import { ledgerDocIdFromFinancialAccountData } from "@/modules/compagnie/treasury/ledgerAccounts";
 import { payableRef } from "./payablesService";
 import type { PayableDoc, PayableStatus } from "./payablesTypes";
 import { getFinancialSettings } from "./financialSettingsService";
@@ -51,22 +52,6 @@ async function executePaymentInTransaction(tx: Transaction, params: PayPayablePa
   if (!accountSnap.exists()) throw new Error("Compte source introuvable.");
   const balance = Number((accountSnap.data() as { currentBalance?: number }).currentBalance ?? 0);
   if (balance < amount) throw new Error("Solde insuffisant sur le compte source.");
-
-  const referenceId = `${params.payableId}_${params.idempotencyKey}`;
-  await recordMovementInTransaction(tx, {
-    companyId: params.companyId,
-    fromAccountId: params.fromAccountId,
-    toAccountId: null,
-    amount,
-    currency: params.currency,
-    movementType: "payable_payment",
-    referenceType: REFERENCE_TYPE,
-    referenceId,
-    agencyId: payable.agencyId,
-    performedBy: params.performedBy,
-    performedByRole: params.performedByRole ?? null,
-    notes: `Paiement fournisseur: ${payable.supplierName} - ${payable.description}`.slice(0, 200),
-  });
 
   const newAmountPaid = Number(payable.amountPaid ?? 0) + amount;
   const totalAmount = Number(payable.totalAmount ?? 0);
@@ -143,6 +128,29 @@ export async function payPayable(params: PayPayableParams): Promise<PayPayableRe
     if (remaining < amount) throw new Error("Montant supérieur au solde restant dû.");
     await executePaymentInTransaction(tx, params, payable);
   });
+  try {
+    const accSnap = await getDoc(financialAccountRef(params.companyId, params.fromAccountId));
+    const acc = accSnap.exists()
+      ? (accSnap.data() as { accountType?: string | null; agencyId?: string | null })
+      : {};
+    const debitId = ledgerDocIdFromFinancialAccountData(acc);
+    if (debitId) {
+      await createFinancialTransaction({
+        companyId: params.companyId,
+        type: "expense",
+        expenseDebitLedgerDocId: debitId,
+        source: String(acc.accountType ?? "").includes("mobile") ? "mobile_money" : String(acc.accountType ?? "").includes("bank") ? "bank" : "cash",
+        amount,
+        currency: params.currency,
+        agencyId: payableData.agencyId ?? null,
+        referenceType: REFERENCE_TYPE,
+        referenceId: `${params.payableId}_${params.idempotencyKey}`,
+        metadata: { payableId: params.payableId },
+      });
+    }
+  } catch {
+    /* keep payable state as source */
+  }
 
   return { status: "executed" };
 }
@@ -184,21 +192,6 @@ export async function approvePaymentProposal(params: ApprovePaymentProposalParam
     if (balance < amount) throw new Error("Solde insuffisant sur le compte source.");
 
     const referenceId = `${proposal.payableId}_ceo_${params.proposalId}`;
-    const movementId = await recordMovementInTransaction(tx, {
-      companyId: params.companyId,
-      fromAccountId: proposal.fromAccountId,
-      toAccountId: null,
-      amount,
-      currency: proposal.currency,
-      movementType: "payable_payment",
-      referenceType: REFERENCE_TYPE,
-      referenceId,
-      agencyId: proposal.agencyId,
-      performedBy: params.approvedBy,
-      performedByRole: "admin_compagnie",
-      notes: `Paiement approuvé CEO: ${payable.supplierName} - ${payable.description}`.slice(0, 200),
-    });
-
     const newAmountPaid = Number(payable.amountPaid ?? 0) + amount;
     const totalAmount = Number(payable.totalAmount ?? 0);
     tx.update(payableRefDoc, {
@@ -223,10 +216,35 @@ export async function approvePaymentProposal(params: ApprovePaymentProposalParam
       approvedBy: params.approvedBy,
       approvedAt: serverTimestamp(),
       approvedByRole,
-      executedMovementId: movementId,
+      executedMovementId: null,
       approvalHistory: history,
     });
   });
+  try {
+    const proposalSnap = await getDoc(paymentProposalRef(params.companyId, params.proposalId));
+    if (!proposalSnap.exists()) return;
+    const p = proposalSnap.data() as PaymentProposalDoc;
+    const accSnap = await getDoc(financialAccountRef(params.companyId, p.fromAccountId));
+    const acc = accSnap.exists()
+      ? (accSnap.data() as { accountType?: string | null; agencyId?: string | null })
+      : {};
+    const debitId = ledgerDocIdFromFinancialAccountData(acc);
+    if (!debitId) return;
+    await createFinancialTransaction({
+      companyId: params.companyId,
+      type: "expense",
+      expenseDebitLedgerDocId: debitId,
+      source: String(acc.accountType ?? "").includes("mobile") ? "mobile_money" : String(acc.accountType ?? "").includes("bank") ? "bank" : "cash",
+      amount: Number(p.amount ?? 0),
+      currency: p.currency,
+      agencyId: p.agencyId ?? null,
+      referenceType: REFERENCE_TYPE,
+      referenceId: `${p.payableId}_ceo_${params.proposalId}`,
+      metadata: { payableId: p.payableId, proposalId: params.proposalId },
+    });
+  } catch {
+    /* ignore: approval already persisted */
+  }
 }
 
 export interface RejectPaymentProposalParams {

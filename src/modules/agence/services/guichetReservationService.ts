@@ -8,26 +8,35 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
+  query,
   setDoc,
   updateDoc,
   deleteDoc,
   runTransaction,
   serverTimestamp,
   Timestamp,
+  where,
+  limit,
 } from 'firebase/firestore';
-import { db } from '@/firebaseConfig';
+import { auth, db } from '@/firebaseConfig';
 import { normalizePhone } from '@/utils/phoneUtils';
 import { SHIFT_STATUS, isShiftLocked } from '../constants/sessionLifecycle';
-import { updateDailyStatsOnReservationCreated } from '../aggregates/dailyStats';
+import { dailyStatsTimezoneFromAgencyData, updateDailyStatsOnReservationCreated } from '../aggregates/dailyStats';
 import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
 import { addToExpectedBalance } from '@/modules/agence/cashControl/cashSessionService';
 import type { CashPaymentMethod } from '@/modules/agence/cashControl/cashSessionTypes';
-import { incrementReservedSeats, findTripInstanceBySlot, getTripInstance } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import {
+  bookSeatsOnTripInstanceInTransaction,
+  findTripInstanceBySlot,
+  getTripInstance,
+  tripInstanceRef,
+} from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { getStopByOrder, getEscaleDestinations } from '@/modules/compagnie/routes/routeStopsService';
 import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
-import { createCashTransaction } from '@/modules/compagnie/cash/cashService';
-import { LOCATION_TYPE } from '@/modules/compagnie/cash/cashTypes';
-import { getTodayBamako } from '@/shared/date/dateUtilsTz';
+import { createPayment } from '@/services/paymentService';
+import { createFinancialTransaction } from '@/modules/compagnie/treasury/financialTransactions';
+import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
 
 export type CreateGuichetReservationParams = {
   companyId: string;
@@ -60,7 +69,95 @@ export type CreateGuichetReservationParams = {
   /** Segment orders on the route (for segment-based occupancy). When omitted, resolved from route + depart/arrivee when possible. */
   originStopOrder?: number | null;
   destinationStopOrder?: number | null;
+  offlineMeta?: {
+    mode: "online" | "offline";
+    transactionId?: string;
+    deviceId?: string;
+    createdAt?: number;
+  };
 };
+
+async function verifyReservationIntegrity(
+  companyId: string,
+  agencyId: string,
+  reservationId: string
+): Promise<void> {
+  const markInvalid = async (reason: string): Promise<void> => {
+    const reservationRef = doc(db, `companies/${companyId}/agences/${agencyId}/reservations/${reservationId}`);
+    await updateDoc(reservationRef, {
+      statut: 'invalide',
+      integrityIssue: true,
+      integrityReason: reason,
+      updatedAt: serverTimestamp(),
+    });
+    console.error("[verifyReservationIntegrity] reservation marked invalid", { reservationId, reason });
+  };
+
+  const reservationRef = doc(db, `companies/${companyId}/agences/${agencyId}/reservations/${reservationId}`);
+  const reservationSnap = await getDoc(reservationRef);
+  if (!reservationSnap.exists()) throw new Error("Reservation missing");
+  const reservation = reservationSnap.data() as { tripInstanceId?: string | null; paymentId?: string | null };
+  if (reservation.tripInstanceId) {
+    const trip = await getTripInstance(companyId, reservation.tripInstanceId);
+    if (!trip) {
+      await markInvalid("Trip missing");
+      throw new Error("Trip missing");
+    }
+    const reservedSeats = Number((trip as { reservedSeats?: number }).reservedSeats ?? 0);
+    if (reservedSeats < 0) {
+      await markInvalid("Seat inconsistency detected");
+      throw new Error("Seat inconsistency detected");
+    }
+  }
+  if (!reservation.paymentId) {
+    await markInvalid("Missing payment for reservation");
+    console.warn("Missing payment for reservation", reservationId);
+  }
+}
+
+async function verifyGlobalReservationConsistency(
+  companyId: string,
+  agencyId: string,
+  reservationId: string
+): Promise<void> {
+  const reservationRef = doc(db, `companies/${companyId}/agences/${agencyId}/reservations/${reservationId}`);
+  const reservationSnap = await getDoc(reservationRef);
+  const reservationExists = reservationSnap.exists();
+  const reservation = reservationExists ? (reservationSnap.data() as { paymentId?: string | null }) : null;
+  const paymentId = String(reservation?.paymentId ?? '').trim();
+
+  const paymentExists = paymentId
+    ? (await getDoc(doc(db, 'companies', companyId, 'payments', paymentId))).exists()
+    : false;
+
+  const txSnap = await getDocs(query(
+    collection(db, 'companies', companyId, 'financialTransactions'),
+    where('reservationId', '==', reservationId),
+    where('type', '==', 'payment_received'),
+    limit(1)
+  ));
+  const financialTransactionExists = !txSnap.empty;
+
+  const isConsistent = reservationExists && paymentExists && financialTransactionExists;
+  await updateDoc(reservationRef, {
+    isConsistent,
+    consistencyIssue: !isConsistent,
+    consistencyCheckedAt: serverTimestamp(),
+    ...(isConsistent
+      ? { consistencyReason: null }
+      : { consistencyReason: 'Missing reservation/payment/financial transaction link' }),
+    ...(isConsistent ? {} : { integrityIssue: true }),
+    updatedAt: serverTimestamp(),
+  });
+  if (!isConsistent) {
+    console.warn('[guichetReservationService] reservation consistency issue', {
+      reservationId,
+      reservationExists,
+      paymentExists,
+      financialTransactionExists,
+    });
+  }
+}
 
 function isOfflineError(e: unknown): boolean {
   if (!e || typeof e !== 'object') return false;
@@ -71,6 +168,56 @@ function isOfflineError(e: unknown): boolean {
     code === 'resource-exhausted' ||
     /offline|network|unavailable|failed to get document/i.test(msg)
   );
+}
+
+async function logGuichetFinanceAuthDebug(params: {
+  companyId: string;
+  agencyId: string;
+  userId: string;
+}): Promise<void> {
+  try {
+    const currentUid = auth.currentUser?.uid ?? null;
+    const token = auth.currentUser ? await auth.currentUser.getIdTokenResult(false) : null;
+    const tokenRole = (token?.claims?.role as string | undefined) ?? '';
+    const tokenCompanyId =
+      (token?.claims?.companyId as string | undefined) ??
+      (token?.claims?.compagnieId as string | undefined) ??
+      '';
+    const userSnap = currentUid
+      ? await getDoc(doc(db, 'users', currentUid))
+      : null;
+    const userData = userSnap?.exists() ? (userSnap.data() as Record<string, unknown>) : null;
+    const userRoleDoc = String(userData?.role ?? '');
+    const userCompanyDoc =
+      String(userData?.companyId ?? userData?.compagnieId ?? '');
+
+    console.warn('[GUICHET_FINANCE_DEBUG]', {
+      expected: {
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        userId: params.userId,
+      },
+      auth: {
+        isAuthenticated: auth.currentUser != null,
+        currentUid,
+        tokenRole,
+        tokenCompanyId,
+      },
+      userDoc: {
+        exists: Boolean(userData),
+        role: userRoleDoc,
+        companyId: userCompanyDoc,
+        agencyId: String(userData?.agencyId ?? ''),
+      },
+      checks: {
+        uidMatches: currentUid === params.userId,
+        companyMatchesToken: tokenCompanyId === params.companyId,
+        companyMatchesUserDoc: userCompanyDoc === params.companyId,
+      },
+    });
+  } catch (e) {
+    console.warn('[GUICHET_FINANCE_DEBUG] unable to resolve auth debug:', e);
+  }
 }
 
 /**
@@ -157,8 +304,27 @@ export async function createGuichetReservation(
     }
   }
 
+  let tripInstanceIdForHold = params.tripInstanceId ?? null;
+  if (tripInstanceIdForHold == null && params.trajetId && String(params.trajetId).includes('_')) {
+    const parts = String(params.trajetId).split('_');
+    if (parts.length >= 3) {
+      const [, date, timePart] = parts;
+      const time = timePart?.replace('-', ':') ?? '';
+      const ti = await findTripInstanceBySlot(
+        params.companyId,
+        params.agencyId,
+        date,
+        time,
+        params.depart,
+        params.arrivee
+      );
+      if (ti) tripInstanceIdForHold = ti.id;
+    }
+  }
+
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const shiftRef = doc(db, `${base}/shifts/${params.sessionId}`);
+  const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
   const colRef = collection(db, `${base}/reservations`);
   const newRef = doc(colRef);
   const newId = newRef.id;
@@ -210,26 +376,46 @@ export async function createGuichetReservation(
     createdInSessionId: params.sessionId,
     createdByUid: params.userId,
     paymentStatus: 'paid',
-    ...(params.tripInstanceId != null && { tripInstanceId: params.tripInstanceId }),
+    paymentId: null,
+    creationMode: params.offlineMeta?.mode ?? 'online',
+    offlineTransactionId: params.offlineMeta?.transactionId ?? null,
+    offlineDeviceId: params.offlineMeta?.deviceId ?? null,
+    offlineCreatedAt: params.offlineMeta?.createdAt ?? null,
+    ...(tripInstanceIdForHold != null && { tripInstanceId: tripInstanceIdForHold }),
   };
 
   try {
     await runTransaction(db, async (tx) => {
-      const shiftSnap = await tx.get(shiftRef);
+      const [shiftSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(agencyRef)]);
       if (!shiftSnap.exists()) throw new Error('Poste introuvable.');
       const shiftData = shiftSnap.data() as Record<string, unknown>;
       const status = shiftData.status as string;
-      if (status !== 'active' && status !== 'paused') {
-        throw new Error('Le poste doit être actif pour enregistrer une vente.');
+      if (status !== 'active') {
+        throw new Error(
+          status === 'paused'
+            ? 'Le poste est en pause. Reprenez la session pour enregistrer une vente.'
+            : 'Le poste doit être en service pour enregistrer une vente.'
+        );
       }
       if (isShiftLocked(status)) throw new Error('Poste verrouillé.');
       if (shiftData.deviceFingerprint && options?.deviceFingerprint && shiftData.deviceFingerprint !== options.deviceFingerprint) {
         throw new Error('Session ouverte sur un autre appareil.');
       }
-      tx.set(newRef, payload);
       const passengers = 1;
       const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
-      updateDailyStatsOnReservationCreated(tx, params.companyId, params.agencyId, params.date, passengers, seats);
+      if (tripInstanceIdForHold && seats > 0) {
+        const tiRef = tripInstanceRef(params.companyId, tripInstanceIdForHold);
+        const tiSnap = await tx.get(tiRef);
+        bookSeatsOnTripInstanceInTransaction(tx, tiRef, tiSnap, seats, {
+          originStopOrder: originStopOrder ?? undefined,
+          destinationStopOrder: destinationStopOrder ?? undefined,
+          depart: params.depart,
+          arrivee: params.arrivee,
+        });
+      }
+      tx.set(newRef, payload);
+      const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
+      updateDailyStatsOnReservationCreated(tx, params.companyId, params.agencyId, params.date, passengers, seats, agencyTz);
     });
   } catch (e) {
     if (isOfflineError(e)) {
@@ -240,21 +426,7 @@ export async function createGuichetReservation(
   }
 
   const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
-  let tripInstanceId = params.tripInstanceId ?? null;
-  if (tripInstanceId == null && params.trajetId && String(params.trajetId).includes('_')) {
-    const parts = String(params.trajetId).split('_');
-    if (parts.length >= 3) {
-      const [wtId, date, timePart] = parts;
-      const time = timePart?.replace('-', ':') ?? '';
-      const ti = await findTripInstanceBySlot(params.companyId, params.agencyId, date, time, params.depart, params.arrivee);
-      if (ti) tripInstanceId = ti.id;
-    }
-  }
-  if (tripInstanceId && seats > 0) {
-    incrementReservedSeats(params.companyId, tripInstanceId, seats).catch((err) => {
-      console.error('[guichetReservationService] incrementReservedSeats failed:', err);
-    });
-  }
+  const tripInstanceId = tripInstanceIdForHold;
 
   // Cash control: add ticket amount to open GUICHET cash session for this agent (if any)
   const montant = Number(params.montant ?? 0);
@@ -263,37 +435,86 @@ export async function createGuichetReservation(
     addToExpectedBalance(params.companyId, params.agencyId, params.userId, 'GUICHET', montant, paymentMethod).catch(() => {});
   }
 
-  // Caisse TELIYA: 1 vente = 1 encaissement. Aucune réservation sans cashTransaction.
+  // FINANCIAL_TRUTH: 1 vente = 1 encaissement ledger (payment_received).
   if (montant > 0) {
-    const agencySnap = await getDoc(doc(db, 'companies', params.companyId, 'agences', params.agencyId));
-    const agencyType = (agencySnap.data() as { type?: string })?.type?.toLowerCase();
-    const locationType = agencyType === 'escale' ? LOCATION_TYPE.ESCALE : LOCATION_TYPE.AGENCE;
-    const paymentMethodCash = params.paymentMethod === 'bank' ? 'transfer' : (params.paymentMethod ?? 'cash');
-    const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
-    const routeLabel = [params.depart, params.arrivee].filter(Boolean).join('→') || null;
     try {
-      const cashTxId = await createCashTransaction({
-        companyId: params.companyId,
+      const provider = params.paymentMethod === 'mobile_money' ? 'wave' : (params.paymentMethod === 'bank' ? 'wave' : 'cash');
+      const paymentMethodLedger = params.paymentMethod === 'mobile_money'
+        ? 'mobile_money'
+        : params.paymentMethod === 'bank'
+          ? 'card'
+          : 'cash';
+      const paymentId = await createPayment({
         reservationId: newId,
-        sessionId: params.sessionId,
-        sourceType: "guichet",
-        sourceSessionId: params.sessionId,
-        tripInstanceId: tripInstanceId ?? undefined,
+        companyId: params.companyId,
+        agencyId: params.agencyId,
         amount: montant,
         currency: 'XOF',
-        paymentMethod: paymentMethodCash,
-        locationType,
-        locationId: params.agencyId,
-        createdBy: params.userId,
-        paidAt: getTodayBamako(),
-        seats,
-        routeLabel,
+        channel: 'guichet',
+        provider,
+        status: 'validated',
+        validatedBy: params.userId,
       });
-      await updateDoc(newRef, { cashTransactionId: cashTxId });
+      await Promise.all([
+        updateDoc(newRef, {
+          paymentId,
+          updatedAt: serverTimestamp(),
+        }),
+        createFinancialTransaction({
+          companyId: params.companyId,
+          type: 'payment_received',
+          source: 'cash',
+          paymentChannel: 'guichet',
+          paymentMethod: paymentMethodLedger,
+          paymentProvider: provider,
+          amount: montant,
+          currency: 'XOF',
+          agencyId: params.agencyId,
+          reservationId: newId,
+          referenceType: 'payment',
+          referenceId: newId,
+          metadata: {
+            channel: 'guichet',
+            sourceType: 'guichet',
+            sourceSessionId: params.sessionId,
+            mode: params.offlineMeta?.mode ?? 'online',
+            offlineTransactionId: params.offlineMeta?.transactionId ?? null,
+            offlineDeviceId: params.offlineMeta?.deviceId ?? null,
+            tripInstanceId: tripInstanceIdForHold ?? null,
+            seats: (params.seatsGo ?? 0) + (params.seatsReturn ?? 0),
+            routeLabel: [params.depart, params.arrivee].filter(Boolean).join('→') || null,
+          },
+        }),
+      ]);
+      logAgentHistoryEvent({
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        agentId: params.userId,
+        agentName: auth.currentUser?.displayName ?? null,
+        role: 'guichetier',
+        type: 'PAYMENT_RECEIVED',
+        referenceId: newId,
+        amount: montant,
+        status: 'VALIDE',
+        createdBy: params.userId,
+        metadata: {
+          paymentMethod: paymentMethodLedger,
+          sessionId: params.sessionId,
+        },
+      });
     } catch (err) {
-      console.error('[guichetReservationService] createCashTransaction failed:', err);
-      await deleteDoc(newRef);
-      throw err;
+      console.error('[guichetReservationService] financial side-effects failed:', err);
+      await logGuichetFinanceAuthDebug({
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        userId: params.userId,
+      });
+      // Ne pas bloquer la vente guichet si le ledger/paiement n'est pas autorisé.
+      // La réservation reste créée; la correction financière peut être rejouée plus tard.
+      await updateDoc(newRef, {
+        paymentStatus: 'finance_side_effects_failed',
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
     }
   }
 
@@ -309,6 +530,15 @@ export async function createGuichetReservation(
       departureDate: params.date || '',
     }).catch(() => {});
   }
+
+  // Non-bloquant: ne pas retarder l'affichage du ticket côté guichet.
+  // Les contrôles d'intégrité restent exécutés, mais en arrière-plan.
+  void verifyReservationIntegrity(params.companyId, params.agencyId, newId).catch((err) => {
+    console.error('[guichetReservationService] verifyReservationIntegrity failed:', err);
+  });
+  void verifyGlobalReservationConsistency(params.companyId, params.agencyId, newId).catch((err) => {
+    console.error('[guichetReservationService] verifyGlobalReservationConsistency failed:', err);
+  });
 
   return newId;
 }

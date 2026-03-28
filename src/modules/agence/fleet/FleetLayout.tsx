@@ -19,7 +19,7 @@ const FLEET_SECTIONS: NavSection[] = [
   { label: "Mouvements", icon: History, path: "/agence/fleet/movements" },
 ];
 
-const ALLOWED_FLEET_ROLES = ["agency_fleet_controller", "chefAgence", "admin_compagnie"] as const;
+const ALLOWED_FLEET_ROLES = ["agency_fleet_controller", "admin_compagnie"] as const;
 
 const FleetLayout: React.FC = () => {
   const { user, company, logout } = useAuth() as {
@@ -40,7 +40,8 @@ const FleetLayout: React.FC = () => {
 
   if (!canUseFleet) {
     if (has("chefEmbarquement")) return <Navigate to="/agence/boarding" replace />;
-    if (has("chefAgence") || has("admin_compagnie")) return <Navigate to="/agence/dashboard" replace />;
+    if (has("chefAgence") || has("superviseur")) return <Navigate to="/agence/activite" replace />;
+    if (has("admin_compagnie")) return <Navigate to="/agence/activite" replace />;
     return <Navigate to="/login" replace />;
   }
 

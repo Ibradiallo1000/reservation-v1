@@ -1,7 +1,6 @@
 /**
- * Courier session service — aligned with Ticket (Guichet) shift architecture.
- * Lifecycle: PENDING (agent) → ACTIVE (accountant) → CLOSED (agent) → VALIDATED (accountant).
- * expectedAmount is computed from shipments at close, not stored per ledger entry.
+ * Courier session service — aligné guichet : PENDING → ACTIVE → CLOSED → VALIDATED_AGENCY → VALIDATED.
+ * Totaux théoriques : exclusivement via financialTransactions (getCourierSessionLedgerTotal).
  */
 
 import {
@@ -15,25 +14,29 @@ import {
   serverTimestamp,
   getDoc,
 } from "firebase/firestore";
-import { Timestamp } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { CourierSession, CourierSessionStatus } from "../domain/courierSession.types";
-import type { PaymentStatus } from "../domain/shipment.types";
 import { courierSessionsRef, courierSessionRef } from "../domain/courierSessionPaths";
-import { shipmentsRef } from "../domain/firestorePaths";
-import { updateDailyStatsOnCourierSessionValidated, formatDateForDailyStats } from "@/modules/agence/aggregates/dailyStats";
+import {
+  updateDailyStatsOnCourierSessionValidatedByAgency,
+  updateDailyStatsOnCourierSessionValidatedByCompany,
+  formatDateForDailyStats,
+  dailyStatsTimezoneFromAgencyData,
+} from "@/modules/agence/aggregates/dailyStats";
+import { authorizeActorInAgency } from "@/modules/agence/services/sessionService";
 import {
   updateAgencyLiveStateOnCourierSessionActivated,
   updateAgencyLiveStateOnCourierSessionClosed,
   updateAgencyLiveStateOnCourierSessionValidated,
 } from "@/modules/agence/aggregates/agencyLiveState";
+import { getCourierSessionLedgerTotal } from "./courierSessionLedger";
+import { applyRemittancePendingToAgencyCashInTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import {
-  recordMovementInTransaction,
-  uniqueReferenceKey,
-  ensureUniqueReferenceKeyInTransaction,
-} from "@/modules/compagnie/treasury/financialMovements";
-import { financialAccountRef } from "@/modules/compagnie/treasury/financialAccounts";
-import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
+  PENDING_CASH_LEDGER_SYSTEM_VERSION,
+  type PendingCashRemittanceStatus,
+} from "@/modules/agence/comptabilite/pendingCashSafety";
+import { writeComptaEncaissementInTransaction } from "@/modules/agence/comptabilite/comptaEncaissementsService";
+import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 
 const OPEN_STATUSES: CourierSessionStatus[] = ["PENDING", "ACTIVE"];
 
@@ -82,7 +85,6 @@ export async function createCourierSession(params: {
     openedAt: null,
     closedAt: null,
     validatedAt: null,
-    expectedAmount: 0,
     validatedAmount: null,
     difference: null,
     createdAt: serverTimestamp(),
@@ -127,26 +129,35 @@ export async function activateCourierSession(params: {
     });
     updateAgencyLiveStateOnCourierSessionActivated(tx, params.companyId, params.agencyId);
   });
+
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: data.agentId,
+    role: "agentCourrier",
+    type: "SESSION_OPENED",
+    referenceId: params.sessionId,
+    status: "EN_COURS",
+    createdBy: params.activatedBy.id,
+    metadata: {
+      activatedByName: params.activatedBy.name ?? undefined,
+      agentCode: data.agentCode,
+    },
+  });
 }
 
 /**
  * Agent closes session → CLOSED.
- * expectedAmount is computed from shipments linked to sessionId (transportFee + insuranceAmount per shipment).
+ * Aucun montant « attendu » persisté : le comptable compare à la somme ledger (financialTransactions).
  */
 export async function closeCourierSession(params: {
   companyId: string;
   agencyId: string;
   sessionId: string;
-}): Promise<{ expectedAmount: number }> {
+}): Promise<{ ledgerSessionTotal: number }> {
+  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
   const sessionRef = courierSessionRef(db, params.companyId, params.agencyId, params.sessionId);
-  const shipCol = shipmentsRef(db, params.companyId);
-  const shipQuery = query(shipCol, where("sessionId", "==", params.sessionId));
-  const shipSnap = await getDocs(shipQuery);
-  let expectedAmount = 0;
-  shipSnap.docs.forEach((d) => {
-    const s = d.data() as { transportFee?: number; insuranceAmount?: number };
-    expectedAmount += Number(s.transportFee ?? 0) + Number(s.insuranceAmount ?? 0);
-  });
+  let courierAgentId = "";
 
   await runTransaction(db, async (tx) => {
     const sSnap = await tx.get(sessionRef);
@@ -155,28 +166,34 @@ export async function closeCourierSession(params: {
     if (data.status !== "ACTIVE") {
       throw new Error("La session doit être ACTIVE pour être clôturée.");
     }
+    courierAgentId = data.agentId;
     tx.update(sessionRef, {
       status: "CLOSED",
       closedAt: serverTimestamp(),
-      expectedAmount,
       updatedAt: serverTimestamp(),
     });
     updateAgencyLiveStateOnCourierSessionClosed(tx, params.companyId, params.agencyId);
   });
 
-  return { expectedAmount };
-}
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: courierAgentId,
+    role: "agentCourrier",
+    type: "SESSION_CLOSED",
+    referenceId: params.sessionId,
+    amount: ledgerSessionTotal,
+    status: "EN_ATTENTE",
+    createdBy: courierAgentId,
+    metadata: { channel: "courrier", ledgerSessionTotal },
+  });
 
-const PAID_PAYMENT_STATUSES: PaymentStatus[] = ["PAID_ORIGIN", "PAID_DESTINATION"];
-
-function isPaidPaymentStatus(status: string | undefined): boolean {
-  return status != null && PAID_PAYMENT_STATUSES.includes(status as PaymentStatus);
+  return { ledgerSessionTotal };
 }
 
 /**
- * Accountant validates session (with counted amount) → VALIDATED.
- * Sets validatedAmount, difference = validatedAmount - expectedAmount.
- * Updates dailyStats with courier revenue (paid shipments only).
+ * Comptable agence : CLOSED → VALIDATED_AGENCY (remise caisse + compta, comme le guichet).
+ * Le chef d'agence finalise avec {@link validateCourierSessionByHeadAccountant} → VALIDATED.
  */
 export async function validateCourierSession(params: {
   companyId: string;
@@ -184,32 +201,30 @@ export async function validateCourierSession(params: {
   sessionId: string;
   validatedAmount: number;
   validatedBy: { id: string; name?: string | null };
-}): Promise<{ difference: number }> {
+}): Promise<{ difference: number; ledgerSessionTotal: number }> {
   const sessionRef = courierSessionRef(db, params.companyId, params.agencyId, params.sessionId);
   const snap = await getDoc(sessionRef);
   if (!snap.exists()) throw new Error("Session courrier introuvable.");
   const data = snap.data() as CourierSession;
+  const ledgerSessionTotalEarly = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
+  if (data.status === "VALIDATED" || data.status === "VALIDATED_AGENCY") {
+    return {
+      difference: Number(data.difference ?? 0),
+      ledgerSessionTotal: ledgerSessionTotalEarly,
+    };
+  }
   if (data.status !== "CLOSED") {
     throw new Error("La session doit être CLOSED pour être validée.");
   }
-  const expectedAmount = Number(data.expectedAmount ?? 0);
-  const difference = params.validatedAmount - expectedAmount;
 
-  // Aggregate courier revenue from paid shipments only (for dailyStats)
-  const shipQuery = query(
-    shipmentsRef(db, params.companyId),
-    where("sessionId", "==", params.sessionId)
-  );
-  const shipSnap = await getDocs(shipQuery);
-  let courierRevenue = 0;
-  shipSnap.docs.forEach((d) => {
-    const s = d.data() as { paymentStatus?: string; transportFee?: number; insuranceAmount?: number };
-    if (isPaidPaymentStatus(s.paymentStatus)) {
-      courierRevenue += Number(s.transportFee ?? 0) + Number(s.insuranceAmount ?? 0);
-    }
-  });
+  const ledgerSessionTotal = ledgerSessionTotalEarly;
+  const difference = params.validatedAmount - ledgerSessionTotal;
 
-  const statsDate = formatDateForDailyStats(data.closedAt ?? data.createdAt);
+  const agencySnapForTz = await getDoc(doc(db, "companies", params.companyId, "agences", params.agencyId));
+  const agencyData = agencySnapForTz.data() as { timezone?: string; currency?: string } | undefined;
+  const agencyTz = dailyStatsTimezoneFromAgencyData(agencyData);
+  const agencyCurrency = String(agencyData?.currency ?? "XOF");
+  const statsDate = formatDateForDailyStats(data.closedAt ?? data.createdAt, agencyTz);
 
   await runTransaction(db, async (tx) => {
     const sSnap = await tx.get(sessionRef);
@@ -217,61 +232,189 @@ export async function validateCourierSession(params: {
     if ((sSnap.data() as CourierSession).status !== "CLOSED") {
       throw new Error("La session doit être CLOSED pour être validée.");
     }
+    const isPartialRemittance = params.validatedAmount + 0.01 < ledgerSessionTotal;
+    const remittanceStatus: PendingCashRemittanceStatus = isPartialRemittance
+      ? "partial_remittance"
+      : "full_remittance";
+    const remittanceDiscrepancyAmount = isPartialRemittance
+      ? Math.max(0, ledgerSessionTotal - params.validatedAmount)
+      : 0;
+
+    /** Ledger avant update session : tous les get avant les writes (Firestore). */
+    await applyRemittancePendingToAgencyCashInTransaction(
+      tx,
+      params.companyId,
+      params.agencyId,
+      params.validatedAmount,
+      agencyCurrency,
+      { referenceType: "courier_session", referenceId: params.sessionId },
+      `courier session ${params.sessionId} validated by accountant`
+    );
+
     tx.update(sessionRef, {
-      status: "VALIDATED",
+      status: "VALIDATED_AGENCY",
       validatedAt: serverTimestamp(),
       validatedAmount: params.validatedAmount,
       difference,
+      remittanceStatus,
+      remittanceDiscrepancyAmount,
+      pendingCashLedgerVersion: PENDING_CASH_LEDGER_SYSTEM_VERSION,
       validatedBy: {
         id: params.validatedBy.id,
         name: params.validatedBy.name ?? null,
       },
       updatedAt: serverTimestamp(),
     });
-    updateDailyStatsOnCourierSessionValidated(
+
+    if (params.validatedAmount > 0) {
+      writeComptaEncaissementInTransaction(tx, params.companyId, params.agencyId, {
+        sessionId: params.sessionId,
+        montant: params.validatedAmount,
+        source: "courrier",
+      });
+    }
+    updateDailyStatsOnCourierSessionValidatedByAgency(
       tx,
       params.companyId,
       params.agencyId,
       statsDate,
-      courierRevenue
+      ledgerSessionTotal,
+      agencyTz
     );
     updateAgencyLiveStateOnCourierSessionValidated(tx, params.companyId, params.agencyId);
-
-    // Treasury: same as ticket validation — credit agency_cash with validated (counted) amount
-    if (params.validatedAmount > 0) {
-      const key = uniqueReferenceKey("courier_session", params.sessionId);
-      await ensureUniqueReferenceKeyInTransaction(tx, params.companyId, key);
-      const cashId = agencyCashAccountId(params.agencyId);
-      const cashRef = financialAccountRef(params.companyId, cashId);
-      const accountSnap = await tx.get(cashRef);
-      if (accountSnap.exists()) {
-        const currency = (accountSnap.data() as { currency?: string }).currency ?? "XOF";
-        await recordMovementInTransaction(tx, {
-          companyId: params.companyId,
-          fromAccountId: null,
-          toAccountId: cashId,
-          amount: params.validatedAmount,
-          currency,
-          movementType: "revenue_cash",
-          referenceType: "courier_session",
-          referenceId: params.sessionId,
-          agencyId: params.agencyId,
-          performedBy: params.validatedBy.id,
-          performedAt: Timestamp.now(),
-          notes: `Validation session courrier (agent: ${(sSnap.data() as CourierSession).agentId ?? ""})`,
-        });
-      }
-    }
   });
 
-  return { difference };
+  const v = params.validatedBy;
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: v.id,
+    agentName: v.name ?? null,
+    role: "agency_accountant",
+    type: "REMISSION_DONE",
+    referenceId: params.sessionId,
+    amount: params.validatedAmount,
+    status: "VALIDE",
+    createdBy: v.id,
+    metadata: {
+      expectedAmount: ledgerSessionTotal,
+      declaredAmount: params.validatedAmount,
+      difference,
+      channel: "courrier",
+      courierAgentId: data.agentId,
+    },
+  });
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: v.id,
+    agentName: v.name ?? null,
+    role: "agency_accountant",
+    type: "SESSION_VALIDATED",
+    referenceId: params.sessionId,
+    status: "VALIDE",
+    createdBy: v.id,
+    metadata: {
+      validationLevel: "agency_accountant",
+      channel: "courrier",
+      expectedAmount: ledgerSessionTotal,
+      declaredAmount: params.validatedAmount,
+      difference,
+    },
+  });
+
+  return { difference, ledgerSessionTotal };
+}
+
+/**
+ * Chef d'agence : VALIDATED_AGENCY → VALIDATED (stats siège, sans second mouvement caisse).
+ */
+export async function validateCourierSessionByHeadAccountant(params: {
+  companyId: string;
+  agencyId: string;
+  sessionId: string;
+  validatedBy: { id: string; name?: string | null };
+}): Promise<void> {
+  await authorizeActorInAgency({
+    userId: params.validatedBy.id,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    allowedRoles: ["chefAgence", "admin_compagnie", "admin_platforme"],
+    deniedMessage: "Seul un chef d'agence peut valider cette étape.",
+  });
+  const sessionRef = courierSessionRef(db, params.companyId, params.agencyId, params.sessionId);
+  const preSnap = await getDoc(sessionRef);
+  if (!preSnap.exists()) throw new Error("Session courrier introuvable.");
+  const pre = preSnap.data() as CourierSession;
+  if (pre.status === "VALIDATED") return;
+  if (pre.status !== "VALIDATED_AGENCY") {
+    throw new Error(
+      "Seules les sessions courrier validées par le comptable agence peuvent être approuvées par le chef d'agence."
+    );
+  }
+  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
+  const agencySnapForTz = await getDoc(doc(db, "companies", params.companyId, "agences", params.agencyId));
+  const agencyData = agencySnapForTz.data() as { timezone?: string } | undefined;
+  const agencyTz = dailyStatsTimezoneFromAgencyData(agencyData);
+  const statsDate = formatDateForDailyStats(pre.closedAt ?? pre.createdAt, agencyTz);
+
+  await runTransaction(db, async (tx) => {
+    const sSnap = await tx.get(sessionRef);
+    if (!sSnap.exists()) throw new Error("Session courrier introuvable.");
+    const s = sSnap.data() as CourierSession;
+    if (s.status === "VALIDATED") {
+      throw new Error("Cette session courrier a déjà été validée par le chef d'agence.");
+    }
+    if (s.status !== "VALIDATED_AGENCY") {
+      throw new Error(
+        "Seules les sessions courrier validées par le comptable agence peuvent être approuvées par le chef d'agence."
+      );
+    }
+    const now = serverTimestamp();
+    tx.update(sessionRef, {
+      status: "VALIDATED",
+      managerValidated: true,
+      managerValidatedAt: now,
+      validatedByChef: {
+        id: params.validatedBy.id,
+        name: params.validatedBy.name ?? null,
+      },
+      updatedAt: now,
+    });
+    updateDailyStatsOnCourierSessionValidatedByCompany(
+      tx,
+      params.companyId,
+      params.agencyId,
+      statsDate,
+      ledgerSessionTotal,
+      agencyTz
+    );
+  });
+
+  const v = params.validatedBy;
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: v.id,
+    agentName: v.name ?? null,
+    role: "chefAgence",
+    type: "SESSION_VALIDATED",
+    referenceId: params.sessionId,
+    amount: ledgerSessionTotal,
+    status: "VALIDE",
+    createdBy: v.id,
+    metadata: {
+      validationLevel: "chef_agence",
+      channel: "courrier",
+      courierAgentId: pre.agentId,
+    },
+  });
 }
 
 export type CourierSessionWithId = CourierSession & { id: string };
 
 /**
  * List validated courier sessions with non-zero discrepancy per agency (for CEO / financial monitoring).
- * Same pattern as listClosedCashSessionsWithDiscrepancy — courier discrepancies feed into the same governance.
  */
 export async function listCourierSessionsWithDiscrepancy(
   companyId: string,
@@ -281,14 +424,12 @@ export async function listCourierSessionsWithDiscrepancy(
   await Promise.all(
     agencyIds.map(async (agencyId) => {
       const col = courierSessionsRef(db, companyId, agencyId);
-      const snap = await getDocs(
-        query(col, where("status", "==", "VALIDATED"), limit(200))
-      );
+      const snap = await getDocs(query(col, where("status", "==", "VALIDATED"), limit(200)));
       snap.docs.forEach((d) => {
-        const data = d.data() as CourierSession;
-        const diff = Number(data.difference ?? 0);
+        const row = d.data() as CourierSession;
+        const diff = Number(row.difference ?? 0);
         if (diff !== 0) {
-          results.push({ agencyId, session: { id: d.id, ...data } });
+          results.push({ agencyId, session: { id: d.id, ...row } });
         }
       });
     })

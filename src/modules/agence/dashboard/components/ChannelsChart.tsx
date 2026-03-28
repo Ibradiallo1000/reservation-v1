@@ -4,6 +4,7 @@ import { Skeleton } from "@/shared/ui/skeleton";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend, Label } from "recharts";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import { OperationalSourceBadge } from "@/modules/agence/components/OperationalDataHint";
 
 interface ChannelStat {
   name: string; // "En ligne" | "Guichet"
@@ -62,9 +63,15 @@ export const ChannelsChart = ({
   return (
     <Card className="shadow-sm border border-gray-200">
       <CardHeader>
-        <CardTitle style={{ color: theme.colors.primary }}>
-          Répartition par canal
-        </CardTitle>
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle style={{ color: theme.colors.primary }}>
+            Répartition par canal
+          </CardTitle>
+          <OperationalSourceBadge />
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Billets par canal (networkStats) — donnée opérationnelle, non comptable.
+        </p>
       </CardHeader>
       <CardContent>
         <div className="h-64">

@@ -29,7 +29,7 @@ const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 
 /** Canonical roles only. agency_boarding_officer / embarquement → chefEmbarquement. */
 const CANONICAL_ROLES = new Set([
-  "admin_platforme", "admin_compagnie", "company_accountant", "agency_accountant",
+  "admin_platforme", "admin_compagnie", "company_accountant", "operator_digital", "agency_accountant",
   "responsable_logistique", "chefagence", "chefembarquement", "guichetier",
   "agency_fleet_controller", "financial_director", "agentcourrier",
   "escale_agent", "escale_manager",
@@ -54,10 +54,12 @@ const routeForRole = (role: string): string => {
       return "/compagnie/command-center";
     case "company_accountant":
       return "/role-landing";
+    case "operator_digital":
+      return "/role-landing";
     case "responsable_logistique":
       return "/compagnie/garage/dashboard";
     case "chefAgence":
-      return "/agence/dashboard";
+      return "/agence/activite";
     case "chefEmbarquement":
       return "/agence/boarding";
     case "agency_accountant":
@@ -190,6 +192,12 @@ const LoginPage: React.FC = () => {
       }
       if ((role === "company_accountant" || role === "financial_director") && companyId) {
         path = `/compagnie/${companyId}/accounting`;
+      }
+      if (role === "operator_digital" && companyId) {
+        path = `/compagnie/${companyId}/digital-cash`;
+      } else if (role === "operator_digital" && !companyId) {
+        console.warn("[LoginPage] operator_digital without companyId, redirecting to /login");
+        path = "/login";
       }
 
       if (!path || path === "") {

@@ -7,13 +7,23 @@ import { collectionGroup, doc, getDoc, getDocs, query, where, setDoc, serverTime
 import { db } from "@/firebaseConfig";
 import { getTripInstance } from "./tripInstanceService";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
-import { getRemainingSeats } from "./segmentOccupancyService";
+import { tripInstanceRemainingFromDoc, tripInstanceSeatCapacity, tripInstanceTime } from "./tripInstanceTypes";
 import type { TripInstanceInventoryDoc } from "@/types/inventoryQuota";
 import { DEFAULT_INVENTORY } from "@/types/inventoryQuota";
 
 const INVENTORY_SUBCOLLECTION = "inventory";
 const QUOTA_DOC_ID = "quota";
 const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "confirmé", "validé"];
+
+function reservationConfirmedForQuota(d: {
+  statut?: string;
+  status?: string;
+  ticketValidatedAt?: unknown;
+}): boolean {
+  const st = String(d.status ?? "").toLowerCase();
+  if (st === "payé" || st === "paye") return d.ticketValidatedAt != null;
+  return CONFIRMED_STATUTS.includes((d.statut ?? "").toString().toLowerCase());
+}
 
 function inventoryQuotaRef(companyId: string, tripInstanceId: string) {
   return doc(
@@ -90,9 +100,8 @@ async function getSoldFromStop(
   const snap = await getDocs(qGroup);
   let total = 0;
   for (const d of snap.docs) {
-    const data = d.data() as { statut?: string; seatsGo?: number };
-    const statut = (data.statut ?? "").toString().toLowerCase();
-    if (!CONFIRMED_STATUTS.includes(statut)) continue;
+    const data = d.data() as { statut?: string; status?: string; ticketValidatedAt?: unknown; seatsGo?: number };
+    if (!reservationConfirmedForQuota(data)) continue;
     total += Number(data.seatsGo ?? 1);
   }
   return total;
@@ -109,10 +118,7 @@ export async function getStopQuota(
 ): Promise<number> {
   const ti = await getTripInstance(companyId, tripInstanceId);
   if (!ti) return 0;
-  const capacity =
-    (ti as { seatCapacity?: number }).seatCapacity ??
-    (ti as { capacitySeats?: number }).capacitySeats ??
-    0;
+  const capacity = tripInstanceSeatCapacity(ti);
   if (capacity <= 0) return 0;
   if (stopOrder === 1) return capacity; // origine = pas de plafond
   const inv = await getInventory(companyId, tripInstanceId);
@@ -139,7 +145,7 @@ export async function releaseStopQuotaIfNeeded(
   const stop = stops.find((s) => s.order === stopOrder);
   if (!stop) return false;
   const dateStr = (ti as { date?: string }).date ?? "";
-  const depTime = (ti as { departureTime?: string }).departureTime ?? "";
+  const depTime = tripInstanceTime(ti);
   const offsetMin = stop.estimatedArrivalOffsetMinutes ?? 0;
   const arrivalMs = getEstimatedArrivalAtStopMs(dateStr, depTime, offsetMin);
   if (arrivalMs <= 0) return false;
@@ -149,16 +155,17 @@ export async function releaseStopQuotaIfNeeded(
 }
 
 /**
- * Nombre de places que l'escale peut encore vendre (min(places restantes réelles, quota escale restant)).
- * Pour l'origine (stopOrder 1) : retourne getRemainingSeats() sans limite quota.
- * Pour une escale : si within quotaReleaseHoursBeforeArrival → getRemainingSeats(); sinon min(remainingSeats, quota - soldFromStop).
+ * Nombre de places que l'escale peut encore vendre (min(places restantes sur tripInstance, quota escale restant)).
+ * Pour l'origine (stopOrder 1) : retourne remainingSeats du document sans limite quota.
  */
 export async function getRemainingStopQuota(
   companyId: string,
   tripInstanceId: string,
   stopOrder: number
 ): Promise<number> {
-  const remainingSeats = await getRemainingSeats(companyId, tripInstanceId);
+  const ti = await getTripInstance(companyId, tripInstanceId);
+  if (!ti) return 0;
+  const remainingSeats = tripInstanceRemainingFromDoc(ti);
   if (stopOrder === 1) return remainingSeats; // priorité origine = pas de plafond
 
   const released = await releaseStopQuotaIfNeeded(companyId, tripInstanceId, stopOrder);
@@ -184,7 +191,8 @@ export async function getStopQuotaDisplay(
   stopQuotaNominal: number;
   soldFromStop: number;
 }> {
-  const remainingSeats = await getRemainingSeats(companyId, tripInstanceId);
+  const ti = await getTripInstance(companyId, tripInstanceId);
+  const remainingSeats = ti ? tripInstanceRemainingFromDoc(ti) : 0;
   const quotaReleased = await releaseStopQuotaIfNeeded(companyId, tripInstanceId, stopOrder);
   const stopQuotaNominal = await getStopQuota(companyId, tripInstanceId, stopOrder);
   const soldFromStop = stopOrder === 1 ? 0 : await getSoldFromStop(companyId, tripInstanceId, stopOrder);

@@ -8,7 +8,9 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 type ExpenseRow = ExpenseDoc & { id: string };
 
-export default function ManagerExpensesPage() {
+export type ManagerExpensesPageProps = { embedded?: boolean };
+
+export default function ManagerExpensesPage({ embedded: _embedded = false }: ManagerExpensesPageProps = {}) {
   const { user } = useAuth() as any;
   const money = useFormatCurrency();
   const companyId = user?.companyId ?? "";

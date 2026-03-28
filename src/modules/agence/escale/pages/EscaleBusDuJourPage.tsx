@@ -5,16 +5,19 @@
  */
 import React, { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, orderBy, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, EmptyState, table } from "@/ui";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
-import { listTripInstancesByRouteIdAndDate } from "@/modules/compagnie/tripInstances/tripInstanceService";
-import { getRemainingSeats } from "@/modules/compagnie/tripInstances/segmentOccupancyService";
-import { getStopQuotaDisplay } from "@/modules/compagnie/tripInstances/inventoryQuotaService";
 import type { RouteStopDocWithId } from "@/modules/compagnie/routes/routesTypes";
-import type { TripInstanceDocWithId } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
+import {
+  type TripInstanceDocWithId,
+  tripInstanceSeatCapacity,
+  tripInstanceDeparture,
+  tripInstanceArrival,
+  tripInstanceTime,
+} from "@/modules/compagnie/tripInstances/tripInstanceTypes";
 import { Bus, Ticket, Loader2, Users } from "lucide-react";
 import { DayFilterBar } from "@/shared/date/DayFilterBar";
 import { getSelectedDateStr, toLocalDateStr, type DayPreset } from "@/shared/date/dayFilterUtils";
@@ -34,10 +37,6 @@ export default function EscaleBusDuJourPage() {
   const [agencyStopOrder, setAgencyStopOrder] = useState<number | null>(null);
   const [stop, setStop] = useState<RouteStopDocWithId | null>(null);
   const [instances, setInstances] = useState<TripInstanceDocWithId[]>([]);
-  const [remainingByInstanceId, setRemainingByInstanceId] = useState<Record<string, number>>({});
-  const [quotaDisplayByInstanceId, setQuotaDisplayByInstanceId] = useState<
-    Record<string, { remainingSeats: number; remainingStopQuota: number; quotaReleased: boolean; stopQuotaNominal: number; soldFromStop: number }>
-  >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dayPreset, setDayPreset] = useState<DayPreset>("today");
@@ -83,25 +82,22 @@ export default function EscaleBusDuJourPage() {
         return;
       }
 
-      const list = await listTripInstancesByRouteIdAndDate(user.companyId, routeId, selectedDateStr);
-      const remainingById: Record<string, number> = {};
-      const quotaById: Record<string, { remainingSeats: number; remainingStopQuota: number; quotaReleased: boolean; stopQuotaNominal: number; soldFromStop: number }> = {};
-      const so = stopOrder ?? 1;
-      await Promise.all(
-        list.map(async (ti) => {
-          remainingById[ti.id] = await getRemainingSeats(user.companyId, ti.id);
-          const display = await getStopQuotaDisplay(user.companyId, ti.id, so);
-          quotaById[ti.id] = display;
-        })
+      const tripRef = collection(db, "companies", user.companyId, "tripInstances");
+      const snap = await getDocs(
+        query(
+          tripRef,
+          where("routeId", "==", routeId),
+          where("date", ">=", selectedDateStr),
+          where("date", "<=", selectedDateStr),
+          orderBy("date", "asc"),
+          orderBy("time", "asc")
+        )
       );
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
       setInstances(list);
-      setRemainingByInstanceId(remainingById);
-      setQuotaDisplayByInstanceId(quotaById);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erreur de chargement.");
       setInstances([]);
-      setRemainingByInstanceId({});
-      setQuotaDisplayByInstanceId({});
     } finally {
       setLoading(false);
     }
@@ -112,27 +108,13 @@ export default function EscaleBusDuJourPage() {
   }, [load]);
 
   const rows = instances.map((ti) => {
-    const capacity =
-      (ti as { seatCapacity?: number; capacitySeats?: number }).seatCapacity ??
-      (ti as { capacitySeats?: number }).capacitySeats ??
-      0;
-    const reserved = (ti as { reservedSeats?: number }).reservedSeats ?? 0;
-    const remaining = remainingByInstanceId[ti.id] ?? capacity - reserved;
-    const quotaDisplay = quotaDisplayByInstanceId[ti.id];
-    const remainingAllowed =
-      quotaDisplay != null ? Math.min(remaining, quotaDisplay.remainingStopQuota) : remaining;
-
-    const departureTime = (ti as { departureTime?: string }).departureTime ?? "";
+    const capacity = tripInstanceSeatCapacity(ti);
+    const remaining = Math.max(0, Number((ti as { remainingSeats?: number }).remainingSeats ?? 0));
+    const departureTime = tripInstanceTime(ti);
     const offsetMin = stop?.estimatedArrivalOffsetMinutes ?? 0;
-    const timeAtStop = addMinutesToTime(departureTime, offsetMin);
-    const origin =
-      (ti as { departureCity?: string; routeDeparture?: string }).departureCity ??
-      (ti as { routeDeparture?: string }).routeDeparture ??
-      "";
-    const dest =
-      (ti as { arrivalCity?: string; routeArrival?: string }).arrivalCity ??
-      (ti as { routeArrival?: string }).routeArrival ??
-      "";
+    const timeAtStop = addMinutesToTime(departureTime || "00:00", offsetMin);
+    const origin = tripInstanceDeparture(ti);
+    const dest = tripInstanceArrival(ti);
 
     return {
       id: ti.id,
@@ -143,8 +125,6 @@ export default function EscaleBusDuJourPage() {
       remaining,
       capacity,
       status: (ti as { status?: string }).status,
-      quotaDisplay,
-      remainingAllowed,
     };
   });
 
@@ -221,7 +201,7 @@ export default function EscaleBusDuJourPage() {
                 <tr>
                   <th className={table.th}>Bus</th>
                   <th className={table.th}>Heure passage escale</th>
-                  <th className={table.th}>Places (global / quota escale)</th>
+                  <th className={table.th}>Places restantes</th>
                   <th className={table.th + " w-48 text-right"}>Actions</th>
                 </tr>
               </thead>
@@ -237,17 +217,6 @@ export default function EscaleBusDuJourPage() {
                         <span className={r.remaining <= 0 ? "text-red-600" : r.remaining <= 10 ? "text-amber-600" : "text-gray-700 dark:text-gray-300"}>
                           Places restantes : {r.remaining} / {r.capacity}
                         </span>
-                        {r.quotaDisplay && (
-                          <>
-                            <span className="text-gray-600 dark:text-gray-400">
-                              Quota escale : {r.quotaDisplay.remainingStopQuota} vendables
-                              {r.quotaDisplay.quotaReleased && <span className="ml-1 text-emerald-600">(quota libéré)</span>}
-                            </span>
-                            {r.quotaDisplay.soldFromStop > 0 && (
-                              <span className="text-xs text-gray-500">Passagers qui descendent ici : {r.quotaDisplay.soldFromStop} places déjà vendues depuis cette escale</span>
-                            )}
-                          </>
-                        )}
                       </div>
                     </td>
                     <td className={table.td + " text-right"}>
@@ -261,8 +230,8 @@ export default function EscaleBusDuJourPage() {
                         </ActionButton>
                         <ActionButton
                           onClick={() => handleVendreBillet(r.id)}
-                          disabled={r.remainingAllowed <= 0 || r.status === "cancelled"}
-                          title={r.remainingAllowed <= 0 ? "Complet ou quota atteint" : "Vendre un billet"}
+                          disabled={r.remaining <= 0 || r.status === "cancelled"}
+                          title={r.remaining <= 0 ? "Complet" : "Vendre un billet"}
                         >
                           <Ticket className="w-4 h-4" />
                           Vendre billet

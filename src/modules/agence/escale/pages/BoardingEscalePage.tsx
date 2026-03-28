@@ -4,25 +4,26 @@
  * Accessible par escale_agent et escale_manager.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, orderBy, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, EmptyState, table, tableRowClassName } from "@/ui";
-import { listTripInstancesByRouteIdAndDate } from "@/modules/compagnie/tripInstances/tripInstanceService";
 import {
-  getPassengersForBoarding,
+  tripInstanceDeparture,
+  tripInstanceArrival,
+  tripInstanceTime,
+} from "@/modules/compagnie/tripInstances/tripInstanceTypes";
+import {
   markBoarded,
   markNoShow,
   type PassengerForBoarding,
 } from "@/modules/compagnie/boarding/boardingService";
 import {
-  getPassengersToDrop,
   markDropped,
   type PassengerToDrop,
 } from "@/modules/compagnie/dropoff/dropoffService";
-import { getNextSegmentInfo } from "@/modules/compagnie/connections/connectionsService";
-import { getTripProgress } from "@/modules/compagnie/tripInstances/tripProgressService";
-import { UserCheck, UserX, Loader2, UserMinus, Link2, Bus, AlertTriangle } from "lucide-react";
+import { UserCheck, UserX, Loader2, UserMinus } from "lucide-react";
+import { toLocalDateStr } from "@/shared/date/dayFilterUtils";
 
 type TabId = "boarding" | "dropoff";
 
@@ -31,7 +32,9 @@ export default function BoardingEscalePage() {
   const [activeTab, setActiveTab] = useState<TabId>("boarding");
   const [agencyRouteId, setAgencyRouteId] = useState<string | null>(null);
   const [agencyStopOrder, setAgencyStopOrder] = useState<number | null>(null);
-  const [tripInstances, setTripInstances] = useState<Array<{ id: string; departureTime: string; routeDeparture?: string; routeArrival?: string }>>([]);
+  const [tripInstances, setTripInstances] = useState<
+    Array<{ id: string; time: string; departure: string; arrival: string; agencyId: string }>
+  >([]);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
   const [passengers, setPassengers] = useState<PassengerForBoarding[]>([]);
   const [passengersToDrop, setPassengersToDrop] = useState<PassengerToDrop[]>([]);
@@ -40,10 +43,7 @@ export default function BoardingEscalePage() {
   const [loadingDropoff, setLoadingDropoff] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [updatingDropoffId, setUpdatingDropoffId] = useState<string | null>(null);
-  const [nextSegmentByDropId, setNextSegmentByDropId] = useState<Record<string, { routeLabel: string; departureTime: string } | null>>({});
-  const [currentBusDelayMinutes, setCurrentBusDelayMinutes] = useState<number | null>(null);
-
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalDateStr(new Date());
 
   const loadAgencyAndTrips = useCallback(async () => {
     if (!user?.companyId || !user?.agencyId) {
@@ -66,15 +66,28 @@ export default function BoardingEscalePage() {
       }
       setAgencyRouteId(routeId);
       setAgencyStopOrder(stopOrder);
-      const list = await listTripInstancesByRouteIdAndDate(user.companyId, routeId, today);
+      const tripRef = collection(db, "companies", user.companyId, "tripInstances");
+      const snap = await getDocs(
+        query(
+          tripRef,
+          where("routeId", "==", routeId),
+          where("date", ">=", today),
+          where("date", "<=", today),
+          orderBy("date", "asc"),
+          orderBy("time", "asc")
+        )
+      );
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
       setTripInstances(
         list
+          .filter((ti) => String((ti as any).routeId ?? "") === routeId)
           .filter((ti) => (ti as { status?: string }).status !== "cancelled")
           .map((ti) => ({
             id: ti.id,
-            departureTime: (ti as { departureTime?: string }).departureTime ?? "",
-            routeDeparture: (ti as { routeDeparture?: string }).routeDeparture ?? (ti as { departureCity?: string }).departureCity ?? "",
-            routeArrival: (ti as { routeArrival?: string }).routeArrival ?? (ti as { arrivalCity?: string }).arrivalCity ?? "",
+            time: tripInstanceTime(ti),
+            departure: tripInstanceDeparture(ti),
+            arrival: tripInstanceArrival(ti),
+            agencyId: String((ti as any).agencyId ?? ""),
           }))
       );
       if (list.length > 0 && !selectedTripId) setSelectedTripId(list[0].id);
@@ -96,7 +109,21 @@ export default function BoardingEscalePage() {
     }
     setLoadingPassengers(true);
     try {
-      const list = await getPassengersForBoarding(user.companyId, selectedTripId, agencyStopOrder);
+      const trip = tripInstances.find((t) => t.id === selectedTripId);
+      if (!trip?.agencyId) {
+        setPassengers([]);
+        return;
+      }
+      const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
+      const snap = await getDocs(
+        query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
+      );
+      const list: PassengerForBoarding[] = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any), agencyId: trip.agencyId } as PassengerForBoarding))
+        .filter((r) => (r.boardingStatus ?? "pending") !== "boarded")
+        .filter((r) => (r.journeyStatus ?? "booked") !== "cancelled")
+        .filter((r) => Number(r.originStopOrder ?? 0) <= agencyStopOrder)
+        .filter((r) => Number(r.destinationStopOrder ?? 9999) > agencyStopOrder);
       setPassengers(list);
     } catch (e) {
       console.error("[BoardingEscale] getPassengers error:", e);
@@ -104,7 +131,7 @@ export default function BoardingEscalePage() {
     } finally {
       setLoadingPassengers(false);
     }
-  }, [user?.companyId, selectedTripId, agencyStopOrder]);
+  }, [user?.companyId, selectedTripId, agencyStopOrder, tripInstances]);
 
   useEffect(() => {
     loadPassengers();
@@ -117,7 +144,20 @@ export default function BoardingEscalePage() {
     }
     setLoadingDropoff(true);
     try {
-      const list = await getPassengersToDrop(user.companyId, selectedTripId, agencyStopOrder);
+      const trip = tripInstances.find((t) => t.id === selectedTripId);
+      if (!trip?.agencyId) {
+        setPassengersToDrop([]);
+        return;
+      }
+      const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
+      const snap = await getDocs(
+        query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
+      );
+      const list: PassengerToDrop[] = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any), agencyId: trip.agencyId } as PassengerToDrop))
+        .filter((r) => (r.boardingStatus ?? "pending") === "boarded")
+        .filter((r) => (r.dropoffStatus ?? "pending") !== "dropped")
+        .filter((r) => Number(r.destinationStopOrder ?? -1) === agencyStopOrder);
       setPassengersToDrop(list);
     } catch (e) {
       console.error("[BoardingEscale] getPassengersToDrop error:", e);
@@ -125,7 +165,7 @@ export default function BoardingEscalePage() {
     } finally {
       setLoadingDropoff(false);
     }
-  }, [user?.companyId, selectedTripId, agencyStopOrder]);
+  }, [user?.companyId, selectedTripId, agencyStopOrder, tripInstances]);
 
   useEffect(() => {
     if (activeTab === "dropoff") loadPassengersToDrop();
@@ -229,7 +269,7 @@ export default function BoardingEscalePage() {
           >
             {tripInstances.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.routeDeparture} → {t.routeArrival} — {t.departureTime}
+                {t.departure} → {t.arrival} — {t.time}
               </option>
             ))}
           </select>
@@ -264,7 +304,7 @@ export default function BoardingEscalePage() {
 
       {activeTab === "boarding" && (
         <SectionCard
-          title={selectedTrip ? `Passagers à embarquer — ${selectedTrip.routeDeparture} → ${selectedTrip.routeArrival} ${selectedTrip.departureTime}` : "Passagers à embarquer"}
+          title={selectedTrip ? `Passagers à embarquer — ${selectedTrip.departure} → ${selectedTrip.arrival} ${selectedTrip.time}` : "Passagers à embarquer"}
           noPad
         >
           {loadingPassengers ? (
@@ -325,7 +365,7 @@ export default function BoardingEscalePage() {
 
       {activeTab === "dropoff" && (
         <SectionCard
-          title={selectedTrip ? `Passagers à faire descendre — ${selectedTrip.routeDeparture} → ${selectedTrip.routeArrival} ${selectedTrip.departureTime}` : "Descente passagers"}
+          title={selectedTrip ? `Passagers à faire descendre — ${selectedTrip.departure} → ${selectedTrip.arrival} ${selectedTrip.time}` : "Descente passagers"}
           noPad
         >
           {loadingDropoff ? (
@@ -349,37 +389,12 @@ export default function BoardingEscalePage() {
                 </thead>
                 <tbody className={table.body}>
                   {passengersToDrop.map((r) => {
-                    const nextSeg = nextSegmentByDropId[r.id];
-                    const isConnection = !!r.connectionId;
-                    const delayAlert = isConnection && currentBusDelayMinutes != null && currentBusDelayMinutes > 0;
                     return (
                       <tr key={r.id} className={tableRowClassName()}>
                         <td className={table.td}>{r.nomClient || "—"}</td>
                         <td className={table.td}>{r.depart || "—"}</td>
                         <td className={table.td}>{r.arrivee || "—"}</td>
-                        <td className={table.td}>
-                          {isConnection && (
-                            <div className="flex flex-col gap-0.5 text-xs">
-                              <span className="inline-flex items-center gap-1 font-medium text-indigo-600 dark:text-indigo-400">
-                                <Link2 className="w-3.5 h-3.5" />
-                                Passager en correspondance
-                              </span>
-                              {nextSeg && (
-                                <span className="text-gray-600 dark:text-gray-400">
-                                  <Bus className="w-3 h-3 inline mr-0.5" />
-                                  Correspondance vers {nextSeg.routeLabel} — {nextSeg.departureTime}
-                                </span>
-                              )}
-                              {delayAlert && (
-                                <span className="font-medium text-amber-600 dark:text-amber-400">
-                                  <AlertTriangle className="w-3 h-3 inline mr-0.5" />
-                                  Correspondance potentiellement manquée
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {!isConnection && "—"}
-                        </td>
+                        <td className={table.td}>{r.connectionId ? "Correspondance" : "—"}</td>
                         <td className={table.td}>
                           <ActionButton
                             size="sm"

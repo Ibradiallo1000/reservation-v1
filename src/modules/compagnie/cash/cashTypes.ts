@@ -49,12 +49,18 @@ export interface CashTransactionDoc {
   locationId: string;
   routeId?: string | null;
   createdBy: string;
-  /** @deprecated Utiliser paidAt. Date du jour (YYYY-MM-DD) — conservé pour rétrocompat. */
+  /**
+   * Jour calendaire hérité (YYYY-MM-DD), souvent aligné UTC à l’écriture.
+   * @deprecated Pour les requêtes : utiliser `createdAt` + fuseau agence — ne pas `where` sur `date`.
+   */
   date: string;
   /**
-   * Date réelle d'encaissement, format strict "YYYY-MM-DD" (pas d'espace, pas de timezone).
-   * Source de vérité pour les encaissements par période.
-   * Recommandation future : migrer vers Firestore Timestamp pour requêtes et indexation cohérentes.
+   * Instant d'encaissement (Firestore Timestamp) — moment réel.
+   * Requêtes par période : bornes sur `createdAt` (et éventuellement corrélation `paidAtAt`), jamais sur le string `paidAt`.
+   */
+  paidAtAt?: unknown;
+  /**
+   * @deprecated Copie jour héritée pour affichage / virtualSessions. Interdit : filtres Firestore `where`/`orderBy` sur ce champ.
    */
   paidAt?: string;
   /** paid | refunded | orphan | cancelled. Défaut paid. */
@@ -63,6 +69,8 @@ export interface CashTransactionDoc {
   seats?: number;
   /** Libellé trajet (ex. "Bamako→Gao") pour regroupement rapports. */
   routeLabel?: string | null;
+  /** Référence vers financialAccounts (compte mobile money / central). Traçabilité comptable. */
+  accountId?: string | null;
   createdAt: unknown;
   /** Remboursement / annulation : date de mise à jour du statut (Timestamp). */
   refundedAt?: unknown;

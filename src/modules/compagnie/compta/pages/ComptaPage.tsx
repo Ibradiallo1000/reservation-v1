@@ -1,6 +1,6 @@
 /**
  * Module Comptabilité — Grand livre, Balance, Compte de résultat.
- * Données issues de la trésorerie (financialMovements / financialAccounts).
+ * Données issues du ledger financier (financialTransactions / accounts).
  */
 
 import React, { useState, useEffect, useMemo } from "react";

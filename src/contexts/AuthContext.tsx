@@ -31,6 +31,7 @@ import { auth, db } from "@/firebaseConfig";
 import { Role, permissionsByRole } from "@/roles-permissions";
 import { Company } from "@/types/companyTypes";
 import { CustomUser } from "@/types/auth";
+import { resolveAgencyTimezone } from "@/shared/date/dateUtilsTz";
 
 /* =========================
    Types
@@ -57,6 +58,7 @@ const CANONICAL_ROLES: ReadonlySet<string> = new Set([
   "admin_platforme",
   "admin_compagnie",
   "company_accountant",
+  "operator_digital",
   "agency_accountant",
   "responsable_logistique",
   "chefagence",
@@ -121,13 +123,16 @@ export const landingTargetForRoles = (roles: unknown): string => {
   // company_accountant / financial_director → accounting area (companyId resolved in role landing)
   if (hasAny(rolesArray, ["company_accountant", "financial_director"])) return "/role-landing";
 
+  // operator_digital → caisse digitale (companyId resolved in RoleLanding / login)
+  if (hasAny(rolesArray, ["operator_digital"])) return "/role-landing";
+
   // agency_accountant → /agence/comptabilite
   if (hasAny(rolesArray, ["agency_accountant"])) return "/agence/comptabilite";
 
   // chefEmbarquement → /agence/boarding (embarquement)
   if (hasAny(rolesArray, ["chefEmbarquement"])) return "/agence/boarding";
-  // chefAgence → /agence/dashboard (rolesArray may be from context: chefAgence or chefagence)
-  if (hasAny(rolesArray, ["chefAgence", "chefagence"])) return "/agence/dashboard";
+  // chefAgence → /agence/activite (rolesArray may be from context: chefAgence or chefagence)
+  if (hasAny(rolesArray, ["chefAgence", "chefagence"])) return "/agence/activite";
   // agency_fleet_controller → /agence/fleet
   if (hasAny(rolesArray, ["agency_fleet_controller"])) return "/agence/fleet";
 
@@ -325,6 +330,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         agencyNom: data.agencyNom,
         agencyLogoUrl: data.agencyLogoUrl,
       };
+
+      if (customUser.companyId && customUser.agencyId) {
+        try {
+          const agSnap = await getDoc(
+            doc(db, "companies", customUser.companyId, "agences", customUser.agencyId)
+          );
+          if (agSnap.exists()) {
+            customUser.agencyTimezone = resolveAgencyTimezone(
+              agSnap.data() as { timezone?: string | null }
+            );
+          }
+        } catch {
+          /* non-blocking : KPI utiliseront le fuseau par défaut */
+        }
+      }
 
       setUser(customUser);
 

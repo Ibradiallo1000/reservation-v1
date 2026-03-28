@@ -1,19 +1,11 @@
 // src/modules/compagnie/finances/pages/ChefComptableCompagnie.tsx
 // Refactored to use InternalLayout — aligned with agence/CEO (réseau, dark, F2).
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../../../contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { db } from "@/firebaseConfig";
-import {
-  doc,
-  getDoc,
-  collection,
-  getDocs,
-  query,
-  where,
-  onSnapshot,
-} from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import {
   Globe,
   CreditCard,
@@ -37,36 +29,9 @@ const ChefComptableCompagniePage: React.FC = () => {
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
 
-  // ===== Notification state =====
-  const [pendingCount, setPendingCount] = useState(0);
-  const [pendingByAgency, setPendingByAgency] = useState<
-    Record<string, number>
-  >({});
-  const [playedIds, setPlayedIds] = useState<Set<string>>(new Set());
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState<string>("Compagnie");
 
-  // Init audio on first interaction
-  useEffect(() => {
-    const initAudio = () => {
-      if (!audioRef.current) {
-        audioRef.current = new Audio("/notification.mp3");
-        audioRef.current.preload = "auto";
-      }
-      document.removeEventListener("click", initAudio);
-      document.removeEventListener("keydown", initAudio);
-    };
-    document.addEventListener("click", initAudio);
-    document.addEventListener("keydown", initAudio);
-    return () => {
-      document.removeEventListener("click", initAudio);
-      document.removeEventListener("keydown", initAudio);
-    };
-  }, []);
-
-  // Load company data
   useEffect(() => {
     if (!user?.companyId) return;
     (async () => {
@@ -83,90 +48,6 @@ const ChefComptableCompagniePage: React.FC = () => {
     })();
   }, [user?.companyId]);
 
-  // Compute total from per-agency counts
-  useEffect(() => {
-    const total = Object.values(pendingByAgency).reduce((a, b) => a + b, 0);
-    setPendingCount(total);
-  }, [pendingByAgency]);
-
-  // Firestore listener for pending proofs
-  useEffect(() => {
-    if (!user?.companyId) return;
-    let unsubscribers: (() => void)[] = [];
-
-    (async () => {
-      try {
-        const agencesSnap = await getDocs(
-          collection(db, "companies", user.companyId, "agences"),
-        );
-        agencesSnap.forEach((agenceDoc) => {
-          const agencyId = agenceDoc.id;
-          const q = query(
-            collection(
-              db,
-              "companies",
-              user.companyId,
-              "agences",
-              agencyId,
-              "reservations",
-            ),
-            where("statut", "==", "preuve_recue"),
-          );
-          const unsub = onSnapshot(
-            q,
-            (snap) => {
-              setPendingByAgency((prev) => ({
-                ...prev,
-                [agencyId]: snap.size,
-              }));
-
-              snap.docChanges().forEach((change) => {
-                if (change.type === "added") {
-                  const reservationId = change.doc.id;
-                  const key = `${agencyId}_${reservationId}`;
-                  const data = change.doc.data() as any;
-                  const createdAt = data.createdAt?.toDate?.();
-
-                  if (createdAt && Date.now() - createdAt.getTime() > 30_000) {
-                    setPlayedIds((prev) => {
-                      const next = new Set(prev);
-                      next.add(key);
-                      return next;
-                    });
-                    return;
-                  }
-
-                  setPlayedIds((prev) => {
-                    if (prev.has(key)) return prev;
-                    if (audioRef.current) {
-                      try {
-                        audioRef.current.currentTime = 0;
-                        audioRef.current.play().catch(() => {});
-                      } catch {}
-                    }
-                    const next = new Set(prev);
-                    next.add(key);
-                    return next;
-                  });
-                }
-              });
-            },
-            (error) => {
-              console.error("[ChefComptable] Listener error:", error);
-            },
-          );
-          unsubscribers.push(unsub);
-        });
-      } catch (error) {
-        console.error("[ChefComptable] Init error:", error);
-      }
-    })();
-
-    return () => {
-      unsubscribers.forEach((unsub) => unsub());
-    };
-  }, [user?.companyId]);
-
   const handleLogout = async () => {
     try {
       await logout();
@@ -176,15 +57,17 @@ const ChefComptableCompagniePage: React.FC = () => {
     }
   };
 
-  // Navigation sections (<=4 → tabs layout)
   const sections: NavSection[] = [
     { label: "Vue Globale", icon: Globe, path: "/chef-comptable", end: true },
-    {
-      label: "Réservations",
-      icon: CreditCard,
-      path: "/chef-comptable/reservations-en-ligne",
-      badge: pendingCount,
-    },
+    ...(user?.companyId
+      ? [
+          {
+            label: "Réservations réseau",
+            icon: CreditCard,
+            path: `/compagnie/${user.companyId}/accounting/reservations-reseau`,
+          } as NavSection,
+        ]
+      : []),
     { label: "Finances", icon: TrendingUp, path: "/chef-comptable/finances" },
     { label: "Compta", icon: BookOpen, path: "/chef-comptable/compta" },
     { label: "Dépenses", icon: Receipt, path: "/chef-comptable/depenses" },

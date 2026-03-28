@@ -2,50 +2,45 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { format, isToday, isTomorrow, parseISO, parse } from 'date-fns';
-import { fr } from 'date-fns/locale';
 import { SectionCard } from '@/ui';
-import { ChevronLeft, Phone, Plus, Minus, CheckCircle, User, AlertCircle, ArrowRight, Clock, Calendar, Loader2, MessageCircle } from 'lucide-react';
+import { Phone, Plus, Minus, User, AlertCircle, ArrowRight, Clock, Calendar, Loader2 } from 'lucide-react';
 import ReservationStepHeader from '../components/ReservationStepHeader';
 import {
-  collection, getDocs, query, where, addDoc, doc, updateDoc, setDoc, serverTimestamp, getDoc,
+  collection,
+  getDocs,
+  query,
+  where,
+  doc,
+  updateDoc,
+  setDoc,
+  serverTimestamp,
+  getDoc,
 } from 'firebase/firestore';
 import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
-import { incrementReservedSeats } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { tripInstanceRef } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import {
+  fetchPendingOnlineHoldSeatsMap,
+  onlineHoldCompositeKey,
+} from '@/modules/compagnie/tripInstances/onlineReservationHolds';
+import { tripInstanceRemainingFromDoc } from '@/modules/compagnie/tripInstances/tripInstanceTypes';
 import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
 import { buildValidTripsFromWeeklyTrips } from '@/modules/compagnie/tripInstances/publicValidTripsService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
-import { resolveReservationById } from '../utils/resolveReservation';
-import { getAgencyCityFromDoc } from '@/modules/agence/utils/agencyCity';
-
-/* ============== Anti-spam: mémoire locale ============== */
-const PENDING_KEY = 'pendingReservation';
-
-const isBlockingStatus = (s?: string) =>
-  ['preuve_recue', 'confirme'].includes(String(s || '').toLowerCase());
-
-const rememberPending = (payload: { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; }) => {
-  try { localStorage.setItem(PENDING_KEY, JSON.stringify(payload)); } catch {}
-};
-
-const readPending = (): { slug: string; id: string; referenceCode?: string; status: string; companyId?: string; agencyId?: string; } | null => {
-  try { const r = localStorage.getItem(PENDING_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
-};
-
-const clearPendingIfNotBlocking = () => {
-  try {
-    const raw = localStorage.getItem(PENDING_KEY);
-    if (!raw) return;
-    const p = JSON.parse(raw);
-    if (!isBlockingStatus(p?.status)) localStorage.removeItem(PENDING_KEY);
-  } catch {}
-};
-/* ======================================================= */
+import { toast } from 'sonner';
+import { createPayment } from '@/services/paymentService';
+import { isReservationAwaitingPayment } from '../utils/onlineReservationStatus';
+import { hexToRgba } from '@/utils/color';
+import {
+  savePendingReservation,
+  readPendingReservationPointer,
+  fetchReservationFromNestedPath,
+  RESERVATION_DURATION_MS,
+} from '../utils/pendingReservation';
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -53,16 +48,31 @@ const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 // ---------- helpers ----------
 const normalize = (s: string) =>
   s?.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/-/g,' ').replace(/\s+/g,' ') || '';
-const toYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const formatCity = (s: string) => s ? s.charAt(0).toUpperCase()+s.slice(1).toLowerCase() : s;
-const addMin = (d: Date, m: number) => new Date(d.getTime() + m*60000);
 const DAYS = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+
+const formatDateLongFR = (dateStr: string) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).format(d);
+};
+
+/** Même principe que AgenceGuichetPage (puces dates). */
+const formatDateShortFR = (dateStr: string) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  const raw = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', day: 'numeric' })
+    .format(d)
+    .replace('.', '');
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+};
 
 type ExistingReservation = {
   id: string;
   companyId: string;
   agencyId: string;
   canal?: string;
+  status?: string;
   statut?: string;
   nomClient?: string;
   telephone?: string;
@@ -113,13 +123,31 @@ export default function ReservationClientPage() {
     logoUrl: '', 
     code: '' 
   });
-  const theme = useMemo(() => ({
-    primary: company.couleurPrimaire,
-    secondary: company.couleurSecondaire,
-    lightPrimary: `${company.couleurPrimaire}1A`,
-    lightSecondary: `${company.couleurSecondaire}1A`,
-    veryLightPrimary: `${company.couleurPrimaire}08`, // 🔥 Pour background subtil
-  }), [company]);
+  const theme = useMemo(() => {
+    const p = company.couleurPrimaire || '#f43f5e';
+    const s = company.couleurSecondaire || '#f97316';
+    return {
+      primary: p,
+      secondary: s,
+      /** Fonds légers mais visibles (hex #RRGGBBAA peu supporté / trop transparent). */
+      veryLightPrimary: hexToRgba(p, 0.1),
+      lightPrimary: hexToRgba(p, 0.26),
+      lightSecondary: hexToRgba(s, 0.26),
+      routeGradStart: hexToRgba(p, 0.14),
+      routeGradEnd: hexToRgba(p, 0.28),
+      routeBorder: hexToRgba(p, 0.38),
+      cardTrajetsBg: hexToRgba(p, 0.22),
+      cardTrajetsBorder: hexToRgba(p, 0.48),
+      cardInfosBg: hexToRgba(s, 0.2),
+      cardInfosBorder: hexToRgba(s, 0.44),
+      wellDatesBg: hexToRgba(p, 0.14),
+      wellDatesBorder: hexToRgba(p, 0.4),
+      wellHorairesBg: hexToRgba(s, 0.12),
+      wellHorairesBorder: hexToRgba(s, 0.4),
+      wellPlacesBg: hexToRgba(p, 0.12),
+      wellPlacesBorder: hexToRgba(p, 0.36),
+    };
+  }, [company]);
 
   const [agencyInfo, setAgencyInfo] = useState<{
     id?: string; 
@@ -127,38 +155,40 @@ export default function ReservationClientPage() {
     telephone?: string; 
     code?: string;
   }>({});
-  const [trips, setTrips] = useState<Trip[]>([]);
+  const [validTrips, setValidTrips] = useState<Trip[]>([]);
+  /** Date YYYY-MM-DD sélectionnée (flux identique guichet : dates puis horaires). */
   const [selectedDate, setSelectedDate] = useState('');
-  const [selectedTime, setSelectedTime] = useState('');
+  const [selectedTripId, setSelectedTripId] = useState('');
   const [seats, setSeats] = useState(1);
   const [passenger, setPassenger] = useState({ fullName: '', phone: '' });
 
   const [creating, setCreating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showSlowConnectionHint, setShowSlowConnectionHint] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const [existing, setExisting] = useState<ExistingReservation | null>(null);
 
-  useEffect(() => {
-    clearPendingIfNotBlocking();
-    // CORRECTION : Pas de redirection automatique basée uniquement sur le pending
-    // L'utilisateur doit compléter le processus de paiement explicitement
-  }, [slug, navigate, reservationRouteId]);
-
   // Redirect when user lands on booking with existing reservation → send to correct step
   useEffect(() => {
     if (!existing || !slug || !existing.id) return;
-    const statut = String(existing.statut || '').toLowerCase();
-    if (statut === 'en_attente_paiement') {
+    const st = String(existing.status || '').toLowerCase();
+    const legacy = String(existing.statut || '').toLowerCase();
+    if (isReservationAwaitingPayment(st) || legacy === 'en_attente' || legacy === 'en_attente_paiement') {
       navigate(pathBase ? `/${pathBase}/payment/${existing.id}` : `/payment/${existing.id}`, {
         replace: true,
-        state: { companyId: existing.companyId, agencyId: existing.agencyId }
+        state: { reservationId: existing.id, companyId: existing.companyId, agencyId: existing.agencyId }
       });
       return;
     }
-    if (statut === 'preuve_recue' || statut === 'confirme') {
-      navigate(pathBase ? `/${pathBase}/receipt/${existing.id}` : `/receipt/${existing.id}`, { replace: true });
+    if (st === 'payé' || st === 'paye' || legacy === 'preuve_recue' || legacy === 'confirme') {
+      navigate(pathBase ? `/${pathBase}/receipt/${existing.id}` : `/receipt/${existing.id}`, {
+        replace: true,
+        state: { companyId: existing.companyId, agencyId: existing.agencyId },
+      });
       return;
     }
   }, [existing, slug, navigate, pathBase]);
@@ -169,15 +199,19 @@ export default function ReservationClientPage() {
       if (!reservationRouteId || !slug) return;
       setLoading(true);
       try {
-        const r = await resolveReservationById(slug, reservationRouteId);
-        const snap = r.snapshot;
+        const companyId = routeState.companyId ?? readPendingReservationPointer()?.companyId;
+        const agencyId = routeState.agencyId ?? readPendingReservationPointer()?.agencyId;
+        if (!companyId || !agencyId) {
+          setError('Réservation introuvable. Ouvrez le lien reçu ou retrouvez-la avec votre numéro.');
+          setLoading(false);
+          return;
+        }
+        const snap = await fetchReservationFromNestedPath(db, companyId, agencyId, reservationRouteId);
         if (!snap) {
           setError("Réservation introuvable. Utilisez le lien de votre billet (mon-billet?r=...).");
           setLoading(false);
           return;
         }
-        const companyId = r.companyId;
-        const agencyId = r.agencyId;
 
         const compSnap = await getDoc(doc(db, 'companies', companyId));
         const comp = compSnap.exists() ? (compSnap.data() as any) : {};
@@ -190,13 +224,11 @@ export default function ReservationClientPage() {
           logoUrl: comp.logoUrl || ''
         });
 
-        const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
-        const ag = agSnap.exists() ? (agSnap.data() as any) : {};
         setAgencyInfo({
           id: agencyId,
-          nom: ag.nomAgence || ag.nom || ag.name || 'Agence',
-          telephone: ag.telephone,
-          code: (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined
+          nom: ((snap.agencyNom as string) || (snap.nomAgence as string) || 'Agence'),
+          telephone: (snap.telephone as string) || '',
+          code: undefined
         });
 
         setExisting({
@@ -204,6 +236,7 @@ export default function ReservationClientPage() {
           companyId,
           agencyId,
           canal: (snap.canal as string) ?? 'en_ligne',
+          status: (snap.status as string) ?? '',
           statut: (snap.statut as string) ?? '',
           nomClient: (snap.nomClient as string) ?? '',
           telephone: (snap.telephone as string) ?? '',
@@ -252,59 +285,41 @@ export default function ReservationClientPage() {
           logoUrl: cdata.logoUrl || ''
         });
 
-        const agencesSnap = await getDocs(collection(db, 'companies', cdoc.id, 'agences'));
-        const agences = agencesSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-        // Afficher l'agence de la ville de DÉPART (ex. Bamako pour Bamako → Gao), pas la première de la liste.
-        const agencyForDeparture = agences.find(
-          a => normalize(getAgencyCityFromDoc(a)) === departureQ
-        ) ?? agences[0];
-        if (agencyForDeparture) {
-          const a = agencyForDeparture;
-          setAgencyInfo({
-            id: a.id,
-            nom: a.nomAgence || a.nom || a.name,
-            telephone: a.telephone,
-            code: (a.code || a.codeAgence || '').toString().toUpperCase() || undefined
-          });
-        }
+        setAgencyInfo({});
 
         const depNorm = (search.get('departure') || '').trim();
         const arrNorm = (search.get('arrival') || '').trim();
 
-        const isPastTimeFn = (dateStr: string, time: string) => {
-          if (dateStr !== toYMD(new Date())) return false;
-          const now = new Date();
-          const nowHHMM = parse(
-            `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-            'HH:mm',
-            new Date()
-          );
-          return parse(time, 'HH:mm', new Date()) <= nowHHMM;
-        };
-
-        // Page résa publique : ne jamais lire collectionGroup('reservations') (règles = lecture réservée à la compagnie). Toujours utiliser capacité simple (seatCapacity - reservedSeats) pour éviter "Missing or insufficient permissions" (visiteur non connecté ou connecté autre compte).
+        // Places affichées : tripInstance − holds en ligne non expirés (seatHoldOnly), voir publicValidTripsService.
         const { validTrips } = await buildValidTripsFromWeeklyTrips({
           companyId: cdoc.id,
           depNorm,
           arrNorm,
-          normalize: (s) => normalize(s),
-          agences: agences.map((a) => ({ id: a.id })),
-          daysAhead: 14,
-          isPastTime: isPastTimeFn,
-          getRemaining: async (_companyId, _instanceId, ti) => {
-            const cap = (ti.seatCapacity ?? ti.capacitySeats ?? 30) as number;
-            const res = (ti.reservedSeats ?? 0) as number;
-            return Math.max(0, cap - res);
-          },
+          daysAhead: 8,
+          limitCount: 100,
         });
 
-        const sorted = validTrips as Trip[];
-        setTrips(sorted);
-        const firstDate = sorted[0]?.date ?? '';
+        const directTrips = validTrips.map((trip) => ({
+          ...trip,
+          companyId: cdoc.id,
+        })) as Trip[];
+        const now = new Date();
+        const upcomingTrips = directTrips.filter((trip: any) => {
+          const tripDate = String(trip?.date ?? '');
+          const tripTime = String(trip?.time ?? '00:00');
+          const tripDt = new Date(`${tripDate}T${tripTime}`);
+          if (Number.isNaN(tripDt.getTime())) return true;
+          return tripDt.getTime() >= now.getTime();
+        });
+        setValidTrips(upcomingTrips);
+        const dates = [...new Set(upcomingTrips.map((t: any) => String(t.date || '')).filter(Boolean))].sort((a, b) =>
+          a.localeCompare(b)
+        );
+        const firstDate = dates[0] ?? '';
         setSelectedDate(firstDate);
+        const firstOfDate = upcomingTrips.find((t: any) => String(t.date) === firstDate);
+        setSelectedTripId(firstOfDate?.id ?? '');
 
-        const preloadAgency = agencyForDeparture ?? agences[0];
-        const derivedDates = Array.from(new Set(sorted.map((t: Trip) => t.date))).sort();
         sessionStorage.setItem(`preload_${slug}_${departureQ}_${arrivalQ}`, JSON.stringify({
           company: {
             id: cdoc.id, 
@@ -314,12 +329,11 @@ export default function ReservationClientPage() {
             logoUrl: cdata.logoUrl || '', 
             code: (cdata.code || 'MT').toString().toUpperCase()
           }, 
-          trips: sorted, 
-          dates: derivedDates,
+          trips: directTrips,
           agencyInfo: { 
-            nom: preloadAgency?.nomAgence || preloadAgency?.nom || '', 
-            telephone: preloadAgency?.telephone || '', 
-            code: preloadAgency?.code 
+            nom: '', 
+            telephone: '', 
+            code: undefined 
           }
         }));
       } catch (e: any) {
@@ -345,46 +359,59 @@ export default function ReservationClientPage() {
     };
   }, [company?.couleurPrimaire]);
 
-  const dates = useMemo(
-    () => Array.from(new Set(trips.map((t: Trip) => t.date))).sort(),
-    [trips]
+  const availableDates = useMemo(
+    () => [...new Set(validTrips.map((t: any) => String(t.date || '')).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [validTrips]
   );
 
-  useEffect(() => {
-    if (!dates.length) return;
-    if (!dates.includes(selectedDate)) {
-      setSelectedDate(dates[0]);
-    }
-  }, [dates, selectedDate]);
+  const nowClock = new Date();
+  const nowDateStr = nowClock.toISOString().split('T')[0];
+  const nowTimeStr = `${String(nowClock.getHours()).padStart(2, '0')}:${String(nowClock.getMinutes()).padStart(2, '0')}`;
 
-  const filteredTrips = useMemo(() => {
-    if (!selectedDate) return [] as any[];
-    const base = trips.filter((t: any) => t.date === selectedDate);
-    if (isToday(parseISO(selectedDate))) {
-      const now = new Date();
-      const nowHHMM = parse(
-        `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-        'HH:mm',
-        new Date()
+  const slotsForSelectedDate = useMemo(() => {
+    return validTrips
+      .filter((t: any) => String(t.date) === selectedDate)
+      .filter(
+        (t: any) =>
+          !(String(t.date) === nowDateStr && String(t.time || '').slice(0, 5) < nowTimeStr)
       );
-      return base.filter((t: any) => parse(t.time, 'HH:mm', new Date()) > nowHHMM);
-    }
-    return base;
-  }, [trips, selectedDate]);
+  }, [validTrips, selectedDate, nowDateStr, nowTimeStr]);
 
   useEffect(() => {
-    if (!reservationRouteId && filteredTrips.length && !selectedTime) {
-      setSelectedTime(filteredTrips[0].time);
+    if (reservationRouteId) return;
+    if (availableDates.length === 0) {
+      if (selectedDate) setSelectedDate('');
+      if (selectedTripId) setSelectedTripId('');
+      return;
     }
-  }, [filteredTrips, selectedTime, reservationRouteId]);
+    if (!selectedDate || !availableDates.includes(selectedDate)) {
+      setSelectedDate(availableDates[0]!);
+    }
+  }, [availableDates, selectedDate, selectedTripId, reservationRouteId]);
 
-  const selectedTrip: any = filteredTrips.find((t: any) => t.time === selectedTime);
-  const topPrice = (selectedTrip?.price ?? (filteredTrips[0] as any)?.price);
+  useEffect(() => {
+    if (reservationRouteId || !selectedDate) return;
+    const list = validTrips.filter(
+      (t: any) =>
+        String(t.date) === selectedDate &&
+        !(String(t.date) === nowDateStr && String(t.time || '').slice(0, 5) < nowTimeStr)
+    );
+    if (list.length === 0) {
+      setSelectedTripId('');
+      return;
+    }
+    const stillValid = list.some((t: any) => t.id === selectedTripId);
+    if (!selectedTripId || !stillValid) {
+      setSelectedTripId((list[0] as any).id);
+    }
+  }, [validTrips, selectedDate, selectedTripId, reservationRouteId, nowDateStr, nowTimeStr]);
 
-  const seatColor = (remaining: number, total: number) => {
-    const ratio = remaining / total;
-    if (ratio > 0.7) return '#16a34a';
-    if (ratio > 0.3) return '#f59e0b';
+  const selectedTrip: any = validTrips.find((t: any) => t.id === selectedTripId);
+  const topPrice = selectedTrip?.price ?? (slotsForSelectedDate[0] as any)?.price ?? (validTrips[0] as any)?.price;
+
+  const seatColor = (remaining: number) => {
+    if (remaining > 10) return '#16a34a';
+    if (remaining > 3) return '#f59e0b';
     return '#dc2626';
   };
 
@@ -428,20 +455,24 @@ export default function ReservationClientPage() {
       setError('Veuillez sélectionner un horaire');
       return;
     }
-    if (creating) return;
+    if (creating || isSubmitting) return;
 
-    setCreating(true); 
+    setCreating(true);
+    setIsSubmitting(true);
+    setSubmitError(null);
+    setShowSlowConnectionHint(false);
     setError('');
     setFieldErrors({});
+    const slowHintTimer = window.setTimeout(() => {
+      setShowSlowConnectionHint(true);
+    }, 5000);
     
     try {
       const companyId = selectedTrip.companyId;
       const tripInstanceId = selectedTrip.id as string;
 
-      const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', selectedTrip.agencyId));
-      const ag = agSnap.exists() ? (agSnap.data() as any) : {};
-      const agencyName = ag.nomAgence || ag.nom || ag.name || 'Agence';
-      const agencyCode = (ag.code || ag.codeAgence || '').toString().toUpperCase() || undefined;
+      const agencyName = agencyInfo.nom || 'Agence';
+      const agencyCode = agencyInfo.code;
 
       const compSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId));
       const comp = compSnap.exists() ? (compSnap.data() as any) : {};
@@ -473,7 +504,7 @@ export default function ReservationClientPage() {
 
       let originStopOrder: number | null = null;
       let destinationStopOrder: number | null = null;
-      const routeId = (selectedTrip as any).routeId ?? null;
+      const routeId = String((selectedTrip as any).routeId ?? '').trim() || null;
       if (routeId) {
         const resolved = await getStopOrdersFromCities(
           selectedTrip.companyId,
@@ -487,13 +518,16 @@ export default function ReservationClientPage() {
         }
       }
 
-      const now = new Date();
+      const nowMs = Date.now();
+      const expiresAtMs = nowMs + RESERVATION_DURATION_MS;
       const telephoneInput = passenger.phone.trim();
+      const phoneNorm = normalizePhone(telephoneInput);
       const reservation = {
         nomClient: passenger.fullName.trim(),
         telephone: telephoneInput,
         telephoneOriginal: telephoneInput,
-        telephoneNormalized: normalizePhone(telephoneInput),
+        telephoneNormalized: phoneNorm,
+        phone: phoneNorm,
         depart: selectedTrip.departure,
         arrivee: selectedTrip.arrival,
         date: selectedTrip.date,
@@ -502,7 +536,9 @@ export default function ReservationClientPage() {
         seatsGo: seats, 
         seatsReturn: 0, 
         tripType: 'aller_simple',
-        statut: 'en_attente_paiement', 
+        status: 'en_attente',
+        seatHoldOnly: true,
+        seatsHeld: seats,
         canal: 'en_ligne',
         companyId: selectedTrip.companyId,
         companySlug: slug,
@@ -518,21 +554,40 @@ export default function ReservationClientPage() {
         boardingStatus: 'pending',
         dropoffStatus: 'pending',
         journeyStatus: 'booked',
-        holdUntil: addMin(now, 15),
-        createdAt: serverTimestamp(),
+        expiresAt: expiresAtMs,
+        createdAt: nowMs,
         updatedAt: serverTimestamp(),
       };
 
-      const refDoc = await addDoc(
-        collection(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations'),
-        reservation
-      );
+      console.log('[ReservationClientPage] reservation (avant écriture)', reservation);
 
-      try {
-        await incrementReservedSeats(companyId, tripInstanceId, seats);
-      } catch (e) {
-        console.error('Could not update trip instance reservedSeats:', e);
+      const resCol = collection(
+        db,
+        'companies',
+        selectedTrip.companyId,
+        'agences',
+        selectedTrip.agencyId,
+        'reservations'
+      );
+      const newResRef = doc(resCol);
+      const tiRef = tripInstanceRef(companyId, tripInstanceId);
+      const tiSnap = await getDoc(tiRef);
+      if (!tiSnap.exists()) {
+        throw new Error('Trajet introuvable ou plus disponible.');
       }
+      const holdMap = await fetchPendingOnlineHoldSeatsMap(companyId);
+      const holdKey = onlineHoldCompositeKey(
+        tripInstanceId,
+        selectedTrip.departure,
+        selectedTrip.arrival
+      );
+      const held = holdMap.get(holdKey) ?? 0;
+      const baseRemaining = tripInstanceRemainingFromDoc(tiSnap.data()!);
+      if (baseRemaining - held < seats) {
+        throw new Error('Plus assez de places disponibles sur ce trajet.');
+      }
+      await setDoc(newResRef, reservation);
+      const refDoc = { id: newResRef.id };
 
       const token = randomToken();
       const publicUrl = pathBase ? `${window.location.origin}/${pathBase}/mon-billet?r=${encodeURIComponent(token)}` : `${window.location.origin}/mon-billet?r=${encodeURIComponent(token)}`;
@@ -540,6 +595,35 @@ export default function ReservationClientPage() {
         doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations', refDoc.id),
         { publicToken: token, publicUrl, updatedAt: serverTimestamp() }
       );
+
+      // Nouveau flux Payment (pending) — en parallèle, sans supprimer le flux réservation existant
+      const rawProvider = String((reservation as any).paymentMethod ?? (reservation as any).paiement ?? '').toLowerCase();
+      const provider = rawProvider.includes('orange')
+        ? 'orange'
+        : rawProvider.includes('moov')
+          ? 'moov'
+          : rawProvider.includes('cash') || rawProvider.includes('esp')
+            ? 'cash'
+            : 'wave';
+      try {
+        await createPayment({
+          reservationId: refDoc.id,
+          companyId: selectedTrip.companyId,
+          agencyId: selectedTrip.agencyId,
+          amount: reservation.montant,
+          currency: 'XOF',
+          channel: 'online',
+          provider,
+          status: 'pending',
+          paymentDocumentId: refDoc.id,
+        });
+      } catch (payErr: any) {
+        console.error('[ReservationClientPage] createPayment failed:', payErr);
+        toast.error('Réservation créée, mais le paiement « en attente » n’a pas été enregistré', {
+          description: payErr?.message ?? payErr?.code ?? 'Vérifiez les règles Firestore (payments) ou réessayez.',
+          duration: 8000,
+        });
+      }
 
       const publicSnapshot = {
         reservationId: refDoc.id,
@@ -557,7 +641,7 @@ export default function ReservationClientPage() {
         seatsGo: reservation.seatsGo,
         seatsReturn: reservation.seatsReturn,
         tripType: reservation.tripType,
-        statut: reservation.statut,
+        status: reservation.status,
         canal: reservation.canal,
         referenceCode: reservation.referenceCode,
         companyName: reservation.companyName,
@@ -580,33 +664,39 @@ export default function ReservationClientPage() {
         await navigator.clipboard.writeText(publicUrl); 
       } catch {}
 
-      rememberPending({
-        slug: slug!,
+      savePendingReservation({
         id: refDoc.id,
-        referenceCode,
-        status: 'en_attente_paiement',
         companyId: selectedTrip.companyId,
-        agencyId: selectedTrip.agencyId
+        agencyId: selectedTrip.agencyId,
       });
 
+      setIsSubmitting(false);
       navigate(pathBase ? `/${pathBase}/payment/${refDoc.id}` : `/payment/${refDoc.id}`, {
         replace: true,
-        state: { companyId: selectedTrip.companyId, agencyId: selectedTrip.agencyId }
+        state: {
+          reservationId: refDoc.id,
+          companyId: selectedTrip.companyId,
+          agencyId: selectedTrip.agencyId,
+        },
       });
     } catch (e: any) {
+      setSubmitError('Erreur réseau ou places indisponibles');
       setError(e?.message || 'Impossible de créer la réservation');
     } finally { 
-      setCreating(false); 
+      window.clearTimeout(slowHintTimer);
+      setShowSlowConnectionHint(false);
+      setCreating(false);
+      setIsSubmitting(false);
     }
-  }, [selectedTrip, passenger, seats, creating, slug, company, navigate, validatePersonalInfo, pathBase]);
+  }, [selectedTrip, passenger, seats, creating, isSubmitting, slug, company, agencyInfo, navigate, validatePersonalInfo, pathBase]);
 
   // ---------- UI: carte trajet épurée (logo retiré, déjà présent dans le header) ----------
   const RouteCard = (titleRight?: string) => (
     <div
       className="rounded-2xl overflow-hidden"
       style={{
-        background: `linear-gradient(135deg, ${theme.veryLightPrimary ?? `${theme.primary}14`}, ${theme.lightPrimary ?? `${theme.primary}22`})`,
-        border: `1px solid ${theme.primary}20`,
+        background: `linear-gradient(135deg, ${theme.routeGradStart}, ${theme.routeGradEnd})`,
+        border: `1px solid ${theme.routeBorder}`,
       }}
     >
       <div className="flex items-center justify-between gap-4 px-4 sm:px-5 py-4">
@@ -714,7 +804,7 @@ export default function ReservationClientPage() {
         </div>
       ) : (
         /* Step 1 only: reservation form → then redirect to payment page */
-        <main className="max-w-[1100px] mx-auto px-3 sm:px-4 py-5 sm:py-6 space-y-5 sm:space-y-6">
+        <main className="max-w-[1100px] mx-auto px-2.5 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
           {RouteCard()}
 
           {agencyInfo?.nom && (
@@ -731,66 +821,105 @@ export default function ReservationClientPage() {
             <div className="p-4 rounded-xl bg-red-50 border border-red-100 text-red-800 text-sm">{error}</div>
           )}
 
-          {/* dates */}
           <SectionCard
-            title="Date de départ"
+            title="Trajets disponibles"
             icon={Calendar}
-            className="border-gray-100 shadow-sm bg-white rounded-xl"
+            className="rounded-xl border-2 shadow-sm !bg-transparent hover:shadow-md dark:!bg-transparent"
+            style={{
+              backgroundColor: theme.cardTrajetsBg,
+              borderColor: theme.cardTrajetsBorder,
+            }}
           >
-            <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
-              {dates.map(d => (
-                <button
-                  key={d}
-                  onClick={() => { setSelectedDate(d); setSelectedTime(''); }}
-                  className="flex-shrink-0 h-11 px-4 rounded-xl text-sm font-medium whitespace-nowrap transition-all duration-200"
+            {validTrips.length === 0 ? (
+              <div className="text-sm text-gray-500">Aucun trajet disponible.</div>
+            ) : (
+              <div className="space-y-4">
+                <div
+                  className="rounded-lg border px-3 py-3"
                   style={{
-                    border: selectedDate === d ? `2px solid ${theme.primary}` : '1px solid #e5e7eb',
-                    color: selectedDate === d ? theme.primary : '#4b5563',
-                    backgroundColor: selectedDate === d ? theme.lightPrimary : '#fafafa',
+                    backgroundColor: theme.wellDatesBg,
+                    borderColor: theme.wellDatesBorder,
                   }}
                 >
-                  {format(parseISO(d), 'EEE d', { locale: fr })}
-                  {(isToday(parseISO(d)) || isTomorrow(parseISO(d))) && (
-                    <span className="ml-1.5 text-xs opacity-80">
-                      {isToday(parseISO(d)) ? 'Auj.' : 'Demain'}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </SectionCard>
+                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-800">
+                    <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" style={{ color: theme.primary }} aria-hidden />
+                    Dates
+                  </h4>
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    {availableDates.map((d) => {
+                      const active = d === selectedDate;
+                      return (
+                        <button
+                          key={d}
+                          type="button"
+                          disabled={isSubmitting}
+                          onClick={() => {
+                            setSelectedDate(d);
+                            const first = validTrips.find((t: any) => String(t.date) === d);
+                            if (first) setSelectedTripId((first as any).id);
+                          }}
+                          className="flex-shrink-0 rounded-lg border px-2 py-1 text-xs font-medium transition"
+                          style={{
+                            borderColor: active ? theme.primary : '#e5e7eb',
+                            backgroundColor: active ? theme.lightPrimary : '#fff',
+                            color: active ? theme.primary : '#374151',
+                          }}
+                        >
+                          {formatDateShortFR(d)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
-          {/* heures */}
-          {!!filteredTrips.length && (
-            <SectionCard
-              title="Heure de départ"
-              icon={Clock}
-              className="border-gray-100 shadow-sm bg-white rounded-xl"
-            >
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                {filteredTrips.map((t: any) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setSelectedTime(t.time)}
-                    className="h-12 px-3 rounded-xl border text-sm text-left transition-all duration-200 flex flex-col justify-center"
+                {selectedDate ? (
+                  <div
+                    className="rounded-lg border px-3 py-3"
                     style={{
-                      borderColor: selectedTime === t.time ? theme.primary : '#e5e7eb',
-                      backgroundColor: selectedTime === t.time ? theme.lightPrimary : '#fafafa',
-                      color: selectedTime === t.time ? theme.primary : '#374151',
+                      backgroundColor: theme.wellHorairesBg,
+                      borderColor: theme.wellHorairesBorder,
                     }}
                   >
-                    <span className="font-semibold">{t.time}</span>
-                    <span
-                      className="text-[11px] font-medium mt-0.5"
-                      style={{ color: seatColor(t.remainingSeats, t.places) }}
-                    >
-                      {t.remainingSeats} places
-                    </span>
-                  </button>
-                ))}
+                    <h4 className="mb-2 text-xs font-semibold text-gray-800" style={{ color: theme.secondary }}>
+                      Horaires
+                    </h4>
+                    {slotsForSelectedDate.length === 0 ? (
+                      <p className="text-sm text-gray-500">Aucun départ pour cette date.</p>
+                    ) : (
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {(slotsForSelectedDate as any[]).map((t) => {
+                          const active = t.id === selectedTripId;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              disabled={isSubmitting}
+                              onClick={() => setSelectedTripId(t.id)}
+                              className="inline-flex w-fit max-w-full flex-shrink-0 flex-col items-start rounded-xl border px-3 py-2 text-left transition-all duration-200"
+                              style={{
+                                borderColor: active ? theme.primary : '#e5e7eb',
+                                backgroundColor: active ? theme.lightPrimary : '#fafafa',
+                              }}
+                            >
+                              <p
+                                className="text-lg font-bold leading-none"
+                                style={{ color: active ? theme.primary : '#111827' }}
+                              >
+                                {String(t.time || '').slice(0, 5)}
+                              </p>
+                              <p className="mt-1.5 text-xs" style={{ color: seatColor(t.remainingSeats) }}>
+                                {t.remainingSeats} places
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
-            </SectionCard>
-          )}
+            )}
+          </SectionCard>
 
           {/* infos personnelles */}
           {selectedTrip && (
@@ -798,17 +927,12 @@ export default function ReservationClientPage() {
               <SectionCard
                 title="Vos informations"
                 icon={User}
-                className="border-gray-100 shadow-sm bg-white rounded-xl"
+                className="rounded-xl border-2 shadow-sm !bg-transparent hover:shadow-md dark:!bg-transparent"
+                style={{
+                  backgroundColor: theme.cardInfosBg,
+                  borderColor: theme.cardInfosBorder,
+                }}
               >
-                <p className="text-sm text-gray-600 mb-2">
-                  Nom complet et numéro de téléphone du ou des passagers pour le voyage.
-                </p>
-                <div className="flex items-start gap-2 p-3 rounded-xl mb-4 bg-green-50 border border-green-100">
-                  <MessageCircle className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" aria-hidden />
-                  <p className="text-sm text-green-800">
-                    <strong>Préférence :</strong> indiquez un numéro <strong>WhatsApp</strong> pour recevoir le lien de votre billet directement sur WhatsApp après validation.
-                  </p>
-                </div>
                 <div className="grid sm:grid-cols-2 gap-4">
                   {/* Nom */}
                   <div className="relative">
@@ -817,6 +941,7 @@ export default function ReservationClientPage() {
                     </div>
                     <input
                       ref={nameInputRef}
+                      disabled={isSubmitting}
                       className={`h-12 pl-11 pr-4 w-full border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none bg-gray-50/80 text-gray-900 placeholder-gray-400 transition ${
                         fieldErrors.fullName ? 'border-red-300 focus:border-red-400' : 'border-gray-200 focus:border-gray-300'
                       }`}
@@ -834,20 +959,21 @@ export default function ReservationClientPage() {
                     )}
                   </div>
 
-                  {/* Téléphone (WhatsApp recommandé) */}
+                  {/* Téléphone */}
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
                       <Phone className="h-5 w-5" />
                     </div>
                     <input
                       ref={phoneInputRef}
+                      disabled={isSubmitting}
                       inputMode="numeric"
                       autoComplete="tel"
                       maxLength={11}
                       className={`h-12 pl-11 pr-4 w-full border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none bg-gray-50/80 text-gray-900 placeholder-gray-400 transition ${
                         fieldErrors.phone ? 'border-red-300 focus:border-red-400' : 'border-gray-200 focus:border-gray-300'
                       }`}
-                      placeholder="Téléphone / WhatsApp (ex: 22 22 22 22)"
+                      placeholder="Téléphone (ex: 22 22 22 22)"
                       value={passenger.phone}
                       onChange={e => {
                         setPassenger(p => ({ ...p, phone: formatMaliPhone(e.target.value) }));
@@ -862,12 +988,19 @@ export default function ReservationClientPage() {
                   </div>
 
                   {/* Places */}
-                  <div className="sm:col-span-2 flex items-center gap-3 pt-1">
+                  <div
+                    className="sm:col-span-2 flex flex-wrap items-center gap-3 rounded-lg border px-3 py-3"
+                    style={{
+                      backgroundColor: theme.wellPlacesBg,
+                      borderColor: theme.wellPlacesBorder,
+                    }}
+                  >
                     <span className="text-sm font-medium text-gray-700">Nombre de places</span>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={() => setSeats(s => Math.max(1, s - 1))}
+                        disabled={isSubmitting}
                         className="w-10 h-10 rounded-xl border-2 grid place-items-center transition hover:bg-gray-100"
                         style={{ borderColor: theme.primary, color: theme.primary }}
                       >
@@ -882,29 +1015,45 @@ export default function ReservationClientPage() {
                       <button
                         type="button"
                         onClick={() => setSeats(s => Math.min(Math.min(5, selectedTrip.remainingSeats), s + 1))}
+                        disabled={isSubmitting}
                         className="w-10 h-10 rounded-xl border-2 grid place-items-center transition hover:bg-gray-100"
                         style={{ borderColor: theme.primary, color: theme.primary }}
                       >
                         <Plus className="w-4 h-4" />
                       </button>
                     </div>
-                    <span className="text-xs text-gray-500" style={{ color: seatColor(selectedTrip.remainingSeats, selectedTrip.places) }}>
+                    <span className="text-xs text-gray-500" style={{ color: seatColor(selectedTrip.remainingSeats) }}>
                       {selectedTrip.remainingSeats} places disponibles
                     </span>
                   </div>
                 </div>
 
+                {isSubmitting && (
+                  <div className="mt-4 p-3 rounded-xl bg-blue-50 border border-blue-100 text-blue-800 text-sm">
+                    ⏳ Creation de votre reservation en cours...
+                    {showSlowConnectionHint ? (
+                      <div className="mt-1 text-blue-700">Connexion lente, veuillez patienter...</div>
+                    ) : null}
+                  </div>
+                )}
+                {submitError && (
+                  <div className="mt-4 p-3 rounded-xl bg-red-50 border border-red-100 text-red-800 text-sm">
+                    ❌ Impossible de créer la réservation
+                    <div className="mt-1">🔁 Veuillez réessayer</div>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={createReservationDraft}
-                  disabled={creating}
+                  disabled={creating || isSubmitting}
                   className="mt-6 w-full h-12 rounded-xl font-semibold shadow-md disabled:opacity-60 transition hover:opacity-95 active:scale-[0.99] flex items-center justify-center gap-2 text-white"
                   style={{
                     background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`,
                   }}
                 >
-                  {creating ? (
-                    'Traitement…'
+                  {creating || isSubmitting ? (
+                    'Creation de votre reservation...'
                   ) : (
                     <>
                       Passer au paiement

@@ -2,21 +2,29 @@
  * Source unique des indicateurs réseau TELIYA.
  * Toutes les pages (Poste de pilotage, Réservations réseau, tableau agences, Flotte)
  * doivent utiliser getNetworkStats() pour afficher les mêmes chiffres.
- * Les dates "aujourd'hui" sont calculées en fuseau Africa/Bamako pour cohérence à minuit.
+ * Les dates « jour » pour une agence utilisent `timeZone` (défaut Africa/Bamako).
  */
 
 import { collectionGroup, getDocs, query, where, orderBy, limit, Timestamp } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import {
   TZ_BAMAKO,
+  DEFAULT_AGENCY_TIMEZONE,
   getTodayBamako,
   getStartOfDayBamako,
   getEndOfDayBamako,
   getStartOfDayInBamako,
   getEndOfDayInBamako,
+  getStartOfDayForDate,
+  getEndOfDayForDate,
+  getDateKeyInTimezone,
+  getHourInTimezone,
+  normalizeDateToYYYYMMDD,
 } from "@/shared/date/dateUtilsTz";
-import { getCashTransactionsByDateRange } from "@/modules/compagnie/cash/cashService";
-import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
+import {
+  isConfirmedTransactionStatus,
+  listFinancialTransactionsByPeriod,
+} from "@/modules/compagnie/treasury/financialTransactions";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -36,7 +44,7 @@ export function isSoldReservation(statut: string | undefined): boolean {
 }
 
 export interface NetworkStats {
-  /** CA total : somme des cashTransactions payées sur la période */
+  /** CA total : somme des payment_received confirmés (ledger) sur la période */
   totalRevenue: number;
   /** Billets vendus : réservations créées sur la période (createdAt), toute période (jour/semaine/mois) */
   totalTickets: number;
@@ -108,6 +116,29 @@ async function getReservationsByCreatedAtRange(
   });
 }
 
+async function getLedgerPaymentReceivedByPeriod(
+  companyId: string,
+  startDate: Date,
+  endDate: Date
+): Promise<Array<{ amount: number; performedAt: Date }>> {
+  const rows = await listFinancialTransactionsByPeriod(
+    companyId,
+    Timestamp.fromDate(startDate),
+    Timestamp.fromDate(endDate)
+  );
+  return rows
+    .filter((r) => r.type === "payment_received" && isConfirmedTransactionStatus(r.status))
+    .map((r) => {
+      const ts = r.performedAt as Timestamp | undefined;
+      const performedAt = ts?.toDate?.() ?? new Date(0);
+      return {
+        amount: Number(r.amount ?? 0) || 0,
+        performedAt,
+      };
+    })
+    .filter((r) => r.amount > 0);
+}
+
 /** Réservation chargée une seule fois pour la page Réservations réseau (tableau, cartes, graphique). */
 export interface ReservationInRange {
   id: string;
@@ -168,7 +199,7 @@ export function buildChartDataFromReservations(
   dateFrom: string,
   dateTo: string
 ): ChartDataPoint[] {
-  const paid = reservations.filter((r) => isSoldReservation(r.statut));
+  /** Aligné cartes / KPI réseau : toutes les réservations de la période, 1 point = 1 réservation (pas filtre statut). */
   const isSingleDay = dateFrom === dateTo;
   const map = new Map<string, { revenue: number; reservations: number }>();
 
@@ -176,12 +207,12 @@ export function buildChartDataFromReservations(
     for (let h = 0; h < 24; h++) {
       map.set(`${dateFrom}T${String(h).padStart(2, "0")}`, { revenue: 0, reservations: 0 });
     }
-    paid.forEach((r) => {
+    reservations.forEach((r) => {
       const hour = getHourBamako(r.createdAt);
       const key = `${dateFrom}T${String(hour).padStart(2, "0")}`;
       const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
       curr.revenue += r.montant;
-      curr.reservations += r.seatsGo;
+      curr.reservations += 1;
       map.set(key, curr);
     });
   } else {
@@ -190,11 +221,11 @@ export function buildChartDataFromReservations(
     for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
       map.set(getDateKeyBamako(new Date(t)), { revenue: 0, reservations: 0 });
     }
-    paid.forEach((r) => {
+    reservations.forEach((r) => {
       const key = getDateKeyBamako(r.createdAt);
       const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
       curr.revenue += r.montant;
-      curr.reservations += r.seatsGo;
+      curr.reservations += 1;
       map.set(key, curr);
     });
   }
@@ -238,17 +269,18 @@ export interface AgencyStats {
 /**
  * Statistiques d'une agence unique, avec les mêmes règles que le CEO :
  * - Billets vendus = réservations créées (createdAt Bamako) dont statut canonique ∈ {confirme, paye}
- * - Période définie par [dateFrom, dateTo] (YYYY-MM-DD) en fuseau Africa/Bamako
+ * - Période définie par [dateFrom, dateTo] (YYYY-MM-DD) dans le fuseau `timeZone` (souvent `agency.timezone`)
  * - Découpage journalier ou horaire identique à buildChartDataFromReservations/getNetworkStatsChartData
  */
 export async function getAgencyStats(
   companyId: string,
   agencyId: string,
   dateFrom: string,
-  dateTo: string
+  dateTo: string,
+  timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<AgencyStats> {
-  const periodStart = getStartOfDayInBamako(dateFrom);
-  const periodEnd = getEndOfDayInBamako(dateTo);
+  const periodStart = getStartOfDayForDate(dateFrom, timeZone);
+  const periodEnd = getEndOfDayForDate(dateTo, timeZone);
 
   const startTs = Timestamp.fromDate(periodStart);
   const endTs = Timestamp.fromDate(periodEnd);
@@ -299,7 +331,7 @@ export async function getAgencyStats(
       map.set(`${dateFrom}T${String(h).padStart(2, "0")}`, { revenue: 0, reservations: 0 });
     }
     sold.forEach((r) => {
-      const hour = getHourBamako(r.createdAt);
+      const hour = getHourInTimezone(r.createdAt, timeZone);
       const key = `${dateFrom}T${String(hour).padStart(2, "0")}`;
       const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
       curr.revenue += r.montant;
@@ -307,13 +339,17 @@ export async function getAgencyStats(
       map.set(key, curr);
     });
   } else {
-    const start = new Date(dateFrom + "T00:00:00");
-    const end = new Date(dateTo + "T23:59:59");
-    for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
-      map.set(getDateKeyBamako(new Date(t)), { revenue: 0, reservations: 0 });
+    const fromNorm = normalizeDateToYYYYMMDD(dateFrom);
+    const toNorm = normalizeDateToYYYYMMDD(dateTo);
+    let cur = dayjs.tz(`${fromNorm}T12:00:00`, timeZone);
+    for (;;) {
+      const key = cur.format("YYYY-MM-DD");
+      map.set(key, { revenue: 0, reservations: 0 });
+      if (key >= toNorm) break;
+      cur = cur.add(1, "day");
     }
     sold.forEach((r) => {
-      const key = getDateKeyBamako(r.createdAt);
+      const key = getDateKeyInTimezone(r.createdAt, timeZone);
       const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
       curr.revenue += r.montant;
       curr.reservations += r.seatsGo;
@@ -359,8 +395,8 @@ export async function getNetworkStats(
     });
   }
 
-  const [cashTx, reservationsByCreatedAt, tripInstances, busesInTransit, vehicles] = await Promise.all([
-    getCashTransactionsByDateRange(companyId, dateFrom, dateTo),
+  const [ledgerPayments, reservationsByCreatedAt, tripInstances, busesInTransit, vehicles] = await Promise.all([
+    getLedgerPaymentReceivedByPeriod(companyId, periodStart, periodEnd),
     getReservationsByCreatedAtRange(companyId, periodStart, periodEnd),
     listTripInstancesByDateRange(companyId, dateFrom, dateTo, { limitCount: 2000 }),
     getBusesInProgressCountToday(companyId),
@@ -376,8 +412,7 @@ export async function getNetworkStats(
     });
   }
 
-  const paidCash = cashTx.filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID);
-  const totalRevenue = paidCash.reduce((s, t) => s + (Number(t.amount) || 0), 0);
+  const totalRevenue = ledgerPayments.reduce((s, t) => s + (Number(t.amount) || 0), 0);
 
   const soldReservations = reservationsByCreatedAt.filter((r) => isSoldReservation(r.statut));
   const totalTickets = soldReservations.length;
@@ -438,7 +473,7 @@ export type ChartDataPoint = { date: string; revenue: number; reservations: numb
 
 /**
  * Données du graphique "Évolution CA / réservations" à partir de la MÊME source que les cartes.
- * - CA = cashTransactions (status paid), agrégé par jour ou par heure.
+ * - CA = payment_received confirmés (ledger), agrégé par jour ou par heure.
  * - Réservations = réservations créées (createdAt), non annulées, agrégées par jour ou par heure.
  * Ainsi le graphique reflète exactement les totaux affichés dans les cartes.
  */
@@ -451,12 +486,11 @@ export async function getNetworkStatsChartData(
   const periodEnd = getEndOfDayInBamako(dateTo);
   const isSingleDay = dateFrom === dateTo;
 
-  const [cashTx, reservationsByCreatedAt] = await Promise.all([
-    getCashTransactionsByDateRange(companyId, dateFrom, dateTo),
+  const [ledgerPayments, reservationsByCreatedAt] = await Promise.all([
+    getLedgerPaymentReceivedByPeriod(companyId, periodStart, periodEnd),
     getReservationsByCreatedAtRange(companyId, periodStart, periodEnd),
   ]);
 
-  const paidCash = cashTx.filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID);
   const soldReservations = reservationsByCreatedAt.filter((r) => isSoldReservation(r.statut));
 
   const map = new Map<string, { revenue: number; reservations: number }>();
@@ -466,10 +500,8 @@ export async function getNetworkStatsChartData(
       const key = `${dateFrom}T${String(h).padStart(2, "0")}`;
       map.set(key, { revenue: 0, reservations: 0 });
     }
-    paidCash.forEach((t) => {
-      const createdAt = t.createdAt as { toDate?: () => Date } | undefined;
-      const d = typeof createdAt?.toDate === "function" ? createdAt.toDate() : new Date(t.date + "T12:00:00");
-      const hour = getHourBamako(d);
+    ledgerPayments.forEach((t) => {
+      const hour = getHourBamako(t.performedAt);
       const key = `${dateFrom}T${String(hour).padStart(2, "0")}`;
       const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
       curr.revenue += Number(t.amount) || 0;
@@ -489,8 +521,8 @@ export async function getNetworkStatsChartData(
       const key = getDateKeyBamako(new Date(t));
       map.set(key, { revenue: 0, reservations: 0 });
     }
-    paidCash.forEach((t) => {
-      const key = t.date ?? getDateKeyBamako(new Date());
+    ledgerPayments.forEach((t) => {
+      const key = getDateKeyBamako(t.performedAt);
       const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
       curr.revenue += Number(t.amount) || 0;
       map.set(key, curr);

@@ -17,6 +17,7 @@ export type PassengerToDrop = {
   depart: string;
   arrivee: string;
   dropoffStatus: string;
+  boardingStatus?: string;
   connectionId?: string | null;
   tripInstanceId?: string;
   destinationStopOrder?: number | null;
