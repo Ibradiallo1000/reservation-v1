@@ -377,6 +377,76 @@ export async function ensureTripExecutionOnBoardingStart(params: {
 }
 
 /**
+ * Validation logistique: alimente/rafraîchit le vehicleSnapshot si le tripExecution existe déjà.
+ * Si le tripExecution n'existe pas encore, il sera enrichi au début d'embarquement.
+ */
+export async function refreshTripExecutionVehicleSnapshotOnAssignmentValidation(params: {
+  companyId: string;
+  agencyId: string;
+  assignmentId: string;
+}): Promise<void> {
+  const { companyId, agencyId, assignmentId } = params;
+  const asgRef = doc(db, "companies", companyId, "agences", agencyId, "tripAssignments", assignmentId);
+  const asgSnap = await getDoc(asgRef);
+  if (!asgSnap.exists()) return;
+  const asg = asgSnap.data() as Record<string, unknown>;
+  const weeklyTripId = String(asg.tripId ?? "").trim();
+  const tripExecutionDate = String(asg.date ?? "").trim();
+  const departureTime = String(asg.heure ?? "").trim();
+  const vehicleId = String(asg.vehicleId ?? "").trim();
+  if (!weeklyTripId || !tripExecutionDate || !departureTime || !vehicleId) return;
+
+  const tripInstanceId = buildTripExecutionIdFromSlot({
+    weeklyTripId,
+    tripExecutionDate,
+    departureTime,
+  });
+  const teRef = tripExecutionRef(companyId, tripInstanceId);
+  const teSnap = await getDoc(teRef);
+  if (!teSnap.exists()) return;
+
+  let plateNumber = "";
+  let driverName = "";
+  let convoyeurName = "";
+  try {
+    const [vSnap, wtSnap] = await Promise.all([
+      getDoc(vehicleRef(companyId, vehicleId)),
+      getDoc(doc(db, "companies", companyId, "agences", agencyId, "weeklyTrips", weeklyTripId)),
+    ]);
+    plateNumber = vSnap.exists() ? String((vSnap.data() as { plateNumber?: string }).plateNumber ?? "").trim() : "";
+    const departureCity = String(wtSnap.exists() ? (wtSnap.data() as any).departure ?? "" : "").trim();
+    const arrivalCity = String(wtSnap.exists() ? (wtSnap.data() as any).arrival ?? "" : "").trim();
+    const affectation = await getAffectationForBoarding(
+      companyId,
+      agencyId,
+      departureCity,
+      arrivalCity,
+      tripExecutionDate,
+      departureTime
+    ).catch(() => null);
+    driverName = String((asg as any).driverName ?? (affectation as any)?.driverName ?? "").trim();
+    convoyeurName = String((asg as any).convoyeurName ?? (affectation as any)?.convoyeurName ?? "").trim();
+  } catch {
+    /* best effort */
+  }
+
+  await setDoc(
+    teRef,
+    {
+      tripAssignmentId: assignmentId,
+      vehicleId,
+      vehicleSnapshot: {
+        plateNumber: plateNumber || undefined,
+        driverName: driverName || undefined,
+        convoyeurName: convoyeurName || undefined,
+      },
+      updatedAt: serverTimestamp(),
+    } as Partial<TripExecutionDoc>,
+    { merge: true }
+  );
+}
+
+/**
  * Upsert : status=departed, departedAt, passengersCount depuis tripAssignments.liveStatus.boardedCount.
  * + checkpoint stopOrder=1.
  */

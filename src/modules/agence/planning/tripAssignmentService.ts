@@ -31,6 +31,7 @@ import {
   applyPlanningStatsVehicleChange,
   scheduleRecomputeCompanyPlanningStats,
 } from "./planningStatsService";
+import { refreshTripExecutionVehicleSnapshotOnAssignmentValidation } from "@/modules/compagnie/tripExecutions/tripExecutionService";
 
 /** planned / validated bloquent les créneaux ; cancelled / rejected non. */
 export type TripAssignmentStatus = "planned" | "validated" | "cancelled" | "rejected";
@@ -701,6 +702,13 @@ export async function validateTripAssignment(
         updatedAt: now,
       });
     }
+  });
+  void refreshTripExecutionVehicleSnapshotOnAssignmentValidation({
+    companyId,
+    agencyId,
+    assignmentId,
+  }).catch(() => {
+    /* best effort */
   });
 }
 

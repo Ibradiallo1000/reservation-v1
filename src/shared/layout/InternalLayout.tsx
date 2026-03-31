@@ -617,9 +617,9 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
         )}
         style={{ backgroundImage: "var(--agency-gradient-header)" }}
       >
-        <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3")}>
+        <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-3 md:px-6 py-2.5 flex items-center justify-between gap-2 flex-nowrap overflow-hidden")}>
           {/* Brand */}
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             {logoUrl ? (
               <img
                 src={logoUrl}
@@ -634,7 +634,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                 <User className="w-5 h-5 text-gray-500 dark:text-slate-400" />
               </div>
             )}
-            <div className="min-w-0">
+            <div className="min-w-0 overflow-hidden">
               <div
                 className="font-bold tracking-tight truncate text-base text-gray-900 dark:text-white"
                 style={{ color: primary }}
@@ -642,7 +642,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                 {brandName}
               </div>
               {brandSubtitle && (
-                <div className="text-xs text-gray-500 dark:text-slate-400 truncate">
+                <div className="hidden sm:block text-xs text-gray-500 dark:text-slate-400 truncate">
                   {brandSubtitle}
                 </div>
               )}
@@ -650,7 +650,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
           </div>
 
           {/* Profile — top right */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600">
               <div
                 className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
@@ -668,7 +668,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
             <button
               type="button"
               onClick={cycleTheme}
-              className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
+              className="p-1.5 sm:p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
               title={isDark ? "Mode clair" : "Mode sombre"}
               aria-label={isDark ? "Mode clair" : "Mode sombre"}
             >
@@ -676,7 +676,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
             </button>
             <button
               onClick={onLogout}
-              className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
+              className="p-1.5 sm:p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
               title="Logout"
             >
               <LogOut className="w-4 h-4" />
@@ -690,7 +690,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
           style={{ backgroundImage: "var(--agency-gradient-subheader)" }}
         >
           <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-2")}>
-            <div className="flex flex-wrap gap-2 overflow-x-auto pb-1 -mb-1 scrollbar-thin">
+            <div className="flex flex-nowrap gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap pb-1 -mb-1 scrollbar-thin">
               {sections.map(({ label, icon: Icon, path, badge, end }) => (
                 <NavLink
                   key={path}
@@ -698,7 +698,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                   end={end}
                   className={({ isActive: active }) =>
                     cn(
-                      "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition",
+                      "inline-flex shrink-0 items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition",
                       active
                         ? "text-white shadow-sm"
                         : "text-gray-600 dark:text-slate-300 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-600",

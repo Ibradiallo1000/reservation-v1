@@ -1345,6 +1345,40 @@ useEffect(() => {
         }
       } catch (e: any) {
         const msg = String(e?.message || e || "");
+        const permissionDenied =
+          msg.toLowerCase().includes("missing or insufficient permissions") ||
+          msg.toLowerCase().includes("permission_denied");
+        if (permissionDenied) {
+          try {
+            // Fallback prod: write only fields accepted by strict boarding rules.
+            const current = await getDoc(resRef);
+            const currentStatut = current.exists() ? String((current.data() as Record<string, unknown>).statut ?? "") : "";
+            const nextStatut = statut === "embarqué" ? "embarque" : currentStatut;
+            await updateDoc(resRef, {
+              statutEmbarquement: statut,
+              ...(statut === "embarqué" ? { statut: nextStatut } : {}),
+              controleurId: uid,
+              checkInTime: statut === "embarqué" ? serverTimestamp() : null,
+              auditLog: arrayUnion(
+                buildStatutTransitionPayload(currentStatut, nextStatut || currentStatut, {
+                  userId: uid,
+                  userRole: (user as { role?: string })?.role ?? "controleur_embarquement",
+                })
+              ),
+              updatedAt: serverTimestamp(),
+            } as Record<string, unknown>);
+            if (!options?.suppressAlert) {
+              try {
+                new Audio("/beep.mp3").play();
+              } catch {
+                /* ignore */
+              }
+            }
+            return;
+          } catch (fallbackErr) {
+            console.error("[EMBARK][FALLBACK][ERROR]", fallbackErr);
+          }
+        }
         if (options?.suppressAlert) {
           console.error("[EMBARK][ERROR]", e);
           throw e;
