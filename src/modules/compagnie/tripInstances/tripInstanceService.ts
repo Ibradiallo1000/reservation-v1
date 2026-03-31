@@ -31,6 +31,10 @@ import {
 } from "@/modules/logistics/services/tripInstanceShipmentSync";
 import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import {
+  upsertTripExecutionTransit,
+  upsertTripExecutionArrived,
+} from "@/modules/compagnie/tripExecutions/tripExecutionService";
+import {
   TRIP_INSTANCE_COLLECTION,
   TRIP_INSTANCE_STATUS,
   tripInstanceArrival,
@@ -459,11 +463,17 @@ export async function updateTripInstanceStatus(
     void onTripInstanceStarted(companyId, tripInstanceId).catch((err) => {
       console.error("[tripInstanceService] onTripInstanceStarted failed:", err);
     });
+    void upsertTripExecutionTransit({ companyId, tripInstanceId }).catch((err) => {
+      console.error("[tripInstanceService] upsertTripExecutionTransit failed:", err);
+    });
   }
 
   if (status === TRIP_INSTANCE_STATUS.ARRIVED) {
     void onTripInstanceArrivedAuto(companyId, tripInstanceId).catch((err) => {
       console.error("[tripInstanceService] onTripInstanceArrivedAuto failed:", err);
+    });
+    void upsertTripExecutionArrived({ companyId, tripInstanceId }).catch((err) => {
+      console.error("[tripInstanceService] upsertTripExecutionArrived failed:", err);
     });
   }
 }

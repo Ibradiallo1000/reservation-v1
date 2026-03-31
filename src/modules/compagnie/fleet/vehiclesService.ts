@@ -76,6 +76,68 @@ function canonicalStatusFromStates(technicalStatus: TechnicalStatus, operational
   return CANONICAL_VEHICLE_STATUS.AVAILABLE;
 }
 
+async function markVehicleIncidentAsDisrupted(
+  companyId: string,
+  vehicleId: string,
+  reason: "maintenance" | "accidented"
+): Promise<void> {
+  const vSnap = await getDoc(vehicleRef(companyId, vehicleId));
+  if (!vSnap.exists()) return;
+  const vData = vSnap.data() as { currentAssignmentId?: string | null; currentTripId?: string | null };
+  const assignmentId = String(vData.currentAssignmentId ?? "").trim();
+  const currentTripId = String(vData.currentTripId ?? "").trim();
+  if (!assignmentId && !currentTripId) return;
+
+  let disruptedTripExecutionId: string | null = null;
+  if (currentTripId) {
+    const byIdSnap = await getDoc(doc(db, "companies", companyId, "tripExecutions", currentTripId));
+    if (byIdSnap.exists()) disruptedTripExecutionId = byIdSnap.id;
+  }
+  if (!disruptedTripExecutionId && assignmentId) {
+    const q = query(
+      collection(db, "companies", companyId, "tripExecutions"),
+      where("tripAssignmentId", "==", assignmentId),
+      limit(1)
+    );
+    const snap = await getDocs(q);
+    disruptedTripExecutionId = snap.docs[0]?.id ?? null;
+  }
+  if (disruptedTripExecutionId) {
+    await updateDoc(doc(db, "companies", companyId, "tripExecutions", disruptedTripExecutionId), {
+      status: "disrupted",
+      disruptedAt: serverTimestamp(),
+      disruptedReason: reason === "maintenance" ? "vehicle_maintenance" : "vehicle_accidented",
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const notifRef = doc(collection(db, "companies", companyId, "notifications"));
+  await setDoc(notifRef, {
+    type: "planning_vehicle_incident",
+    entityType: "planning_assignment",
+    entityId: assignmentId || currentTripId || vehicleId,
+    title: "Action logistique requise",
+    body:
+      reason === "maintenance"
+        ? `Le véhicule ${vehicleId} est en maintenance. Décider remplacement ou annulation.`
+        : `Le véhicule ${vehicleId} est accidenté. Décider remplacement ou annulation.`,
+    link: `/compagnie/${companyId}/logistics`,
+    read: false,
+    createdAt: serverTimestamp(),
+  });
+  await setDoc(doc(collection(db, "companies", companyId, "logisticsActions")), {
+    type: "vehicle_incident",
+    vehicleId,
+    tripAssignmentId: assignmentId || null,
+    tripExecutionId: disruptedTripExecutionId,
+    status: "pending",
+    decision: null,
+    reason,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 function normalizeBusNumber(raw: string): string {
   const digits = String(raw ?? "").replace(/\D+/g, "");
   if (!digits) return "";
@@ -262,9 +324,18 @@ function normalizeVehicleDoc(data: Record<string, unknown>, docId?: string): Rec
   const prepared = applyNormalizedCityAndFleetToRaw(data, { docId });
   const status = prepared.status as string | undefined;
   const hasNew = prepared.technicalStatus != null && prepared.operationalStatus != null;
+  const deriveOperationStatus = (input: Record<string, unknown>): "idle" | "planned" | "in_transit" => {
+    const explicit = String(input.operationStatus ?? "").toLowerCase();
+    if (explicit === "idle" || explicit === "planned" || explicit === "in_transit") return explicit;
+    const op = String(input.operationalStatus ?? OPERATIONAL_STATUS.GARAGE).toUpperCase();
+    if (op === OPERATIONAL_STATUS.EN_TRANSIT) return "in_transit";
+    if (op === OPERATIONAL_STATUS.AFFECTE) return "planned";
+    if (String(input.currentAssignmentId ?? "").trim()) return "planned";
+    return "idle";
+  };
   if (hasNew) {
     const fleetStatus = inferFleetStatus(prepared) as VehicleFleetStatus;
-    return { ...prepared, fleetStatus };
+    return { ...prepared, operationStatus: deriveOperationStatus(prepared), fleetStatus };
   }
   if (!status) {
     const merged = {
@@ -272,7 +343,7 @@ function normalizeVehicleDoc(data: Record<string, unknown>, docId?: string): Rec
       technicalStatus: TECHNICAL_STATUS.NORMAL,
       operationalStatus: OPERATIONAL_STATUS.GARAGE,
     };
-    return { ...merged, fleetStatus: inferFleetStatus(merged) as VehicleFleetStatus };
+    return { ...merged, operationStatus: deriveOperationStatus(merged), fleetStatus: inferFleetStatus(merged) as VehicleFleetStatus };
   }
   let technicalStatus: TechnicalStatus = TECHNICAL_STATUS.NORMAL;
   let operationalStatus: OperationalStatus = OPERATIONAL_STATUS.GARAGE;
@@ -306,7 +377,7 @@ function normalizeVehicleDoc(data: Record<string, unknown>, docId?: string): Rec
             ? "ON_TRIP"
             : "AVAILABLE";
   const merged = { ...prepared, technicalStatus, operationalStatus, canonicalStatus };
-  return { ...merged, fleetStatus: inferFleetStatus(merged) as VehicleFleetStatus };
+  return { ...merged, operationStatus: deriveOperationStatus(merged), fleetStatus: inferFleetStatus(merged) as VehicleFleetStatus };
 }
 
 export type ListVehiclesOrderBy = "plate" | "technicalStatus" | "updatedAt";
@@ -566,6 +637,7 @@ export async function setVehicleOnTripStart(
     canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
     status: VEHICLE_STATUS.EN_TRANSIT,
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
+    operationStatus: "in_transit",
     technicalStatus: TECHNICAL_STATUS.NORMAL,
     fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
     currentTripId: tripId,
@@ -585,12 +657,14 @@ export async function setVehicleOnTripEnd(
     canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
     status: VEHICLE_STATUS.GARAGE,
     operationalStatus: OPERATIONAL_STATUS.GARAGE,
+    operationStatus: "idle",
     technicalStatus: TECHNICAL_STATUS.NORMAL,
     fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
     currentCity: normalizeCity(arrivalCity || ""),
     destinationCity: null,
     lastTripId: tripId,
     currentTripId: null,
+    currentAssignmentId: null,
     updatedAt: serverTimestamp(),
   });
 }
@@ -651,6 +725,7 @@ export async function declareTransit(
 }
 
 export async function declareMaintenance(companyId: string, vehicleId: string): Promise<void> {
+  await markVehicleIncidentAsDisrupted(companyId, vehicleId, "maintenance");
   await updateDoc(vehicleRef(companyId, vehicleId), {
     status: "EN_MAINTENANCE",
     technicalStatus: TECHNICAL_STATUS.MAINTENANCE,
@@ -662,6 +737,7 @@ export async function declareMaintenance(companyId: string, vehicleId: string): 
 }
 
 export async function declareAccident(companyId: string, vehicleId: string): Promise<void> {
+  await markVehicleIncidentAsDisrupted(companyId, vehicleId, "accidented");
   await updateDoc(vehicleRef(companyId, vehicleId), {
     status: "ACCIDENTE",
     technicalStatus: TECHNICAL_STATUS.ACCIDENTE,
@@ -722,10 +798,12 @@ export async function assignVehicle(
   const affectationId = await createAffectation(companyId, agencyId, affectationData);
   await updateDoc(vehicleRef(companyId, vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.AFFECTE,
+    operationStatus: "planned",
     status: VEHICLE_STATUS.EN_SERVICE,
     canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
     fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
     currentTripId: affectationId,
+    currentAssignmentId: affectationId,
     destinationCity: payload.arrivalCity ? normalizeCity(payload.arrivalCity) : null,
     statusHistory: arrayUnion(statusEntry),
     defaultDriverName: payload.driverName ?? "",
@@ -784,8 +862,11 @@ export async function cancelAffectation(
     };
     await updateDoc(vehicleRef(companyId, aff.vehicleId), {
       operationalStatus: OPERATIONAL_STATUS.GARAGE,
+      operationStatus: "idle",
       status: VEHICLE_STATUS.GARAGE,
       fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
+      currentTripId: null,
+      currentAssignmentId: null,
       statusHistory: arrayUnion(entry),
       updatedAt: serverTimestamp(),
     });
@@ -826,6 +907,7 @@ export async function confirmDeparture(
   };
   await updateDoc(vehicleRef(companyId, vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
+    operationStatus: "in_transit",
     status: VEHICLE_STATUS.EN_TRANSIT,
     technicalStatus: TECHNICAL_STATUS.NORMAL,
     fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
@@ -864,6 +946,7 @@ export async function confirmArrival(
   };
   await updateDoc(vehicleRef(companyId, vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.GARAGE,
+    operationStatus: "idle",
     status: VEHICLE_STATUS.GARAGE,
     technicalStatus: TECHNICAL_STATUS.NORMAL,
     fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
@@ -907,12 +990,14 @@ export async function confirmDepartureAffectation(
   };
   await updateDoc(vehicleRef(companyId, aff.vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.EN_TRANSIT,
+    operationStatus: "in_transit",
     status: VEHICLE_STATUS.EN_TRANSIT,
     technicalStatus: TECHNICAL_STATUS.NORMAL,
     fleetStatus: VEHICLE_FLEET_STATUS.EN_TRANSIT,
     destinationCity: aff.arrivalCity ? normalizeCity(aff.arrivalCity) : null,
     canonicalStatus: CANONICAL_VEHICLE_STATUS.ON_TRIP,
     currentTripId: affectationId,
+    currentAssignmentId: null,
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),
   });
@@ -972,6 +1057,7 @@ export async function confirmArrivalAffectation(
   };
   await updateDoc(vehicleRef(companyId, aff.vehicleId), {
     operationalStatus: OPERATIONAL_STATUS.GARAGE,
+    operationStatus: "idle",
     status: VEHICLE_STATUS.GARAGE,
     technicalStatus: TECHNICAL_STATUS.NORMAL,
     fleetStatus: VEHICLE_FLEET_STATUS.DISPONIBLE,
@@ -979,6 +1065,7 @@ export async function confirmArrivalAffectation(
     destinationCity: null,
     canonicalStatus: CANONICAL_VEHICLE_STATUS.AVAILABLE,
     currentTripId: null,
+    currentAssignmentId: null,
     lastTripId: affectationId,
     statusHistory: arrayUnion(entry),
     updatedAt: serverTimestamp(),

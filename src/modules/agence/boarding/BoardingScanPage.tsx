@@ -11,6 +11,7 @@ import {
   BOARDING_SESSION_IN_USE_MSG,
   getVehicleCapacity,
   startBoardingSessionLock,
+  tripAssignmentDocId,
   type TripAssignmentDoc,
 } from "@/modules/agence/planning/tripAssignmentService";
 import { getOrCreateBoardingClientInstanceId, persistBoardingSlotSnapshot } from "@/modules/agence/embarquement/boardingSlotSnapshot";
@@ -45,11 +46,28 @@ const BoardingScanPage: React.FC = () => {
   const vehicleId = location.state?.vehicleId ?? null;
   const departure = location.state?.departure ?? "";
   const arrival = location.state?.arrival ?? "";
+  const deniedLockAssignments = React.useRef<Set<string>>(new Set());
+  const isPermissionDenied = (msg: string) => {
+    const m = String(msg ?? "").toLowerCase();
+    return m.includes("missing or insufficient permissions") || m.includes("permission_denied");
+  };
 
   useEffect(() => {
-    if (!companyId || !agencyId || !date || !heure || !assignmentId || !vehicleId) {
+    if (!companyId || !agencyId || !date || !heure) {
+      setBlocked("Sélectionnez un départ depuis Départs planifiés pour ouvrir le scan.");
+      setVehicleCapacity(null);
+      setResolved(true);
+      return;
+    }
+    const resolvedAssignmentId =
+      assignmentId || (tripId ? tripAssignmentDocId(tripId, date, heure) : null);
+    if (!resolvedAssignmentId) {
       setBlocked("Ce trajet n’a pas encore de véhicule assigné (créneau incomplet ou absent du tableau des départs).");
       setVehicleCapacity(null);
+      setResolved(true);
+      return;
+    }
+    if (deniedLockAssignments.current.has(resolvedAssignmentId)) {
       setResolved(true);
       return;
     }
@@ -62,7 +80,7 @@ const BoardingScanPage: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const ref = doc(db, `companies/${companyId}/agences/${agencyId}/tripAssignments/${assignmentId}`);
+        const ref = doc(db, `companies/${companyId}/agences/${agencyId}/tripAssignments/${resolvedAssignmentId}`);
         const snap = await getDoc(ref);
         if (!snap.exists()) {
           if (!cancelled) {
@@ -87,9 +105,9 @@ const BoardingScanPage: React.FC = () => {
           return;
         }
         const vidFromAssignment = String(data.vehicleId ?? "").trim();
-        if (!vidFromAssignment || vidFromAssignment !== String(vehicleId).trim()) {
+        if (!vidFromAssignment) {
           if (!cancelled) {
-            setBlocked("Le véhicule de l’affectation ne correspond pas — source tripAssignments.");
+            setBlocked("Ce trajet n’a pas encore de véhicule assigné.");
             setResolved(true);
           }
           return;
@@ -97,25 +115,31 @@ const BoardingScanPage: React.FC = () => {
         const cap = await getVehicleCapacity(companyId, vidFromAssignment);
         const clientId = getOrCreateBoardingClientInstanceId();
         try {
-          await startBoardingSessionLock(companyId, agencyId, assignmentId, uid, clientId);
+          await startBoardingSessionLock(companyId, agencyId, resolvedAssignmentId, uid, clientId);
         } catch (lockErr: unknown) {
           const lm = String((lockErr as Error)?.message ?? lockErr);
           if (!cancelled) {
             if (lm.includes(BOARDING_SESSION_IN_USE_MSG)) {
               setBlocked(BOARDING_SESSION_IN_USE_MSG);
-            } else {
-              setBlocked(lm || "Impossible de verrouiller la session d’embarquement.");
+              setVehicleCapacity(null);
+              setResolved(true);
+              return;
             }
-            setVehicleCapacity(null);
-            setResolved(true);
+            if (!isPermissionDenied(lm)) {
+              setBlocked(lm || "Impossible de verrouiller la session d’embarquement.");
+              setVehicleCapacity(null);
+              setResolved(true);
+              return;
+            }
+            deniedLockAssignments.current.add(resolvedAssignmentId);
           }
-          return;
+          console.warn("[BoardingScanPage] lock skipped due to rules permissions:", lm);
         }
         persistBoardingSlotSnapshot({
           v: 1,
           companyId,
           agencyId,
-          assignmentId,
+          assignmentId: resolvedAssignmentId,
           vehicleId: vidFromAssignment,
           tripId: tripId ?? "",
           departure: departure || undefined,
@@ -141,7 +165,7 @@ const BoardingScanPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [companyId, agencyId, date, heure, tripId, assignmentId, vehicleId, uid, departure, arrival]);
+  }, [companyId, agencyId, date, heure, tripId, assignmentId, uid, departure, arrival]);
 
   if (!resolved) {
     return (

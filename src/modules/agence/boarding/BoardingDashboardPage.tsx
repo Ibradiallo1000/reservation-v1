@@ -1,5 +1,5 @@
 // src/modules/agence/boarding/BoardingDashboardPage.tsx
-// Départs du jour : tripAssignments (planifié / validé) = source unique pour l’embarquement.
+// Départs planifiés (date sélectionnée) : tripAssignments (planifié / validé) = source unique pour l’embarquement.
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { collection, getDoc, getDocs } from "firebase/firestore";
@@ -10,6 +10,9 @@ import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState } from "@/ui
 import { Plane } from "lucide-react";
 import { listBoardingTripAssignmentsForDate } from "@/modules/agence/planning/tripAssignmentService";
 import { vehicleRef } from "@/modules/compagnie/fleet/vehiclesService";
+import DatePicker from "react-datepicker";
+import { fr } from "date-fns/locale";
+import "react-datepicker/dist/react-datepicker.css";
 
 type WeeklyTripLite = { id: string; departure: string; arrival: string };
 
@@ -43,6 +46,8 @@ const BoardingDashboardPage: React.FC = () => {
   >([]);
   const [loading, setLoading] = useState(true);
   const today = toLocalISO(new Date());
+  const [selectedDate, setSelectedDate] = useState<string>(today);
+  const selectedDateObj = new Date(`${selectedDate}T00:00:00`);
 
   useEffect(() => {
     if (!companyId) {
@@ -75,7 +80,7 @@ const BoardingDashboardPage: React.FC = () => {
             });
           });
 
-          const assignments = await listBoardingTripAssignmentsForDate(companyId, agencyId, today);
+          const assignments = await listBoardingTripAssignmentsForDate(companyId, agencyId, selectedDate);
           const plates = new Map<string, string>();
           await Promise.all(
             [...new Set(assignments.map((x) => x.vehicleId).filter(Boolean))].map(async (vid) => {
@@ -114,25 +119,76 @@ const BoardingDashboardPage: React.FC = () => {
         setLoading(false);
       }
     })();
-  }, [companyId, userAgencyId, today]);
+  }, [companyId, userAgencyId, selectedDate]);
 
   const primaryColor = (company as { couleurPrimaire?: string })?.couleurPrimaire ?? "#0ea5e9";
 
   return (
     <StandardLayoutWrapper maxWidthClass="max-w-4xl">
       <PageHeader
-        title="Départs du jour"
-        subtitle={`${formatDateLongFr(new Date())} — Source : planification (tripAssignments). Planifié ou validé logistique.`}
+        title="Départs planifiés"
+        subtitle={`${formatDateLongFr(new Date(`${selectedDate}T00:00:00`))} — Source : planification (tripAssignments). Planifié ou validé logistique.`}
         icon={Plane}
       />
+      <SectionCard title="Filtre date">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="px-2 py-1 rounded border border-gray-200 dark:border-slate-600 text-sm"
+            onClick={() => {
+              const d = new Date(`${selectedDate}T00:00:00`);
+              d.setDate(d.getDate() - 1);
+              setSelectedDate(toLocalISO(d));
+            }}
+          >
+            ◀ Jour précédent
+          </button>
+          <input
+            type="hidden"
+            value={selectedDate}
+            readOnly
+          />
+          <DatePicker
+            selected={selectedDateObj}
+            onChange={(d) => {
+              if (!d) return;
+              setSelectedDate(toLocalISO(d));
+            }}
+            dateFormat="dd/MM/yyyy"
+            locale={fr}
+            shouldCloseOnSelect
+            className="border rounded px-3 py-1 text-sm bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600 w-[120px]"
+          />
+          <button
+            type="button"
+            className="px-2 py-1 rounded border border-gray-200 dark:border-slate-600 text-sm"
+            onClick={() => {
+              const d = new Date(`${selectedDate}T00:00:00`);
+              d.setDate(d.getDate() + 1);
+              setSelectedDate(toLocalISO(d));
+            }}
+          >
+            Jour suivant ▶
+          </button>
+          {selectedDate !== today && (
+            <button
+              type="button"
+              className="px-2 py-1 rounded border border-emerald-200 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300 text-sm"
+              onClick={() => setSelectedDate(today)}
+            >
+              Revenir à aujourd&apos;hui
+            </button>
+          )}
+        </div>
+      </SectionCard>
       {loading ? (
         <p className="text-gray-600 dark:text-gray-200">Chargement…</p>
       ) : departures.length === 0 ? (
         <SectionCard title="Départs">
-          <EmptyState message="Aucun départ planifié pour aujourd’hui (tripAssignments). Planifiez un véhicule par créneau ; la logistique peut valider avant embarquement." />
+          <EmptyState message="Aucun départ planifié pour cette date (tripAssignments). Planifiez un véhicule par créneau ; la logistique peut valider avant embarquement." />
         </SectionCard>
       ) : (
-        <SectionCard title="Départs du jour">
+        <SectionCard title="Départs pour la date sélectionnée">
           <ul className="space-y-2">
             {departures.map((d) => (
               <li key={d.assignmentId}>

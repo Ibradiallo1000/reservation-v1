@@ -835,6 +835,15 @@
       "collectionId": "tripAssignments",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "vehicleId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionId": "tripAssignments",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "tripId", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "ASCENDING" },
         { "fieldPath": "heure", "order": "ASCENDING" },
@@ -857,6 +866,14 @@
       "fields": [
         { "fieldPath": "date", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionId": "tripExecutions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "destinationCity", "order": "ASCENDING" },
+        { "fieldPath": "tripExecutionDate", "order": "ASCENDING" }
       ]
     }
   ],

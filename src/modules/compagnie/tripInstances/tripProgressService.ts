@@ -20,6 +20,7 @@ import { getTripInstance } from "./tripInstanceService";
 import { tripInstanceTime } from "./tripInstanceTypes";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
 import { listTripInstancesByDateRange } from "./tripInstanceService";
+import { upsertTripExecutionDeparted, syncTripExecutionCheckpoint } from "@/modules/compagnie/tripExecutions/tripExecutionService";
 
 const PROGRESS_SUBCOLLECTION = "progress";
 
@@ -139,6 +140,9 @@ const delayMinutes = await computeDelay(companyId, tripInstanceId, stopOrder, no
       updatedAt: serverTimestamp(),
     });
   }
+
+  // Synchronise checkpoint tripExecutions (arrivalTime).
+  await syncTripExecutionCheckpoint({ companyId, tripInstanceId, stopOrder });
 }
 
 /**
@@ -163,6 +167,9 @@ export async function markDeparture(
     source: "manual",
     updatedAt: serverTimestamp(),
   });
+
+  // Synchronise checkpoint tripExecutions (departureTime).
+  await syncTripExecutionCheckpoint({ companyId, tripInstanceId, stopOrder });
 }
 
 /**
@@ -255,6 +262,9 @@ export async function markOriginDeparture(
       updatedAt: serverTimestamp(),
     });
   }
+
+  // Met à jour tripExecutions (status=departed + checkpoint stopOrder=1).
+  await upsertTripExecutionDeparted({ companyId, tripInstanceId });
 }
 
 /**
@@ -342,6 +352,9 @@ export async function ensureAutoDepartForStopIfNeeded(
     source: "auto",
     updatedAt: serverTimestamp(),
   });
+
+  // Synchronise checkpoint tripExecutions (auto departureTime).
+  await syncTripExecutionCheckpoint({ companyId, tripInstanceId, stopOrder });
   return true;
 }
 

@@ -1090,3 +1090,104 @@ export const onCompanyNotificationCreated = functions
     if (staleTokenRemovals.length) await Promise.all(staleTokenRemovals);
     return null;
   });
+
+/* =======================================================
+   TRIP EXECUTION -> VEHICLE SYNC (event-driven)
+   - Source of truth: tripExecutions
+   - Idempotent vehicle update
+   - No write-back to tripExecutions (anti-loop)
+======================================================= */
+type SyncVehicleOperationStatus = "idle" | "planned" | "boarding" | "in_transit" | "arrived";
+type SyncTripExecutionStatus = "boarding" | "departed" | "transit" | "arrived" | "finished" | "disrupted";
+
+function mapTripExecutionToVehicleStatus(status: SyncTripExecutionStatus): SyncVehicleOperationStatus | null {
+  if (status === "boarding") return "boarding";
+  if (status === "departed" || status === "transit") return "in_transit";
+  if (status === "arrived") return "arrived";
+  if (status === "finished") return "idle";
+  return null;
+}
+
+function executionSyncFingerprint(data: Record<string, any>) {
+  return JSON.stringify({
+    status: String(data.status || ""),
+    vehicleId: String(data.vehicleId || ""),
+    tripAssignmentId: String(data.tripAssignmentId || ""),
+    destinationCity: String(data.destinationCity || ""),
+  });
+}
+
+export const onTripExecutionUpdatedSyncVehicle = functions
+  .region("europe-west1")
+  .firestore.document("companies/{companyId}/tripExecutions/{tripInstanceId}")
+  .onUpdate(async (change, context) => {
+    const companyId = String(context.params.companyId || "");
+    const tripInstanceId = String(context.params.tripInstanceId || "");
+    const before = (change.before.data() || {}) as Record<string, any>;
+    const after = (change.after.data() || {}) as Record<string, any>;
+
+    // Idempotence + anti-noise: ignore updates that don't affect sync inputs.
+    if (executionSyncFingerprint(before) === executionSyncFingerprint(after)) return null;
+
+    const status = String(after.status || "") as SyncTripExecutionStatus;
+    const vehicleId = String(after.vehicleId || "").trim();
+    if (!vehicleId) return null;
+
+    const target = mapTripExecutionToVehicleStatus(status);
+    const vehicleRef = db.collection("companies").doc(companyId).collection("vehicles").doc(vehicleId);
+    const logisticsActionsRef = db.collection("companies").doc(companyId).collection("logisticsActions");
+
+    await db.runTransaction(async (tx) => {
+      const vSnap = await tx.get(vehicleRef);
+      if (!vSnap.exists) return;
+      const v = (vSnap.data() || {}) as Record<string, any>;
+
+      const technicalRaw = String(v.technicalStatus || "NORMAL").toUpperCase();
+      const isActiveTechnical = technicalRaw === "NORMAL";
+
+      // Incident path: mark logistics action only once; no write-back to tripExecution to avoid loops.
+      if (!isActiveTechnical && status !== "finished") {
+        const incidentKey = `${tripInstanceId}__${vehicleId}__incident`;
+        const actionRef = logisticsActionsRef.doc(incidentKey);
+        const actionSnap = await tx.get(actionRef);
+        if (!actionSnap.exists) {
+          tx.set(actionRef, {
+            type: "vehicle_disrupted",
+            status: "pending",
+            vehicleId,
+            tripInstanceId,
+            tripAssignmentId: String(after.tripAssignmentId || "") || null,
+            message: "Véhicule indisponible techniquement. Remplacement ou annulation requis.",
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+        return;
+      }
+
+      if (!target) return;
+      const nextTripId = target === "idle" ? null : (String(after.tripAssignmentId || "").trim() || tripInstanceId);
+      const nextAssignmentId = target === "idle" ? null : (String(after.tripAssignmentId || "").trim() || null);
+      const nextDestinationCity = target === "idle" ? null : (String(after.destinationCity || "").trim() || null);
+      const nextCurrentCity = target === "idle" ? (String(after.destinationCity || "").trim() || v.currentCity || null) : (v.currentCity || null);
+
+      const unchanged =
+        String(v.operationStatus || "") === target &&
+        String(v.currentTripId || "") === String(nextTripId || "") &&
+        String(v.currentAssignmentId || "") === String(nextAssignmentId || "") &&
+        String(v.destinationCity || "") === String(nextDestinationCity || "");
+      if (unchanged) return;
+
+      tx.update(vehicleRef, {
+        operationStatus: target,
+        currentTripId: nextTripId,
+        currentAssignmentId: nextAssignmentId,
+        destinationCity: nextDestinationCity,
+        currentCity: nextCurrentCity,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    functions.logger.info("tripExecution sync applied", { companyId, tripInstanceId, vehicleId, status });
+    return null;
+  });

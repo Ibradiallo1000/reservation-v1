@@ -27,6 +27,17 @@ export const CANONICAL_VEHICLE_STATUS = {
 
 export type CanonicalVehicleStatus = (typeof CANONICAL_VEHICLE_STATUS)[keyof typeof CANONICAL_VEHICLE_STATUS];
 
+export const VEHICLE_OPERATION_STATUS = {
+  IDLE: "idle",
+  PLANNED: "planned",
+  BOARDING: "boarding",
+  IN_TRANSIT: "in_transit",
+  ARRIVED: "arrived",
+} as const;
+
+export type VehicleOperationStatus =
+  (typeof VEHICLE_OPERATION_STATUS)[keyof typeof VEHICLE_OPERATION_STATUS];
+
 export interface VehicleDoc {
   /** Numero bus interne (001 a 999). */
   busNumber?: string;
@@ -54,6 +65,8 @@ export interface VehicleDoc {
   technicalStatus?: TechnicalStatus;
   /** Phase 1 Operational: statut opérationnel. */
   operationalStatus?: OperationalStatus;
+  /** State machine métier (disponibilité opérationnelle). */
+  operationStatus?: VehicleOperationStatus;
   currentCity: string;
   /** Agency where vehicle is physically located (when agency-scoped). */
   currentAgencyId?: string | null;
@@ -62,6 +75,8 @@ export interface VehicleDoc {
   driverId?: string | null;
   /** Trip currently assigned (weeklyTrip id or instance). Cleared when trip finishes. */
   currentTripId?: string | null;
+  /** Planning assignment currently reserving this vehicle (tripAssignments/{id}). */
+  currentAssignmentId?: string | null;
   /** Last completed trip id (set when trip finishes). */
   lastTripId?: string | null;
   /** Phase 1 Operational: historique des changements de statut. */

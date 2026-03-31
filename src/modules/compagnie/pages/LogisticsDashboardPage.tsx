@@ -3,14 +3,24 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard } from "@/ui";
+import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, ActionButton } from "@/ui";
 import { listVehicles, emergencyReplaceVehicleOnTrip } from "@/modules/compagnie/fleet/vehiclesService";
 import { getActiveAffectationByVehicle } from "@/modules/compagnie/fleet/affectationService";
 import { TECHNICAL_STATUS, OPERATIONAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
+import { deriveOperationStatus, isVehicleActiveTechnical } from "@/modules/compagnie/fleet/vehicleOperationStateMachine";
 import { getVehicleFinancialStats, type VehicleFinancialStats } from "@/modules/compagnie/fleet/fleetFinanceService";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import { db } from "@/firebaseConfig";
-import { getDocs, collection } from "firebase/firestore";
+import { getDocs, getDoc, collection, query, where, doc as fsDoc } from "firebase/firestore";
+import {
+  planningStatsDocRef,
+  scheduleRecomputeCompanyPlanningStats,
+} from "@/modules/agence/planning/planningStatsService";
+import {
+  validateTripAssignment,
+  cancelPlannedTripAssignment,
+  type TripAssignmentDoc,
+} from "@/modules/agence/planning/tripAssignmentService";
 import {
   Truck,
   Package,
@@ -28,6 +38,47 @@ import { toast } from "sonner";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 
 type DateLike = Date | { toDate?: () => Date } | null | undefined;
+type LogisticsPlanningRequest = {
+  id: string;
+  agencyId: string;
+  agencyName: string;
+  departure: string;
+  arrival: string;
+  heure: string;
+  date: string;
+  vehicleId: string;
+  vehiclePlate: string;
+  expectedPlaces: number | null;
+  status: "planned" | "validated" | "cancelled";
+};
+
+function formatDateFrLong(isoDate: string): string {
+  if (!isoDate) return "Date non renseignée";
+  const [y, m, d] = isoDate.split("-").map(Number);
+  if (!y || !m || !d) return isoDate;
+  const dt = new Date(y, m - 1, d);
+  if (Number.isNaN(dt.getTime())) return isoDate;
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(dt);
+}
+
+function planningPriorityFlags(date: string, heure: string): { isToday: boolean; isImminent: boolean } {
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = heure.split(":").map(Number);
+  if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return { isToday: false, isImminent: false };
+  const dep = new Date(y, m - 1, d, hh, mm, 0, 0);
+  const now = new Date();
+  const isToday =
+    dep.getFullYear() === now.getFullYear() &&
+    dep.getMonth() === now.getMonth() &&
+    dep.getDate() === now.getDate();
+  const deltaMs = dep.getTime() - now.getTime();
+  const isImminent = deltaMs > 0 && deltaMs <= 2 * 60 * 60 * 1000;
+  return { isToday, isImminent };
+}
 
 function toDate(value: DateLike): Date | null {
   if (!value) return null;
@@ -75,6 +126,7 @@ export default function LogisticsDashboardPage() {
     operationalStatus: string;
     currentCity?: string;
     currentTripId?: string | null;
+    currentAssignmentId?: string | null;
     canonicalStatus?: string;
     insuranceExpiryDate?: DateLike;
     inspectionExpiryDate?: DateLike;
@@ -84,6 +136,11 @@ export default function LogisticsDashboardPage() {
   const [financialStats, setFinancialStats] = useState<VehicleFinancialStats[]>([]);
   const [shipmentsCount, setShipmentsCount] = useState<{ today: number; inTransit: number }>({ today: 0, inTransit: 0 });
   const [weeklyTripsCount, setWeeklyTripsCount] = useState(0);
+  const [planningRequests, setPlanningRequests] = useState<LogisticsPlanningRequest[]>([]);
+  const [planningActionById, setPlanningActionById] = useState<Record<string, "validating" | "rejecting" | null>>({});
+  const [syncingState, setSyncingState] = useState(false);
+  const [pendingLogisticsActionsCount, setPendingLogisticsActionsCount] = useState(0);
+  const [fleetFilter, setFleetFilter] = useState<"all" | "available" | "planned" | "transit" | "maintenance">("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [emergencyIncidentVehicleId, setEmergencyIncidentVehicleId] = useState("");
@@ -113,6 +170,7 @@ export default function LogisticsDashboardPage() {
         operationalStatus: v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE,
         currentCity: v.currentCity ?? "",
         currentTripId: (v as any).currentTripId ?? null,
+        currentAssignmentId: (v as any).currentAssignmentId ?? null,
         canonicalStatus: (v as any).canonicalStatus ?? "",
         insuranceExpiryDate: (v as any).insuranceExpiryDate ?? null,
         inspectionExpiryDate: (v as any).inspectionExpiryDate ?? null,
@@ -121,6 +179,22 @@ export default function LogisticsDashboardPage() {
       }));
       setVehicles(list);
       setFinancialStats(finance);
+      const vehiclePlateById = new Map<string, string>();
+      const vehicleLabelById = new Map<string, string>();
+      list.forEach((v) => {
+        vehiclePlateById.set(v.id, v.plateNumber || v.id);
+        const bus = String(v.busNumber ?? "").trim();
+        const title = bus ? `Bus ${bus}` : "Bus";
+        const plate = v.plateNumber || v.id;
+        vehicleLabelById.set(v.id, `${title} (${plate})`);
+      });
+
+      const agencyNameById = new Map<string, string>();
+      agencesSnap.docs.forEach((ag) => {
+        const ad = ag.data() as { nom?: string; nomAgence?: string; name?: string };
+        const label = String(ad.nom ?? ad.nomAgence ?? ad.name ?? "").trim();
+        agencyNameById.set(ag.id, label || ag.id);
+      });
 
       let tripsTotal = 0;
       for (const ag of agencesSnap.docs) {
@@ -130,6 +204,68 @@ export default function LogisticsDashboardPage() {
         tripsTotal += tripsSnap.size;
       }
       setWeeklyTripsCount(tripsTotal);
+
+      const planningRows: LogisticsPlanningRequest[] = [];
+      for (const ag of agencesSnap.docs) {
+        const agencyId = ag.id;
+        const agencyName = agencyNameById.get(agencyId) ?? agencyId;
+        const taRef = collection(db, "companies", companyId, "agences", agencyId, "tripAssignments");
+        const plannedSnap = await getDocs(query(taRef, where("status", "==", "planned")));
+        const tripMetaByTripId = new Map<string, { departure: string; arrival: string }>();
+        const uniqueTripIds = Array.from(
+          new Set(
+            plannedSnap.docs
+              .map((d) => String((d.data() as TripAssignmentDoc).tripId ?? ""))
+              .filter((id) => id.length > 0)
+          )
+        );
+
+        await Promise.all(
+          uniqueTripIds.map(async (tripId) => {
+            try {
+              const wtRef = fsDoc(db, "companies", companyId, "agences", agencyId, "weeklyTrips", tripId);
+              const wtSnap = await getDoc(wtRef);
+              if (!wtSnap.exists()) return;
+              const wt = wtSnap.data() as { departure?: string; departureCity?: string; arrival?: string; arrivalCity?: string };
+              const departure = String(wt.departure ?? wt.departureCity ?? "").trim();
+              const arrival = String(wt.arrival ?? wt.arrivalCity ?? "").trim();
+              tripMetaByTripId.set(tripId, { departure, arrival });
+            } catch {
+              // ignore single trip resolution error
+            }
+          })
+        );
+
+        plannedSnap.docs.forEach((d) => {
+          const data = d.data() as TripAssignmentDoc & { departure?: string; arrival?: string };
+          const tripMeta = tripMetaByTripId.get(String(data.tripId ?? ""));
+          planningRows.push({
+            id: d.id,
+            agencyId,
+            agencyName,
+            departure: String(tripMeta?.departure ?? (data as any).departure ?? "").trim(),
+            arrival: String(tripMeta?.arrival ?? (data as any).arrival ?? "").trim(),
+            heure: String(data.heure ?? "").trim(),
+            date: String(data.date ?? "").trim(),
+            vehicleId: String(data.vehicleId ?? ""),
+            vehiclePlate: vehicleLabelById.get(String(data.vehicleId ?? "")) ?? (vehiclePlateById.get(String(data.vehicleId ?? "")) ?? "Véhicule non renseigné"),
+            expectedPlaces:
+              typeof data.liveStatus?.expectedCount === "number"
+                ? Number(data.liveStatus.expectedCount)
+                : null,
+            status: "planned",
+          });
+        });
+      }
+      planningRows.sort((a, b) => `${a.date} ${a.heure}`.localeCompare(`${b.date} ${b.heure}`));
+      setPlanningRequests(planningRows);
+
+      const statsSnap = await getDoc(planningStatsDocRef(companyId));
+      if (statsSnap.exists()) {
+        // Kept for fallback recompute trigger and backward compatibility.
+      } else {
+        scheduleRecomputeCompanyPlanningStats(companyId);
+      }
 
       const shipRef = shipmentsRef(db, companyId);
       const shipSnap = await getDocs(shipRef);
@@ -145,6 +281,15 @@ export default function LogisticsDashboardPage() {
         if (status.includes("transit") || status.includes("en_route") || status === "in_transit") inTransit++;
       });
       setShipmentsCount({ today, inTransit });
+
+      try {
+        const laSnap = await getDocs(
+          query(collection(db, "companies", companyId, "logisticsActions"), where("status", "==", "pending"))
+        );
+        setPendingLogisticsActionsCount(laSnap.size);
+      } catch {
+        setPendingLogisticsActionsCount(0);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur chargement.");
     } finally {
@@ -159,13 +304,10 @@ export default function LogisticsDashboardPage() {
   const totalVehicles = vehicles.length;
   const available = vehicles.filter(
     (v) =>
-      (v as any).canonicalStatus === "AVAILABLE" ||
-      ((v.operationalStatus === OPERATIONAL_STATUS.GARAGE) && (v.technicalStatus === TECHNICAL_STATUS.NORMAL))
+      isVehicleActiveTechnical(v as any) && deriveOperationStatus(v as any) === "idle"
   ).length;
-  const onTrip = vehicles.filter(
-    (v) =>
-      (v as any).canonicalStatus === "ON_TRIP" || v.operationalStatus === OPERATIONAL_STATUS.EN_TRANSIT
-  ).length;
+  const plannedVehiclesCount = vehicles.filter((v) => deriveOperationStatus(v as any) === "planned").length;
+  const onTrip = vehicles.filter((v) => deriveOperationStatus(v as any) === "in_transit").length;
   const inMaintenance = vehicles.filter(
     (v) => (v as any).canonicalStatus === "MAINTENANCE" || v.technicalStatus === TECHNICAL_STATUS.MAINTENANCE
   ).length;
@@ -220,6 +362,7 @@ export default function LogisticsDashboardPage() {
   const showCompliance = pageMode === "overview" || pageMode === "compliance";
   const showEmergency = pageMode === "overview" || pageMode === "emergency";
   const showIncident = pageMode === "overview" || pageMode === "emergency";
+  const pendingPlanningRequestsCount = planningRequests.filter((r) => r.status === "planned").length;
   const incidentTransitVehicles = vehicles.filter(
     (v) =>
       v.operationalStatus === OPERATIONAL_STATUS.EN_TRANSIT &&
@@ -234,6 +377,18 @@ export default function LogisticsDashboardPage() {
       v.operationalStatus === OPERATIONAL_STATUS.GARAGE &&
       v.technicalStatus === TECHNICAL_STATUS.NORMAL
   );
+  const filteredFleet = vehicles.filter((v) => {
+    if (fleetFilter === "all") return true;
+    if (fleetFilter === "available") {
+      return (
+        isVehicleActiveTechnical(v as any) && deriveOperationStatus(v as any) === "idle"
+      );
+    }
+    if (fleetFilter === "planned") return deriveOperationStatus(v as any) === "planned";
+    if (fleetFilter === "transit") return deriveOperationStatus(v as any) === "in_transit";
+    if (fleetFilter === "maintenance") return v.technicalStatus === TECHNICAL_STATUS.MAINTENANCE;
+    return true;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -291,6 +446,38 @@ export default function LogisticsDashboardPage() {
     }
   };
 
+  const handleValidatePlanningRequest = async (row: LogisticsPlanningRequest) => {
+    if (!companyId) return;
+    setPlanningActionById((prev) => ({ ...prev, [row.id]: "validating" }));
+    try {
+      setSyncingState(true);
+      await validateTripAssignment(companyId, row.agencyId, row.id);
+      setPlanningRequests((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: "validated" } : r)));
+      toast.success("Planification validée.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Impossible de valider.");
+    } finally {
+      setPlanningActionById((prev) => ({ ...prev, [row.id]: null }));
+      setTimeout(() => setSyncingState(false), 1200);
+    }
+  };
+
+  const handleRejectPlanningRequest = async (row: LogisticsPlanningRequest) => {
+    if (!companyId) return;
+    setPlanningActionById((prev) => ({ ...prev, [row.id]: "rejecting" }));
+    try {
+      setSyncingState(true);
+      await cancelPlannedTripAssignment(companyId, row.agencyId, row.id);
+      setPlanningRequests((prev) => prev.map((r) => (r.id === row.id ? { ...r, status: "cancelled" } : r)));
+      toast.success("Planification refusée.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Impossible de refuser.");
+    } finally {
+      setPlanningActionById((prev) => ({ ...prev, [row.id]: null }));
+      setTimeout(() => setSyncingState(false), 1200);
+    }
+  };
+
   return (
     <StandardLayoutWrapper>
       <PageHeader
@@ -322,15 +509,69 @@ export default function LogisticsDashboardPage() {
           <>
           {/* Fleet overview */}
           <SectionCard title="Resume flotte">
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-              <MetricCard label="Total véhicules" value={String(totalVehicles)} icon={Car} />
-              <MetricCard label="Disponibles" value={String(available)} icon={Car} />
-              <MetricCard label="En trajet" value={String(onTrip)} icon={MapPin} />
-              <MetricCard label="En maintenance" value={String(inMaintenance)} icon={Wrench} />
-              <MetricCard label="Accident" value={String(inAccident)} icon={AlertTriangle} />
+            {syncingState && (
+              <p className="mb-3 text-xs text-emerald-700 dark:text-emerald-300">Synchronisation en cours…</p>
+            )}
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-4">
+              <button type="button" className="text-left" onClick={() => setFleetFilter("all")}>
+                <MetricCard label="Total véhicules" value={String(totalVehicles)} icon={Car} className="cursor-pointer" />
+              </button>
+              <button type="button" className="text-left" onClick={() => setFleetFilter("available")}>
+                <MetricCard label="Disponibles (libres)" value={String(available)} icon={Car} className="cursor-pointer" />
+              </button>
+              <button type="button" className="text-left" onClick={() => setFleetFilter("planned")}>
+                <MetricCard label="Véhicules planifiés" value={String(plannedVehiclesCount)} icon={ClipboardList} className="cursor-pointer" />
+              </button>
+              <button type="button" className="text-left" onClick={() => setFleetFilter("transit")}>
+                <MetricCard label="En transit" value={String(onTrip)} icon={MapPin} className="cursor-pointer" />
+              </button>
+              <button type="button" className="text-left" onClick={() => setFleetFilter("maintenance")}>
+                <MetricCard label="Maintenance" value={String(inMaintenance)} icon={Wrench} className="cursor-pointer" />
+              </button>
             </div>
             {(outOfService > 0) && (
               <p className="mt-2 text-sm text-gray-500">Hors service : {outOfService}</p>
+            )}
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+              Actions logistiques en attente : <span className="font-semibold">{pendingLogisticsActionsCount}</span>
+            </p>
+            <p className="mt-2 text-xs text-gray-500">Cliquez un indicateur pour voir la liste détaillée.</p>
+          </SectionCard>
+
+          <SectionCard
+            title={`Liste détaillée — ${
+              fleetFilter === "all"
+                ? "Tous les véhicules"
+                : fleetFilter === "available"
+                  ? "Disponibles (libres)"
+                  : fleetFilter === "planned"
+                    ? "Véhicules planifiés"
+                    : fleetFilter === "transit"
+                      ? "En transit"
+                      : "Maintenance"
+            }`}
+          >
+            {filteredFleet.length === 0 ? (
+              <p className="text-sm text-gray-500">Aucun véhicule trouvé pour ce filtre.</p>
+            ) : (
+              <ul className="space-y-2">
+                {filteredFleet.slice(0, 80).map((v) => (
+                  <li key={v.id} className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-700">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        {v.busNumber ? `Bus ${v.busNumber} — ` : ""}{v.plateNumber || v.id}
+                      </span>
+                      <span className="text-xs text-gray-600 dark:text-gray-300">
+                        {v.currentCity || "Ville non renseignée"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Opérationnel: {deriveOperationStatus(v as any)} · Technique: {v.technicalStatus}
+                      {String(v.currentAssignmentId ?? "").trim() ? " · Planifié" : ""}
+                    </p>
+                  </li>
+                ))}
+              </ul>
             )}
           </SectionCard>
           </>
@@ -410,6 +651,107 @@ export default function LogisticsDashboardPage() {
             <p className="mt-2 text-sm text-gray-500">
               Données : weeklyTrips par agence ; véhicules avec currentTripId. Détail sur le tableau de bord Garage.
             </p>
+          </SectionCard>
+          </>
+          )}
+
+          {showOverview && (
+          <>
+          <SectionCard title="Demandes de planification">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                {pendingPlanningRequestsCount} demande{pendingPlanningRequestsCount > 1 ? "s" : ""} en attente
+              </p>
+            </div>
+            {planningRequests.length === 0 ? (
+              <p className="text-sm text-gray-500">Aucune demande de planification en attente.</p>
+            ) : (
+              <div className="space-y-3">
+                {planningRequests.map((row) => {
+                  const actionState = planningActionById[row.id] ?? null;
+                  const { isToday, isImminent } = planningPriorityFlags(row.date, row.heure);
+                  return (
+                    <div key={row.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="space-y-1">
+                          <p className="font-semibold text-gray-900 dark:text-white">
+                            {(row.departure && row.arrival) ? `${row.departure} → ${row.arrival}` : "Trajet non renseigné"}
+                          </p>
+                          <p className="text-sm text-gray-600 dark:text-gray-300">
+                            {formatDateFrLong(row.date)} à {row.heure || "—"}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isImminent && (
+                            <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
+                              Départ imminent
+                            </span>
+                          )}
+                          {!isImminent && isToday && (
+                            <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
+                              Aujourd&apos;hui
+                            </span>
+                          )}
+                          {row.status === "planned" && (
+                            <span className="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-semibold text-orange-700">
+                              En attente
+                            </span>
+                          )}
+                          {row.status === "validated" && (
+                            <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700">
+                              Validé
+                            </span>
+                          )}
+                          {row.status === "cancelled" && (
+                            <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
+                              Refusé
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-3 min-h-[88px]">
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Véhicule</p>
+                          <p className="text-sm font-semibold text-gray-900 dark:text-white break-words">{row.vehiclePlate}</p>
+                        </div>
+                        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-3 min-h-[88px]">
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Agence</p>
+                          <p className="text-sm font-semibold text-gray-900 dark:text-white break-words">{row.agencyName}</p>
+                        </div>
+                        <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-3 min-h-[88px]">
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Passagers prévus</p>
+                          <p className="text-sm font-semibold text-gray-900 dark:text-white">{row.expectedPlaces ?? 0}</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        {row.status === "planned" && (
+                          <>
+                            <ActionButton
+                              size="sm"
+                              variant="primary"
+                              disabled={actionState != null}
+                              onClick={() => void handleValidatePlanningRequest(row)}
+                            >
+                              {actionState === "validating" ? "Validation..." : "Valider"}
+                            </ActionButton>
+                            <ActionButton
+                              size="sm"
+                              variant="secondary"
+                              disabled={actionState != null}
+                              onClick={() => void handleRejectPlanningRequest(row)}
+                            >
+                              {actionState === "rejecting" ? "Refus..." : "Refuser"}
+                            </ActionButton>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </SectionCard>
           </>
           )}

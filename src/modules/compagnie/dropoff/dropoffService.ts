@@ -6,6 +6,7 @@
 import { collectionGroup, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { ensureProgressArrival } from "@/modules/compagnie/tripInstances/tripProgressService";
+import { maybeFinishTripExecutionAfterFinalDropoff } from "@/modules/compagnie/tripExecutions/tripExecutionService";
 
 const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "validé"];
 
@@ -80,11 +81,18 @@ export async function markDropped(
 ): Promise<void> {
   const ref = doc(db, "companies", companyId, "agences", agencyId, "reservations", reservationId);
   const snap = await getDoc(ref);
+  let tiId: string | undefined;
+  let destinationStopOrder: number | null = null;
   if (snap.exists()) {
     const d = snap.data() as { tripInstanceId?: string; destinationStopOrder?: number };
-    const tiId = d.tripInstanceId;
-    const stopOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
-    if (tiId && stopOrder != null) await ensureProgressArrival(companyId, tiId, stopOrder);
+    tiId = d.tripInstanceId;
+    destinationStopOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
+    if (tiId && destinationStopOrder != null) await ensureProgressArrival(companyId, tiId, destinationStopOrder);
   }
   await updateDoc(ref, { dropoffStatus: "dropped", journeyStatus: "dropped" });
+
+  // finished (v2) : passe en "finished" uniquement si plus de passagers en attente de descente sur la dernière escale.
+  if (tiId && destinationStopOrder != null) {
+    await maybeFinishTripExecutionAfterFinalDropoff({ companyId, tripInstanceId: tiId, destinationStopOrder });
+  }
 }

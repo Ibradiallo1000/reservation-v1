@@ -4,7 +4,7 @@ import { useParams } from "react-router-dom";
 import { StandardLayoutWrapper, PageHeader, SectionCard, StatusBadge } from "@/ui";
 import type { StatusVariant } from "@/ui";
 import { useAuth } from "@/contexts/AuthContext";
-import { Timestamp, type DocumentSnapshot } from "firebase/firestore";
+import { Timestamp, type DocumentSnapshot, collection, getDocs, query, where, limit } from "firebase/firestore";
 import {
   listVehiclesPaginated,
   createVehicle,
@@ -33,6 +33,7 @@ import { Truck, Loader2, Plus, X, Pencil, Archive } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { toast } from "sonner";
+import { db } from "@/firebaseConfig";
 
 type VehicleRow = {
   id: string;
@@ -44,6 +45,7 @@ type VehicleRow = {
   status: string;
   technicalStatus: string;
   operationalStatus: string;
+  canonicalStatus?: string;
   currentCity: string;
   destinationCity?: string | null;
   createdAt?: { toDate?: () => Date } | Date | null;
@@ -100,6 +102,19 @@ function formatCreatedAt(createdAt: VehicleRow["createdAt"]): string {
         ? createdAt
         : null;
   return d ? format(d, "dd/MM/yyyy HH:mm", { locale: fr }) : "—";
+}
+
+function fleetSchedulingStatusLabel(
+  v: VehicleRow,
+  planned: Record<string, boolean>
+): { label: string; className: string } {
+  if (v.operationalStatus === OPERATIONAL_STATUS.EN_TRANSIT || v.canonicalStatus === "ON_TRIP") {
+    return { label: "En transit", className: "text-sky-700 dark:text-sky-300 font-medium" };
+  }
+  if (planned[v.id]) {
+    return { label: "Planifié", className: "text-amber-700 dark:text-amber-300 font-medium" };
+  }
+  return { label: "Libre", className: "text-emerald-700 dark:text-emerald-300 font-medium" };
 }
 
 function normalizeBusNumberUi(raw: string): string {
@@ -185,6 +200,7 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
   const [orderByField, setOrderByField] = useState<ListVehiclesOrderBy>("plate");
   const [hasMorePages, setHasMorePages] = useState(false);
   const nextPageCursorRef = useRef<DocumentSnapshot | null>(null);
+  const [plannedVehicleIds, setPlannedVehicleIds] = useState<Record<string, boolean>>({});
 
   const routeFilter: ViewFilter =
     view === "maintenance"
@@ -222,6 +238,7 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
           status: (v as any).status ?? "GARAGE",
           technicalStatus: (v as any).technicalStatus ?? TECHNICAL_STATUS.NORMAL,
           operationalStatus: (v as any).operationalStatus ?? OPERATIONAL_STATUS.GARAGE,
+          canonicalStatus: String((v as any).canonicalStatus ?? ""),
           currentCity: v.currentCity ?? "",
           destinationCity: (v as any).destinationCity ?? null,
           updatedAt: (v as any).updatedAt ?? null,
@@ -244,6 +261,42 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
   useEffect(() => {
     load(0);
   }, [load]);
+
+  useEffect(() => {
+    if (!companyId) {
+      setPlannedVehicleIds({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const todayIso = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-${String(new Date().getDate()).padStart(2, "0")}`;
+      try {
+        const agSnap = await getDocs(collection(db, "companies", companyId, "agences"));
+        const m: Record<string, boolean> = {};
+        for (const ag of agSnap.docs) {
+          const taSnap = await getDocs(
+            query(
+              collection(db, "companies", companyId, "agences", ag.id, "tripAssignments"),
+              where("date", ">=", todayIso),
+              limit(500)
+            )
+          );
+          taSnap.docs.forEach((d) => {
+            const data = d.data() as { status?: string; vehicleId?: string };
+            if ((data.status === "planned" || data.status === "validated") && data.vehicleId) {
+              m[String(data.vehicleId)] = true;
+            }
+          });
+        }
+        if (!cancelled) setPlannedVehicleIds(m);
+      } catch {
+        if (!cancelled) setPlannedVehicleIds({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -382,7 +435,7 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
   const handlePhase1VehicleMigration = async () => {
     if (!companyId || phase1MigrationRunning) return;
     const ok = window.confirm(
-      "Migration Phase 1 (unique recommandée) : normalisation des villes, recalcul fleetStatus, suppression des champs villeActuelle / ville_actuelle. Continuer ?"
+      "Normaliser les villes, recalculer fleetStatus et supprimer les champs villeActuelle / ville_actuelle ?"
     );
     if (!ok) return;
     setPhase1MigrationRunning(true);
@@ -604,7 +657,7 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
               disabled={phase1MigrationRunning || backfillRunning}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-sm hover:bg-amber-100 disabled:opacity-50"
             >
-              {phase1MigrationRunning ? "Migration Phase 1…" : "Migration Phase 1 (villes / statuts)"}
+              {phase1MigrationRunning ? "Migration…" : "Migration données véhicules"}
             </button>
           </>
         )}
@@ -685,6 +738,7 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
                   <th className="p-3 font-medium text-slate-700">Année</th>
                   <th className="p-3 font-medium text-slate-700">Opérationnel</th>
                   <th className="p-3 font-medium text-slate-700">Technique</th>
+                  <th className="p-3 font-medium text-slate-700">Statut planification</th>
                   <th className="p-3 font-medium text-slate-700">Ville actuelle</th>
                   <th className="p-3 font-medium text-slate-700">Destination</th>
                   <th className="p-3 font-medium text-slate-700">Date ajout</th>
@@ -696,6 +750,7 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
               <tbody>
                 {filteredVehicles.map((v) => {
                   const isActioning = actioningId === v.id;
+                  const sched = fleetSchedulingStatusLabel(v, plannedVehicleIds);
                   return (
                     <tr key={v.id} className="border-b hover:bg-slate-50/50">
                       <td className="p-3 font-semibold text-slate-700">{(v as any).busNumber ?? (v as any).fleetNumber ?? "—"}</td>
@@ -708,6 +763,9 @@ export default function GarageDashboardPage({ view, embedded = false }: GarageDa
                       </td>
                       <td className="p-3">
                         <StatusBadge status={statusToVariant(v.status)}>{TECHNICAL_LABELS[v.technicalStatus] ?? v.technicalStatus}</StatusBadge>
+                      </td>
+                      <td className="p-3">
+                        <span className={sched.className}>{sched.label}</span>
                       </td>
                       <td className="p-3">{v.currentCity}</td>
                       <td className="p-3">{v.destinationCity ?? "—"}</td>

@@ -18,6 +18,8 @@ import {
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
+import DatePicker from "react-datepicker";
+import { fr } from "date-fns/locale";
 import { useLocation } from "react-router-dom";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { createFleetMovementPayload, buildVehicleTransitionToInTransit } from "@/modules/agence/fleet/fleetStateMachine";
@@ -52,6 +54,11 @@ import {
   type TripAssignmentDoc,
 } from "@/modules/agence/planning/tripAssignmentService";
 import {
+  buildTripExecutionIdFromSlot,
+  ensureTripExecutionOnBoardingStart,
+  tripExecutionRef,
+} from "@/modules/compagnie/tripExecutions/tripExecutionService";
+import {
   clearBoardingSlotSnapshot,
   getOrCreateBoardingClientInstanceId,
   loadBoardingSlotSnapshot,
@@ -60,13 +67,14 @@ import {
   type BoardingSlotSnapshotV1,
 } from "@/modules/agence/embarquement/boardingSlotSnapshot";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
-import { Plane, CheckCircle, AlertTriangle } from "lucide-react";
+import { Bus, CheckCircle, AlertTriangle } from "lucide-react";
 import {
   addToBoardingQueue,
   getUnsyncedBoardingQueue,
   markBoardingQueueSynced,
 } from "@/modules/agence/embarquement/boardingQueue";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
+import "react-datepicker/dist/react-datepicker.css";
 
 const FAST_BOARDING_OVERLAY_DURATION_MS = 1200;
 const INVALID_RESERVATION_STATUT = "invalide";
@@ -326,6 +334,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const [selectedDate, setSelectedDate] = useState<string>(
     location.state?.date || toLocalISO(new Date())
   );
+  const selectedDateObj = useMemo(() => new Date(`${selectedDate}T00:00:00`), [selectedDate]);
 
   const [weeklyForDay, setWeeklyForDay] = useState<WeeklyTrip[]>([]);
   const [dayAssignments, setDayAssignments] = useState<Array<TripAssignmentDoc & { id: string }>>([]);
@@ -338,7 +347,29 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const [selectedTrip, setSelectedTrip] = useState<SelectedTrip | null>(null);
 
   const capacityLimit = vehicleCapacity != null ? vehicleCapacity : resolvedVehicleCapacity;
-  const assignmentStatusBadge = boardingAssignmentStatusProp ?? activeBoardingAssignment?.status ?? null;
+  const assignmentStatusBadge = activeBoardingAssignment?.status ?? null;
+  const fallbackBoardingAssignment = useMemo(() => {
+    if (!selectedTrip) return null;
+    const match = dayAssignments.find((a) => {
+      const sameTrip = String(a.tripId ?? "") === String(selectedTrip.id ?? "");
+      const sameHeure = String(a.heure ?? "").trim() === String(selectedTrip.heure ?? "").trim();
+      const statusOk = a.status === "planned" || a.status === "validated";
+      const hasVehicle = String(a.vehicleId ?? "").trim().length > 0;
+      return sameTrip && sameHeure && statusOk && hasVehicle;
+    });
+    if (!match) return null;
+    return {
+      id: match.id,
+      vehicleId: String(match.vehicleId ?? "").trim(),
+      status: (match.status === "validated" ? "validated" : "planned") as "planned" | "validated",
+    };
+  }, [selectedTrip, dayAssignments]);
+  const hasOperationalAssignment = !!(activeBoardingAssignment || fallbackBoardingAssignment);
+
+  useEffect(() => {
+    if (activeBoardingAssignment || !fallbackBoardingAssignment) return;
+    setActiveBoardingAssignment(fallbackBoardingAssignment);
+  }, [activeBoardingAssignment, fallbackBoardingAssignment]);
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -363,6 +394,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const lockHeldRef = useRef<{ companyId: string; agencyId: string; assignmentId: string; clientId: string } | null>(
     null
   );
+  const lockPermissionDeniedRef = useRef<Set<string>>(new Set());
   const activeAssignmentIdRef = useRef<string | null>(null);
   activeAssignmentIdRef.current = activeBoardingAssignment?.id ?? null;
   /** Évite de réimposer le snapshot local après que l’utilisateur ait désélectionné le créneau (hors ligne). */
@@ -413,6 +445,14 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const dateAgencyKeyRef = useRef<string>("");
   useEffect(() => {
     if (!companyId) return;
+    const navState = location.state as
+      | { agencyId?: string; date?: string; assignmentId?: string; vehicleId?: string }
+      | undefined;
+    const keepAssignmentFromNavState =
+      !!navState?.assignmentId &&
+      !!navState?.vehicleId &&
+      navState?.agencyId === (selectedAgencyId ?? undefined) &&
+      navState?.date === selectedDate;
     const key = `${selectedDate}|${selectedAgencyId ?? ""}`;
     const prevKey = dateAgencyKeyRef.current;
     if (!prevKey) {
@@ -420,6 +460,10 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
       return;
     }
     if (prevKey === key) return;
+    if (keepAssignmentFromNavState) {
+      dateAgencyKeyRef.current = key;
+      return;
+    }
     const pipeIdx = prevKey.indexOf("|");
     const oldAgencyOnly = pipeIdx >= 0 ? prevKey.slice(pipeIdx + 1) : "";
     dateAgencyKeyRef.current = key;
@@ -432,7 +476,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     boardingSlotSnapshotRef.current = null;
     offlineHydratedKeyRef.current = "";
     if (oldAgencyOnly) clearBoardingSlotSnapshot(companyId, oldAgencyOnly);
-  }, [selectedDate, selectedAgencyId, companyId, isOnline]);
+  }, [selectedDate, selectedAgencyId, companyId, isOnline, location.state]);
 
   /** Phase 3.5 — reprise hors ligne : une restauration auto par (agence, date, assignment) tant que le snapshot existe. */
   useEffect(() => {
@@ -474,11 +518,46 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     const targetVehicleId = activeBoardingAssignment.vehicleId;
     const targetStatus = activeBoardingAssignment.status;
     const clientId = getOrCreateBoardingClientInstanceId();
+    if (lockHeldRef.current?.assignmentId === targetAssignmentId) return;
+    if (lockPermissionDeniedRef.current.has(targetAssignmentId)) return;
     let cancelled = false;
 
     void (async () => {
       try {
-        await startBoardingSessionLock(companyId, selectedAgencyId, targetAssignmentId, uid, clientId);
+        let lockGranted = false;
+        try {
+          await startBoardingSessionLock(companyId, selectedAgencyId, targetAssignmentId, uid, clientId);
+          lockGranted = true;
+        } catch (e: unknown) {
+          const msg = String((e as Error)?.message ?? e);
+          const m = msg.toLowerCase();
+          const permissionDenied =
+            m.includes("missing or insufficient permissions") || m.includes("permission_denied");
+          if (msg.includes(BOARDING_SESSION_IN_USE_MSG)) {
+            throw e;
+          }
+          if (!permissionDenied) {
+            throw e;
+          }
+          // Degraded mode: continue without Firestore lock when rules reject the lock write.
+          lockPermissionDeniedRef.current.add(targetAssignmentId);
+          console.warn("[AgenceEmbarquementPage] lock skipped due to rules permissions:", msg);
+        }
+        // Crée / upsert l’exécution de trajet au début de l’embarquement.
+        // On le fait après le verrou boardingSession pour limiter les créations concurrentes.
+        if (selectedTrip?.id) {
+          await ensureTripExecutionOnBoardingStart({
+            companyId,
+            tripAssignmentId: targetAssignmentId,
+            vehicleId: targetVehicleId,
+            departureAgencyId: selectedAgencyId,
+            departureCity: selectedTrip.departure,
+            weeklyTripId: selectedTrip.id,
+            tripExecutionDate: selectedDate,
+            departureTime: selectedTrip.heure,
+            targetArrivalCity: selectedTrip.arrival,
+          });
+        }
         if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
         const cap = await getVehicleCapacity(companyId, targetVehicleId);
         if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
@@ -500,12 +579,14 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
         };
         persistBoardingSlotSnapshot(snap);
         boardingSlotSnapshotRef.current = snap;
-        lockHeldRef.current = {
-          companyId,
-          agencyId: selectedAgencyId,
-          assignmentId: targetAssignmentId,
-          clientId,
-        };
+        lockHeldRef.current = lockGranted
+          ? {
+              companyId,
+              agencyId: selectedAgencyId,
+              assignmentId: targetAssignmentId,
+              clientId,
+            }
+          : null;
       } catch (e: unknown) {
         const msg = String((e as Error)?.message ?? e);
         if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
@@ -676,6 +757,103 @@ useEffect(() => {
     (async () => {
       let immat = "";
       let bus = "";
+      let chauffeur = "";
+      let chauffeurPhone = "";
+      let chef = "";
+      let chefPhone = "";
+      let assignmentIdFromExecution = "";
+      const tripExecutionId = selectedTrip.id
+        ? buildTripExecutionIdFromSlot({
+            weeklyTripId: selectedTrip.id,
+            tripExecutionDate: selectedDate,
+            departureTime: heure,
+          })
+        : "";
+
+      if (tripExecutionId) {
+        try {
+          const teSnap = await getDoc(tripExecutionRef(companyId, tripExecutionId));
+          if (teSnap.exists()) {
+            const te = teSnap.data() as {
+              tripAssignmentId?: string;
+              vehicleSnapshot?: { plateNumber?: string; driverName?: string; convoyeurName?: string };
+            };
+            assignmentIdFromExecution = String(te.tripAssignmentId ?? "").trim();
+            immat = String(te.vehicleSnapshot?.plateNumber ?? "").trim() || immat;
+            chauffeur = String(te.vehicleSnapshot?.driverName ?? "").trim() || chauffeur;
+            chef = String(te.vehicleSnapshot?.convoyeurName ?? "").trim() || chef;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const assignmentId = assignmentIdFromExecution || String(activeBoardingAssignment?.id ?? "").trim();
+      if (assignmentId) {
+        try {
+          const asgSnap = await getDoc(
+            doc(db, "companies", companyId, "agences", selectedAgencyId, "tripAssignments", assignmentId)
+          );
+          if (asgSnap.exists() && !cancelled) {
+            const ad = asgSnap.data() as {
+              vehicleId?: string;
+              driverName?: string;
+              convoyeurName?: string;
+              driverPhone?: string;
+              convoyeurPhone?: string;
+            };
+            chauffeur = String(ad.driverName ?? "").trim() || chauffeur;
+            chef = String(ad.convoyeurName ?? "").trim() || chef;
+            chauffeurPhone = String(ad.driverPhone ?? "").trim() || chauffeurPhone;
+            chefPhone = String(ad.convoyeurPhone ?? "").trim() || chefPhone;
+            if (!immat && ad.vehicleId) {
+              const vs2 = await getDoc(vehicleRef(companyId, String(ad.vehicleId).trim()));
+              if (vs2.exists() && !cancelled) {
+                const vd2 = vs2.data() as { plateNumber?: string; model?: string };
+                immat = String(vd2.plateNumber ?? "").trim() || immat;
+                bus = String(vd2.model ?? "").trim() || bus;
+              }
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      const effectiveVehicleId = String(activeBoardingAssignment?.vehicleId ?? "").trim();
+      if (effectiveVehicleId) {
+        try {
+          const crewSnap = await getDocs(
+            query(collection(db, `companies/${companyId}/personnel`), where("assignedVehicleId", "==", effectiveVehicleId))
+          );
+          if (!cancelled && !crewSnap.empty) {
+            const toFullName = (d: Record<string, unknown>) => {
+              const last = String(d.lastName ?? "").trim();
+              const first = String(d.firstName ?? "").trim();
+              const full = String(d.fullName ?? "").trim();
+              return [last, first].filter(Boolean).join(" ").trim() || full;
+            };
+            const drivers = crewSnap.docs
+              .map((x) => x.data() as Record<string, unknown>)
+              .filter((d) => d.active !== false && d.isAvailable !== false && String(d.crewRole ?? "").trim() === "driver");
+            const convoyeurs = crewSnap.docs
+              .map((x) => x.data() as Record<string, unknown>)
+              .filter((d) => d.active !== false && d.isAvailable !== false && String(d.crewRole ?? "").trim() === "convoyeur");
+            const d0 = drivers[0];
+            const c0 = convoyeurs[0];
+            if (d0) {
+              chauffeur = chauffeur || toFullName(d0);
+              chauffeurPhone = chauffeurPhone || String(d0.phone ?? "").trim();
+            }
+            if (c0) {
+              chef = chef || toFullName(c0);
+              chefPhone = chefPhone || String(c0.phone ?? "").trim();
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
       if (activeBoardingAssignment?.vehicleId) {
         try {
           const vs = await getDoc(vehicleRef(companyId, activeBoardingAssignment.vehicleId));
@@ -692,14 +870,14 @@ useEffect(() => {
         () => null
       );
       if (cancelled) return;
-      if (a || immat || bus) {
+      if (a || immat || bus || chauffeur || chef) {
         setAssign({
           bus: bus || ((a as any)?.vehicleModel ?? ""),
           immat: immat || ((a as any)?.vehiclePlate ?? ""),
-          chauffeur: (a as any)?.driverName ?? "",
-          chauffeurPhone: (a as any)?.driverPhone ?? "",
-          chef: (a as any)?.convoyeurName ?? "",
-          chefPhone: (a as any)?.convoyeurPhone ?? "",
+          chauffeur: chauffeur || ((a as any)?.driverName ?? ""),
+          chauffeurPhone: chauffeurPhone || ((a as any)?.driverPhone ?? ""),
+          chef: chef || ((a as any)?.convoyeurName ?? ""),
+          chefPhone: chefPhone || ((a as any)?.convoyeurPhone ?? ""),
         });
       }
     })();
@@ -2033,6 +2211,9 @@ useEffect(() => {
         const k = `${trip.id}|${h}`;
         covered.add(k);
         const a = assignMap.get(k);
+        const vehicleId = String(a?.vehicleId ?? "").trim();
+        const hasOperationalAssignment =
+          !!a && (a.status === "planned" || a.status === "validated") && vehicleId.length > 0;
         rows.push({
           key: k,
           tripId: trip.id,
@@ -2040,10 +2221,14 @@ useEffect(() => {
           arrival: trip.arrival,
           heure: h,
           assignmentId: a?.id,
-          vehicleId: a?.vehicleId,
+          vehicleId: vehicleId || undefined,
           assignmentStatus:
-            a?.status === "validated" ? "validated" : a?.status === "planned" ? "planned" : undefined,
-          hasAssignment: !!(a && (a.status === "planned" || a.status === "validated")),
+            hasOperationalAssignment
+              ? a?.status === "validated"
+                ? "validated"
+                : "planned"
+              : undefined,
+          hasAssignment: hasOperationalAssignment,
         });
       }
     });
@@ -2060,9 +2245,13 @@ useEffect(() => {
         arrival: trip?.arrival ?? "—",
         heure: a.heure,
         assignmentId: a.id,
-        vehicleId: a.vehicleId,
-        assignmentStatus: a.status === "validated" ? "validated" : "planned",
-        hasAssignment: true,
+        vehicleId: String(a.vehicleId ?? "").trim() || undefined,
+        assignmentStatus: String(a.vehicleId ?? "").trim()
+          ? a.status === "validated"
+            ? "validated"
+            : "planned"
+          : undefined,
+        hasAssignment: String(a.vehicleId ?? "").trim().length > 0,
       });
     });
     rows.sort((a, b) => {
@@ -2086,13 +2275,25 @@ useEffect(() => {
           key={row.key}
           type="button"
           onClick={async () => {
+            const fallback = dayAssignments.find((a) => {
+              const sameTrip = String(a.tripId ?? "") === row.tripId;
+              const sameHeure = String(a.heure ?? "").trim() === String(row.heure ?? "").trim();
+              const statusOk = a.status === "planned" || a.status === "validated";
+              const hasVehicle = String(a.vehicleId ?? "").trim().length > 0;
+              return sameTrip && sameHeure && statusOk && hasVehicle;
+            });
+            const effectiveAssignmentId = row.assignmentId ?? fallback?.id;
+            const effectiveVehicleId = row.vehicleId ?? (String(fallback?.vehicleId ?? "").trim() || undefined);
+            const effectiveStatus: "planned" | "validated" | undefined =
+              row.assignmentStatus ?? (fallback ? (fallback.status === "validated" ? "validated" : "planned") : undefined);
+
             setSelectedTrip({
               id: row.tripId,
               departure: row.departure,
               arrival: row.arrival,
               heure: row.heure,
             });
-            if (!row.hasAssignment || !row.assignmentId || !row.vehicleId || !row.assignmentStatus) {
+            if (!effectiveAssignmentId || !effectiveVehicleId || !effectiveStatus) {
               const held = lockHeldRef.current;
               if (held && isOnline) {
                 await closeBoardingSessionLock(held.companyId, held.agencyId, held.assignmentId, held.clientId).catch(() => {});
@@ -2112,7 +2313,7 @@ useEffect(() => {
                 snapshotMatchesSelection(snap, {
                   companyId,
                   agencyId: selectedAgencyId,
-                  assignmentId: row.assignmentId,
+                  assignmentId: effectiveAssignmentId,
                   date: selectedDate,
                 })
               ) {
@@ -2131,14 +2332,14 @@ useEffect(() => {
               return;
             }
             const held = lockHeldRef.current;
-            if (held && held.assignmentId !== row.assignmentId) {
+            if (held && held.assignmentId !== effectiveAssignmentId) {
               await closeBoardingSessionLock(held.companyId, held.agencyId, held.assignmentId, held.clientId).catch(() => {});
               lockHeldRef.current = null;
             }
             setActiveBoardingAssignment({
-              id: row.assignmentId,
-              vehicleId: row.vehicleId,
-              status: row.assignmentStatus,
+              id: effectiveAssignmentId,
+              vehicleId: effectiveVehicleId,
+              status: effectiveStatus,
             });
           }}
           className={`px-3 py-2 rounded-lg text-sm font-medium shadow-sm flex flex-col items-start gap-1 ${
@@ -2188,7 +2389,7 @@ useEffect(() => {
           title="Liste d'embarquement"
           subtitle={
             selectedTrip
-              ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedDate} ${selectedTrip.heure}${
+              ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${humanDate} ${selectedTrip.heure}${
                   assignmentStatusBadge
                     ? assignmentStatusBadge === "validated"
                       ? " • Validé (logistique)"
@@ -2197,7 +2398,7 @@ useEffect(() => {
                 }`
               : undefined
           }
-          icon={Plane}
+          icon={Bus}
         />
         <div
           className="flex items-center gap-2 shrink-0 rounded-full px-3 py-1.5 text-sm font-medium"
@@ -2340,11 +2541,16 @@ useEffect(() => {
             >
               ◀ Jour précédent
             </button>
-            <input
-              type="date"
-              className="border rounded px-3 py-1"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
+            <DatePicker
+              selected={selectedDateObj}
+              onChange={(d) => {
+                if (!d) return;
+                setSelectedDate(toLocalISO(d));
+              }}
+              dateFormat="dd/MM/yyyy"
+              locale={fr}
+              shouldCloseOnSelect
+              className="border rounded px-3 py-1 w-[120px] bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600"
             />
             <button
               className="px-2 py-1 rounded border"
@@ -2368,7 +2574,7 @@ useEffect(() => {
               trajetButtons
             )}
           </div>
-          {selectedTrip && !activeBoardingAssignment ? (
+          {selectedTrip && !hasOperationalAssignment ? (
             <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
               Ce trajet n’a pas encore de véhicule assigné (tripAssignment). Embarquement et scan sont désactivés jusqu’à planification.
             </div>
@@ -2460,7 +2666,7 @@ useEffect(() => {
                 scanOn ? "bg-emerald-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-slate-700 dark:text-gray-200"
               }`}
               title="Activer le scanner (QR / code-barres)"
-              disabled={!selectedTrip || !selectedAgencyId || !activeBoardingAssignment}
+              disabled={!selectedTrip || !selectedAgencyId || !hasOperationalAssignment}
             >
               {scanOn ? "Scanner ON" : "Scanner OFF"}
             </button>
@@ -2523,7 +2729,7 @@ useEffect(() => {
               type="submit"
               className="px-3 py-2 rounded-lg text-white text-sm"
               style={{ background: primary }}
-              disabled={(!selectedAgencyId && !userAgencyId) || !activeBoardingAssignment}
+              disabled={(!selectedAgencyId && !userAgencyId) || !hasOperationalAssignment}
             >
               Valider
             </button>

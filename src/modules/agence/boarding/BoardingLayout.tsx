@@ -11,7 +11,7 @@ import type { Company } from "@/types/companyTypes";
 import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts } from "@/modules/agence/shared";
 
 const BOARDING_SECTIONS: NavSection[] = [
-  { label: "Départs du jour", icon: LayoutDashboard, path: "/agence/boarding", end: true },
+  { label: "Départs planifiés", icon: LayoutDashboard, path: "/agence/boarding", end: true },
   { label: "Activité en direct", icon: Radio, path: "/agence/boarding/live" },
   { label: "Scan / Liste", icon: ClipboardCheck, path: "/agence/boarding/scan" },
 ];

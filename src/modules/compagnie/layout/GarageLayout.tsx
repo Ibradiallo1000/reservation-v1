@@ -4,7 +4,7 @@ import React from "react";
 import { useParams } from "react-router-dom";
 import { LayoutDashboard, List, Wrench, MapPin, AlertTriangle, Moon, Sun, Package, ShieldAlert, Users, Route } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, collection, query, where, onSnapshot, getDocs } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
@@ -49,6 +49,8 @@ const GarageLayout: React.FC = () => {
   );
 
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
+  const [pendingPlanningCount, setPendingPlanningCount] = React.useState(0);
+  const [pendingLogisticsActionsCount, setPendingLogisticsActionsCount] = React.useState(0);
 
   React.useEffect(() => {
     if (darkMode) document.documentElement.classList.add("dark");
@@ -93,14 +95,75 @@ const GarageLayout: React.FC = () => {
     loadCompanyFromUrl();
   }, [urlCompanyId, userCompanyId, company]);
 
+  React.useEffect(() => {
+    if (!currentCompanyId) {
+      setPendingPlanningCount(0);
+      return;
+    }
+    const unsubs: Array<() => void> = [];
+    const countsByAgency = new Map<string, number>();
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const agencesSnap = await getDocs(collection(db, "companies", currentCompanyId, "agences"));
+        if (cancelled) return;
+        agencesSnap.docs.forEach((ag) => {
+          const agencyId = ag.id;
+          const q = query(
+            collection(db, "companies", currentCompanyId, "agences", agencyId, "tripAssignments"),
+            where("status", "==", "planned")
+          );
+          const unsub = onSnapshot(
+            q,
+            (snap) => {
+              countsByAgency.set(agencyId, snap.size);
+              setPendingPlanningCount(Array.from(countsByAgency.values()).reduce((sum, n) => sum + n, 0));
+            },
+            () => {
+              countsByAgency.set(agencyId, 0);
+              setPendingPlanningCount(Array.from(countsByAgency.values()).reduce((sum, n) => sum + n, 0));
+            }
+          );
+          unsubs.push(unsub);
+        });
+      } catch {
+        setPendingPlanningCount(0);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubs.forEach((u) => u());
+    };
+  }, [currentCompanyId]);
+
+  React.useEffect(() => {
+    if (!currentCompanyId) {
+      setPendingLogisticsActionsCount(0);
+      return;
+    }
+    const q = query(
+      collection(db, "companies", currentCompanyId, "logisticsActions"),
+      where("status", "==", "pending")
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => setPendingLogisticsActionsCount(snap.size),
+      () => setPendingLogisticsActionsCount(0)
+    );
+    return () => unsub();
+  }, [currentCompanyId]);
+
   const basePath = urlCompanyId
     ? `/compagnie/${urlCompanyId}/garage`
     : "/compagnie/garage";
 
+  const globalLogisticsBadge = pendingPlanningCount + pendingLogisticsActionsCount;
   const sections: NavSection[] = [
     { label: "Tableau de bord", icon: LayoutDashboard, path: `${basePath}/dashboard`, end: true },
     { label: "Routes réseau", icon: Route, path: `${basePath}/routes`, end: true },
-    { label: "Logistique", icon: Package, path: `${basePath}/logistics`, end: true },
+    { label: "Logistique", icon: Package, path: `${basePath}/logistics`, end: true, badge: globalLogisticsBadge || undefined },
     { label: "Équipage", icon: Users, path: `${basePath}/logistics/crew`, end: true },
     { label: "Liste flotte", icon: List, path: `${basePath}/fleet`, end: true },
     { label: "Maintenance", icon: Wrench, path: `${basePath}/maintenance`, end: true },

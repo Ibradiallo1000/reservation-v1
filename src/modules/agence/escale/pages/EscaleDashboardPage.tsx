@@ -26,6 +26,9 @@ import {
   tripInstanceArrival,
   tripInstanceTime,
 } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
+import { getVehicle } from "@/modules/compagnie/fleet/vehiclesService";
+import { subscribeTripExecutionsByDestinationCityAndDate } from "@/modules/compagnie/tripExecutions/tripExecutionService";
+import type { TripExecutionDocWithId, TripExecutionCheckpoint, TripExecutionStatus } from "@/modules/compagnie/tripExecutions/tripExecutionTypes";
 import {
   getTripProgress,
   getLastProgressFromList,
@@ -84,6 +87,10 @@ export default function EscaleDashboardPage() {
   const [customDate, setCustomDate] = useState<string>(() => toLocalDateStr(new Date()));
   const [pendingShifts, setPendingShifts] = useState<Array<{ id: string; userName?: string; userId: string; createdAt?: unknown }>>([]);
   const [activatingShiftId, setActivatingShiftId] = useState<string | null>(null);
+
+  const [tripExecutions, setTripExecutions] = useState<TripExecutionDocWithId[]>([]);
+  const [tripExecutionsVehicleLabelById, setTripExecutionsVehicleLabelById] = useState<Record<string, string>>({});
+  const [tripExecutionsLoading, setTripExecutionsLoading] = useState(false);
 
   const selectedDateStr = getSelectedDateStr(dayPreset, customDate);
   const rolesArr: string[] = Array.isArray((user as any)?.role) ? (user as any).role : (user as any)?.role ? [(user as any).role] : [];
@@ -209,6 +216,62 @@ export default function EscaleDashboardPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Suivi temps réel des exécutions de trajets (inter-agences) pour cette escale.
+  useEffect(() => {
+    if (!user?.companyId || !stop?.city || !selectedDateStr) return;
+    setTripExecutionsLoading(true);
+
+    const unsub = subscribeTripExecutionsByDestinationCityAndDate({
+      companyId: user.companyId,
+      destinationCity: stop.city,
+      tripExecutionDate: selectedDateStr,
+      onData: (rows) => {
+        setTripExecutions(rows);
+        setTripExecutionsLoading(false);
+      },
+      onError: (e) => {
+        setTripExecutionsLoading(false);
+        setError(e.message || "Erreur chargement suivi trajets.");
+      },
+    });
+
+    return () => unsub();
+  }, [user?.companyId, stop?.city, selectedDateStr]);
+
+  // Récupère les libellés véhicules (ex. immatriculation) pour affichage.
+  useEffect(() => {
+    const companyId = user?.companyId;
+    if (!companyId) return;
+    const vehicleIds = Array.from(new Set(tripExecutions.map((t) => t.vehicleId).filter(Boolean)));
+    const missing = vehicleIds.filter((vid) => !(vid in tripExecutionsVehicleLabelById));
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const snaps = await Promise.all(
+          missing.map(async (vid) => {
+            const v = await getVehicle(companyId, vid);
+            const label = v?.plateNumber ? String(v.plateNumber) : vid;
+            return [vid, label] as const;
+          })
+        );
+        if (cancelled) return;
+        setTripExecutionsVehicleLabelById((prev) => {
+          const next = { ...prev };
+          for (const [vid, label] of snaps) next[vid] = label;
+          return next;
+        });
+      } catch {
+        // best effort : affichage avec ID si échec
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.companyId, tripExecutions, tripExecutionsVehicleLabelById]);
 
   useEffect(() => {
     if (!isEscaleManager || !user?.companyId || !user?.agencyId) {
@@ -461,6 +524,94 @@ export default function EscaleDashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Suivi trajets (inter-agences) */}
+      <SectionCard title="Suivi trajets" icon={Activity} className="mb-6" noPad>
+        {tripExecutionsLoading ? (
+          <div className="p-6 text-center text-gray-500 dark:text-gray-400">Chargement…</div>
+        ) : tripExecutions.length === 0 ? (
+          <div className="p-6">
+            <EmptyState message="Aucun trajet en suivi pour cette date sur cette escale." />
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-200 dark:divide-gray-700">
+            {tripExecutions
+              .slice()
+              .sort((a, b) => String(a.tripInstanceId).localeCompare(String(b.tripInstanceId)))
+              .map((te) => {
+                const statusLabel: Record<TripExecutionStatus, string> = {
+                  boarding: "En embarquement",
+                  departed: "Départ origine enregistré",
+                  transit: "En transit",
+                  arrived: "Arrivé",
+                  finished: "Terminé",
+                  disrupted: "Perturbé",
+                };
+                const checkpoints = Array.isArray(te.checkpoints) ? [...te.checkpoints] : [];
+                checkpoints.sort((c1, c2) => c1.stopOrder - c2.stopOrder);
+                const vehicleLabel = tripExecutionsVehicleLabelById[te.vehicleId] ?? te.vehicleId;
+                return (
+                  <div key={te.id} className="p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-[220px]">
+                        <div className="font-medium text-gray-900 dark:text-gray-100">
+                          {vehicleLabel ? `Véhicule : ${vehicleLabel}` : "Véhicule"}
+                        </div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          Destination : {te.destinationCity || "—"}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                          Passagers : {te.passengersCount ?? 0}
+                        </span>
+                        <span className="text-xs font-semibold px-2 py-1 rounded bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
+                          {statusLabel[te.status] ?? te.status}
+                        </span>
+                      </div>
+                    </div>
+
+                    {checkpoints.length > 0 ? (
+                      <div className="mt-3 space-y-1">
+                        {checkpoints.map((cp) => {
+                          const arrival = (() => {
+                            const v = cp.arrivalTime as any;
+                            return v && typeof v.toDate === "function" ? (v.toDate() as Date) : null;
+                          })();
+                          const departure = (() => {
+                            const v = cp.departureTime as any;
+                            return v && typeof v.toDate === "function" ? (v.toDate() as Date) : null;
+                          })();
+                          const fmt = (d: Date | null) =>
+                            d ? d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+                          return (
+                            <div key={cp.stopOrder} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+                              <div className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                                Escale {cp.stopOrder} · {cp.city}
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">
+                                {arrival && <span>Arrivée : {fmt(arrival)} </span>}
+                                {departure && <span>· Départ : {fmt(departure)} </span>}
+                                {typeof cp.montées === "number" && (
+                                  <span className="ml-1">· Montées : {cp.montées}</span>
+                                )}
+                                {typeof cp.descentes === "number" && (
+                                  <span className="ml-1">· Descentes : {cp.descentes}</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-sm text-gray-500 dark:text-gray-400">Horaires en attente…</div>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        )}
+      </SectionCard>
 
       {isEscaleManager && (
         <SectionCard title="Postes en attente d'activation" icon={Clock} className="mb-6" noPad>

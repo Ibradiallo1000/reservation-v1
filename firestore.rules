@@ -11,6 +11,11 @@ service cloud.firestore {
       let path = /databases/$(database)/documents/users/$(request.auth.uid);
       return exists(path) ? get(path).data.get('role', '') : '';
     }
+    function hasUserRole(role) {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      let raw = exists(path) ? get(path).data.get('role', '') : '';
+      return (raw is string && raw == role) || (raw is list && raw.hasAny([role]));
+    }
     function isComptable() {
       return isAuth() && (getUserRole() == 'agency_accountant' || getUserRole() == 'admin_compagnie');
     }
@@ -19,16 +24,21 @@ service cloud.firestore {
     }
     function isBoardingOfficer() {
       return isAuth() && (
-        getUserRole() == 'agency_boarding_officer' ||
-        getUserRole() == 'embarquement' ||
-        getUserRole() == 'chefEmbarquement'
+        hasUserRole('agency_boarding_officer') ||
+        hasUserRole('embarquement') ||
+        hasUserRole('chefEmbarquement') ||
+        hasUserRole('chefembarquement')
       );
     }
     function isFleetController() {
       return isAuth() && getUserRole() == 'agency_fleet_controller';
     }
     function isAgencyManager() {
-      return isAuth() && (getUserRole() == 'chefAgence' || getUserRole() == 'admin_compagnie');
+      return isAuth() && (
+        getUserRole() == 'chefAgence' ||
+        getUserRole() == 'chefagence' ||
+        getUserRole() == 'admin_compagnie'
+      );
     }
     function isEscaleManager() {
       return isAuth() && getUserRole() == 'escale_manager';
@@ -36,7 +46,7 @@ service cloud.firestore {
     /* Chef d'agence ou chef d'escale : peuvent gérer l'équipe de leur agence. */
     function canManageAgencyTeam(agencyId) {
       return isAuth() && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme'
-        || (getUserRole() == 'chefAgence' && getUserAgencyId() == agencyId)
+        || ((getUserRole() == 'chefAgence' || getUserRole() == 'chefagence') && getUserAgencyId() == agencyId)
         || (getUserRole() == 'escale_manager' && getUserAgencyId() == agencyId));
     }
     /* Fleet & vehicle operations (ex chef_garage). Backward compat: accept both role names. */
@@ -172,11 +182,15 @@ service cloud.firestore {
         && request.resource.data.agencyId == resource.data.agencyId
         && request.resource.data.status == resource.data.status;
     }
+    /** Embarquement : chef / équipe / escale sur l’agence du créneau ; admins société ou plateforme (souvent sans agencyId) comme pour liveStatus. */
     function canWriteTripAssignmentBoardingSession(companyId, agencyId) {
-      return isAuth() && userCompanyId() == companyId && getUserAgencyId() == agencyId && (
-        isBoardingOfficer()
-        || getUserRole() == 'escale_agent'
-        || getUserRole() == 'escale_manager'
+      return isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
+        hasUserRole('admin_compagnie')
+        || hasUserRole('admin_platforme')
+        || (
+          getUserAgencyId() == agencyId
+          && userAgencyBelongsToCompany(companyId)
+        )
       );
     }
     function tripAssignmentBoardingSessionActivateOk() {
@@ -207,11 +221,10 @@ service cloud.firestore {
     }
     /** Phase 4 — liveStatus (supervision embarquement). */
     function canWriteTripAssignmentLiveStatus(companyId, agencyId) {
-      return isAuth() && userCompanyId() == companyId && getUserAgencyId() == agencyId && (
-        isBoardingOfficer()
-        || getUserRole() == 'escale_agent'
-        || getUserRole() == 'escale_manager'
-        || getUserRole() == 'admin_compagnie'
+      return isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
+        hasUserRole('admin_compagnie')
+        || hasUserRole('admin_platforme')
+        || (getUserAgencyId() == agencyId && userAgencyBelongsToCompany(companyId))
       );
     }
     function tripAssignmentLiveStatusShapeOk() {
@@ -326,6 +339,35 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      /* Agrégats planification (totalPlannedVehicles, totalTrips) — recalcul côté client après mutations. */
+      match /planningStats/{docId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'chefAgence' ||
+          getUserRole() == 'chefagence' ||
+          getUserRole() == 'superviseur' ||
+          getUserRole() == 'agency_fleet_controller' ||
+          getUserRole() == 'responsable_logistique' ||
+          getUserRole() == 'admin_platforme'
+        );
+        allow delete: if false;
+      }
+
+      /* Compteurs incrémentaux par véhicule (planification) — transactions client create/update/delete. */
+      match /planningVehicleTripCount/{vehicleId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'chefAgence' ||
+          getUserRole() == 'chefagence' ||
+          getUserRole() == 'superviseur' ||
+          getUserRole() == 'agency_fleet_controller' ||
+          getUserRole() == 'responsable_logistique' ||
+          getUserRole() == 'admin_platforme'
+        );
+      }
+
       /* Trip instances (daily departures). Read: public. Create: public only when initial state (lazy creation on search). Update: (1) same company or platform for full updates; (2) unauthenticated allowed only to increment reservedSeats + updatedAt (public reservation flow). Status: code uses lowercase 'scheduled'. */
       match /tripInstances/{tripInstanceId} {
         allow get, list: if true;
@@ -356,6 +398,41 @@ service cloud.firestore {
           allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
+      }
+
+      /* Suivi temps réel inter-agences : tripExecutions */
+      function userAgencyCity() {
+        let userPath = /databases/$(database)/documents/companies/$(companyId)/agences/$(getUserAgencyId());
+        let userData = exists(userPath) ? get(userPath).data : null;
+        return userData == null
+          ? ''
+          : (userData.get('city', '') != ''
+            ? userData.get('city', '')
+            : (userData.get('villeNorm', '') != ''
+              ? userData.get('villeNorm', '')
+              : userData.get('ville', '')));
+      }
+
+      match /tripExecutions/{executionId} {
+        /* Lecture : chaque agence ne voit que les destinations qui correspondent à sa ville. */
+        allow get, list: if isAuth() && userCompanyId() == companyId && (
+          getUserRole() == 'admin_platforme'
+          || getUserRole() == 'admin_compagnie'
+          || resource.data.get('destinationCity', '') == userAgencyCity()
+        );
+
+        /* Écriture : uniquement par les rôles qui mettent à jour le cycle (embarquement/escale/fleet/logistique). */
+        allow create, update: if isAuth() && userCompanyId() == companyId && (
+          isBoardingOfficer()
+          || getUserRole() == 'escale_manager'
+          || getUserRole() == 'escale_agent'
+          || isFleetController()
+          || isResponsableLogistique()
+          || getUserRole() == 'admin_platforme'
+          || getUserRole() == 'admin_compagnie'
+        );
+
+        allow delete: if false;
       }
 
       /* Caisse (cashTransactions, cashClosures, cashRefunds, cashTransfers). Read/write: same company, platform admin, or escale user whose agency is in this company. */
@@ -440,13 +517,107 @@ service cloud.firestore {
           );
         }
 
+        /* Verrou créneau planification (concurrence) — holderUid = request.auth.uid, TTL côté client. */
+        match /planningLocks/{lockId} {
+          allow get, list: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
+            (getUserAgencyId() == agencyId && (
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur' ||
+              getUserRole() == 'agency_fleet_controller' ||
+              getUserRole() == 'admin_compagnie'
+            ))
+            || getUserRole() == 'admin_compagnie'
+            || (isResponsableLogistique() && userCompanyId() == companyId)
+          );
+          allow create, update: if isAuth() && userCompanyId() == companyId && (
+            (
+              getUserAgencyId() == agencyId && (
+                getUserRole() == 'chefAgence' ||
+                getUserRole() == 'chefagence' ||
+                getUserRole() == 'superviseur' ||
+                getUserRole() == 'admin_compagnie'
+              )
+            )
+            || getUserRole() == 'admin_compagnie'
+          )
+            && request.resource.data.keys().hasAll(['holderUid', 'acquiredAt'])
+            && request.resource.data.holderUid == request.auth.uid;
+          allow delete: if isAuth() && userCompanyId() == companyId && (
+            (
+              getUserAgencyId() == agencyId && (
+                getUserRole() == 'chefAgence' ||
+                getUserRole() == 'chefagence' ||
+                getUserRole() == 'superviseur' ||
+                getUserRole() == 'admin_compagnie'
+              )
+            )
+            || getUserRole() == 'admin_compagnie'
+          )
+            && resource.data.get('holderUid', '') == request.auth.uid;
+        }
+
+        /* Index miroir créneau véhicule (atomicité planification). */
+        match /tripAssignmentVehicleSlots/{slotId} {
+          allow get, list: if isAuth() && userCompanyId() == companyId && (
+            (getUserAgencyId() == agencyId && (
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur' ||
+              getUserRole() == 'chefEmbarquement' ||
+              getUserRole() == 'chefembarquement' ||
+              getUserRole() == 'agency_boarding_officer' ||
+              getUserRole() == 'embarquement' ||
+              getUserRole() == 'escale_agent' ||
+              getUserRole() == 'escale_manager' ||
+              getUserRole() == 'agency_fleet_controller'
+            ))
+            || getUserRole() == 'admin_compagnie'
+            || (isResponsableLogistique() && userCompanyId() == companyId)
+          );
+          allow create, update: if isAuth() && userCompanyId() == companyId && (
+            (
+              getUserAgencyId() == agencyId && (
+                getUserRole() == 'chefAgence' ||
+                getUserRole() == 'chefagence' ||
+                getUserRole() == 'superviseur' ||
+                getUserRole() == 'admin_compagnie' ||
+                getUserRole() == 'agency_fleet_controller'
+              )
+            )
+            || getUserRole() == 'admin_compagnie'
+            || (isResponsableLogistique() && userCompanyId() == companyId)
+          )
+            && request.resource.data.keys().hasAll(['assignmentId', 'vehicleId', 'tripId', 'date', 'heure', 'status', 'updatedAt'])
+            && request.resource.data.assignmentId is string
+            && request.resource.data.vehicleId is string
+            && request.resource.data.tripId is string
+            && request.resource.data.date is string
+            && request.resource.data.heure is string
+            && (request.resource.data.status == 'planned' || request.resource.data.status == 'validated');
+          allow delete: if isAuth() && userCompanyId() == companyId && (
+            (
+              getUserAgencyId() == agencyId && (
+                getUserRole() == 'chefAgence' ||
+                getUserRole() == 'chefagence' ||
+                getUserRole() == 'superviseur' ||
+                getUserRole() == 'admin_compagnie'
+              )
+            )
+            || getUserRole() == 'admin_compagnie'
+            || (isResponsableLogistique() && userCompanyId() == companyId)
+          );
+        }
+
         /* Affectations trajet + date + heure → véhicule (planifié par chef/superviseur, validé par logistique). */
         match /tripAssignments/{assignmentId} {
           allow get, list: if isAuth() && userCompanyId() == companyId && (
             (getUserAgencyId() == agencyId && (
               getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
               getUserRole() == 'superviseur' ||
               getUserRole() == 'chefEmbarquement' ||
+              getUserRole() == 'chefembarquement' ||
               getUserRole() == 'agency_boarding_officer' ||
               getUserRole() == 'embarquement' ||
               getUserRole() == 'escale_agent' ||
@@ -457,7 +628,7 @@ service cloud.firestore {
             || (isResponsableLogistique() && userCompanyId() == companyId)
           );
           allow create: if isAuth() && userCompanyId() == companyId && (
-            (getUserAgencyId() == agencyId && (getUserRole() == 'chefAgence' || getUserRole() == 'superviseur'))
+            (getUserAgencyId() == agencyId && (getUserRole() == 'chefAgence' || getUserRole() == 'chefagence' || getUserRole() == 'superviseur'))
             || getUserRole() == 'admin_compagnie'
           )
             && request.resource.data.keys().hasAll(['tripId', 'date', 'heure', 'vehicleId', 'agencyId', 'status', 'liveStatus'])
@@ -472,12 +643,42 @@ service cloud.firestore {
             && request.resource.data.liveStatus.status == 'waiting'
             && request.resource.data.liveStatus.expectedCount is int
             && request.resource.data.liveStatus.expectedCount >= 0;
-          allow update: if isAuth() && userCompanyId() == companyId && (
+          allow update: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
             (
               getUserAgencyId() == agencyId &&
-              (getUserRole() == 'chefAgence' || getUserRole() == 'superviseur' || getUserRole() == 'admin_compagnie') &&
+              (getUserRole() == 'chefAgence' || getUserRole() == 'chefagence' || getUserRole() == 'superviseur' || getUserRole() == 'admin_compagnie') &&
+              (resource.data.status == 'cancelled' || resource.data.status == 'rejected') &&
+              request.resource.data.status == 'planned' &&
+              request.resource.data.agencyId == agencyId &&
+              request.resource.data.tripId is string &&
+              request.resource.data.date is string &&
+              request.resource.data.heure is string &&
+              request.resource.data.vehicleId is string &&
+              request.resource.data.liveStatus.keys().hasAll(['boardedCount', 'expectedCount', 'status']) &&
+              request.resource.data.liveStatus.boardedCount == 0 &&
+              request.resource.data.liveStatus.status == 'waiting' &&
+              request.resource.data.liveStatus.expectedCount is int &&
+              request.resource.data.liveStatus.expectedCount >= 0
+            )
+            || (
+              getUserAgencyId() == agencyId &&
+              (getUserRole() == 'chefAgence' || getUserRole() == 'chefagence' || getUserRole() == 'superviseur' || getUserRole() == 'admin_compagnie') &&
               resource.data.status == 'planned' &&
               request.resource.data.status == 'planned'
+            )
+            || (
+              getUserAgencyId() == agencyId &&
+              (getUserRole() == 'chefAgence' || getUserRole() == 'chefagence' || getUserRole() == 'superviseur' || getUserRole() == 'admin_compagnie') &&
+              resource.data.status == 'planned' &&
+              request.resource.data.status == 'cancelled' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+            )
+            || (
+              getUserAgencyId() == agencyId &&
+              (getUserRole() == 'chefAgence' || getUserRole() == 'chefagence' || getUserRole() == 'superviseur' || getUserRole() == 'admin_compagnie') &&
+              resource.data.status == 'validated' &&
+              request.resource.data.status == 'cancelled' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
             )
             || (
               resource.data.status == 'planned' &&
@@ -496,6 +697,20 @@ service cloud.firestore {
                 tripAssignmentBoardingSessionActivateOk()
                 || tripAssignmentBoardingSessionCloseOk()
               )
+            )
+            || (
+              canWriteTripAssignmentBoardingSession(companyId, agencyId)
+              && tripAssignmentCoreUnchangedForBoarding()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['boardingSession', 'updatedAt'])
+              && request.resource.data.boardingSession.status == 'active'
+              && request.resource.data.boardingSession.clientInstanceId is string
+            )
+            || (
+              canWriteTripAssignmentBoardingSession(companyId, agencyId)
+              && tripAssignmentCoreUnchangedForBoarding()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['boardingSession', 'updatedAt'])
+              && request.resource.data.boardingSession.status == 'closed'
+              && request.resource.data.boardingSession.clientInstanceId is string
             )
             || (
               canWriteTripAssignmentLiveStatus(companyId, agencyId)
@@ -990,9 +1205,32 @@ service cloud.firestore {
         allow get, list: if canReadCompanyData(companyId)
           || (isBoardingOfficer() && userAgencyBelongsToCompany(companyId))
           || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && userAgencyBelongsToCompany(companyId));
-        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           canModifyFleet() || isResponsableLogistique()
         );
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          canModifyFleet() ||
+          isResponsableLogistique() ||
+          (
+            (
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur' ||
+              getUserRole() == 'agency_fleet_controller' ||
+              getUserRole() == 'escale_agent' ||
+              getUserRole() == 'escale_manager' ||
+              isBoardingOfficer() ||
+              getUserRole() == 'admin_compagnie'
+            ) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'currentAssignmentId',
+              'destinationCity',
+              'currentCity',
+              'updatedAt'
+            ])
+          )
+        ) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['operationStatus', 'currentTripId', 'status']);
         allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
       }
 

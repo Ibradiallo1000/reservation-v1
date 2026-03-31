@@ -5,6 +5,7 @@
  * (Firestore Web ne permet pas les requêtes WHERE dans runTransaction ; l’index miroir garantit l’atomicité.)
  */
 import {
+  addDoc,
   collection,
   doc,
   getDoc,
@@ -14,13 +15,22 @@ import {
   runTransaction,
   serverTimestamp,
   where,
+  orderBy,
   limit,
   type Unsubscribe,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { vehicleRef } from "@/modules/compagnie/fleet/vehiclesService";
 import type { VehicleDoc } from "@/modules/compagnie/fleet/vehicleTypes";
+import { TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
+import { canAssignVehicle, deriveOperationStatus } from "@/modules/compagnie/fleet/vehicleOperationStateMachine";
 import { RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
+import {
+  applyPlanningStatsDecrementRemove,
+  applyPlanningStatsIncrementCreate,
+  applyPlanningStatsVehicleChange,
+  scheduleRecomputeCompanyPlanningStats,
+} from "./planningStatsService";
 
 /** planned / validated bloquent les créneaux ; cancelled / rejected non. */
 export type TripAssignmentStatus = "planned" | "validated" | "cancelled" | "rejected";
@@ -46,6 +56,8 @@ export type TripAssignmentDoc = {
   tripId: string;
   date: string;
   heure: string;
+  /** Durée trajet (minutes) — conflits véhicule = chevauchement [départ, départ+durée). */
+  tripDurationMinutes?: number;
   vehicleId: string;
   agencyId: string;
   status: TripAssignmentStatus;
@@ -55,6 +67,26 @@ export type TripAssignmentDoc = {
   boardingSession?: TripAssignmentBoardingSession;
   liveStatus?: TripAssignmentLiveStatus;
 };
+
+function isVehicleTechnicallyActiveForPlanning(v: Partial<VehicleDoc> & { isArchived?: boolean }): boolean {
+  if ((v as any).isArchived === true) return false;
+  const legacy = String((v as any).status ?? "").toLowerCase();
+  if (legacy) {
+    if (legacy === "active") return true;
+    if (legacy === "garage" || legacy === "en_service") return true;
+  }
+  const tech = String((v as any).technicalStatus ?? TECHNICAL_STATUS.NORMAL).toUpperCase();
+  return tech === TECHNICAL_STATUS.NORMAL;
+}
+
+function isVehicleAssignableOperationally(v: Partial<VehicleDoc>, assignmentId?: string): boolean {
+  if (canAssignVehicle(v)) return true;
+  const opState = deriveOperationStatus(v);
+  if (opState !== "planned") return false;
+  const currentAssignmentId = String((v as any).currentAssignmentId ?? "").trim();
+  if (!currentAssignmentId) return true;
+  return assignmentId != null && currentAssignmentId === assignmentId;
+}
 
 /** Message affiché si une autre instance détient déjà le verrou actif. */
 export const BOARDING_SESSION_IN_USE_MSG = "Embarquement déjà en cours sur un autre appareil";
@@ -98,6 +130,62 @@ export function tripAssignmentDocId(tripId: string, date: string, heure: string)
   return `${tripId}__${date}__${h}`;
 }
 
+async function notifyLogisticsPlanningCreated(params: {
+  companyId: string;
+  agencyId: string;
+  assignmentId: string;
+  tripId: string;
+  date: string;
+  heure: string;
+  vehicleId: string;
+}): Promise<void> {
+  const roles = ["responsable_logistique", "chef_garage", "admin_compagnie"];
+  // Backward compat: some users still carry `compagnieId` instead of `companyId`.
+  const [companyUsersSnap, compagnieUsersSnap] = await Promise.all([
+    getDocs(query(collection(db, "users"), where("companyId", "==", params.companyId), where("role", "in", roles))),
+    getDocs(query(collection(db, "users"), where("compagnieId", "==", params.companyId), where("role", "in", roles))),
+  ]);
+  const recipientById = new Map<string, { role?: string }>();
+  [...companyUsersSnap.docs, ...compagnieUsersSnap.docs].forEach((u) => {
+    recipientById.set(u.id, { role: String((u.data() as { role?: string }).role ?? "") });
+  });
+  const notificationsCol = collection(db, "companies", params.companyId, "notifications");
+  if (recipientById.size === 0) {
+    await addDoc(notificationsCol, {
+      type: "planning_submitted",
+      entityType: "planning_assignment",
+      entityId: params.assignmentId,
+      title: "Nouvelle demande de planification",
+      body: `Trajet ${params.tripId} · ${params.date} ${params.heure} · Véhicule ${params.vehicleId}`,
+      link: `/compagnie/${params.companyId}/logistics`,
+      agencyId: params.agencyId,
+      targetUserId: null,
+      targetRole: null,
+      read: false,
+      createdAt: serverTimestamp(),
+    });
+    return;
+  }
+
+  const writes = Array.from(recipientById.entries()).map(([uid, meta]) => {
+    const role = String(meta.role ?? "");
+    return addDoc(notificationsCol, {
+      type: "planning_submitted",
+      entityType: "planning_assignment",
+      entityId: params.assignmentId,
+      title: "Nouvelle demande de planification",
+      body: `Trajet ${params.tripId} · ${params.date} ${params.heure} · Véhicule ${params.vehicleId}`,
+      link: `/compagnie/${params.companyId}/logistics`,
+      agencyId: params.agencyId,
+      targetUserId: uid,
+      targetRole: role || null,
+      read: false,
+      createdAt: serverTimestamp(),
+    });
+  });
+  await Promise.all(writes);
+}
+
 export function tripAssignmentVehicleSlotDocId(vehicleId: string, date: string, heure: string): string {
   const h = String(heure ?? "").trim().replace(/:/g, "-");
   const vid = String(vehicleId ?? "").trim();
@@ -112,10 +200,102 @@ function isBlockingTripAssignmentStatus(s: unknown): boolean {
 export const TRIP_PLANNING_ERROR_TRIP_SLOT_TAKEN =
   "Ce trajet est déjà planifié avec un autre véhicule.";
 export const TRIP_PLANNING_ERROR_VEHICLE_BUSY =
-  "Affectation impossible : véhicule déjà utilisé sur ce créneau.";
+  "Affectation impossible : véhicule déjà utilisé sur une plage horaire qui chevauche ce départ.";
+export const PLANNING_LOCK_CONFLICT_MSG =
+  "Ce créneau est verrouillé par un autre opérateur. Réessayez dans quelques instants.";
+
+export const DEFAULT_TRIP_DURATION_MINUTES = 180;
+
+export function minutesFromHeure(h: string): number {
+  const p = String(h ?? "").trim().split(":").map((x) => Number(x));
+  const hh = Number.isFinite(p[0]) ? p[0] : 0;
+  const mm = Number.isFinite(p[1]) ? p[1] : 0;
+  return hh * 60 + mm;
+}
+
+/** Chevauchement sur la même journée calendaire (intervalles semi-ouverts en minutes depuis minuit). */
+export function assignmentTimeRangesOverlap(
+  date: string,
+  heureA: string,
+  durA: number,
+  other: { date: string; heure: string; tripDurationMinutes?: number }
+): boolean {
+  if (date !== other.date) return false;
+  const dA = Math.max(1, Math.min(24 * 60, Math.floor(durA || DEFAULT_TRIP_DURATION_MINUTES)));
+  const dB = Math.max(
+    1,
+    Math.min(24 * 60, Math.floor(other.tripDurationMinutes ?? DEFAULT_TRIP_DURATION_MINUTES))
+  );
+  const sa = minutesFromHeure(heureA);
+  const ea = sa + dA;
+  const sb = minutesFromHeure(other.heure);
+  const eb = sb + dB;
+  return sa < eb && sb < ea;
+}
+
+export async function fetchWeeklyTripDurationMinutes(
+  companyId: string,
+  agencyId: string,
+  tripId: string
+): Promise<number> {
+  const wref = doc(db, "companies", companyId, "agences", agencyId, "weeklyTrips", tripId);
+  const wSnap = await getDoc(wref);
+  if (!wSnap.exists()) return DEFAULT_TRIP_DURATION_MINUTES;
+  const d = wSnap.data() as Record<string, unknown>;
+  const n = Number(
+    d.tripDurationMinutes ?? d.durationMinutes ?? d.dureeMinutes ?? d.dureeTrajetMinutes ?? DEFAULT_TRIP_DURATION_MINUTES
+  );
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TRIP_DURATION_MINUTES;
+  return Math.min(24 * 60, Math.floor(n));
+}
+
+export function planningSlotLockRef(companyId: string, agencyId: string, lockId: string) {
+  const safe = String(lockId).replace(/\//g, "_");
+  return doc(db, "companies", companyId, "agences", agencyId, "planningLocks", safe);
+}
+
+const PLANNING_LOCK_TTL_MS = 120_000;
+
+export async function acquirePlanningSlotLock(
+  companyId: string,
+  agencyId: string,
+  lockId: string,
+  uid: string
+): Promise<void> {
+  const ref = planningSlotLockRef(companyId, agencyId, lockId);
+  await runTransaction(db, async (transaction) => {
+    const s = await transaction.get(ref);
+    const now = Date.now();
+    if (s.exists()) {
+      const d = s.data() as { holderUid?: string; acquiredAt?: { toMillis?: () => number } };
+      const at = d.acquiredAt?.toMillis?.() ?? 0;
+      if (d.holderUid && d.holderUid !== uid && now - at < PLANNING_LOCK_TTL_MS) {
+        throw new Error(PLANNING_LOCK_CONFLICT_MSG);
+      }
+    }
+    transaction.set(ref, { holderUid: uid, acquiredAt: serverTimestamp() }, { merge: true });
+  });
+}
+
+export async function releasePlanningSlotLock(
+  companyId: string,
+  agencyId: string,
+  lockId: string,
+  uid: string
+): Promise<void> {
+  const ref = planningSlotLockRef(companyId, agencyId, lockId);
+  await runTransaction(db, async (transaction) => {
+    const s = await transaction.get(ref);
+    if (!s.exists()) return;
+    const d = s.data() as { holderUid?: string };
+    if (d.holderUid === uid) {
+      transaction.delete(ref);
+    }
+  });
+}
 
 /**
- * Pré-contrôle hors transaction (ex. UI) : uniquement affectations actives (planned / validated).
+ * Pré-contrôle hors transaction : trajet déjà pris sur l’heure exacte ; véhicule libre sur toute la plage [heure, heure+durée).
  */
 export async function assertNoTripPlanningConflicts(
   companyId: string,
@@ -126,12 +306,14 @@ export async function assertNoTripPlanningConflicts(
     heure: string;
     vehicleId: string;
     excludeAssignmentId?: string;
+    tripDurationMinutes?: number;
   }
 ): Promise<void> {
   const ref = tripAssignmentsCollectionRef(companyId, agencyId);
   const heure = String(input.heure ?? "").trim();
   const { tripId, date, vehicleId } = input;
   const excludeId = input.excludeAssignmentId;
+  const dur = Math.max(1, Math.floor(input.tripDurationMinutes ?? DEFAULT_TRIP_DURATION_MINUTES));
 
   const snapTrip = await getDocs(
     query(
@@ -153,14 +335,33 @@ export async function assertNoTripPlanningConflicts(
       ref,
       where("vehicleId", "==", vehicleId),
       where("date", "==", date),
-      where("heure", "==", heure),
       where("status", "in", ["planned", "validated"]),
-      limit(25)
+      limit(40)
     )
   );
-  const vehConflicts = snapVeh.docs.filter((d) => d.id !== excludeId);
-  if (vehConflicts.length > 0) {
-    throw new Error(TRIP_PLANNING_ERROR_VEHICLE_BUSY);
+  const tripDurationCache: Record<string, number> = {};
+  for (const d of snapVeh.docs) {
+    if (d.id === excludeId) continue;
+    const o = d.data() as TripAssignmentDoc;
+
+    const otherTripId = String(o.tripId ?? "").trim();
+    let otherDur = o.tripDurationMinutes;
+    if (!Number.isFinite(otherDur) || (otherDur ?? 0) <= 0) {
+      if (!otherTripId) continue;
+      otherDur =
+        tripDurationCache[otherTripId] ??
+        (await fetchWeeklyTripDurationMinutes(companyId, agencyId, otherTripId));
+      tripDurationCache[otherTripId] = otherDur;
+    }
+
+    if (
+      assignmentTimeRangesOverlap(date, heure, dur, {
+        ...o,
+        tripDurationMinutes: Math.max(1, Math.floor(otherDur as number)),
+      })
+    ) {
+      throw new Error(TRIP_PLANNING_ERROR_VEHICLE_BUSY);
+    }
   }
 }
 
@@ -172,12 +373,51 @@ export function subscribeTripAssignmentsForDate(
   onError?: (e: Error) => void
 ): Unsubscribe {
   const ref = tripAssignmentsCollectionRef(companyId, agencyId);
-  const q = query(ref, where("date", "==", date));
+  const q = query(ref, where("date", "==", date), where("status", "in", ["planned", "validated"]));
   return onSnapshot(
     q,
     (snap) => {
       const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as TripAssignmentDoc) }));
       onData(rows);
+    },
+    (err) => onError?.(err)
+  );
+}
+
+/** Taille max des affectations « à venir » par écoute temps réel (scalabilité). */
+export const FUTURE_ASSIGNMENTS_LISTENER_LIMIT = 250;
+
+export type TripAssignmentsFromDatePayload = {
+  rows: Array<TripAssignmentDoc & { id: string }>;
+  /** True si au moins `FUTURE_ASSIGNMENTS_LISTENER_LIMIT` docs — afficher un avertissement troncature. */
+  capped: boolean;
+};
+
+/**
+ * Affectations planned|validated à partir d’une date ISO (>=), agence courante — filtre côté serveur + limite.
+ */
+export function subscribeTripAssignmentsFromDate(
+  companyId: string,
+  agencyId: string,
+  fromDateIso: string,
+  onData: (payload: TripAssignmentsFromDatePayload) => void,
+  onError?: (e: Error) => void
+): Unsubscribe {
+  const ref = tripAssignmentsCollectionRef(companyId, agencyId);
+  const q = query(
+    ref,
+    where("date", ">=", fromDateIso),
+    where("status", "in", ["planned", "validated"]),
+    orderBy("date"),
+    limit(FUTURE_ASSIGNMENTS_LISTENER_LIMIT)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData({
+        rows: snap.docs.map((d) => ({ id: d.id, ...(d.data() as TripAssignmentDoc) })),
+        capped: snap.docs.length >= FUTURE_ASSIGNMENTS_LISTENER_LIMIT,
+      });
     },
     (err) => onError?.(err)
   );
@@ -264,7 +504,9 @@ export async function countExpectedReservationsForTripSlot(
   );
   addSnap(await getDocs(q2));
 
-  return total;
+  // Rules expect an integer for liveStatus.expectedCount.
+  // Some legacy reservations may contain non-integer seatsGo values.
+  return Math.max(0, Math.floor(total));
 }
 
 export async function createPlannedTripAssignment(
@@ -276,11 +518,21 @@ export async function createPlannedTripAssignment(
   const vehicleId = String(input.vehicleId ?? "").trim();
   if (!vehicleId) throw new Error("Véhicule invalide.");
 
+  const tripDurationMinutes = await fetchWeeklyTripDurationMinutes(companyId, agencyId, input.tripId);
+  await assertNoTripPlanningConflicts(companyId, agencyId, {
+    tripId: input.tripId,
+    date: input.date,
+    heure: heureNorm,
+    vehicleId,
+    tripDurationMinutes,
+  });
+
   const id = tripAssignmentDocId(input.tripId, input.date, heureNorm);
   const assignmentsCol = tripAssignmentsCollectionRef(companyId, agencyId);
   const slotsCol = tripAssignmentVehicleSlotsCollectionRef(companyId, agencyId);
   const assignmentRef = doc(assignmentsCol, id);
   const vehicleSlotRef = doc(slotsCol, tripAssignmentVehicleSlotDocId(vehicleId, input.date, heureNorm));
+  const vehicleDocRef = vehicleRef(companyId, vehicleId);
 
   const expectedCount = await countExpectedReservationsForTripSlot(companyId, agencyId, {
     tripId: input.tripId,
@@ -321,11 +573,28 @@ export async function createPlannedTripAssignment(
         throw new Error(TRIP_PLANNING_ERROR_VEHICLE_BUSY);
       }
     }
+    const vehicleSnap = await transaction.get(vehicleDocRef);
+    if (!vehicleSnap.exists()) throw new Error("Véhicule introuvable.");
+    const vehicleData = vehicleSnap.data() as VehicleDoc & { currentAssignmentId?: string; isArchived?: boolean };
+    if (!isVehicleTechnicallyActiveForPlanning(vehicleData)) {
+      throw new Error("Véhicule non actif techniquement.");
+    }
+    if (!isVehicleAssignableOperationally(vehicleData, id)) {
+      throw new Error("Véhicule déjà planifié sur une autre affectation.");
+    }
+
+    const prevStatus = aSnap.exists() ? (aSnap.data() as TripAssignmentDoc).status : undefined;
+    const wasCounted = prevStatus === "planned" || prevStatus === "validated";
+    if (!wasCounted) {
+      // Best effort outside transaction to avoid blocking planning if aggregate rules diverge.
+      // See post-commit scheduleRecomputeCompanyPlanningStats fallback.
+    }
 
     const payload: TripAssignmentDoc = {
       tripId: input.tripId,
       date: input.date,
       heure: heureNorm,
+      tripDurationMinutes,
       vehicleId,
       agencyId,
       status: "planned",
@@ -357,6 +626,24 @@ export async function createPlannedTripAssignment(
       status: "planned",
       updatedAt: now,
     });
+    // Do not block assignment creation on fleet mirror update permissions.
+    // Fleet consistency is reconciled by planner/fleet flows and periodic recompute.
+  });
+
+  // Safety net: keep aggregates consistent even if incremental update is skipped.
+  scheduleRecomputeCompanyPlanningStats(companyId);
+
+  // Notification logistique (non bloquante) : nouvelle demande "planned" à traiter.
+  void notifyLogisticsPlanningCreated({
+    companyId,
+    agencyId,
+    assignmentId: id,
+    tripId: input.tripId,
+    date: input.date,
+    heure: heureNorm,
+    vehicleId,
+  }).catch((e) => {
+    console.warn("[tripAssignmentService] notifyLogisticsPlanningCreated failed:", e);
   });
 
   return id;
@@ -411,6 +698,55 @@ export async function validateTripAssignment(
   });
 }
 
+/** Annulation chef / superviseur : planned/validated -> cancelled, libère le créneau miroir véhicule, stats −1 (si date future). */
+export async function cancelPlannedTripAssignment(
+  companyId: string,
+  agencyId: string,
+  assignmentId: string
+): Promise<void> {
+  const assignmentsCol = tripAssignmentsCollectionRef(companyId, agencyId);
+  const slotsCol = tripAssignmentVehicleSlotsCollectionRef(companyId, agencyId);
+  const assignmentRef = doc(assignmentsCol, assignmentId);
+
+  await runTransaction(db, async (transaction) => {
+    const aSnap = await transaction.get(assignmentRef);
+    if (!aSnap.exists()) throw new Error("Affectation introuvable.");
+    const data = aSnap.data() as TripAssignmentDoc;
+    if (data.status !== "planned" && data.status !== "validated") {
+      throw new Error("Seules les affectations planifiées ou validées peuvent être annulées.");
+    }
+
+    const heureNorm = String(data.heure ?? "").trim();
+    const vehicleSlotRef = doc(slotsCol, tripAssignmentVehicleSlotDocId(data.vehicleId, data.date, heureNorm));
+    const vSnap = await transaction.get(vehicleSlotRef);
+    const currentVehicleRef = vehicleRef(companyId, data.vehicleId);
+    const currentVehicleSnap = await transaction.get(currentVehicleRef);
+    const now = serverTimestamp();
+    await applyPlanningStatsDecrementRemove(transaction, companyId, data.vehicleId, data.date);
+
+    if (vSnap.exists()) {
+      const vd = vSnap.data() as { assignmentId?: string };
+      if (vd.assignmentId === assignmentId) {
+        transaction.delete(vehicleSlotRef);
+      }
+    }
+    if (currentVehicleSnap.exists()) {
+      const vd = currentVehicleSnap.data() as { currentAssignmentId?: string };
+      if (String(vd.currentAssignmentId ?? "") === assignmentId) {
+        transaction.update(currentVehicleRef, {
+          currentAssignmentId: null,
+          updatedAt: now,
+        });
+      }
+    }
+
+    transaction.update(assignmentRef, {
+      status: "cancelled",
+      updatedAt: now,
+    });
+  });
+}
+
 /** Changement de véhicule tant que l’affectation n’est pas encore validée par la logistique. */
 export async function updatePlannedTripAssignmentVehicle(
   companyId: string,
@@ -424,6 +760,25 @@ export async function updatePlannedTripAssignmentVehicle(
   const nextVehicleId = String(vehicleId ?? "").trim();
   if (!nextVehicleId) throw new Error("Véhicule invalide.");
 
+  const preSnap = await getDoc(assignmentRef);
+  if (!preSnap.exists()) throw new Error("Affectation introuvable.");
+  const pre = preSnap.data() as TripAssignmentDoc;
+  if (pre.status !== "planned") {
+    throw new Error("Seules les affectations en attente de validation peuvent être modifiées.");
+  }
+  const tripDurationMinutes =
+    pre.tripDurationMinutes ??
+    (await fetchWeeklyTripDurationMinutes(companyId, agencyId, pre.tripId));
+
+  await assertNoTripPlanningConflicts(companyId, agencyId, {
+    tripId: pre.tripId,
+    date: pre.date,
+    heure: pre.heure,
+    vehicleId: nextVehicleId,
+    excludeAssignmentId: assignmentId,
+    tripDurationMinutes,
+  });
+
   await runTransaction(db, async (transaction) => {
     const aSnap = await transaction.get(assignmentRef);
     if (!aSnap.exists()) throw new Error("Affectation introuvable.");
@@ -436,6 +791,21 @@ export async function updatePlannedTripAssignmentVehicle(
     const heureNorm = String(data.heure ?? "").trim();
     const oldVid = String(data.vehicleId ?? "").trim();
     const now = serverTimestamp();
+    const newVehicleRef = vehicleRef(companyId, nextVehicleId);
+    const oldVehicleRef = vehicleRef(companyId, oldVid);
+    const [newVehicleSnap, oldVehicleSnap] = await Promise.all([
+      transaction.get(newVehicleRef),
+      transaction.get(oldVehicleRef),
+    ]);
+
+    if (!newVehicleSnap.exists()) throw new Error("Véhicule introuvable.");
+    const newVehicleData = newVehicleSnap.data() as VehicleDoc & { currentAssignmentId?: string; isArchived?: boolean };
+    if (!isVehicleTechnicallyActiveForPlanning(newVehicleData)) {
+      throw new Error("Véhicule non actif techniquement.");
+    }
+    if (!isVehicleAssignableOperationally(newVehicleData, assignmentId)) {
+      throw new Error("Véhicule déjà planifié sur une autre affectation.");
+    }
 
     if (nextVehicleId === oldVid) {
       transaction.update(assignmentRef, {
@@ -445,15 +815,21 @@ export async function updatePlannedTripAssignmentVehicle(
       const sameSlotRef = doc(slotsCol, tripAssignmentVehicleSlotDocId(nextVehicleId, date, heureNorm));
       const sameSnap = await transaction.get(sameSlotRef);
       if (!sameSnap.exists() || (sameSnap.data() as { assignmentId?: string }).assignmentId !== assignmentId) {
-      transaction.set(sameSlotRef, {
-        assignmentId,
-        vehicleId: nextVehicleId,
-        tripId: data.tripId,
-        date,
-        heure: heureNorm,
-        status: "planned",
-        updatedAt: now,
-      });
+        transaction.set(sameSlotRef, {
+          assignmentId,
+          vehicleId: nextVehicleId,
+          tripId: data.tripId,
+          date,
+          heure: heureNorm,
+          status: "planned",
+          updatedAt: now,
+        });
+      }
+      if (newVehicleSnap.exists()) {
+        transaction.update(newVehicleRef, {
+          currentAssignmentId: assignmentId,
+          updatedAt: now,
+        });
       }
       return;
     }
@@ -476,6 +852,8 @@ export async function updatePlannedTripAssignmentVehicle(
       }
     }
 
+    await applyPlanningStatsVehicleChange(transaction, companyId, oldVid, nextVehicleId, date);
+
     transaction.update(assignmentRef, {
       vehicleId: nextVehicleId,
       updatedAt: now,
@@ -490,6 +868,19 @@ export async function updatePlannedTripAssignmentVehicle(
       status: "planned",
       updatedAt: now,
     });
+    transaction.update(newVehicleRef, {
+      currentAssignmentId: assignmentId,
+      updatedAt: now,
+    });
+    if (oldVehicleSnap.exists()) {
+      const oldVehicleData = oldVehicleSnap.data() as { currentAssignmentId?: string };
+      if (String(oldVehicleData.currentAssignmentId ?? "") === assignmentId) {
+        transaction.update(oldVehicleRef, {
+          currentAssignmentId: null,
+          updatedAt: now,
+        });
+      }
+    }
   });
 }
 
