@@ -51,6 +51,7 @@ import {
   getVehicleCapacity,
   listBoardingTripAssignmentsForDate,
   startBoardingSessionLock,
+  tripAssignmentDocId,
   type TripAssignmentDoc,
 } from "@/modules/agence/planning/tripAssignmentService";
 import {
@@ -364,6 +365,27 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
       status: (match.status === "validated" ? "validated" : "planned") as "planned" | "validated",
     };
   }, [selectedTrip, dayAssignments]);
+  const selectedTripAssignment = useMemo(() => {
+    if (!selectedTrip) return null;
+    const match = dayAssignments.find((a) => {
+      const sameTrip = String(a.tripId ?? "") === String(selectedTrip.id ?? "");
+      const sameHeure = String(a.heure ?? "").trim() === String(selectedTrip.heure ?? "").trim();
+      const statusOk = a.status === "planned" || a.status === "validated";
+      return sameTrip && sameHeure && statusOk;
+    });
+    if (!match) return null;
+    return {
+      id: match.id,
+      vehicleId: String(match.vehicleId ?? "").trim(),
+      status: (match.status === "validated" ? "validated" : "planned") as "planned" | "validated",
+      driverName: String((match as any).driverName ?? "").trim(),
+      convoyeurName: String((match as any).convoyeurName ?? "").trim(),
+      driverPhone: String((match as any).driverPhone ?? "").trim(),
+      convoyeurPhone: String((match as any).convoyeurPhone ?? "").trim(),
+      vehiclePlate: String((match as any).vehiclePlate ?? "").trim(),
+      vehicleModel: String((match as any).vehicleModel ?? "").trim(),
+    };
+  }, [selectedTrip, dayAssignments]);
   const hasOperationalAssignment = !!(activeBoardingAssignment || fallbackBoardingAssignment);
 
   useEffect(() => {
@@ -546,17 +568,26 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
         // Crée / upsert l’exécution de trajet au début de l’embarquement.
         // On le fait après le verrou boardingSession pour limiter les créations concurrentes.
         if (selectedTrip?.id) {
-          await ensureTripExecutionOnBoardingStart({
-            companyId,
-            tripAssignmentId: targetAssignmentId,
-            vehicleId: targetVehicleId,
-            departureAgencyId: selectedAgencyId,
-            departureCity: selectedTrip.departure,
-            weeklyTripId: selectedTrip.id,
-            tripExecutionDate: selectedDate,
-            departureTime: selectedTrip.heure,
-            targetArrivalCity: selectedTrip.arrival,
-          });
+          try {
+            await ensureTripExecutionOnBoardingStart({
+              companyId,
+              tripAssignmentId: targetAssignmentId,
+              vehicleId: targetVehicleId,
+              departureAgencyId: selectedAgencyId,
+              departureCity: selectedTrip.departure,
+              weeklyTripId: selectedTrip.id,
+              tripExecutionDate: selectedDate,
+              departureTime: selectedTrip.heure,
+              targetArrivalCity: selectedTrip.arrival,
+            });
+          } catch (teErr: unknown) {
+            const teMsg = String((teErr as Error)?.message ?? teErr).toLowerCase();
+            const tePermissionDenied =
+              teMsg.includes("missing or insufficient permissions") || teMsg.includes("permission_denied");
+            // Do not block boarding flow if tripExecution upsert is denied by rules.
+            if (!tePermissionDenied) throw teErr;
+            console.warn("[AgenceEmbarquementPage] tripExecution skipped due to rules permissions:", teErr);
+          }
         }
         if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
         const cap = await getVehicleCapacity(companyId, targetVehicleId);
@@ -732,18 +763,21 @@ useEffect(() => {
       setResolvedVehicleCapacity(null);
       return;
     }
-    if (!companyId || !activeBoardingAssignment?.vehicleId) {
+    const effectiveVehicleId =
+      String(activeBoardingAssignment?.vehicleId ?? "").trim() ||
+      String(fallbackBoardingAssignment?.vehicleId ?? "").trim();
+    if (!companyId || !effectiveVehicleId) {
       setResolvedVehicleCapacity(null);
       return;
     }
     let cancelled = false;
-    getVehicleCapacity(companyId, activeBoardingAssignment.vehicleId).then((c) => {
+    getVehicleCapacity(companyId, effectiveVehicleId).then((c) => {
       if (!cancelled) setResolvedVehicleCapacity(c);
     });
     return () => {
       cancelled = true;
     };
-  }, [vehicleCapacity, companyId, activeBoardingAssignment?.vehicleId]);
+  }, [vehicleCapacity, companyId, activeBoardingAssignment?.vehicleId, fallbackBoardingAssignment?.vehicleId]);
 
   /* ---------- Véhicule : plaque depuis flotte (tripAssignment) + équipage affectation si dispo ---------- */
   useEffect(() => {
@@ -788,7 +822,14 @@ useEffect(() => {
         }
       }
 
-      const assignmentId = assignmentIdFromExecution || String(activeBoardingAssignment?.id ?? "").trim();
+      let assignmentId =
+        assignmentIdFromExecution ||
+        String(activeBoardingAssignment?.id ?? "").trim() ||
+        String(fallbackBoardingAssignment?.id ?? "").trim() ||
+        String(selectedTripAssignment?.id ?? "").trim();
+      if (!assignmentId && selectedTrip?.id) {
+        assignmentId = tripAssignmentDocId(selectedTrip.id, selectedDate, heure);
+      }
       if (assignmentId) {
         try {
           const asgSnap = await getDoc(
@@ -806,6 +847,12 @@ useEffect(() => {
             chef = String(ad.convoyeurName ?? "").trim() || chef;
             chauffeurPhone = String(ad.driverPhone ?? "").trim() || chauffeurPhone;
             chefPhone = String(ad.convoyeurPhone ?? "").trim() || chefPhone;
+            immat =
+              String((ad as any).vehiclePlate ?? "").trim() ||
+              String((ad as any).plateNumber ?? "").trim() ||
+              String((ad as any).vehicleImmat ?? "").trim() ||
+              immat;
+            bus = String((ad as any).vehicleModel ?? "").trim() || String((ad as any).busLabel ?? "").trim() || bus;
             if (!immat && ad.vehicleId) {
               const vs2 = await getDoc(vehicleRef(companyId, String(ad.vehicleId).trim()));
               if (vs2.exists() && !cancelled) {
@@ -819,7 +866,19 @@ useEffect(() => {
           /* ignore */
         }
       }
-      const effectiveVehicleId = String(activeBoardingAssignment?.vehicleId ?? "").trim();
+      const effectiveVehicleId =
+        String(activeBoardingAssignment?.vehicleId ?? "").trim() ||
+        String(fallbackBoardingAssignment?.vehicleId ?? "").trim() ||
+        String(selectedTripAssignment?.vehicleId ?? "").trim();
+      chauffeur = chauffeur || String(selectedTripAssignment?.driverName ?? "").trim();
+      chef = chef || String(selectedTripAssignment?.convoyeurName ?? "").trim();
+      chauffeurPhone = chauffeurPhone || String(selectedTripAssignment?.driverPhone ?? "").trim();
+      chefPhone = chefPhone || String(selectedTripAssignment?.convoyeurPhone ?? "").trim();
+      immat = immat || String(selectedTripAssignment?.vehiclePlate ?? "").trim();
+      bus = bus || String(selectedTripAssignment?.vehicleModel ?? "").trim();
+      if (!immat && effectiveVehicleId) {
+        immat = effectiveVehicleId;
+      }
       if (effectiveVehicleId) {
         try {
           const crewSnap = await getDocs(
@@ -834,10 +893,16 @@ useEffect(() => {
             };
             const drivers = crewSnap.docs
               .map((x) => x.data() as Record<string, unknown>)
-              .filter((d) => d.active !== false && d.isAvailable !== false && String(d.crewRole ?? "").trim() === "driver");
+              .filter((d) => {
+                const role = String(d.crewRole ?? d.role ?? "").trim().toLowerCase();
+                return d.active !== false && d.isAvailable !== false && (role === "driver" || role === "both");
+              });
             const convoyeurs = crewSnap.docs
               .map((x) => x.data() as Record<string, unknown>)
-              .filter((d) => d.active !== false && d.isAvailable !== false && String(d.crewRole ?? "").trim() === "convoyeur");
+              .filter((d) => {
+                const role = String(d.crewRole ?? d.role ?? "").trim().toLowerCase();
+                return d.active !== false && d.isAvailable !== false && (role === "convoyeur" || role === "both");
+              });
             const d0 = drivers[0];
             const c0 = convoyeurs[0];
             if (d0) {
@@ -854,9 +919,9 @@ useEffect(() => {
         }
       }
 
-      if (activeBoardingAssignment?.vehicleId) {
+      if (effectiveVehicleId) {
         try {
-          const vs = await getDoc(vehicleRef(companyId, activeBoardingAssignment.vehicleId));
+          const vs = await getDoc(vehicleRef(companyId, effectiveVehicleId));
           if (vs.exists() && !cancelled) {
             const vd = vs.data() as { plateNumber?: string; model?: string };
             immat = String(vd.plateNumber ?? "");
@@ -884,7 +949,24 @@ useEffect(() => {
     return () => {
       cancelled = true;
     };
-  }, [companyId, selectedAgencyId, selectedTrip, selectedDate, activeBoardingAssignment?.vehicleId]);
+  }, [
+    companyId,
+    selectedAgencyId,
+    selectedTrip,
+    selectedDate,
+    activeBoardingAssignment?.id,
+    activeBoardingAssignment?.vehicleId,
+    fallbackBoardingAssignment?.id,
+    fallbackBoardingAssignment?.vehicleId,
+    selectedTripAssignment?.id,
+    selectedTripAssignment?.vehicleId,
+    selectedTripAssignment?.driverName,
+    selectedTripAssignment?.convoyeurName,
+    selectedTripAssignment?.driverPhone,
+    selectedTripAssignment?.convoyeurPhone,
+    selectedTripAssignment?.vehiclePlate,
+    selectedTripAssignment?.vehicleModel,
+  ]);
 
   /* ---------- Pré-remplissage navigation (boarding/scan : tripAssignment obligatoire) ---------- */
   useEffect(() => {

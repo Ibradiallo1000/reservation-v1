@@ -431,6 +431,12 @@ service cloud.firestore {
           || getUserRole() == 'admin_platforme'
           || getUserRole() == 'admin_compagnie'
         );
+        /* Exception ciblée chefEmbarquement: update borné à quelques champs opérationnels. */
+        allow update: if isAuth() && userCompanyId() == companyId
+          && (hasUserRole('chefEmbarquement') || hasUserRole('chefembarquement'))
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            'status', 'departureTime', 'checkpoints', 'updatedAt'
+          ]);
 
         allow delete: if false;
       }
@@ -1212,6 +1218,12 @@ service cloud.firestore {
           canModifyFleet() ||
           isResponsableLogistique() ||
           (
+            (hasUserRole('chefEmbarquement') || hasUserRole('chefembarquement')) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'operationStatus', 'currentTripId', 'updatedAt'
+            ])
+          ) ||
+          (
             (
               getUserRole() == 'chefAgence' ||
               getUserRole() == 'chefagence' ||
@@ -1230,7 +1242,15 @@ service cloud.firestore {
             ])
           )
         ) &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['operationStatus', 'currentTripId', 'status']);
+        (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['operationStatus', 'currentTripId', 'status']) ||
+          (
+            (hasUserRole('chefEmbarquement') || hasUserRole('chefembarquement')) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'operationStatus', 'currentTripId', 'updatedAt'
+            ])
+          )
+        );
         allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && canModifyFleet();
       }
 
@@ -1290,7 +1310,19 @@ service cloud.firestore {
 
       /* Company-level personnel. Authenticated read/write. */
       match /personnel/{personnelId} {
-        allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId
+          || getUserRole() == 'admin_platforme'
+          || (
+            userAgencyBelongsToCompany(companyId)
+            && (
+              isBoardingOfficer()
+              || getUserRole() == 'escale_agent'
+              || getUserRole() == 'escale_manager'
+            )
+          )
+        );
+        allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
       /* Plan change requests. Authenticated read/write. */

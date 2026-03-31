@@ -554,6 +554,7 @@ export async function createPlannedTripAssignment(
 
   await runTransaction(db, async (transaction) => {
     const aSnap = await transaction.get(assignmentRef);
+    let oldSlotRefToDelete: ReturnType<typeof doc> | null = null;
 
     if (aSnap.exists()) {
       const prev = aSnap.data() as TripAssignmentDoc;
@@ -567,7 +568,7 @@ export async function createPlannedTripAssignment(
         if (oldSlotSnap.exists()) {
           const od = oldSlotSnap.data() as { assignmentId?: string };
           if (od.assignmentId === id) {
-            transaction.delete(oldSlotRef);
+            oldSlotRefToDelete = oldSlotRef;
           }
         }
       }
@@ -633,6 +634,9 @@ export async function createPlannedTripAssignment(
       status: "planned",
       updatedAt: now,
     });
+    if (oldSlotRefToDelete) {
+      transaction.delete(oldSlotRefToDelete);
+    }
     // Do not block assignment creation on fleet mirror update permissions.
     // Fleet consistency is reconciled by planner/fleet flows and periodic recompute.
   });
@@ -822,12 +826,12 @@ export async function updatePlannedTripAssignmentVehicle(
     }
 
     if (nextVehicleId === oldVid) {
+      const sameSlotRef = doc(slotsCol, tripAssignmentVehicleSlotDocId(nextVehicleId, date, heureNorm));
+      const sameSnap = await transaction.get(sameSlotRef);
       transaction.update(assignmentRef, {
         vehicleId: nextVehicleId,
         updatedAt: now,
       });
-      const sameSlotRef = doc(slotsCol, tripAssignmentVehicleSlotDocId(nextVehicleId, date, heureNorm));
-      const sameSnap = await transaction.get(sameSlotRef);
       if (!sameSnap.exists() || (sameSnap.data() as { assignmentId?: string }).assignmentId !== assignmentId) {
         transaction.set(sameSlotRef, {
           assignmentId,
@@ -859,10 +863,11 @@ export async function updatePlannedTripAssignmentVehicle(
 
     const oldSlotRef = doc(slotsCol, tripAssignmentVehicleSlotDocId(oldVid, date, heureNorm));
     const oldSnap = await transaction.get(oldSlotRef);
+    let shouldDeleteOldSlot = false;
     if (oldSnap.exists()) {
       const od = oldSnap.data() as { assignmentId?: string };
       if (od.assignmentId === assignmentId) {
-        transaction.delete(oldSlotRef);
+        shouldDeleteOldSlot = true;
       }
     }
 
@@ -882,6 +887,9 @@ export async function updatePlannedTripAssignmentVehicle(
       status: "planned",
       updatedAt: now,
     });
+    if (shouldDeleteOldSlot) {
+      transaction.delete(oldSlotRef);
+    }
     transaction.update(newVehicleRef, {
       currentAssignmentId: assignmentId,
       updatedAt: now,
