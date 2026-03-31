@@ -415,14 +415,14 @@ service cloud.firestore {
 
       match /tripExecutions/{executionId} {
         /* Lecture : chaque agence ne voit que les destinations qui correspondent à sa ville. */
-        allow get, list: if isAuth() && userCompanyId() == companyId && (
+        allow get, list: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
           getUserRole() == 'admin_platforme'
           || getUserRole() == 'admin_compagnie'
           || resource.data.get('destinationCity', '') == userAgencyCity()
         );
 
         /* Écriture : uniquement par les rôles qui mettent à jour le cycle (embarquement/escale/fleet/logistique). */
-        allow create, update: if isAuth() && userCompanyId() == companyId && (
+        allow create, update: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
           isBoardingOfficer()
           || getUserRole() == 'escale_manager'
           || getUserRole() == 'escale_agent'
@@ -432,7 +432,7 @@ service cloud.firestore {
           || getUserRole() == 'admin_compagnie'
         );
         /* Exception ciblée chefEmbarquement: update borné à quelques champs opérationnels. */
-        allow update: if isAuth() && userCompanyId() == companyId
+        allow update: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId))
           && (hasUserRole('chefEmbarquement') || hasUserRole('chefembarquement'))
           && request.resource.data.diff(resource.data).changedKeys().hasOnly([
             'status', 'departureTime', 'checkpoints', 'updatedAt'
@@ -769,7 +769,11 @@ service cloud.firestore {
              contrôleur embarquement : champs restreints.
              operator_digital : peut valider/refuser même si shiftId est présent/validé, mais
              pour les updates "non-statut" on limite les clés autorisées (cash/paiement). */
-          allow update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          allow update, delete: if isAuth() && (
+            userCompanyId() == companyId
+            || userAgencyBelongsToCompany(companyId)
+            || getUserRole() == 'admin_platforme'
+          ) && (
             (
               getUserRole() == 'operator_digital' ||
               /* Validation finale chef/compta : autoriser le marquage validatedAt/updatedAt

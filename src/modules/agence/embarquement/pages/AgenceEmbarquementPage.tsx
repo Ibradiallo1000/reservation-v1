@@ -620,7 +620,16 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
           : null;
       } catch (e: unknown) {
         const msg = String((e as Error)?.message ?? e);
+        const m = msg.toLowerCase();
+        const permissionDenied =
+          m.includes("missing or insufficient permissions") || m.includes("permission_denied");
         if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
+        if (permissionDenied) {
+          // Degraded mode: keep selected assignment and continue without lock/capacity snapshot.
+          console.warn("[AgenceEmbarquementPage] degraded mode on permission error:", msg);
+          lockHeldRef.current = null;
+          return;
+        }
         if (msg.includes(BOARDING_SESSION_IN_USE_MSG)) {
           alert(BOARDING_SESSION_IN_USE_MSG);
         } else {
@@ -1298,6 +1307,18 @@ useEffect(() => {
                 throw new Error("Déjà embarqué");
               }
             }
+            let liveAsgRef = null as ReturnType<typeof doc> | null;
+            let liveAsg: TripAssignmentDoc | null = null;
+            if (liveAid) {
+              liveAsgRef = doc(
+                db,
+                `companies/${companyId}/agences/${agencyIdToUse}/tripAssignments/${liveAid}`
+              );
+              const asgSnap = await tx.get(liveAsgRef);
+              if (asgSnap.exists()) {
+                liveAsg = asgSnap.data() as TripAssignmentDoc;
+              }
+            }
 
             const tripKey = boardingStatsKey(selDep ?? "", selArr ?? "", selHr ?? "", selectedDate);
             const statsRef = getBoardingStatsRef(companyId, agencyIdToUse, tripKey);
@@ -1319,36 +1340,26 @@ useEffect(() => {
             }
             incrementBoardingStatsEmbarked(tx, companyId, agencyIdToUse, tripKey, addSeats);
 
-            if (liveAid) {
-              const asgRef = doc(
-                db,
-                `companies/${companyId}/agences/${agencyIdToUse}/tripAssignments/${liveAid}`
-              );
-              const asgSnap = await tx.get(asgRef);
-              if (asgSnap.exists()) {
-                const asg = asgSnap.data() as TripAssignmentDoc;
-                if (asg.status === "planned" || asg.status === "validated") {
-                  const ls = asg.liveStatus;
-                  const prevBoarded = ls?.boardedCount ?? 0;
-                  const isFirstEmbark = ls?.boardingStartedAt == null;
-                  const expected =
-                    isFirstEmbark && prefetchedLiveExpected != null
-                      ? prefetchedLiveExpected
-                      : (ls?.expectedCount ?? 0);
-                  const nextBoarded = prevBoarded + addSeats;
-                  const startedAt =
-                    ls?.boardingStartedAt != null ? ls.boardingStartedAt : serverTimestamp();
-                  tx.update(asgRef, {
-                    liveStatus: {
-                      boardedCount: nextBoarded,
-                      expectedCount: expected,
-                      status: "boarding",
-                      boardingStartedAt: startedAt,
-                    },
-                    updatedAt: serverTimestamp(),
-                  });
-                }
-              }
+            if (liveAsgRef && liveAsg && (liveAsg.status === "planned" || liveAsg.status === "validated")) {
+              const ls = liveAsg.liveStatus;
+              const prevBoarded = ls?.boardedCount ?? 0;
+              const isFirstEmbark = ls?.boardingStartedAt == null;
+              const expected =
+                isFirstEmbark && prefetchedLiveExpected != null
+                  ? prefetchedLiveExpected
+                  : (ls?.expectedCount ?? 0);
+              const nextBoarded = prevBoarded + addSeats;
+              const startedAt =
+                ls?.boardingStartedAt != null ? ls.boardingStartedAt : serverTimestamp();
+              tx.update(liveAsgRef, {
+                liveStatus: {
+                  boardedCount: nextBoarded,
+                  expectedCount: expected,
+                  status: "boarding",
+                  boardingStartedAt: startedAt,
+                },
+                updatedAt: serverTimestamp(),
+              });
             }
 
             if (embarkDedupRef) {
