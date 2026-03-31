@@ -90,6 +90,12 @@ function isVehicleAssignableOperationally(v: Partial<VehicleDoc>, assignmentId?:
 
 /** Message affiché si une autre instance détient déjà le verrou actif. */
 export const BOARDING_SESSION_IN_USE_MSG = "Embarquement déjà en cours sur un autre appareil";
+/**
+ * Hotfix prod: verrou Firestore embarquement désactivé temporairement.
+ * Raison: règles hétérogènes selon profils en production -> 403 bloquants au scan.
+ * Impact: plus d'exclusivité multi-appareils stricte pendant l'embarquement.
+ */
+const BOARDING_LOCKS_DISABLED = true;
 
 export type TripAssignmentVehicleSlotDoc = {
   assignmentId: string;
@@ -906,6 +912,7 @@ export async function startBoardingSessionLock(
   uid: string,
   clientInstanceId: string
 ): Promise<void> {
+  if (BOARDING_LOCKS_DISABLED) return;
   const assignmentRef = doc(db, "companies", companyId, "agences", agencyId, "tripAssignments", assignmentId);
   const now = serverTimestamp();
 
@@ -951,6 +958,7 @@ export async function closeBoardingSessionLock(
   assignmentId: string,
   clientInstanceId: string
 ): Promise<void> {
+  if (BOARDING_LOCKS_DISABLED) return;
   const assignmentRef = doc(db, "companies", companyId, "agences", agencyId, "tripAssignments", assignmentId);
   const now = serverTimestamp();
 
