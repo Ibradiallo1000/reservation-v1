@@ -28,8 +28,13 @@ import { normalizeCity } from "@/shared/utils/normalizeCity";
 import { getAgencyCityFromDoc } from "@/modules/agence/utils/agencyCity";
 import { vehicleRef } from "../fleet/vehiclesService";
 import { getAffectationForBoarding } from "../fleet/affectationService";
-import { tripInstanceRef, buildTripInstanceId } from "../tripInstances/tripInstanceService";
+import {
+  tripInstanceRef,
+  buildTripInstanceId,
+  updateTripInstanceStatutMetier,
+} from "../tripInstances/tripInstanceService";
 import type { TripInstanceDoc } from "../tripInstances/tripInstanceTypes";
+import { TRIP_INSTANCE_STATUT_METIER } from "../tripInstances/tripInstanceTypes";
 import { getRouteStops } from "../routes/routeStopsService";
 import { getPassengersToDrop } from "../dropoff/dropoffService";
 import {
@@ -43,11 +48,12 @@ import { syncVehicleWithTripExecution } from "../fleet/vehicleOperationStateMach
 
 const STATUS_RANK: Record<TripExecutionStatus, number> = {
   boarding: 0,
-  departed: 1,
-  transit: 2,
-  arrived: 3,
-  finished: 4,
-  disrupted: 5,
+  validation_agence_requise: 1,
+  departed: 2,
+  transit: 3,
+  arrived: 4,
+  finished: 5,
+  disrupted: 6,
 };
 
 export function tripExecutionRef(companyId: string, tripInstanceId: string) {
@@ -218,6 +224,13 @@ async function ensureTripExecutionBaseFromTripInstance(companyId: string, tripIn
       passengersCount: 0,
       status: "boarding",
       boardingStartedAt: null,
+      boardingCompletedAt: null,
+      boardingCompletedBy: null,
+      agencyValidationRequiredAt: null,
+      agencyValidatedAt: null,
+      agencyValidatedBy: null,
+      departureValidatedAt: null,
+      departureValidatedBy: null,
       departedAt: null,
       transitAt: null,
       arrivedAt: null,
@@ -360,6 +373,21 @@ export async function ensureTripExecutionOnBoardingStart(params: {
     } as Partial<TripExecutionDoc>,
     { merge: true }
   );
+  await updateTripInstanceStatutMetier(
+    companyId,
+    tripInstanceId,
+    TRIP_INSTANCE_STATUT_METIER.EMBARQUEMENT_EN_COURS
+  ).catch(() => {
+    /* non-bloquant */
+  });
+  await setDoc(
+    tripInstanceRef(companyId, tripInstanceId),
+    {
+      destinationAgencyId: arrivalAgencyId ?? null,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
   try {
     const teAfter = await getDoc(ref);
     if (teAfter.exists()) {
@@ -457,6 +485,11 @@ export async function upsertTripExecutionDeparted(params: { companyId: string; t
   const teSnap = await getDoc(tripExecutionRef(companyId, tripInstanceId));
   if (!teSnap.exists()) return;
   const te = teSnap.data() as TripExecutionDoc;
+  const tiSnap = await getDoc(tripInstanceRef(companyId, tripInstanceId));
+  const ti = tiSnap.exists() ? (tiSnap.data() as { statutMetier?: string }) : null;
+  if (String(ti?.statutMetier ?? "") !== TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT) {
+    throw new Error("Validation agence requise avant le départ véhicule.");
+  }
 
   let passengersCount = te.passengersCount ?? 0;
   if (te.tripAssignmentId && te.departureAgencyId) {
@@ -499,9 +532,81 @@ export async function upsertTripExecutionDeparted(params: { companyId: string; t
   }
 }
 
+export async function markTripExecutionBoardingCompleted(params: {
+  companyId: string;
+  tripInstanceId: string;
+  completedBy: string;
+}): Promise<void> {
+  const { companyId, tripInstanceId, completedBy } = params;
+  await ensureTripExecutionBaseFromTripInstance(companyId, tripInstanceId);
+  await upsertTripExecutionStatus({
+    companyId,
+    tripInstanceId,
+    newStatus: "validation_agence_requise",
+    statusFieldTimes: {},
+  });
+  await setDoc(
+    tripExecutionRef(companyId, tripInstanceId),
+    {
+      boardingCompletedAt: serverTimestamp(),
+      boardingCompletedBy: completedBy,
+      agencyValidationRequiredAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    } as Partial<TripExecutionDoc>,
+    { merge: true }
+  );
+  await updateTripInstanceStatutMetier(
+    companyId,
+    tripInstanceId,
+    TRIP_INSTANCE_STATUT_METIER.VALIDATION_AGENCE_REQUISE
+  );
+}
+
+export async function ensureAgencyValidationBeforeDeparture(params: {
+  companyId: string;
+  tripInstanceId: string;
+  validatedBy: string | null;
+}): Promise<void> {
+  const { companyId, tripInstanceId, validatedBy } = params;
+  await ensureTripExecutionBaseFromTripInstance(companyId, tripInstanceId);
+  const tiSnap = await getDoc(tripInstanceRef(companyId, tripInstanceId));
+  if (!tiSnap.exists()) throw new Error("Trajet introuvable.");
+  const ti = tiSnap.data() as { statutMetier?: string };
+  if (String(ti.statutMetier ?? "") !== TRIP_INSTANCE_STATUT_METIER.VALIDATION_AGENCE_REQUISE) {
+    throw new Error("Validation agence requise avant le départ véhicule.");
+  }
+  const canValidate = !!validatedBy;
+  if (canValidate) {
+    const ref = tripExecutionRef(companyId, tripInstanceId);
+    await setDoc(
+      ref,
+      {
+        agencyValidatedAt: serverTimestamp(),
+        agencyValidatedBy: validatedBy,
+        departureValidatedAt: serverTimestamp(),
+        departureValidatedBy: validatedBy,
+        updatedAt: serverTimestamp(),
+      } as Partial<TripExecutionDoc>,
+      { merge: true }
+    );
+    await updateTripInstanceStatutMetier(
+      companyId,
+      tripInstanceId,
+      TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT
+    );
+  }
+}
+
 export async function upsertTripExecutionTransit(params: { companyId: string; tripInstanceId: string }): Promise<void> {
   const { companyId, tripInstanceId } = params;
   await ensureTripExecutionBaseFromTripInstance(companyId, tripInstanceId);
+  const tiSnapBefore = await getDoc(tripInstanceRef(companyId, tripInstanceId));
+  if (tiSnapBefore.exists()) {
+    const tiBefore = tiSnapBefore.data() as { statutMetier?: string };
+    if (String(tiBefore.statutMetier ?? "") !== TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT) {
+      throw new Error("Interdit: passage direct embarquement -> transit sans validation agence.");
+    }
+  }
   await upsertTripExecutionStatus({
     companyId,
     tripInstanceId,
@@ -532,19 +637,6 @@ export async function upsertTripExecutionArrived(params: { companyId: string; tr
     newStatus: "arrived",
     statusFieldTimes: { arrivedAt: serverTimestamp() },
   });
-  const teSnap = await getDoc(tripExecutionRef(companyId, tripInstanceId));
-  if (teSnap.exists()) {
-    const te = teSnap.data() as TripExecutionDoc;
-    try {
-      await syncVehicleWithTripExecution({
-        companyId,
-        tripInstanceId,
-        tripExecution: te,
-      });
-    } catch {
-      // best effort
-    }
-  }
 }
 
 export async function syncTripExecutionCheckpoint(params: {

@@ -99,6 +99,7 @@ const FinancesPage = lazy(() => import("./modules/compagnie/pages/FinancesPage")
 const ReservationsReseauPage = lazy(() => import("./modules/compagnie/pages/ReservationsReseauPage"));
 const FlottePage = lazy(() => import("./modules/compagnie/pages/FlottePage"));
 const AuditControlePage = lazy(() => import("./modules/compagnie/pages/AuditControlePage"));
+const CompanySystemErrorsPage = lazy(() => import("./modules/compagnie/pages/CompanySystemErrorsPage"));
 const CompagnieComptabiliteValidationPage = lazy(() => import("./modules/compagnie/pages/CompagnieComptabiliteValidationPage"));
 const ParametresPlan = lazy(() => import("./modules/compagnie/components/parametres/ParametresPlan"));
 const FinancialSettingsPage = lazy(() => import("./modules/compagnie/settings/FinancialSettingsPage"));
@@ -116,6 +117,8 @@ const AgencyActivityDomainPage = lazy(() => import("./modules/agence/manager/dom
 const AgencyActivityLogPage = lazy(() => import("./modules/agence/manager/AgencyActivityLogPage"));
 const AgencyAgentHistoryPage = lazy(() => import("./modules/agence/manager/AgencyAgentHistoryPage"));
 const AgencyCashDomainPage = lazy(() => import("./modules/agence/manager/domains/AgencyCashDomainPage"));
+const AgencyDepartureValidationsPage = lazy(() => import("./modules/agence/manager/AgencyDepartureValidationsPage"));
+const AgencyExpectedArrivalsPage = lazy(() => import("./modules/agence/manager/AgencyExpectedArrivalsPage"));
 const AgenceTrajetsPage = lazy(() => import("./modules/agence/pages/AgenceTrajetsPage"));
 const AgencyTreasuryNewOperationPage = lazy(() => import("./modules/agence/treasury/pages/AgencyTreasuryNewOperationPage"));
 const AgencyTreasuryTransferPage = lazy(() => import("./modules/agence/treasury/pages/AgencyTreasuryTransferPage"));
@@ -443,6 +446,7 @@ const AppRoutes = () => {
           <Route path="comptabilite/validation" element={<CompagnieComptabiliteValidationPage />} />
           <Route path="comptabilite" element={<Navigate to="audit-controle?tab=controle" replace />} />
           <Route path="audit-controle" element={<AuditControlePage />} />
+          <Route path="system-errors" element={<CompanySystemErrorsPage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
           <Route path="parametres/plan" element={<ParametresPlan companyId={""} />} />
@@ -575,6 +579,22 @@ const AppRoutes = () => {
           <Route path="treasury/transfer" element={<AgencyTreasuryTransferPage />} />
           <Route path="treasury/new-payable" element={<AgencyTreasuryNewPayablePage />} />
           <Route path="team" element={<ManagerTeamPage />} />
+          <Route
+            path="validation-departs"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.validationsAgence} withCurrency>
+                <AgencyDepartureValidationsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="arrivees-attendues"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.validationsAgence} withCurrency>
+                <AgencyExpectedArrivalsPage />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="planification-trajets"
             element={

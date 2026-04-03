@@ -45,7 +45,6 @@ interface Props {
   totalPrice: number;
   canValidate: boolean;
   isProcessing: boolean;
-  processingMessage?: string;
   onValidate: () => void;
   formatMoney: (n: number) => string;
   primaryColor: string;
@@ -65,7 +64,7 @@ export const SalePanel: React.FC<Props> = ({
   selectedTrip, canSell, status,
   nomClient, onNomChange, telephone, onTelChange,
   placesAller, onPlacesAllerChange,
-  totalPrice, canValidate, isProcessing, processingMessage, onValidate,
+  totalPrice, canValidate, isProcessing, onValidate,
   formatMoney, primaryColor, secondaryColor, validationHint,
   activationByEscaleManager = false,
   clientSuggestions = [],
@@ -354,8 +353,9 @@ export const SalePanel: React.FC<Props> = ({
             style={{ background: canValidate ? gradient : "#9CA3AF" }}
           >
             {isProcessing ? (
-              <span className="inline-flex items-center gap-1.5">
-                <Loader2 className="w-4 h-4 animate-spin" /> Traitement...
+              <span className="inline-flex items-center justify-center gap-2" aria-busy="true">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden />
+                <span className="sr-only">Vente en cours</span>
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5">
@@ -363,11 +363,6 @@ export const SalePanel: React.FC<Props> = ({
               </span>
             )}
           </button>
-          {isProcessing && (
-            <p className="text-[11px] text-center text-amber-700 px-1 font-medium">
-              {processingMessage || "Encaissement en cours..."}
-            </p>
-          )}
         </div>
       </div>
     </div>

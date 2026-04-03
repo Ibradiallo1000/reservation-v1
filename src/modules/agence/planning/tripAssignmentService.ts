@@ -81,6 +81,8 @@ function isVehicleTechnicallyActiveForPlanning(v: Partial<VehicleDoc> & { isArch
 }
 
 function isVehicleAssignableOperationally(v: Partial<VehicleDoc>, assignmentId?: string): boolean {
+  const statusVehicule = String((v as { statusVehicule?: string }).statusVehicule ?? "").trim().toLowerCase();
+  if (statusVehicule && statusVehicule !== "disponible") return false;
   if (canAssignVehicle(v)) return true;
   const opState = deriveOperationStatus(v);
   if (opState !== "planned") return false;
@@ -590,6 +592,9 @@ export async function createPlannedTripAssignment(
     if (!isVehicleAssignableOperationally(vehicleData, id)) {
       throw new Error("Véhicule déjà planifié sur une autre affectation.");
     }
+    if (String((vehicleData as { statusVehicule?: string }).statusVehicule ?? "disponible").toLowerCase() !== "disponible") {
+      throw new Error("Affectation impossible: véhicule non disponible.");
+    }
 
     const prevStatus = aSnap.exists() ? (aSnap.data() as TripAssignmentDoc).status : undefined;
     const wasCounted = prevStatus === "planned" || prevStatus === "validated";
@@ -737,8 +742,6 @@ export async function cancelPlannedTripAssignment(
     const heureNorm = String(data.heure ?? "").trim();
     const vehicleSlotRef = doc(slotsCol, tripAssignmentVehicleSlotDocId(data.vehicleId, data.date, heureNorm));
     const vSnap = await transaction.get(vehicleSlotRef);
-    const currentVehicleRef = vehicleRef(companyId, data.vehicleId);
-    const currentVehicleSnap = await transaction.get(currentVehicleRef);
     const now = serverTimestamp();
     await applyPlanningStatsDecrementRemove(transaction, companyId, data.vehicleId, data.date);
 
@@ -746,15 +749,6 @@ export async function cancelPlannedTripAssignment(
       const vd = vSnap.data() as { assignmentId?: string };
       if (vd.assignmentId === assignmentId) {
         transaction.delete(vehicleSlotRef);
-      }
-    }
-    if (currentVehicleSnap.exists()) {
-      const vd = currentVehicleSnap.data() as { currentAssignmentId?: string };
-      if (String(vd.currentAssignmentId ?? "") === assignmentId) {
-        transaction.update(currentVehicleRef, {
-          currentAssignmentId: null,
-          updatedAt: now,
-        });
       }
     }
 
@@ -810,11 +804,7 @@ export async function updatePlannedTripAssignmentVehicle(
     const oldVid = String(data.vehicleId ?? "").trim();
     const now = serverTimestamp();
     const newVehicleRef = vehicleRef(companyId, nextVehicleId);
-    const oldVehicleRef = vehicleRef(companyId, oldVid);
-    const [newVehicleSnap, oldVehicleSnap] = await Promise.all([
-      transaction.get(newVehicleRef),
-      transaction.get(oldVehicleRef),
-    ]);
+    const newVehicleSnap = await transaction.get(newVehicleRef);
 
     if (!newVehicleSnap.exists()) throw new Error("Véhicule introuvable.");
     const newVehicleData = newVehicleSnap.data() as VehicleDoc & { currentAssignmentId?: string; isArchived?: boolean };
@@ -823,6 +813,9 @@ export async function updatePlannedTripAssignmentVehicle(
     }
     if (!isVehicleAssignableOperationally(newVehicleData, assignmentId)) {
       throw new Error("Véhicule déjà planifié sur une autre affectation.");
+    }
+    if (String((newVehicleData as { statusVehicule?: string }).statusVehicule ?? "disponible").toLowerCase() !== "disponible") {
+      throw new Error("Affectation impossible: véhicule non disponible.");
     }
 
     if (nextVehicleId === oldVid) {
@@ -840,12 +833,6 @@ export async function updatePlannedTripAssignmentVehicle(
           date,
           heure: heureNorm,
           status: "planned",
-          updatedAt: now,
-        });
-      }
-      if (newVehicleSnap.exists()) {
-        transaction.update(newVehicleRef, {
-          currentAssignmentId: assignmentId,
           updatedAt: now,
         });
       }
@@ -889,19 +876,6 @@ export async function updatePlannedTripAssignmentVehicle(
     });
     if (shouldDeleteOldSlot) {
       transaction.delete(oldSlotRef);
-    }
-    transaction.update(newVehicleRef, {
-      currentAssignmentId: assignmentId,
-      updatedAt: now,
-    });
-    if (oldVehicleSnap.exists()) {
-      const oldVehicleData = oldVehicleSnap.data() as { currentAssignmentId?: string };
-      if (String(oldVehicleData.currentAssignmentId ?? "") === assignmentId) {
-        transaction.update(oldVehicleRef, {
-          currentAssignmentId: null,
-          updatedAt: now,
-        });
-      }
     }
   });
 }

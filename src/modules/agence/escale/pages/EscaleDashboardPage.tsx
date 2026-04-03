@@ -541,6 +541,7 @@ export default function EscaleDashboardPage() {
               .map((te) => {
                 const statusLabel: Record<TripExecutionStatus, string> = {
                   boarding: "En embarquement",
+                  validation_agence_requise: "Validation agence requise",
                   departed: "Départ origine enregistré",
                   transit: "En transit",
                   arrived: "Arrivé",

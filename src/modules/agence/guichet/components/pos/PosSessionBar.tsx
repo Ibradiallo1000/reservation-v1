@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import { AGENCY_KPI_TIME } from "@/modules/agence/shared/agencyKpiTimeContract";
 import {
   Power, Pause, Play, RefreshCw, XCircle, LogOut, User2, Timer, WifiOff,
 } from "lucide-react";
@@ -123,15 +122,10 @@ export const PosSessionBar: React.FC<Props> = ({
                 <span className="text-gray-500">Billets</span>
                 <span className="font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded-md">{sessionTickets}</span>
               </div>
-              <div className="flex flex-col items-end gap-0.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-gray-500">Recette</span>
-                  <span className="font-bold rounded-md px-2 py-0.5" style={{ background: `${primaryColor}15`, color: primaryColor }}>
-                    {sessionRevenue}
-                  </span>
-                </div>
-                <span className="text-[10px] text-gray-400 max-w-[14rem] text-right leading-tight">
-                  {AGENCY_KPI_TIME.SESSION_POSTE}
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500">Recette</span>
+                <span className="font-bold rounded-md px-2 py-0.5" style={{ background: `${primaryColor}15`, color: primaryColor }}>
+                  {sessionRevenue}
                 </span>
               </div>
             </div>

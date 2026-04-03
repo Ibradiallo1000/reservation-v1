@@ -78,6 +78,10 @@ import {
   logComptabiliteTabDenied,
   normalizeUserRoles,
 } from '@/modules/agence/comptabilite/agencyComptabiliteTabAccess';
+import {
+  belongsToGuichetSession,
+  fetchReservationDocsForShiftSlot,
+} from '@/modules/agence/guichet/guichetSessionReservationModel';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -170,7 +174,6 @@ type ShiftAgg = {
   amount: number;
   cashExpected: number;
   mmExpected: number;
-  onlineAmount?: number; // NOUVEAU : montant en ligne
 };
 
 /* ============================================================================
@@ -985,7 +988,7 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [pendingCourierSessions.length, userRole]);
 
   /* ============================================================================
-     SECTION : STATISTIQUES EN TEMPS RÉEL (ÉTENDU POUR TOUS LES CANAUX)
+     SECTION : STATISTIQUES EN TEMPS RÉEL (GUICHET — POSTE + VENDEUR UNIQUEMENT)
      Description : Calcul des stats live pour les postes actifs/en pause
      ============================================================================ */
   
@@ -1010,15 +1013,15 @@ const AgenceComptabilitePage: React.FC = () => {
       if (liveUnsubsRef.current[s.id]) continue;
       
       console.log(`[AgenceCompta] Démarrage de l'écoute pour le poste ${s.id}`);
-      // Écoute TOUTES les réservations du poste (guichet + ligne)
-      const qLive = query(rRef, where('shiftId', '==', s.id));
+      const qLive = query(rRef, where('sessionId', '==', s.id));
       const unsub = onSnapshot(qLive, (snap) => {
         let reservations = 0, tickets = 0, amount = 0;
         snap.forEach(d => {
-          const r = d.data() as any;
+          const r = d.data() as Record<string, unknown>;
+          if (!belongsToGuichetSession(r, s.id, s.userId)) return;
           reservations += 1;
-          tickets += (r.seatsGo || 0) + (r.seatsReturn || 0);
-          amount += r.montant || 0;
+          tickets += (Number(r.seatsGo) || 0) + (Number(r.seatsReturn) || 0);
+          amount += Number(r.montant) || 0;
         });
         setLiveStats(prev => ({ ...prev, [s.id]: { reservations, tickets, amount } }));
       });
@@ -1033,7 +1036,7 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [activeShifts, pausedShifts, user?.companyId, user?.agencyId]);
 
   /* ============================================================================
-     SECTION : AGRÉGATS POUR RÉCEPTIONS (ÉTENDU POUR INCLURE EN LIGNE)
+     SECTION : AGRÉGATS POUR RÉCEPTIONS (GUICHET UNIQUEMENT)
      Description : Calcul des montants attendus pour validation comptable
      ============================================================================ */
   
@@ -1048,27 +1051,23 @@ const AgenceComptabilitePage: React.FC = () => {
       console.log(`[AgenceCompta] ${closedShifts.length} poste(s) clôturé(s) à analyser`);
       
       for (const s of closedShifts) {
-        const snap = await getDocs(query(rRef, where('shiftId', '==', s.id)));
-        let reservations = 0, tickets = 0, amount = 0, cashExpected = 0, mmExpected = 0, onlineAmount = 0;
+        const docs = await fetchReservationDocsForShiftSlot(user.companyId, user.agencyId, s.id);
+        let reservations = 0, tickets = 0, amount = 0, cashExpected = 0, mmExpected = 0;
         
-        snap.forEach(d => {
-          const r = d.data() as any;
+        docs.forEach(d => {
+          const r = d.data() as Record<string, unknown>;
+          if (!belongsToGuichetSession(r, s.id, s.userId)) return;
           reservations += 1;
-          tickets += (r.seatsGo || 0) + (r.seatsReturn || 0);
-          amount += (r.montant || 0);
+          tickets += (Number(r.seatsGo) || 0) + (Number(r.seatsReturn) || 0);
+          const montant = Number(r.montant) || 0;
+          amount += montant;
           
           const pay = String(r.paiement || '').toLowerCase();
-          const canal = String(r.canal || '').toLowerCase();
-          
-          if (canal === 'guichet' || canal === '') {
-            if (pay.includes('esp')) { 
-              cashExpected += (r.montant || 0); 
-            }
-            if (pay.includes('mobile') || pay.includes('mm')) { 
-              mmExpected += (r.montant || 0); 
-            }
-          } else if (canal === 'en_ligne') {
-            onlineAmount += (r.montant || 0);
+          if (pay.includes('esp')) {
+            cashExpected += montant;
+          }
+          if (pay.includes('mobile') || pay.includes('mm')) {
+            mmExpected += montant;
           }
         });
         
@@ -1078,7 +1077,6 @@ const AgenceComptabilitePage: React.FC = () => {
           amount, 
           cashExpected, 
           mmExpected,
-          onlineAmount 
         };
       }
       
@@ -1271,8 +1269,8 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [user?.companyId, user?.agencyId, accountant, receptionInputsCourier, currencySymbol, savingCourierSessionIds]);
 
   /* ============================================================================
-     SECTION : RAPPORTS DÉTAILLÉS (ÉTENDU POUR TOUS LES CANAUX)
-     Description : Génération des rapports de vente avec déduplication
+     SECTION : RAPPORTS DÉTAILLÉS (GUICHET — SESSION + VENDEUR)
+     Description : Détail des ventes du poste, sans mélange avec l’en ligne
      ============================================================================ */
   
   const loadReportForShift = useCallback(async (shiftId: string) => {
@@ -1295,64 +1293,16 @@ const AgenceComptabilitePage: React.FC = () => {
       const sSnap = await getDoc(sRef);
       const sDoc: any = sSnap.exists() ? sSnap.data() : {};
       
-      const startRaw = sDoc.startTime?.toDate?.() ?? sDoc.openedAt?.toDate?.() ?? null;
-      const endRaw   = sDoc.endTime?.toDate?.()   ?? sDoc.closedAt?.toDate?.()   ?? null;
-      const userId   = sDoc.userId || sDoc.openedById || '';
-      const userCode = sDoc.userCode || sDoc.openedByCode || '';
+      const userId   = String(sDoc.userId || sDoc.openedById || '');
 
-      const start = startRaw ? new Date(startRaw.getTime() - 5 * 60 * 1000) : null;
-      /** Fin de fenêtre : clôture + marge, ou maintenant si le poste est encore ouvert (sinon aucune vente « en ligne » sur la période). */
-      const rangeEnd = endRaw
-        ? new Date(endRaw.getTime() + 6 * 60 * 60 * 1000)
-        : new Date();
-
-      const isOnlineCanal = (c: string) =>
-        c === 'en_ligne' || c === 'online' || c === 'web';
-
-      // Réservations explicitement liées au shift (souvent guichet ; l’en ligne a rarement ce shiftId)
-      const snap1 = await getDocs(query(
-        rRef,
-        where('shiftId', '==', shiftId),
-        orderBy('createdAt', 'asc')
-      ));
-
-      let extraDocs: any[] = [];
-      let onlineWindowDocs: any[] = [];
-      // Même fenêtre horaire que le poste : orphelins guichet (même vendeur) + ventes en ligne agence
-      if (start) {
-        const snapAll = await getDocs(query(
-          rRef,
-          where('createdAt', '>=', Timestamp.fromDate(start)),
-          orderBy('createdAt', 'asc')
-        ));
-        extraDocs = snapAll.docs.filter((d) => {
-          const r = d.data() as any;
-          const dt = r.createdAt?.toDate?.() ?? new Date(0);
-          const inRange = dt >= start && dt <= rangeEnd;
-          const canal = String(r.canal || '').toLowerCase();
-          if (isOnlineCanal(canal)) return false;
-          const sameSeller =
-            (!!userId && r.guichetierId === userId) ||
-            (!!userCode && r.guichetierCode === userCode);
-          const noShiftId = !r.shiftId || r.shiftId === '';
-          return inRange && (canal === 'guichet' || canal === '') && sameSeller && noShiftId;
-        });
-
-        onlineWindowDocs = snapAll.docs.filter((d) => {
-          const r = d.data() as any;
-          const dt = r.createdAt?.toDate?.() ?? new Date(0);
-          const inRange = dt >= start && dt <= rangeEnd;
-          const canal = String(r.canal || '').toLowerCase();
-          return inRange && isOnlineCanal(canal);
-        });
-      }
+      const merged = await fetchReservationDocsForShiftSlot(user.companyId, user.agencyId, shiftId, {
+        perQueryLimit: 800,
+      });
 
       const mk = (d: any) => {
         const r = d.data() as any;
-        const canalRaw = String(r.canal || '').toLowerCase();
-        const isOnline = isOnlineCanal(canalRaw);
-        const canal = isOnline ? 'en_ligne' : canalRaw;
-        const encaissement = canal === 'guichet' || canal === '' ? 'agence' : 'compagnie';
+        const canal = 'guichet';
+        const encaissement = 'agence' as const;
 
         return {
           id: d.id,
@@ -1374,11 +1324,9 @@ const AgenceComptabilitePage: React.FC = () => {
         } as TicketRow;
       };
 
-      const byId = new Map<string, (typeof snap1.docs)[0]>();
-      for (const d of [...snap1.docs, ...extraDocs, ...onlineWindowDocs]) {
-        if (!byId.has(d.id)) byId.set(d.id, d);
-      }
-      const rawDocs = [...byId.values()];
+      const rawDocs = merged.filter((d) =>
+        belongsToGuichetSession(d.data() as Record<string, unknown>, shiftId, userId)
+      );
       const raw = rawDocs.map(mk);
 
       // Déduplication basée sur les références uniques

@@ -26,12 +26,33 @@ export type TripInstanceStatus =
   | "arrived"
   | "cancelled";
 
+export const TRIP_INSTANCE_STATUT_METIER = {
+  PLANIFIE: "planifie",
+  EMBARQUEMENT_EN_COURS: "embarquement_en_cours",
+  EMBARQUEMENT_TERMINE: "embarquement_termine",
+  VALIDATION_AGENCE_REQUISE: "validation_agence_requise",
+  EN_TRANSIT: "en_transit",
+  RETOUR_ORIGINE: "retour_origine",
+  TERMINE: "termine",
+} as const;
+
+export type TripInstanceStatutMetier =
+  | "planifie"
+  | "embarquement_en_cours"
+  | "embarquement_termine"
+  | "validation_agence_requise"
+  | "en_transit"
+  | "retour_origine"
+  | "termine";
+
 export type { TripInstanceSegment, JourneyForSegments };
 
 export interface TripInstanceDoc {
   companyId: string;
   /** Primary / origin agency. Kept for backward compat and simple queries. */
   agencyId: string;
+  /** Agence destination officielle du trajet (utilisée pour validations d'arrivée). */
+  destinationAgencyId?: string | null;
   /** All agencies involved on this trip (e.g. Bamako → Sikasso → Bouaké). Enables intermediate loading, en-route boarding, per-agency stats. */
   agenciesInvolved?: string[];
   /** Canonical departure city (mirror legacy routeDeparture / departureCity for queries). */
@@ -59,6 +80,8 @@ export interface TripInstanceDoc {
   departureDate?: unknown;
   departureTime: string;
   status: TripInstanceStatus;
+  /** Source de vérité métier du cycle opérationnel du trajet. */
+  statutMetier?: TripInstanceStatutMetier;
   /** Confirmed passengers (reservations). Backward compat: use reservedSeats if absent. */
   passengerCount?: number;
   /** Parcels/shipments assigned to this instance. */
@@ -70,6 +93,16 @@ export interface TripInstanceDoc {
   createdAt?: unknown;
   createdBy?: string;
   updatedAt?: unknown;
+  /** Validation arrivée à destination (workflow inter-agences). */
+  arrivalValidatedAt?: unknown;
+  arrivalValidatedBy?: string;
+  /** Cas exceptionnel: retour vers l'origine (statutMetier reste en_transit). */
+  isReturnToOrigin?: boolean;
+  /** @deprecated Lire isReturnToOrigin ; conservé pour anciens documents. */
+  retourOrigine?: boolean;
+  /** Cas exceptionnel: véhicule revenu à la gare d'origine. */
+  returnedToOriginAt?: unknown;
+  returnedToOriginBy?: string;
   /** Backward compat: same as routeDeparture. */
   departureCity?: string;
   /** Backward compat: same as routeArrival. */

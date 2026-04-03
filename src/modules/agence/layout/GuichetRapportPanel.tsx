@@ -32,7 +32,7 @@ const GuichetRapportPanel: React.FC = () => {
         qRef = query(
           resRef,
           where('guichetierId', '==', user.uid),
-          where('shiftId', '==', shiftId),
+          where('sessionId', '==', shiftId),
           orderBy('heure', 'asc')
         );
       } else {

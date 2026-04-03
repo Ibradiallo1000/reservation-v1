@@ -8,6 +8,7 @@ import {
   confirmDepartureAffectation,
   confirmArrivalAffectation,
 } from "@/modules/compagnie/fleet/vehiclesService";
+import { getVehicleOperationalView } from "@/modules/compagnie/fleet/getVehicleOperationalView";
 import { listAffectationsByCompany } from "@/modules/compagnie/fleet/affectationService";
 import { AFFECTATION_STATUS } from "@/modules/compagnie/fleet/affectationTypes";
 import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
@@ -21,6 +22,10 @@ type VehicleRow = {
   currentCity: string;
   operationalStatus: string;
   technicalStatus: string;
+  statusVehicule?: string;
+  currentAgencyId?: string | null;
+  destinationAgencyId?: string | null;
+  destinationCity?: string | null;
 };
 
 type AffectationRow = {
@@ -84,15 +89,23 @@ const AgenceFleetOperationsPage: React.FC<AgenceFleetOperationsPageProps> = ({ e
         listVehicles(companyId),
         listAffectationsByCompany(companyId),
       ]);
+      const views = await Promise.all(list.map((v: { id: string }) => getVehicleOperationalView(companyId, v.id)));
       setVehicles(
-        list.map((v: any) => ({
-          id: v.id,
-          plateNumber: v.plateNumber ?? "",
-          model: v.model ?? "",
-          currentCity: v.currentCity ?? "",
-          operationalStatus: v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE,
-          technicalStatus: v.technicalStatus ?? TECHNICAL_STATUS.NORMAL,
-        }))
+        list.map((v: any, i: number) => {
+          const op = views[i];
+          return {
+            id: v.id,
+            plateNumber: v.plateNumber ?? "",
+            model: v.model ?? "",
+            currentCity: v.currentCity ?? "",
+            operationalStatus: v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE,
+            technicalStatus: v.technicalStatus ?? TECHNICAL_STATUS.NORMAL,
+            statusVehicule: op?.statusVehicule ?? v.statusVehicule,
+            currentAgencyId: op?.currentAgencyId ?? v.currentAgencyId ?? null,
+            destinationAgencyId: op?.destinationAgencyId ?? v.destinationAgencyId ?? null,
+            destinationCity: v.destinationCity ?? null,
+          };
+        })
       );
       setAffectations(
         allAff.map((a: any) => ({
@@ -133,10 +146,9 @@ const AgenceFleetOperationsPage: React.FC<AgenceFleetOperationsPageProps> = ({ e
 
   const vehiclesDisponibles = vehicles.filter(
     (v) =>
-      agencyCity &&
-      v.operationalStatus === OPERATIONAL_STATUS.GARAGE &&
-      v.technicalStatus === TECHNICAL_STATUS.NORMAL &&
-      (v.currentCity ?? "").trim().toLowerCase() === agencyCity.toLowerCase() &&
+      agencyId &&
+      String(v.statusVehicule ?? "").toLowerCase() === "disponible" &&
+      String(v.currentAgencyId ?? "") === agencyId &&
       !activeVehicleIds.has(v.id)
   );
 
@@ -147,6 +159,14 @@ const AgenceFleetOperationsPage: React.FC<AgenceFleetOperationsPageProps> = ({ e
     (a) =>
       a.status === AFFECTATION_STATUS.DEPART_CONFIRME &&
       (a.arrivalCity ?? "").trim().toLowerCase() === agencyCity.toLowerCase()
+  );
+  const vehiclesTransitVersMoi = vehicles.filter(
+    (v) =>
+      agencyId &&
+      String(v.statusVehicule ?? "").toLowerCase() === "en_transit" &&
+      (v.currentAgencyId == null || String(v.currentAgencyId).trim() === "") &&
+      (String(v.destinationAgencyId ?? "") === agencyId ||
+        String(v.destinationCity ?? "").trim().toLowerCase() === agencyCity.toLowerCase())
   );
 
   const handleAssign = async (e: React.FormEvent) => {
@@ -313,10 +333,20 @@ const AgenceFleetOperationsPage: React.FC<AgenceFleetOperationsPageProps> = ({ e
           </SectionCard>
 
           <SectionCard title="3. En transit vers moi" icon={CheckCircle}>
-            {enTransitVersMoi.length === 0 ? (
+            {enTransitVersMoi.length === 0 && vehiclesTransitVersMoi.length === 0 ? (
               <EmptyState message="Aucun véhicule en attente d'arrivée." />
             ) : (
               <ul className="space-y-2">
+                {vehiclesTransitVersMoi.map((v) => (
+                  <li
+                    key={`vehicle-${v.id}`}
+                    className="flex flex-wrap items-center gap-2 p-3 rounded-lg border bg-white"
+                  >
+                    <span className="font-medium">{v.plateNumber}</span>
+                    <span className="text-gray-500">{v.model}</span>
+                    <span className="text-gray-500">Statut: en transit</span>
+                  </li>
+                ))}
                 {enTransitVersMoi.map((a) => (
                   <li
                     key={a.id}

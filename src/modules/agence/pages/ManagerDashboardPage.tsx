@@ -130,8 +130,9 @@ const ManagerDashboardPage: React.FC = () => {
   const revenueByShift = useMemo(() => {
     const map: Record<string, number> = {};
     reservationsToday.forEach((r) => {
-      if (r.shiftId && r.montant != null) {
-        map[r.shiftId] = (map[r.shiftId] ?? 0) + r.montant;
+      const sid = String((r as { sessionId?: string; shiftId?: string }).sessionId ?? (r as { shiftId?: string }).shiftId ?? "");
+      if (sid && r.montant != null) {
+        map[sid] = (map[sid] ?? 0) + r.montant;
       }
     });
     return map;

@@ -24,6 +24,11 @@ import {
   type Transaction,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { runFirestoreTransactionWithRetry } from "@/shared/firebase/runTransactionWithRetry";
+import {
+  applyVehicleSyncFromTripInstanceInTransaction,
+  isVehicleCoherentWithTripInstance,
+} from "@/modules/compagnie/fleet/syncVehicleWithTripInstance";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
 import {
   onTripInstanceStarted,
@@ -31,11 +36,8 @@ import {
 } from "@/modules/logistics/services/tripInstanceShipmentSync";
 import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import {
-  upsertTripExecutionTransit,
-  upsertTripExecutionArrived,
-} from "@/modules/compagnie/tripExecutions/tripExecutionService";
-import {
   TRIP_INSTANCE_COLLECTION,
+  TRIP_INSTANCE_STATUT_METIER,
   TRIP_INSTANCE_STATUS,
   tripInstanceArrival,
   tripInstanceDeparture,
@@ -45,6 +47,7 @@ import {
   type JourneyForSegments,
   type TripInstanceDoc,
   type TripInstanceDocWithId,
+  type TripInstanceStatutMetier,
   type TripInstanceStatus,
 } from "./tripInstanceTypes";
 import {
@@ -86,6 +89,7 @@ export interface CreateTripInstanceParams {
   agencyId: string;
   /** All agencies involved on this trip (e.g. [Bamako, Sikasso, Bouaké]). Optional; when absent, agencyId is used as single agency. */
   agenciesInvolved?: string[];
+  destinationAgencyId?: string | null;
   departureCity: string;
   arrivalCity: string;
   date: string;
@@ -156,6 +160,7 @@ export async function createTripInstance(
   } = {
     companyId,
     agencyId: params.agencyId,
+    destinationAgencyId: params.destinationAgencyId ?? null,
     ...(params.agenciesInvolved != null && params.agenciesInvolved.length > 0 && { agenciesInvolved: params.agenciesInvolved }),
     capacity: cap,
     departure: dep,
@@ -170,6 +175,7 @@ export async function createTripInstance(
     departureDate,
     departureTime: timeStr,
     status: TRIP_INSTANCE_STATUS.SCHEDULED,
+    statutMetier: TRIP_INSTANCE_STATUT_METIER.PLANIFIE,
     passengerCount: 0,
     parcelCount: 0,
     ...(cap > 0 && { capacitySeats: cap }),
@@ -454,17 +460,37 @@ export async function updateTripInstanceStatus(
   tripInstanceId: string,
   status: TripInstanceStatus
 ): Promise<void> {
-  await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
-    status,
-    updatedAt: serverTimestamp(),
-  });
+  const statutMetierByLegacy: Partial<Record<TripInstanceStatus, TripInstanceStatutMetier>> = {
+    scheduled: TRIP_INSTANCE_STATUT_METIER.PLANIFIE,
+    boarding: TRIP_INSTANCE_STATUT_METIER.EMBARQUEMENT_EN_COURS,
+    departed: TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT,
+    arrived: TRIP_INSTANCE_STATUT_METIER.TERMINE,
+  };
+  const sm = statutMetierByLegacy[status];
+  if (sm) {
+    const extraTripExecutionFields: Record<string, unknown> = {};
+    if (status === TRIP_INSTANCE_STATUS.DEPARTED) {
+      extraTripExecutionFields.transitAt = serverTimestamp();
+    }
+    if (status === TRIP_INSTANCE_STATUS.ARRIVED) {
+      extraTripExecutionFields.arrivedAt = serverTimestamp();
+    }
+    await updateTripInstanceStatutMetier(companyId, tripInstanceId, sm, {
+      extraTripInstanceFields: { status },
+      ...(Object.keys(extraTripExecutionFields).length > 0
+        ? { extraTripExecutionFields }
+        : {}),
+    });
+  } else {
+    await updateDoc(tripInstanceRef(companyId, tripInstanceId), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  }
 
   if (status === TRIP_INSTANCE_STATUS.DEPARTED) {
     void onTripInstanceStarted(companyId, tripInstanceId).catch((err) => {
       console.error("[tripInstanceService] onTripInstanceStarted failed:", err);
-    });
-    void upsertTripExecutionTransit({ companyId, tripInstanceId }).catch((err) => {
-      console.error("[tripInstanceService] upsertTripExecutionTransit failed:", err);
     });
   }
 
@@ -472,10 +498,211 @@ export async function updateTripInstanceStatus(
     void onTripInstanceArrivedAuto(companyId, tripInstanceId).catch((err) => {
       console.error("[tripInstanceService] onTripInstanceArrivedAuto failed:", err);
     });
-    void upsertTripExecutionArrived({ companyId, tripInstanceId }).catch((err) => {
-      console.error("[tripInstanceService] upsertTripExecutionArrived failed:", err);
-    });
   }
+}
+
+export async function updateTripInstanceStatutMetier(
+  companyId: string,
+  tripInstanceId: string,
+  statutMetier: TripInstanceStatutMetier,
+  options?: {
+    isReturnToOrigin?: boolean;
+    tripExecutionStatusOverride?: "boarding" | "validation_agence_requise" | "departed" | "transit" | "arrived" | "finished" | "disrupted";
+    extraTripInstanceFields?: Record<string, unknown>;
+    extraTripExecutionFields?: Record<string, unknown>;
+  }
+): Promise<void> {
+  const ref = tripInstanceRef(companyId, tripInstanceId);
+  const tripExecutionDocRef = doc(db, "companies", companyId, "tripExecutions", tripInstanceId);
+  const tripExecutionStatusFromMetier = (s: TripInstanceStatutMetier) => {
+    if (s === TRIP_INSTANCE_STATUT_METIER.EMBARQUEMENT_EN_COURS) return "boarding";
+    if (s === TRIP_INSTANCE_STATUT_METIER.VALIDATION_AGENCE_REQUISE) return "validation_agence_requise";
+    if (s === TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT) return "transit";
+    if (s === TRIP_INSTANCE_STATUT_METIER.TERMINE) return "arrived";
+    return null;
+  };
+
+  await runFirestoreTransactionWithRetry(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error("Trajet introuvable.");
+    const data = snap.data() as {
+      statutMetier?: string;
+      vehicleId?: string | null;
+      destinationAgencyId?: string | null;
+      agencyId?: string | null;
+      isReturnToOrigin?: boolean | null;
+      retourOrigine?: boolean | null;
+    };
+    const currentRaw = String(data.statutMetier ?? "").trim();
+    const effectiveCurrentMetier = (currentRaw || TRIP_INSTANCE_STATUT_METIER.PLANIFIE) as TripInstanceStatutMetier;
+
+    const allowed: Record<TripInstanceStatutMetier, TripInstanceStatutMetier[]> = {
+      planifie: ["planifie", "embarquement_en_cours"],
+      embarquement_en_cours: ["embarquement_en_cours", "validation_agence_requise"],
+      embarquement_termine: ["embarquement_termine"],
+      validation_agence_requise: ["validation_agence_requise", "en_transit"],
+      en_transit: ["en_transit", "termine"],
+      retour_origine: ["retour_origine"],
+      termine: ["termine"],
+    };
+
+    if (!allowed[effectiveCurrentMetier]?.includes(statutMetier)) {
+      throw new Error(`Transition statutMetier interdite: ${effectiveCurrentMetier} -> ${statutMetier}`);
+    }
+
+    const vehicleId = String(data.vehicleId ?? "").trim();
+    const destinationAgencyId = String(data.destinationAgencyId ?? "").trim() || null;
+    const originAgencyId = String(data.agencyId ?? "").trim() || null;
+
+    const tripForCoherenceCheck = {
+      statutMetier: effectiveCurrentMetier,
+      destinationAgencyId,
+      agencyId: originAgencyId ?? undefined,
+      isReturnToOrigin: data.isReturnToOrigin,
+      retourOrigine: data.retourOrigine,
+    };
+
+    if (vehicleId) {
+      const vRef = doc(db, "companies", companyId, "vehicles", vehicleId);
+      const vSnap = await tx.get(vRef);
+      if (vSnap.exists()) {
+        const vd = vSnap.data() as {
+          statusVehicule?: string;
+          currentAgencyId?: string | null;
+          destinationAgencyId?: string | null;
+        };
+        if (!isVehicleCoherentWithTripInstance(vd, tripForCoherenceCheck)) {
+          throw new Error("Incohérence détectée: état véhicule non aligné avec tripInstance.statutMetier.");
+        }
+      }
+    }
+
+    let persistReturnToOrigin: boolean;
+    if (statutMetier === TRIP_INSTANCE_STATUT_METIER.TERMINE) {
+      persistReturnToOrigin = false;
+    } else if (options?.isReturnToOrigin === true) {
+      persistReturnToOrigin = true;
+    } else if (options?.isReturnToOrigin === false) {
+      persistReturnToOrigin = false;
+    } else {
+      persistReturnToOrigin = !!(data.isReturnToOrigin || data.retourOrigine);
+    }
+
+    tx.update(ref, {
+      statutMetier,
+      isReturnToOrigin: persistReturnToOrigin,
+      retourOrigine: persistReturnToOrigin,
+      updatedAt: serverTimestamp(),
+      ...(options?.extraTripInstanceFields ?? {}),
+    });
+
+    if (vehicleId) {
+      const applyReturn =
+        options?.isReturnToOrigin === true ||
+        data.isReturnToOrigin === true ||
+        data.retourOrigine === true;
+      applyVehicleSyncFromTripInstanceInTransaction(
+        tx,
+        companyId,
+        vehicleId,
+        {
+          statutMetier,
+          destinationAgencyId,
+          agencyId: originAgencyId ?? undefined,
+          isReturnToOrigin: applyReturn,
+          retourOrigine: applyReturn,
+        },
+        tripInstanceId
+      );
+    }
+
+    const teStatus = options?.tripExecutionStatusOverride ?? tripExecutionStatusFromMetier(statutMetier);
+    if (teStatus) {
+      tx.set(
+        tripExecutionDocRef,
+        {
+          status: teStatus,
+          updatedAt: serverTimestamp(),
+          ...(options?.extraTripExecutionFields ?? {}),
+        },
+        { merge: true }
+      );
+    }
+  });
+}
+
+export async function confirmTripArrivalAtDestination(params: {
+  companyId: string;
+  tripInstanceId: string;
+  destinationAgencyId: string;
+  validatedBy: string;
+}): Promise<void> {
+  const { companyId, tripInstanceId, destinationAgencyId, validatedBy } = params;
+  const ref = tripInstanceRef(companyId, tripInstanceId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Trajet introuvable.");
+  const data = snap.data() as { destinationAgencyId?: string | null; statutMetier?: TripInstanceStatutMetier; vehicleId?: string | null };
+  if (String(data.destinationAgencyId ?? "") !== destinationAgencyId) {
+    throw new Error("Validation arrivée refusée: cette agence n'est pas la destination.");
+  }
+  if (data.statutMetier !== TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT) {
+    throw new Error("Validation arrivée refusée: le trajet n'est pas en transit.");
+  }
+  await updateTripInstanceStatutMetier(companyId, tripInstanceId, TRIP_INSTANCE_STATUT_METIER.TERMINE, {
+    extraTripInstanceFields: {
+      status: TRIP_INSTANCE_STATUS.ARRIVED,
+      arrivalValidatedAt: serverTimestamp(),
+      arrivalValidatedBy: validatedBy,
+    },
+    extraTripExecutionFields: {
+      arrivedAt: serverTimestamp(),
+    },
+  });
+  const vehicleId = String(data.vehicleId ?? "").trim();
+  if (vehicleId) {
+    await setDoc(
+      doc(db, "companies", companyId, "fleetMovements", `${tripInstanceId}__arrival__${vehicleId}`),
+      {
+        vehicleId,
+        statusVehicule: "disponible",
+        sourceAgencyId: null,
+        destinationAgencyId,
+        changedBy: validatedBy,
+        role: null,
+        context: "trip_instance_arrival_validation",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+}
+
+export async function markTripReturnToOrigin(params: {
+  companyId: string;
+  tripInstanceId: string;
+  byUserId: string;
+}): Promise<void> {
+  const { companyId, tripInstanceId, byUserId } = params;
+  const ref = tripInstanceRef(companyId, tripInstanceId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Trajet introuvable.");
+  const data = snap.data() as { statutMetier?: TripInstanceStatutMetier };
+  if (data.statutMetier !== TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT) {
+    throw new Error("Retour gare refusé: le trajet n'est pas en transit.");
+  }
+  await updateTripInstanceStatutMetier(companyId, tripInstanceId, TRIP_INSTANCE_STATUT_METIER.EN_TRANSIT, {
+    isReturnToOrigin: true,
+    tripExecutionStatusOverride: "disrupted",
+    extraTripInstanceFields: {
+      returnedToOriginAt: serverTimestamp(),
+      returnedToOriginBy: byUserId,
+    },
+    extraTripExecutionFields: {
+      returnedToOriginAt: serverTimestamp(),
+      returnedToOriginBy: byUserId,
+    },
+  });
 }
 
 /**

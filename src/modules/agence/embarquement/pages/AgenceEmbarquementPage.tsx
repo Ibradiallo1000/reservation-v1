@@ -10,6 +10,7 @@ import {
   getDocs,
   runTransaction,
   serverTimestamp,
+  Timestamp,
   writeBatch,
   updateDoc,
   arrayUnion,
@@ -41,7 +42,15 @@ import { getAffectationForBoarding } from "@/modules/compagnie/fleet/affectation
 import { getEffectiveStatut, canEmbarkWithScan, RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
 import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
 import { ensureProgressArrival, markOriginDeparture, ensureAutoDepartIfNeeded, getTripProgress, ORIGIN_STOP_ORDER } from "@/modules/compagnie/tripInstances/tripProgressService";
-import { findTripInstanceBySlot } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import {
+  buildTripInstanceId,
+  findTripInstanceBySlot,
+  tripInstanceRef,
+} from "@/modules/compagnie/tripInstances/tripInstanceService";
+import {
+  TRIP_INSTANCE_STATUT_METIER,
+  type TripInstanceStatutMetier,
+} from "@/modules/compagnie/tripInstances/tripInstanceTypes";
 import { vehicleRef } from "@/modules/compagnie/fleet/vehiclesService";
 import {
   BOARDING_SESSION_IN_USE_MSG,
@@ -57,6 +66,7 @@ import {
 import {
   buildTripExecutionIdFromSlot,
   ensureTripExecutionOnBoardingStart,
+  markTripExecutionBoardingCompleted,
   tripExecutionRef,
 } from "@/modules/compagnie/tripExecutions/tripExecutionService";
 import {
@@ -67,8 +77,8 @@ import {
   snapshotMatchesSelection,
   type BoardingSlotSnapshotV1,
 } from "@/modules/agence/embarquement/boardingSlotSnapshot";
-import { StandardLayoutWrapper, PageHeader } from "@/ui";
-import { Bus, CheckCircle, AlertTriangle } from "lucide-react";
+import { StandardLayoutWrapper } from "@/ui";
+import { Camera, List, CheckCircle, AlertTriangle } from "lucide-react";
 import {
   addToBoardingQueue,
   getUnsyncedBoardingQueue,
@@ -79,6 +89,25 @@ import "react-datepicker/dist/react-datepicker.css";
 
 const FAST_BOARDING_OVERLAY_DURATION_MS = 1200;
 const INVALID_RESERVATION_STATUT = "invalide";
+/** Même code-barres / QR : évite double traitement sans ralentir l’enchaînement de billets différents. */
+const SCAN_SAME_CODE_MIN_INTERVAL_MS = 400;
+/** Même réservation (id Firestore du passager) : filet si le décodeur renvoie plusieurs fois la même cible. */
+const SCAN_SAME_RESERVATION_MIN_INTERVAL_MS = 350;
+
+const DatePickerButton = React.forwardRef<HTMLButtonElement, { value?: string; onClick?: () => void }>(
+  ({ value, onClick }, ref) => (
+    <button
+      type="button"
+      ref={ref}
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 text-sm px-2 py-1.5 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+    >
+      <span aria-hidden>📅</span>
+      <span>{value || "—"}</span>
+    </button>
+  )
+);
+DatePickerButton.displayName = "DatePickerButton";
 
 /* ===================== Types ===================== */
 type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
@@ -116,6 +145,13 @@ function getEffectiveBoardingStatus(r: { boardingStatus?: string; statutEmbarque
   if (s === "embarqué" || s === "embarque") return "boarded";
   if (s === "absent") return "no_show";
   return "pending";
+}
+
+/** Logs temporaires embarquement (dev uniquement) — retirer ou désactiver après diagnostic. */
+const EMBARK_DIAG_ENABLED = import.meta.env.DEV;
+function embarkDiag(event: string, data: Record<string, unknown>) {
+  if (!EMBARK_DIAG_ENABLED) return;
+  console.info(`[EMBARK_DIAG] ${event}`, { ...data, ts: Date.now() });
 }
 
 interface WeeklyTrip {
@@ -322,11 +358,15 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
 
   // Use global Teliya brand variables so this page matches the unified agency theme
   const primary = "var(--teliya-primary)";
-  const secondary = "var(--teliya-secondary)";
 
   const companyId = user?.companyId ?? null;
   const userAgencyId = user?.agencyId ?? null;
   const uid = user?.uid ?? null;
+  const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
+  const rolesSet = useMemo(() => new Set(rolesArr), [rolesArr]);
+  const isChefAgence = rolesSet.has("chefAgence") || rolesSet.has("chefagence");
+  const canLaunchTripAfterAgencyValidation = isChefAgence;
+  const canPrintOfficialDocs = isChefAgence;
 
   const [agencies, setAgencies] = useState<AgencyItem[]>([]);
   const [selectedAgencyId, setSelectedAgencyId] = useState<string | null>(userAgencyId);
@@ -348,7 +388,6 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const [selectedTrip, setSelectedTrip] = useState<SelectedTrip | null>(null);
 
   const capacityLimit = vehicleCapacity != null ? vehicleCapacity : resolvedVehicleCapacity;
-  const assignmentStatusBadge = activeBoardingAssignment?.status ?? null;
   const fallbackBoardingAssignment = useMemo(() => {
     if (!selectedTrip) return null;
     const match = dayAssignments.find((a) => {
@@ -396,13 +435,20 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [tripStatutMetier, setTripStatutMetier] = useState<TripInstanceStatutMetier | null>(null);
+  const canEditBoardingPassengers = tripStatutMetier === TRIP_INSTANCE_STATUT_METIER.EMBARQUEMENT_EN_COURS;
 
   // Scan caméra
   const [scanOn, setScanOn] = useState(false);
+  const [mobileView, setMobileView] = useState<"scan" | "liste">("scan");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const lastScanRef = useRef<number>(0);
   const lastAlertRef = useRef<number>(0);
+  /** Liste temps réel : lecture synchrone dans les callbacks scan sans recréer le décodeur à chaque snapshot. */
+  const reservationsRef = useRef<Reservation[]>([]);
+  reservationsRef.current = reservations;
+  const scanSameCodeRef = useRef<{ code: string; at: number } | null>(null);
+  const scanSameResIdRef = useRef<Map<string, number>>(new Map());
   const offlineScannedIds = useRef<Set<string>>(new Set());
   /** Snapshot créneau (Phase 3.5) — offline : vérité pour scan / file d’attente. */
   const boardingSlotSnapshotRef = useRef<BoardingSlotSnapshotV1 | null>(null);
@@ -421,6 +467,14 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   activeAssignmentIdRef.current = activeBoardingAssignment?.id ?? null;
   /** Évite de réimposer le snapshot local après que l’utilisateur ait désélectionné le créneau (hors ligne). */
   const offlineHydratedKeyRef = useRef<string>("");
+  /** Un seul flux d’embarquement actif par réservation (évite double traitement scan / rappels). */
+  const embarkInflightIdsRef = useRef<Set<string>>(new Set());
+  /** Compteurs diagnostic (dev) : demandes vs transactions réussies. */
+  const embarkDiagCountRef = useRef({ requested: 0, txOk: 0 });
+  /** Incrémenté au cleanup du scanner : annule les callbacks async d’une session précédente (Strict Mode / remount). */
+  const scanDecoderGenerationRef = useRef(0);
+  /** Évite deux syncs parallèles de la file hors-ligne (double effet ou deps qui bougent). */
+  const boardingQueueSyncInFlightRef = useRef(false);
 
   // Online status for offline boarding queue
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" && navigator.onLine);
@@ -586,7 +640,6 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
               teMsg.includes("missing or insufficient permissions") || teMsg.includes("permission_denied");
             // Do not block boarding flow if tripExecution upsert is denied by rules.
             if (!tePermissionDenied) throw teErr;
-            console.warn("[AgenceEmbarquementPage] tripExecution skipped due to rules permissions:", teErr);
           }
         }
         if (cancelled || activeAssignmentIdRef.current !== targetAssignmentId) return;
@@ -705,6 +758,10 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   }, []);
 
   const normalizeOverlayMessage = useCallback((msg: string): string => {
+    const m = String(msg || "").toLowerCase();
+    if (m.includes("missing or insufficient permissions") || m.includes("permission_denied")) {
+      return "Acces refuse pour ce billet";
+    }
     if (msg.includes("Déjà embarqué")) return "Déjà embarqué";
     if (msg.includes("Capacité véhicule atteinte") || msg.includes("Capacité atteinte")) return "Capacité atteinte";
     if (msg.includes("non concordants") || msg.includes("autre départ")) return "Billet pour un autre trajet";
@@ -1057,7 +1114,9 @@ useEffect(() => {
     const bag = new Map<string, Reservation>();
 
     const commit = () => {
-      const list = Array.from(bag.values()).sort((a, b) => {
+      const dedup = new Map<string, Reservation>();
+      for (const r of bag.values()) dedup.set(r.id, r);
+      const list = Array.from(dedup.values()).sort((a, b) => {
         const aRep = !!(a.canal === "report" || (a as any).sourceReservationId);
         const bRep = !!(b.canal === "report" || (b as any).sourceReservationId);
         if (aRep !== bRep) return aRep ? -1 : 1; // reports d'abord
@@ -1106,6 +1165,9 @@ useEffect(() => {
       options?: { suppressAlert?: boolean }
     ) => {
       if (!companyId || !uid) return;
+      if (!canEditBoardingPassengers) {
+        throw new Error("Modification passagers refusée: embarquement non modifiable à ce stade.");
+      }
 
       const agencyIdToUse = agencyOverride ?? selectedAgencyId;
       if (!agencyIdToUse) {
@@ -1126,6 +1188,18 @@ useEffect(() => {
         `companies/${companyId}/agences/${agencyIdToUse}/reservations/${reservationId}`
       );
 
+      let embarkPrecheckSnap: Awaited<ReturnType<typeof getDoc>> | null = null;
+      if (statut === "embarqué") {
+        embarkPrecheckSnap = await getDoc(resRef);
+        if (embarkPrecheckSnap.exists()) {
+          const preRow = embarkPrecheckSnap.data() as { boardingStatus?: string; statutEmbarquement?: string };
+          if (getEffectiveBoardingStatus(preRow) === "boarded") {
+            embarkDiag("embarqué:ignoré-déjà-embarqué", { reservationId });
+            return;
+          }
+        }
+      }
+
       // Phase 3: capacity check before transaction (tx.get() does not support queries)
       if (statut === "embarqué" && capacityLimit != null && capacityLimit > 0) {
         const qEmb = query(
@@ -1141,10 +1215,10 @@ useEffect(() => {
             if (getEffectiveBoardingStatus(docData) === "boarded") seatsEmbarques += docData.seatsGo ?? 1;
           }
         });
-        const resSnap = await getDoc(resRef);
-        const dataPre = resSnap.exists() ? (resSnap.data() as { boardingStatus?: string; statutEmbarquement?: string; seatsGo?: number }) : null;
-        const alreadyEmbarked = dataPre ? getEffectiveBoardingStatus(dataPre) === "boarded" : false;
-        const addSeats = alreadyEmbarked ? 0 : (dataPre?.seatsGo ?? 1);
+        const dataPre = embarkPrecheckSnap?.exists()
+          ? (embarkPrecheckSnap.data() as { boardingStatus?: string; statutEmbarquement?: string; seatsGo?: number })
+          : null;
+        const addSeats = dataPre?.seatsGo ?? 1;
         if (seatsEmbarques + addSeats > capacityLimit) {
           throw new Error("Capacité véhicule atteinte");
         }
@@ -1154,8 +1228,9 @@ useEffect(() => {
       if (statut === "embarqué" && (agencyInfo as { type?: string; stopOrder?: number })?.type === "escale") {
         const stopOrder = (agencyInfo as { stopOrder?: number }).stopOrder;
         if (stopOrder != null && companyId) {
-          const resSnap = await getDoc(resRef);
-          const resData = resSnap.exists() ? (resSnap.data() as { tripInstanceId?: string; trajetId?: string }) : {};
+          const resData = embarkPrecheckSnap?.exists()
+            ? (embarkPrecheckSnap.data() as { tripInstanceId?: string; trajetId?: string })
+            : {};
           const tripInstanceId = resData.tripInstanceId ?? resData.trajetId ?? selectedTrip?.id;
           if (tripInstanceId) await ensureProgressArrival(companyId, tripInstanceId, stopOrder);
         }
@@ -1189,6 +1264,21 @@ useEffect(() => {
             /* recalcul optionnel */
           }
         }
+      }
+
+      let embarkInflightHeld = false;
+      if (statut === "embarqué") {
+        embarkDiagCountRef.current.requested += 1;
+        embarkDiag("embarqué:demandé", {
+          reservationId,
+          demandes: embarkDiagCountRef.current.requested,
+        });
+        if (embarkInflightIdsRef.current.has(reservationId)) {
+          embarkDiag("embarqué:ignoré-doublon-concurrent", { reservationId });
+          return;
+        }
+        embarkInflightIdsRef.current.add(reservationId);
+        embarkInflightHeld = true;
       }
 
       try {
@@ -1335,7 +1425,7 @@ useEffect(() => {
             const currentEmbarked = statsSnap.exists()
               ? ((statsSnap.data() as { embarkedSeats?: number }).embarkedSeats ?? 0)
               : 0;
-            if (vehicleCapacity != null && vehicleCapacity > 0 && currentEmbarked + addSeats > vehicleCapacity) {
+            if (capacityLimit != null && capacityLimit > 0 && currentEmbarked + addSeats > capacityLimit) {
               throw new Error("Capacité véhicule atteinte");
             }
             incrementBoardingStatsEmbarked(tx, companyId, agencyIdToUse, tripKey, addSeats);
@@ -1415,6 +1505,11 @@ useEffect(() => {
         });
 
         if (statut === "embarqué") {
+          embarkDiagCountRef.current.txOk += 1;
+          embarkDiag("embarqué:transaction-ok", {
+            reservationId,
+            transactionsOk: embarkDiagCountRef.current.txOk,
+          });
           logAgentHistoryEvent({
             companyId,
             agencyId: agencyIdToUse,
@@ -1460,6 +1555,12 @@ useEffect(() => {
               ),
               updatedAt: serverTimestamp(),
             } as Record<string, unknown>);
+            if (statut === "embarqué") {
+              embarkDiag("embarqué:fallback-permissions", {
+                reservationId,
+                note: "réservation mise à jour sans agrégats (locks/stats/live)",
+              });
+            }
             if (!options?.suppressAlert) {
               try {
                 new Audio("/beep.mp3").play();
@@ -1486,6 +1587,8 @@ useEffect(() => {
           alert("Erreur d’embarquement.");
         }
         console.error("[EMBARK][ERROR]", e);
+      } finally {
+        if (embarkInflightHeld) embarkInflightIdsRef.current.delete(reservationId);
       }
     },
     [
@@ -1500,6 +1603,7 @@ useEffect(() => {
       selectedDate,
       capacityLimit,
       agencyInfo,
+      canEditBoardingPassengers,
     ]
   );
 
@@ -1508,6 +1612,11 @@ useEffect(() => {
     if (!isOnline || !companyId) return;
     let cancelled = false;
     const run = async () => {
+      if (boardingQueueSyncInFlightRef.current) {
+        embarkDiag("file-hors-ligne:sync-déjà-en-cours", {});
+        return;
+      }
+      boardingQueueSyncInFlightRef.current = true;
       try {
         const list = await getUnsyncedBoardingQueue();
         for (const rec of list) {
@@ -1534,9 +1643,11 @@ useEffect(() => {
         }
       } catch (err) {
         console.error("[EMBARK][SYNC]", err);
+      } finally {
+        boardingQueueSyncInFlightRef.current = false;
       }
     };
-    run();
+    void run();
     return () => { cancelled = true; };
   }, [isOnline, companyId, updateStatut]);
 
@@ -1667,15 +1778,31 @@ useEffect(() => {
   const [sendingOriginDeparture, setSendingOriginDeparture] = useState(false);
 
   useEffect(() => {
+    if (!companyId || !tripInstanceIdForSlot) {
+      setTripStatutMetier(null);
+      return;
+    }
+    const unsub = onSnapshot(tripInstanceRef(companyId, tripInstanceIdForSlot), (snap) => {
+      if (!snap.exists()) {
+        setTripStatutMetier(null);
+        return;
+      }
+      const data = snap.data() as { statutMetier?: TripInstanceStatutMetier };
+      setTripStatutMetier(data.statutMetier ?? null);
+    });
+    return () => unsub();
+  }, [companyId, tripInstanceIdForSlot]);
+
+  useEffect(() => {
     if (!companyId || !selectedAgencyId || !tripKey) { setIsClosed(false); return; }
     const ref = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingClosures/${tripKey}`);
     const unsub = onSnapshot(ref, (s) => setIsClosed(s.exists()));
     return () => unsub();
   }, [companyId, selectedAgencyId, tripKey]);
 
-  /* ---------- Résoudre tripInstanceId + auto-départ 30 min après clôture ---------- */
+  /* ---------- Résoudre tripInstanceId dès le créneau (sans attendre la clôture) ---------- */
   useEffect(() => {
-    if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate || !isClosed) {
+    if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate) {
       setTripInstanceIdForSlot(null);
       setOriginDepartureDone(false);
       return;
@@ -1683,9 +1810,6 @@ useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const closureRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingClosures/${tripKey!}`);
-        const closureSnap = await getDoc(closureRef);
-        const closedAt = closureSnap.exists() ? (closureSnap.data() as { closedAt?: { toMillis: () => number } }).closedAt : null;
         const ti = await findTripInstanceBySlot(
           companyId,
           selectedAgencyId,
@@ -1694,25 +1818,83 @@ useEffect(() => {
           selectedTrip.departure,
           selectedTrip.arrival
         );
-        if (cancelled || !ti) {
+        let resolvedId: string | null = ti?.id ?? null;
+        if (!resolvedId && selectedTrip.id) {
+          const detId = buildTripInstanceId(selectedTrip.id, selectedDate, selectedTrip.heure);
+          const detSnap = await getDoc(tripInstanceRef(companyId, detId));
+          if (detSnap.exists()) resolvedId = detId;
+        }
+        if (cancelled || !resolvedId) {
           setTripInstanceIdForSlot(null);
           setOriginDepartureDone(false);
           return;
         }
-        setTripInstanceIdForSlot(ti.id);
-        if (closedAt && typeof (closedAt as any).toMillis === "function") await ensureAutoDepartIfNeeded(companyId, ti.id, closedAt as any);
-        const progress = await getTripProgress(companyId, ti.id);
+        setTripInstanceIdForSlot(resolvedId);
+        const progress = await getTripProgress(companyId, resolvedId);
         const origin = progress.find((p) => p.stopOrder === ORIGIN_STOP_ORDER);
         setOriginDepartureDone(!!origin?.departureTime);
       } catch {
-        if (!cancelled) setTripInstanceIdForSlot(null);
+        if (!cancelled) {
+          setTripInstanceIdForSlot(null);
+          setOriginDepartureDone(false);
+        }
       }
     })();
-    return () => { cancelled = true; };
-  }, [companyId, selectedAgencyId, selectedTrip, selectedDate, isClosed, tripKey]);
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
+
+  /* ---------- Auto-départ 30 min après clôture (ne bloque plus le bouton manuel) ---------- */
+  useEffect(() => {
+    if (!companyId || !selectedAgencyId || !tripKey || !isClosed || !tripInstanceIdForSlot) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const closureRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingClosures/${tripKey}`);
+        const closureSnap = await getDoc(closureRef);
+        const closedAt = closureSnap.exists()
+          ? (closureSnap.data() as { closedAt?: Timestamp }).closedAt
+          : null;
+        if (closedAt != null && typeof (closedAt as Timestamp).toMillis === "function") {
+          await ensureAutoDepartIfNeeded(companyId, tripInstanceIdForSlot, closedAt as Timestamp);
+        }
+        if (cancelled) return;
+        const progress = await getTripProgress(companyId, tripInstanceIdForSlot);
+        const origin = progress.find((p) => p.stopOrder === ORIGIN_STOP_ORDER);
+        setOriginDepartureDone(!!origin?.departureTime);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, selectedAgencyId, tripKey, isClosed, tripInstanceIdForSlot]);
 
   const handleBusParti = useCallback(async () => {
     if (!companyId || !tripInstanceIdForSlot || !uid) return;
+    if (!canLaunchTripAfterAgencyValidation) {
+      alert("Seul le chef d'agence peut valider et lancer le trajet.");
+      return;
+    }
+    if (tripStatutMetier !== "validation_agence_requise") {
+      alert("Validation agence requise avant le départ véhicule.");
+      return;
+    }
+    const boardedSeats = reservations.reduce((sum, r) => {
+      const seats = r.seatsGo ?? 1;
+      return getEffectiveBoardingStatus(r) === "boarded" ? sum + seats : sum;
+    }, 0);
+    if (scanOn) {
+      alert("Désactivez le scanner avant de terminer et lancer le trajet.");
+      return;
+    }
+    if (boardedSeats <= 0) {
+      alert("Impossible: aucun passager embarqué.");
+      return;
+    }
+    if (!window.confirm("Confirmer le départ du véhicule ?")) return;
     setSendingOriginDeparture(true);
     try {
       await markOriginDeparture(companyId, tripInstanceIdForSlot, uid);
@@ -1723,7 +1905,15 @@ useEffect(() => {
     } finally {
       setSendingOriginDeparture(false);
     }
-  }, [companyId, tripInstanceIdForSlot, uid]);
+  }, [
+    companyId,
+    tripInstanceIdForSlot,
+    uid,
+    scanOn,
+    reservations,
+    canLaunchTripAfterAgencyValidation,
+    tripStatutMetier,
+  ]);
 
   /* ---------- Clôturer : un seul passage + verrou + reprogrammation ---------- */
   const cloturerEmbarquement = useCallback(async () => {
@@ -1855,6 +2045,14 @@ useEffect(() => {
         }
       });
 
+      if (tripInstanceIdForSlot) {
+        await markTripExecutionBoardingCompleted({
+          companyId,
+          tripInstanceId: tripInstanceIdForSlot,
+          completedBy: uid,
+        });
+      }
+
       // Reprogrammer les absents (hors transaction, batch)
       const batch = writeBatch(db);
 
@@ -1962,7 +2160,7 @@ useEffect(() => {
         }
       }
 
-      alert("Clôture effectuée. Absents marqués et reprogrammés (si possible).");
+      alert("Clôture effectuée. Validation agence requise avant départ.");
     } catch (e: any) {
       if (String(e?.message || e) === "DEJA_CLOTURE") {
         alert("Déjà clôturé : aucune action répétée.");
@@ -1982,6 +2180,7 @@ useEffect(() => {
     agencyInfo,
     isOnline,
     activeBoardingAssignment?.id,
+    tripInstanceIdForSlot,
   ]);
 
   /* ---------- Offline: resolve from cached list (no Firestore) ---------- */
@@ -1997,15 +2196,51 @@ useEffect(() => {
     [reservations, selectedAgencyId]
   );
 
+  const takeScanSlotForCode = useCallback((code: string, now: number) => {
+    const c = code.trim();
+    const p = scanSameCodeRef.current;
+    if (!p || p.code !== c) {
+      scanSameCodeRef.current = { code: c, at: now };
+      return true;
+    }
+    if (now - p.at < SCAN_SAME_CODE_MIN_INTERVAL_MS) return false;
+    scanSameCodeRef.current = { code: c, at: now };
+    return true;
+  }, []);
+
+  const takeScanSlotForResId = useCallback((resId: string, now: number) => {
+    const t = scanSameResIdRef.current.get(resId) ?? 0;
+    if (now - t < SCAN_SAME_RESERVATION_MIN_INTERVAL_MS) return false;
+    scanSameResIdRef.current.set(resId, now);
+    return true;
+  }, []);
+
+  /** Mise à jour toujours ciblée par `reservationId` ; ici on évite un aller serveur si la liste locale est déjà à jour. */
+  const blockIfAlreadyBoardedLocal = useCallback((resId: string, onBlock: (msg: string) => void) => {
+    const row = reservationsRef.current.find((r) => r.id === resId);
+    if (row && getEffectiveBoardingStatus(row) === "boarded") {
+      onBlock("Billet déjà embarqué.");
+      return true;
+    }
+    return false;
+  }, []);
+
   /* ---------- Saisie manuelle ---------- */
   const [scanCode, setScanCode] = useState("");
   const submitManual = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       if (!companyId) return;
+      if (!canEditBoardingPassengers) {
+        showFastBoardError("Scan/validation refusé: validation agence requise ou trajet en transit/terminé.");
+        return;
+      }
 
       const code = extractCode(scanCode);
       if (!code) return;
+
+      const manualNow = Date.now();
+      if (!takeScanSlotForCode(code, manualNow)) return;
 
       if (!effectiveBoardingAssignmentRef.current) {
         showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
@@ -2015,6 +2250,10 @@ useEffect(() => {
       if (!isOnline) {
         const found = findFromCache(code);
         if (found) {
+          if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) {
+            setScanCode("");
+            return;
+          }
           if (offlineScannedIds.current.has(found.resId)) {
             showFastBoardError("Billet déjà scanné (hors ligne).");
             return;
@@ -2054,6 +2293,11 @@ useEffect(() => {
           } : undefined
         );
         if (found) {
+          if (!takeScanSlotForResId(found.resId, Date.now())) return;
+          if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) {
+            setScanCode("");
+            return;
+          }
           let scanDetails: ScanDetails | undefined;
           try {
             const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
@@ -2084,7 +2328,24 @@ useEffect(() => {
         showFastBoardError(normalizeOverlayMessage(err?.message ?? "Erreur lors de la validation manuelle."));
       }
     },
-    [scanCode, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage, agencyInfo]
+    [
+      scanCode,
+      companyId,
+      selectedAgencyId,
+      isOnline,
+      findFromCache,
+      updateStatut,
+      selectedTrip,
+      selectedDate,
+      showFastBoardSuccess,
+      showFastBoardError,
+      normalizeOverlayMessage,
+      agencyInfo,
+      takeScanSlotForCode,
+      takeScanSlotForResId,
+      blockIfAlreadyBoardedLocal,
+      canEditBoardingPassengers,
+    ]
   );
 
   /* ---------- Scanner caméra ---------- */
@@ -2100,6 +2361,8 @@ useEffect(() => {
     }
     const reader = new BrowserMultiFormatReader();
     readerRef.current = reader;
+    const decoderGen = ++scanDecoderGenerationRef.current;
+    const isDecoderStale = () => scanDecoderGenerationRef.current !== decoderGen;
 
     (async () => {
       try {
@@ -2108,14 +2371,16 @@ useEffect(() => {
           { video: { facingMode: { ideal: "environment" } } },
           videoRef.current as HTMLVideoElement,
           async (res: any) => {
-            const now = Date.now();
-            if (!res || now - lastScanRef.current < 1200) return;
-            lastScanRef.current = now;
+            if (!res) return;
+            if (isDecoderStale()) return;
 
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
               if (!code) return;
+              if (!canEditBoardingPassengers) return;
+              const scanNow = Date.now();
+              if (!takeScanSlotForCode(code, scanNow)) return;
               if (!effectiveBoardingAssignmentRef.current) {
                 showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
                 return;
@@ -2123,6 +2388,7 @@ useEffect(() => {
               if (!isOnline) {
                 const found = findFromCache(code);
                 if (found) {
+                  if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
                   if (offlineScannedIds.current.has(found.resId)) {
                     showFastBoardError("Billet déjà scanné (hors ligne).");
                     return;
@@ -2146,6 +2412,7 @@ useEffect(() => {
                 }
                 return;
               }
+              if (isDecoderStale()) return;
               const found = await findReservationByCode(
                 companyId!,
                 selectedAgencyId,
@@ -2158,11 +2425,15 @@ useEffect(() => {
                   weeklyTripId: selectedTrip.id || null,
                 } : undefined
               );
+              if (isDecoderStale()) return;
               if (found) {
+                if (!takeScanSlotForResId(found.resId, Date.now())) return;
+                if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
                 let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
                 try {
                   const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
                   const resSnap = await getDoc(resRef);
+                  if (isDecoderStale()) return;
                   if (resSnap.exists()) {
                     const d = resSnap.data() as Record<string, unknown>;
                     const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
@@ -2171,7 +2442,9 @@ useEffect(() => {
                     scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
                   }
                 } catch (_) {}
+                if (isDecoderStale()) return;
                 await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                if (isDecoderStale()) return;
                 showFastBoardSuccess(false, scanDetails);
               } else {
                 showFastBoardError("Billet introuvable.");
@@ -2189,14 +2462,16 @@ useEffect(() => {
           (preferred as unknown) as string | null,
           videoRef.current as HTMLVideoElement,
           async (res: any) => {
-            const now = Date.now();
-            if (!res || now - lastScanRef.current < 1200) return;
-            lastScanRef.current = now;
+            if (!res) return;
+            if (isDecoderStale()) return;
 
             const raw = getScanText(res);
             const code = extractCode(raw);
             try {
               if (!code) return;
+              if (!canEditBoardingPassengers) return;
+              const scanNow = Date.now();
+              if (!takeScanSlotForCode(code, scanNow)) return;
               if (!effectiveBoardingAssignmentRef.current) {
                 showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
                 return;
@@ -2204,6 +2479,7 @@ useEffect(() => {
               if (!isOnline) {
                 const found = findFromCache(code);
                 if (found) {
+                  if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
                   if (offlineScannedIds.current.has(found.resId)) {
                     showFastBoardError("Billet déjà scanné (hors ligne).");
                     return;
@@ -2227,6 +2503,7 @@ useEffect(() => {
                 }
                 return;
               }
+              if (isDecoderStale()) return;
               const found = await findReservationByCode(
                 companyId!,
                 selectedAgencyId,
@@ -2239,11 +2516,15 @@ useEffect(() => {
                   weeklyTripId: selectedTrip.id || null,
                 } : undefined
               );
+              if (isDecoderStale()) return;
               if (found) {
+                if (!takeScanSlotForResId(found.resId, Date.now())) return;
+                if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
                 let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
                 try {
                   const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
                   const resSnap = await getDoc(resRef);
+                  if (isDecoderStale()) return;
                   if (resSnap.exists()) {
                     const d = resSnap.data() as Record<string, unknown>;
                     const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
@@ -2252,7 +2533,9 @@ useEffect(() => {
                     scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
                   }
                 } catch (_) {}
+                if (isDecoderStale()) return;
                 await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                if (isDecoderStale()) return;
                 showFastBoardSuccess(false, scanDetails);
               } else {
                 showFastBoardError("Billet introuvable.");
@@ -2267,6 +2550,7 @@ useEffect(() => {
     })();
 
     return () => {
+      scanDecoderGenerationRef.current += 1;
       offlineScannedIds.current.clear();
       readerRef.current?.reset?.();
       readerRef.current = null;
@@ -2275,7 +2559,24 @@ useEffect(() => {
         videoRef.current.srcObject = null;
       }
     };
-  }, [scanOn, companyId, selectedAgencyId, isOnline, findFromCache, updateStatut, selectedTrip, selectedDate, showFastBoardSuccess, showFastBoardError, normalizeOverlayMessage, agencyInfo]);
+  }, [
+    scanOn,
+    companyId,
+    selectedAgencyId,
+    isOnline,
+    findFromCache,
+    updateStatut,
+    selectedTrip,
+    selectedDate,
+    showFastBoardSuccess,
+    showFastBoardError,
+    normalizeOverlayMessage,
+    agencyInfo,
+    takeScanSlotForCode,
+    takeScanSlotForResId,
+    blockIfAlreadyBoardedLocal,
+    canEditBoardingPassengers,
+  ]);
 
   /* ---------- Filtre & Totaux ---------- */
   const filtered = useMemo(() => {
@@ -2287,18 +2588,35 @@ useEffect(() => {
         (r.telephone || "").includes(searchTerm)
     );
   }, [reservations, searchTerm]);
+  const assignmentStatusBadge = activeBoardingAssignment?.status ?? fallbackBoardingAssignment?.status ?? null;
+
+  const markAllEmbarked = useCallback(async () => {
+    /* Toute la liste du créneau (pas le filtre recherche) ; n’embarque que les encore « en attente ». */
+    const toEmbark = reservations.filter((r) => getEffectiveBoardingStatus(r) === "pending");
+    if (toEmbark.length === 0) return;
+    for (const r of toEmbark) {
+      await updateStatut(r.id, "embarqué", undefined, { suppressAlert: true });
+    }
+    showFastBoardSuccess(false, {
+      nomClient: `${toEmbark.length} réservation(s)`,
+      statutEmbarquement: "embarqué",
+    });
+  }, [reservations, updateStatut, showFastBoardSuccess]);
 
   const totals = useMemo(() => {
     let totalRes = 0, totalSeats = 0, seatsEmbarques = 0, seatsAbsents = 0;
     for (const r of reservations) {
+      if (String(r.statut ?? "").toLowerCase() === INVALID_RESERVATION_STATUT) continue;
       const seats = r.seatsGo ?? 1;
       totalRes += 1;
       totalSeats += seats;
-      if (String(r.statut ?? "").toLowerCase() === INVALID_RESERVATION_STATUT) continue;
-      if (r.statutEmbarquement === "embarqué") seatsEmbarques += seats;
-      if (r.statutEmbarquement === "absent") seatsAbsents += seats;
+      const eff = getEffectiveBoardingStatus(r);
+      if (eff === "boarded") seatsEmbarques += seats;
+      else if (eff === "no_show") seatsAbsents += seats;
     }
-    return { totalRes, totalSeats, seatsEmbarques, seatsAbsents };
+    /** Tous embarqués : toutes les places du manifeste sont en statut embarqué (aucun absent ni en attente). */
+    const allPassengersEmbarked = totalSeats > 0 && seatsEmbarques === totalSeats;
+    return { totalRes, totalSeats, seatsEmbarques, seatsAbsents, allPassengersEmbarked };
   }, [reservations]);
 
   const humanDate = useMemo(() => {
@@ -2313,6 +2631,45 @@ useEffect(() => {
   const dayName = useMemo(
     () => weekdayFR(new Date(selectedDate)),
     [selectedDate]
+  );
+  const printCompanyName = useMemo(
+    () =>
+      String(
+        company?.nom ||
+          company?.name ||
+          company?.companyName ||
+          user?.companyName ||
+          "Compagnie"
+      ),
+    [company, user]
+  );
+  const printCompanyLogo = useMemo(
+    () =>
+      String(
+        company?.logoUrl ||
+          company?.logo ||
+          company?.brandLogoUrl ||
+          company?.imageUrl ||
+          ""
+      ).trim(),
+    [company]
+  );
+  const printAgencyName = useMemo(
+    () =>
+      String(
+        agencyInfo?.nom ||
+          agencyInfo?.name ||
+          agencies.find((a) => a.id === selectedAgencyId)?.nom ||
+          "Agence"
+      ),
+    [agencyInfo, agencies, selectedAgencyId]
+  );
+  const printAgencyPhone = useMemo(
+    () =>
+      String(
+        agencyInfo?.telephone || agencyInfo?.phone || agencyInfo?.contactPhone || ""
+      ).trim(),
+    [agencyInfo]
   );
 
   const departureRows = useMemo(() => {
@@ -2388,6 +2745,15 @@ useEffect(() => {
     });
     return rows;
   }, [weeklyForDay, dayAssignments, dayName]);
+
+  /** Un seul créneau déjà reflété dans le header : masquer la bande de sélection (zéro texte redondant). */
+  const hideTripPickerStrip =
+    departureRows.length === 1 &&
+    !!selectedTrip &&
+    selectedTrip.departure === departureRows[0]?.departure &&
+    selectedTrip.arrival === departureRows[0]?.arrival &&
+    selectedTrip.heure === departureRows[0]?.heure &&
+    selectedTrip.id === departureRows[0]?.tripId;
 
   const trajetButtons = useMemo(() => {
     if (!departureRows.length) return [] as JSX.Element[];
@@ -2469,34 +2835,17 @@ useEffect(() => {
               status: effectiveStatus,
             });
           }}
-          className={`px-3 py-2 rounded-lg text-sm font-medium shadow-sm flex flex-col items-start gap-1 ${
-            active ? "text-white" : row.hasAssignment ? "bg-gray-200 text-gray-700" : "bg-gray-100 text-gray-400 border border-dashed border-gray-300"
+          aria-label={`${row.departure} → ${row.arrival}, ${row.heure}`}
+          title=""
+          className={`shrink-0 h-10 w-10 rounded-full border-2 shadow-sm ${
+            active
+              ? "border-transparent ring-2 ring-offset-1 ring-red-500"
+              : row.hasAssignment
+                ? "border-gray-300 bg-gray-200 dark:bg-slate-600"
+                : "border-dashed border-gray-300 bg-gray-100 dark:bg-slate-800"
           }`}
-          style={active ? { background: primary } : undefined}
-        >
-          <span>
-            {row.departure} → {row.arrival} à {row.heure}
-          </span>
-          <span className="flex flex-wrap items-center gap-1 text-[11px] font-normal opacity-95">
-            {row.hasAssignment && row.assignmentStatus ? (
-              <span
-                className={`px-1.5 py-0.5 rounded ${
-                  row.assignmentStatus === "validated"
-                    ? active
-                      ? "bg-white/20"
-                      : "bg-emerald-100 text-emerald-800"
-                    : active
-                      ? "bg-white/20"
-                      : "bg-amber-100 text-amber-900"
-                }`}
-              >
-                {row.assignmentStatus === "validated" ? "Validé" : "Planifié"}
-              </span>
-            ) : (
-              <span className={active ? "text-white/90" : "text-amber-700"}>Aucun véhicule planifié pour ce trajet</span>
-            )}
-          </span>
-        </button>
+          style={active ? { background: primary, borderColor: "transparent" } : undefined}
+        />
       );
     });
   }, [departureRows, selectedTrip, primary, companyId, selectedAgencyId, isOnline, selectedDate]);
@@ -2511,37 +2860,6 @@ useEffect(() => {
 
   return (
     <StandardLayoutWrapper>
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <PageHeader
-          title="Liste d'embarquement"
-          subtitle={
-            selectedTrip
-              ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${humanDate} ${selectedTrip.heure}${
-                  assignmentStatusBadge
-                    ? assignmentStatusBadge === "validated"
-                      ? " • Validé (logistique)"
-                      : " • Planifié"
-                    : ""
-                }`
-              : undefined
-          }
-          icon={Bus}
-        />
-        <div
-          className="flex items-center gap-2 shrink-0 rounded-full px-3 py-1.5 text-sm font-medium"
-          style={{
-            backgroundColor: isOnline ? "rgba(34, 197, 94, 0.15)" : "rgba(249, 115, 22, 0.2)",
-            color: isOnline ? "#16a34a" : "#ea580c",
-          }}
-          aria-live="polite"
-        >
-          <span
-            className="w-2 h-2 rounded-full shrink-0"
-            style={{ backgroundColor: isOnline ? "#16a34a" : "#ea580c" }}
-          />
-          {isOnline ? "En ligne" : "Mode hors ligne"}
-        </div>
-      </div>
     <>
       {/* Fast boarding overlay — full screen 1.2s feedback */}
       {fastBoardOverlay && (
@@ -2606,418 +2924,598 @@ useEffect(() => {
           .col-ref{width:22%}
         }
 
-        /* Header imprimable centré */
-        #print-area .title{ text-align:center; font-weight:800; font-size:18px; }
-        #print-area .subtitle{ text-align:center; font-size:14px; margin-top:2px; }
-
-        /* zones signatures épurées */
-        #print-area .sig-box {
-          border: 1px solid #000;
-          min-height: 28mm;
-          border-radius: 6px;
+        /* Document officiel imprimable */
+        .print-doc{
+          background:#fff;
+          color:#000;
+          font-size:12px;
+          line-height:1.35;
+          padding:0;
         }
-        #print-area .sig-caption { text-align:center; margin-top:6px; }
+        .print-doc__header{
+          border:1px solid #000;
+          padding:10px 12px;
+          margin-bottom:8px;
+        }
+        .print-doc__brand{
+          display:flex;
+          align-items:center;
+          gap:12px;
+          margin-bottom:8px;
+        }
+        .print-doc__logo{
+          width:64px;
+          height:64px;
+          object-fit:contain;
+        }
+        .print-doc__logo-fallback{
+          width:64px;
+          height:64px;
+          border:1px solid #000;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          font-size:10px;
+          letter-spacing:0.08em;
+        }
+        .print-doc__title{
+          font-size:16px;
+          font-weight:700;
+          text-transform:uppercase;
+        }
+        .print-doc__company{
+          font-size:13px;
+          font-weight:600;
+        }
+        .print-doc__meta{
+          display:grid;
+          grid-template-columns:auto 1fr auto 1fr;
+          gap:6px 10px;
+          align-items:baseline;
+          font-size:11px;
+        }
+        .print-doc__meta .print-doc__k{
+          font-weight:700;
+          color:#000;
+        }
+        .print-doc__meta .print-doc__v{
+          word-break:break-word;
+        }
+        .print-doc__meta .print-doc__span2{
+          grid-column:span 3;
+        }
+        .print-doc__summary{
+          display:grid;
+          grid-template-columns:repeat(4,minmax(0,1fr));
+          border:1px solid #000;
+          margin-bottom:8px;
+        }
+        .print-doc__summary > div{
+          padding:6px 8px;
+          border-right:1px solid #000;
+          display:flex;
+          justify-content:space-between;
+          gap:8px;
+        }
+        .print-doc__summary > div:last-child{ border-right:none; }
+        .print-doc__table{
+          width:100%;
+          border-collapse:collapse;
+          table-layout:fixed;
+          font-size:11px;
+          color:#000;
+        }
+        .print-doc__table thead{ display:table-header-group; }
+        .print-doc__table tbody tr{ page-break-inside:avoid; }
+        .print-doc__table th,
+        .print-doc__table td{
+          border:1px solid #000;
+          padding:4px 6px;
+          vertical-align:middle;
+          word-break:break-word;
+          overflow-wrap:anywhere;
+        }
+        .print-doc__table th{
+          font-weight:700;
+          text-align:left;
+        }
+        .print-doc__table th:nth-child(1),
+        .print-doc__table td:nth-child(1){ width:5%; }
+        .print-doc__table th:nth-child(6),
+        .print-doc__table td:nth-child(6){ width:8%; text-align:center; }
+        .print-doc__table th:nth-child(7),
+        .print-doc__table td:nth-child(7),
+        .print-doc__table th:nth-child(8),
+        .print-doc__table td:nth-child(8){ width:8%; text-align:center; }
+        .print-doc__table .center{ text-align:center; }
+        .print-doc__empty{
+          text-align:center;
+          padding:10px;
+        }
+        .print-doc__signatures{
+          margin-top:14px;
+          display:grid;
+          grid-template-columns:repeat(3,minmax(0,1fr));
+          gap:18px;
+        }
+        .print-doc__sig-line{
+          border-bottom:1px solid #000;
+          height:24mm;
+        }
+        .print-doc__sig-label{
+          text-align:center;
+          margin-top:6px;
+          font-size:11px;
+          font-weight:600;
+        }
+        .print-doc__footer{
+          margin-top:10px;
+          padding-top:6px;
+          border-top:1px solid #000;
+          font-size:9px;
+          color:#333;
+        }
 
         @media print{
+          @page { size: A4 portrait; margin: 10mm; }
           body * { visibility: hidden; }
-          #print-area, #print-area * { visibility: visible; }
-          #print-area { position: absolute; inset: 0; padding: 0 8mm; }
-          .brand-logo{height:26px}
-          .case{width:14px;height:14px;border:1.5px solid #000;border-radius:0}
-          .case::after{font-size:12px;line-height:1}
-          tr.embarked { background:transparent !important; color:inherit !important; }
+          #print-area.boarding-official-print,
+          #print-area.boarding-official-print * { visibility: visible; }
+          #print-area.boarding-official-print {
+            display:block !important;
+            position: absolute;
+            inset: 0;
+            padding: 0;
+          }
+          .print-doc{
+            display:block !important;
+            width:100%;
+          }
+          .print-doc__header,
+          .print-doc__summary,
+          .print-doc__table{
+            break-inside: avoid;
+          }
         }
       `}</style>
 
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* Filtre Agence + Date */}
-        <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 p-4 shadow-md space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold" style={{ color: secondary }}>
-                Agence :
-              </span>
-              {selectedAgencyId ? (
-                <span className="px-2 py-1 rounded border bg-gray-50 text-sm">
-                  {agencyInfo?.nomAgence || "—"}
-                </span>
-              ) : (
-                <select
-                  className="px-2 py-1 border rounded text-sm"
-                  value={selectedAgencyId || ""}
-                  onChange={(e) => setSelectedAgencyId(e.target.value || null)}
-                >
-                  <option value="">— Choisir une agence —</option>
-                  {agencies.map(a => (
-                    <option key={a.id} value={a.id}>{a.nom}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-
-            <span className="font-semibold" style={{ color: secondary }}>
-              Date :
-            </span>
-            <button
-              className="px-2 py-1 rounded border"
-              onClick={() => {
-                const d = new Date(selectedDate);
-                d.setDate(d.getDate() - 1);
-                setSelectedDate(toLocalISO(d));
-              }}
-            >
-              ◀ Jour précédent
-            </button>
-            <DatePicker
-              selected={selectedDateObj}
-              onChange={(d) => {
-                if (!d) return;
-                setSelectedDate(toLocalISO(d));
-              }}
-              dateFormat="dd/MM/yyyy"
-              locale={fr}
-              shouldCloseOnSelect
-              className="border rounded px-3 py-1 w-[120px] bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600"
-            />
-            <button
-              className="px-2 py-1 rounded border"
-              onClick={() => {
-                const d = new Date(selectedDate);
-                d.setDate(d.getDate() + 1);
-                setSelectedDate(toLocalISO(d));
-              }}
-            >
-              Jour suivant ▶
-            </button>
+      <div className="w-full px-2 sm:px-3 py-3 space-y-3 pb-28">
+        <div className="no-print flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+            {selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedTrip.heure}` : "Sélectionner un trajet"}
           </div>
-
-          <div className="font-semibold">Sélectionner un trajet</div>
-          <div className="flex flex-wrap gap-2">
-            {!selectedAgencyId ? (
-              <div className="text-gray-500 dark:text-gray-200">Choisissez d’abord une agence.</div>
-            ) : departureRows.length === 0 ? (
-              <div className="text-gray-500 dark:text-gray-200">Aucun créneau hebdomadaire pour cette date</div>
-            ) : (
-              trajetButtons
-            )}
-          </div>
-          {selectedTrip && !hasOperationalAssignment ? (
-            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
-              Ce trajet n’a pas encore de véhicule assigné (tripAssignment). Embarquement et scan sont désactivés jusqu’à planification.
-            </div>
-          ) : null}
+          <DatePicker
+            selected={selectedDateObj}
+            onChange={(d) => {
+              if (!d) return;
+              setSelectedDate(toLocalISO(d));
+            }}
+            dateFormat="dd/MM"
+            locale={fr}
+            shouldCloseOnSelect
+            customInput={<DatePickerButton />}
+          />
         </div>
 
-        {/* Infos départ + actions */}
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 shadow-md">
-          <div className="px-4 pt-4 flex flex-wrap items-center gap-3">
-            <div className="text-sm text-gray-500 dark:text-gray-200">Trajet</div>
-            <div className="font-semibold text-gray-900 dark:text-white">
-              {selectedTrip ? (
-                <>
-                  {selectedTrip.departure} — {selectedTrip.arrival} • {humanDate} à {selectedTrip.heure}
-                </>
-              ) : (
-                "Aucun trajet sélectionné"
-              )}
-            </div>
-            <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
-              <div className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white font-medium">
-                <span className="opacity-90">Réservations:</span> <b>{totals.totalRes}</b>
-              </div>
-              <div className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white font-medium">
-                <span className="opacity-90">Places:</span> <b>{totals.totalSeats}</b>
-              </div>
-              <div className="px-2.5 py-1.5 rounded-lg bg-green-600 text-white font-medium">
-                <span className="opacity-90">Embarqués:</span> <b>{totals.seatsEmbarques}</b>
-              </div>
-              <div className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white font-medium">
-                <span className="opacity-90">Absent:</span> <b>{totals.seatsAbsents}</b>
-              </div>
-              {capacityLimit != null && (
-                <div className="px-2 py-1 rounded bg-blue-50 dark:bg-slate-700 border border-blue-200 dark:border-slate-600">
-                  <span className="text-gray-500 dark:text-gray-200">Capacité véhicule:</span>{" "}
-                  <b className="text-gray-900 dark:text-white">{capacityLimit}</b> places
-                  {capacityLimit > 0 && (
-                    <span className="ml-1 text-sm">
-                      {" "}
-                      — Remplissage: {Math.round((totals.seatsEmbarques / capacityLimit) * 100)}%
-                    </span>
-                  )}
-                </div>
-              )}
-              {capacityLimit != null && capacityLimit > 0 && totals.seatsEmbarques >= capacityLimit && (
-                <div className="px-2 py-1 rounded bg-amber-100 border border-amber-300 text-amber-800 text-sm font-medium">
-                  Capacité atteinte
-                </div>
-              )}
-            </div>
-          </div>
+        <div className="no-print flex flex-nowrap overflow-x-auto gap-2">
+          <button
+            type="button"
+            onClick={() => setMobileView("scan")}
+            className={`shrink-0 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-semibold whitespace-nowrap min-w-[44%] ${
+              mobileView === "scan"
+                ? "bg-red-600 text-white"
+                : "bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-gray-200"
+            }`}
+          >
+            <Camera className="w-4 h-4 shrink-0" aria-hidden />
+            SCAN
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileView("liste")}
+            className={`shrink-0 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-semibold whitespace-nowrap min-w-[44%] ${
+              mobileView === "liste"
+                ? "bg-red-600 text-white"
+                : "bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-gray-200"
+            }`}
+          >
+            <List className="w-4 h-4 shrink-0" aria-hidden />
+            LISTE
+          </button>
+        </div>
 
-          {/* Cartes info bus / chauffeur / convoyeur (depuis affectation Phase 1) */}
-          <div className="px-4 pb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="border border-gray-200 dark:border-slate-600 rounded-xl p-3 bg-gray-50 dark:bg-slate-800 shadow-md">
-              <div className="text-xs text-gray-500 dark:text-gray-200 mb-1">Véhicule / Plaque</div>
-              <div className="font-medium text-gray-900 dark:text-white">
-                {assign.bus || assign.immat ? `${assign.bus || "—"} / ${assign.immat || "—"}` : "— / —"}
+        <div className="no-print flex flex-nowrap items-center gap-2 overflow-x-auto">
+          {agencies.length > 1 && !userAgencyId && (
+            <select
+              className="shrink-0 text-xs border border-gray-200 dark:border-slate-600 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-800 max-w-[55vw]"
+              value={selectedAgencyId || ""}
+              onChange={(e) => setSelectedAgencyId(e.target.value || null)}
+            >
+              <option value="">Agence</option>
+              {agencies.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.nom}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {((!hideTripPickerStrip || !selectedAgencyId || departureRows.length === 0) ||
+          (selectedTrip && !hasOperationalAssignment)) && (
+          <div className="no-print bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600 p-2">
+            {(!hideTripPickerStrip || !selectedAgencyId || departureRows.length === 0) && (
+              <div className="flex flex-nowrap overflow-x-auto gap-2">
+                {!selectedAgencyId ? (
+                  <div className="text-xs text-gray-500 dark:text-gray-200 shrink-0">Choisissez une agence.</div>
+                ) : departureRows.length === 0 ? (
+                  <div className="text-xs text-gray-500 dark:text-gray-200 shrink-0">Aucun départ pour cette date.</div>
+                ) : (
+                  trajetButtons
+                )}
+              </div>
+            )}
+            {selectedTrip && !hasOperationalAssignment ? (
+              <div className="mt-2 text-xs text-amber-800 dark:text-amber-200">Aucun véhicule planifié pour ce trajet.</div>
+            ) : null}
+          </div>
+        )}
+
+        <div className="no-print grid grid-cols-3 gap-2">
+          <div className="rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
+            <div className="text-[10px] text-gray-500 dark:text-gray-400">Véhicule</div>
+            <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
+              {assign.immat || "—"}
+            </div>
+            {assignmentStatusBadge === "validated" && (
+              <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-semibold">
+                Validé
+              </span>
+            )}
+          </div>
+          <div className="rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
+            <div className="text-[10px] text-gray-500 dark:text-gray-400">Chauffeur</div>
+            <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{assign.chauffeur || "—"}</div>
+            {assign.chauffeurPhone && (
+              <a className="text-[11px] text-blue-700 underline" href={`tel:${assign.chauffeurPhone}`}>
+                {assign.chauffeurPhone}
+              </a>
+            )}
+          </div>
+          <div className="rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
+            <div className="text-[10px] text-gray-500 dark:text-gray-400">Convoyeur</div>
+            <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{assign.chef || "—"}</div>
+            {assign.chefPhone && (
+              <a className="text-[11px] text-blue-700 underline" href={`tel:${assign.chefPhone}`}>
+                {assign.chefPhone}
+              </a>
+            )}
+          </div>
+        </div>
+
+        <div className="no-print flex flex-nowrap overflow-x-auto gap-1.5 text-[11px] font-medium">
+          <span className="shrink-0 px-2 py-1 rounded bg-blue-600 text-white whitespace-nowrap">
+            R {totals.totalRes}
+          </span>
+          <span className="shrink-0 px-2 py-1 rounded bg-indigo-600 text-white whitespace-nowrap">
+            P {totals.totalSeats}
+          </span>
+          <span className="shrink-0 px-2 py-1 rounded bg-green-600 text-white whitespace-nowrap">
+            E {totals.seatsEmbarques}
+          </span>
+          <span className="shrink-0 px-2 py-1 rounded bg-red-600 text-white whitespace-nowrap">
+            A {totals.seatsAbsents}
+          </span>
+        </div>
+
+        {mobileView === "scan" && (
+          <div className="no-print space-y-3">
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 px-2 py-1.5">
+                <div className="text-green-800 dark:text-green-200">Embarqués</div>
+                <div className="text-base font-bold text-green-900 dark:text-green-100">{totals.seatsEmbarques}</div>
+              </div>
+              <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 px-2 py-1.5">
+                <div className="text-red-800 dark:text-red-200">Absents</div>
+                <div className="text-base font-bold text-red-900 dark:text-red-100">{totals.seatsAbsents}</div>
               </div>
             </div>
-            <div className="border border-gray-200 dark:border-slate-600 rounded-xl p-3 bg-gray-50 dark:bg-slate-800 shadow-md">
-              <div className="text-xs text-gray-500 dark:text-gray-200 mb-1">Chauffeur</div>
-              <div className="font-medium text-gray-900 dark:text-white">{assign.chauffeur || "—"}</div>
-              {assign.chauffeurPhone && (
-                <div className="text-xs text-gray-600 dark:text-gray-200 mt-0.5">Tél. {assign.chauffeurPhone}</div>
-              )}
-            </div>
-            <div className="border border-gray-200 dark:border-slate-600 rounded-xl p-3 bg-gray-50 dark:bg-slate-800 shadow-md">
-              <div className="text-xs text-gray-500 dark:text-gray-200 mb-1">Convoyeur</div>
-              <div className="font-medium text-gray-900 dark:text-white">{assign.chef || "—"}</div>
-              {assign.chefPhone && (
-                <div className="text-xs text-gray-600 dark:text-gray-200 mt-0.5">Tél. {assign.chefPhone}</div>
-              )}
-            </div>
+            {scanOn && (
+              <video
+                ref={videoRef}
+                className="w-full aspect-video bg-black rounded-lg overflow-hidden"
+                muted
+                playsInline
+                autoPlay
+              />
+            )}
+            <form onSubmit={submitManual} className="flex flex-nowrap gap-2">
+              <input
+                value={scanCode}
+                onChange={(e) => setScanCode(e.target.value)}
+                placeholder="Entrer code billet"
+                className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+              />
+              <button
+                type="submit"
+                className="shrink-0 px-3 py-2 rounded-lg text-white text-sm"
+                style={{ background: primary }}
+                disabled={(!selectedAgencyId && !userAgencyId) || !hasOperationalAssignment || !canEditBoardingPassengers}
+              >
+                Valider
+              </button>
+            </form>
           </div>
+        )}
 
-          <div className="no-print px-4 pb-3 flex flex-wrap items-center gap-3">
+        {mobileView === "liste" && (
+          <div className="no-print space-y-2">
             <input
               type="text"
               placeholder="Rechercher nom / téléphone…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
             />
+            <div className="flex flex-col gap-1">
+            <div className="flex flex-nowrap overflow-x-auto gap-2">
+              <button
+                type="button"
+                onClick={() => void markAllEmbarked()}
+                className={`shrink-0 px-3 py-2 rounded-lg text-sm border min-h-[40px] whitespace-nowrap ${
+                  totals.allPassengersEmbarked
+                    ? "border-emerald-500 bg-emerald-100 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100"
+                    : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100"
+                } disabled:opacity-50`}
+                disabled={
+                  isLoading ||
+                  totals.totalSeats === 0 ||
+                  totals.allPassengersEmbarked ||
+                  !hasOperationalAssignment ||
+                  !canEditBoardingPassengers
+                }
+              >
+                {totals.allPassengersEmbarked ? "✓ Tous embarqués" : "Tout marquer embarqué"}
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="shrink-0 px-3 py-2 rounded-lg text-sm border border-gray-300 dark:border-slate-600 min-h-[40px] whitespace-nowrap"
+                disabled={!canPrintOfficialDocs}
+                title={canPrintOfficialDocs ? "Imprimer la liste officielle" : "Impression officielle réservée au chef d'agence"}
+              >
+                Imprimer
+              </button>
+            </div>
+            {totals.totalSeats > 0 && totals.allPassengersEmbarked && (
+              <p className="text-xs text-emerald-800 dark:text-emerald-200">
+                Toutes les places du manifeste sont embarquées ({totals.seatsEmbarques}/{totals.totalSeats}).
+              </p>
+            )}
+            </div>
+            <div className="overflow-x-auto mt-1 bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600">
+              <table className="w-full text-sm thin-table min-w-[600px]" style={{ fontSize: "14px" }}>
+                <colgroup>
+                  <col className="col-idx" />
+                  <col className="col-client" />
+                  <col className="col-phone" />
+                  <col className="col-canal" />
+                  <col className="col-ref" />
+                  <col className="col-seats" />
+                  <col className="col-emb" />
+                  <col className="col-abs" />
+                </colgroup>
+                <thead className="bg-gray-50 dark:bg-slate-800 dark:border-slate-600">
+                  <tr>
+                    <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">#</th>
+                    <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Client</th>
+                    <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Téléphone</th>
+                    <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Canal</th>
+                    <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Référence</th>
+                    <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Places</th>
+                    <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Embarqué</th>
+                    <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Absent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {isLoading ? (
+                    <tr>
+                      <td className="py-4 text-gray-500 dark:text-gray-200" colSpan={8}>
+                        Chargement…
+                      </td>
+                    </tr>
+                  ) : filtered.length === 0 ? (
+                    <tr>
+                      <td className="py-4 text-gray-400 dark:text-gray-200" colSpan={8}>
+                        Aucun passager trouvé
+                      </td>
+                    </tr>
+                  ) : (
+                    filtered.map((r, idx) => {
+                      const eff = getEffectiveBoardingStatus(r);
+                      const embarked = eff === "boarded";
+                      const absent = eff === "no_show";
+                      const seats = r.seatsGo ?? 1;
+                      return (
+                        <tr
+                          key={r.id}
+                          className={`border-t border-gray-200 dark:border-slate-600 ${embarked ? "embarked bg-gray-50 dark:bg-slate-700 text-slate-700 dark:text-white" : `bg-white ${idx % 2 === 0 ? "dark:bg-slate-900" : "dark:bg-slate-800"} text-gray-900 dark:text-white`}`}
+                        >
+                          <td className={embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}>{idx + 1}</td>
+                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.nomClient || "—"}</td>
+                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.telephone || "—"}</td>
+                          <td className={`capitalize truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.canal || "—"}</td>
+                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.referenceCode || r.id}</td>
+                          <td className={`text-center font-semibold ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{seats}</td>
+                          <td className="text-center">
+                            <button
+                              className="case"
+                              data-checked={embarked}
+                              onClick={() => updateStatut(r.id, embarked ? "en_attente" : "embarqué")}
+                              title="Basculer Embarqué"
+                              disabled={!canEditBoardingPassengers}
+                            />
+                          </td>
+                          <td className="text-center">
+                            <button
+                              className="case"
+                              data-checked={absent}
+                              onClick={() => updateStatut(r.id, absent ? "en_attente" : "absent")}
+                              title="Basculer Absent"
+                              disabled={!canEditBoardingPassengers}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        <div className="no-print fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-600 bg-white/95 dark:bg-slate-900/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-2">
+            <button
+              type="button"
+              onClick={() => void handleBusParti()}
+              className="w-full px-3 py-2.5 rounded-lg text-sm font-semibold min-h-[44px] border-2 border-gray-300 dark:border-slate-500 bg-gray-50 dark:bg-slate-800 text-gray-900 dark:text-white shadow-sm disabled:opacity-45"
+              disabled={
+                !tripInstanceIdForSlot ||
+                sendingOriginDeparture ||
+                originDepartureDone ||
+                scanOn ||
+                totals.seatsEmbarques <= 0 ||
+                !canLaunchTripAfterAgencyValidation ||
+                tripStatutMetier !== "validation_agence_requise"
+              }
+            >
+              🚌{" "}
+              {sendingOriginDeparture
+                ? "Enregistrement..."
+                : originDepartureDone
+                  ? "Trajet lancé"
+                  : !canLaunchTripAfterAgencyValidation
+                    ? "Validation chef agence requise"
+                    : tripStatutMetier !== "validation_agence_requise"
+                      ? "Terminer embarquement puis valider agence"
+                      : "Valider et lancer le trajet"}
+            </button>
             <button
               type="button"
               onClick={() => setScanOn((v) => !v)}
-              className={`w-full sm:w-auto px-3 py-2 rounded-lg text-sm min-h-[40px] ${
-                scanOn ? "bg-emerald-600 text-white" : "bg-gray-200 text-gray-700 dark:bg-slate-700 dark:text-gray-200"
+              className={`w-full px-3 py-3.5 rounded-xl text-sm font-semibold min-h-[52px] whitespace-nowrap shadow-md ${
+                scanOn ? "bg-emerald-600 text-white" : "text-white"
               }`}
-              title="Activer le scanner (QR / code-barres)"
-              disabled={!selectedTrip || !selectedAgencyId || !hasOperationalAssignment}
+              style={!scanOn ? { background: primary } : undefined}
+              disabled={!selectedTrip || !selectedAgencyId || !hasOperationalAssignment || !canEditBoardingPassengers}
             >
-              {scanOn ? "Scanner ON" : "Scanner OFF"}
+              {scanOn ? "🟢 Scan en cours..." : "📷 Scanner les billets"}
             </button>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="w-full sm:w-auto px-3 py-2 rounded-lg text-sm border border-gray-300 dark:border-slate-600 min-h-[40px]"
-              title="Imprimer la liste"
-            >
-              🖨️ Imprimer
-            </button>
-            <button
-              type="button"
-              onClick={cloturerEmbarquement}
-              className={`w-full sm:w-auto px-3 py-2 rounded-lg text-sm min-h-[40px] ${isClosed ? "bg-gray-300 text-gray-600" : "bg-red-600 text-white"}`}
-              title={isClosed ? "Déjà clôturé" : "Clôturer l’embarquement"}
-              disabled={!selectedTrip || !selectedAgencyId || isClosed}
-            >
-              {isClosed ? "Clôturé" : "🚍 Clôturer"}
-            </button>
-            {isClosed && tripInstanceIdForSlot && !originDepartureDone && (
-              <button
-                type="button"
-                onClick={handleBusParti}
-                disabled={sendingOriginDeparture}
-                className="w-full sm:w-auto px-3 py-2 rounded-lg text-sm min-h-[40px] bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
-                title="Enregistrer le départ du bus depuis l'agence d'origine"
-              >
-                {sendingOriginDeparture ? "Enregistrement…" : "🚌 Bus parti"}
-              </button>
-            )}
           </div>
 
-          {scanOn && (
-            <div className="no-print px-4 pb-4 w-full">
-              <video
-                ref={videoRef}
-                className="w-full sm:max-w-md aspect-video bg-black rounded-xl overflow-hidden"
-                muted
-                playsInline
-                autoPlay
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Saisie manuelle */}
-        <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 shadow-md p-4">
-          <div className="text-sm font-semibold mb-2" style={{ color: secondary }}>
-            Saisir une référence
-          </div>
-          <form onSubmit={submitManual} className="flex gap-2">
-            <input
-              value={scanCode}
-              onChange={(e) => setScanCode(e.target.value)}
-              placeholder="ID Firestore ou référence (REF-… / MT-…)"
-              className="flex-1 px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
-            />
-            <button
-              type="submit"
-              className="px-3 py-2 rounded-lg text-white text-sm"
-              style={{ background: primary }}
-              disabled={(!selectedAgencyId && !userAgencyId) || !hasOperationalAssignment}
-            >
-              Valider
-            </button>
-          </form>
-        </div>
-
-        {/* Zone imprimable */}
-        <div id="print-area" className="bg-white rounded-xl border shadow-sm">
-          <div className="px-4 pt-4">
-            {/* Bandeau logo + société + agence */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                {company?.logoUrl && (
-                  <img
-                    src={(company as any).logoUrl}
-                    alt={(company as any)?.nom}
-                    className="brand-logo"
-                  />
-                )}
-                <div>
-                  <div className="font-extrabold text-lg">
-                  {company?.nom ?? "—"}
-                </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-200">
-                  {agencyInfo?.nomAgence || "Agence"} • Tel. {agencyInfo?.telephone || "—"}
-                 </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Titre centré + destination */}
-            <div className="mt-2">
-              <div className="title">Liste d’embarquement</div>
-              {selectedTrip && (
-                <div className="subtitle text-gray-700 dark:text-gray-200">
-                  {selectedTrip.departure} → {selectedTrip.arrival} • {humanDate} • {selectedTrip.heure}
+        {/* Document officiel : uniquement visible à l’impression (hors flux mobile) */}
+        <div id="print-area" className="boarding-official-print hidden print:block print-doc">
+          <div className="print-doc__header">
+            <div className="print-doc__brand">
+              {printCompanyLogo ? (
+                <img src={printCompanyLogo} alt="" className="print-doc__logo" />
+              ) : (
+                <div className="print-doc__logo-fallback" aria-hidden>
+                  LOGO
                 </div>
               )}
+              <div>
+                <div className="print-doc__title">Liste d&apos;embarquement</div>
+                <div className="print-doc__company">{printCompanyName}</div>
+              </div>
             </div>
-
-            {/* Méta + totaux (plaque, modèle, chauffeur, convoyeur depuis affectation) */}
-            <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
-              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
-                <div className="text-xs text-gray-500 dark:text-gray-200">Véhicule / Plaque</div>
-                <div className="font-medium">
-                  {(assign.bus || "—") + " / " + (assign.immat || "—")}
-                </div>
-              </div>
-              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
-                <div className="text-xs text-gray-500 dark:text-gray-200">Chauffeur</div>
-                <div className="font-medium">{assign.chauffeur || "—"}</div>
-                {assign.chauffeurPhone && <div className="text-xs text-gray-600 dark:text-gray-200">Tél. {assign.chauffeurPhone}</div>}
-              </div>
-              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
-                <div className="text-xs text-gray-500 dark:text-gray-200">Convoyeur</div>
-                <div className="font-medium">{assign.chef || "—"}</div>
-                {assign.chefPhone && <div className="text-xs text-gray-600 dark:text-gray-200">Tél. {assign.chefPhone}</div>}
-              </div>
-              <div className="meta-card bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white">
-                <div className="text-xs text-gray-500 dark:text-gray-200">Totaux</div>
-                <div className="font-medium">
-                  R: {totals.totalRes} • P: {totals.totalSeats} • E: {totals.seatsEmbarques} • A: {totals.seatsAbsents}
-                </div>
-              </div>
+            <div className="print-doc__meta">
+              <span className="print-doc__k">Agence</span>
+              <span className="print-doc__v">{printAgencyName}</span>
+              <span className="print-doc__k">Téléphone</span>
+              <span className="print-doc__v">{printAgencyPhone || "—"}</span>
+              <span className="print-doc__k">Trajet</span>
+              <span className="print-doc__v print-doc__span2">
+                {selectedTrip
+                  ? `${selectedTrip.departure} → ${selectedTrip.arrival}${selectedTrip.heure ? ` — départ ${selectedTrip.heure}` : ""}`
+                  : "—"}
+              </span>
+              <span className="print-doc__k">Date</span>
+              <span className="print-doc__v">{humanDate}</span>
+              <span className="print-doc__k">Véhicule</span>
+              <span className="print-doc__v">{assign.immat || "—"}</span>
+              <span className="print-doc__k">Chauffeur</span>
+              <span className="print-doc__v">{assign.chauffeur || "—"}</span>
+              <span className="print-doc__k">Convoyeur</span>
+              <span className="print-doc__v">{assign.chef || "—"}</span>
             </div>
           </div>
 
-          <div className="overflow-x-auto mt-3" style={{ minWidth: 0 }}>
-            <table className="w-full text-sm thin-table min-w-[600px]" style={{ fontSize: "14px" }}>
-              <colgroup>
-                <col className="col-idx" />
-                <col className="col-client" />
-                <col className="col-phone" />
-                <col className="col-canal" />
-                <col className="col-ref" />
-                <col className="col-seats" />
-                <col className="col-emb" />
-                <col className="col-abs" />
-              </colgroup>
-              <thead className="bg-gray-50 dark:bg-slate-800 dark:border-slate-600">
+          <div className="print-doc__summary">
+            <div><span>Réservations</span><strong>{totals.totalRes}</strong></div>
+            <div><span>Places</span><strong>{totals.totalSeats}</strong></div>
+            <div><span>Embarqués</span><strong>{totals.seatsEmbarques}</strong></div>
+            <div><span>Absents</span><strong>{totals.seatsAbsents}</strong></div>
+          </div>
+
+          <table className="print-doc__table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Nom</th>
+                <th>Téléphone</th>
+                <th>Canal</th>
+                <th>Référence</th>
+                <th>Places</th>
+                <th>Embarqué</th>
+                <th>Absent</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reservations.length === 0 ? (
                 <tr>
-                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">#</th>
-                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Client</th>
-                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Téléphone</th>
-                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Canal</th>
-                  <th className="text-left text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Référence</th>
-                  <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Places</th>
-                  <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Embarqué</th>
-                  <th className="text-center text-gray-900 dark:text-white border-b border-gray-200 dark:border-slate-600">Absent</th>
+                  <td colSpan={8} className="print-doc__empty">Aucun passager</td>
                 </tr>
-              </thead>
-              <tbody>
-                {isLoading ? (
-                  <tr>
-                    <td className="py-4 text-gray-500 dark:text-gray-200" colSpan={8}>
-                      Chargement…
-                    </td>
-                  </tr>
-                ) : filtered.length === 0 ? (
-                  <tr>
-                    <td className="py-4 text-gray-400 dark:text-gray-200" colSpan={8}>
-                      Aucun passager trouvé
-                    </td>
-                  </tr>
-                ) : (
-                  filtered.map((r, idx) => {
-                    const eff = getEffectiveBoardingStatus(r);
-                    const embarked = eff === "boarded";
-                    const absent   = eff === "no_show";
-                    const seats = r.seatsGo ?? 1;
-                    return (
-                      <tr
-                        key={r.id}
-                        className={`border-t border-gray-200 dark:border-slate-600 ${embarked ? "embarked bg-gray-50 dark:bg-slate-700 text-slate-700 dark:text-white" : `bg-white ${idx % 2 === 0 ? "dark:bg-slate-900" : "dark:bg-slate-800"} text-gray-900 dark:text-white`}`}
-                      >
-                        <td className={embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}>{idx + 1}</td>
-                        <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.nomClient || "—"}</td>
-                        <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.telephone || "—"}</td>
-                        <td className={`capitalize truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.canal || "—"}</td>
-                        <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.referenceCode || r.id}</td>
-                        <td className={`text-center font-semibold ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{seats}</td>
-                        <td className="text-center">
-                          <button
-                            className="case"
-                            data-checked={embarked}
-                            onClick={() => updateStatut(r.id, embarked ? "en_attente" : "embarqué")}
-                            title="Basculer Embarqué"
-                          />
-                        </td>
-                        <td className="text-center">
-                          <button
-                            className="case"
-                            data-checked={absent}
-                            onClick={() => updateStatut(r.id, absent ? "en_attente" : "absent")}
-                            title="Basculer Absent"
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+              ) : (
+                reservations.map((r, idx) => {
+                  const eff = getEffectiveBoardingStatus(r);
+                  const embarked = eff === "boarded";
+                  const absent = eff === "no_show";
+                  const seats = r.seatsGo ?? 1;
+                  return (
+                    <tr key={r.id}>
+                      <td>{idx + 1}</td>
+                      <td>{r.nomClient || "—"}</td>
+                      <td>{r.telephone || "—"}</td>
+                      <td>{r.canal || "—"}</td>
+                      <td>{String(r.referenceCode ?? "").trim() || "—"}</td>
+                      <td className="center">{seats}</td>
+                      <td className="center">{embarked ? "X" : ""}</td>
+                      <td className="center">{absent ? "X" : ""}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
 
-          {/* Signatures */}
-          <div className="px-4 py-6 text-sm">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-              <div>
-                <div className="sig-box" />
-                <div className="sig-caption">Contrôleur / Chef d’embarquement — Nom & Signature</div>
-              </div>
-              <div>
-                <div className="sig-box" />
-                <div className="sig-caption">Chauffeur — Nom & Signature</div>
-              </div>
-              <div>
-                <div className="sig-box" />
-                <div className="sig-caption">Visa Agence</div>
-              </div>
+          <div className="print-doc__signatures">
+            <div>
+              <div className="print-doc__sig-line" />
+              <div className="print-doc__sig-label">Chef embarquement (nom et signature)</div>
             </div>
+            <div>
+              <div className="print-doc__sig-line" />
+              <div className="print-doc__sig-label">Chauffeur (nom et signature)</div>
+            </div>
+            <div>
+              <div className="print-doc__sig-line" />
+              <div className="print-doc__sig-label">Visa agence</div>
+            </div>
+          </div>
+          <div className="print-doc__footer">
+            Édition du {format(new Date(), "EEEE d MMMM yyyy 'à' HH:mm", { locale: fr })}
           </div>
         </div>
       </div>

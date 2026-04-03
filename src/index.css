@@ -301,9 +301,6 @@ img.hero, img.logo {
   color: #ffffff !important;
 }
 /* Header fixe : couleur contrôlée par le composant (blanc en haut, couleur primaire au scroll) — ne pas forcer inherit */
-.public-booking .public-site-header {
-  /* color set via inline style in CompanyPublicHeader */
-}
 .public-booking .public-site-header .public-site-header-inner {
   color: inherit;
 }
@@ -719,15 +716,21 @@ html.dark .public-booking .public-hero-titles h2 {
   .no-print {
     display: none !important;
   }
-  /* Forcer lisibilité à l'impression */
+  /* Ticket / reçu : fond clair */
   .ticket-force-light,
-  #print-area,
-  #print-area * {
+  .ticket-force-light * {
     background: transparent !important;
     color: #111827 !important;
   }
-  #print-area .meta-card {
-    border: 1px solid #e5e7eb !important;
-    background: #f9fafb !important;
+  /**
+   * Document officiel embarquement (#print-area.boarding-official-print) :
+   * ne pas forcer background:transparent sur les cellules (sinon bordures illisibles au PDF).
+   */
+  .boarding-official-print,
+  .boarding-official-print * {
+    background-color: #fff !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }

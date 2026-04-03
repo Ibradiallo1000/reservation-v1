@@ -52,6 +52,10 @@ import { writeComptaEncaissementInTransaction } from '@/modules/agence/comptabil
 import type { FinancialTransactionDoc } from '@/modules/compagnie/treasury/types';
 import { fetchAgencyStaffProfile } from '@/modules/agence/services/agencyStaffProfileService';
 import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
+import {
+  belongsToGuichetSession,
+  fetchReservationDocsForShiftSlot,
+} from '@/modules/agence/guichet/guichetSessionReservationModel';
 
 type SessionAccountantHistoryLog = {
   expectedCash: number;
@@ -69,7 +73,6 @@ type SessionHeadValidationHistoryLog = {
 
 const SHIFTS_COLLECTION = 'shifts';
 const RESERVATIONS_COLLECTION = 'reservations';
-const CANAL_GUICHET = 'guichet';
 const FINANCIAL_TRANSACTIONS_COLLECTION = 'financialTransactions';
 const RESERVATION_LIMIT = 1000;
 
@@ -356,21 +359,26 @@ async function computeLedgerSessionTotalsFromReservations(params: {
   companyId: string;
   agencyId: string;
   shiftId: string;
+  shiftAgentId: string;
 }): Promise<CloseSessionTotals> {
-  const reservationsRef = collection(
-    db,
-    `companies/${params.companyId}/agences/${params.agencyId}/${RESERVATIONS_COLLECTION}`
+  const mergedDocs = await fetchReservationDocsForShiftSlot(
+    params.companyId,
+    params.agencyId,
+    params.shiftId,
+    { perQueryLimit: 500 }
   );
-  const reservationsSnap = await getDocs(
-    query(reservationsRef, where('createdInSessionId', '==', params.shiftId), limit(500))
-  );
-  const reservations = reservationsSnap.docs
-    .map((d) => ({ id: d.id, ...(d.data() as Omit<ReservationSessionRow, 'id'>) }))
-    .filter((r) => {
-      const s = String(r.statut ?? '').toLowerCase().trim();
-      if (s === 'invalide' || s === 'annule' || s === 'annulation_en_attente') return false;
-      return isSoldReservationStatus(r.statut);
-    });
+  const mergedById = new Map<string, { id: string } & Omit<ReservationSessionRow, 'id'>>();
+  for (const d of mergedDocs) {
+    const row = { id: d.id, ...(d.data() as Omit<ReservationSessionRow, 'id'>) };
+    if (!belongsToGuichetSession(row as Record<string, unknown>, params.shiftId, params.shiftAgentId))
+      continue;
+    mergedById.set(d.id, row);
+  }
+  const reservations = [...mergedById.values()].filter((r) => {
+    const s = String(r.statut ?? '').toLowerCase().trim();
+    if (s === 'invalide' || s === 'annule' || s === 'annulation_en_attente') return false;
+    return isSoldReservationStatus(r.statut);
+  });
 
   const byRoute: Record<string, { billets: number; montant: number }> = {};
   let tickets = 0;
@@ -431,26 +439,29 @@ async function getReservationsBySession(params: {
   companyId: string;
   agencyId: string;
   sessionId: string;
+  agentId: string;
 }): Promise<Array<SessionReservationAmountRow & { id: string }>> {
-  const reservationsRef = collection(
-    db,
-    `companies/${params.companyId}/agences/${params.agencyId}/${RESERVATIONS_COLLECTION}`
+  const mergedDocs = await fetchReservationDocsForShiftSlot(
+    params.companyId,
+    params.agencyId,
+    params.sessionId,
+    { perQueryLimit: RESERVATION_LIMIT }
   );
-  const reservationsSnap = await getDocs(
-    query(
-      reservationsRef,
-      where('createdInSessionId', '==', params.sessionId),
-      where('canal', '==', CANAL_GUICHET),
-      limit(RESERVATION_LIMIT)
-    )
-  );
-  return reservationsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as SessionReservationAmountRow) }));
+  const byId = new Map<string, SessionReservationAmountRow & { id: string }>();
+  for (const d of mergedDocs) {
+    const row = { id: d.id, ...(d.data() as SessionReservationAmountRow) };
+    if (!belongsToGuichetSession(row as Record<string, unknown>, params.sessionId, params.agentId))
+      continue;
+    byId.set(d.id, row);
+  }
+  return [...byId.values()];
 }
 
 export async function calculateSessionTotals(params: {
   companyId: string;
   agencyId: string;
   sessionId: string;
+  agentId: string;
 }): Promise<number> {
   const reservations = await getReservationsBySession(params);
   const validReservations = reservations.filter((r) => {
@@ -481,15 +492,23 @@ export async function closeSession(params: {
   const shiftsRef = collection(db, `${base}/${SHIFTS_COLLECTION}`);
   const shiftRef = doc(shiftsRef, params.shiftId);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
+  const shiftPreSnap = await getDoc(shiftRef);
+  if (!shiftPreSnap.exists()) throw new Error('Poste introuvable.');
+  const shiftAgentId = String((shiftPreSnap.data() as { userId?: string }).userId ?? '');
+  if (!shiftAgentId) {
+    throw new Error('Poste sans vendeur associé : impossible de calculer les totaux guichet.');
+  }
   const ledgerTotals = await computeLedgerSessionTotalsFromReservations({
     companyId: params.companyId,
     agencyId: params.agencyId,
     shiftId: params.shiftId,
+    shiftAgentId,
   });
   const expectedAmount = await calculateSessionTotals({
     companyId: params.companyId,
     agencyId: params.agencyId,
     sessionId: params.shiftId,
+    agentId: shiftAgentId,
   });
   const actualAmount = Number(params.actualAmount ?? expectedAmount);
   const ecart = actualAmount - expectedAmount;
@@ -497,14 +516,12 @@ export async function closeSession(params: {
   let resultTotals: CloseSessionTotals = ledgerTotals;
 
   const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
-  let shiftAgentId = "";
   let shiftAgentName: string | null = null;
 
   await runTransaction(db, async (tx) => {
     const [shiftSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(agencyRef)]);
     if (!shiftSnap.exists()) throw new Error('Poste introuvable.');
     const shiftData = shiftSnap.data() as Record<string, unknown>;
-    shiftAgentId = String(shiftData.userId ?? "");
     shiftAgentName = (shiftData.userName ?? null) as string | null;
     const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
     const status = shiftData.status as string;
@@ -919,16 +936,21 @@ async function setValidatedAtOnShiftReservations(params: {
   validatedAt: Timestamp;
 }): Promise<void> {
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
-  const reservationsRef = collection(db, base, RESERVATIONS_COLLECTION);
-  const q = query(
-    reservationsRef,
-    where('createdInSessionId', '==', params.shiftId),
-    limit(500)
+  const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
+  const shiftSnap = await getDoc(shiftRef);
+  const shiftAgentId = String((shiftSnap.data() as { userId?: string })?.userId ?? '');
+  if (!shiftAgentId) return;
+  const mergedDocs = await fetchReservationDocsForShiftSlot(
+    params.companyId,
+    params.agencyId,
+    params.shiftId,
+    { perQueryLimit: 500 }
   );
-  const snap = await getDocs(q);
   const sold = ['paye', 'confirme', 'payé', 'confirmé'];
-  const toUpdate = snap.docs.filter((d) => {
-    const statut = String((d.data() as { statut?: string }).statut ?? '').toLowerCase();
+  const toUpdate = mergedDocs.filter((d) => {
+    const data = d.data() as Record<string, unknown>;
+    if (!belongsToGuichetSession(data, params.shiftId, shiftAgentId)) return false;
+    const statut = String((data.statut as string | undefined) ?? '').toLowerCase();
     return sold.some((s) => statut === s || statut.includes(s));
   });
   await Promise.all(

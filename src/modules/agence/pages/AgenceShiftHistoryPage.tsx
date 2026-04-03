@@ -115,7 +115,7 @@ const AgenceShiftHistoryPage: React.FC = () => {
         if (sellerCode && !code.toLowerCase().includes(sellerCode.toLowerCase())) continue;
 
         // agrégats sur ce shift
-        const res = allRes.filter(r => r.shiftId === d.id);
+        const res = allRes.filter((r) => (r.sessionId || r.shiftId) === d.id);
         const reservations = res.length;
         const billets = res.reduce((acc, r) => acc + (r.seatsGo || 0) + (r.seatsReturn || 0), 0);
         const montant = res.reduce((acc, r) => acc + (r.montant || 0), 0);

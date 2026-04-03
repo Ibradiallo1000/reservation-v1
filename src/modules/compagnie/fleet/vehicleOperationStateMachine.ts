@@ -42,14 +42,18 @@ export function canTransitionVehicleOperationStatus(from: VehicleOperationStatus
 export function mapTripExecutionStatusToVehicleOperationStatus(
   tripStatus: TripExecutionStatus
 ): VehicleOperationStatus | null {
-  if (tripStatus === "boarding") return "boarding";
+  if (tripStatus === "boarding" || tripStatus === "validation_agence_requise") return "boarding";
   if (tripStatus === "departed" || tripStatus === "transit") return "in_transit";
   if (tripStatus === "arrived") return "arrived";
   if (tripStatus === "finished") return "idle";
   return null;
 }
 
-export async function setVehicleOperationStatus(params: {
+/**
+ * Désactivé : ne plus écrire operationStatus / currentTripId sur le véhicule.
+ * Source de vérité : tripInstance.statutMetier + transaction (voir getVehicleOperationalView).
+ */
+export async function setVehicleOperationStatus(_params: {
   companyId: string;
   vehicleId: string;
   from?: VehicleOperationStatus | null;
@@ -59,36 +63,20 @@ export async function setVehicleOperationStatus(params: {
   destinationCity?: string | null;
   currentCity?: string | null;
 }): Promise<void> {
-  const { companyId, vehicleId, to } = params;
-  await runTransaction(db, async (tx) => {
-    const vRef = vehicleRef(companyId, vehicleId);
-    const vSnap = await tx.get(vRef);
-    if (!vSnap.exists()) throw new Error("Véhicule introuvable.");
-    const vehicle = vSnap.data() as VehicleDoc;
-    const current = params.from ?? deriveOperationStatus(vehicle);
-    if (!canTransitionVehicleOperationStatus(current, to)) {
-      throw new Error(`Transition véhicule interdite: ${current} -> ${to}`);
-    }
-    tx.update(vRef, {
-      operationStatus: to,
-      ...(params.currentTripId !== undefined ? { currentTripId: params.currentTripId } : {}),
-      ...(params.currentAssignmentId !== undefined ? { currentAssignmentId: params.currentAssignmentId } : {}),
-      ...(params.destinationCity !== undefined ? { destinationCity: params.destinationCity } : {}),
-      ...(params.currentCity !== undefined ? { currentCity: params.currentCity } : {}),
-      updatedAt: serverTimestamp(),
-    });
-  });
+  return;
 }
 
+/**
+ * Ne met plus à jour le document véhicule : l’alignement statut / position passe uniquement par
+ * updateTripInstanceStatutMetier → applyVehicleSyncFromTripInstanceInTransaction.
+ * Conserve la détection panne technique → tripExecution disrupted + logisticsActions.
+ */
 export async function syncVehicleWithTripExecution(params: {
   companyId: string;
   tripExecution: TripExecutionDoc;
   tripInstanceId: string;
 }): Promise<void> {
   const { companyId, tripExecution, tripInstanceId } = params;
-  const target = mapTripExecutionStatusToVehicleOperationStatus(tripExecution.status);
-  if (!target) return;
-
   const vRef = vehicleRef(companyId, tripExecution.vehicleId);
   const teRef = doc(collection(db, "companies", companyId, "tripExecutions"), tripInstanceId);
   await runTransaction(db, async (tx) => {
@@ -96,7 +84,6 @@ export async function syncVehicleWithTripExecution(params: {
     if (!vSnap.exists() || !teSnap.exists()) return;
     const vehicle = vSnap.data() as VehicleDoc;
     const te = teSnap.data() as TripExecutionDoc;
-    const current = deriveOperationStatus(vehicle);
 
     if (!isVehicleActiveTechnical(vehicle) && te.status !== "finished") {
       tx.update(teRef, {
@@ -112,19 +99,6 @@ export async function syncVehicleWithTripExecution(params: {
         message: "Véhicule indisponible techniquement. Remplacement ou annulation requis.",
         createdAt: serverTimestamp(),
       });
-      return;
     }
-
-    if (current !== target && !canTransitionVehicleOperationStatus(current, target)) {
-      return;
-    }
-    tx.update(vRef, {
-      operationStatus: target,
-      currentTripId: target === "idle" ? null : te.tripAssignmentId || tripInstanceId,
-      currentAssignmentId: target === "idle" ? null : te.tripAssignmentId || null,
-      destinationCity: target === "idle" ? null : (te.destinationCity || null),
-      currentCity: target === "idle" ? (te.destinationCity || vehicle.currentCity || null) : (vehicle.currentCity ?? null),
-      updatedAt: serverTimestamp(),
-    });
   });
 }

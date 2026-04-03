@@ -13,6 +13,7 @@ import {
   MapPinned,
   Boxes,
   CalendarRange,
+  ClipboardCheck,
 } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection, NavSectionChild } from "@/shared/layout/InternalLayout";
@@ -94,6 +95,20 @@ const BASE_SECTIONS: Array<
     end: true,
     moduleKey: "planning",
   },
+  {
+    label: "Validation départs",
+    icon: ClipboardCheck,
+    path: "/agence/validation-departs",
+    end: true,
+    moduleKey: "validations",
+  },
+  {
+    label: "Arrivées attendues",
+    icon: MapPinned,
+    path: "/agence/arrivees-attendues",
+    end: true,
+    moduleKey: "arrivals",
+  },
   { label: "Rapports", icon: FileBarChart2, path: "/agence/reports", end: true, moduleKey: "reports" },
 ];
 
@@ -112,8 +127,10 @@ const ManagerShellInner: React.FC = () => {
     Équipe: 3,
     Trajets: 4,
     Planification: 5,
-    Rapports: 6,
-    "Journal agents": 7,
+    "Validation départs": 6,
+    "Arrivées attendues": 7,
+    Rapports: 8,
+    "Journal agents": 8,
     Courrier: 8,
     Exploitation: 8,
   };
@@ -167,6 +184,12 @@ const ManagerShellInner: React.FC = () => {
           { label: "Remise", icon: Boxes, path: "/agence/courrier/remise", end: true },
         ]
       : BASE_SECTIONS.map((s) => {
+          if (s.label === "Validation départs" && !has("chefAgence") && !has("chefagence")) {
+            return null;
+          }
+          if (s.label === "Arrivées attendues" && !has("chefAgence") && !has("chefagence")) {
+            return null;
+          }
           const opBadge = (badgeByModule as Record<string, number>).operations ?? 0;
           const finBadge = (badgeByModule as Record<string, number>).finances ?? 0;
           let badge: number | undefined;
@@ -186,7 +209,7 @@ const ManagerShellInner: React.FC = () => {
             end: s.end,
             badge,
           };
-        });
+        }).filter(Boolean) as NavSection[];
 
     if (
       !isCourierOnly &&

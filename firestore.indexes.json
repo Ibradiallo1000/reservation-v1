@@ -194,7 +194,7 @@
       "collectionGroup": "reservations",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
-        { "fieldPath": "shiftId", "order": "ASCENDING" },
+        { "fieldPath": "sessionId", "order": "ASCENDING" },
         { "fieldPath": "canal", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]

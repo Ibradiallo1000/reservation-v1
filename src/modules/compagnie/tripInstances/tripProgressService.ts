@@ -20,7 +20,11 @@ import { getTripInstance } from "./tripInstanceService";
 import { tripInstanceTime } from "./tripInstanceTypes";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
 import { listTripInstancesByDateRange } from "./tripInstanceService";
-import { upsertTripExecutionDeparted, syncTripExecutionCheckpoint } from "@/modules/compagnie/tripExecutions/tripExecutionService";
+import {
+  ensureAgencyValidationBeforeDeparture,
+  upsertTripExecutionDeparted,
+  syncTripExecutionCheckpoint,
+} from "@/modules/compagnie/tripExecutions/tripExecutionService";
 
 const PROGRESS_SUBCOLLECTION = "progress";
 
@@ -227,6 +231,11 @@ export async function markOriginDeparture(
   tripInstanceId: string,
   confirmedBy: string | null
 ): Promise<void> {
+  await ensureAgencyValidationBeforeDeparture({
+    companyId,
+    tripInstanceId,
+    validatedBy: confirmedBy,
+  });
   const ti = await getTripInstance(companyId, tripInstanceId);
   if (!ti) throw new Error("Trajet introuvable.");
   const routeId = (ti as { routeId?: string | null }).routeId ?? null;

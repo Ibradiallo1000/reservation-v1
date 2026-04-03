@@ -6,6 +6,7 @@ import { db } from '@/firebaseConfig';
 import { ShieldCheck, Clock4 } from 'lucide-react';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { OperationalSourceBadge } from '@/modules/agence/components/OperationalDataHint';
+import { belongsToGuichetSession } from '@/modules/agence/guichet/guichetSessionReservationModel';
 
 type AgencyTheme = { primary: string; secondary: string };
 type ShiftStatus = 'pending'|'active'|'paused'|'closed'|'validated';
@@ -109,13 +110,14 @@ export const ShiftsControlWidget: React.FC<{
     // (re)brancher pour les actifs
     rows.filter(s=>s.status==='active').forEach(s => {
       if (liveUnsubsRef.current[s.id]) return;
-      const unsub = onSnapshot(query(rRef, where('shiftId','==',s.id), where('canal','==','guichet')), snap => {
+      const unsub = onSnapshot(query(rRef, where('sessionId','==',s.id), where('canal','==','guichet')), snap => {
         let reservations=0, tickets=0, amount=0;
         snap.forEach(d => {
-          const r = d.data() as any;
+          const r = d.data() as Record<string, unknown>;
+          if (!belongsToGuichetSession(r, s.id, s.userId)) return;
           reservations += 1;
-          tickets += (r.seatsGo||0) + (r.seatsReturn||0);
-          amount += r.montant || 0;
+          tickets += (Number(r.seatsGo)||0) + (Number(r.seatsReturn)||0);
+          amount += Number(r.montant) || 0;
         });
         setLive(prev => ({ ...prev, [s.id]: { reservations, tickets, amount }}));
       });

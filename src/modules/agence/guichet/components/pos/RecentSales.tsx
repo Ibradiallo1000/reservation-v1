@@ -69,9 +69,7 @@ export const RecentSales: React.FC<Props> = ({ sales, formatMoney, primaryColor,
                 <p className="text-xs text-gray-500 mt-0.5">
                   {s.depart} → {s.arrivee} • {s.heure}
                 </p>
-                {isPending && <p className="text-[10px] font-medium text-amber-800 mt-1">Encaissement en cours…</p>}
-                {isSlow && <p className="text-[10px] font-medium text-amber-800 mt-1">Connexion lente, traitement en cours…</p>}
-                {isError && <p className="text-[10px] font-medium text-red-700 mt-1">Erreur d'encaissement</p>}
+                {isError && <p className="text-[10px] font-medium text-red-700 mt-1">Erreur d&apos;encaissement</p>}
               </div>
               <span className="text-sm font-bold shrink-0" style={{ color: primaryColor }}>
                 {formatMoney(s.montant)}

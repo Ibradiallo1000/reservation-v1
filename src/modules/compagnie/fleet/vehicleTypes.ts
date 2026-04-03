@@ -57,6 +57,8 @@ export interface VehicleDoc {
   capacity?: number;
   /** Statut métier normalisé (Phase 1) : disponible | en_transit | maintenance. */
   fleetStatus?: "disponible" | "en_transit" | "maintenance";
+  /** Statut opération terrain verrouillé (source UI planification/disponibilité). */
+  statusVehicule?: "disponible" | "affecte" | "en_transit" | "en_maintenance";
   /** Legacy: conservé pour rétrocompat. Déduit de technicalStatus/operationalStatus si absent. */
   status?: VehicleStatus;
   /** Canonical status for queries and UI. Preferred when present. */
@@ -70,6 +72,12 @@ export interface VehicleDoc {
   currentCity: string;
   /** Agency where vehicle is physically located (when agency-scoped). */
   currentAgencyId?: string | null;
+  /** Last known agency checkpoint (for traceability when in transit). */
+  lastKnownAgencyId?: string | null;
+  /** Intended destination agency of the ongoing movement. */
+  destinationAgencyId?: string | null;
+  /** Timestamp of latest logical movement update. */
+  lastMovementAt?: Timestamp;
   destinationCity?: string | null;
   /** User/personnel id of assigned driver. Optional; chauffeurName on affectation for legacy. */
   driverId?: string | null;

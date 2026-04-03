@@ -99,9 +99,9 @@ const ReceiptModal: React.FC<Props> = ({
   );
 
   const isPendingEncaissement = reservation.statut === SALE_PENDING_UI_STATUT;
-  const isSlowEncaissement = reservation.statut === SALE_SLOW_UI_STATUT;
   const isErrorEncaissement = reservation.statut === SALE_ERROR_UI_STATUT;
-  const blockFinalTicket = isPendingEncaissement || isSlowEncaissement || isErrorEncaissement;
+  const blockFinalTicket =
+    isPendingEncaissement || reservation.statut === SALE_SLOW_UI_STATUT || isErrorEncaissement;
 
   const handlePDF = () => {
     if (!ref.current) return;
@@ -263,17 +263,19 @@ const ReceiptModal: React.FC<Props> = ({
           {blockFinalTicket ? (
             <div
               className={`no-print rounded-lg border px-3 py-2.5 text-center ${
-                isErrorEncaissement ? "border-red-300 bg-red-50 text-red-900" : "border-amber-300 bg-amber-50 text-amber-900"
+                isErrorEncaissement ? "border-red-300 bg-red-50 text-red-900" : "border-amber-200 bg-amber-50/80 text-amber-950"
               }`}
               style={{ marginTop: '12px', fontSize: '11px', lineHeight: 1.45 }}
             >
-              <strong>{isErrorEncaissement ? "Encaissement en erreur" : "Encaissement en cours"}</strong>
-              <br />
-              {isErrorEncaissement
-                ? "La transaction n'a pas été validée. Veuillez relancer l'encaissement."
-                : isSlowEncaissement
-                  ? "Connexion lente, traitement en cours..."
-                  : "Validation du billet après confirmation serveur. N’utilisez pas ce document comme billet définitif."}
+              {isErrorEncaissement ? (
+                <>
+                  <strong>Encaissement en erreur</strong>
+                  <br />
+                  La transaction n&apos;a pas été validée. Veuillez relancer l&apos;encaissement.
+                </>
+              ) : (
+                <>En attente de confirmation — ce document n&apos;est pas un billet valide.</>
+              )}
             </div>
           ) : (
             <>

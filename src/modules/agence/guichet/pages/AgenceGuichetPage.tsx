@@ -33,6 +33,7 @@ import {
   createGuichetReservation,
   updateGuichetReservation,
 } from "@/modules/agence/services/guichetReservationService";
+import { belongsToGuichetSession } from "@/modules/agence/guichet/guichetSessionReservationModel";
 import {
   listTripInstancesByRouteAndDateRange,
 } from "@/modules/compagnie/tripInstances/tripInstanceService";
@@ -94,7 +95,7 @@ type Trip = { id: string; date: string; time: string; departure: string; arrival
 type TicketRow = {
   id: string; referenceCode?: string; date: string; heure: string; depart: string; arrivee: string;
   nomClient: string; telephone?: string; seatsGo: number; seatsReturn?: number; montant: number;
-  canal?: string; statutEmbarquement?: string; boardingStatus?: string; statut?: string; trajetId?: string; shiftId?: string;
+  canal?: string; statutEmbarquement?: string; boardingStatus?: string; statut?: string; trajetId?: string; sessionId?: string;
   createdAt?: any; guichetierCode?: string;
 };
 
@@ -246,7 +247,6 @@ const AgenceGuichetPage: React.FC = () => {
   const [telephone, setTelephone] = useState("");
   const [placesAller, setPlacesAller] = useState(1);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [processingMessage, setProcessingMessage] = useState<string>("");
 
   // ── Enhancement states ──
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -292,7 +292,12 @@ const AgenceGuichetPage: React.FC = () => {
   const staffCodeForSale = (user as any)?.staffCode || (user as any)?.codeCourt || (user as any)?.code || "GUEST";
 
   const status: "active" | "paused" | "closed" | "pending" | "none" = (activeShift?.status as any) ?? "none";
-  const canSell = status === "active" && !!user?.companyId && !!user?.agencyId && !sessionLockedByOtherDevice;
+  const canSell =
+    status === "active" &&
+    !!activeShift?.id &&
+    !!user?.companyId &&
+    !!user?.agencyId &&
+    !sessionLockedByOtherDevice;
   const isCounterOpen = status === "active" || status === "paused";
 
   // ── Session start time for timer ──
@@ -641,7 +646,6 @@ const AgenceGuichetPage: React.FC = () => {
       alert(`Il reste ${selectedTrip.remainingSeats} places.`); return;
     }
     setIsProcessing(true);
-    setProcessingMessage("Encaissement en cours...");
     try {
       if (!isOnline) {
         const offlineParams = {
@@ -682,6 +686,7 @@ const AgenceGuichetPage: React.FC = () => {
             params: {
               ...offlineParams,
               referenceCode,
+              idempotencyKey: transactionId,
               offlineMeta: {
                 mode: "offline",
                 transactionId,
@@ -752,7 +757,7 @@ const AgenceGuichetPage: React.FC = () => {
         boardingStatus: "pending",
         statut: SALE_PENDING_UI_STATUT,
         trajetId: selectedTrip.id,
-        shiftId: activeShift!.id,
+        sessionId: activeShift!.id,
         createdAt: Timestamp.now(),
         guichetierCode: guichetCode,
       };
@@ -784,11 +789,11 @@ const AgenceGuichetPage: React.FC = () => {
       });
       setShowReceipt(true);
 
+      const saleIdempotencyKey = crypto.randomUUID();
       let attempt = 0;
       let shouldRetry = false;
       while (true) {
         const slowTimer = window.setTimeout(() => {
-          setProcessingMessage("Connexion lente, traitement en cours...");
           setOptimisticSessionSales((p) => p.map((x) => (x.id === tempId ? { ...x, statut: SALE_SLOW_UI_STATUT } : x)));
           setReceiptData((prev) => (prev && prev.id === tempId ? { ...prev, statut: SALE_SLOW_UI_STATUT } : prev));
         }, SLOW_NETWORK_TIMEOUT_MS);
@@ -797,7 +802,9 @@ const AgenceGuichetPage: React.FC = () => {
           setReceiptData((prev) => (prev && prev.id === tempId ? { ...prev, statut: SALE_PENDING_UI_STATUT } : prev));
           const newId = await createGuichetReservation({
             companyId: user!.companyId, agencyId: user!.agencyId, userId: user!.uid,
-            sessionId: activeShift!.id, userCode: sellerCodeCached || staffCodeForSale,
+            sessionId: activeShift!.id,
+            idempotencyKey: saleIdempotencyKey,
+            userCode: sellerCodeCached || staffCodeForSale,
             trajetId: selectedTrip.id, date: selectedTrip.date, heure: selectedTrip.time,
             depart: selectedTrip.departure, arrivee: selectedTrip.arrival,
             nomClient: normalizedName,
@@ -821,8 +828,6 @@ const AgenceGuichetPage: React.FC = () => {
               ? { ...prev, id: newId, statut: RESERVATION_STATUS.PAYE }
               : prev
           );
-          setProcessingMessage("");
-
           const msg = `Réservation confirmée — ${normalizedName} • ${placesAller} place(s) • ${money(totalPrice)}`;
           showToast(msg);
           if (soundEnabled) playSound("success");
@@ -865,7 +870,6 @@ const AgenceGuichetPage: React.FC = () => {
           }
           if (shouldRetry) {
             attempt += 1;
-            setProcessingMessage("Nouvelle tentative automatique...");
             await new Promise((r) => window.setTimeout(r, 700));
             continue;
           }
@@ -873,7 +877,6 @@ const AgenceGuichetPage: React.FC = () => {
           setOptimisticSessionSales((p) => p.filter((x) => x.id !== tempId));
           setShowReceipt(false);
           setReceiptData(null);
-          setProcessingMessage("");
           showToast(mapGuichetSaleError(e), "error");
           if (soundEnabled) playSound("error");
           break;
@@ -883,7 +886,9 @@ const AgenceGuichetPage: React.FC = () => {
       console.error("[GUICHET] reservation:error", e);
       showToast("Erreur lors de la réservation.", "error");
       if (soundEnabled) playSound("error");
-    } finally { setIsProcessing(false); setProcessingMessage(""); }
+    } finally {
+      setIsProcessing(false);
+    }
   }, [selectedTrip, nomClient, telephone, canSell, placesAller, totalPrice, user, activeShift, companyMeta, agencyMeta, sellerCodeCached, staffCodeForSale, theme, company, sessionLockedByOtherDevice, soundEnabled, money, isOnline, showToast, autoPrint, tariffKey, tariffMultiplier, additionalPassengers]);
 
   // ═══════════════ CANCEL / EDIT ═══════════════
@@ -995,7 +1000,7 @@ const AgenceGuichetPage: React.FC = () => {
     const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
     const q = query(
       rRef,
-      where("shiftId", "==", activeShift.id),
+      where("sessionId", "==", activeShift.id),
       where("canal", "==", CANALS.GUICHET),
       orderBy("createdAt", "desc"),
       limit(50)
@@ -1004,7 +1009,12 @@ const AgenceGuichetPage: React.FC = () => {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const rows: TicketRow[] = snap.docs.map((d) => {
+        const agentId = String(user?.uid ?? "");
+        const rows: TicketRow[] = snap.docs
+          .filter((d) =>
+            belongsToGuichetSession(d.data() as Record<string, unknown>, activeShift.id, agentId)
+          )
+          .map((d) => {
           const r = d.data() as any;
           return {
             id: d.id,
@@ -1023,7 +1033,7 @@ const AgenceGuichetPage: React.FC = () => {
             boardingStatus: r.boardingStatus,
             statut: r.statut,
             trajetId: r.trajetId,
-            shiftId: r.shiftId,
+            sessionId: r.sessionId,
             createdAt: r.createdAt,
             guichetierCode: r.guichetierCode || "",
           };
@@ -1038,7 +1048,7 @@ const AgenceGuichetPage: React.FC = () => {
     );
 
     return () => unsub();
-  }, [user?.companyId, user?.agencyId, activeShift?.id, status]);
+  }, [user?.companyId, user?.agencyId, user?.uid, activeShift?.id, status]);
 
   useEffect(() => {
     setOptimisticSessionSales([]);
@@ -1411,7 +1421,6 @@ const AgenceGuichetPage: React.FC = () => {
                       totalPrice={totalPrice}
                       canValidate={canValidateSale}
                       isProcessing={isProcessing}
-                      processingMessage={processingMessage}
                       onValidate={handleReservation}
                       formatMoney={money}
                       primaryColor={theme.primary}
@@ -1511,8 +1520,7 @@ const AgenceGuichetPage: React.FC = () => {
                                 <td className="px-4 py-3 text-center">
                                   <StatusBadge status={errorEnc ? "danger" : (pendingEnc || slowEnc) ? "warning" : invalid ? "warning" : canceled ? "danger" : boarded ? "success" : "info"}>
                                     {errorEnc ? "Erreur"
-                                      : slowEnc ? "Connexion lente…"
-                                      : pendingEnc ? "Encaissement…"
+                                      : (pendingEnc || slowEnc) ? "En attente"
                                       : invalid ? "Réservation invalide"
                                       : canceled ? "Annulé"
                                       : boarded ? "Embarqué"

@@ -1,6 +1,13 @@
 import type { FieldValue, Timestamp } from "firebase/firestore";
 
-export type TripExecutionStatus = "boarding" | "departed" | "transit" | "arrived" | "finished" | "disrupted";
+export type TripExecutionStatus =
+  | "boarding"
+  | "validation_agence_requise"
+  | "departed"
+  | "transit"
+  | "arrived"
+  | "finished"
+  | "disrupted";
 
 export type TimestampOrFieldValue = Timestamp | FieldValue;
 
@@ -38,6 +45,13 @@ export type TripExecutionDoc = {
   status: TripExecutionStatus;
 
   boardingStartedAt?: TimestampOrFieldValue | null;
+  boardingCompletedAt?: TimestampOrFieldValue | null;
+  boardingCompletedBy?: string | null;
+  agencyValidationRequiredAt?: TimestampOrFieldValue | null;
+  agencyValidatedAt?: TimestampOrFieldValue | null;
+  agencyValidatedBy?: string | null;
+  departureValidatedAt?: TimestampOrFieldValue | null;
+  departureValidatedBy?: string | null;
   departedAt?: TimestampOrFieldValue | null;
   transitAt?: TimestampOrFieldValue | null;
   arrivedAt?: TimestampOrFieldValue | null;

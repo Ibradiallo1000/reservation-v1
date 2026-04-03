@@ -540,6 +540,7 @@ export default function ReservationClientPage() {
         seatHoldOnly: true,
         seatsHeld: seats,
         canal: 'en_ligne',
+        paymentChannel: 'online',
         companyId: selectedTrip.companyId,
         companySlug: slug,
         companyName: company.name,

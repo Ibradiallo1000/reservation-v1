@@ -38,6 +38,19 @@ import { getEndOfDayForDate, getStartOfDayForDate, getTodayForTimezone, resolveA
 import { cn } from "@/lib/utils";
 
 dayjs.extend(utc);
+
+function reservationMatchesGuichetShift(
+  r: { sessionId?: string; shiftId?: string; agentId?: string; guichetierId?: string; paymentChannel?: string; canal?: string },
+  s: { id: string; userId?: string }
+): boolean {
+  const sid = String(r.sessionId ?? r.shiftId ?? "");
+  if (sid !== s.id) return false;
+  const agent = String(r.agentId ?? r.guichetierId ?? "");
+  if (agent !== String(s.userId ?? "")) return false;
+  const pc = String(r.paymentChannel ?? "").toLowerCase();
+  const canal = String(r.canal ?? "").toLowerCase();
+  return pc === "guichet" || canal === "guichet";
+}
 dayjs.extend(timezone);
 
 type CourierSessionWithId = CourierSession & { id: string };
@@ -338,12 +351,25 @@ export default function ManagerCockpitPage({
     }
     for (const s of list) {
       if (cur[s.id]) continue;
-      const q = query(rRef, where("shiftId", "==", s.id));
+      const q = query(rRef, where("sessionId", "==", s.id));
       cur[s.id] = onSnapshot(q, (snap) => {
         let tickets = 0;
         let revenue = 0;
-        snap.forEach((d) => {
-          const r = d.data() as { seatsGo?: number; seatsReturn?: number; montant?: number };
+        snap.forEach((docSnap) => {
+          const r = docSnap.data() as {
+            seatsGo?: number;
+            seatsReturn?: number;
+            montant?: number;
+            paymentChannel?: string;
+            canal?: string;
+            agentId?: string;
+            guichetierId?: string;
+          };
+          const agent = String(r.agentId ?? r.guichetierId ?? "");
+          if (agent !== String(s.userId ?? "")) return;
+          if (String(r.paymentChannel ?? "").toLowerCase() !== "guichet" && String(r.canal ?? "").toLowerCase() !== "guichet") {
+            return;
+          }
           tickets += (r.seatsGo ?? 0) + (r.seatsReturn ?? 0);
           revenue += r.montant ?? 0;
         });
@@ -554,7 +580,7 @@ export default function ManagerCockpitPage({
         .filter((s) => s.status === "active" || s.status === "paused")
         .map((s) => {
           const live = liveStatsByShift[s.id];
-          const fallbackRes = reservationsToday.filter((r) => r.shiftId === s.id);
+          const fallbackRes = reservationsToday.filter((r) => reservationMatchesGuichetShift(r, s));
           const staff = guichetStaffCache[s.userId];
           const displayName = (staff?.name && staff.name.trim()) || s.userName || s.userId;
           const code = String(staff?.code || s.userCode || "").trim() || "—";
@@ -1058,7 +1084,9 @@ export default function ManagerCockpitPage({
                 </thead>
                 <tbody className={table.body}>
                   {sessionsQueueOrdered.map((s) => {
-                    const rev = reservationsToday.filter((r) => r.shiftId === s.id).reduce((a, r) => a + (r.montant ?? 0), 0);
+                    const rev = reservationsToday
+                      .filter((r) => reservationMatchesGuichetShift(r, s))
+                      .reduce((a, r) => a + (r.montant ?? 0), 0);
                     const isUrgentChef = s.status === "validated";
                     return (
                       <tr
