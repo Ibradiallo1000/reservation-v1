@@ -6,6 +6,9 @@
 import { collectionGroup, getDocs, query, where, QueryDocumentSnapshot } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getPassengersToDrop as getPassengersToDropFromDropoff } from "@/modules/compagnie/dropoff/dropoffService";
+import { getTripInstance } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import { buildStopIdToOrderMap, reservationOvertravelPastStop } from "@/modules/compagnie/routes/stopResolution";
 
 const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "validé"];
 
@@ -21,6 +24,8 @@ export type ManifestPassenger = {
   journeyStatus: string;
   originStopOrder?: number | null;
   destinationStopOrder?: number | null;
+  originStopId?: string | null;
+  destinationStopId?: string | null;
   connectionId?: string | null;
 };
 
@@ -46,6 +51,8 @@ function parseReservationDoc(d: QueryDocumentSnapshot): ManifestPassenger | null
     journeyStatus: (data.journeyStatus ?? "booked").toString().toLowerCase(),
     originStopOrder: data.originStopOrder != null ? Number(data.originStopOrder) : null,
     destinationStopOrder: data.destinationStopOrder != null ? Number(data.destinationStopOrder) : null,
+    originStopId: data.originStopId != null ? String(data.originStopId) : null,
+    destinationStopId: data.destinationStopId != null ? String(data.destinationStopId) : null,
     connectionId: (data.connectionId as string) ?? null,
   };
 }
@@ -82,9 +89,10 @@ export async function getPassengersOnBoard(
 export async function getPassengersToDrop(
   companyId: string,
   tripInstanceId: string,
-  stopOrder: number
+  stopOrder: number,
+  options?: { destinationStopId?: string | null }
 ) {
-  return getPassengersToDropFromDropoff(companyId, tripInstanceId, stopOrder);
+  return getPassengersToDropFromDropoff(companyId, tripInstanceId, stopOrder, options);
 }
 
 /**
@@ -96,6 +104,10 @@ export async function detectOvertravelPassengers(
   tripInstanceId: string,
   stopOrder: number
 ): Promise<ManifestPassenger[]> {
+  const ti = await getTripInstance(companyId, tripInstanceId);
+  const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+  const idToOrder = routeId ? buildStopIdToOrderMap(await getRouteStops(companyId, routeId)) : new Map<string, number>();
+
   const q = query(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
@@ -107,8 +119,12 @@ export async function detectOvertravelPassengers(
     const row = parseReservationDoc(d);
     if (!row) continue;
     if (row.dropoffStatus === "dropped") continue;
-    const dest = row.destinationStopOrder;
-    if (dest == null || !Number.isInteger(dest) || dest >= stopOrder) continue;
+    if (idToOrder.size > 0) {
+      if (!reservationOvertravelPastStop(d.data() as Record<string, unknown>, stopOrder, idToOrder)) continue;
+    } else {
+      const dest = row.destinationStopOrder;
+      if (dest == null || !Number.isInteger(dest) || dest >= stopOrder) continue;
+    }
     list.push(row);
   }
   return list;

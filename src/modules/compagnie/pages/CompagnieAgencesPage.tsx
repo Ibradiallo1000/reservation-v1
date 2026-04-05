@@ -50,6 +50,8 @@ interface Agence {
   routeId?: string | null;
   /** Ordre de l'escale sur la route (pour type=escale). */
   stopOrder?: number | null;
+  /** Document stop Firestore (routes/.../stops/{stopId}), double écriture avec stopOrder. */
+  stopId?: string | null;
   statut: Statut;
   emailGerant: string;
   nomGerant: string;
@@ -580,6 +582,7 @@ const CompagnieAgencesPage: React.FC = () => {
         type: formData.type || "principale",
         routeId: formData.type === "escale" && formData.routeId ? formData.routeId : null,
         stopOrder: formData.type === "escale" && formData.stopOrder ? parseInt(formData.stopOrder, 10) : null,
+        stopId: formData.type === "escale" && selectedStop ? selectedStop.id : null,
         statut: "active",
         emailGerant: normalizeEmail(formData.emailGerant),
         nomGerant: formatNom(formData.nomGerant || ""),
@@ -660,6 +663,7 @@ const CompagnieAgencesPage: React.FC = () => {
           type: formData.type || "principale",
           routeId: formData.type === "escale" && formData.routeId ? formData.routeId : null,
           stopOrder: formData.type === "escale" && formData.stopOrder ? parseInt(formData.stopOrder, 10) : null,
+          stopId: formData.type === "escale" && selectedStop ? selectedStop.id : null,
           nomGerant: formData.nomGerant,
           emailGerant: normalizeEmail(formData.emailGerant),
           telephone: onlyDigits(formData.telephone),

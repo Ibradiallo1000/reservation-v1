@@ -11,7 +11,6 @@ import {
   query,
   where,
   doc,
-  updateDoc,
   setDoc,
   serverTimestamp,
   getDoc,
@@ -26,7 +25,7 @@ import {
   onlineHoldCompositeKey,
 } from '@/modules/compagnie/tripInstances/onlineReservationHolds';
 import { tripInstanceRemainingFromDoc } from '@/modules/compagnie/tripInstances/tripInstanceTypes';
-import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
+import { resolveJourneyStopIdsFromCities } from '@/modules/compagnie/routes/stopResolution';
 import { buildValidTripsFromWeeklyTrips } from '@/modules/compagnie/tripInstances/publicValidTripsService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
@@ -504,9 +503,11 @@ export default function ReservationClientPage() {
 
       let originStopOrder: number | null = null;
       let destinationStopOrder: number | null = null;
+      let originStopId: string | null = null;
+      let destinationStopId: string | null = null;
       const routeId = String((selectedTrip as any).routeId ?? '').trim() || null;
       if (routeId) {
-        const resolved = await getStopOrdersFromCities(
+        const resolved = await resolveJourneyStopIdsFromCities(
           selectedTrip.companyId,
           routeId,
           selectedTrip.departure,
@@ -515,6 +516,8 @@ export default function ReservationClientPage() {
         if (resolved) {
           originStopOrder = resolved.originStopOrder;
           destinationStopOrder = resolved.destinationStopOrder;
+          originStopId = resolved.originStopId;
+          destinationStopId = resolved.destinationStopId;
         }
       }
 
@@ -522,6 +525,22 @@ export default function ReservationClientPage() {
       const expiresAtMs = nowMs + RESERVATION_DURATION_MS;
       const telephoneInput = passenger.phone.trim();
       const phoneNorm = normalizePhone(telephoneInput);
+
+      const resCol = collection(
+        db,
+        'companies',
+        selectedTrip.companyId,
+        'agences',
+        selectedTrip.agencyId,
+        'reservations'
+      );
+      const newResRef = doc(resCol);
+      const token = randomToken();
+      const publicUrl = pathBase
+        ? `${window.location.origin}/${pathBase}/mon-billet?r=${encodeURIComponent(token)}`
+        : `${window.location.origin}/mon-billet?r=${encodeURIComponent(token)}`;
+
+      /** Même document en une seule écriture : évite hold sans token si l’update anonyme est refusée par les règles. */
       const reservation = {
         nomClient: passenger.fullName.trim(),
         telephone: telephoneInput,
@@ -533,10 +552,11 @@ export default function ReservationClientPage() {
         date: selectedTrip.date,
         heure: selectedTrip.time,
         montant: selectedTrip.price * seats,
-        seatsGo: seats, 
-        seatsReturn: 0, 
+        seatsGo: seats,
+        seatsReturn: 0,
         tripType: 'aller_simple',
         status: 'en_attente',
+        statut: 'en_attente',
         seatHoldOnly: true,
         seatsHeld: seats,
         canal: 'en_ligne',
@@ -550,8 +570,12 @@ export default function ReservationClientPage() {
         referenceCode,
         trajetId: selectedTrip.id,
         tripInstanceId,
+        publicToken: token,
+        publicUrl,
         ...(originStopOrder != null && { originStopOrder }),
         ...(destinationStopOrder != null && { destinationStopOrder }),
+        ...(originStopId != null && { originStopId }),
+        ...(destinationStopId != null && { destinationStopId }),
         boardingStatus: 'pending',
         dropoffStatus: 'pending',
         journeyStatus: 'booked',
@@ -562,15 +586,6 @@ export default function ReservationClientPage() {
 
       console.log('[ReservationClientPage] reservation (avant écriture)', reservation);
 
-      const resCol = collection(
-        db,
-        'companies',
-        selectedTrip.companyId,
-        'agences',
-        selectedTrip.agencyId,
-        'reservations'
-      );
-      const newResRef = doc(resCol);
       const tiRef = tripInstanceRef(companyId, tripInstanceId);
       const tiSnap = await getDoc(tiRef);
       if (!tiSnap.exists()) {
@@ -589,13 +604,6 @@ export default function ReservationClientPage() {
       }
       await setDoc(newResRef, reservation);
       const refDoc = { id: newResRef.id };
-
-      const token = randomToken();
-      const publicUrl = pathBase ? `${window.location.origin}/${pathBase}/mon-billet?r=${encodeURIComponent(token)}` : `${window.location.origin}/mon-billet?r=${encodeURIComponent(token)}`;
-      await updateDoc(
-        doc(db, 'companies', selectedTrip.companyId, 'agences', selectedTrip.agencyId, 'reservations', refDoc.id),
-        { publicToken: token, publicUrl, updatedAt: serverTimestamp() }
-      );
 
       // Nouveau flux Payment (pending) — en parallèle, sans supprimer le flux réservation existant
       const rawProvider = String((reservation as any).paymentMethod ?? (reservation as any).paiement ?? '').toLowerCase();

@@ -24,6 +24,12 @@ import {
 } from "@/modules/compagnie/dropoff/dropoffService";
 import { UserCheck, UserX, Loader2, UserMinus } from "lucide-react";
 import { toLocalDateStr } from "@/shared/date/dayFilterUtils";
+import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import {
+  buildStopIdToOrderMap,
+  reservationBoardingWindowAtStop,
+  reservationDropoffAtStop,
+} from "@/modules/compagnie/routes/stopResolution";
 
 type TabId = "boarding" | "dropoff";
 
@@ -103,7 +109,7 @@ export default function BoardingEscalePage() {
   }, [loadAgencyAndTrips]);
 
   const loadPassengers = useCallback(async () => {
-    if (!user?.companyId || agencyStopOrder == null || !selectedTripId) {
+    if (!user?.companyId || agencyStopOrder == null || !selectedTripId || !agencyRouteId) {
       setPassengers([]);
       return;
     }
@@ -114,6 +120,8 @@ export default function BoardingEscalePage() {
         setPassengers([]);
         return;
       }
+      const stops = await getRouteStops(user.companyId, agencyRouteId);
+      const idToOrder = buildStopIdToOrderMap(stops);
       const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
       const snap = await getDocs(
         query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
@@ -122,8 +130,7 @@ export default function BoardingEscalePage() {
         .map((d) => ({ id: d.id, ...(d.data() as any), agencyId: trip.agencyId } as PassengerForBoarding))
         .filter((r) => (r.boardingStatus ?? "pending") !== "boarded")
         .filter((r) => (r.journeyStatus ?? "booked") !== "cancelled")
-        .filter((r) => Number(r.originStopOrder ?? 0) <= agencyStopOrder)
-        .filter((r) => Number(r.destinationStopOrder ?? 9999) > agencyStopOrder);
+        .filter((r) => reservationBoardingWindowAtStop(r as unknown as Record<string, unknown>, agencyStopOrder, idToOrder));
       setPassengers(list);
     } catch (e) {
       console.error("[BoardingEscale] getPassengers error:", e);
@@ -131,14 +138,14 @@ export default function BoardingEscalePage() {
     } finally {
       setLoadingPassengers(false);
     }
-  }, [user?.companyId, selectedTripId, agencyStopOrder, tripInstances]);
+  }, [user?.companyId, selectedTripId, agencyStopOrder, agencyRouteId, tripInstances]);
 
   useEffect(() => {
     loadPassengers();
   }, [loadPassengers]);
 
   const loadPassengersToDrop = useCallback(async () => {
-    if (!user?.companyId || agencyStopOrder == null || !selectedTripId) {
+    if (!user?.companyId || agencyStopOrder == null || !selectedTripId || !agencyRouteId) {
       setPassengersToDrop([]);
       return;
     }
@@ -149,6 +156,8 @@ export default function BoardingEscalePage() {
         setPassengersToDrop([]);
         return;
       }
+      const stops = await getRouteStops(user.companyId, agencyRouteId);
+      const idToOrder = buildStopIdToOrderMap(stops);
       const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
       const snap = await getDocs(
         query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
@@ -157,7 +166,7 @@ export default function BoardingEscalePage() {
         .map((d) => ({ id: d.id, ...(d.data() as any), agencyId: trip.agencyId } as PassengerToDrop))
         .filter((r) => (r.boardingStatus ?? "pending") === "boarded")
         .filter((r) => (r.dropoffStatus ?? "pending") !== "dropped")
-        .filter((r) => Number(r.destinationStopOrder ?? -1) === agencyStopOrder);
+        .filter((r) => reservationDropoffAtStop(r as unknown as Record<string, unknown>, agencyStopOrder, idToOrder));
       setPassengersToDrop(list);
     } catch (e) {
       console.error("[BoardingEscale] getPassengersToDrop error:", e);
@@ -165,7 +174,7 @@ export default function BoardingEscalePage() {
     } finally {
       setLoadingDropoff(false);
     }
-  }, [user?.companyId, selectedTripId, agencyStopOrder, tripInstances]);
+  }, [user?.companyId, selectedTripId, agencyStopOrder, agencyRouteId, tripInstances]);
 
   useEffect(() => {
     if (activeTab === "dropoff") loadPassengersToDrop();

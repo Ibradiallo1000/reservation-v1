@@ -47,6 +47,28 @@ function progressDocRef(
   return doc(progressRef(companyId, tripInstanceId), String(stopOrder));
 }
 
+/**
+ * Clé pour documents `progress/{id}` en lecture (post-migration : stopId prioritaire).
+ * Écriture actuelle : uniquement String(stopOrder) — voir progressDocRef.
+ */
+export function getProgressKeyForRead(stop: { stopId?: string | null; stopOrder: number }): string {
+  const id = stop.stopId != null ? String(stop.stopId).trim() : "";
+  return id || String(stop.stopOrder);
+}
+
+/** Lecture avec repli sur la clé historique String(stopOrder) si la clé stopId n’existe pas encore. */
+export async function getProgressDocSnapshotForRead(
+  companyId: string,
+  tripInstanceId: string,
+  stop: { stopOrder: number; stopId?: string | null }
+) {
+  const primaryKey = getProgressKeyForRead(stop);
+  const refPrimary = doc(progressRef(companyId, tripInstanceId), primaryKey);
+  let snap = await getDoc(refPrimary);
+  if (snap.exists() || primaryKey === String(stop.stopOrder)) return snap;
+  return getDoc(progressDocRef(companyId, tripInstanceId, stop.stopOrder));
+}
+
 export type ProgressStopDoc = {
   stopOrder: number;
   city: string;
@@ -374,10 +396,13 @@ export async function ensureAutoDepartForStopIfNeeded(
 export async function getProgressStatusAtStop(
   companyId: string,
   tripInstanceId: string,
-  stopOrder: number
+  stopOrder: number,
+  options?: { stopId?: string | null }
 ): Promise<"en_route" | "arrived" | "departed"> {
-  const ref = progressDocRef(companyId, tripInstanceId, stopOrder);
-  const snap = await getDoc(ref);
+  const snap = await getProgressDocSnapshotForRead(companyId, tripInstanceId, {
+    stopOrder,
+    stopId: options?.stopId,
+  });
   if (!snap.exists()) return "en_route";
   const data = snap.data() as { arrivalTime?: unknown; departureTime?: unknown };
   if (data.departureTime != null) return "departed";

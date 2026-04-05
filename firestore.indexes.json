@@ -203,6 +203,14 @@
       "collectionGroup": "reservations",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
+        { "fieldPath": "shiftId", "order": "ASCENDING" },
+        { "fieldPath": "canal", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
         { "fieldPath": "companyId", "order": "ASCENDING" },
         { "fieldPath": "tripInstanceId", "order": "ASCENDING" }
       ]
@@ -223,6 +231,24 @@
         { "fieldPath": "companyId", "order": "ASCENDING" },
         { "fieldPath": "tripInstanceId", "order": "ASCENDING" },
         { "fieldPath": "destinationStopOrder", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "tripInstanceId", "order": "ASCENDING" },
+        { "fieldPath": "originStopId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reservations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "tripInstanceId", "order": "ASCENDING" },
+        { "fieldPath": "destinationStopId", "order": "ASCENDING" }
       ]
     },
     {

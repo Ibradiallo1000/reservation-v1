@@ -21,7 +21,9 @@ import {
   startAfter,
   type DocumentReference,
   type DocumentSnapshot,
+  type QueryDocumentSnapshot,
   type Transaction,
+  type DocumentData,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { runFirestoreTransactionWithRetry } from "@/shared/firebase/runTransactionWithRetry";
@@ -84,6 +86,18 @@ function mergeTripInstancesById(
   return merged.slice(0, limitCount);
 }
 
+function normalizeTripInstanceQueryDoc(d: QueryDocumentSnapshot<DocumentData>): TripInstanceDocWithId {
+  const raw = d.data() as TripInstanceDoc;
+  return {
+    id: d.id,
+    ...(raw as any),
+    departure: tripInstanceDeparture(raw),
+    arrival: tripInstanceArrival(raw),
+    time: tripInstanceTime(raw),
+    remainingSeats: tripInstanceRemainingFromDoc(raw),
+  } as TripInstanceDocWithId;
+}
+
 export interface CreateTripInstanceParams {
   routeId?: string | null;
   agencyId: string;
@@ -132,6 +146,7 @@ export async function createTripInstance(
   const timeStr = params.departureTime;
 
   let stopCities: string[] = [dep, arr];
+  let stopsSnapshot: Array<{ stopId: string; order: number; agencyId: string | null }> | undefined;
   if (params.routeId) {
     try {
       const routeStops = await getRouteStops(companyId, params.routeId);
@@ -141,6 +156,11 @@ export async function createTripInstance(
           .map((s) => String(s.city ?? "").trim())
           .filter((c) => c.length > 0);
         if (cities.length >= 2) stopCities = cities;
+        stopsSnapshot = ordered.map((s) => ({
+          stopId: s.id,
+          order: s.order,
+          agencyId: null,
+        }));
       }
     } catch {
       /* garder [dep, arr] */
@@ -191,6 +211,7 @@ export async function createTripInstance(
     price: params.price ?? null,
     stops: stopCities,
     segments,
+    ...(stopsSnapshot && stopsSnapshot.length >= 2 ? { stopsSnapshot } : {}),
   };
   if (optionalId) {
     const created = await runTransaction(db, async (tx) => {
@@ -287,7 +308,7 @@ export async function getOrCreateTripInstanceForSlot(
 
 /**
  * List trip instances by route (cities) and date.
- * Queries canonical fields (departure, arrival, date, time) and legacy (departureCity, arrivalCity, date, departureTime), merges by id until backfill is complete.
+ * Fusionne `departureCity`/`arrivalCity` et `departure`/`arrival` (anciennes fiches).
  */
 export async function listTripInstancesByRouteAndDate(
   companyId: string,
@@ -312,16 +333,16 @@ export async function listTripInstancesByRouteAndDate(
   );
   const qLegacy = query(
     ref,
-    where("departureCity", "==", dep),
-    where("arrivalCity", "==", arr),
+    where("departure", "==", dep),
+    where("arrival", "==", arr),
     where("date", "==", date),
-    orderBy("departureTime", "asc"),
+    orderBy("time", "asc"),
     limit(perQueryLimit)
   );
   let canon: TripInstanceDocWithId[] = [];
   try {
     const snapCanon = await getDocs(qCanon);
-    canon = snapCanon.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
+    canon = snapCanon.docs.map(normalizeTripInstanceQueryDoc);
   } catch (e) {
     console.warn(
       "[tripInstanceService] listTripInstancesByRouteAndDate canonical query failed; legacy only",
@@ -329,13 +350,14 @@ export async function listTripInstancesByRouteAndDate(
     );
   }
   const snapLegacy = await getDocs(qLegacy);
-  const legacy = snapLegacy.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
+  const legacy = snapLegacy.docs.map(normalizeTripInstanceQueryDoc);
   return mergeTripInstancesById(canon, legacy, limitCount);
 }
 
 /**
- * Single-query public search:
- * departure == dep, arrival == arr, date in [dateFrom, dateTo], orderBy(date,time), limit.
+ * Trajets sur une OD et une plage de dates.
+ * Fusionne requête canonique (`departureCity` / `arrivalCity`) et requête legacy (`departure` / `arrival`) :
+ * certaines fiches n’ont qu’un des deux jeux de champs — le guichet listait alors « Aucun horaire ».
  */
 export async function listTripInstancesByRouteAndDateRange(
   companyId: string,
@@ -371,18 +393,31 @@ export async function listTripInstancesByRouteAndDateRange(
       )
     : query(qBase, limit(limitCount));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => {
-    const raw = d.data() as TripInstanceDoc;
-    const normalized: TripInstanceDocWithId = {
-      id: d.id,
-      ...(raw as any),
-      departure: tripInstanceDeparture(raw),
-      arrival: tripInstanceArrival(raw),
-      time: tripInstanceTime(raw),
-      remainingSeats: tripInstanceRemainingFromDoc(raw),
-    } as TripInstanceDocWithId;
-    return normalized;
-  });
+  const primary = snap.docs.map(normalizeTripInstanceQueryDoc);
+
+  if (options?.startAfterCursor) {
+    return primary;
+  }
+
+  const qLegacy = query(
+    tripInstancesRef(companyId),
+    where("departure", "==", dep),
+    where("arrival", "==", arr),
+    where("date", ">=", dateFrom),
+    where("date", "<=", dateTo),
+    orderBy("date", "asc"),
+    orderBy("time", "asc"),
+    limit(limitCount)
+  );
+  let legacy: TripInstanceDocWithId[] = [];
+  try {
+    const snapL = await getDocs(qLegacy);
+    legacy = snapL.docs.map(normalizeTripInstanceQueryDoc);
+  } catch (e) {
+    console.warn("[tripInstanceService] listTripInstancesByRouteAndDateRange legacy OD query failed", e);
+  }
+
+  return mergeTripInstancesById(primary, legacy, limitCount);
 }
 
 /** List trip instances by date range (for capacity / fill rate). Requires index: tripInstances (date ASC). */

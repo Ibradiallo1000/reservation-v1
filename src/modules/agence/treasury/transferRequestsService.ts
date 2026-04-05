@@ -44,8 +44,11 @@ export type TransferRequestDoc = {
 
 const COLLECTION = "treasuryTransferRequests";
 
-const INITIATOR_ROLES = ["agency_accountant", "admin_compagnie"];
-const MANAGER_ROLES = ["chefAgence", "superviseur", "admin_compagnie"];
+export const TRANSFER_INITIATOR_ROLES = ["agency_accountant", "admin_compagnie"] as const;
+export const TRANSFER_MANAGER_ROLES = ["chefAgence", "superviseur", "admin_compagnie"] as const;
+
+const INITIATOR_SET = new Set<string>(TRANSFER_INITIATOR_ROLES);
+const MANAGER_SET = new Set<string>(TRANSFER_MANAGER_ROLES);
 
 function requestsRef(companyId: string) {
   return collection(db, `companies/${companyId}/${COLLECTION}`);
@@ -55,12 +58,28 @@ function requestRef(companyId: string, requestId: string) {
   return doc(db, `companies/${companyId}/${COLLECTION}/${requestId}`);
 }
 
-function canInitiate(role?: string | null): boolean {
-  return INITIATOR_ROLES.includes((role ?? "").trim());
+function canInitiateWithRoles(roles: string[]): boolean {
+  return roles.some((r) => INITIATOR_SET.has((r ?? "").trim()));
 }
 
-function canValidate(role?: string | null): boolean {
-  return MANAGER_ROLES.includes((role ?? "").trim());
+function firstInitiatorRole(roles: string[]): string | null {
+  for (const r of roles) {
+    const t = (r ?? "").trim();
+    if (INITIATOR_SET.has(t)) return t;
+  }
+  return null;
+}
+
+function canValidateWithRoles(roles: string[]): boolean {
+  return roles.some((r) => MANAGER_SET.has((r ?? "").trim()));
+}
+
+function firstManagerRole(roles: string[]): string | null {
+  for (const r of roles) {
+    const t = (r ?? "").trim();
+    if (MANAGER_SET.has(t)) return t;
+  }
+  return null;
 }
 
 export async function createTransferRequest(params: {
@@ -72,12 +91,21 @@ export async function createTransferRequest(params: {
   currency: string;
   description?: string | null;
   initiatedBy: string;
+  /** @deprecated Préférer `initiatedByRoles` si l’utilisateur a plusieurs rôles. */
   initiatedByRole?: string | null;
+  /** Tous les rôles du token / profil ; au moins un doit être initiateur autorisé. */
+  initiatedByRoles?: string[] | null;
 }): Promise<string> {
-  const role = params.initiatedByRole ?? null;
-  if (!canInitiate(role)) {
+  const roleList =
+    params.initiatedByRoles?.length != null && params.initiatedByRoles.length > 0
+      ? params.initiatedByRoles.map((r) => String(r ?? "").trim()).filter(Boolean)
+      : params.initiatedByRole
+        ? [String(params.initiatedByRole).trim()].filter(Boolean)
+        : [];
+  if (!canInitiateWithRoles(roleList)) {
     throw new Error("Seul le comptable agence peut initier un versement.");
   }
+  const role = firstInitiatorRole(roleList);
   const amount = Number(params.amount);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error("Montant invalide.");
@@ -94,7 +122,7 @@ export async function createTransferRequest(params: {
     description: params.description?.trim() || null,
     status: "pending_manager",
     initiatedBy: params.initiatedBy,
-    initiatedByRole: role,
+    initiatedByRole: role ?? null,
     managerDecisionBy: null,
     managerDecisionAt: null,
     managerDecisionReason: null,
@@ -139,11 +167,18 @@ export async function approveTransferRequest(params: {
   requestId: string;
   managerId: string;
   managerRole?: string | null;
+  managerRoles?: string[] | null;
 }): Promise<void> {
-  const role = params.managerRole ?? null;
-  if (!canValidate(role)) {
+  const roleList =
+    params.managerRoles?.length != null && params.managerRoles.length > 0
+      ? params.managerRoles.map((r) => String(r ?? "").trim()).filter(Boolean)
+      : params.managerRole
+        ? [String(params.managerRole).trim()].filter(Boolean)
+        : [];
+  if (!canValidateWithRoles(roleList)) {
     throw new Error("Seul le chef d'agence peut valider ce versement.");
   }
+  const role = firstManagerRole(roleList);
   const ref = requestRef(params.companyId, params.requestId);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("Demande introuvable.");
@@ -155,32 +190,44 @@ export async function approveTransferRequest(params: {
     throw new Error("L'initiateur ne peut pas valider sa propre demande.");
   }
 
-  await updateDoc(ref, {
-    status: "approved",
-    managerDecisionBy: params.managerId,
-    managerDecisionAt: serverTimestamp(),
-    managerDecisionReason: null,
-    updatedAt: serverTimestamp(),
-  });
+  try {
+    await agencyDepositToBank({
+      companyId: req.companyId,
+      agencyCashAccountId: req.fromAccountId,
+      companyBankAccountId: req.toAccountId,
+      amount: req.amount,
+      currency: req.currency,
+      performedBy: params.managerId,
+      performedByRole: role ?? null,
+      idempotencyKey: req.idempotencyKey,
+      description: req.description || "Versement caisse agence vers banque compagnie",
+    });
+  } catch (err) {
+    console.error("[treasuryTransfer] agencyDepositToBank a échoué — demande reste en attente chef.", {
+      companyId: params.companyId,
+      requestId: params.requestId,
+      err,
+    });
+    throw err;
+  }
 
-  await agencyDepositToBank({
-    companyId: req.companyId,
-    agencyCashAccountId: req.fromAccountId,
-    companyBankAccountId: req.toAccountId,
-    amount: req.amount,
-    currency: req.currency,
-    performedBy: params.managerId,
-    performedByRole: role,
-    idempotencyKey: req.idempotencyKey,
-    description: req.description || "Versement caisse agence vers banque compagnie",
-  });
-
-  await updateDoc(ref, {
-    status: "executed",
-    executedBy: params.managerId,
-    executedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  try {
+    await updateDoc(ref, {
+      status: "executed",
+      managerDecisionBy: params.managerId,
+      managerDecisionAt: serverTimestamp(),
+      managerDecisionReason: null,
+      executedBy: params.managerId,
+      executedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.error(
+      "[treasuryTransfer] Échec mise à jour demande après versement ledger — vérifier cohérence manuellement.",
+      { companyId: params.companyId, requestId: params.requestId, err }
+    );
+    throw err;
+  }
 }
 
 export async function rejectTransferRequest(params: {
@@ -188,10 +235,16 @@ export async function rejectTransferRequest(params: {
   requestId: string;
   managerId: string;
   managerRole?: string | null;
+  managerRoles?: string[] | null;
   reason?: string | null;
 }): Promise<void> {
-  const role = params.managerRole ?? null;
-  if (!canValidate(role)) {
+  const roleList =
+    params.managerRoles?.length != null && params.managerRoles.length > 0
+      ? params.managerRoles.map((r) => String(r ?? "").trim()).filter(Boolean)
+      : params.managerRole
+        ? [String(params.managerRole).trim()].filter(Boolean)
+        : [];
+  if (!canValidateWithRoles(roleList)) {
     throw new Error("Seul le chef d'agence peut refuser ce versement.");
   }
   const ref = requestRef(params.companyId, params.requestId);

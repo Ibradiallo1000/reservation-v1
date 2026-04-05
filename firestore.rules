@@ -304,16 +304,24 @@ service cloud.firestore {
 
     /**
      * Réservation en ligne en attente de preuve (upload preuve / transaction sièges).
-     * Flux actuel : statut "en_attente" + hold ; ancien alias : "en_attente_paiement".
+     * Flux actuel : statut legacy "en_attente" OU champ SaaS status "en_attente" + hold ; alias : "en_attente_paiement".
      */
     function reservationAwaitingOnlinePaymentProof() {
       let s = resource.data.get('statut', '');
-      return s == 'en_attente_paiement'
+      let lifecycle = resource.data.get('status', '');
+      let statutOk = s == 'en_attente_paiement'
         || s == 'en_attente'
         || (s is string && (
           s.toLowerCase().replace(' ', '_') == 'en_attente_paiement'
           || s.toLowerCase().replace(' ', '_') == 'en_attente'
         ));
+      let statusOk = lifecycle == 'en_attente'
+        || lifecycle == 'en_attente_paiement'
+        || (lifecycle is string && (
+          lifecycle.toLowerCase().replace(' ', '_') == 'en_attente'
+          || lifecycle.toLowerCase().replace(' ', '_') == 'en_attente_paiement'
+        ));
+      return statutOk || statusOk;
     }
 
     /* =====================
@@ -520,7 +528,8 @@ service cloud.firestore {
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
           escaleUserCanReadCompany(companyId) ||
-          canWriteAgencyScopedFinance(companyId)
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
         );
         allow delete: if false;
       }
@@ -886,7 +895,19 @@ service cloud.firestore {
                 !request.resource.data.diff(resource.data).affectedKeys().hasAny(['statut'])
                 ? (getUserRole() != 'operator_digital'
                   || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                    'cashTransactionId', 'paymentStatus', 'paymentMethod'
+                    'cashTransactionId',
+                    'paymentStatus',
+                    'paymentMethod',
+                    'updatedAt',
+                    'payment',
+                    'status',
+                    'refusedBy',
+                    'refusedAt',
+                    'refusalReason',
+                    'ticketValidatedAt',
+                    'auditLog',
+                    'validatedBy',
+                    'ticketRevenueCountedInDailyStats'
                   ]))
                 : true
               )
@@ -1209,6 +1230,68 @@ service cloud.firestore {
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
+      /* Versements caisse agence → banque : workflow pending_manager → executed | rejected */
+      match /treasuryTransferRequests/{requestId} {
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          getUserRole() == 'admin_compagnie' ||
+          (
+            userAgencyBelongsToCompany(companyId) &&
+            resource.data.get('agencyId', '') == getUserAgencyId() &&
+            (
+              getUserRole() == 'agency_accountant' ||
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur'
+            )
+          )
+        );
+        allow create: if isAuth() && userCompanyId() == companyId && (
+          getUserRole() == 'admin_platforme' ||
+          (
+            getUserRole() == 'admin_compagnie' &&
+            request.resource.data.get('companyId', '') == companyId
+          ) ||
+          (
+            getUserRole() == 'agency_accountant' &&
+            request.resource.data.get('agencyId', '') == getUserAgencyId() &&
+            request.resource.data.get('companyId', '') == companyId
+          )
+        )
+          && request.resource.data.get('status', '') == 'pending_manager'
+          && request.resource.data.get('initiatedBy', '') == request.auth.uid
+          && request.resource.data.get('amount', 0) is number
+          && request.resource.data.get('amount', 0) > 0
+          && request.resource.data.get('amount', 0) < 100000000
+          && request.resource.data.get('fromAccountId', '').size() > 0
+          && request.resource.data.get('toAccountId', '').size() > 0;
+        allow update: if isAuth() && userCompanyId() == companyId
+          && resource.data.get('status', '') == 'pending_manager'
+          && request.auth.uid != resource.data.get('initiatedBy', '')
+          && (
+            getUserRole() == 'admin_platforme' ||
+            getUserRole() == 'admin_compagnie' ||
+            (
+              resource.data.get('agencyId', '') == getUserAgencyId() &&
+              (
+                getUserRole() == 'chefAgence' ||
+                getUserRole() == 'chefagence' ||
+                getUserRole() == 'superviseur'
+              )
+            )
+          )
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'managerDecisionBy', 'managerDecisionAt', 'managerDecisionReason',
+            'executedBy', 'executedAt', 'updatedAt'
+          ])
+          && (
+            (request.resource.data.get('status', '') == 'executed'
+              && request.resource.data.get('executedBy', '') == request.auth.uid)
+            || request.resource.data.get('status', '') == 'rejected'
+          );
+        allow delete: if false;
+      }
       /* Phase B1.5 — Trip costs: create/update by agency_manager (own agency), company_accountant, admin_compagnie. No delete. */
       match /tripCosts/{tripCostId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || getUserRole() == 'admin_compagnie');
@@ -1235,12 +1318,14 @@ service cloud.firestore {
         allow get, list: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
-          canWriteAgencyScopedFinance(companyId)
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
         );
         allow create: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
-          (canWriteAgencyScopedFinance(companyId) && financialTxAgencyStaffPayload(companyId))
+          (canWriteAgencyScopedFinance(companyId) && financialTxAgencyStaffPayload(companyId)) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
         );
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           getUserRole() == 'admin_compagnie' ||
@@ -1254,7 +1339,8 @@ service cloud.firestore {
         allow get, create: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
-          canWriteAgencyScopedFinance(companyId)
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
         );
         allow update, delete: if false;
       }
@@ -1263,13 +1349,20 @@ service cloud.firestore {
         allow get, list: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
-          canWriteAgencyScopedFinance(companyId)
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
         );
-        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || canWriteAgencyScopedFinance(companyId));
+        allow create: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
+        );
         allow update: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
-          canWriteAgencyScopedFinance(companyId)
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
         )
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'balance', 'updatedAt', 'currency', 'accountType', 'type', 'label',
@@ -1508,12 +1601,14 @@ service cloud.firestore {
         allow get, list: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
-          canWriteAgencyScopedFinance(companyId)
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
         );
         allow create: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
-          (canWriteAgencyScopedFinance(companyId) && request.resource.data.get('userId', '') == request.auth.uid)
+          (canWriteAgencyScopedFinance(companyId) && request.resource.data.get('userId', '') == request.auth.uid) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId) && request.resource.data.get('userId', '') == request.auth.uid)
         );
         allow update, delete: if false;
       }
@@ -1547,7 +1642,12 @@ service cloud.firestore {
           || visitorOnlinePendingPaymentCreate()
           || (canWriteAgencyScopedFinance(companyId) && guichetValidatedPaymentCreate(companyId));
         /* setDoc sur doc existant = update : idempotence (double envoi preuve / course). */
-        allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+        /* Mise à jour staff : même tenant (companyId profil / token) ou rôles siège / opérateur digital rattaché à la compagnie. */
+        allow update: if (isAuth() && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
+          ))
           || (
             resource.data.get('status', '') == 'pending'
             && resource.data.get('channel', '') == 'online'

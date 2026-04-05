@@ -32,7 +32,11 @@ import {
   tripInstanceRef,
 } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { getStopByOrder, getEscaleDestinations } from '@/modules/compagnie/routes/routeStopsService';
-import { getStopOrdersFromCities } from '@/modules/compagnie/tripInstances/segmentOccupancyService';
+import {
+  resolveJourneyStopIdsFromCities,
+  resolveStopByStopId,
+  warnIfStopIdOrderMismatch,
+} from '@/modules/compagnie/routes/stopResolution';
 import { createPayment } from '@/services/paymentService';
 import { createFinancialTransaction } from '@/modules/compagnie/treasury/financialTransactions';
 import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
@@ -74,6 +78,9 @@ export type CreateGuichetReservationParams = {
   /** Segment orders on the route (for segment-based occupancy). When omitted, resolved from route + depart/arrivee when possible. */
   originStopOrder?: number | null;
   destinationStopOrder?: number | null;
+  /** Stop Firestore ids (double écriture avec order). */
+  originStopId?: string | null;
+  destinationStopId?: string | null;
   offlineMeta?: {
     mode: "online" | "offline";
     transactionId?: string;
@@ -245,12 +252,20 @@ async function validateEscaleAgentReservation(
   const agencyRef = doc(db, 'companies', companyId, 'agences', agencyId);
   const agencySnap = await getDoc(agencyRef);
   if (!agencySnap.exists()) return;
-  const ad = agencySnap.data() as { type?: string; routeId?: string; stopOrder?: number };
+  const ad = agencySnap.data() as { type?: string; routeId?: string; stopOrder?: number; stopId?: string };
   const typ = (ad.type ?? 'principale').toLowerCase();
-  if (typ !== 'escale' || !ad.routeId || ad.stopOrder == null) return;
+  if (typ !== 'escale' || !ad.routeId) return;
 
   const routeId = ad.routeId;
-  const stopOrder = ad.stopOrder;
+  if (ad.stopId && ad.stopOrder != null && !Number.isNaN(Number(ad.stopOrder))) {
+    await warnIfStopIdOrderMismatch(companyId, routeId, ad.stopId, Number(ad.stopOrder));
+  }
+  let stopOrder = ad.stopOrder != null ? Number(ad.stopOrder) : null;
+  if ((stopOrder == null || Number.isNaN(stopOrder)) && ad.stopId) {
+    const byId = await resolveStopByStopId(companyId, routeId, String(ad.stopId));
+    if (byId) stopOrder = byId.order;
+  }
+  if (stopOrder == null || Number.isNaN(stopOrder)) return;
 
   const originStop = await getStopByOrder(companyId, routeId, stopOrder);
   if (!originStop) throw new Error('Configuration escale invalide : stop introuvable.');
@@ -298,11 +313,19 @@ export async function createGuichetReservation(
 
   let originStopOrder: number | null = params.originStopOrder ?? null;
   let destinationStopOrder: number | null = params.destinationStopOrder ?? null;
-  if ((originStopOrder == null || destinationStopOrder == null) && params.tripInstanceId) {
+  let originStopId: string | null = params.originStopId ?? null;
+  let destinationStopId: string | null = params.destinationStopId ?? null;
+  const needJourneyResolution =
+    params.tripInstanceId &&
+    (originStopOrder == null ||
+      destinationStopOrder == null ||
+      originStopId == null ||
+      destinationStopId == null);
+  if (needJourneyResolution && params.tripInstanceId) {
     const ti = await getTripInstance(params.companyId, params.tripInstanceId);
     const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
     if (routeId) {
-      const resolved = await getStopOrdersFromCities(
+      const resolved = await resolveJourneyStopIdsFromCities(
         params.companyId,
         routeId,
         params.depart,
@@ -311,6 +334,8 @@ export async function createGuichetReservation(
       if (resolved) {
         originStopOrder = originStopOrder ?? resolved.originStopOrder;
         destinationStopOrder = destinationStopOrder ?? resolved.destinationStopOrder;
+        originStopId = originStopId ?? resolved.originStopId;
+        destinationStopId = destinationStopId ?? resolved.destinationStopId;
       }
     }
   }
@@ -352,6 +377,9 @@ export async function createGuichetReservation(
     arrivee: params.arrivee,
     ...(originStopOrder != null && { originStopOrder }),
     ...(destinationStopOrder != null && { destinationStopOrder }),
+    ...(originStopId != null && String(originStopId).trim() !== '' && { originStopId: String(originStopId).trim() }),
+    ...(destinationStopId != null &&
+      String(destinationStopId).trim() !== '' && { destinationStopId: String(destinationStopId).trim() }),
     nomClient: params.nomClient,
     telephone: params.telephone,
     telephoneOriginal: phoneOriginal || null,

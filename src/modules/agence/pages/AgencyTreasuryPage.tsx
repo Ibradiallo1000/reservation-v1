@@ -13,7 +13,7 @@ import {
 import { db } from "@/firebaseConfig";
 import { formatDateLongFr } from "@/utils/dateFmt";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { getAgencyOperationalAvailableCash } from "@/modules/agence/comptabilite/agencyCashAuditService";
+import { getAgencyTreasuryLedgerCashDisplay } from "@/modules/agence/comptabilite/agencyCashAuditService";
 import {
   listExpenses,
   createExpense,
@@ -66,6 +66,8 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     adjustmentTotal: number;
     availableCash: number;
   } | null>(null);
+  /** Miroir `financialAccounts` — affichage secondaire uniquement (écarts journalisés côté service). */
+  const [mirrorCashSecondary, setMirrorCashSecondary] = useState<number | null>(null);
   const [movements, setMovements] = useState<{ id: string; amount: number; movementType: string; performedAt: unknown }[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<{ id: string; amount: number; category: string; status: ExpenseStatus }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,12 +94,22 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     const runEnsure = () =>
       ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as { nom?: string })?.nom)
         .then(async () => {
-          const [acc, ledger] = await Promise.all([
+          const [acc, primary] = await Promise.all([
             listAccounts(companyId, { agencyId }),
-            getAgencyOperationalAvailableCash(companyId, agencyId).catch(() => null),
+            getAgencyTreasuryLedgerCashDisplay(companyId, agencyId).catch(() => null),
           ]);
           setAccounts(acc);
-          setOperationalCash(ledger);
+          if (primary) {
+            setOperationalCash({
+              accountingCash: primary.ledgerCash,
+              adjustmentTotal: 0,
+              availableCash: primary.ledgerCash,
+            });
+            setMirrorCashSecondary(primary.mirrorCash);
+          } else {
+            setOperationalCash(null);
+            setMirrorCashSecondary(null);
+          }
         });
     runEnsure()
       .catch((err: any) => {
@@ -140,6 +152,10 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     const amount = Number(formAmount?.replace(/\s/g, "").replace(",", "."));
     if (!formDescription.trim() || amount <= 0 || !formAccountId) {
       toast.error("Renseignez la description, le montant et le compte.");
+      return;
+    }
+    if (operationalCash != null && amount > operationalCash.availableCash + 0.0001) {
+      toast.error("Montant supérieur à la caisse disponible (solde ledger).");
       return;
     }
     setSubmitting(true);
@@ -223,8 +239,10 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     return () => clearInterval(interval);
   }, [companyId, agencyId, isOnline]);
 
-  const totalAgencyCash = agencyCashAccounts.reduce((s, a) => s + a.currentBalance, 0);
-  const displayedCash = operationalCash?.availableCash ?? totalAgencyCash;
+  const caisseDevise =
+    agencyCashAccounts[0]?.currency ?? (company as { devise?: string })?.devise ?? "XOF";
+  const ledgerCashDisplay = operationalCash?.availableCash ?? 0;
+  const displayedCash = ledgerCashDisplay;
   const pendingExpensesTotal = useMemo(
     () => pendingExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0),
     [pendingExpenses]
@@ -320,38 +338,24 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
 
       <SectionCard title="Position caisse agence" icon={Wallet}>
         <div className="text-2xl font-bold text-indigo-700 dark:text-indigo-300">{money(displayedCash)}</div>
-        {operationalCash !== null && Math.abs((operationalCash.accountingCash + operationalCash.adjustmentTotal) - totalAgencyCash) > 0.01 ? (
-          <p className="mt-2 text-xs text-amber-700">
-            Le disponible inclut les écarts de validation comptable (manquants/surplus).
+        <p className="mt-1 text-xs text-gray-500">
+          Montant issu du grand livre (comptes caisse), source utilisée pour les plafonds dépense et versement.
+        </p>
+        {mirrorCashSecondary != null ? (
+          <p className="mt-2 text-xs text-gray-500">
+            Référence compte miroir (non prioritaire) : {formatCurrency(mirrorCashSecondary, caisseDevise)}
           </p>
         ) : null}
         {agencyCashAccounts.length === 0 ? (
-          <p className="mt-3 text-sm text-gray-500">Aucun compte caisse agence n'est encore disponible.</p>
-        ) : agencyCashAccounts.length === 1 && !(operationalCash !== null && Math.abs((operationalCash.accountingCash + operationalCash.adjustmentTotal) - totalAgencyCash) > 0.01) ? (
+          <p className="mt-3 text-sm text-gray-500">Aucun compte caisse agence n&apos;est encore disponible.</p>
+        ) : (
           <p className="mt-3 text-sm text-gray-600">
-            Compte actif:{" "}
+            Compte métier :{" "}
             <span className="font-medium">
-              {agencyCashAccounts[0].accountName || "Caisse agence"} ({formatCurrency(agencyCashAccounts[0].currentBalance, agencyCashAccounts[0].currency)})
+              {agencyCashAccounts[0].accountName || "Caisse agence"} — solde ledger {formatCurrency(ledgerCashDisplay, caisseDevise)}
             </span>
           </p>
-        ) : agencyCashAccounts.length > 1 && !(operationalCash !== null && Math.abs((operationalCash.accountingCash + operationalCash.adjustmentTotal) - totalAgencyCash) > 0.01) ? (
-          <ul className="mt-3 space-y-2 text-sm">
-            {agencyCashAccounts.map((a) => (
-              <li
-                key={a.id}
-                className="flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <span className="min-w-0">{a.accountName || "Caisse agence"}</span>
-                <span className="font-medium tabular-nums">{formatCurrency(a.currentBalance, a.currency)}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {operationalCash !== null && Math.abs((operationalCash.accountingCash + operationalCash.adjustmentTotal) - totalAgencyCash) > 0.01 ? (
-          <p className="mt-2 text-xs text-gray-500">
-            Compte opérationnel: {agencyCashAccounts[0]?.accountName || "Caisse agence"} ({formatCurrency(agencyCashAccounts[0]?.currentBalance ?? 0, agencyCashAccounts[0]?.currency ?? "XOF")}).
-          </p>
-        ) : null}
+        )}
       </SectionCard>
 
       <SectionCard title="Derniers mouvements" icon={ArrowRightLeft}>
@@ -435,7 +439,9 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 >
                   {agencyCashAccounts.map((a) => (
-                    <option key={a.id} value={a.id}>Caisse agence — {formatCurrency(a.currentBalance, a.currency)}</option>
+                    <option key={a.id} value={a.id}>
+                      Caisse agence — {formatCurrency(ledgerCashDisplay, caisseDevise)} (ledger)
+                    </option>
                   ))}
                 </select>
               </div>
@@ -526,7 +532,9 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
             >
               {agencyCashAccounts.map((a) => (
-                <option key={a.id} value={a.id}>Caisse agence — {formatCurrency(a.currentBalance, a.currency)}</option>
+                <option key={a.id} value={a.id}>
+                  Caisse agence — {formatCurrency(ledgerCashDisplay, caisseDevise)} (ledger)
+                </option>
               ))}
             </select>
           </div>

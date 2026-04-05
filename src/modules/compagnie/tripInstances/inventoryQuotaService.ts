@@ -7,6 +7,7 @@ import { collectionGroup, doc, getDoc, getDocs, query, where, setDoc, serverTime
 import { db } from "@/firebaseConfig";
 import { getTripInstance } from "./tripInstanceService";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import { mergeQueryDocsUnique, resolveStop } from "@/modules/compagnie/routes/stopResolution";
 import { tripInstanceRemainingFromDoc, tripInstanceSeatCapacity, tripInstanceTime } from "./tripInstanceTypes";
 import type { TripInstanceInventoryDoc } from "@/types/inventoryQuota";
 import { DEFAULT_INVENTORY } from "@/types/inventoryQuota";
@@ -91,15 +92,33 @@ async function getSoldFromStop(
   tripInstanceId: string,
   stopOrder: number
 ): Promise<number> {
-  const qGroup = query(
+  const ti = await getTripInstance(companyId, tripInstanceId);
+  const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+  let originStopId: string | null = null;
+  if (routeId) {
+    const rs = await resolveStop(companyId, routeId, stopOrder);
+    originStopId = rs?.stopId ?? null;
+  }
+  const qOrder = query(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
     where("originStopOrder", "==", stopOrder)
   );
-  const snap = await getDocs(qGroup);
+  const snapOrder = await getDocs(qOrder);
+  let docs = snapOrder.docs;
+  if (originStopId) {
+    const qId = query(
+      collectionGroup(db, "reservations"),
+      where("companyId", "==", companyId),
+      where("tripInstanceId", "==", tripInstanceId),
+      where("originStopId", "==", originStopId)
+    );
+    const snapId = await getDocs(qId);
+    docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);
+  }
   let total = 0;
-  for (const d of snap.docs) {
+  for (const d of docs) {
     const data = d.data() as { statut?: string; status?: string; ticketValidatedAt?: unknown; seatsGo?: number };
     if (!reservationConfirmedForQuota(data)) continue;
     total += Number(data.seatsGo ?? 1);

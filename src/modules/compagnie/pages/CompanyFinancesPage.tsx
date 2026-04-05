@@ -11,6 +11,7 @@ import {
   doc,
   limit,
   onSnapshot,
+  orderBy,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -19,7 +20,17 @@ import { useGlobalDataSnapshot } from "@/contexts/GlobalDataSnapshotContext";
 import { useGlobalMoneyPositions } from "@/contexts/GlobalMoneyPositionsContext";
 import { StandardLayoutWrapper, PageHeader, MetricCard } from "@/ui";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
-import { DollarSign, AlertTriangle, Building2, Download, Info, Siren } from "lucide-react";
+import { fr } from "date-fns/locale";
+import {
+  DollarSign,
+  AlertTriangle,
+  Download,
+  Info,
+  Siren,
+  Landmark,
+  Clock,
+  CreditCard,
+} from "lucide-react";
 import { useCapabilities } from "@/core/hooks/useCapabilities";
 import AccessDenied from "@/core/ui/AccessDenied";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
@@ -28,6 +39,7 @@ import {
   getUnifiedCompanyFinance,
   type UnifiedAgencyFinance,
 } from "@/modules/finance/services/unifiedFinanceService";
+import { PENDING_STATUSES } from "@/modules/compagnie/treasury/expenses";
 
 const SHIFT_REPORTS_COLLECTION = "shiftReports";
 
@@ -99,6 +111,31 @@ type CompanyFinancesPageProps = {
 const WARNING_GAP_THRESHOLD = 50000;
 const CRITICAL_GAP_THRESHOLD = 150000;
 
+const EXPENSE_PENDING_SET = new Set<string>(PENDING_STATUSES as unknown as string[]);
+
+function BlockTitle({
+  title,
+  tooltip,
+  subtitle,
+  icon: Icon,
+}: {
+  title: string;
+  tooltip: string;
+  subtitle?: string;
+  icon?: React.ComponentType<{ className?: string }>;
+}) {
+  return (
+    <div className="mb-4 border-b border-slate-200/80 dark:border-slate-600 pb-3">
+      <h2 className="text-lg font-semibold flex items-center gap-2 text-slate-900 dark:text-slate-100">
+        {Icon ? <Icon className="h-5 w-5 shrink-0 text-slate-600 dark:text-slate-300" /> : null}
+        {title}
+        <InfoHint text={tooltip} />
+      </h2>
+      {subtitle ? <p className="text-xs text-slate-600 dark:text-slate-400 mt-2 max-w-3xl">{subtitle}</p> : null}
+    </div>
+  );
+}
+
 function InfoHint({ text }: { text: string }) {
   return (
     <button
@@ -131,6 +168,13 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   const [currency, setCurrency] = useState("XOF");
   const [unifiedFinance, setUnifiedFinance] = useState<UnifiedAgencyFinance | null>(null);
   const [unifiedFinanceLoading, setUnifiedFinanceLoading] = useState(false);
+  const [expenseDash, setExpenseDash] = useState({
+    pendingCount: 0,
+    pendingAmount: 0,
+    paidInPeriodAmount: 0,
+    submittedInPeriodAmount: 0,
+    loading: false,
+  });
   const globalSnapshot = useGlobalDataSnapshot();
   const moneyPositions = useGlobalMoneyPositions();
 
@@ -233,6 +277,81 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
       .then(setUnifiedFinance)
       .catch(() => setUnifiedFinance(null))
       .finally(() => setUnifiedFinanceLoading(false));
+  }, [companyId, globalPeriod.startDate, globalPeriod.endDate]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    const { dateFrom, dateTo } = globalPeriod.toFinancialPeriod();
+    const fromMs = new Date(`${dateFrom}T00:00:00.000`).getTime();
+    const toMs = new Date(`${dateTo}T23:59:59.999`).getTime();
+
+    let cancelled = false;
+    setExpenseDash((s) => ({ ...s, loading: true }));
+
+    (async () => {
+      try {
+        const snap = await getDocs(
+          query(
+            collection(db, "companies", companyId, "expenses"),
+            orderBy("createdAt", "desc"),
+            limit(500)
+          )
+        );
+        if (cancelled) return;
+
+        let pendingCount = 0;
+        let pendingAmount = 0;
+        let paidInPeriodAmount = 0;
+        let submittedInPeriodAmount = 0;
+
+        snap.forEach((d) => {
+          const x = d.data() as {
+            amount?: number;
+            status?: string;
+            createdAt?: unknown;
+            paidAt?: unknown;
+          };
+          const amt = Number(x.amount) || 0;
+          const st = String(x.status ?? "");
+          const createdMs = toMillis(x.createdAt);
+          const paidMs = toMillis(x.paidAt);
+
+          if (EXPENSE_PENDING_SET.has(st)) {
+            pendingCount += 1;
+            pendingAmount += amt;
+          }
+          if (createdMs != null && createdMs >= fromMs && createdMs <= toMs) {
+            submittedInPeriodAmount += amt;
+          }
+          if (st === "paid" && paidMs != null && paidMs >= fromMs && paidMs <= toMs) {
+            paidInPeriodAmount += amt;
+          }
+        });
+
+        setExpenseDash({
+          pendingCount,
+          pendingAmount,
+          paidInPeriodAmount,
+          submittedInPeriodAmount,
+          loading: false,
+        });
+      } catch (e) {
+        console.error("CompanyFinances expenses load:", e);
+        if (!cancelled) {
+          setExpenseDash({
+            pendingCount: 0,
+            pendingAmount: 0,
+            paidInPeriodAmount: 0,
+            submittedInPeriodAmount: 0,
+            loading: false,
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [companyId, globalPeriod.startDate, globalPeriod.endDate]);
 
   useEffect(() => {
@@ -342,7 +461,17 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     const day = globalPeriod.endDate;
     const list = derivedDailyStats.filter((d) => d.date === day);
     return { ticket: sumTicket(list), courier: sumCourier(list), total: sumTotal(list) };
-  }, [derivedDailyStats]);
+  }, [derivedDailyStats, globalPeriod.endDate]);
+
+  const periodLabelFr = useMemo(() => {
+    try {
+      const a = new Date(`${globalPeriod.startDate}T12:00:00`);
+      const b = new Date(`${globalPeriod.endDate}T12:00:00`);
+      return `${format(a, "d MMM yyyy", { locale: fr })} – ${format(b, "d MMM yyyy", { locale: fr })}`;
+    } catch {
+      return `${globalPeriod.startDate} – ${globalPeriod.endDate}`;
+    }
+  }, [globalPeriod.startDate, globalPeriod.endDate]);
 
   const revenueWeek = useMemo(() => {
     const today = new Date();
@@ -553,11 +682,9 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     <>
       {!embedded && <PageHeader title="Finances compagnie" />}
 
-      {/* Positions d'argent (vérité métier) */}
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/90 pb-3 text-xs text-slate-500 dark:border-slate-600 dark:text-slate-400">
         <span>
-          {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
-          :{" "}
+          Actualisation des positions (live) :{" "}
           {globalSnapshot.snapshot.lastUpdatedAt
             ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
             : "—"}
@@ -565,301 +692,425 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
         <button
           type="button"
           onClick={() => void globalSnapshot.refresh()}
-          className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-800"
+          className="rounded-md border border-slate-200 bg-white px-2 py-1 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
         >
           Rafraîchir
         </button>
       </div>
 
-      {!unifiedFinanceLoading && unifiedFinance && (
-        <div className="mb-4 space-y-4">
-          <section className="rounded-xl border-2 border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-4">
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-              1 — Argent réel (soldes <code className="text-[11px]">accounts</code>)
-            </h3>
-            <p className="text-xs text-slate-600 dark:text-slate-400 mb-3">
-              Uniquement la somme des soldes ledger — pas les ventes ni les stats.
-            </p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Caisse espèces</div>
-                <div className="font-semibold">{money(unifiedFinance.realMoney.cash)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Mobile money</div>
-                <div className="font-semibold">{money(unifiedFinance.realMoney.mobileMoney)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Banque</div>
-                <div className="font-semibold">{money(unifiedFinance.realMoney.bank)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Liquidité totale</div>
-                <div className="font-semibold">{money(unifiedFinance.realMoney.total)}</div>
-              </div>
-            </div>
-          </section>
-          <section className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 p-4">
-            <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-1">
-              2 — Activité (période globale)
-            </h3>
-            <p className="text-xs text-blue-800/80 dark:text-blue-200/80 mb-3">
-              Ventes = réservations (createdAt). Encaissements / CA net = <code className="text-[11px]">financialTransactions</code> confirmés.
-            </p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Ventes (réservations)</div>
-                <div className="font-semibold">
-                  {unifiedFinance.activity.sales.reservationCount} résa · {money(unifiedFinance.activity.sales.amountHint)}
+      <div className="space-y-10">
+        {/* 1 — Trésorerie réelle (ledger uniquement) */}
+        <section className="rounded-2xl border-2 border-emerald-300/80 bg-emerald-50/40 p-5 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/25">
+          <BlockTitle
+            icon={Landmark}
+            title="Trésorerie réelle (ledger)"
+            tooltip="Trésorerie réelle : argent disponible actuellement selon les comptes du grand livre. Sans stats journalières ni montants encore dans les sessions ouvertes."
+            subtitle="Source : soldes agrégés des comptes liquidités (espèces caisse agences, mobile money, banque). À ne pas lire comme chiffre d'affaires."
+          />
+          {unifiedFinanceLoading && (
+            <p className="text-sm text-slate-600 dark:text-slate-400">Chargement des soldes…</p>
+          )}
+          {!unifiedFinanceLoading && !unifiedFinance && (
+            <p className="text-sm text-amber-800 dark:text-amber-200">Synthèse indisponible pour le moment.</p>
+          )}
+          {!unifiedFinanceLoading && unifiedFinance && (
+            <div className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-4">
+              <div className="rounded-lg border border-emerald-200/90 bg-white/70 p-3 dark:border-emerald-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  Espèces en caisses agences
+                  <InfoHint text="Argent réel en caisse au sens ledger (toutes agences). Hors ventes seulement déclarées dans une session non clôturée." />
+                </div>
+                <div className="mt-1 font-semibold text-emerald-950 dark:text-emerald-100">
+                  {money(unifiedFinance.realMoney.cash)}
                 </div>
               </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Encaissements</div>
-                <div className="font-semibold">{money(unifiedFinance.activity.encaissements.total)}</div>
+              <div className="rounded-lg border border-emerald-200/90 bg-white/70 p-3 dark:border-emerald-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  Mobile money
+                  <InfoHint text="Soldes ledger des comptes mobile money entreprise." />
+                </div>
+                <div className="mt-1 font-semibold text-emerald-950 dark:text-emerald-100">
+                  {money(unifiedFinance.realMoney.mobileMoney)}
+                </div>
               </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">CA net</div>
-                <div className="font-semibold">{money(unifiedFinance.activity.caNet)}</div>
+              <div className="rounded-lg border border-emerald-200/90 bg-white/70 p-3 dark:border-emerald-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  Comptes bancaires
+                  <InfoHint text="Soldes ledger des comptes banque." />
+                </div>
+                <div className="mt-1 font-semibold text-emerald-950 dark:text-emerald-100">
+                  {money(unifiedFinance.realMoney.bank)}
+                </div>
               </div>
-              <div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Split (paymentMethod)</div>
-                <div className="font-semibold text-[12px]">
-                  Guichet {money(unifiedFinance.activity.split.paiementsGuichet)} · En ligne{" "}
+              <div className="rounded-lg border-2 border-emerald-400/70 bg-emerald-100/50 p-3 dark:border-emerald-700 dark:bg-emerald-900/40">
+                <div className="flex items-center gap-1 text-xs font-medium text-emerald-900 dark:text-emerald-100">
+                  Liquidité totale
+                  <InfoHint text="Somme espèces caisses + mobile money + banque selon le ledger." />
+                </div>
+                <div className="mt-1 text-lg font-bold text-emerald-950 dark:text-emerald-50">
+                  {money(unifiedFinance.realMoney.total)}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* 2 — Chiffre d'affaires / activité (pas la trésorerie) */}
+        <section className="rounded-2xl border-2 border-sky-300/80 bg-sky-50/40 p-5 shadow-sm dark:border-sky-800 dark:bg-sky-950/25">
+          <BlockTitle
+            icon={DollarSign}
+            title="Chiffre d'affaires (activité)"
+            tooltip="Chiffre d'affaires : total des ventes et mouvements d'activité sur la période. Ce n'est pas l'équivalent de l'argent disponible dans les caisses."
+            subtitle={`Période : ${periodLabelFr}. Ventes = réservations ; encaissements et répartition guichet / en ligne = transactions confirmées sur cette période.`}
+          />
+          {unifiedFinanceLoading && (
+            <p className="text-sm text-slate-600 dark:text-slate-400">Chargement de l'activité…</p>
+          )}
+          {!unifiedFinanceLoading && unifiedFinance && (
+            <div className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-4">
+              <div className="rounded-lg border border-sky-200/90 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  Ventes période (réservations)
+                  <InfoHint text="Montant des réservations payées comptées sur la période sélectionnée (activité)." />
+                </div>
+                <div className="mt-1 font-semibold text-sky-950 dark:text-sky-100">
+                  {unifiedFinance.activity.sales.reservationCount} ventes · {money(unifiedFinance.activity.sales.amountHint)}
+                </div>
+              </div>
+              <div className="rounded-lg border border-sky-200/90 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  Ventes guichet (encaissements espèces)
+                  <InfoHint text="Encaissements classés guichet sur la période (transactions confirmées). Toujours distinct du solde caisse instantané." />
+                </div>
+                <div className="mt-1 font-semibold text-sky-950 dark:text-sky-100">
+                  {money(unifiedFinance.activity.split.paiementsGuichet)}
+                </div>
+              </div>
+              <div className="rounded-lg border border-sky-200/90 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  Ventes en ligne (carte / mobile money)
+                  <InfoHint text="Encaissements classés en ligne sur la période (transactions confirmées)." />
+                </div>
+                <div className="mt-1 font-semibold text-sky-950 dark:text-sky-100">
                   {money(unifiedFinance.activity.split.paiementsEnLigne)}
                 </div>
               </div>
+              <div className="rounded-lg border border-sky-200/90 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  Encaissements totaux (période)
+                  <InfoHint text="Somme des paiements reçus confirmés sur la période, toutes méthodes." />
+                </div>
+                <div className="mt-1 font-semibold text-sky-950 dark:text-sky-100">
+                  {money(unifiedFinance.activity.encaissements.total)}
+                </div>
+              </div>
             </div>
-          </section>
-        </div>
-      )}
-      {unifiedFinanceLoading && (
-        <p className="mb-4 text-xs text-slate-500">Chargement de la synthèse ledger…</p>
-      )}
+          )}
+          {!unifiedFinanceLoading && unifiedFinance && (
+            <div className="mt-3 rounded-lg border border-sky-200/80 bg-white/50 p-3 text-sm dark:border-sky-900/50 dark:bg-slate-900/40">
+              <span className="text-slate-600 dark:text-slate-400">Résultat net sur transactions (période) : </span>
+              <span className="font-semibold text-sky-950 dark:text-sky-100">{money(unifiedFinance.activity.caNet)}</span>
+              <InfoHint text="Paiements reçus moins remboursements confirmés sur la période — indicateur d'activité, pas trésorerie instantanée." />
+            </div>
+          )}
 
-      <section className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">En attente validation (sessions)</div>
-          <div className="text-xl font-bold mt-1" style={{ color: "#2563eb" }}>
-            {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.pendingGuichet)}
-          </div>
-          <p className="text-xs text-gray-500 mt-1">Indicateur opérationnel — pas un solde ledger.</p>
-        </div>
-        <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Caisse espèces (ledger)</div>
-          <div className="text-xl font-bold mt-1" style={{ color: "#16a34a" }}>
-            {unifiedFinanceLoading || !unifiedFinance ? "—" : money(unifiedFinance.realMoney.cash)}
-          </div>
-          <p className="text-xs text-gray-500 mt-1">Comptes <code className="text-[10px]">type=cash</code> uniquement.</p>
-        </div>
-        <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
-          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Mobile money (ledger)</div>
-          <div className="text-xl font-bold mt-1" style={{ color: "#7c3aed" }}>
-            {unifiedFinanceLoading || !unifiedFinance ? "—" : money(unifiedFinance.realMoney.mobileMoney)}
-          </div>
-          <p className="text-xs text-gray-500 mt-1">Comptes <code className="text-[10px]">type=mobile_money</code> uniquement.</p>
-        </div>
-      </section>
-
-      <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3 mb-3">
-          <h2 className="text-lg font-semibold">Surveillance financière</h2>
-          <InfoHint text="Temps réel: ventes des sessions non validées du jour. Journalier: agrégat dailyStats (indicateur comptable historique, distinct du ledger)." />
-        </div>
-
-        {(criticalAlerts.length > 0 || warningAlerts.length > 0) && (
-          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm">
-            <div className="inline-flex items-center gap-2 font-semibold text-amber-700 dark:text-amber-300">
-              <Siren className="w-4 h-4" />
-              Alertes automatiques d&apos;écart
+          <div className="mt-8 rounded-xl border-2 border-indigo-200/90 bg-indigo-50/50 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">
+            <h3 className="mb-1 flex flex-wrap items-center gap-2 text-sm font-semibold text-indigo-950 dark:text-indigo-100">
+              Tendance depuis les stats journalières
+              <InfoHint text="Chiffres issus des agrégats journaliers chargés (30 derniers jours environ). Utile pour la tendance ; ce n'est ni le ledger ni les ventes live des sessions." />
+            </h3>
+            <p className="mb-4 text-xs text-indigo-900/80 dark:text-indigo-200/90">
+              Libellés volontairement distincts du bloc trésorerie : il s'agit d'activité historisée, pas d'argent disponible.
+            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <MetricCard
+                label="CA jour (dailyStats)"
+                value={money(revenueToday.total)}
+                icon={DollarSign}
+                valueColorVar="#4338ca"
+                variation={calculateChange(revenueToday.total, revenueYesterday)}
+                variationLabel="Veille (même source)"
+              />
+              <MetricCard
+                label="CA 7 jours (dailyStats)"
+                value={money(revenueWeek.total)}
+                icon={DollarSign}
+                valueColorVar="#7c3aed"
+                variation={calculateChange(revenueWeek.total, revenuePrevWeek)}
+                variationLabel="7 jours précédents"
+              />
+              <MetricCard
+                label="CA 30 jours (dailyStats)"
+                value={money(revenueMonth.total)}
+                icon={DollarSign}
+                valueColorVar="#0f766e"
+                variation={calculateChange(revenueMonth.total, revenuePrevMonth)}
+                variationLabel="30 jours précédents"
+              />
             </div>
-            <div className="mt-1 text-amber-700/90 dark:text-amber-200">
-              {criticalAlerts.length} critique(s) (≥ {money(CRITICAL_GAP_THRESHOLD)}) · {warningAlerts.length} avertissement(s) (≥ {money(WARNING_GAP_THRESHOLD)})
+            <div className="mt-3 text-sm text-indigo-900/90 dark:text-indigo-200">
+              Détail 30 j. : billets {money(revenueMonth.ticket)} · courrier {money(revenueMonth.courier)}
             </div>
-          </div>
-        )}
-
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-          <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
-            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">
-              <span>Temps réel</span>
-              <InfoHint text="Montant des ventes en cours provenant des sessions non validées." />
-            </div>
-            <div className="mt-1 text-xl font-bold text-primary">{money(liveSalesTotal)}</div>
-          </div>
-            <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
-            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">
-              <span>Stats journalières</span>
-              <InfoHint text="Revenu du jour issu des dailyStats (pas la source ledger — utile pour tendance)." />
-            </div>
-            <div className="mt-1 text-xl font-bold text-primary">{money(revenueToday.total)}</div>
-          </div>
-          <div className="rounded-xl border border-primary/30 bg-primary/10 dark:bg-primary/20 p-4">
-            <div className="text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">Écart à investiguer</div>
-            <div className={`mt-1 text-xl font-bold ${globalGap === 0 ? "text-primary" : globalGap > 0 ? "text-amber-600" : "text-emerald-600"}`}>
-              {globalGap > 0 ? "+" : ""}
-              {money(globalGap)}
-            </div>
-          </div>
-          <div className="rounded-xl border border-secondary/40 bg-secondary/20 dark:bg-slate-700/40 p-4">
-            <div className="text-xs uppercase tracking-wide text-gray-600 dark:text-slate-400">Sessions / billets live</div>
-            <div className="mt-1 text-xl font-bold text-primary">
-              {openSessionsTotal} / {liveTicketsTotal}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 overflow-auto max-h-[420px] rounded-xl border border-gray-200 dark:border-slate-700">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-white dark:bg-slate-800 border-b dark:border-slate-700">
-              <tr>
-                <th className="text-left py-2 px-3">Agence</th>
-                <th className="text-right py-2 px-3">Temps réel</th>
-                <th className="text-right py-2 px-3">Consolidé</th>
-                <th className="text-right py-2 px-3">Écart</th>
-                <th className="text-right py-2 px-3">Sessions</th>
-                <th className="text-right py-2 px-3">Billets</th>
-              </tr>
-            </thead>
-            <tbody>
-              {surveillanceRows.map((row) => {
-                const absGap = Math.abs(row.gap);
-                const rowClass =
-                  absGap >= CRITICAL_GAP_THRESHOLD
-                    ? "bg-red-50/60 dark:bg-red-900/20"
-                    : absGap >= WARNING_GAP_THRESHOLD
-                      ? "bg-amber-50/60 dark:bg-amber-900/20"
-                      : "";
-                return (
-                  <tr key={row.agencyId} className={`border-b dark:border-slate-700 ${rowClass}`}>
-                    <td className="py-2 px-3 font-medium text-primary">{row.name}</td>
-                    <td className="py-2 px-3 text-right">{money(row.liveAmount)}</td>
-                    <td className="py-2 px-3 text-right">{money(row.consolidated)}</td>
-                    <td className={`py-2 px-3 text-right font-semibold ${row.gap === 0 ? "text-primary" : row.gap > 0 ? "text-amber-600" : "text-emerald-600"}`}>
-                      {row.gap > 0 ? "+" : ""}
-                      {money(row.gap)}
-                    </td>
-                    <td className="py-2 px-3 text-right">{row.openSessions}</td>
-                    <td className="py-2 px-3 text-right">{row.liveTickets}</td>
+            <div className="mt-4 overflow-auto max-h-[380px] rounded-xl border border-indigo-200/70 dark:border-indigo-900/60">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 border-b border-indigo-200/80 bg-indigo-50/95 dark:border-indigo-800 dark:bg-indigo-950/90">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Agence</th>
+                    <th className="px-3 py-2 text-right">CA jour (stats)</th>
+                    <th className="px-3 py-2 text-right">CA 7 j. (stats)</th>
+                    <th className="px-3 py-2 text-right">CA 30 j. (stats)</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <p className="mt-3 text-xs text-gray-500 dark:text-slate-400">
-          Dernière mise à jour live: {liveUpdatedAt ? liveUpdatedAt.toLocaleTimeString("fr-FR") : "—"} · Devise: {currency}
-        </p>
-      </section>
-      {/* Consolidated Revenue */}
-      <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <DollarSign className="w-5 h-5" /> Revenus consolidés (billets + courrier)
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MetricCard
-            label="Aujourd'hui (total)"
-            value={money(revenueToday.total)}
-            icon={DollarSign}
-            valueColorVar="#4338ca"
-            variation={calculateChange(revenueToday.total, revenueYesterday)}
-            variationLabel="Comparé à hier"
-          />
-          <MetricCard
-            label="7 derniers jours (total)"
-            value={money(revenueWeek.total)}
-            icon={DollarSign}
-            valueColorVar="#7c3aed"
-            variation={calculateChange(revenueWeek.total, revenuePrevWeek)}
-            variationLabel="Comparé aux 7 jours précédents"
-          />
-          <MetricCard
-            label="30 derniers jours (total)"
-            value={money(revenueMonth.total)}
-            icon={DollarSign}
-            valueColorVar="#0f766e"
-            variation={calculateChange(revenueMonth.total, revenuePrevMonth)}
-            variationLabel="Comparé aux 30 jours précédents"
-          />
-        </div>
-        <div className="mt-3 text-sm text-gray-600 dark:text-gray-400">
-          <span className="font-medium">30j :</span> Billets {money(revenueMonth.ticket)} · Courrier {money(revenueMonth.courier)}
-        </div>
-        <div className="mt-4 overflow-auto max-h-[380px] rounded-xl border border-gray-200 dark:border-slate-700">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-white dark:bg-slate-800 border-b dark:border-slate-700">
-              <tr>
-                <th className="text-left py-2 px-3">Agence</th>
-                <th className="text-right py-2 px-3">Aujourd&apos;hui</th>
-                <th className="text-right py-2 px-3">7 jours</th>
-                <th className="text-right py-2 px-3">30 jours</th>
-              </tr>
-            </thead>
-            <tbody>
-              {byAgency.map((a) => (
-                <tr key={a.agencyId} className="border-b dark:border-slate-700">
-                  <td className="py-2 px-3 font-medium text-primary">{a.nom}</td>
-                  <td className="py-2 px-3 text-right">{money(a.today)}</td>
-                  <td className="py-2 px-3 text-right">{money(a.week)}</td>
-                  <td className="py-2 px-3 text-right font-semibold">{money(a.month)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                </thead>
+                <tbody>
+                  {byAgency.map((a) => (
+                    <tr key={a.agencyId} className="border-b border-indigo-100/80 dark:border-indigo-900/40">
+                      <td className="px-3 py-2 font-medium text-indigo-950 dark:text-indigo-100">{a.nom}</td>
+                      <td className="px-3 py-2 text-right">{money(a.today)}</td>
+                      <td className="px-3 py-2 text-right">{money(a.week)}</td>
+                      <td className="px-3 py-2 text-right font-semibold">{money(a.month)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
 
-      {/* Discrepancy Monitoring */}
-      <section className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-4 shadow-sm">
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5" /> Écarts comptables (computedDifference ≠ 0)
-        </h2>
-        <div className="flex flex-wrap gap-2 mb-3">
-          <select
-            className="border rounded px-3 py-1.5 text-sm"
-            value={agencyFilter}
-            onChange={(e) => setAgencyFilter(e.target.value)}
-          >
-            <option value="">Toutes les agences</option>
-            {agencies.map((a) => (
-              <option key={a.id} value={a.id}>{a.nom}</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={exportCsv}
-            className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded text-sm"
-          >
-            <Download className="w-4 h-4" /> Exporter CSV
-          </button>
-        </div>
-        {filteredDiscrepancies.length === 0 ? (
-          <p className="text-sm text-gray-500">Aucun écart enregistré.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-2">Agence</th>
-                  <th className="text-left py-2">Shift</th>
-                  <th className="text-right py-2">Écart</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredDiscrepancies.map((d, i) => (
-                  <tr key={i} className="border-b">
-                    <td className="py-2">{getAgencyDisplayName(d.agencyId ?? "")}</td>
-                    <td className="py-2">{d.shiftId ?? "—"}</td>
-                    <td className="py-2 text-right">
-                      {(d.validationAudit?.computedDifference ?? 0) >= 0 ? "+" : ""}
-                      {money(d.validationAudit?.computedDifference ?? 0)}
-                    </td>
+        {/* 3 — En attente / opérationnel */}
+        <section className="rounded-2xl border-2 border-amber-300/80 bg-amber-50/35 p-5 shadow-sm dark:border-amber-800 dark:bg-amber-950/25">
+          <BlockTitle
+            icon={Clock}
+            title="Montants en attente (non inclus dans la caisse)"
+            tooltip="En attente : argent lié au guichet ou aux flux suivis en direct, pas encore reflété comme la même chose que la trésorerie ledger du bloc 1."
+            subtitle="Sessions ouvertes, positions live et écarts de clôture : pilotage opérationnel."
+          />
+
+          <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded-lg border-2 border-blue-300/80 bg-white/80 p-4 dark:border-blue-800 dark:bg-slate-900/50">
+              <div className="flex items-center gap-1 text-sm font-medium text-slate-800 dark:text-slate-200">
+                En attente guichet
+                <InfoHint text="Montant signalé comme en attente côté guichet — non confondre avec la liquidité ledger du haut de page." />
+              </div>
+              <div className="mt-1 text-xl font-bold text-blue-700 dark:text-blue-300">
+                {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.pendingGuichet)}
+              </div>
+            </div>
+            {typeof moneyPositions.snapshot.paymentsConfirmedTotal === "number" && (
+              <div className="rounded-lg border-2 border-violet-300/80 bg-white/80 p-4 dark:border-violet-900 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-sm font-medium text-slate-800 dark:text-slate-200">
+                  Paiements suivis (période)
+                  <InfoHint text="Total des paiements confirmés dans le suivi des positions — indicateur de flux, pas le solde de trésorerie." />
+                </div>
+                <div className="mt-1 text-xl font-bold text-violet-700 dark:text-violet-300">
+                  {moneyPositions.loading ? "—" : money(moneyPositions.snapshot.paymentsConfirmedTotal)}
+                </div>
+              </div>
+            )}
+            <div className="rounded-lg border-2 border-amber-300/80 bg-white/80 p-4 dark:border-amber-900 dark:bg-slate-900/50">
+              <div className="flex items-center gap-1 text-sm font-medium text-slate-800 dark:text-slate-200">
+                Sessions ouvertes
+                <InfoHint text="Nombre de sessions de guichet non encore validées (comptage opérationnel)." />
+              </div>
+              <div className="mt-1 text-xl font-bold text-amber-800 dark:text-amber-200">{openSessionsTotal}</div>
+              <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                Billets vendus en live (jour de référence) : {liveTicketsTotal}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-amber-200/90 bg-white/60 p-4 dark:border-amber-900/50 dark:bg-slate-900/40">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">Surveillance guichet vs stats du jour</h3>
+              <InfoHint text="Compare les ventes des sessions encore ouvertes à l'agrégat dailyStats du jour de référence. Écart = suivi opérationnel, pas erreur de trésorerie ledger." />
+            </div>
+
+            {(criticalAlerts.length > 0 || warningAlerts.length > 0) && (
+              <div className="mb-4 rounded-lg border border-amber-400 bg-amber-100/50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950/40">
+                <div className="inline-flex items-center gap-2 font-semibold text-amber-900 dark:text-amber-200">
+                  <Siren className="h-4 w-4" />
+                  Alertes d'écart
+                </div>
+                <div className="mt-1 text-amber-900/90 dark:text-amber-100">
+                  {criticalAlerts.length} critique(s) (≥ {money(CRITICAL_GAP_THRESHOLD)}) · {warningAlerts.length}{" "}
+                  avertissement(s) (≥ {money(WARNING_GAP_THRESHOLD)})
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/60">
+                <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                  <span>Ventes sessions ouvertes</span>
+                  <InfoHint text="Montant des ventes comptées dans les sessions non validées pour le jour de référence." />
+                </div>
+                <div className="mt-1 text-xl font-bold text-primary">{money(liveSalesTotal)}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/60">
+                <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-600 dark:text-slate-400">
+                  <span>CA jour (dailyStats)</span>
+                  <InfoHint text="Agrégat journalier pour le jour de référence — autre source que les sessions ouvertes." />
+                </div>
+                <div className="mt-1 text-xl font-bold text-primary">{money(revenueToday.total)}</div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/60">
+                <div className="text-xs uppercase tracking-wide text-slate-600 dark:text-slate-400">Écart (live − stats jour)</div>
+                <div
+                  className={`mt-1 text-xl font-bold ${globalGap === 0 ? "text-primary" : globalGap > 0 ? "text-amber-600" : "text-emerald-600"}`}
+                >
+                  {globalGap > 0 ? "+" : ""}
+                  {money(globalGap)}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/60">
+                <div className="text-xs uppercase tracking-wide text-slate-600 dark:text-slate-400">Sessions / billets (live)</div>
+                <div className="mt-1 text-xl font-bold text-primary">
+                  {openSessionsTotal} / {liveTicketsTotal}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 overflow-auto max-h-[420px] rounded-xl border border-slate-200 dark:border-slate-600">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 border-b border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-800">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Agence</th>
+                    <th className="px-3 py-2 text-right">Ventes sessions ouvertes</th>
+                    <th className="px-3 py-2 text-right">CA jour (stats)</th>
+                    <th className="px-3 py-2 text-right">Écart</th>
+                    <th className="px-3 py-2 text-right">Sessions</th>
+                    <th className="px-3 py-2 text-right">Billets</th>
                   </tr>
+                </thead>
+                <tbody>
+                  {surveillanceRows.map((row) => {
+                    const absGap = Math.abs(row.gap);
+                    const rowClass =
+                      absGap >= CRITICAL_GAP_THRESHOLD
+                        ? "bg-red-50/70 dark:bg-red-900/25"
+                        : absGap >= WARNING_GAP_THRESHOLD
+                          ? "bg-amber-50/70 dark:bg-amber-900/25"
+                          : "";
+                    return (
+                      <tr key={row.agencyId} className={`border-b border-slate-100 dark:border-slate-700 ${rowClass}`}>
+                        <td className="px-3 py-2 font-medium text-primary">{row.name}</td>
+                        <td className="px-3 py-2 text-right">{money(row.liveAmount)}</td>
+                        <td className="px-3 py-2 text-right">{money(row.consolidated)}</td>
+                        <td
+                          className={`px-3 py-2 text-right font-semibold ${row.gap === 0 ? "text-primary" : row.gap > 0 ? "text-amber-600" : "text-emerald-600"}`}
+                        >
+                          {row.gap > 0 ? "+" : ""}
+                          {money(row.gap)}
+                        </td>
+                        <td className="px-3 py-2 text-right">{row.openSessions}</td>
+                        <td className="px-3 py-2 text-right">{row.liveTickets}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-3 text-xs text-slate-600 dark:text-slate-400">
+              Dernière mise à jour live : {liveUpdatedAt ? liveUpdatedAt.toLocaleTimeString("fr-FR") : "—"} · Devise affichée : {currency}
+            </p>
+          </div>
+
+          <div className="mt-8 border-t border-amber-200/90 pt-6 dark:border-amber-900/50">
+            <h3 className="mb-3 flex flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-700 dark:text-amber-400" />
+              Écarts constatés à la clôture de session
+              <InfoHint text="Shifts validés avec écart entre montant constaté et attendu. Contrôle opérationnel, distinct du solde ledger." />
+            </h3>
+            <div className="mb-3 flex flex-wrap gap-2">
+              <select
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900"
+                value={agencyFilter}
+                onChange={(e) => setAgencyFilter(e.target.value)}
+              >
+                <option value="">Toutes les agences</option>
+                {agencies.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.nom}
+                  </option>
                 ))}
-              </tbody>
-            </table>
+              </select>
+              <button
+                type="button"
+                onClick={exportCsv}
+                className="inline-flex items-center gap-1 rounded bg-slate-100 px-3 py-1.5 text-sm hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700"
+              >
+                <Download className="h-4 w-4" /> Exporter CSV
+              </button>
+            </div>
+            {filteredDiscrepancies.length === 0 ? (
+              <p className="text-sm text-slate-600 dark:text-slate-400">Aucun écart enregistré sur la fenêtre chargée.</p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-600">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-600">
+                      <th className="py-2 text-left">Agence</th>
+                      <th className="py-2 text-left">Session</th>
+                      <th className="py-2 text-right">Écart constaté</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredDiscrepancies.map((d, i) => (
+                      <tr key={i} className="border-b border-slate-100 dark:border-slate-700">
+                        <td className="py-2">{getAgencyDisplayName(d.agencyId ?? "")}</td>
+                        <td className="py-2">{d.shiftId ?? "—"}</td>
+                        <td className="py-2 text-right font-medium">
+                          {(d.validationAudit?.computedDifference ?? 0) >= 0 ? "+" : ""}
+                          {money(d.validationAudit?.computedDifference ?? 0)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </section>
+        </section>
+
+        {/* 4 — Dépenses */}
+        <section className="rounded-2xl border-2 border-rose-300/80 bg-rose-50/35 p-5 shadow-sm dark:border-rose-900 dark:bg-rose-950/25">
+          <BlockTitle
+            icon={CreditCard}
+            title="Dépenses"
+            tooltip="Dépenses : demandes et règlements suivis en comptabilité. Une dépense saisie ou en attente n'est pas la même chose que l'argent disponible au ledger."
+            subtitle="Lecture directe des fiches dépense (500 plus récentes). Les montants de période peuvent être incomplets si l'historique est plus long."
+          />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-rose-200/90 bg-white/80 p-4 dark:border-rose-900/60 dark:bg-slate-900/50">
+              <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                Dépenses saisies sur la période
+                <InfoHint text="Somme des montants des dépenses créées entre les dates de la période globale (échantillon 500 dernières fiches)." />
+              </div>
+              <div className="mt-1 text-xl font-bold text-rose-900 dark:text-rose-100">
+                {expenseDash.loading ? "—" : money(expenseDash.submittedInPeriodAmount)}
+              </div>
+            </div>
+            <div className="rounded-lg border border-rose-200/90 bg-white/80 p-4 dark:border-rose-900/60 dark:bg-slate-900/50">
+              <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                En attente de paiement
+                <InfoHint text="Dépenses dont le statut est encore en circuit de validation ou de paiement (toutes dates, sur l'échantillon chargé)." />
+              </div>
+              <div className="mt-1 text-xl font-bold text-rose-900 dark:text-rose-100">
+                {expenseDash.loading ? "—" : money(expenseDash.pendingAmount)}
+              </div>
+              <p className="mt-1 text-xs text-slate-500">{expenseDash.pendingCount} fiche(s)</p>
+            </div>
+            <div className="rounded-lg border border-rose-200/90 bg-white/80 p-4 dark:border-rose-900/60 dark:bg-slate-900/50">
+              <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                Payées sur la période
+                <InfoHint text="Dépenses marquées payées dont la date de paiement tombe dans la période sélectionnée (échantillon chargé)." />
+              </div>
+              <div className="mt-1 text-xl font-bold text-rose-900 dark:text-rose-100">
+                {expenseDash.loading ? "—" : money(expenseDash.paidInPeriodAmount)}
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
 
       <p className="text-xs text-gray-500">
         Accès : CEO (admin_compagnie) et comptable compagnie (company_accountant). Aucune validation ni modification des sessions depuis cette page.

@@ -45,6 +45,13 @@ export type TripInstanceStatutMetier =
   | "retour_origine"
   | "termine";
 
+/** Snapshot optionnel des arrêts au moment de la création de l’instance (migration stopId). */
+export type TripInstanceStopSnapshotEntry = {
+  stopId: string;
+  order: number;
+  agencyId?: string | null;
+};
+
 export type { TripInstanceSegment, JourneyForSegments };
 
 export interface TripInstanceDoc {
@@ -115,6 +122,8 @@ export interface TripInstanceDoc {
   price?: number | null;
   /** Villes d’arrêt dans l’ordre de parcours (pour segments). */
   stops?: string[];
+  /** Arrêts avec stopId Firestore (complément de `stops` / route, sans casser la logique villes). */
+  stopsSnapshot?: TripInstanceStopSnapshotEntry[];
   /** Segments entre arrêts consécutifs ; `remaining` = places vendables sur la portion. */
   segments?: TripInstanceSegment[];
 }

@@ -6,6 +6,12 @@
 import { collectionGroup, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { ensureProgressArrival } from "@/modules/compagnie/tripInstances/tripProgressService";
+import { getTripInstance } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import {
+  mergeQueryDocsUnique,
+  resolveStop,
+  resolveStopByStopId,
+} from "@/modules/compagnie/routes/stopResolution";
 
 const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "validé"];
 
@@ -20,6 +26,8 @@ export type PassengerForBoarding = {
   journeyStatus?: string;
   originStopOrder?: number | null;
   destinationStopOrder?: number | null;
+  originStopId?: string | null;
+  destinationStopId?: string | null;
 };
 
 /**
@@ -27,21 +35,43 @@ export type PassengerForBoarding = {
  * tripInstanceId == tripInstanceId, originStopOrder == stopOrder, boardingStatus == "pending"
  * (ou non renseigné pour compatibilité).
  * Index Firestore requis : collection group "reservations", companyId (ASC), tripInstanceId (ASC), originStopOrder (ASC).
+ * Fusionne aussi originStopId == … quand connu (double lecture migration stopId).
  */
 export async function getPassengersForBoarding(
   companyId: string,
   tripInstanceId: string,
-  stopOrder: number
+  stopOrder: number,
+  options?: { originStopId?: string | null }
 ): Promise<PassengerForBoarding[]> {
-  const q = query(
+  let originStopId = options?.originStopId?.trim() || null;
+  if (!originStopId) {
+    const ti = await getTripInstance(companyId, tripInstanceId);
+    const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+    if (routeId) {
+      const rs = await resolveStop(companyId, routeId, stopOrder);
+      originStopId = rs?.stopId ?? null;
+    }
+  }
+  const qOrder = query(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
     where("originStopOrder", "==", stopOrder)
   );
-  const snap = await getDocs(q);
+  const snapOrder = await getDocs(qOrder);
+  let docs = snapOrder.docs;
+  if (originStopId) {
+    const qId = query(
+      collectionGroup(db, "reservations"),
+      where("companyId", "==", companyId),
+      where("tripInstanceId", "==", tripInstanceId),
+      where("originStopId", "==", originStopId)
+    );
+    const snapId = await getDocs(qId);
+    docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);
+  }
   const list: PassengerForBoarding[] = [];
-  for (const d of snap.docs) {
+  for (const d of docs) {
     const data = d.data() as Record<string, unknown>;
     const statut = (data.statut ?? "").toString().toLowerCase();
     if (!CONFIRMED_STATUTS.includes(statut)) continue;
@@ -61,6 +91,10 @@ export async function getPassengersForBoarding(
       arrivee: (data.arrivee as string) ?? "",
       seatsGo: Number(data.seatsGo ?? 1),
       boardingStatus: boarding,
+      originStopOrder: data.originStopOrder != null ? Number(data.originStopOrder) : null,
+      destinationStopOrder: data.destinationStopOrder != null ? Number(data.destinationStopOrder) : null,
+      originStopId: (data.originStopId as string) ?? null,
+      destinationStopId: (data.destinationStopId as string) ?? null,
     });
   }
   return list;
@@ -78,9 +112,21 @@ export async function markBoarded(
   const ref = doc(db, "companies", companyId, "agences", agencyId, "reservations", reservationId);
   const snap = await getDoc(ref);
   if (snap.exists()) {
-    const d = snap.data() as { tripInstanceId?: string; originStopOrder?: number };
+    const d = snap.data() as {
+      tripInstanceId?: string;
+      originStopOrder?: number;
+      originStopId?: string;
+    };
     const tiId = d.tripInstanceId;
-    const stopOrder = d.originStopOrder != null ? Number(d.originStopOrder) : null;
+    let stopOrder = d.originStopOrder != null ? Number(d.originStopOrder) : null;
+    if ((stopOrder == null || Number.isNaN(stopOrder)) && d.originStopId && tiId) {
+      const ti = await getTripInstance(companyId, tiId);
+      const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+      if (routeId) {
+        const rs = await resolveStopByStopId(companyId, routeId, String(d.originStopId));
+        stopOrder = rs?.order ?? null;
+      }
+    }
     if (tiId && stopOrder != null) await ensureProgressArrival(companyId, tiId, stopOrder);
   }
   await updateDoc(ref, { boardingStatus: "boarded", journeyStatus: "in_transit" });

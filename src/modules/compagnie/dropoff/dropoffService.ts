@@ -7,6 +7,12 @@ import { collectionGroup, doc, getDoc, getDocs, query, updateDoc, where } from "
 import { db } from "@/firebaseConfig";
 import { ensureProgressArrival } from "@/modules/compagnie/tripInstances/tripProgressService";
 import { maybeFinishTripExecutionAfterFinalDropoff } from "@/modules/compagnie/tripExecutions/tripExecutionService";
+import { getTripInstance } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import {
+  mergeQueryDocsUnique,
+  resolveStop,
+  resolveStopByStopId,
+} from "@/modules/compagnie/routes/stopResolution";
 
 const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "validé"];
 
@@ -22,27 +28,50 @@ export type PassengerToDrop = {
   connectionId?: string | null;
   tripInstanceId?: string;
   destinationStopOrder?: number | null;
+  destinationStopId?: string | null;
 };
 
 /**
  * Retourne les réservations dont la destination est cette escale et qui sont encore en attente de descente :
  * destinationStopOrder == stopOrder, dropoffStatus == "pending" (ou non renseigné).
  * Index Firestore : collection group "reservations", companyId (ASC), tripInstanceId (ASC), destinationStopOrder (ASC).
+ * Fusionne destinationStopId quand connu.
  */
 export async function getPassengersToDrop(
   companyId: string,
   tripInstanceId: string,
-  stopOrder: number
+  stopOrder: number,
+  options?: { destinationStopId?: string | null }
 ): Promise<PassengerToDrop[]> {
-  const q = query(
+  let destinationStopId = options?.destinationStopId?.trim() || null;
+  if (!destinationStopId) {
+    const ti = await getTripInstance(companyId, tripInstanceId);
+    const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+    if (routeId) {
+      const rs = await resolveStop(companyId, routeId, stopOrder);
+      destinationStopId = rs?.stopId ?? null;
+    }
+  }
+  const qOrder = query(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
     where("destinationStopOrder", "==", stopOrder)
   );
-  const snap = await getDocs(q);
+  const snapOrder = await getDocs(qOrder);
+  let docs = snapOrder.docs;
+  if (destinationStopId) {
+    const qId = query(
+      collectionGroup(db, "reservations"),
+      where("companyId", "==", companyId),
+      where("tripInstanceId", "==", tripInstanceId),
+      where("destinationStopId", "==", destinationStopId)
+    );
+    const snapId = await getDocs(qId);
+    docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);
+  }
   const list: PassengerToDrop[] = [];
-  for (const d of snap.docs) {
+  for (const d of docs) {
     const data = d.data() as Record<string, unknown>;
     const statut = (data.statut ?? "").toString().toLowerCase();
     if (!CONFIRMED_STATUTS.includes(statut)) continue;
@@ -65,6 +94,7 @@ export async function getPassengersToDrop(
       connectionId: (data.connectionId as string) ?? null,
       tripInstanceId,
       destinationStopOrder: stopOrder,
+      destinationStopId: (data.destinationStopId as string) ?? null,
     });
   }
   return list;
@@ -84,9 +114,25 @@ export async function markDropped(
   let tiId: string | undefined;
   let destinationStopOrder: number | null = null;
   if (snap.exists()) {
-    const d = snap.data() as { tripInstanceId?: string; destinationStopOrder?: number };
+    const d = snap.data() as {
+      tripInstanceId?: string;
+      destinationStopOrder?: number;
+      destinationStopId?: string;
+    };
     tiId = d.tripInstanceId;
     destinationStopOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
+    if (
+      (destinationStopOrder == null || Number.isNaN(destinationStopOrder)) &&
+      d.destinationStopId &&
+      tiId
+    ) {
+      const ti = await getTripInstance(companyId, tiId);
+      const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+      if (routeId) {
+        const rs = await resolveStopByStopId(companyId, routeId, String(d.destinationStopId));
+        destinationStopOrder = rs?.order ?? null;
+      }
+    }
     if (tiId && destinationStopOrder != null) await ensureProgressArrival(companyId, tiId, destinationStopOrder);
   }
   await updateDoc(ref, { dropoffStatus: "dropped", journeyStatus: "dropped" });

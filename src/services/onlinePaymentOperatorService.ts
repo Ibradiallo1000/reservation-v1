@@ -7,7 +7,8 @@ import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { createCashTransaction } from "@/modules/compagnie/cash/cashService";
 import { LOCATION_TYPE } from "@/modules/compagnie/cash/cashTypes";
-import { decrementReservedSeats } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { decrementReservedSeats, getTripInstance } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { resolveJourneyStopIdsFromCities } from "@/modules/compagnie/routes/stopResolution";
 import {
   transitionToConfirmedOrPaidWithDailyStats,
   updateReservationStatut,
@@ -65,6 +66,33 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
       { userId: uid, userRole: role },
       { validatedBy: uid }
     );
+
+    const tripInstanceIdConfirm = String(reservationData?.tripInstanceId ?? "").trim();
+    const departConfirm = String(reservationData?.depart ?? "").trim();
+    const arriveeConfirm = String(reservationData?.arrivee ?? "").trim();
+    const missingOriginId =
+      reservationData?.originStopId == null || String(reservationData.originStopId).trim() === "";
+    const missingDestId =
+      reservationData?.destinationStopId == null || String(reservationData.destinationStopId).trim() === "";
+    if (tripInstanceIdConfirm && departConfirm && arriveeConfirm && (missingOriginId || missingDestId)) {
+      const ti = await getTripInstance(companyId, tripInstanceIdConfirm);
+      const routeIdConfirm = String((ti as { routeId?: unknown })?.routeId ?? "").trim();
+      if (routeIdConfirm) {
+        const journey = await resolveJourneyStopIdsFromCities(
+          companyId,
+          routeIdConfirm,
+          departConfirm,
+          arriveeConfirm
+        );
+        if (journey) {
+          await updateDoc(reservationRef, {
+            ...(missingOriginId && { originStopId: journey.originStopId }),
+            ...(missingDestId && { destinationStopId: journey.destinationStopId }),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+    }
 
     const montant = Number(reservationData?.montant ?? payment.amount ?? 0);
     const paymentMethod = paymentMethodFromProvider(payment.provider) as string;

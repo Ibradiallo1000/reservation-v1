@@ -19,6 +19,12 @@ import { markDropped } from "@/modules/compagnie/dropoff/dropoffService";
 import type { PassengerToDrop } from "@/modules/compagnie/dropoff/dropoffService";
 import { ClipboardList, Loader2, UserMinus, AlertTriangle, Link2 } from "lucide-react";
 import { toLocalDateStr } from "@/shared/date/dayFilterUtils";
+import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import {
+  buildStopIdToOrderMap,
+  reservationDropoffAtStop,
+  reservationOvertravelPastStop,
+} from "@/modules/compagnie/routes/stopResolution";
 
 export default function BusPassengerManifestPage() {
   const { user } = useAuth();
@@ -93,7 +99,7 @@ export default function BusPassengerManifestPage() {
   }, [loadAgencyAndTrips]);
 
   const loadManifest = useCallback(async () => {
-    if (!user?.companyId || !selectedTripId) {
+    if (!user?.companyId || !selectedTripId || !agencyRouteId || agencyStopOrder == null) {
       setOnBoard([]);
       setToDrop([]);
       setOvertravel([]);
@@ -108,6 +114,8 @@ export default function BusPassengerManifestPage() {
         setOvertravel([]);
         return;
       }
+      const stops = await getRouteStops(user.companyId, agencyRouteId);
+      const idToOrder = buildStopIdToOrderMap(stops);
       const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
       const snap = await getDocs(
         query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
@@ -116,16 +124,14 @@ export default function BusPassengerManifestPage() {
       const board = rows.filter((r) => (r.boardingStatus ?? "pending") === "boarded");
       const drop = rows.filter(
         (r) =>
-          agencyStopOrder != null &&
           (r.boardingStatus ?? "pending") === "boarded" &&
           (r.dropoffStatus ?? "pending") !== "dropped" &&
-          Number(r.destinationStopOrder ?? -1) === agencyStopOrder
+          reservationDropoffAtStop(r as unknown as Record<string, unknown>, agencyStopOrder, idToOrder)
       );
       const over = rows.filter(
         (r) =>
-          agencyStopOrder != null &&
           (r.boardingStatus ?? "pending") === "boarded" &&
-          Number(r.destinationStopOrder ?? 9999) < agencyStopOrder
+          reservationOvertravelPastStop(r as unknown as Record<string, unknown>, agencyStopOrder, idToOrder)
       );
       setOnBoard(board as ManifestPassenger[]);
       setToDrop(drop as PassengerToDrop[]);
@@ -138,7 +144,7 @@ export default function BusPassengerManifestPage() {
     } finally {
       setLoadingManifest(false);
     }
-  }, [user?.companyId, selectedTripId, agencyStopOrder, tripInstances]);
+  }, [user?.companyId, selectedTripId, agencyStopOrder, agencyRouteId, tripInstances]);
 
   useEffect(() => {
     loadManifest();

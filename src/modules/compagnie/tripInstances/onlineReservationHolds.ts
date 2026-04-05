@@ -38,6 +38,10 @@ function holdExpiresAtValid(expiresAt: unknown, nowMs: number): boolean {
 /**
  * Somme des seatsGo des réservations en ligne en attente de paiement (hold uniquement),
  * par clé tripInstance|départ|arrivée. Ignoré si expiré ou sans seatHoldOnly.
+ *
+ * Sur la billetterie publique (non connecté), le collectionGroup `reservations` est refusé
+ * par les règles Firestore : on renvoie une map vide — l’affichage des places reste correct
+ * côté tripInstance ; seuls les holds ne sont pas soustraits (léger écart jusqu’à expiration).
  */
 export async function fetchPendingOnlineHoldSeatsMap(companyId: string): Promise<Map<string, number>> {
   const map = new Map<string, number>();
@@ -48,7 +52,24 @@ export async function fetchPendingOnlineHoldSeatsMap(companyId: string): Promise
     where("status", "==", "en_attente"),
     limit(500)
   );
-  const snap = await getDocs(q);
+  let snap;
+  try {
+    snap = await getDocs(q);
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string };
+    const denied =
+      err?.code === "permission-denied" ||
+      String(err?.message ?? "").toLowerCase().includes("permission");
+    if (denied) {
+      if (import.meta.env?.DEV) {
+        console.warn(
+          "[onlineReservationHolds] Lecture collectionGroup reservations refusée (souvent visiteur anonyme). Holds non appliqués à l’affichage."
+        );
+      }
+      return map;
+    }
+    throw e;
+  }
   snap.forEach((d) => {
     const data = d.data() as Record<string, unknown>;
     if (String(data.canal ?? "").toLowerCase() !== "en_ligne") return;

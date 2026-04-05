@@ -456,7 +456,8 @@ export async function applyRemittancePendingToAgencyCashInTransaction(
   console.info(`Balance updated from remittance: +${amt} (${context})`);
 }
 
-export async function createFinancialTransaction(params: {
+/** Paramètres alignés sur `createFinancialTransaction` (écriture ledger + journal dans une transaction Firestore existante). */
+export type ApplyFinancialTransactionParams = {
   companyId: string;
   type: FinancialTransactionType;
   source?: string | null;
@@ -472,15 +473,20 @@ export async function createFinancialTransaction(params: {
   paymentChannel?: string | null;
   paymentMethod?: FinancialPaymentMethod | null;
   paymentProvider?: string | null;
-  /** @deprecated Interdit — la paire ledger est résolue uniquement via resolveLedgerPair. */
   debitAccountId?: string | null;
-  /** @deprecated Interdit — la paire ledger est résolue uniquement via resolveLedgerPair. */
   creditAccountId?: string | null;
   transferRoute?: LedgerTransferRoute | null;
   expenseDebitLedgerDocId?: string | null;
   transferDebitLedgerDocId?: string | null;
   transferCreditLedgerDocId?: string | null;
-}): Promise<string> {
+};
+
+function assertCreateFinancialTransactionParams(params: ApplyFinancialTransactionParams): {
+  source: FinancialTransactionSource;
+  txTypeNorm: FinancialTransactionType;
+  ledgerAmount: number;
+  uniqueReferenceKey: string;
+} {
   if (params.debitAccountId != null && String(params.debitAccountId).trim() !== "") {
     throw new Error(
       "[ledger] debitAccountId explicite interdit — utiliser transferRoute / expenseDebitLedgerDocId / règles métier."
@@ -500,134 +506,151 @@ export async function createFinancialTransaction(params: {
   }
   const source = toSource(params.source);
   const uniqueReferenceKey = `${txTypeNorm}_${params.referenceId}_${ledgerAmount}`;
-  let createdId = "";
+  return { source, txTypeNorm, ledgerAmount, uniqueReferenceKey };
+}
 
-  await runTransaction(db, async (tx) => {
-    const currency = params.currency ?? "XOF";
+/**
+ * Applique une écriture ledger + ligne `financialTransactions` dans une transaction Firestore déjà ouverte
+ * (ex. paiement dépense atomique avec mise à jour métier).
+ */
+export async function applyFinancialTransactionInExistingFirestoreTransaction(
+  tx: Transaction,
+  params: ApplyFinancialTransactionParams
+): Promise<{ transactionId: string; skippedDuplicate: boolean }> {
+  const { source, txTypeNorm, ledgerAmount, uniqueReferenceKey } = assertCreateFinancialTransactionParams(params);
+  const companyId = params.companyId;
+  const currency = params.currency ?? "XOF";
 
-    const idemSnap = await tx.get(idempotencyRef(params.companyId, uniqueReferenceKey));
-    if (idemSnap.exists()) {
-      const existingId = String((idemSnap.data() as { transactionId?: string }).transactionId ?? "");
-      createdId = existingId;
-      return;
-    }
+  const idemSnap = await tx.get(idempotencyRef(companyId, uniqueReferenceKey));
+  if (idemSnap.exists()) {
+    const existingId = String((idemSnap.data() as { transactionId?: string }).transactionId ?? "");
+    return { transactionId: existingId, skippedDuplicate: true };
+  }
 
-    let debitId: string;
-    let creditId: string;
-    try {
-      const pair = resolveLedgerPair({
-        companyId: params.companyId,
-        type: params.type,
-        agencyId: params.agencyId,
-        paymentChannel: params.paymentChannel ?? params.source,
-        paymentMethod: params.paymentMethod ?? null,
-        source: params.source,
-        transferRoute: params.transferRoute ?? null,
-        expenseDebitLedgerDocId: params.expenseDebitLedgerDocId ?? null,
-        transferDebitLedgerDocId: params.transferDebitLedgerDocId ?? null,
-        transferCreditLedgerDocId: params.transferCreditLedgerDocId ?? null,
-      });
-      debitId = pair.debitId;
-      creditId = pair.creditId;
-    } catch (e) {
-      console.error("[ledger] CRITICAL resolveLedgerPair failed:", e, params);
-      throw e;
-    }
-
-    assertAllowedCreditToAgencyPhysicalCash(creditId, txTypeNorm);
-
-    const ag = params.agencyId ?? null;
-    const s0 = specForLedgerDocId(debitId, ag);
-    const s1 = specForLedgerDocId(creditId, ag);
-
-    const debitRef = ledgerAccountDocRef(params.companyId, debitId);
-    const creditRef = ledgerAccountDocRef(params.companyId, creditId);
-    const [debitSnap, creditSnap] = await Promise.all([tx.get(debitRef), tx.get(creditRef)]);
-
-    assertExistingLedgerAccountMatchesSpec(debitSnap, debitId, s0.type);
-    assertExistingLedgerAccountMatchesSpec(creditSnap, creditId, s1.type);
-
-    const debitBal = Number((debitSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
-    const creditBal = Number((creditSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
-    const debitAfter = debitBal - ledgerAmount;
-    const creditAfter = creditBal + ledgerAmount;
-
-    if (!allowsNegativeBalance(debitId) && debitAfter < -0.0001) {
-      throw new Error(`[ledger] Solde insuffisant sur le compte débit ${debitId} (${debitBal} < ${ledgerAmount})`);
-    }
-
-    const existingFlags = [debitSnap.exists(), creditSnap.exists()];
-    ensureLedgerAccountDocsInTransaction(
-      tx,
-      params.companyId,
-      currency,
-      [
-        {
-          docId: debitId,
-          type: s0.type,
-          agencyId: s0.agencyId,
-          label: s0.label,
-          includeInLiquidity: s0.includeInLiquidity,
-        },
-        {
-          docId: creditId,
-          type: s1.type,
-          agencyId: s1.agencyId,
-          label: s1.label,
-          includeInLiquidity: s1.includeInLiquidity,
-        },
-      ],
-      existingFlags
-    );
-
-    tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
-    tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
-
-    const newRef = doc(financialTransactionsRef(params.companyId));
-    const kpiChannel = isGuichetChannel(params.paymentChannel, params.source) ? "guichet" : "online";
-    const paymentMethod = resolveFinancialPaymentMethod({
+  let debitId: string;
+  let creditId: string;
+  try {
+    const pair = resolveLedgerPair({
+      companyId,
       type: params.type,
+      agencyId: params.agencyId,
+      paymentChannel: params.paymentChannel ?? params.source,
       paymentMethod: params.paymentMethod ?? null,
-      paymentProvider: params.paymentProvider ?? null,
-      paymentChannel: params.paymentChannel ?? kpiChannel,
       source: params.source,
-      metadata: params.metadata ?? null,
+      transferRoute: params.transferRoute ?? null,
+      expenseDebitLedgerDocId: params.expenseDebitLedgerDocId ?? null,
+      transferDebitLedgerDocId: params.transferDebitLedgerDocId ?? null,
+      transferCreditLedgerDocId: params.transferCreditLedgerDocId ?? null,
     });
-    const paymentProviderStored =
-      params.paymentProvider ?? (typeof params.metadata?.provider === "string" ? params.metadata.provider : null);
-    const storedAmount = txTypeNorm === "refund" ? -ledgerAmount : ledgerAmount;
-    const payload: FinancialTransactionDoc = {
-      type: txTypeNorm,
-      source,
-      amount: storedAmount,
-      currency: params.currency ?? "XOF",
-      companyId: params.companyId,
-      agencyId: params.agencyId ?? null,
-      reservationId: params.reservationId ?? null,
-      debitAccountId: debitId,
-      creditAccountId: creditId,
-      debitAccountType: ledgerMirrorTypeFromKind(s0.type),
-      creditAccountType: ledgerMirrorTypeFromKind(s1.type),
-      balanceAfter: creditAfter,
-      status: params.status ?? defaultStatusForType(txTypeNorm),
-      performedAt: params.performedAt ?? Timestamp.now(),
-      createdAt: Timestamp.now(),
-      metadata: { ...(params.metadata ?? {}), debitAfter, creditAfter },
-      referenceType: params.referenceType,
-      referenceId: params.referenceId,
-      uniqueReferenceKey,
-      paymentChannel: params.paymentChannel ?? kpiChannel,
-      paymentMethod,
-      paymentProvider: paymentProviderStored,
-    };
-    tx.set(newRef, payload);
-    tx.set(idempotencyRef(params.companyId, uniqueReferenceKey), {
-      transactionId: newRef.id,
-      createdAt: serverTimestamp(),
-    });
-    createdId = newRef.id;
-  });
+    debitId = pair.debitId;
+    creditId = pair.creditId;
+  } catch (e) {
+    console.error("[ledger] CRITICAL resolveLedgerPair failed:", e, params);
+    throw e;
+  }
 
+  assertAllowedCreditToAgencyPhysicalCash(creditId, txTypeNorm);
+
+  const ag = params.agencyId ?? null;
+  const s0 = specForLedgerDocId(debitId, ag);
+  const s1 = specForLedgerDocId(creditId, ag);
+
+  const debitRef = ledgerAccountDocRef(companyId, debitId);
+  const creditRef = ledgerAccountDocRef(companyId, creditId);
+  const [debitSnap, creditSnap] = await Promise.all([tx.get(debitRef), tx.get(creditRef)]);
+
+  assertExistingLedgerAccountMatchesSpec(debitSnap, debitId, s0.type);
+  assertExistingLedgerAccountMatchesSpec(creditSnap, creditId, s1.type);
+
+  const debitBal = Number((debitSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
+  const creditBal = Number((creditSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
+  const debitAfter = debitBal - ledgerAmount;
+  const creditAfter = creditBal + ledgerAmount;
+
+  if (!allowsNegativeBalance(debitId) && debitAfter < -0.0001) {
+    throw new Error(`[ledger] Solde insuffisant sur le compte débit ${debitId} (${debitBal} < ${ledgerAmount})`);
+  }
+
+  const existingFlags = [debitSnap.exists(), creditSnap.exists()];
+  ensureLedgerAccountDocsInTransaction(
+    tx,
+    companyId,
+    currency,
+    [
+      {
+        docId: debitId,
+        type: s0.type,
+        agencyId: s0.agencyId,
+        label: s0.label,
+        includeInLiquidity: s0.includeInLiquidity,
+      },
+      {
+        docId: creditId,
+        type: s1.type,
+        agencyId: s1.agencyId,
+        label: s1.label,
+        includeInLiquidity: s1.includeInLiquidity,
+      },
+    ],
+    existingFlags
+  );
+
+  tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
+  tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
+
+  const newRef = doc(financialTransactionsRef(companyId));
+  const kpiChannel = isGuichetChannel(params.paymentChannel, params.source) ? "guichet" : "online";
+  const paymentMethod = resolveFinancialPaymentMethod({
+    type: params.type,
+    paymentMethod: params.paymentMethod ?? null,
+    paymentProvider: params.paymentProvider ?? null,
+    paymentChannel: params.paymentChannel ?? kpiChannel,
+    source: params.source,
+    metadata: params.metadata ?? null,
+  });
+  const paymentProviderStored =
+    params.paymentProvider ?? (typeof params.metadata?.provider === "string" ? params.metadata.provider : null);
+  const storedAmount = txTypeNorm === "refund" ? -ledgerAmount : ledgerAmount;
+  const payload: FinancialTransactionDoc = {
+    type: txTypeNorm,
+    source,
+    amount: storedAmount,
+    currency: params.currency ?? "XOF",
+    companyId,
+    agencyId: params.agencyId ?? null,
+    reservationId: params.reservationId ?? null,
+    debitAccountId: debitId,
+    creditAccountId: creditId,
+    debitAccountType: ledgerMirrorTypeFromKind(s0.type),
+    creditAccountType: ledgerMirrorTypeFromKind(s1.type),
+    balanceAfter: creditAfter,
+    status: params.status ?? defaultStatusForType(txTypeNorm),
+    performedAt: params.performedAt ?? Timestamp.now(),
+    createdAt: Timestamp.now(),
+    metadata: { ...(params.metadata ?? {}), debitAfter, creditAfter },
+    referenceType: params.referenceType,
+    referenceId: params.referenceId,
+    uniqueReferenceKey,
+    paymentChannel: params.paymentChannel ?? kpiChannel,
+    paymentMethod,
+    paymentProvider: paymentProviderStored,
+  };
+  tx.set(newRef, payload);
+  tx.set(idempotencyRef(companyId, uniqueReferenceKey), {
+    transactionId: newRef.id,
+    createdAt: serverTimestamp(),
+  });
+  return { transactionId: newRef.id, skippedDuplicate: false };
+}
+
+export async function createFinancialTransaction(
+  params: ApplyFinancialTransactionParams
+): Promise<string> {
+  let createdId = "";
+  await runTransaction(db, async (tx) => {
+    const r = await applyFinancialTransactionInExistingFirestoreTransaction(tx, params);
+    createdId = r.transactionId;
+  });
   return createdId;
 }
 

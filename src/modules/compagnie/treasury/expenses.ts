@@ -24,7 +24,9 @@ import {
 } from "@/modules/compagnie/settings/expenseApprovalSettings";
 import { createCompanyNotification, notifyCompanyRoles } from "@/shared/services/companyNotifications";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
-import { createFinancialTransaction } from "./financialTransactions";
+import {
+  applyFinancialTransactionInExistingFirestoreTransaction,
+} from "./financialTransactions";
 
 const EXPENSES_COLLECTION = "expenses";
 const EXPENSE_RESERVE_ACCOUNT_ID = "company_expense_reserve";
@@ -424,8 +426,8 @@ export async function rejectExpense(
 }
 
 /**
- * Mark expense as paid: record movement (source account → expense_reserve) and set paidAt.
- * Fails if insufficient balance. Runs in a single transaction.
+ * Mark expense as paid: écriture ledger + statut `paid` dans la même transaction Firestore.
+ * Si l’écriture ledger échoue, la dépense reste `approved`.
  */
 export async function payExpense(
   companyId: string,
@@ -434,9 +436,6 @@ export async function payExpense(
   currency: string
 ): Promise<void> {
   const ref = expenseRef(companyId, expenseId);
-  let mirroredAmount = 0;
-  let mirroredAgencyId: string | null = null;
-  let mirroredAccountType = "";
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
@@ -451,29 +450,15 @@ export async function payExpense(
     const sourceAccountRef = financialAccountRef(companyId, data.accountId);
     const sourceSnap = await tx.get(sourceAccountRef);
     if (!sourceSnap.exists()) throw new Error("Compte source introuvable.");
-    const balance = Number((sourceSnap.data() as { currentBalance?: number }).currentBalance ?? 0);
-    mirroredAmount = amount;
-    mirroredAgencyId = data.agencyId ?? null;
-    mirroredAccountType = String((sourceSnap.data() as { accountType?: string }).accountType ?? "");
-    if (balance < amount) throw new Error("Solde insuffisant sur le compte source.");
+    const mirroredAccountType = String((sourceSnap.data() as { accountType?: string }).accountType ?? "");
+    const mirroredAgencyId = data.agencyId ?? null;
 
-    const now = Timestamp.now();
-    tx.update(ref, {
-      status: "paid",
-      paidAt: now,
-      updatedAt: serverTimestamp(),
-    });
-  });
-  try {
-    const paidSnap = await getDoc(ref);
-    if (!paidSnap.exists()) throw new Error("Dépense introuvable.");
-    const paid = paidSnap.data() as ExpenseDoc;
-    const sourceSnap = await getDoc(financialAccountRef(companyId, paid.accountId));
     const debitLedgerId = ledgerDocIdFromFinancialAccountData(
       sourceSnap.exists() ? (sourceSnap.data() as { accountType?: string; agencyId?: string | null }) : {}
     );
     if (!debitLedgerId) throw new Error("[expenses] Compte source sans mapping ledger.");
-    await createFinancialTransaction({
+
+    await applyFinancialTransactionInExistingFirestoreTransaction(tx, {
       companyId,
       type: "expense",
       expenseDebitLedgerDocId: debitLedgerId,
@@ -482,15 +467,20 @@ export async function payExpense(
         : mirroredAccountType.includes("mobile")
           ? "mobile_money"
           : "cash",
-      amount: mirroredAmount,
+      amount,
       currency,
       agencyId: mirroredAgencyId,
       referenceType: "expense",
       referenceId: expenseId,
     });
-  } catch (err) {
-    console.warn("[expenses] createFinancialTransaction failed (expense):", err);
-  }
+
+    const now = Timestamp.now();
+    tx.update(ref, {
+      status: "paid",
+      paidAt: now,
+      updatedAt: serverTimestamp(),
+    });
+  });
   try {
     const snap = await getDoc(ref);
     const data = snap.exists() ? (snap.data() as ExpenseDoc) : null;
@@ -506,7 +496,9 @@ export async function payExpense(
       expenseId,
       link: `/compagnie/${companyId}/accounting/expenses`,
     });
-  } catch (_) {}
+  } catch (err) {
+    console.error("[expenses] Notification expense_paid échouée après payExpense.", { companyId, expenseId, err });
+  }
 }
 
 /** List expenses (optionally by agency, status, or statusIn for multiple pending statuses). */

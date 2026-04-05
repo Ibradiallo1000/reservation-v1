@@ -35,10 +35,15 @@ import {
 } from "@/modules/agence/services/guichetReservationService";
 import { belongsToGuichetSession } from "@/modules/agence/guichet/guichetSessionReservationModel";
 import {
+  buildTripInstanceId,
+  getOrCreateTripInstanceForSlot,
   listTripInstancesByRouteAndDateRange,
 } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { tripInstanceTime } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
+import { normalizeTripInstanceTime } from "@/modules/compagnie/tripInstances/generateTripInstancesFromWeeklyTrips";
 import { agencyNomFromDoc, cityLabelFromAgencyDoc } from "@/modules/agence/lib/agencyDocCity";
 import { getStopByOrder, getEscaleDestinations } from "@/modules/compagnie/routes/routeStopsService";
+import { resolveStopByStopId } from "@/modules/compagnie/routes/stopResolution";
 import { getDeviceFingerprint } from "@/utils/deviceFingerprint";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { agencyChromePageRootStyle } from "@/shared/theme/agencySurfaceGradients";
@@ -87,11 +92,42 @@ function reservationCreatedAtMs(createdAt: unknown): number {
   return 0;
 }
 
-const DAYS_IN_ADVANCE = 8;
+/** Fenêtre d’affichage guichet : 7 jours glissants (grille weeklyTrips). */
+const GUICHET_SCHEDULE_DAYS = 7;
 const DEFAULT_COMPANY_SLUG = "compagnie-par-defaut";
 
+function weekdayFRGuichet(d: Date): string {
+  return d.toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
+}
+
+function toLocalYmdGuichet(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${da}`;
+}
+
+function citiesMatchGuichet(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
 // ─── Types ───
-type Trip = { id: string; date: string; time: string; departure: string; arrival: string; price: number; places: number; remainingSeats?: number; capacitySeats?: number; agencyId?: string };
+type Trip = {
+  id: string;
+  /** Document weeklyTrips (trajet modèle). */
+  weeklyTripId?: string;
+  /** Instance matérialisée si elle existe ; complétée à la vente par getOrCreate. */
+  tripInstanceId?: string | null;
+  date: string;
+  time: string;
+  departure: string;
+  arrival: string;
+  price: number;
+  places: number;
+  remainingSeats?: number;
+  capacitySeats?: number;
+  agencyId?: string;
+};
 type TicketRow = {
   id: string; referenceCode?: string; date: string; heure: string; depart: string; arrivee: string;
   nomClient: string; telephone?: string; seatsGo: number; seatsReturn?: number; montant: number;
@@ -220,8 +256,19 @@ const AgenceGuichetPage: React.FC = () => {
     [theme.primary, theme.secondary, darkMode]
   );
 
-  const locationState = (location.state || {}) as { fromEscale?: boolean; routeId?: string; stopOrder?: number; originEscaleCity?: string };
-  const isEscaleMode = Boolean(locationState.fromEscale && locationState.routeId != null && locationState.stopOrder != null);
+  const locationState = (location.state || {}) as {
+    fromEscale?: boolean;
+    routeId?: string;
+    stopOrder?: number;
+    stopId?: string;
+    originEscaleCity?: string;
+  };
+  const isEscaleMode = Boolean(
+    locationState.fromEscale &&
+      locationState.routeId != null &&
+      (locationState.stopOrder != null ||
+        (locationState.stopId != null && String(locationState.stopId).trim() !== ""))
+  );
 
   // ── Tab state (with key for transitions) ──
   const [tab, setTab] = useState<"vente" | "rapport" | "historique">("vente");
@@ -433,11 +480,11 @@ const AgenceGuichetPage: React.FC = () => {
           });
           setAgencyType(String(a.type ?? ""));
         }
-        if (!isEscaleMode || !locationState.routeId || locationState.stopOrder == null) {
+        if (!isEscaleMode || !locationState.routeId) {
           const today = new Date();
           const from = today.toISOString().split("T")[0];
           const to = new Date(today);
-          to.setDate(today.getDate() + DAYS_IN_ADVANCE);
+          to.setDate(today.getDate() + GUICHET_SCHEDULE_DAYS);
           const toYmd = to.toISOString().split("T")[0];
           const dep = departureCity.trim();
           let tripsForArrivals: any[] = [];
@@ -473,18 +520,41 @@ const AgenceGuichetPage: React.FC = () => {
               )
               .catch(() => []);
           }
-          const arrivals = Array.from(
-            new Set(
-              tripsForArrivals
-                .map((ti) => String((ti as any).arrivalCity ?? (ti as any).routeArrival ?? (ti as any).arrival ?? ""))
-                .filter((a) => a && (!dep || a.toLowerCase() !== dep.toLowerCase()))
-            )
+          const arrivalSet = new Set<string>(
+            tripsForArrivals
+              .map((ti) => String((ti as any).arrivalCity ?? (ti as any).routeArrival ?? (ti as any).arrival ?? ""))
+              .filter((a) => a && (!dep || a.toLowerCase() !== dep.toLowerCase()))
           );
-          setAllArrivals(arrivals);
+          try {
+            const wtSnap = await getDocs(collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`));
+            for (const d of wtSnap.docs) {
+              const wt = d.data() as Record<string, unknown>;
+              if (wt.active === false) continue;
+              const d0 = String(wt.departureCity ?? wt.departure ?? "").trim();
+              const a0 = String(wt.arrivalCity ?? wt.arrival ?? "").trim();
+              if (!a0 || (dep && d0.toLowerCase() !== dep.toLowerCase())) continue;
+              if (!dep || a0.toLowerCase() !== dep.toLowerCase()) arrivalSet.add(a0);
+            }
+          } catch {
+            /* ignore */
+          }
+          setAllArrivals(Array.from(arrivalSet));
           return;
         }
         const routeId = locationState.routeId;
-        const stopOrder = Number(locationState.stopOrder);
+        let stopOrder =
+          locationState.stopOrder != null && !Number.isNaN(Number(locationState.stopOrder))
+            ? Number(locationState.stopOrder)
+            : NaN;
+        if (Number.isNaN(stopOrder) && locationState.stopId && user.companyId) {
+          const rs = await resolveStopByStopId(user.companyId, routeId, String(locationState.stopId));
+          stopOrder = rs?.order ?? NaN;
+        }
+        if (Number.isNaN(stopOrder)) {
+          setDeparture("");
+          setAllArrivals([]);
+          return;
+        }
         const originStop = await getStopByOrder(user.companyId, routeId, stopOrder);
         const destinations = await getEscaleDestinations(user.companyId, routeId, stopOrder);
         const originCity = originStop?.city ?? locationState.originEscaleCity ?? "";
@@ -494,30 +564,28 @@ const AgenceGuichetPage: React.FC = () => {
         if (destinationCities.length > 0) setArrival(destinationCities[0]);
       } catch (e) { console.error("[GUICHET] init:error", e); }
     })();
-  }, [user?.uid, user?.companyId, user?.agencyId, isEscaleMode, locationState.routeId, locationState.stopOrder, locationState.originEscaleCity]);
+  }, [
+    user?.uid,
+    user?.companyId,
+    user?.agencyId,
+    isEscaleMode,
+    locationState.routeId,
+    locationState.stopOrder,
+    locationState.stopId,
+    locationState.originEscaleCity,
+  ]);
 
-  // ═══════════════ TRIP SEARCH (source unique: tripInstances) ═══════════════
+  // ═══════════════ TRIP SEARCH (source principale: weeklyTrips.horaires ; tripInstances = complément) ═══════════════
   const searchTrips = useCallback(async (dep: string, arr: string) => {
     setTrips([]);
     setSelectedTrip(null);
-    if (!user?.companyId || !dep?.trim() || !arr?.trim()) return;
+    if (!user?.companyId || !user?.agencyId || !dep?.trim() || !arr?.trim()) return;
 
+    const depN = dep.trim();
+    const arrN = arr.trim();
     const now = new Date();
-    const dateFrom = now.toISOString().split("T")[0];
-    const to = new Date(now);
-    to.setDate(now.getDate() + DAYS_IN_ADVANCE);
-    const dateTo = to.toISOString().split("T")[0];
 
-    const instances = await listTripInstancesByRouteAndDateRange(
-      user.companyId,
-      dep.trim(),
-      arr.trim(),
-      dateFrom,
-      dateTo,
-      { limitCount: 100 }
-    );
-
-    const remainingFor = (ti: any) => {
+    const remainingForTi = (ti: Record<string, unknown>) => {
       const direct = Number(ti?.remainingSeats);
       if (Number.isFinite(direct)) return direct;
       const capacity = Number(ti?.capacitySeats ?? ti?.seatCapacity ?? ti?.passengerCount ?? ti?.places ?? 0);
@@ -525,33 +593,137 @@ const AgenceGuichetPage: React.FC = () => {
       return Math.max(0, capacity - reserved);
     };
 
-    const out: Trip[] = instances
-      .filter((ti) => String((ti as any).status ?? "").toLowerCase() !== "cancelled")
-      .filter((ti) => remainingFor(ti) > 0)
-      .map((ti) => ({
-        id: ti.id,
-        date: String((ti as any).date ?? ""),
-        time: String((ti as any).departureTime ?? (ti as any).time ?? "00:00"),
-        departure: String((ti as any).departureCity ?? (ti as any).departure ?? (ti as any).routeDeparture ?? dep),
-        arrival: String((ti as any).arrivalCity ?? (ti as any).arrival ?? (ti as any).routeArrival ?? arr),
-        price: Number((ti as any).price ?? 0),
-        places: remainingFor(ti),
-        remainingSeats: remainingFor(ti),
-        capacitySeats: Number((ti as any).capacitySeats ?? (ti as any).seatCapacity ?? remainingFor(ti)),
-        agencyId: String((ti as any).agencyId ?? ""),
-      }));
+    let weeklyRows: Array<{ id: string; data: Record<string, unknown> }> = [];
+    try {
+      const wtRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/weeklyTrips`);
+      const wtSnap = await getDocs(wtRef);
+      weeklyRows = wtSnap.docs
+        .map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }))
+        .filter(({ data: wt }) => wt.active !== false)
+        .filter(({ data: wt }) => {
+          const d0 = String(wt.departureCity ?? wt.departure ?? "").trim();
+          const a0 = String(wt.arrivalCity ?? wt.arrival ?? "").trim();
+          return citiesMatchGuichet(d0, depN) && citiesMatchGuichet(a0, arrN);
+        });
+    } catch (e) {
+      console.error("[GUICHET] weeklyTrips load error", e);
+    }
 
-    const nowTime = new Date();
-    const filtered = out.filter((t) => {
-      const tripDt = new Date(`${t.date}T${t.time}`);
-      if (Number.isNaN(tripDt.getTime())) return true; // sécurité: ne pas masquer des cas inattendus
-      return tripDt.getTime() >= nowTime.getTime();
-    });
+    if (weeklyRows.length === 0) {
+      setTrips([]);
+      return;
+    }
 
-    setTrips(filtered);
-    setSelectedDate(filtered[0]?.date ?? "");
-    setSelectedTrip(filtered[0] ?? null);
-  }, [user?.companyId]);
+    const slotRows: Trip[] = [];
+
+    for (let dayIdx = 0; dayIdx < GUICHET_SCHEDULE_DAYS; dayIdx++) {
+      const dayDate = new Date(now);
+      dayDate.setHours(0, 0, 0, 0);
+      dayDate.setDate(dayDate.getDate() + dayIdx);
+      const ymd = toLocalYmdGuichet(dayDate);
+      const dayName = weekdayFRGuichet(dayDate);
+
+      for (const { id: weeklyTripId, data: wt } of weeklyRows) {
+        const horairesRaw = wt.horaires as Record<string, string[]> | undefined;
+        const hours = Array.isArray(horairesRaw?.[dayName]) ? horairesRaw![dayName]! : [];
+        if (hours.length === 0) continue;
+
+        const wdep = String(wt.departureCity ?? wt.departure ?? "").trim() || depN;
+        const warr = String(wt.arrivalCity ?? wt.arrival ?? "").trim() || arrN;
+        const priceWt = Math.max(0, Number(wt.price ?? 0) || 0);
+        const capWt = Math.max(1, Number(wt.places ?? wt.seats ?? 30) || 30);
+        const agencyIdWt = String(wt.agencyId ?? user.agencyId).trim();
+
+        for (const rawH of hours) {
+          const timeNorm = normalizeTripInstanceTime(String(rawH));
+          if (!timeNorm) continue;
+
+          const slotDt = new Date(`${ymd}T${timeNorm}:00`);
+          if (Number.isNaN(slotDt.getTime())) continue;
+          if (slotDt.getTime() <= now.getTime()) continue;
+
+          slotRows.push({
+            id: `${weeklyTripId}|${ymd}|${timeNorm}`,
+            weeklyTripId,
+            tripInstanceId: undefined,
+            date: ymd,
+            time: timeNorm,
+            departure: wdep,
+            arrival: warr,
+            price: priceWt,
+            places: capWt,
+            remainingSeats: capWt,
+            capacitySeats: capWt,
+            agencyId: agencyIdWt,
+          });
+        }
+      }
+    }
+
+    slotRows.sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+    const dateFrom = toLocalYmdGuichet(now);
+    const endD = new Date(now);
+    endD.setDate(endD.getDate() + GUICHET_SCHEDULE_DAYS - 1);
+    const dateTo = toLocalYmdGuichet(endD);
+
+    let instances: Awaited<ReturnType<typeof listTripInstancesByRouteAndDateRange>> = [];
+    try {
+      instances = await listTripInstancesByRouteAndDateRange(
+        user.companyId,
+        depN,
+        arrN,
+        dateFrom,
+        dateTo,
+        { limitCount: 400 }
+      );
+    } catch (e) {
+      console.warn("[GUICHET] tripInstances enrich skipped", e);
+    }
+
+    const byDeterministicId = new Map<string, (typeof instances)[0]>();
+    const byCompositeKey = new Map<string, (typeof instances)[0]>();
+    for (const ti of instances) {
+      byDeterministicId.set(ti.id, ti);
+      const wid = String((ti as { weeklyTripId?: string }).weeklyTripId ?? "").trim();
+      if (wid) {
+        const tStr = normalizeTripInstanceTime(tripInstanceTime(ti));
+        const dStr = String((ti as { date?: string }).date ?? "");
+        byCompositeKey.set(`${wid}|${dStr}|${tStr}`, ti);
+      }
+    }
+
+    const out: Trip[] = [];
+    for (const s of slotRows) {
+      const wid = s.weeklyTripId;
+      if (!wid) continue;
+      const ti =
+        byDeterministicId.get(buildTripInstanceId(wid, s.date, s.time)) ??
+        byCompositeKey.get(`${wid}|${s.date}|${s.time}`);
+      if (ti && String((ti as { status?: string }).status ?? "").toLowerCase() === "cancelled") continue;
+
+      const row: Trip = { ...s };
+      if (ti) {
+        const t = ti as unknown as Record<string, unknown>;
+        row.tripInstanceId = String(ti.id);
+        const rem = remainingForTi(t);
+        row.remainingSeats = rem;
+        row.places = rem;
+        row.capacitySeats = Math.max(
+          1,
+          Number(t.capacitySeats ?? t.seatCapacity ?? row.capacitySeats ?? 1) || 1
+        );
+        const p = Number(t.price ?? 0);
+        if (Number.isFinite(p) && p > 0) row.price = p;
+      }
+
+      out.push(row);
+    }
+
+    setTrips(out);
+    setSelectedDate(out[0]?.date ?? "");
+    setSelectedTrip(out[0] ?? null);
+  }, [user?.companyId, user?.agencyId]);
 
   const searchTripsRef = useRef(searchTrips);
   searchTripsRef.current = searchTrips;
@@ -599,12 +771,9 @@ const AgenceGuichetPage: React.FC = () => {
   }, [selectedTrip, nomClient, telephone, totalPrice, placesAller]);
 
   const availableDates = [...new Set(trips.map((t) => String(t.date || "")).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const now = new Date();
-  const nowDate = now.toISOString().split("T")[0];
-  const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const selectedTrips = trips
     .filter((t) => t.date === selectedDate)
-    .filter((t) => !(t.date === nowDate && String(t.time || "") < nowTime));
+    .filter((t) => !isPastTime(t.date, t.time));
 
   useEffect(() => {
     if (availableDates.length === 0) {
@@ -645,13 +814,21 @@ const AgenceGuichetPage: React.FC = () => {
     if (selectedTrip.remainingSeats !== undefined && placesAller > selectedTrip.remainingSeats) {
       alert(`Il reste ${selectedTrip.remainingSeats} places.`); return;
     }
+
+    const timeNormSale = normalizeTripInstanceTime(selectedTrip.time);
+    const trajetIdForSale = selectedTrip.weeklyTripId ?? selectedTrip.id;
+    const prospectiveTiId =
+      selectedTrip.weeklyTripId != null && String(selectedTrip.weeklyTripId).trim() !== ""
+        ? buildTripInstanceId(selectedTrip.weeklyTripId, selectedTrip.date, timeNormSale)
+        : (selectedTrip.tripInstanceId ?? selectedTrip.id);
+
     setIsProcessing(true);
     try {
       if (!isOnline) {
         const offlineParams = {
           companyId: user!.companyId, agencyId: user!.agencyId, userId: user!.uid,
           sessionId: activeShift!.id, userCode: sellerCodeCached || staffCodeForSale,
-          trajetId: selectedTrip.id, date: selectedTrip.date, heure: selectedTrip.time,
+          trajetId: trajetIdForSale, date: selectedTrip.date, heure: selectedTrip.time,
           depart: selectedTrip.departure, arrivee: selectedTrip.arrival,
           nomClient: normalizedName,
           telephone: rawPhoneMali(telephone) || null,
@@ -661,7 +838,7 @@ const AgenceGuichetPage: React.FC = () => {
           montant: totalPrice, companySlug: companyMeta.slug,
           compagnieNom: companyMeta.name, agencyNom: agencyMeta.name,
           agencyTelephone: agencyMeta.phone ?? null, referenceCode: "", tripType: "aller_simple",
-          tripInstanceId: selectedTrip.id,
+          tripInstanceId: prospectiveTiId,
           ...(tariffKey !== "plein" ? { tariff: tariffKey, tariffMultiplier } : {}),
           ...(additionalPassengers.length > 0
             ? {
@@ -719,17 +896,50 @@ const AgenceGuichetPage: React.FC = () => {
         return;
       }
 
+      let tripInstanceIdForSale = selectedTrip.tripInstanceId ?? prospectiveTiId;
+      if (selectedTrip.weeklyTripId != null && String(selectedTrip.weeklyTripId).trim() !== "") {
+        try {
+          const wtSnap = await getDoc(
+            doc(db, `companies/${user!.companyId}/agences/${user!.agencyId}/weeklyTrips`, selectedTrip.weeklyTripId)
+          );
+          const wtd = (wtSnap.exists() ? wtSnap.data() : {}) as Record<string, unknown>;
+          const seatCap = Math.max(1, Number(wtd.places ?? wtd.seats ?? selectedTrip.capacitySeats ?? 30) || 30);
+          const ti = await getOrCreateTripInstanceForSlot(user!.companyId, {
+            agencyId: user!.agencyId!,
+            departureCity: selectedTrip.departure,
+            arrivalCity: selectedTrip.arrival,
+            date: selectedTrip.date,
+            departureTime: timeNormSale,
+            weeklyTripId: selectedTrip.weeklyTripId,
+            seatCapacity: seatCap,
+            capacitySeats: seatCap,
+            price: selectedTrip.price > 0 ? selectedTrip.price : (Number(wtd.price) || null),
+            routeId: (wtd.routeId as string) || null,
+          });
+          tripInstanceIdForSale = ti.id;
+        } catch (e) {
+          console.error("[GUICHET] getOrCreateTripInstanceForSlot", e);
+          showToast("Impossible de préparer le départ pour la vente. Réessayez.", "error");
+          if (soundEnabled) playSound("error");
+          setIsProcessing(false);
+          return;
+        }
+      } else if (!selectedTrip.tripInstanceId) {
+        tripInstanceIdForSale = selectedTrip.id;
+      }
+
       let referenceCode: string;
       try {
         referenceCode = await generateRef({
           companyId: user!.companyId, companyCode: companyMeta.code,
           agencyId: user!.agencyId, agencyCode: agencyMeta.code,
-          tripInstanceId: selectedTrip.id, sellerCode: sellerCodeCached || staffCodeForSale,
+          tripInstanceId: tripInstanceIdForSale, sellerCode: sellerCodeCached || staffCodeForSale,
         });
       } catch (e) {
         console.error("[GUICHET] generateRef:error", e);
         showToast("Impossible de générer la référence billet.", "error");
         if (soundEnabled) playSound("error");
+        setIsProcessing(false);
         return;
       }
 
@@ -756,7 +966,7 @@ const AgenceGuichetPage: React.FC = () => {
         statutEmbarquement: "en_attente",
         boardingStatus: "pending",
         statut: SALE_PENDING_UI_STATUT,
-        trajetId: selectedTrip.id,
+        trajetId: trajetIdForSale,
         sessionId: activeShift!.id,
         createdAt: Timestamp.now(),
         guichetierCode: guichetCode,
@@ -805,7 +1015,7 @@ const AgenceGuichetPage: React.FC = () => {
             sessionId: activeShift!.id,
             idempotencyKey: saleIdempotencyKey,
             userCode: sellerCodeCached || staffCodeForSale,
-            trajetId: selectedTrip.id, date: selectedTrip.date, heure: selectedTrip.time,
+            trajetId: trajetIdForSale, date: selectedTrip.date, heure: selectedTrip.time,
             depart: selectedTrip.departure, arrivee: selectedTrip.arrival,
             nomClient: normalizedName,
             telephone: rawPhoneMali(telephone) || null,
@@ -815,7 +1025,7 @@ const AgenceGuichetPage: React.FC = () => {
             montant: totalPrice, companySlug: companyMeta.slug,
             compagnieNom: companyMeta.name, agencyNom: agencyMeta.name,
             agencyTelephone: agencyMeta.phone ?? null, referenceCode, tripType: "aller_simple",
-            tripInstanceId: selectedTrip.id,
+            tripInstanceId: tripInstanceIdForSale,
             offlineMeta: { mode: "online" },
             ...(tariffKey !== "plein" ? { tariff: tariffKey, tariffMultiplier } : {}),
             ...(passengersField ? { passengers: passengersField } : {}),
@@ -1357,43 +1567,26 @@ const AgenceGuichetPage: React.FC = () => {
                             {selectedTrips.length === 0 ? (
                               <div className="py-3 text-center text-xs text-gray-400">Aucun horaire disponible.</div>
                             ) : (
-                              <div
-                                className="grid gap-1.5"
-                                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(60px, 1fr))" }}
-                              >
+                              <div className="flex flex-wrap gap-1">
                                 {selectedTrips.map((t) => {
                                 const active = selectedTrip?.id === t.id;
                                 const remaining = Math.max(0, Number(t.remainingSeats ?? 0));
-                                const capacity = Math.max(1, Number(t.capacitySeats ?? t.places ?? remaining));
-                                const ratio = remaining / capacity;
-                                const color = ratio > 0.6 ? "#16a34a" : ratio > 0.3 ? "#f59e0b" : "#dc2626";
                                 const disabled = remaining <= 0;
+                                const label = disabled ? `${t.time} · complet` : `${t.time} · ${remaining}`;
                                 return (
                                   <button
                                     key={t.id}
                                     type="button"
                                     onClick={() => setSelectedTrip(t)}
                                     disabled={disabled}
-                                    className="rounded-lg border px-2 py-1 text-left transition disabled:cursor-not-allowed disabled:bg-gray-100 disabled:border-gray-200"
+                                    className="max-w-full rounded border px-1.5 py-0.5 text-left text-[10px] font-normal text-gray-800 transition disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-400"
                                     style={{
                                       borderColor: active ? theme.primary : "#e5e7eb",
-                                      backgroundColor: active ? `${theme.primary}14` : "#fff",
+                                      backgroundColor: active ? `${theme.primary}12` : "#fff",
+                                      color: active ? theme.primary : undefined,
                                     }}
                                   >
-                                    <p className="flex items-center gap-1 leading-none">
-                                      <span
-                                        className="text-sm font-bold"
-                                        style={{ color: active ? theme.primary : "#111827" }}
-                                      >
-                                        {t.time}
-                                      </span>
-                                      <span
-                                        className="text-[11px] font-medium"
-                                        style={{ color: disabled ? "#9ca3af" : color }}
-                                      >
-                                        {disabled ? "•complet" : `•${remaining}`}
-                                      </span>
-                                    </p>
+                                    {label}
                                   </button>
                                 );
                               })}

@@ -25,6 +25,10 @@ import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPat
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import ChiefSessionDetailModal from "@/modules/agence/manager/ChiefSessionDetailModal";
 import AgencyBusMovementsSection from "@/modules/agence/manager/AgencyBusMovementsSection";
+import {
+  belongsToGuichetSession,
+  reservationLinkedSessionId,
+} from "@/modules/agence/guichet/guichetSessionReservationModel";
 
 /** Durée au-delà de laquelle une session est considérée comme prolongée (supervision). */
 const LONG_SESSION_THRESHOLD_MS = 8 * 60 * 60 * 1000;
@@ -34,6 +38,8 @@ export type SessionDoc = {
   kind: "guichet" | "courrier";
   type: string;
   status: string;
+  /** Titulaire du poste (même règle que comptabilité agence pour rattacher les ventes). */
+  userId?: string;
   closedAt?: unknown;
   startAt?: unknown;
   openedAt?: unknown;
@@ -323,16 +329,41 @@ export default function AgencyChiefDashboardLite() {
 
     const reservationsRef = collection(db, "companies", companyId, "agences", agencyId, "reservations");
     const unsubs: Array<() => void> = [];
-    const chunkTotals = new Map<number, Record<string, GuichetLiveTotals>>();
+    /** Même logique que la compta agence : `sessionId` / `shiftId` + vendeur du poste (pas `createdInSessionId`, absent des écritures guichet). */
+    const chunkStates = new Map<
+      number,
+      {
+        chunk: string[];
+        sessionData: Map<string, Record<string, unknown>>;
+        shiftData: Map<string, Record<string, unknown>>;
+      }
+    >();
+
+    const shiftUserById: Record<string, string> = Object.fromEntries(
+      guichetSessions.map((s) => [s.id, String(s.userId ?? "").trim()])
+    );
 
     const recompute = () => {
       const merged: Record<string, GuichetLiveTotals> = {};
-      for (const perChunk of chunkTotals.values()) {
-        for (const [sid, t] of Object.entries(perChunk)) {
-          if (!merged[sid]) merged[sid] = { reservations: 0, tickets: 0, amount: 0 };
-          merged[sid].reservations += t.reservations;
-          merged[sid].tickets += t.tickets;
-          merged[sid].amount += t.amount;
+      for (const sid of sessionIds) {
+        merged[sid] = { reservations: 0, tickets: 0, amount: 0 };
+      }
+      const seenDocIds = new Set<string>();
+      for (const state of chunkStates.values()) {
+        const byId = new Map<string, Record<string, unknown>>();
+        for (const [id, data] of state.sessionData) byId.set(id, data);
+        for (const [id, data] of state.shiftData) byId.set(id, data);
+
+        for (const [docId, r] of byId) {
+          if (seenDocIds.has(docId)) continue;
+          const linked = reservationLinkedSessionId(r);
+          if (!linked || !merged[linked]) continue;
+          const uid = shiftUserById[linked] ?? "";
+          if (!belongsToGuichetSession(r, linked, uid)) continue;
+          seenDocIds.add(docId);
+          merged[linked].reservations += 1;
+          merged[linked].tickets += Math.max(0, Number(r.seatsGo ?? 0) + Number(r.seatsReturn ?? 0));
+          merged[linked].amount += Math.max(0, Number(r.montant ?? 0));
         }
       }
       setGuichetLiveBySession(merged);
@@ -342,36 +373,55 @@ export default function AgencyChiefDashboardLite() {
     for (let i = 0; i < sessionIds.length; i += 10) {
       const chunk = sessionIds.slice(i, i + 10);
       const chunkIndex = i / 10;
-      const q = query(
+      chunkStates.set(chunkIndex, {
+        chunk,
+        sessionData: new Map(),
+        shiftData: new Map(),
+      });
+
+      const qSession = query(
         reservationsRef,
-        where("createdInSessionId", "in", chunk),
+        where("sessionId", "in", chunk),
         where("canal", "==", "guichet"),
         limit(1000)
       );
       unsubs.push(
         onSnapshot(
-          q,
+          qSession,
           (snap) => {
-            const perChunk: Record<string, GuichetLiveTotals> = {};
-            for (const d of snap.docs) {
-              const r = d.data() as Record<string, unknown>;
-              const statut = String(r.statut ?? "")
-                .toLowerCase()
-                .trim();
-              if (statut === "annule" || statut === "annulation_en_attente" || statut === "invalide")
-                continue;
-              const sid = String(r.createdInSessionId ?? "");
-              if (!sid) continue;
-              if (!perChunk[sid]) perChunk[sid] = { reservations: 0, tickets: 0, amount: 0 };
-              perChunk[sid].reservations += 1;
-              perChunk[sid].tickets += Math.max(0, Number(r.seatsGo ?? 0) + Number(r.seatsReturn ?? 0));
-              perChunk[sid].amount += Math.max(0, Number(r.montant ?? 0));
-            }
-            chunkTotals.set(chunkIndex, perChunk);
+            const st = chunkStates.get(chunkIndex);
+            if (!st) return;
+            st.sessionData.clear();
+            for (const d of snap.docs) st.sessionData.set(d.id, d.data() as Record<string, unknown>);
             recompute();
           },
           () => {
-            chunkTotals.delete(chunkIndex);
+            const st = chunkStates.get(chunkIndex);
+            if (st) st.sessionData.clear();
+            recompute();
+          }
+        )
+      );
+
+      const qShift = query(
+        reservationsRef,
+        where("shiftId", "in", chunk),
+        where("canal", "==", "guichet"),
+        limit(1000)
+      );
+      unsubs.push(
+        onSnapshot(
+          qShift,
+          (snap) => {
+            const st = chunkStates.get(chunkIndex);
+            if (!st) return;
+            st.shiftData.clear();
+            for (const d of snap.docs) st.shiftData.set(d.id, d.data() as Record<string, unknown>);
+            recompute();
+          },
+          () => {
+            const st = chunkStates.get(chunkIndex);
+            if (st) st.shiftData.clear();
             recompute();
           }
         )

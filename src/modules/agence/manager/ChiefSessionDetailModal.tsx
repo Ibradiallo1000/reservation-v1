@@ -8,12 +8,18 @@ import { db } from "@/firebaseConfig";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import { ActionButton } from "@/ui";
+import {
+  belongsToGuichetSession,
+  reservationLinkedSessionId,
+} from "@/modules/agence/guichet/guichetSessionReservationModel";
 
 export type ChiefSessionDetailTarget = {
   id: string;
   kind: "guichet" | "courrier";
   type: string;
   status: string;
+  /** Titulaire du poste — requis pour le même filtre que la compta agence. */
+  userId?: string;
   closedAt?: unknown;
   startAt?: unknown;
   openedAt?: unknown;
@@ -127,56 +133,93 @@ export default function ChiefSessionDetailModal({
         agencyId,
         "reservations"
       );
-      const q = query(
+      const shiftKey = session.id;
+      const sellerUid = String(session.userId ?? "").trim();
+      const sessionData = new Map<string, Record<string, unknown>>();
+      const shiftData = new Map<string, Record<string, unknown>>();
+
+      const applyMerged = () => {
+        setLoadError(null);
+        const byId = new Map<string, Record<string, unknown>>();
+        for (const [id, data] of sessionData) byId.set(id, data);
+        for (const [id, data] of shiftData) byId.set(id, data);
+
+        const byRoute = new Map<string, { billets: number; montant: number }>();
+        let ops = 0;
+        let billetsSum = 0;
+        let montantSum = 0;
+        for (const [, r] of byId) {
+          const linked = reservationLinkedSessionId(r);
+          if (linked !== shiftKey) continue;
+          if (!belongsToGuichetSession(r, shiftKey, sellerUid)) continue;
+          const statut = String(r.statut ?? "");
+          if (!isReservationValid(statut)) continue;
+          ops += 1;
+          const dep = String(r.depart ?? r.departureCity ?? r.departure ?? "").trim() || "—";
+          const arr = String(r.arrivee ?? r.arrivalCity ?? r.arrival ?? "").trim() || "—";
+          const key = `${dep}\u0001${arr}`;
+          const b = Math.max(0, Number(r.seatsGo ?? 0) + Number(r.seatsReturn ?? 0));
+          const m = Math.max(0, Number(r.montant ?? 0));
+          billetsSum += b;
+          montantSum += m;
+          const cur = byRoute.get(key) ?? { billets: 0, montant: 0 };
+          byRoute.set(key, { billets: cur.billets + b, montant: cur.montant + m });
+        }
+        const rows: BilletterieRouteRow[] = [...byRoute.entries()].map(([key, v]) => {
+          const [depart, arrivee] = key.split("\u0001");
+          return { depart, arrivee, billets: v.billets, montant: v.montant };
+        });
+        rows.sort((a, b) => b.montant - a.montant);
+        setBilletterieRows(rows);
+        setCourrierRows([]);
+        setOperationCount(ops);
+        setTotalBillets(billetsSum);
+        setTotalMontant(montantSum);
+      };
+
+      const qSession = query(
         reservationsRef,
-        where("createdInSessionId", "==", session.id),
+        where("sessionId", "==", session.id),
+        where("canal", "==", "guichet"),
         limit(500)
       );
-      const unsub = onSnapshot(
-        q,
+      const qShift = query(
+        reservationsRef,
+        where("shiftId", "==", session.id),
+        where("canal", "==", "guichet"),
+        limit(500)
+      );
+
+      const unsubA = onSnapshot(
+        qSession,
         (snap) => {
-          setLoadError(null);
-          const byRoute = new Map<string, { billets: number; montant: number }>();
-          let ops = 0;
-          let billetsSum = 0;
-          let montantSum = 0;
-          for (const d of snap.docs) {
-            const r = d.data() as Record<string, unknown>;
-            if (String(r.canal ?? "").toLowerCase() !== "guichet") continue;
-            const statut = String(r.statut ?? "");
-            if (!isReservationValid(statut)) continue;
-            ops += 1;
-            const dep = String(r.depart ?? r.departureCity ?? r.departure ?? "").trim() || "—";
-            const arr = String(r.arrivee ?? r.arrivalCity ?? r.arrival ?? "").trim() || "—";
-            const key = `${dep}\u0001${arr}`;
-            const b = Math.max(0, Number(r.seatsGo ?? 0) + Number(r.seatsReturn ?? 0));
-            const m = Math.max(0, Number(r.montant ?? 0));
-            billetsSum += b;
-            montantSum += m;
-            const cur = byRoute.get(key) ?? { billets: 0, montant: 0 };
-            byRoute.set(key, { billets: cur.billets + b, montant: cur.montant + m });
-          }
-          const rows: BilletterieRouteRow[] = [...byRoute.entries()].map(([key, v]) => {
-            const [depart, arrivee] = key.split("\u0001");
-            return { depart, arrivee, billets: v.billets, montant: v.montant };
-          });
-          rows.sort((a, b) => b.montant - a.montant);
-          setBilletterieRows(rows);
-          setCourrierRows([]);
-          setOperationCount(ops);
-          setTotalBillets(billetsSum);
-          setTotalMontant(montantSum);
+          sessionData.clear();
+          for (const d of snap.docs) sessionData.set(d.id, d.data() as Record<string, unknown>);
+          applyMerged();
         },
         (err) => {
-          console.error("[ChiefSessionDetailModal] billetterie:", err);
-          setLoadError("Impossible de charger le détail billetterie.");
-          setBilletterieRows([]);
-          setOperationCount(0);
-          setTotalBillets(0);
-          setTotalMontant(0);
+          console.error("[ChiefSessionDetailModal] billetterie sessionId:", err);
+          sessionData.clear();
+          applyMerged();
         }
       );
-      return () => unsub();
+      const unsubB = onSnapshot(
+        qShift,
+        (snap) => {
+          shiftData.clear();
+          for (const d of snap.docs) shiftData.set(d.id, d.data() as Record<string, unknown>);
+          applyMerged();
+        },
+        (err) => {
+          console.error("[ChiefSessionDetailModal] billetterie shiftId:", err);
+          shiftData.clear();
+          applyMerged();
+        }
+      );
+      return () => {
+        unsubA();
+        unsubB();
+      };
     }
 
     const col = shipmentsRef(db, companyId);

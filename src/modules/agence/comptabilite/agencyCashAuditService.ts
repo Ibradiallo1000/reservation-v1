@@ -1,6 +1,6 @@
 /**
- * Contrôle comptable agence : entrées espèces = `comptaEncaissements` (validation session) ;
- * sorties = ledger `financialTransactions` ; solde attendu = solde compte caisse ledger.
+ * Contrôle comptable agence : `comptaEncaissements` et agrégats servent de contrôle / historique ;
+ * **solde caisse espèces affiché et attendu = ledger `accounts` uniquement** (miroir `financialAccounts` secondaire).
  */
 
 import {
@@ -39,10 +39,52 @@ const PAGE_SIZE = 500;
 const MAX_PAGES = 40;
 const CLOSED_SESSION_STATUSES = ["closed", "CLOSED", "validated", "VALIDATED", "validated_agency"] as const;
 
+const MIRROR_LEDGER_EPSILON = 0.02;
+
+/**
+ * Caisse espèces agence pour la trésorerie : **uniquement** le solde ledger (`accounts`).
+ * Charge le miroir `financialAccounts` pour affichage secondaire et journalise les écarts.
+ */
+export async function getAgencyTreasuryLedgerCashDisplay(
+  companyId: string,
+  agencyId: string
+): Promise<{ ledgerCash: number; mirrorCash: number | null; currency: string }> {
+  const ledger = await getLedgerBalances(companyId, agencyId);
+  const ledgerCash = Number(ledger.cash ?? 0);
+  let mirrorCash: number | null = null;
+  let currency = "XOF";
+  try {
+    const mirrorRef = financialAccountRef(companyId, agencyCashAccountId(agencyId));
+    const mirrorSnap = await getDoc(mirrorRef);
+    if (mirrorSnap.exists()) {
+      const d = mirrorSnap.data() as Record<string, unknown>;
+      mirrorCash = Number(d.currentBalance ?? 0);
+      const c = d.currency;
+      if (typeof c === "string" && c.trim()) currency = c.trim();
+    }
+  } catch (e) {
+    console.error("[caisse] Lecture miroir financialAccounts (secondaire) impossible.", {
+      companyId,
+      agencyId,
+      err: e,
+    });
+  }
+  if (mirrorCash != null && Math.abs(mirrorCash - ledgerCash) > MIRROR_LEDGER_EPSILON) {
+    console.error("[caisse] Incohérence : ledger (source) ≠ financialAccounts.currentBalance (secondaire).", {
+      companyId,
+      agencyId,
+      ledgerCash,
+      mirrorCash,
+    });
+  }
+  return { ledgerCash, mirrorCash, currency };
+}
+
 export type AgencyCashPosition = {
-  /** Entrées espèces : somme des écritures `comptaEncaissements` (type encaissement), pas le ledger. */
+  /** Encaissements comptables (`comptaEncaissements`) — indicateur de contrôle, ne définit pas le solde caisse. */
   totalCashIn: number;
   totalCashOut: number;
+  /** Solde caisse espèces = ledger `accounts` (caisse physique agence), jamais dérivé du miroir ni de comptaEncaissements − sorties. */
   soldeCash: number;
   transactionCount: number;
   /** Nombre de documents `comptaEncaissements` agrégés pour totalCashIn (période ou tout selon l’appel). */
@@ -170,8 +212,8 @@ function aggregateLedgerCashOutflowsOnly(
 }
 
 /**
- * Caisse agence : entrées = écritures comptables `comptaEncaissements` (validation session) ;
- * sorties = financialTransactions débitant la caisse physique ; solde affiché = solde ledger caisse.
+ * Caisse agence : `totalCashIn` / `totalCashOut` restent des indicateurs (compta + journal) ;
+ * **`soldeCash` = solde ledger caisse physique uniquement.**
  */
 export async function getAgencyCashPosition(
   companyId: string,
@@ -192,32 +234,27 @@ export async function getAgencyCashPosition(
 
   const caisseDisponibleAgregat = totalCashIn - totalCashOut;
   const ledgerRaw = cashLedgerSnap.exists() ? (cashLedgerSnap.data() as Record<string, unknown>) : null;
-  const ledgerBal = ledgerRaw != null ? Number(ledgerRaw.balance ?? ledgerRaw.currentBalance ?? 0) : null;
+  const ledgerBal = ledgerRaw != null ? Number(ledgerRaw.balance ?? ledgerRaw.currentBalance ?? 0) : 0;
+  const soldeCash = ledgerBal;
+
   const mirrorBal = mirrorSnap.exists()
     ? Number((mirrorSnap.data() as Record<string, unknown>).currentBalance ?? 0)
     : null;
-  /**
-   * Priorité : miroir `financialAccounts` (dépenses agence), sinon ledger `accounts`, sinon agrégat compta − sorties.
-   * Si miroir et ledger sont à 0 mais des encaissements comptables existent, utiliser l’agrégat.
-   */
-  let soldeCash: number;
-  if (mirrorSnap.exists()) {
-    const m = Number(mirrorBal ?? 0);
-    const lb = ledgerBal ?? 0;
-    if (m !== 0) soldeCash = m;
-    else if (lb !== 0) soldeCash = lb;
-    else soldeCash = caisseDisponibleAgregat;
-  } else if (ledgerBal != null && ledgerBal !== 0) {
-    soldeCash = ledgerBal;
-  } else {
-    soldeCash = caisseDisponibleAgregat;
+  if (mirrorBal != null && Math.abs(mirrorBal - soldeCash) > MIRROR_LEDGER_EPSILON) {
+    console.error("[caisse] getAgencyCashPosition : ledger ≠ miroir financialAccounts.", {
+      companyId,
+      agencyId,
+      soldeLedger: soldeCash,
+      mirror: mirrorBal,
+      comptaMoinsSortiesIndicatif: caisseDisponibleAgregat,
+    });
   }
 
   console.log("[AgenceCompta][caisse]", {
-    totalEncaissements: totalCashIn,
-    totalDepenses: totalCashOut,
-    caisseDisponibleAgregat,
-    soldeLedgerCash: soldeCash,
+    totalEncaissementsCompta: totalCashIn,
+    totalDepensesLedger: totalCashOut,
+    comptaMoinsSortiesIndicatif: caisseDisponibleAgregat,
+    soldeCashLedger: soldeCash,
   });
 
   return {
@@ -231,8 +268,8 @@ export async function getAgencyCashPosition(
 }
 
 /**
- * Période : entrées espèces = `comptaEncaissements` sur [rangeFrom, rangeToExclusive) ;
- * sorties = ledger (financialTransactions, performedAt) débitant la caisse physique.
+ * Période : `totalCashIn` / `totalCashOut` = indicateurs (compta + mouvements sur la fenêtre).
+ * **`soldeCash` = solde ledger caisse espèces au moment de l’appel** (pas compta − sorties sur la période).
  */
 export async function getAgencyCashLedgerPeriodSummary(
   companyId: string,
@@ -241,7 +278,7 @@ export async function getAgencyCashLedgerPeriodSummary(
   rangeToExclusive: Date
 ): Promise<AgencyCashPosition & { capped: boolean }> {
   const endInclusive = new Date(rangeToExclusive.getTime() - 1);
-  const [compta, rows] = await Promise.all([
+  const [compta, rows, ledgerNow] = await Promise.all([
     sumComptaEncaissementsInRange(companyId, agencyId, rangeFrom, rangeToExclusive),
     listFinancialTransactionsByPeriod(
       companyId,
@@ -249,15 +286,18 @@ export async function getAgencyCashLedgerPeriodSummary(
       Timestamp.fromDate(endInclusive),
       agencyId
     ),
+    getLedgerBalances(companyId, agencyId),
   ]);
   const totalCashIn = compta.total;
   const totalCashOut = aggregateLedgerCashOutflowsOnly(rows, agencyId);
-  const soldeCash = totalCashIn - totalCashOut;
+  const soldeCash = Number(ledgerNow.cash ?? 0);
   const capped = rows.length >= 5000 || compta.capped;
+  const indicatifPeriode = totalCashIn - totalCashOut;
   console.log("[AgenceCompta][caisse][periode]", {
-    totalEncaissements: totalCashIn,
-    totalDepenses: totalCashOut,
-    caisseDisponibleAgregat: soldeCash,
+    encaissementsComptaPeriode: totalCashIn,
+    sortiesLedgerPeriode: totalCashOut,
+    indicatifComptaMoinsSortiesPeriode: indicatifPeriode,
+    soldeCashLedgerCourant: soldeCash,
   });
   return {
     totalCashIn,
@@ -296,9 +336,7 @@ export async function getAgencyLedgerPaymentReceivedTotalForPeriod(
 }
 
 /**
- * Caisse opérationnelle affichée pour la trésorerie agence : solde caisse ledger (`accounts`, type cash).
- * Ne pas additionner les `computedDifference` des sessions : le ledger est déjà crédité du montant réellement remis
- * à la validation comptable ; la somme des écarts (reçu − attendu) fausserait le disponible (ex. −150 000 affiché).
+ * Alias métier trésorerie : même source que `getAgencyTreasuryLedgerCashDisplay` (ledger uniquement).
  */
 export async function getAgencyOperationalAvailableCash(
   companyId: string,
@@ -309,12 +347,11 @@ export async function getAgencyOperationalAvailableCash(
   availableCash: number;
   breakdown: { guichetAdjustment: number; courrierAdjustment: number };
 }> {
-  const ledger = await getLedgerBalances(companyId, agencyId);
-  const accountingCash = Number(ledger.cash ?? 0);
+  const { ledgerCash } = await getAgencyTreasuryLedgerCashDisplay(companyId, agencyId);
   return {
-    accountingCash,
+    accountingCash: ledgerCash,
     adjustmentTotal: 0,
-    availableCash: accountingCash,
+    availableCash: ledgerCash,
     breakdown: { guichetAdjustment: 0, courrierAdjustment: 0 },
   };
 }

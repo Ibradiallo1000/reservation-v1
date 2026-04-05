@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
 import { createExpense, EXPENSE_CATEGORIES } from "@/modules/compagnie/treasury/expenses";
 import { getAccount } from "@/modules/compagnie/treasury/financialAccounts";
-import { getAgencyOperationalAvailableCash } from "@/modules/agence/comptabilite/agencyCashAuditService";
+import { getAgencyTreasuryLedgerCashDisplay } from "@/modules/agence/comptabilite/agencyCashAuditService";
 import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
 import { db } from "@/firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
@@ -49,6 +49,7 @@ export default function AgencyTreasuryNewOperationPage() {
     currency: string;
   } | null>(null);
   const [availableCash, setAvailableCash] = useState<number>(0);
+  const [mirrorCashSecondary, setMirrorCashSecondary] = useState<number | null>(null);
 
   useEffect(() => {
     if (!companyId) {
@@ -63,14 +64,12 @@ export default function AgencyTreasuryNewOperationPage() {
     }
     Promise.all([
       getAccount(companyId, agencyCashAccountId(defaultAgencyId)),
-      getAgencyOperationalAvailableCash(companyId, defaultAgencyId).catch(() => null),
+      getAgencyTreasuryLedgerCashDisplay(companyId, defaultAgencyId).catch(() => null),
     ])
-      .then(([cashAccount, ops]) => {
+      .then(([cashAccount, primary]) => {
         setAgencyCashAccount(cashAccount);
-        const mirror = Number(cashAccount?.currentBalance ?? 0);
-        const fromLedger = Number(ops?.availableCash ?? 0);
-        /** Même source que createExpense (financialAccounts) ; le solde ledger seul peut rester à 0 si miroir désynchronisé. */
-        setAvailableCash(cashAccount != null ? mirror : fromLedger);
+        setAvailableCash(primary != null ? primary.ledgerCash : 0);
+        setMirrorCashSecondary(primary?.mirrorCash ?? null);
       })
       .finally(() => setLoading(false));
   }, [companyId, defaultAgencyId]);
@@ -201,9 +200,14 @@ export default function AgencyTreasuryNewOperationPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Source (caisse agence)</label>
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
                   {agencyCashAccount
-                    ? `Caisse agence : ${formatCurrency(availableCash, agencyCashAccount.currency)}`
+                    ? `Caisse agence (ledger) : ${formatCurrency(availableCash, agencyCashAccount.currency)}`
                     : "Aucune caisse agence configurée"}
                 </div>
+                {mirrorCashSecondary != null && agencyCashAccount ? (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Compte miroir (référence) : {formatCurrency(mirrorCashSecondary, agencyCashAccount.currency)}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -232,7 +236,7 @@ export default function AgencyTreasuryNewOperationPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Disponible en caisse: {formatCurrency(availableCash, agencyCashAccount?.currency ?? "XOF")}
+                  Disponible (ledger) : {formatCurrency(availableCash, agencyCashAccount?.currency ?? "XOF")}
                 </p>
               </div>
             </div>

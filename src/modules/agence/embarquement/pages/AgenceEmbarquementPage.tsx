@@ -47,6 +47,15 @@ import {
   findTripInstanceBySlot,
   tripInstanceRef,
 } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import {
+  buildStopIdToOrderMap,
+  effectiveAgencyEscaleStopOrder,
+  effectiveDestinationStopOrder,
+  effectiveOriginStopOrder,
+  resolveStopByStopId,
+  warnIfStopIdOrderMismatch,
+} from "@/modules/compagnie/routes/stopResolution";
 import {
   TRIP_INSTANCE_STATUT_METIER,
   type TripInstanceStatutMetier,
@@ -152,6 +161,44 @@ const EMBARK_DIAG_ENABLED = import.meta.env.DEV;
 function embarkDiag(event: string, data: Record<string, unknown>) {
   if (!EMBARK_DIAG_ENABLED) return;
   console.info(`[EMBARK_DIAG] ${event}`, { ...data, ts: Date.now() });
+}
+
+/** Dépassement d’escale au scan : même logique que BoardingEscale (effectiveDestinationStopOrder + agence escale). */
+async function computeScanOvertravelEmbarquement(
+  companyId: string,
+  d: Record<string, unknown>,
+  agencyInfo: unknown
+): Promise<boolean> {
+  const ai = agencyInfo as {
+    type?: string;
+    stopOrder?: number;
+    stopId?: string;
+    routeId?: string;
+  } | null;
+  if (!ai || String(ai.type ?? "").toLowerCase() !== "escale") return false;
+  let routeId = typeof ai.routeId === "string" ? ai.routeId.trim() : "";
+  if (!routeId) {
+    const tid = String(d.tripInstanceId ?? "").trim();
+    if (tid) {
+      const tiSnap = await getDoc(tripInstanceRef(companyId, tid));
+      if (tiSnap.exists()) {
+        routeId = String((tiSnap.data() as { routeId?: string }).routeId ?? "").trim();
+      }
+    }
+  }
+  const emptyMap = new Map<string, number>();
+  const overtravelAt = (idToOrder: Map<string, number>) => {
+    const agencyOrder = effectiveAgencyEscaleStopOrder(ai, idToOrder);
+    const dd = effectiveDestinationStopOrder(d, idToOrder);
+    const oo = effectiveOriginStopOrder(d, idToOrder);
+    if (agencyOrder == null || dd == null) return false;
+    if (oo != null && oo > agencyOrder) return false;
+    return dd < agencyOrder;
+  };
+  if (!routeId) return overtravelAt(emptyMap);
+  const stops = await getRouteStops(companyId, routeId);
+  const idToOrder = buildStopIdToOrderMap(stops);
+  return overtravelAt(idToOrder);
 }
 
 interface WeeklyTrip {
@@ -1225,9 +1272,24 @@ useEffect(() => {
       }
 
       // Arrivée auto à l'escale si embarquement depuis une escale (avant action passager)
-      if (statut === "embarqué" && (agencyInfo as { type?: string; stopOrder?: number })?.type === "escale") {
-        const stopOrder = (agencyInfo as { stopOrder?: number }).stopOrder;
-        if (stopOrder != null && companyId) {
+      if (statut === "embarqué" && (agencyInfo as { type?: string })?.type === "escale") {
+        const ai = agencyInfo as { stopOrder?: number; stopId?: string; routeId?: string };
+        if (
+          companyId &&
+          ai.routeId &&
+          ai.stopId != null &&
+          String(ai.stopId).trim() !== "" &&
+          ai.stopOrder != null &&
+          !Number.isNaN(Number(ai.stopOrder))
+        ) {
+          await warnIfStopIdOrderMismatch(companyId, ai.routeId, ai.stopId, Number(ai.stopOrder));
+        }
+        let stopOrder = ai.stopOrder != null ? Number(ai.stopOrder) : null;
+        if ((stopOrder == null || Number.isNaN(stopOrder)) && ai.stopId && ai.routeId && companyId) {
+          const rs = await resolveStopByStopId(companyId, ai.routeId, String(ai.stopId));
+          stopOrder = rs?.order ?? null;
+        }
+        if (stopOrder != null && companyId && !Number.isNaN(stopOrder)) {
           const resData = embarkPrecheckSnap?.exists()
             ? (embarkPrecheckSnap.data() as { tripInstanceId?: string; trajetId?: string })
             : {};
@@ -2304,9 +2366,7 @@ useEffect(() => {
             const resSnap = await getDoc(resRef);
             if (resSnap.exists()) {
               const d = resSnap.data() as Record<string, unknown>;
-              const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
-              const currentStopOrder = (agencyInfo as { type?: string; stopOrder?: number } | null)?.type === "escale" ? (agencyInfo as { stopOrder?: number }).stopOrder : undefined;
-              const overtravel = currentStopOrder != null && destOrder != null && destOrder < currentStopOrder;
+              const overtravel = await computeScanOvertravelEmbarquement(companyId, d, agencyInfo);
               const eff = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string });
               scanDetails = {
                 nomClient: (d.nomClient as string) ?? undefined,
@@ -2436,9 +2496,7 @@ useEffect(() => {
                   if (isDecoderStale()) return;
                   if (resSnap.exists()) {
                     const d = resSnap.data() as Record<string, unknown>;
-                    const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
-                    const currentStopOrder = (agencyInfo as { type?: string; stopOrder?: number } | null)?.type === "escale" ? (agencyInfo as { stopOrder?: number }).stopOrder : undefined;
-                    const overtravel = currentStopOrder != null && destOrder != null && destOrder < currentStopOrder;
+                    const overtravel = await computeScanOvertravelEmbarquement(companyId!, d, agencyInfo);
                     scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
                   }
                 } catch (_) {}
@@ -2527,9 +2585,7 @@ useEffect(() => {
                   if (isDecoderStale()) return;
                   if (resSnap.exists()) {
                     const d = resSnap.data() as Record<string, unknown>;
-                    const destOrder = d.destinationStopOrder != null ? Number(d.destinationStopOrder) : null;
-                    const currentStopOrder = (agencyInfo as { type?: string; stopOrder?: number } | null)?.type === "escale" ? (agencyInfo as { stopOrder?: number }).stopOrder : undefined;
-                    const overtravel = currentStopOrder != null && destOrder != null && destOrder < currentStopOrder;
+                    const overtravel = await computeScanOvertravelEmbarquement(companyId!, d, agencyInfo);
                     scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
                   }
                 } catch (_) {}

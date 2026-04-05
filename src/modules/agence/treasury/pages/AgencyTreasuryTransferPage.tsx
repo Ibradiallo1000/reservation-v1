@@ -7,7 +7,7 @@ import {
   getAccount,
   listAccounts,
 } from "@/modules/compagnie/treasury/financialAccounts";
-import { getAgencyOperationalAvailableCash } from "@/modules/agence/comptabilite/agencyCashAuditService";
+import { getAgencyTreasuryLedgerCashDisplay } from "@/modules/agence/comptabilite/agencyCashAuditService";
 import { listCompanyBanks } from "@/modules/compagnie/treasury/companyBanks";
 import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
 import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
@@ -58,6 +58,7 @@ export default function AgencyTreasuryTransferPage() {
     currency: string;
   } | null>(null);
   const [availableAgencyCash, setAvailableAgencyCash] = useState<number>(0);
+  const [mirrorCashSecondary, setMirrorCashSecondary] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [toAccountId, setToAccountId] = useState("");
@@ -88,17 +89,16 @@ export default function AgencyTreasuryTransferPage() {
             )
           )
         );
-        const [cashAccount, banks, ops] = await Promise.all([
+        const [cashAccount, banks, primary] = await Promise.all([
           getAccount(companyId, agencyCashAccountId(agencyId)),
           listAccounts(companyId, { agencyId: null, accountType: "company_bank" }),
-          getAgencyOperationalAvailableCash(companyId, agencyId).catch(() => null),
+          getAgencyTreasuryLedgerCashDisplay(companyId, agencyId).catch(() => null),
         ]);
         if (!cancelled) {
           setAgencyCashAccount(cashAccount);
           setCompanyBankAccounts(banks);
-          const mirror = Number(cashAccount?.currentBalance ?? 0);
-          const fromLedger = Number(ops?.availableCash ?? 0);
-          setAvailableAgencyCash(cashAccount != null ? mirror : fromLedger);
+          setAvailableAgencyCash(primary != null ? primary.ledgerCash : 0);
+          setMirrorCashSecondary(primary?.mirrorCash ?? null);
         }
       } catch (e) {
         console.error("[AgencyTreasuryTransferPage] chargement comptes", e);
@@ -176,7 +176,10 @@ export default function AgencyTreasuryTransferPage() {
   }, [companyId, agencyId]);
 
   const handleSubmit = async () => {
-    if (!companyId || !user?.uid) return;
+    if (!companyId || !user?.uid) {
+      toast.error("Session invalide : reconnectez-vous.");
+      return;
+    }
     if (!agencyId) {
       toast.error("Aucune agence associée à ce compte.");
       return;
@@ -211,7 +214,7 @@ export default function AgencyTreasuryTransferPage() {
         amount: numericAmount,
         currency,
         initiatedBy: user.uid,
-        initiatedByRole: Array.isArray(user?.role) ? user.role[0] ?? null : user?.role ?? null,
+        initiatedByRoles: roles,
         description: description.trim() || "Versement caisse agence vers banque compagnie",
       });
       toast.success("Demande de versement créée. En attente de validation chef d'agence.");
@@ -234,7 +237,7 @@ export default function AgencyTreasuryTransferPage() {
         companyId,
         requestId,
         managerId: user.uid,
-        managerRole: Array.isArray(user?.role) ? user.role[0] ?? null : user?.role ?? null,
+        managerRoles: roles,
       });
       toast.success("Versement validé et exécuté.");
       const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
@@ -255,7 +258,7 @@ export default function AgencyTreasuryTransferPage() {
         companyId,
         requestId,
         managerId: user.uid,
-        managerRole: Array.isArray(user?.role) ? user.role[0] ?? null : user?.role ?? null,
+        managerRoles: roles,
         reason,
       });
       toast.success("Demande de versement refusée.");
@@ -301,9 +304,14 @@ export default function AgencyTreasuryTransferPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Caisse agence (automatique)</label>
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
                   {agencyCashAccount
-                    ? `Caisse agence : ${formatCurrency(availableAgencyCash, agencyCashAccount.currency)}`
+                    ? `Caisse agence (ledger) : ${formatCurrency(availableAgencyCash, agencyCashAccount.currency)}`
                     : "Aucune caisse agence configurée"}
                 </div>
+                {mirrorCashSecondary != null && agencyCashAccount ? (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Compte miroir (référence) : {formatCurrency(mirrorCashSecondary, agencyCashAccount.currency)}
+                  </p>
+                ) : null}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Destination (banque compagnie)</label>
@@ -333,7 +341,7 @@ export default function AgencyTreasuryTransferPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Disponible en caisse: {formatCurrency(availableAgencyCash, agencyCashAccount?.currency ?? "XOF")}
+                  Disponible (ledger) : {formatCurrency(availableAgencyCash, agencyCashAccount?.currency ?? "XOF")}
                 </p>
               </div>
               <div>
@@ -349,7 +357,7 @@ export default function AgencyTreasuryTransferPage() {
             </div>
 
             {canInitiateTransfer ? (
-              <ActionButton onClick={handleSubmit} disabled={submitting}>
+              <ActionButton type="button" onClick={() => void handleSubmit()} disabled={submitting}>
                 {submitting ? "Traitement..." : "Initier le versement"}
               </ActionButton>
             ) : null}

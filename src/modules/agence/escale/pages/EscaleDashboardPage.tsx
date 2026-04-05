@@ -125,13 +125,18 @@ export default function EscaleDashboardPage() {
         setLoading(false);
         return;
       }
-      const ad = agencySnap.data() as { type?: string; routeId?: string; stopOrder?: number; timezone?: string };
+      const ad = agencySnap.data() as {
+        type?: string;
+        routeId?: string;
+        stopOrder?: number;
+        stopId?: string;
+        timezone?: string;
+      };
       const escaleTz = resolveAgencyTimezone(ad);
       const typ = (ad.type ?? "principale").toLowerCase();
       const routeId = ad.routeId ?? null;
-      const stopOrder = ad.stopOrder ?? null;
+      let stopOrder = ad.stopOrder ?? null;
       setAgencyRouteId(routeId);
-      setAgencyStopOrder(stopOrder);
 
       if (typ !== "escale" || !routeId) {
         setError("Cette agence n'est pas configurée en escale (type=escale, routeId et stopOrder requis).");
@@ -148,7 +153,12 @@ export default function EscaleDashboardPage() {
       }
 
       const stops = await getRouteStops(user.companyId, routeId);
-      const myStop = stopOrder != null ? stops.find((s) => s.order === stopOrder) : null;
+      let myStop = stopOrder != null ? stops.find((s) => s.order === stopOrder) : null;
+      if (!myStop && ad.stopId) {
+        myStop = stops.find((s) => s.id === ad.stopId) ?? null;
+        if (myStop) stopOrder = myStop.order;
+      }
+      setAgencyStopOrder(stopOrder);
       setStop(myStop ?? null);
       if (!myStop) {
         setError("Escale (stopOrder) introuvable sur cette route.");
@@ -360,6 +370,7 @@ export default function EscaleDashboardPage() {
         tripInstanceId,
         routeId: agencyRouteId,
         stopOrder: agencyStopOrder,
+        stopId: stop?.id ?? undefined,
         originEscaleCity: stop?.city ?? undefined,
       },
     });

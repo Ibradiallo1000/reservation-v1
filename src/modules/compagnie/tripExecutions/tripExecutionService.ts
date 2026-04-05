@@ -31,11 +31,13 @@ import { getAffectationForBoarding } from "../fleet/affectationService";
 import {
   tripInstanceRef,
   buildTripInstanceId,
+  getTripInstance,
   updateTripInstanceStatutMetier,
 } from "../tripInstances/tripInstanceService";
 import type { TripInstanceDoc } from "../tripInstances/tripInstanceTypes";
 import { TRIP_INSTANCE_STATUT_METIER } from "../tripInstances/tripInstanceTypes";
 import { getRouteStops } from "../routes/routeStopsService";
+import { mergeQueryDocsUnique, resolveStop } from "../routes/stopResolution";
 import { getPassengersToDrop } from "../dropoff/dropoffService";
 import {
   type TripExecutionCheckpoint,
@@ -117,15 +119,33 @@ async function resolveDestinationAgencyId(companyId: string, targetArrivalCity: 
  * On évite un index supplémentaire sur boardingStatus en filtrant côté client.
  */
 async function countBoardedAtStop(companyId: string, tripInstanceId: string, stopOrder: number): Promise<number> {
-  const q = query(
+  const ti = await getTripInstance(companyId, tripInstanceId);
+  const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+  let originStopId: string | null = null;
+  if (routeId) {
+    const rs = await resolveStop(companyId, routeId, stopOrder);
+    originStopId = rs?.stopId ?? null;
+  }
+  const qOrder = query(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
     where("originStopOrder", "==", stopOrder)
   );
-  const snap = await getDocs(q);
+  const snapOrder = await getDocs(qOrder);
+  let docs = snapOrder.docs;
+  if (originStopId) {
+    const qId = query(
+      collectionGroup(db, "reservations"),
+      where("companyId", "==", companyId),
+      where("tripInstanceId", "==", tripInstanceId),
+      where("originStopId", "==", originStopId)
+    );
+    const snapId = await getDocs(qId);
+    docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);
+  }
   let total = 0;
-  for (const d of snap.docs) {
+  for (const d of docs) {
     const data = d.data() as any;
     const boardingStatus = String(data.boardingStatus ?? "").toLowerCase();
     const dropoffStatus = String(data.dropoffStatus ?? "").toLowerCase();
@@ -143,15 +163,33 @@ async function countBoardedAtStop(companyId: string, tripInstanceId: string, sto
  * On évite un index supplémentaire sur dropoffStatus en filtrant côté client.
  */
 async function countDroppedAtStop(companyId: string, tripInstanceId: string, stopOrder: number): Promise<number> {
-  const q = query(
+  const ti = await getTripInstance(companyId, tripInstanceId);
+  const routeId = (ti as { routeId?: string | null })?.routeId ?? null;
+  let destinationStopId: string | null = null;
+  if (routeId) {
+    const rs = await resolveStop(companyId, routeId, stopOrder);
+    destinationStopId = rs?.stopId ?? null;
+  }
+  const qOrder = query(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
     where("destinationStopOrder", "==", stopOrder)
   );
-  const snap = await getDocs(q);
+  const snapOrder = await getDocs(qOrder);
+  let docs = snapOrder.docs;
+  if (destinationStopId) {
+    const qId = query(
+      collectionGroup(db, "reservations"),
+      where("companyId", "==", companyId),
+      where("tripInstanceId", "==", tripInstanceId),
+      where("destinationStopId", "==", destinationStopId)
+    );
+    const snapId = await getDocs(qId);
+    docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);
+  }
   let total = 0;
-  for (const d of snap.docs) {
+  for (const d of docs) {
     const data = d.data() as any;
     const dropoffStatus = String(data.dropoffStatus ?? "").toLowerCase();
     if (dropoffStatus !== "dropped") continue;

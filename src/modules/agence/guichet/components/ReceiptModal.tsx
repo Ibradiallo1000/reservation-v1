@@ -261,22 +261,16 @@ const ReceiptModal: React.FC<Props> = ({
           <hr />
 
           {blockFinalTicket ? (
-            <div
-              className={`no-print rounded-lg border px-3 py-2.5 text-center ${
-                isErrorEncaissement ? "border-red-300 bg-red-50 text-red-900" : "border-amber-200 bg-amber-50/80 text-amber-950"
-              }`}
-              style={{ marginTop: '12px', fontSize: '11px', lineHeight: 1.45 }}
-            >
-              {isErrorEncaissement ? (
-                <>
-                  <strong>Encaissement en erreur</strong>
-                  <br />
-                  La transaction n&apos;a pas été validée. Veuillez relancer l&apos;encaissement.
-                </>
-              ) : (
-                <>En attente de confirmation — ce document n&apos;est pas un billet valide.</>
-              )}
-            </div>
+            isErrorEncaissement ? (
+              <div
+                className="no-print rounded-lg border border-red-300 bg-red-50 px-3 py-2.5 text-center text-red-900"
+                style={{ marginTop: '12px', fontSize: '11px', lineHeight: 1.45 }}
+              >
+                <strong>Encaissement en erreur</strong>
+                <br />
+                La transaction n&apos;a pas été validée. Veuillez relancer l&apos;encaissement.
+              </div>
+            ) : null
           ) : (
             <>
               {/* QR — masqué tant que la transaction Firestore n’a pas réussi */}

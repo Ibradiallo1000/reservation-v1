@@ -16,6 +16,11 @@ import { collectionGroup, getDocs, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getTripInstance } from "./tripInstanceService";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
+import {
+  buildStopIdToOrderMap,
+  effectiveDestinationStopOrder,
+  effectiveOriginStopOrder,
+} from "@/modules/compagnie/routes/stopResolution";
 import { getReservedPlaces } from "./remainingPlacesUtils";
 
 const CONFIRMED_STATUTS = ["paye", "payé", "confirme", "confirmé", "validé"];
@@ -75,6 +80,7 @@ export async function computeSegmentOccupancy(
 
   const numSegments = stops.length - 1;
   const occupancy = new Array<number>(numSegments).fill(0);
+  const idToOrder = buildStopIdToOrderMap(stops);
 
   // Requires Firestore collection group index: reservations, tripInstanceId (ASC)
   const resSnap = await getDocs(
@@ -92,11 +98,11 @@ export async function computeSegmentOccupancy(
 
     let originOrder: number;
     let destOrder: number;
-    const o = docData.originStopOrder != null ? Number(docData.originStopOrder) : null;
-    const d = docData.destinationStopOrder != null ? Number(docData.destinationStopOrder) : null;
-    if (o != null && d != null && Number.isInteger(o) && Number.isInteger(d) && o < d) {
-      originOrder = o;
-      destOrder = d;
+    const eo = effectiveOriginStopOrder(docData, idToOrder);
+    const ed = effectiveDestinationStopOrder(docData, idToOrder);
+    if (eo != null && ed != null && eo < ed) {
+      originOrder = eo;
+      destOrder = ed;
     } else {
       const depart = (docData.depart ?? "").toString().trim();
       const arrivee = (docData.arrivee ?? "").toString().trim();
