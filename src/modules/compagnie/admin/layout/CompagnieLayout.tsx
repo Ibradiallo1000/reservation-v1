@@ -4,7 +4,6 @@ import React from "react";
 import { useLocation, useParams } from "react-router-dom";
 import {
   Settings,
-  BarChart2,
   MessageSquare,
   Gauge,
   DollarSign,
@@ -13,7 +12,6 @@ import {
   FileCheck,
   Users,
   ShieldCheck,
-  Wallet,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -189,25 +187,24 @@ const CompagnieLayout: React.FC = () => {
     };
   }, [currentCompanyId]);
 
-  // Navigation simplifiée (audit CEO) : Poste de pilotage, Réservations réseau, Finances, Flotte, Audit & contrôle
   const basePath = urlCompanyId
     ? `/compagnie/${urlCompanyId}`
     : "/compagnie";
 
   const sections: NavSection[] = [
-    { label: "Poste de pilotage", icon: Gauge, path: `${basePath}/command-center` },
-    { label: "Réservations réseau", icon: TrendingUp, path: `${basePath}/reservations-reseau`, end: false, badge: onlineProofsCount },
+    { label: "Dashboard", icon: Gauge, path: `${basePath}/command-center` },
+    { label: "Activité réseau", icon: TrendingUp, path: `${basePath}/reservations-reseau`, end: false, badge: onlineProofsCount },
     { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
-    { label: "Flotte", icon: Truck, path: `${basePath}/flotte` },
     {
       label: "Audit & contrôle",
       icon: FileCheck,
       path: `${basePath}/audit-controle`,
       badge: pendingCeoExpensesCount || undefined,
     },
+    { label: "Flotte", icon: Truck, path: `${basePath}/flotte` },
     { label: "Validation chef d'agence", icon: ShieldCheck, path: `${basePath}/comptabilite/validation` },
     { label: "Clients", icon: Users, path: `${basePath}/customers` },
-    { label: "Avis Clients", icon: MessageSquare, path: `${basePath}/avis-clients`, badge: pendingReviewsCount },
+    { label: "Avis clients", icon: MessageSquare, path: `${basePath}/avis-clients`, badge: pendingReviewsCount },
     { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },
   ];
 

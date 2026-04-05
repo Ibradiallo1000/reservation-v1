@@ -1,30 +1,19 @@
 /**
- * Réservations réseau (audit CEO) : fusion Performance Réseau + Opérations Réseau.
- * Affiche : réservations réseau, CA, remplissage et synthèse opérationnelle (source unique : getReservationsInRange).
+ * Activité réseau — billets + colis par agence et par trajet (hors grand livre).
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  limit,
-  doc,
-} from "firebase/firestore";
+import { useParams } from "react-router-dom";
+import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import { Link } from "react-router-dom";
-import { TrendingUp, Building2, Ticket, Calendar, Users, Truck } from "lucide-react";
+import { TrendingUp, Building2, Ticket, Package, MapPin } from "lucide-react";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard } from "@/ui";
 import { TimeFilterBar, RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
 import { RevenueReservationsChart } from "@/modules/compagnie/admin/components/CompanyDashboard/RevenueReservationsChart";
-import { NetworkHealthSummary } from "@/modules/compagnie/admin/components/CompanyDashboard/NetworkHealthSummary";
-import { CriticalAlertsPanel, type CriticalAlert } from "@/modules/compagnie/admin/components/CompanyDashboard/CriticalAlertsPanel";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
-import { useGlobalDataSnapshot } from "@/contexts/GlobalDataSnapshotContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageOfflineState } from "@/shared/ui/PageStates";
@@ -34,15 +23,13 @@ import {
   isPaidReservation,
   getNetworkCapacityOnly,
 } from "@/modules/compagnie/networkStats/networkStatsService";
-import { getNetworkOperationalStats } from "@/modules/compagnie/networkStats/networkOperationalService";
 import {
-  getNetworkSales,
-  type FinancialPeriod,
-} from "@/modules/finance/services/financialConsistencyService";
-import { getTodayBamako, getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
-import { getPreviousPeriod, calculateChange, type PeriodKind } from "@/shared/date/periodComparisonUtils";
-import { getDoc } from "firebase/firestore";
-import { Percent } from "lucide-react";
+  getNetworkActivityByAgency,
+  getRouteActivityRows,
+  type AgencyActivityRow,
+  type RouteActivityRow,
+} from "@/modules/compagnie/networkStats/networkActivityService";
+import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -58,15 +45,10 @@ function getDateKey(d: Date): string {
 export default function ReservationsReseauPage() {
   const { user } = useAuth();
   const { companyId: companyIdFromUrl } = useParams();
-  const navigate = useNavigate();
   const isOnline = useOnlineStatus();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
-  const userRoles: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [String(user.role)] : [];
-  const isFinanceView = userRoles.some((r) => ["company_accountant", "financial_director"].includes(String(r)));
-  const isCeoVisual = userRoles.some((r) => String(r) === "admin_compagnie");
   const money = useFormatCurrency();
   const globalPeriod = useGlobalPeriodContext();
-  const globalSnapshot = useGlobalDataSnapshot();
 
   const range: RangeKey =
     globalPeriod.preset === "day"
@@ -82,8 +64,6 @@ export default function ReservationsReseauPage() {
       if (v === "day") return globalPeriod.setPreset("day");
       if (v === "month") return globalPeriod.setPreset("month");
       if (v === "custom") return globalPeriod.setPreset("custom");
-
-      // Map legacy dashboard ranges to a locked custom range (still global, URL-synced).
       const now = new Date();
       if (v === "prev_month") {
         const firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -140,25 +120,25 @@ export default function ReservationsReseauPage() {
     return { dateFrom: start, dateTo: end, periodLabel: label };
   }, [globalPeriod.startDate, globalPeriod.endDate]);
 
-  // ——— Une seule source de vérité : réservations chargées UNE FOIS ———
   const [reservationsInRange, setReservationsInRange] = useState<Awaited<ReturnType<typeof getReservationsInRange>>>([]);
   const [reservationsLoading, setReservationsLoading] = useState(true);
-  const [company, setCompany] = useState<{ id: string; nom?: string; couleurPrimaire?: string; [k: string]: unknown } | null>(null);
+  const [company, setCompany] = useState<{
+    id: string;
+    nom?: string;
+    couleurPrimaire?: string;
+    couleurSecondaire?: string;
+  } | null>(null);
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
   const [capacity, setCapacity] = useState<number | null>(null);
-  const [sessionsOpen, setSessionsOpen] = useState<number | null>(null);
-  const [prevStats, setPrevStats] = useState<{
-    totalRevenue: number;
-    totalTickets: number;
-    activeAgencies: number;
-    comparisonLabel: string;
-  } | null>(null);
+  const [agencyActivity, setAgencyActivity] = useState<AgencyActivityRow[]>([]);
+  const [routeRows, setRouteRows] = useState<RouteActivityRow[]>([]);
+  const [activityLoading, setActivityLoading] = useState(true);
+
   const startStr = globalPeriod.startDate;
   const endStr = globalPeriod.endDate;
   const periodStart = getStartOfDayInBamako(startStr);
   const periodEnd = getEndOfDayInBamako(endStr);
 
-  // Chargement réservations période (graphique, KPI, cartes embedded, remplissage).
   useEffect(() => {
     if (!companyId) {
       setReservationsInRange([]);
@@ -167,21 +147,28 @@ export default function ReservationsReseauPage() {
     }
     setReservationsLoading(true);
     getReservationsInRange(companyId, periodStart, periodEnd)
-      .then((list) => {
-        setReservationsInRange(list);
-      })
+      .then(setReservationsInRange)
       .catch(() => setReservationsInRange([]))
       .finally(() => setReservationsLoading(false));
   }, [companyId, periodStart.getTime(), periodEnd.getTime()]);
 
-  // Compagnie + liste agences (pour noms dans le tableau)
   useEffect(() => {
     if (!companyId) return;
     Promise.all([
       getDoc(doc(db, "companies", companyId)),
       getDocs(collection(db, "companies", companyId, "agences")),
     ]).then(([companySnap, agencesSnap]) => {
-      if (companySnap.exists()) setCompany({ id: companyId, ...companySnap.data() });
+      if (companySnap.exists()) {
+        setCompany({
+          id: companyId,
+          ...companySnap.data(),
+        } as {
+          id: string;
+          nom?: string;
+          couleurPrimaire?: string;
+          couleurSecondaire?: string;
+        });
+      }
       setAgencies(
         agencesSnap.docs.map((d) => {
           const data = d.data() as { nom?: string; nomAgence?: string };
@@ -191,7 +178,6 @@ export default function ReservationsReseauPage() {
     }).catch(() => {});
   }, [companyId]);
 
-  // Capacité réseau (remplissage = sièges réservés / capacité, dérivé avec reservationsInRange)
   useEffect(() => {
     if (!companyId) return;
     getNetworkCapacityOnly(companyId, startStr, endStr)
@@ -199,39 +185,40 @@ export default function ReservationsReseauPage() {
       .catch(() => setCapacity(null));
   }, [companyId, startStr, endStr]);
 
-  // Période précédente (comparaison — ventes/billets couche unique, agences opérationnel)
   useEffect(() => {
-    if (!companyId) return;
-    const periodForCompare: PeriodKind = range === "day" ? "day" : range === "custom" ? "custom" : "month";
-    const { previousStart, previousEnd, comparisonLabel } = getPreviousPeriod(dateFrom, dateTo, periodForCompare);
-    const prevPeriod: FinancialPeriod = { dateFrom: previousStart, dateTo: previousEnd };
+    if (!companyId || agencies.length === 0) {
+      setAgencyActivity([]);
+      setRouteRows([]);
+      setActivityLoading(false);
+      return;
+    }
+    setActivityLoading(true);
     Promise.all([
-      getNetworkSales(companyId, prevPeriod),
-      getNetworkOperationalStats(companyId, previousStart, previousEnd),
+      getNetworkActivityByAgency(companyId, periodStart, periodEnd, agencies),
+      getRouteActivityRows(companyId, periodStart, periodEnd),
     ])
-      .then(([sales, operational]) => {
-        setPrevStats({
-          totalRevenue: sales.total,
-          totalTickets: sales.tickets,
-          activeAgencies: operational.activeAgencies,
-          comparisonLabel,
-        });
+      .then(([byAg, routes]) => {
+        setAgencyActivity(byAg);
+        setRouteRows(routes);
       })
-      .catch(() => setPrevStats(null));
-  }, [companyId, range, dateFrom, dateTo]);
+      .catch(() => {
+        setAgencyActivity([]);
+        setRouteRows([]);
+      })
+      .finally(() => setActivityLoading(false));
+  }, [companyId, agencies, periodStart.getTime(), periodEnd.getTime()]);
 
-  // ——— Tout dérivé de reservationsInRange (aucune autre requête) ———
   const paidReservationsInRange = useMemo(
     () => reservationsInRange.filter((r) => isPaidReservation(r.statut)),
     [reservationsInRange]
   );
 
-  const billetsVendus = useMemo(
-    () => paidReservationsInRange.length,
-    [paidReservationsInRange]
-  );
   const caTotal = useMemo(
     () => paidReservationsInRange.reduce((sum, r) => sum + (Number(r.montant) || 0), 0),
+    [paidReservationsInRange]
+  );
+  const billetsPlaces = useMemo(
+    () => paidReservationsInRange.reduce((s, r) => s + (Number(r.seatsGo) || 1), 0),
     [paidReservationsInRange]
   );
   const activeAgenciesCount = useMemo(
@@ -239,235 +226,167 @@ export default function ReservationsReseauPage() {
     [paidReservationsInRange]
   );
 
-  const todayBamako = getTodayBamako();
-  const reservationsTodayCount = useMemo(() => {
-    return paidReservationsInRange.filter((r) => {
-      const dateKeyBamako = dayjs(r.createdAt).tz("Africa/Bamako").format("YYYY-MM-DD");
-      return dateKeyBamako === todayBamako;
-    }).length;
-  }, [paidReservationsInRange, todayBamako]);
-
-  const perAgency = useMemo(() => {
-    const map = new Map<string, { id: string; nom: string; revenus: number; billets: number }>();
-    agencies.forEach((a) => map.set(a.id, { id: a.id, nom: a.nom, revenus: 0, billets: 0 }));
-    paidReservationsInRange.forEach((r) => {
-      const curr = map.get(r.agencyId);
-      if (curr) {
-        curr.revenus += r.montant;
-        curr.billets += 1;
-      } else {
-        map.set(r.agencyId, { id: r.agencyId, nom: r.agencyId, revenus: r.montant, billets: 1 });
-      }
-    });
-    return Array.from(map.values());
-  }, [agencies, paidReservationsInRange]);
-
-  const chartData = useMemo(
-    () => buildChartDataFromReservations(paidReservationsInRange, startStr, endStr),
-    [paidReservationsInRange, startStr, endStr]
-  );
-
-  /** Places réservées (sièges) — même liste que les KPI, pour remplissage = sièges / capacité. */
-  const seatsReservedInPeriod = useMemo(
-    () => paidReservationsInRange.reduce((s, r) => s + (Number(r.seatsGo) || 1), 0),
-    [paidReservationsInRange]
-  );
+  const seatsReservedInPeriod = billetsPlaces;
   const fillRatePctFromReservations = useMemo(() => {
     const cap = capacity ?? 0;
     if (cap <= 0) return null;
     return Math.round((seatsReservedInPeriod / cap) * 100);
   }, [capacity, seatsReservedInPeriod]);
 
-  const REVENUE_DROP_RISK_THRESHOLD = 15;
-  const healthyAgencies = useMemo(
-    () => perAgency.filter((a) => a.revenus > 0).length,
-    [perAgency]
+  const chartData = useMemo(
+    () => buildChartDataFromReservations(paidReservationsInRange, startStr, endStr),
+    [paidReservationsInRange, startStr, endStr]
   );
-  const atRiskAgencies = useMemo(
-    () => perAgency.filter((a) => a.revenus === 0).length,
-    [perAgency]
-  );
-  const trend = "stable" as const;
-  const criticalAlerts: CriticalAlert[] = [];
 
-  // Sessions ouvertes (shifts actifs) — non inclus dans networkStats
-  useEffect(() => {
-    if (!companyId) return;
-    (async () => {
-      try {
-        const agencesSnap = await getDocs(collection(db, "companies", companyId, "agences"));
-        let openSessionsCount = 0;
-        for (const doc of agencesSnap.docs) {
-          const agencyId = doc.id;
-          const shiftsRef = collection(db, "companies", companyId, "agences", agencyId, "shifts");
-          const qShifts = query(shiftsRef, where("status", "in", ["active", "paused"]), limit(20));
-          const shiftsSnap = await getDocs(qShifts);
-          openSessionsCount += shiftsSnap.size;
-        }
-        setSessionsOpen(openSessionsCount);
-      } catch {
-        setSessionsOpen(null);
-      }
-    })();
-  }, [companyId]);
-
-  const capaciteReseau = capacity ?? 0;
-  const statsLoading = reservationsLoading;
+  const agencyRowsWithNames = useMemo(() => {
+    const name = (id: string) => agencies.find((a) => a.id === id)?.nom ?? id;
+    return agencyActivity.map((row) => ({
+      ...row,
+      name: name(row.agencyId),
+      remplissage: fillRatePctFromReservations,
+    }));
+  }, [agencyActivity, agencies, fillRatePctFromReservations]);
 
   if (!companyId) {
     return (
       <StandardLayoutWrapper>
-        <PageHeader title="Réservations réseau" />
+        <PageHeader title="Activité réseau" />
         <p className="text-sm text-muted-foreground">Identifiant de compagnie introuvable.</p>
       </StandardLayoutWrapper>
     );
   }
 
   const basePath = `/compagnie/${companyId}`;
-
-  const breadcrumb = [
-    { label: "Poste de pilotage", path: `${basePath}/command-center` },
-    { label: "Réservations réseau" },
-  ];
+  const statsLoading = reservationsLoading || activityLoading;
 
   return (
-    <StandardLayoutWrapper className={isFinanceView && !isCeoVisual ? "bg-gray-50 dark:bg-slate-900 rounded-xl p-4 border border-gray-200 dark:border-slate-700" : undefined}>
+    <StandardLayoutWrapper>
       <PageHeader
-        title="Réservations réseau"
-        breadcrumb={breadcrumb}
-        subtitle={`Ventes, réservations et remplissage (sièges / capacité) — Période : ${periodLabel}`}
-        primaryColorVar={isFinanceView && !isCeoVisual ? "" : undefined}
-        titleClassName={isFinanceView && !isCeoVisual ? "text-gray-900 dark:text-white" : undefined}
+        title="Activité réseau"
+        breadcrumb={[
+          { label: "Dashboard", path: `${basePath}/command-center` },
+          { label: "Activité réseau" },
+        ]}
+        subtitle={`Billets, colis et remplissage — ${periodLabel}`}
         right={
-          <div className="flex flex-wrap items-center gap-3">
-            <TimeFilterBar
-              range={range}
-              setRange={setRange}
-              customStart={customStart}
-              setCustomStart={setCustomStart}
-              customEnd={customEnd}
-              setCustomEnd={setCustomEnd}
-            />
-            <div className="text-xs text-slate-500">
-              {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
-              :{" "}
-              {globalSnapshot.snapshot.lastUpdatedAt
-                ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
-                : "—"}
-              <button
-                type="button"
-                onClick={() => void globalSnapshot.refresh()}
-                className="ml-2 rounded-md border border-slate-200 bg-white px-2 py-1 hover:bg-slate-50"
-              >
-                Rafraîchir
-              </button>
-            </div>
-          </div>
+          <TimeFilterBar
+            range={range}
+            setRange={setRange}
+            customStart={customStart}
+            setCustomStart={setCustomStart}
+            customEnd={customEnd}
+            setCustomEnd={setCustomEnd}
+          />
         }
       />
       {!isOnline && (
-        <PageOfflineState message="Connexion instable: certains blocs peuvent être retardés." />
+        <PageOfflineState message="Connexion instable : les données peuvent être incomplètes." />
       )}
 
-      {!isFinanceView && (
-        <>
-          {/* Synthèse opérationnelle — réservations aujourd'hui dérivées de reservationsInRange */}
-          <SectionCard title="Synthèse opérationnelle (aujourd'hui)" icon={Calendar} className="mb-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {statsLoading ? (
+          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[100px] rounded-lg" />)
+        ) : (
+          <>
+            <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
               <MetricCard
-                label="Réservations aujourd'hui"
-                value={reservationsLoading ? "—" : String(reservationsTodayCount)}
-                icon={Calendar}
+                label="Chiffre d'activité (billets)"
+                value={money(caTotal)}
+                icon={TrendingUp}
+                valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
               />
-              <MetricCard label="Sessions ouvertes" value={reservationsLoading ? "—" : (sessionsOpen ?? "—")} icon={Users} />
-              <MetricCard label="Véhicules disponibles" value="—" icon={Truck} />
-              <MetricCard label="Flotte totale" value="—" icon={Truck} />
-            </div>
-          </SectionCard>
-
-          {/* Taux de remplissage réseau + État du réseau (stratégique pour transporteurs) */}
-          <SectionCard title="Taux de remplissage réseau" icon={Percent} className="mb-6">
-            {statsLoading ? (
-              <div className="flex flex-wrap items-center gap-4 text-gray-500">Chargement…</div>
-            ) : (
-              <>
-                <p className="text-xs text-gray-500 dark:text-slate-400 mb-3">
-                  Même source que les KPIs : réservations payées de la période. Remplissage = sièges réservés / capacité.
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <MetricCard label="Réservations" value={String(billetsVendus)} icon={Ticket} />
-                  <MetricCard label="Capacité réseau" value={String(capaciteReseau)} icon={TrendingUp} />
-                  <MetricCard
-                    label="Remplissage"
-                    value={fillRatePctFromReservations != null ? `${fillRatePctFromReservations} %` : "—"}
-                    icon={Percent}
-                    valueColorVar={fillRatePctFromReservations != null && fillRatePctFromReservations >= 50 ? "var(--teliya-primary)" : undefined}
-                  />
-                </div>
-                {/* Indicateur réseau global pour le CEO */}
-                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-600">
-                  <span className="text-sm font-medium text-gray-700 dark:text-slate-300">État du réseau : </span>
-                  {fillRatePctFromReservations == null ? (
-                    <span className="text-gray-500 dark:text-slate-400">—</span>
-                  ) : fillRatePctFromReservations < 20 ? (
-                    <span className="inline-flex items-center gap-1.5 font-medium text-red-600 dark:text-red-400">
-                      <span aria-hidden>🔴</span> Réseau en alerte
-                    </span>
-                  ) : fillRatePctFromReservations < 40 ? (
-                    <span className="inline-flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
-                      <span aria-hidden>🟠</span> Activité faible
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400">
-                      <span aria-hidden>🟢</span> Réseau sain
-                    </span>
-                  )}
-                </div>
-              </>
-            )}
-          </SectionCard>
-        </>
-      )}
-
-      {/* KPIs période — couche unique (aligné CEO / Finances) */}
-      {statsLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-[110px] rounded-lg" />
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-          <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
+            </Link>
             <MetricCard
-              label="Ventes"
-              value={money(caTotal)}
-              icon={TrendingUp}
-              valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
-            />
-          </Link>
-          <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
-            <MetricCard
-              label="Réservations"
-              value={String(billetsVendus)}
+              label="Places vendues"
+              value={String(billetsPlaces)}
               icon={Ticket}
               valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
             />
-          </Link>
-          <Link to={`${basePath}/parametres`} className="block">
             <MetricCard
               label="Agences actives"
               value={`${activeAgenciesCount} / ${agencies.length || "—"}`}
               icon={Building2}
-              valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
             />
-          </Link>
-        </div>
-      )}
+            <MetricCard
+              label="Remplissage réseau"
+              value={fillRatePctFromReservations != null ? `${fillRatePctFromReservations} %` : "—"}
+              icon={TrendingUp}
+            />
+          </>
+        )}
+      </div>
+
+      <SectionCard title="Par agence" icon={Building2} className="mb-6">
+        {activityLoading ? (
+          <p className="text-sm text-slate-500">Chargement…</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {agencyRowsWithNames.map((a) => (
+              <div
+                key={a.agencyId}
+                className="rounded-xl border border-slate-200 dark:border-slate-600 p-4 bg-white dark:bg-slate-900/40"
+              >
+                <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white mb-2">
+                  <MapPin className="h-4 w-4 opacity-70" />
+                  {a.name}
+                </div>
+                <dl className="grid grid-cols-2 gap-2 text-sm">
+                  <dt className="text-slate-500">Activité</dt>
+                  <dd className="text-right font-medium">{money(a.ventes)}</dd>
+                  <dt className="text-slate-500">Places</dt>
+                  <dd className="text-right">{a.billets}</dd>
+                  <dt className="text-slate-500">Colis</dt>
+                  <dd className="text-right">{a.colis}</dd>
+                  <dt className="text-slate-500">Remplissage</dt>
+                  <dd className="text-right">
+                    {a.remplissage != null ? `${a.remplissage} %` : "—"}
+                  </dd>
+                </dl>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Évolution CA / réservations</CardTitle>
+          <CardTitle>Détail par trajet</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {activityLoading ? (
+            <p className="text-sm text-slate-500">Chargement…</p>
+          ) : routeRows.length === 0 ? (
+            <p className="text-sm text-slate-500">Aucune donnée pour cette période.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-600 text-left">
+                    <th className="py-2 pr-3">Trajet</th>
+                    <th className="py-2 pr-3 text-right">Billets (places)</th>
+                    <th className="py-2 pr-3 text-right">Colis</th>
+                    <th className="py-2 text-right">CA activité</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {routeRows.map((row) => (
+                    <tr key={row.trajet} className="border-b border-slate-100 dark:border-slate-800">
+                      <td className="py-2 pr-3 font-medium">{row.trajet}</td>
+                      <td className="py-2 pr-3 text-right">{row.billets}</td>
+                      <td className="py-2 pr-3 text-right">{row.colis}</td>
+                      <td className="py-2 text-right">{money(row.caActivite)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Évolution</CardTitle>
         </CardHeader>
         <CardContent>
           <RevenueReservationsChart
@@ -495,33 +414,6 @@ export default function ReservationsReseauPage() {
           />
         </CardContent>
       </Card>
-
-      {!isFinanceView && (
-        <>
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle>Santé du réseau</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <NetworkHealthSummary
-                totalAgencies={agencies.length}
-                healthyAgencies={healthyAgencies}
-                atRiskAgencies={atRiskAgencies}
-                trend={trend}
-              />
-            </CardContent>
-          </Card>
-
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle>Alertes par agence</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CriticalAlertsPanel alerts={criticalAlerts} loading={reservationsLoading} />
-            </CardContent>
-          </Card>
-        </>
-      )}
 
       <CompagnieReservationsPage embedded />
     </StandardLayoutWrapper>

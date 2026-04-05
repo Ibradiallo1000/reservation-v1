@@ -147,6 +147,8 @@ export interface ReservationInRange {
   createdAt: Date;
   montant: number;
   seatsGo: number;
+  depart?: string;
+  arrivee?: string;
 }
 
 /**
@@ -180,6 +182,8 @@ export async function getReservationsInRange(
       createdAt,
       montant: Number(data.montant ?? data.amount ?? 0) || 0,
       seatsGo: Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1,
+      depart: String(data.depart ?? data.departure ?? "").trim() || undefined,
+      arrivee: String(data.arrivee ?? data.arrival ?? "").trim() || undefined,
     };
   });
 }

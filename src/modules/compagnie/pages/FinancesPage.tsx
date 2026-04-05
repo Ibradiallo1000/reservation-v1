@@ -1,33 +1,30 @@
 /**
- * Menu Finances (audit CEO) : fusion Revenus & Liquidités + Finance — Caisse.
- * 3 onglets : CA | Liquidités | Caisse
+ * Finances — Liquidités (ledger) | Mouvements | Caisse (sessions + encaissements).
  */
 import React, { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import { DollarSign, Wallet, Banknote } from "lucide-react";
+import { DollarSign, Wallet, Banknote, ArrowRightLeft } from "lucide-react";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { TimeFilterBar, type RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import type { Company } from "@/types/companyTypes";
 import { useAuth } from "@/contexts/AuthContext";
-import { doc, getDoc } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
-import CompanyFinancesPage from "./CompanyFinancesPage";
-import CEOTreasuryPage from "./CEOTreasuryPage";
-import CompanyCashPage from "../cash/CompanyCashPage";
+import FinancesLiquiditesTab from "../finances/pages/FinancesLiquiditesTab";
+import FinancesMouvementsTab from "../finances/pages/FinancesMouvementsTab";
+import FinancesCaisseTab from "../finances/pages/FinancesCaisseTab";
 
-const TAB_CA = "ca";
 const TAB_LIQUIDITES = "liquidites";
+const TAB_MOUVEMENTS = "mouvements";
 const TAB_CAISSE = "caisse";
 
 const TABS = [
-  { key: TAB_CA, label: "CA", icon: DollarSign },
   { key: TAB_LIQUIDITES, label: "Liquidités", icon: Wallet },
+  { key: TAB_MOUVEMENTS, label: "Mouvements", icon: ArrowRightLeft },
   { key: TAB_CAISSE, label: "Caisse", icon: Banknote },
 ];
 
-type TabKey = typeof TAB_CA | typeof TAB_LIQUIDITES | typeof TAB_CAISSE;
+type TabKey = typeof TAB_LIQUIDITES | typeof TAB_MOUVEMENTS | typeof TAB_CAISSE;
 
 export default function FinancesPage() {
   const { user, company } = useAuth();
@@ -37,23 +34,21 @@ export default function FinancesPage() {
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
 
   const tabParam = searchParams.get("tab");
-  const tabFromUrl = (TABS.some((t) => t.key === tabParam) ? tabParam : TAB_CA) as TabKey;
-  const [activeTab, setActiveTab] = useState<TabKey>(tabFromUrl);
-  useEffect(() => {
-    setActiveTab(tabFromUrl);
-  }, [tabFromUrl]);
-
-  const [companyInfo, setCompanyInfo] = React.useState<{ id: string; [key: string]: unknown } | null>(
-    company ? { id: company.id, ...(company as unknown as { [key: string]: unknown }) } : null
+  const tabFromUrl = (TABS.some((t) => t.key === tabParam) ? tabParam : TAB_LIQUIDITES) as TabKey;
+  const [activeTab, setActiveTab] = useState<TabKey>(
+    tabParam === "ca" ? TAB_LIQUIDITES : tabFromUrl
   );
+
   useEffect(() => {
-    if (!companyId) return;
-    getDoc(doc(db, "companies", companyId))
-      .then((snap) => {
-        if (snap.exists()) setCompanyInfo({ id: snap.id, ...snap.data() });
-      })
-      .catch(() => {});
-  }, [companyId]);
+    if (tabParam === "ca") {
+      const next = new URLSearchParams(searchParams);
+      next.set("tab", TAB_LIQUIDITES);
+      setSearchParams(next, { replace: true });
+      setActiveTab(TAB_LIQUIDITES);
+      return;
+    }
+    setActiveTab(TABS.some((t) => t.key === tabParam) ? (tabParam as TabKey) : TAB_LIQUIDITES);
+  }, [tabParam, searchParams, setSearchParams]);
 
   const theme = useCompanyTheme((company as Company | null) ?? null);
   const range: RangeKey =
@@ -109,7 +104,7 @@ export default function FinancesPage() {
   if (!companyId) {
     return (
       <StandardLayoutWrapper>
-        <PageHeader title="Finances" />
+        <PageHeader title="Finances" icon={DollarSign} />
         <p className="text-gray-500">Compagnie introuvable.</p>
       </StandardLayoutWrapper>
     );
@@ -119,7 +114,8 @@ export default function FinancesPage() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Finances"
-        subtitle="Chiffre d'affaires, liquidités et caisse par point de vente."
+        subtitle="Liquidités (grand livre), mouvements et caisse par session."
+        icon={DollarSign}
         right={
           <TimeFilterBar
             range={range}
@@ -154,9 +150,9 @@ export default function FinancesPage() {
           );
         })}
       </div>
-      {activeTab === TAB_CA && <CompanyFinancesPage embedded />}
-      {activeTab === TAB_LIQUIDITES && <CEOTreasuryPage embedded />}
-      {activeTab === TAB_CAISSE && <CompanyCashPage embedded />}
+      {activeTab === TAB_LIQUIDITES && <FinancesLiquiditesTab />}
+      {activeTab === TAB_MOUVEMENTS && <FinancesMouvementsTab />}
+      {activeTab === TAB_CAISSE && <FinancesCaisseTab />}
     </StandardLayoutWrapper>
   );
 }

@@ -19,14 +19,23 @@ import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
 import { Trip } from '@/types';
 import { generateWebReferenceCode } from '@/utils/tickets';
-import { tripInstanceRef } from '@/modules/compagnie/tripInstances/tripInstanceService';
+import {
+  getOrCreateTripInstanceForSlot,
+  tripInstanceRef,
+} from '@/modules/compagnie/tripInstances/tripInstanceService';
+import { normalizeTripInstanceTime } from '@/modules/compagnie/tripInstances/generateTripInstancesFromWeeklyTrips';
 import {
   fetchPendingOnlineHoldSeatsMap,
   onlineHoldCompositeKey,
 } from '@/modules/compagnie/tripInstances/onlineReservationHolds';
 import { tripInstanceRemainingFromDoc } from '@/modules/compagnie/tripInstances/tripInstanceTypes';
 import { resolveJourneyStopIdsFromCities } from '@/modules/compagnie/routes/stopResolution';
-import { buildValidTripsFromWeeklyTrips } from '@/modules/compagnie/tripInstances/publicValidTripsService';
+import {
+  buildValidTripsFromWeeklyTrips,
+  getPublicScheduleDatesLocal,
+  PUBLIC_RESERVATION_SCHEDULE_DAYS,
+  publicScheduleLocalYmd,
+} from '@/modules/compagnie/tripInstances/publicValidTripsService';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
@@ -294,7 +303,6 @@ export default function ReservationClientPage() {
           companyId: cdoc.id,
           depNorm,
           arrNorm,
-          daysAhead: 8,
           limitCount: 100,
         });
 
@@ -311,13 +319,19 @@ export default function ReservationClientPage() {
           return tripDt.getTime() >= now.getTime();
         });
         setValidTrips(upcomingTrips);
-        const dates = [...new Set(upcomingTrips.map((t: any) => String(t.date || '')).filter(Boolean))].sort((a, b) =>
-          a.localeCompare(b)
-        );
-        const firstDate = dates[0] ?? '';
-        setSelectedDate(firstDate);
-        const firstOfDate = upcomingTrips.find((t: any) => String(t.date) === firstDate);
-        setSelectedTripId(firstOfDate?.id ?? '');
+        const strip = getPublicScheduleDatesLocal(PUBLIC_RESERVATION_SCHEDULE_DAYS);
+        let selDate = strip[0] ?? '';
+        let selTripId = '';
+        for (const d of strip) {
+          const tr = upcomingTrips.find((trip: any) => String(trip.date) === d);
+          if (tr) {
+            selDate = d;
+            selTripId = String(tr.id);
+            break;
+          }
+        }
+        setSelectedDate(selDate);
+        setSelectedTripId(selTripId);
 
         sessionStorage.setItem(`preload_${slug}_${departureQ}_${arrivalQ}`, JSON.stringify({
           company: {
@@ -358,13 +372,13 @@ export default function ReservationClientPage() {
     };
   }, [company?.couleurPrimaire]);
 
-  const availableDates = useMemo(
-    () => [...new Set(validTrips.map((t: any) => String(t.date || '')).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+  const calendarDates = useMemo(
+    () => getPublicScheduleDatesLocal(PUBLIC_RESERVATION_SCHEDULE_DAYS),
     [validTrips]
   );
 
   const nowClock = new Date();
-  const nowDateStr = nowClock.toISOString().split('T')[0];
+  const nowDateStr = publicScheduleLocalYmd(nowClock);
   const nowTimeStr = `${String(nowClock.getHours()).padStart(2, '0')}:${String(nowClock.getMinutes()).padStart(2, '0')}`;
 
   const slotsForSelectedDate = useMemo(() => {
@@ -378,15 +392,11 @@ export default function ReservationClientPage() {
 
   useEffect(() => {
     if (reservationRouteId) return;
-    if (availableDates.length === 0) {
-      if (selectedDate) setSelectedDate('');
-      if (selectedTripId) setSelectedTripId('');
-      return;
+    if (calendarDates.length === 0) return;
+    if (!selectedDate || !calendarDates.includes(selectedDate)) {
+      setSelectedDate(calendarDates[0]!);
     }
-    if (!selectedDate || !availableDates.includes(selectedDate)) {
-      setSelectedDate(availableDates[0]!);
-    }
-  }, [availableDates, selectedDate, selectedTripId, reservationRouteId]);
+  }, [calendarDates, selectedDate, reservationRouteId]);
 
   useEffect(() => {
     if (reservationRouteId || !selectedDate) return;
@@ -468,7 +478,40 @@ export default function ReservationClientPage() {
     
     try {
       const companyId = selectedTrip.companyId;
-      const tripInstanceId = selectedTrip.id as string;
+      let tripInstanceId = String(selectedTrip.id);
+      const tiRefResolved = tripInstanceRef(companyId, tripInstanceId);
+      let tiSnap = await getDoc(tiRefResolved);
+      if (!tiSnap.exists()) {
+        const wtid = String((selectedTrip as { weeklyTripId?: string }).weeklyTripId ?? '').trim();
+        if (!wtid) {
+          throw new Error('Trajet introuvable ou plus disponible.');
+        }
+        const timeNorm = normalizeTripInstanceTime(String(selectedTrip.time ?? ''));
+        if (!timeNorm) {
+          throw new Error('Horaire invalide.');
+        }
+        const cap = Math.max(
+          1,
+          Number((selectedTrip as { seatCapacity?: number }).seatCapacity ?? selectedTrip.remainingSeats ?? 0) || 1
+        );
+        const tiDoc = await getOrCreateTripInstanceForSlot(companyId, {
+          agencyId: String(selectedTrip.agencyId),
+          departureCity: selectedTrip.departure,
+          arrivalCity: selectedTrip.arrival,
+          date: String(selectedTrip.date),
+          departureTime: timeNorm,
+          weeklyTripId: wtid,
+          seatCapacity: cap,
+          price: selectedTrip.price,
+          routeId: String((selectedTrip as { routeId?: string }).routeId ?? '').trim() || null,
+          createdBy: 'public_reservation',
+        });
+        tripInstanceId = tiDoc.id;
+        tiSnap = await getDoc(tripInstanceRef(companyId, tripInstanceId));
+      }
+      if (!tiSnap.exists()) {
+        throw new Error('Trajet introuvable ou plus disponible.');
+      }
 
       const agencyName = agencyInfo.nom || 'Agence';
       const agencyCode = agencyInfo.code;
@@ -586,11 +629,6 @@ export default function ReservationClientPage() {
 
       console.log('[ReservationClientPage] reservation (avant écriture)', reservation);
 
-      const tiRef = tripInstanceRef(companyId, tripInstanceId);
-      const tiSnap = await getDoc(tiRef);
-      if (!tiSnap.exists()) {
-        throw new Error('Trajet introuvable ou plus disponible.');
-      }
       const holdMap = await fetchPendingOnlineHoldSeatsMap(companyId);
       const holdKey = onlineHoldCompositeKey(
         tripInstanceId,
@@ -839,95 +877,97 @@ export default function ReservationClientPage() {
               borderColor: theme.cardTrajetsBorder,
             }}
           >
-            {validTrips.length === 0 ? (
-              <div className="text-sm text-gray-500">Aucun trajet disponible.</div>
-            ) : (
-              <div className="space-y-4">
+            <div className="space-y-4">
+              {validTrips.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  Aucun départ en ligne sur les sept prochains jours pour ce trajet.
+                </p>
+              ) : null}
+              <div
+                className="rounded-lg border px-3 py-3"
+                style={{
+                  backgroundColor: theme.wellDatesBg,
+                  borderColor: theme.wellDatesBorder,
+                }}
+              >
+                <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-800">
+                  <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" style={{ color: theme.primary }} aria-hidden />
+                  Dates
+                </h4>
+                <div className="flex gap-1.5 overflow-x-auto pb-1">
+                  {calendarDates.map((d) => {
+                    const active = d === selectedDate;
+                    const hasSlots = validTrips.some((t: any) => String(t.date) === d);
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        disabled={isSubmitting}
+                        onClick={() => {
+                          setSelectedDate(d);
+                          const first = validTrips.find((t: any) => String(t.date) === d);
+                          setSelectedTripId(first ? String((first as any).id) : '');
+                        }}
+                        className="flex-shrink-0 rounded-lg border px-2 py-1 text-xs font-medium transition"
+                        style={{
+                          borderColor: active ? theme.primary : '#e5e7eb',
+                          backgroundColor: active ? theme.lightPrimary : '#fff',
+                          color: active ? theme.primary : hasSlots ? '#374151' : '#9ca3af',
+                        }}
+                      >
+                        {formatDateShortFR(d)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {selectedDate ? (
                 <div
                   className="rounded-lg border px-3 py-3"
                   style={{
-                    backgroundColor: theme.wellDatesBg,
-                    borderColor: theme.wellDatesBorder,
+                    backgroundColor: theme.wellHorairesBg,
+                    borderColor: theme.wellHorairesBorder,
                   }}
                 >
-                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-800">
-                    <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" style={{ color: theme.primary }} aria-hidden />
-                    Dates
+                  <h4 className="mb-2 text-xs font-semibold text-gray-800" style={{ color: theme.secondary }}>
+                    Horaires
                   </h4>
-                  <div className="flex gap-1.5 overflow-x-auto pb-1">
-                    {availableDates.map((d) => {
-                      const active = d === selectedDate;
-                      return (
-                        <button
-                          key={d}
-                          type="button"
-                          disabled={isSubmitting}
-                          onClick={() => {
-                            setSelectedDate(d);
-                            const first = validTrips.find((t: any) => String(t.date) === d);
-                            if (first) setSelectedTripId((first as any).id);
-                          }}
-                          className="flex-shrink-0 rounded-lg border px-2 py-1 text-xs font-medium transition"
-                          style={{
-                            borderColor: active ? theme.primary : '#e5e7eb',
-                            backgroundColor: active ? theme.lightPrimary : '#fff',
-                            color: active ? theme.primary : '#374151',
-                          }}
-                        >
-                          {formatDateShortFR(d)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {selectedDate ? (
-                  <div
-                    className="rounded-lg border px-3 py-3"
-                    style={{
-                      backgroundColor: theme.wellHorairesBg,
-                      borderColor: theme.wellHorairesBorder,
-                    }}
-                  >
-                    <h4 className="mb-2 text-xs font-semibold text-gray-800" style={{ color: theme.secondary }}>
-                      Horaires
-                    </h4>
-                    {slotsForSelectedDate.length === 0 ? (
-                      <p className="text-sm text-gray-500">Aucun départ pour cette date.</p>
-                    ) : (
-                      <div className="flex gap-2 overflow-x-auto pb-1">
-                        {(slotsForSelectedDate as any[]).map((t) => {
-                          const active = t.id === selectedTripId;
-                          return (
-                            <button
-                              key={t.id}
-                              type="button"
-                              disabled={isSubmitting}
-                              onClick={() => setSelectedTripId(t.id)}
-                              className="inline-flex w-fit max-w-full flex-shrink-0 flex-col items-start rounded-xl border px-3 py-2 text-left transition-all duration-200"
-                              style={{
-                                borderColor: active ? theme.primary : '#e5e7eb',
-                                backgroundColor: active ? theme.lightPrimary : '#fafafa',
-                              }}
+                  {slotsForSelectedDate.length === 0 ? (
+                    <p className="text-sm text-gray-500">Aucun départ pour cette date.</p>
+                  ) : (
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {(slotsForSelectedDate as any[]).map((t) => {
+                        const active = t.id === selectedTripId;
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            disabled={isSubmitting}
+                            onClick={() => setSelectedTripId(t.id)}
+                            className="inline-flex w-fit max-w-full flex-shrink-0 flex-col items-start rounded-xl border px-3 py-2 text-left transition-all duration-200"
+                            style={{
+                              borderColor: active ? theme.primary : '#e5e7eb',
+                              backgroundColor: active ? theme.lightPrimary : '#fafafa',
+                            }}
+                          >
+                            <p
+                              className="text-lg font-bold leading-none"
+                              style={{ color: active ? theme.primary : '#111827' }}
                             >
-                              <p
-                                className="text-lg font-bold leading-none"
-                                style={{ color: active ? theme.primary : '#111827' }}
-                              >
-                                {String(t.time || '').slice(0, 5)}
-                              </p>
-                              <p className="mt-1.5 text-xs" style={{ color: seatColor(t.remainingSeats) }}>
-                                {t.remainingSeats} places
-                              </p>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            )}
+                              {String(t.time || '').slice(0, 5)}
+                            </p>
+                            <p className="mt-1.5 text-xs" style={{ color: seatColor(t.remainingSeats) }}>
+                              {t.remainingSeats} places
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
           </SectionCard>
 
           {/* infos personnelles */}

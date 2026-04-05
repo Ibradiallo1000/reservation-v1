@@ -25,9 +25,9 @@ import { listRoutes } from "@/modules/compagnie/routes/routesService";
 import type { RouteDocWithId } from "@/modules/compagnie/routes/routesTypes";
 import { Wallet, Building2, MapPin, TrendingUp, AlertCircle, Route, ArrowUpRight, ArrowDownLeft, Smartphone } from "lucide-react";
 
-type CompanyCashPageProps = { embedded?: boolean };
+type CompanyCashPageProps = { embedded?: boolean; /** Masque le bloc soldes ledger (onglet Finances › Caisse). */ financesTabMode?: boolean };
 
-export default function CompanyCashPage({ embedded = false }: CompanyCashPageProps) {
+export default function CompanyCashPage({ embedded = false, financesTabMode = false }: CompanyCashPageProps) {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
@@ -140,24 +140,28 @@ export default function CompanyCashPage({ embedded = false }: CompanyCashPagePro
 
   const content = (
     <>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-        <span>
-          {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
-          :{" "}
-          {globalSnapshot.snapshot.lastUpdatedAt
-            ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
-            : "—"}
-        </span>
-        <button
-          type="button"
-          onClick={() => void globalSnapshot.refresh()}
-          className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-800"
-        >
-          Rafraîchir
-        </button>
-      </div>
+      {!financesTabMode && (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <span>
+            {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
+            :{" "}
+            {globalSnapshot.snapshot.lastUpdatedAt
+              ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
+              : "—"}
+          </span>
+          <button
+            type="button"
+            onClick={() => void globalSnapshot.refresh()}
+            className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-800"
+          >
+            Rafraîchir
+          </button>
+        </div>
+      )}
       <div className="mb-4 flex items-center gap-4">
-        <label className="text-sm font-medium">Jour d&apos;activité (filtre createdAt + fuseau agence)</label>
+        <label className="text-sm font-medium">
+          {financesTabMode ? "Jour affiché" : "Jour d'activité"}
+        </label>
         <input
           type="date"
           value={date}
@@ -172,28 +176,30 @@ export default function CompanyCashPage({ embedded = false }: CompanyCashPagePro
         </SectionCard>
       ) : (
         <>
-          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">
-            1 — Argent réel (comptes <code className="text-xs">accounts</code>, champ <code className="text-xs">type</code>)
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-2">
-            <MetricCard
-              label="Caisse espèces (ledger)"
-              value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.cash)}
-              icon={Wallet}
-            />
-            <MetricCard
-              label="Mobile money (ledger)"
-              value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.mobileMoney)}
-              icon={Smartphone}
-            />
-            <MetricCard
-              label="Banque (ledger)"
-              value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.bank)}
-              icon={Building2}
-            />
-          </div>
+          {!financesTabMode && (
+            <>
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">Argent réel (grand livre)</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-2">
+                <MetricCard
+                  label="Caisse espèces"
+                  value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.cash)}
+                  icon={Wallet}
+                />
+                <MetricCard
+                  label="Mobile money"
+                  value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.mobileMoney)}
+                  icon={Smartphone}
+                />
+                <MetricCard
+                  label="Banque"
+                  value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.bank)}
+                  icon={Building2}
+                />
+              </div>
+            </>
+          )}
           <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mt-6 mb-2">
-            2 — Activité (jour) — cashTransactions / clôtures
+            {financesTabMode ? "Encaissements et clôtures (jour)" : "Activité du jour"}
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-2">
             <MetricCard
@@ -224,10 +230,11 @@ export default function CompanyCashPage({ embedded = false }: CompanyCashPagePro
               valueColorVar={totalDiff !== 0 ? "#b91c1c" : undefined}
             />
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-            La caisse affichée en section 1 = uniquement les soldes des comptes <strong>type=cash</strong>. Le volume du jour =
-            somme des <strong>cashTransactions</strong> payées (tous canaux) — ne pas confondre avec le solde.
-          </p>
+          {!financesTabMode && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+              Le volume du jour est la somme des encaissements enregistrés pour la date choisie — distinct du solde comptable.
+            </p>
+          )}
 
           {byRoute.size > 0 && (
             <SectionCard title="Revenus par route" noPad className="mb-6">

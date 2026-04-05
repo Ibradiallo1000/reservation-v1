@@ -431,14 +431,14 @@ const AppRoutes = () => {
           <Route path="payment-approvals" element={<CEOPaymentApprovalsPage />} />
           <Route path="ceo-expenses" element={<Navigate to="audit-controle?tab=depenses" replace />} />
           <Route path="expenses-approvals" element={<Navigate to="audit-controle?tab=depenses" replace />} />
-          <Route path="revenus-liquidites" element={<Navigate to="finances?tab=ca" replace />} />
+          <Route path="revenus-liquidites" element={<Navigate to="finances?tab=liquidites" replace />} />
           <Route path="caisse" element={<Navigate to="finances?tab=caisse" replace />} />
           <Route path="finances" element={<FinancesPage />} />
           <Route path="treasury" element={<Navigate to="finances?tab=liquidites" replace />} />
           <Route path="operations-reseau" element={<Navigate to="reservations-reseau" replace />} />
           <Route path="fleet" element={<Navigate to="flotte?tab=exploitation" replace />} />
           <Route path="fleet-finance" element={<Navigate to="flotte?tab=rentabilite" replace />} />
-          <Route path="dashboard" element={<Navigate to="reservations-reseau" replace />} />
+          <Route path="dashboard" element={<Navigate to="command-center" replace />} />
           <Route path="reservations-reseau" element={<ReservationsReseauPage />} />
           <Route path="reservations-reseau/reservations" element={<CompagnieReservationsPage />} />
           <Route path="reservations" element={<Navigate to="reservations-reseau/reservations" replace />} />

@@ -425,7 +425,7 @@ export function buildCeoDecisions(input: CeoDecisionInput): DecisionEngineResult
             feasibility: "low",
           },
         ],
-        actionRoute: "/compagnie/finances?tab=cash",
+        actionRoute: "/compagnie/finances?tab=liquidites",
         level: "danger",
       })
     );
