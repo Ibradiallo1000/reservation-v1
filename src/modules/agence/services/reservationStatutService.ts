@@ -21,6 +21,11 @@ import {
   formatDateForDailyStats,
   dailyStatsTimezoneFromAgencyData,
 } from "@/modules/agence/aggregates/dailyStats";
+import {
+  activityLogRef,
+  activityLogDocIdOnline,
+  writeOnlineTicketActivityInTransaction,
+} from "@/modules/compagnie/activity/activityLogsService";
 
 export type StatutTransitionMeta = {
   userId: string;
@@ -118,6 +123,13 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
       companyId &&
       agencyId;
 
+    const isGuichetSale =
+      canal === "guichet" || String(data?.paymentChannel ?? "").toLowerCase() === "guichet";
+    /* Toutes les lectures avant toute écriture (Firestore : reads puis writes uniquement). */
+    const onlineLogRef = companyId ? activityLogRef(companyId, activityLogDocIdOnline(ref.id)) : null;
+    const onlineLogSnap =
+      onlineLogRef && !isGuichetSale && montant > 0 ? await tx.get(onlineLogRef) : null;
+
     if (shouldAddToDailyStats) {
       const dateStr =
         (typeof data?.date === "string" && data.date.length >= 10
@@ -141,6 +153,19 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
     };
     if (shouldAddToDailyStats) {
       updatePayload.ticketRevenueCountedInDailyStats = true;
+    }
+
+    if (onlineLogSnap != null && !onlineLogSnap.exists()) {
+      const seats = Number(data?.seatsGo ?? 0) + Number(data?.seatsReturn ?? 0);
+      writeOnlineTicketActivityInTransaction(tx, {
+        companyId,
+        agencyId,
+        reservationId: ref.id,
+        amount: montant,
+        seats: Math.max(1, seats || 1),
+        depart: String(data?.depart ?? "").trim() || undefined,
+        arrivee: String(data?.arrivee ?? "").trim() || undefined,
+      });
     }
 
     tx.update(ref, updatePayload);

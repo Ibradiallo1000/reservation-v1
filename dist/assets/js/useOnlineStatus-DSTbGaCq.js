@@ -1,1 +1,0 @@
-import{r as o}from"./vendor-DkBE1qyl.js";function s(){const[i,e]=o.useState(typeof navigator<"u"?navigator.onLine:!0);return o.useEffect(()=>{const n=()=>e(!0),t=()=>e(!1);return window.addEventListener("online",n),window.addEventListener("offline",t),()=>{window.removeEventListener("online",n),window.removeEventListener("offline",t)}},[]),i}export{s as u};

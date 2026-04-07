@@ -1,4 +1,10 @@
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  orderBy,
+  query,
+  type Timestamp,
+} from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 export type MediaItem = {
@@ -18,12 +24,19 @@ function docToMediaItem(id: string, data: Record<string, unknown>): MediaItem {
 }
 
 /**
- * Fetches platform media from Firestore (collection "mediaPlatform").
+ * Médias plateforme : collection `medias` (même source que MediaPage / upload plateforme).
+ * L’ancienne collection `mediaPlatform` n’est pas déclarée dans firestore.rules → 403 si on la lit.
  */
 export async function getPlatformMedia(): Promise<MediaItem[]> {
-  const ref = collection(db, "mediaPlatform");
-  const snap = await getDocs(ref);
-  return snap.docs.map((d) => docToMediaItem(d.id, d.data() as Record<string, unknown>));
+  const snap = await getDocs(collection(db, "medias"));
+  const withTime = snap.docs.map((d) => {
+    const data = d.data() as Record<string, unknown>;
+    const ca = data.createdAt as Timestamp | undefined;
+    const ms = ca && typeof ca.toMillis === "function" ? ca.toMillis() : 0;
+    return { ms, item: docToMediaItem(d.id, data) };
+  });
+  withTime.sort((a, b) => b.ms - a.ms);
+  return withTime.map((x) => x.item);
 }
 
 /**

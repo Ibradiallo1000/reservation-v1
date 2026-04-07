@@ -1,30 +1,19 @@
 /**
- * Activité réseau : billets (réservations payées) + colis (envois payés), par agence et par trajet.
- * Ne confond pas avec le ledger (argent réel).
+ * Activité réseau : agrégations depuis `activityLogs` uniquement (hors ledger).
  */
-import {
-  getDocs,
-  query,
-  Timestamp,
-  where,
-  doc,
-  getDoc,
-  type QueryDocumentSnapshot,
-  type DocumentData,
-} from "firebase/firestore";
-import { db } from "@/firebaseConfig";
-import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
-import { getReservationsInRange, isPaidReservation } from "@/modules/compagnie/networkStats/networkStatsService";
-import { tripInstanceRef } from "@/modules/compagnie/tripInstances/tripInstanceService";
-
-const PAID_SHIPMENT = new Set(["PAID_ORIGIN", "PAID_DESTINATION"]);
+import type { DocumentData, QueryDocumentSnapshot, Timestamp } from "firebase/firestore";
+import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
+import { parseCommercialActivityLog } from "@/modules/compagnie/networkStats/activityCore";
 
 export type AgencyActivityRow = {
   agencyId: string;
   ventes: number;
   billets: number;
+  /** Places billetterie guichet (`type` ticket, `source` guichet). */
+  placesGuichet: number;
+  /** Places billetterie en ligne (`type` online, `source` online). */
+  placesOnline: number;
   colis: number;
-  remplissage: number | null;
 };
 
 export type RouteActivityRow = {
@@ -34,8 +23,57 @@ export type RouteActivityRow = {
   caActivite: number;
 };
 
-function shipmentAmount(data: Record<string, unknown>): number {
-  return Number(data.transportFee ?? 0) + Number(data.insuranceAmount ?? 0);
+function logCreatedAt(data: Record<string, unknown>): Date {
+  const c = data.createdAt as Timestamp | undefined;
+  return c?.toDate?.() ?? new Date(0);
+}
+
+function emptyAgencyTotals() {
+  return { ventes: 0, billets: 0, colis: 0, placesGuichet: 0, placesOnline: 0 };
+}
+
+/** Agrège par agence à partir de documents `activityLogs` déjà chargés (une seule lecture Firestore). */
+export function aggregateNetworkActivityByAgencyFromDocs(
+  docs: QueryDocumentSnapshot<DocumentData>[],
+  agencyMeta: { id: string; nom: string }[]
+): AgencyActivityRow[] {
+  const byAgency = new Map<string, ReturnType<typeof emptyAgencyTotals>>();
+
+  for (const a of agencyMeta) {
+    byAgency.set(a.id, emptyAgencyTotals());
+  }
+
+  for (const d of docs) {
+    const parsed = parseCommercialActivityLog(d.data() as Record<string, unknown>);
+    if (!parsed) continue;
+    const aid = parsed.agencyId;
+    const cur = byAgency.get(aid) ?? emptyAgencyTotals();
+    if (parsed.kind === "courier") {
+      cur.colis += 1;
+      cur.ventes += parsed.amount;
+    } else if (parsed.kind === "guichet_ticket") {
+      cur.billets += parsed.seats;
+      cur.placesGuichet += parsed.seats;
+      cur.ventes += parsed.amount;
+    } else {
+      cur.billets += parsed.seats;
+      cur.placesOnline += parsed.seats;
+      cur.ventes += parsed.amount;
+    }
+    byAgency.set(aid, cur);
+  }
+
+  return agencyMeta.map((a) => {
+    const row = byAgency.get(a.id) ?? emptyAgencyTotals();
+    return {
+      agencyId: a.id,
+      ventes: row.ventes,
+      billets: row.billets,
+      placesGuichet: row.placesGuichet,
+      placesOnline: row.placesOnline,
+      colis: row.colis,
+    };
+  });
 }
 
 export async function getNetworkActivityByAgency(
@@ -44,116 +82,34 @@ export async function getNetworkActivityByAgency(
   end: Date,
   agencyMeta: { id: string; nom: string }[]
 ): Promise<AgencyActivityRow[]> {
-  const reservations = await getReservationsInRange(companyId, start, end);
-
-  let shipmentDocs: QueryDocumentSnapshot<DocumentData>[] = [];
-  try {
-    const shipSnap = await getDocs(
-      query(
-        shipmentsRef(db, companyId),
-        where("createdAt", ">=", Timestamp.fromDate(start)),
-        where("createdAt", "<=", Timestamp.fromDate(end))
-      )
-    );
-    shipmentDocs = shipSnap.docs;
-  } catch {
-    /* index / permissions */
-  }
-
-  const paidRes = reservations.filter((r) => isPaidReservation(r.statut));
-  const byAgency = new Map<
-    string,
-    { ventes: number; billets: number; colis: number }
-  >();
-
-  for (const a of agencyMeta) {
-    byAgency.set(a.id, { ventes: 0, billets: 0, colis: 0 });
-  }
-
-  for (const r of paidRes) {
-    const aid = r.agencyId || "";
-    const cur = byAgency.get(aid) ?? { ventes: 0, billets: 0, colis: 0 };
-    cur.ventes += Number(r.montant) || 0;
-    cur.billets += Number(r.seatsGo) || 1;
-    byAgency.set(aid, cur);
-  }
-
-  for (const d of shipmentDocs) {
-    const data = d.data() as Record<string, unknown>;
-    const st = String(data.paymentStatus ?? "");
-    if (!PAID_SHIPMENT.has(st)) continue;
-    const aid = String(data.originAgencyId ?? "");
-    const cur = byAgency.get(aid) ?? { ventes: 0, billets: 0, colis: 0 };
-    cur.colis += 1;
-    cur.ventes += shipmentAmount(data);
-    byAgency.set(aid, cur);
-  }
-
-  return agencyMeta.map((a) => {
-    const row = byAgency.get(a.id) ?? { ventes: 0, billets: 0, colis: 0 };
-    return {
-      agencyId: a.id,
-      ventes: row.ventes,
-      billets: row.billets,
-      colis: row.colis,
-      remplissage: null,
-    };
-  });
+  const docs = await queryActivityLogsInRange(companyId, start, end);
+  return aggregateNetworkActivityByAgencyFromDocs(docs, agencyMeta);
 }
 
-export async function getRouteActivityRows(
-  companyId: string,
-  start: Date,
-  end: Date
-): Promise<RouteActivityRow[]> {
-  const reservations = await getReservationsInRange(companyId, start, end);
-  const paidRes = reservations.filter((r) => isPaidReservation(r.statut));
-
+export function aggregateRouteActivityRowsFromDocs(docs: QueryDocumentSnapshot<DocumentData>[]): RouteActivityRow[] {
   const byRoute = new Map<string, { billets: number; ca: number }>();
-  for (const r of paidRes) {
-    const dep = String(r.depart ?? "").trim();
-    const arr = String(r.arrivee ?? "").trim();
-    const key = dep && arr ? `${dep} → ${arr}` : "Autres";
-    const cur = byRoute.get(key) ?? { billets: 0, ca: 0 };
-    cur.billets += Number(r.seatsGo) || 1;
-    cur.ca += Number(r.montant) || 0;
-    byRoute.set(key, cur);
-  }
-
-  let shipmentDocs: QueryDocumentSnapshot<DocumentData>[] = [];
-  try {
-    const shipSnap = await getDocs(
-      query(
-        shipmentsRef(db, companyId),
-        where("createdAt", ">=", Timestamp.fromDate(start)),
-        where("createdAt", "<=", Timestamp.fromDate(end))
-      )
-    );
-    shipmentDocs = shipSnap.docs;
-  } catch {
-    /* index manquant ou accès refusé : colis par trajet ignorés */
-  }
-
   const routeColis = new Map<string, number>();
-  for (const d of shipmentDocs) {
+
+  for (const d of docs) {
     const data = d.data() as Record<string, unknown>;
-    if (!PAID_SHIPMENT.has(String(data.paymentStatus ?? ""))) continue;
-    const tid = String(data.tripInstanceId ?? "").trim();
-    let label = "Hors trajet bus";
-    if (tid) {
-      try {
-        const snap = await getDoc(tripInstanceRef(companyId, tid));
-        if (snap.exists()) {
-          const t = snap.data() as Record<string, unknown>;
-          const d0 = String(t.departureCity ?? t.departure ?? "").trim();
-          const a0 = String(t.arrivalCity ?? t.arrival ?? "").trim();
-          if (d0 && a0) label = `${d0} → ${a0}`;
-        }
-      } catch {
-        /* ignore */
-      }
+    const parsed = parseCommercialActivityLog(data);
+    if (!parsed) continue;
+    void logCreatedAt(data);
+    const dep = String(data.depart ?? "").trim();
+    const arr = String(data.arrivee ?? "").trim();
+    const key = dep && arr ? `${dep} → ${arr}` : "Autres";
+
+    if (parsed.kind === "courier") {
+      routeColis.set(key, (routeColis.get(key) ?? 0) + 1);
+      const cur = byRoute.get(key) ?? { billets: 0, ca: 0 };
+      cur.ca += parsed.amount;
+      byRoute.set(key, cur);
+    } else {
+      const cur = byRoute.get(key) ?? { billets: 0, ca: 0 };
+      cur.billets += parsed.seats;
+      cur.ca += parsed.amount;
+      byRoute.set(key, cur);
     }
-    routeColis.set(label, (routeColis.get(label) ?? 0) + 1);
   }
 
   const keys = new Set([...byRoute.keys(), ...routeColis.keys()]);
@@ -169,4 +125,13 @@ export async function getRouteActivityRows(
   }
   rows.sort((a, b) => b.caActivite - a.caActivite);
   return rows;
+}
+
+export async function getRouteActivityRows(
+  companyId: string,
+  start: Date,
+  end: Date
+): Promise<RouteActivityRow[]> {
+  const docs = await queryActivityLogsInRange(companyId, start, end);
+  return aggregateRouteActivityRowsFromDocs(docs);
 }

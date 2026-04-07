@@ -191,3 +191,23 @@ export function updateAgencyLiveStateOnCourierSessionValidated(
     lastUpdatedAt: serverTimestamp(),
   }, { merge: true });
 }
+
+/** Annulation validation comptable : la session redevient « fermée en attente compta ». */
+export function updateAgencyLiveStateOnCourierSessionAgencyValidationReverted(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string
+): void {
+  const ref = agencyLiveStateRef(companyId, agencyId);
+  tx.set(ref, {
+    companyId,
+    agencyId,
+    activeSessionsCount: increment(0),
+    closedPendingValidationCount: increment(0),
+    activeCourierSessionsCount: increment(0),
+    closedCourierPendingValidationCount: increment(1),
+    vehiclesInTransitCount: increment(0),
+    boardingOpenCount: increment(0),
+    lastUpdatedAt: serverTimestamp(),
+  }, { merge: true });
+}

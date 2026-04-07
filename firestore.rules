@@ -379,6 +379,31 @@ service cloud.firestore {
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
+      /* Journal d’activité commercial (CA terrain) : append-only, hors ledger. */
+      match /activityLogs/{logId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        /* Même logique que guichetSaleLocks / dailyStats : companyId doc OU agence rattachée à la compagnie (évite 403 si companyId token désynchronisé). */
+        allow create: if isAuth()
+          && request.resource.data.companyId == companyId
+          && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || (
+              userAgencyBelongsToCompany(companyId)
+              && request.resource.data.agencyId == getUserAgencyId()
+            )
+          )
+          && request.resource.data.keys().hasAll(['type', 'source', 'amount', 'seats', 'agencyId', 'companyId', 'createdAt', 'status'])
+          && request.resource.data.agencyId is string
+          && request.resource.data.status == 'confirmed'
+          && request.resource.data.amount is number
+          && request.resource.data.seats is number
+          && request.resource.data.type in ['ticket', 'online', 'courier']
+          && request.resource.data.source in ['guichet', 'online']
+          && request.resource.data.createdAt is timestamp;
+        allow update, delete: if false;
+      }
+
       /* Routes réseau. Lecture publique pour calcul places (résa en ligne) ; écriture = compagnie / admin. */
       match /routes/{routeId} {
         allow get, list: if true;
@@ -443,13 +468,28 @@ service cloud.firestore {
           && request.resource.data.get('departureCity', '') != ''
           && request.resource.data.get('arrivalCity', '') != '';
         /* Public : réservation de sièges (création résa guichet + commit preuve en ligne avec segments). */
+        /* Guichet / escale authentifiés : même delta que le flux public si companyId utilisateur absent du JWT mais agence valide. */
         allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
           || (request.auth == null
             && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['reservedSeats', 'remainingSeats', 'passengerCount', 'updatedAt', 'segments'])
             && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0)
             && request.resource.data.get('passengerCount', 0) >= resource.data.get('passengerCount', 0)
-            && request.resource.data.get('remainingSeats', 999999) <= resource.data.get('remainingSeats', 999999));
+            && request.resource.data.get('remainingSeats', 999999) <= resource.data.get('remainingSeats', 999999))
+          || (
+            isAuth()
+            && userAgencyBelongsToCompany(companyId)
+            && (
+              isGuichetier()
+              || getUserRole() == 'escale_agent'
+              || getUserRole() == 'escale_manager'
+            )
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['reservedSeats', 'remainingSeats', 'passengerCount', 'updatedAt', 'segments'])
+            && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0)
+            && request.resource.data.get('passengerCount', 0) >= resource.data.get('passengerCount', 0)
+            && request.resource.data.get('remainingSeats', 999999) <= resource.data.get('remainingSeats', 999999)
+          );
         allow delete: if false;
         /* Progression bus par escale (arrivée/départ). Lecture: public. Écriture: embarquement (départ origine), chef agence, escales, admin. */
         match /progress/{stopOrder} {
@@ -824,7 +864,15 @@ service cloud.firestore {
         match /reservations/{reservationId} {
 
           /* 🔓 Création publique. Lecture réservée aux utilisateurs compagnie ; accès billet public = via publicReservations (doc id = publicToken) uniquement. */
-          allow create: if (request.auth == null || userCompanyId() == companyId || getUserRole() == 'admin_platforme')
+          allow create: if (
+            request.auth == null
+            || userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || (
+              userAgencyBelongsToCompany(companyId)
+              && getUserAgencyId() == request.resource.data.get('agencyId', '')
+            )
+          )
             && reservationCreatePaymentChannelShapeOk();
           /* get : compagnie + admin_platforme ; ou public pour résa en_ligne (upload preuve, reçu, mon-billet). list : jamais en public. */
           allow get: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
@@ -1113,11 +1161,16 @@ service cloud.firestore {
           allow update, delete: if false;
         }
 
-        /* Écritures comptables encaissement (une par validation de session guichet / courrier). Immutable après création. */
+        /* Écritures comptables encaissement (une par validation de session guichet / courrier). */
         match /comptaEncaissements/{entryId} {
           allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-          allow update, delete: if false;
+          allow update: if false;
+          /* Suppression réservée au renvoi courrier chef → comptable (doc `courier_*` uniquement). */
+          allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+            getUserRole() == 'admin_platforme' ||
+            isAgencyManager()
+          ) && entryId.matches('courier_.+');
         }
 
         /* Agency cash movements (comptabilité). Authenticated read/write. */
@@ -1664,6 +1717,30 @@ service cloud.firestore {
       match /subscription/{docId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create, update, delete: if isAuth() && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme') && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+      }
+
+      /**
+       * Bibliothèque d’images (métadonnées après upload Cloudinary).
+       * Avant : aucune règle explicite → refus par défaut (permission-denied sur listen / addDoc).
+       */
+      match /imagesBibliotheque/{imageId} {
+        allow get, list: if isAuth() && (userCompanyId() == companyId || hasUserRole('admin_platforme'));
+        allow create: if isAuth() && (userCompanyId() == companyId || hasUserRole('admin_platforme')) && (
+          hasUserRole('admin_compagnie') ||
+          hasUserRole('admin_platforme') ||
+          hasUserRole('operator_digital') ||
+          hasUserRole('company_ceo')
+        )
+          && request.resource.data.keys().hasAll(['url', 'type', 'createdAt'])
+          && request.resource.data.url is string
+          && request.resource.data.type is string
+          && request.resource.data.get('url', '').size() > 0;
+        allow update: if false;
+        allow delete: if isAuth() && (userCompanyId() == companyId || hasUserRole('admin_platforme')) && (
+          hasUserRole('admin_compagnie') ||
+          hasUserRole('admin_platforme') ||
+          hasUserRole('company_ceo')
+        );
       }
     }
 

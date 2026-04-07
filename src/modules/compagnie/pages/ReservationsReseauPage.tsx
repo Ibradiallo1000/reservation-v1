@@ -1,39 +1,47 @@
 /**
- * Activité réseau — billets + colis par agence et par trajet (hors grand livre).
+ * Activité réseau — une seule source : `activityLogs` (billets + colis), hors ledger / réservations / sessions / dailyStats.
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
-import { Link } from "react-router-dom";
-import { TrendingUp, Building2, Ticket, Package, MapPin } from "lucide-react";
+import { TrendingUp, Building2, Ticket, Package } from "lucide-react";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard } from "@/ui";
-import { TimeFilterBar, RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
+import { NetworkActivityPeriodBar } from "@/modules/compagnie/admin/components/CompanyDashboard/NetworkActivityPeriodBar";
+import { cn } from "@/lib/utils";
 import { RevenueReservationsChart } from "@/modules/compagnie/admin/components/CompanyDashboard/RevenueReservationsChart";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageOfflineState } from "@/shared/ui/PageStates";
+import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
+import { aggregateActivityLogDocs } from "@/modules/compagnie/networkStats/activityCore";
 import {
-  getReservationsInRange,
-  buildChartDataFromReservations,
-  isPaidReservation,
-  getNetworkCapacityOnly,
+  buildNetworkChartDataFromActivityLogDocs,
+  type ChartDataPoint,
 } from "@/modules/compagnie/networkStats/networkStatsService";
 import {
-  getNetworkActivityByAgency,
-  getRouteActivityRows,
+  aggregateNetworkActivityByAgencyFromDocs,
+  aggregateRouteActivityRowsFromDocs,
   type AgencyActivityRow,
   type RouteActivityRow,
 } from "@/modules/compagnie/networkStats/networkActivityService";
-import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
+import { getStartOfDayInBamako, getEndOfDayInBamako, getTodayBamako, TZ_BAMAKO } from "@/shared/date/dateUtilsTz";
+import { formatActivityPeriodLabelFr } from "@/shared/date/formatActivityPeriodFr";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
-import CompagnieReservationsPage from "./CompagnieReservationsPage";
+import InfoTooltip from "@/shared/ui/InfoTooltip";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -50,78 +58,19 @@ export default function ReservationsReseauPage() {
   const money = useFormatCurrency();
   const globalPeriod = useGlobalPeriodContext();
 
-  const range: RangeKey =
-    globalPeriod.preset === "day"
-      ? "day"
-      : globalPeriod.preset === "month"
-        ? "month"
-        : "custom";
-  const customStart = globalPeriod.preset === "custom" ? globalPeriod.startDate : null;
-  const customEnd = globalPeriod.preset === "custom" ? globalPeriod.endDate : null;
-
-  const setRange = React.useCallback(
-    (v: RangeKey) => {
-      if (v === "day") return globalPeriod.setPreset("day");
-      if (v === "month") return globalPeriod.setPreset("month");
-      if (v === "custom") return globalPeriod.setPreset("custom");
-      const now = new Date();
-      if (v === "prev_month") {
-        const firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const endPrev = new Date(firstOfThisMonth.getTime() - 1);
-        const startPrev = new Date(endPrev.getFullYear(), endPrev.getMonth(), 1);
-        const start = `${startPrev.getFullYear()}-${String(startPrev.getMonth() + 1).padStart(2, "0")}-${String(
-          startPrev.getDate()
-        ).padStart(2, "0")}`;
-        const end = `${endPrev.getFullYear()}-${String(endPrev.getMonth() + 1).padStart(2, "0")}-${String(
-          endPrev.getDate()
-        ).padStart(2, "0")}`;
-        return globalPeriod.setCustomRange(start, end);
-      }
-      if (v === "ytd") {
-        const start = `${now.getFullYear()}-01-01`;
-        const end = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-        return globalPeriod.setCustomRange(start, end);
-      }
-      if (v === "12m") {
-        const endD = now;
-        const startD = new Date(now.getFullYear(), now.getMonth() - 11, 1);
-        const start = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(
-          startD.getDate()
-        ).padStart(2, "0")}`;
-        const end = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, "0")}-${String(
-          endD.getDate()
-        ).padStart(2, "0")}`;
-        return globalPeriod.setCustomRange(start, end);
-      }
-    },
-    [globalPeriod]
-  );
-
-  const setCustomStart = React.useCallback(
-    (v: string | null) => {
-      if (!v) return;
-      globalPeriod.setCustomRange(v, globalPeriod.endDate);
-    },
-    [globalPeriod]
-  );
-
-  const setCustomEnd = React.useCallback(
-    (v: string | null) => {
-      if (!v) return;
-      globalPeriod.setCustomRange(globalPeriod.startDate, v);
-    },
-    [globalPeriod]
-  );
-
   const { dateFrom, dateTo, periodLabel } = useMemo(() => {
     const start = new Date(`${globalPeriod.startDate}T00:00:00.000`);
     const end = new Date(`${globalPeriod.endDate}T23:59:59.999`);
-    const label = `${globalPeriod.startDate} → ${globalPeriod.endDate}`;
+    const label = formatActivityPeriodLabelFr(
+      globalPeriod.startDate,
+      globalPeriod.endDate,
+      getTodayBamako()
+    );
     return { dateFrom: start, dateTo: end, periodLabel: label };
   }, [globalPeriod.startDate, globalPeriod.endDate]);
 
-  const [reservationsInRange, setReservationsInRange] = useState<Awaited<ReturnType<typeof getReservationsInRange>>>([]);
-  const [reservationsLoading, setReservationsLoading] = useState(true);
+  const [logActivity, setLogActivity] = useState<Awaited<ReturnType<typeof aggregateActivityLogDocs>> | null>(null);
+  const [chartSeries, setChartSeries] = useState<ChartDataPoint[]>([]);
   const [company, setCompany] = useState<{
     id: string;
     nom?: string;
@@ -129,10 +78,12 @@ export default function ReservationsReseauPage() {
     couleurSecondaire?: string;
   } | null>(null);
   const [agencies, setAgencies] = useState<{ id: string; nom: string }[]>([]);
-  const [capacity, setCapacity] = useState<number | null>(null);
   const [agencyActivity, setAgencyActivity] = useState<AgencyActivityRow[]>([]);
   const [routeRows, setRouteRows] = useState<RouteActivityRow[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
+  const lastActivityLogDocsRef = useRef<QueryDocumentSnapshot<DocumentData>[] | null>(null);
+  const agenciesRef = useRef(agencies);
+  agenciesRef.current = agencies;
 
   const startStr = globalPeriod.startDate;
   const endStr = globalPeriod.endDate;
@@ -140,102 +91,75 @@ export default function ReservationsReseauPage() {
   const periodEnd = getEndOfDayInBamako(endStr);
 
   useEffect(() => {
-    if (!companyId) {
-      setReservationsInRange([]);
-      setReservationsLoading(false);
-      return;
-    }
-    setReservationsLoading(true);
-    getReservationsInRange(companyId, periodStart, periodEnd)
-      .then(setReservationsInRange)
-      .catch(() => setReservationsInRange([]))
-      .finally(() => setReservationsLoading(false));
-  }, [companyId, periodStart.getTime(), periodEnd.getTime()]);
-
-  useEffect(() => {
     if (!companyId) return;
     Promise.all([
       getDoc(doc(db, "companies", companyId)),
       getDocs(collection(db, "companies", companyId, "agences")),
-    ]).then(([companySnap, agencesSnap]) => {
-      if (companySnap.exists()) {
-        setCompany({
-          id: companyId,
-          ...companySnap.data(),
-        } as {
-          id: string;
-          nom?: string;
-          couleurPrimaire?: string;
-          couleurSecondaire?: string;
-        });
-      }
-      setAgencies(
-        agencesSnap.docs.map((d) => {
-          const data = d.data() as { nom?: string; nomAgence?: string };
-          return { id: d.id, nom: data.nom ?? data.nomAgence ?? d.id };
-        })
-      );
-    }).catch(() => {});
+    ])
+      .then(([companySnap, agencesSnap]) => {
+        if (companySnap.exists()) {
+          setCompany({
+            id: companyId,
+            ...companySnap.data(),
+          } as {
+            id: string;
+            nom?: string;
+            couleurPrimaire?: string;
+            couleurSecondaire?: string;
+          });
+        }
+        setAgencies(
+          agencesSnap.docs.map((d) => {
+            const data = d.data() as { nom?: string; nomAgence?: string };
+            return { id: d.id, nom: data.nom ?? data.nomAgence ?? d.id };
+          })
+        );
+      })
+      .catch(() => {});
   }, [companyId]);
 
   useEffect(() => {
-    if (!companyId) return;
-    getNetworkCapacityOnly(companyId, startStr, endStr)
-      .then((cap) => setCapacity(cap || null))
-      .catch(() => setCapacity(null));
-  }, [companyId, startStr, endStr]);
-
-  useEffect(() => {
-    if (!companyId || agencies.length === 0) {
+    if (!companyId) {
+      lastActivityLogDocsRef.current = null;
+      setLogActivity(null);
+      setChartSeries([]);
       setAgencyActivity([]);
       setRouteRows([]);
       setActivityLoading(false);
       return;
     }
     setActivityLoading(true);
-    Promise.all([
-      getNetworkActivityByAgency(companyId, periodStart, periodEnd, agencies),
-      getRouteActivityRows(companyId, periodStart, periodEnd),
-    ])
-      .then(([byAg, routes]) => {
-        setAgencyActivity(byAg);
-        setRouteRows(routes);
+    queryActivityLogsInRange(companyId, periodStart, periodEnd)
+      .then((docs) => {
+        lastActivityLogDocsRef.current = docs;
+        setLogActivity(aggregateActivityLogDocs(docs));
+        setChartSeries(buildNetworkChartDataFromActivityLogDocs(docs, startStr, endStr, TZ_BAMAKO));
+        setAgencyActivity(aggregateNetworkActivityByAgencyFromDocs(docs, agenciesRef.current));
+        setRouteRows(aggregateRouteActivityRowsFromDocs(docs));
       })
       .catch(() => {
+        lastActivityLogDocsRef.current = null;
+        setLogActivity(null);
+        setChartSeries([]);
         setAgencyActivity([]);
         setRouteRows([]);
       })
       .finally(() => setActivityLoading(false));
-  }, [companyId, agencies, periodStart.getTime(), periodEnd.getTime()]);
+  }, [companyId, periodStart.getTime(), periodEnd.getTime(), startStr, endStr]);
 
-  const paidReservationsInRange = useMemo(
-    () => reservationsInRange.filter((r) => isPaidReservation(r.statut)),
-    [reservationsInRange]
-  );
+  useEffect(() => {
+    const docs = lastActivityLogDocsRef.current;
+    if (!docs || !companyId) return;
+    setAgencyActivity(aggregateNetworkActivityByAgencyFromDocs(docs, agencies));
+  }, [agencies, companyId]);
 
-  const caTotal = useMemo(
-    () => paidReservationsInRange.reduce((sum, r) => sum + (Number(r.montant) || 0), 0),
-    [paidReservationsInRange]
-  );
-  const billetsPlaces = useMemo(
-    () => paidReservationsInRange.reduce((s, r) => s + (Number(r.seatsGo) || 1), 0),
-    [paidReservationsInRange]
-  );
+  const caTotal = logActivity?.totalAmount ?? 0;
+  const billetsPlaces = logActivity?.billets.tickets ?? 0;
+  const colisCount = logActivity?.courier.parcels ?? 0;
+
   const activeAgenciesCount = useMemo(
-    () => new Set(paidReservationsInRange.map((r) => r.agencyId).filter(Boolean)).size,
-    [paidReservationsInRange]
-  );
-
-  const seatsReservedInPeriod = billetsPlaces;
-  const fillRatePctFromReservations = useMemo(() => {
-    const cap = capacity ?? 0;
-    if (cap <= 0) return null;
-    return Math.round((seatsReservedInPeriod / cap) * 100);
-  }, [capacity, seatsReservedInPeriod]);
-
-  const chartData = useMemo(
-    () => buildChartDataFromReservations(paidReservationsInRange, startStr, endStr),
-    [paidReservationsInRange, startStr, endStr]
+    () => agencyActivity.filter((a) => a.ventes > 0 || a.colis > 0).length,
+    [agencyActivity]
   );
 
   const agencyRowsWithNames = useMemo(() => {
@@ -243,13 +167,12 @@ export default function ReservationsReseauPage() {
     return agencyActivity.map((row) => ({
       ...row,
       name: name(row.agencyId),
-      remplissage: fillRatePctFromReservations,
     }));
-  }, [agencyActivity, agencies, fillRatePctFromReservations]);
+  }, [agencyActivity, agencies]);
 
   if (!companyId) {
     return (
-      <StandardLayoutWrapper>
+      <StandardLayoutWrapper maxWidthClass="w-full" className="px-4 bg-gray-50 dark:bg-gray-950">
         <PageHeader title="Activité réseau" />
         <p className="text-sm text-muted-foreground">Identifiant de compagnie introuvable.</p>
       </StandardLayoutWrapper>
@@ -257,102 +180,111 @@ export default function ReservationsReseauPage() {
   }
 
   const basePath = `/compagnie/${companyId}`;
-  const statsLoading = reservationsLoading || activityLoading;
+  const primaryAccent = company?.couleurPrimaire ?? "var(--teliya-primary)";
+  const isSingleDayChart = startStr === endStr;
+
+  const kpiCardClass = cn(
+    "!shadow-sm hover:!shadow-md !transition-shadow !border-gray-200 dark:!border-gray-700",
+    "border-l-[4px] bg-white dark:bg-gray-900",
+    "[background-image:linear-gradient(105deg,color-mix(in_srgb,var(--teliya-primary)_7%,white)_0%,white_42%)]",
+    "dark:[background-image:linear-gradient(105deg,color-mix(in_srgb,var(--teliya-primary)_12%,rgb(17_24_39))_0%,rgb(17_24_39)_45%)]"
+  );
+  const kpiIconWrap = cn(
+    "!h-10 !w-10 !rounded-xl",
+    "[color:var(--teliya-primary)] [background-color:color-mix(in_srgb,var(--teliya-primary)_12%,rgb(249_250_251))]",
+    "dark:[background-color:color-mix(in_srgb,var(--teliya-primary)_18%,rgb(31_41_55))]"
+  );
+  const kpiValueClass = "!text-2xl !font-bold sm:!text-3xl";
 
   return (
-    <StandardLayoutWrapper>
-      <PageHeader
-        title="Activité réseau"
-        breadcrumb={[
-          { label: "Dashboard", path: `${basePath}/command-center` },
-          { label: "Activité réseau" },
-        ]}
-        subtitle={`Billets, colis et remplissage — ${periodLabel}`}
-        right={
-          <TimeFilterBar
-            range={range}
-            setRange={setRange}
-            customStart={customStart}
-            setCustomStart={setCustomStart}
-            customEnd={customEnd}
-            setCustomEnd={setCustomEnd}
-          />
-        }
-      />
-      {!isOnline && (
-        <PageOfflineState message="Connexion instable : les données peuvent être incomplètes." />
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {statsLoading ? (
-          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[100px] rounded-lg" />)
-        ) : (
-          <>
-            <Link to={`${basePath}/reservations-reseau/reservations`} className="block">
-              <MetricCard
-                label="Chiffre d'activité (billets)"
-                value={money(caTotal)}
-                icon={TrendingUp}
-                valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
-              />
-            </Link>
-            <MetricCard
-              label="Places vendues"
-              value={String(billetsPlaces)}
-              icon={Ticket}
-              valueColorVar={company?.couleurPrimaire ?? "var(--teliya-primary)"}
+    <StandardLayoutWrapper maxWidthClass="w-full" className="px-4 bg-gray-50 dark:bg-gray-950">
+      <div className="space-y-4 pb-6">
+        <PageHeader
+          title="Activité réseau"
+          breadcrumb={[
+            { label: "Dashboard", path: `${basePath}/command-center` },
+            { label: "Activité réseau" },
+          ]}
+          subtitle={
+            <span className="text-gray-600 dark:text-gray-400">
+              <span className="font-medium text-gray-900 dark:text-gray-100">{periodLabel}</span>
+              <span className="mx-2 text-gray-300 dark:text-gray-600" aria-hidden>
+                ·
+              </span>
+              Billets et colis (journal d&apos;activité)
+            </span>
+          }
+          right={
+            <NetworkActivityPeriodBar
+              preset={globalPeriod.preset}
+              startDate={globalPeriod.startDate}
+              endDate={globalPeriod.endDate}
+              setPreset={globalPeriod.setPreset}
+              setCustomRange={globalPeriod.setCustomRange}
             />
-            <MetricCard
-              label="Agences actives"
-              value={`${activeAgenciesCount} / ${agencies.length || "—"}`}
-              icon={Building2}
-            />
-            <MetricCard
-              label="Remplissage réseau"
-              value={fillRatePctFromReservations != null ? `${fillRatePctFromReservations} %` : "—"}
-              icon={TrendingUp}
-            />
-          </>
+          }
+        />
+        {!isOnline && (
+          <PageOfflineState message="Connexion instable : les données peuvent être incomplètes." />
         )}
-      </div>
 
-      <SectionCard title="Par agence" icon={Building2} className="mb-6">
-        {activityLoading ? (
-          <p className="text-sm text-slate-500">Chargement…</p>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {agencyRowsWithNames.map((a) => (
-              <div
-                key={a.agencyId}
-                className="rounded-xl border border-slate-200 dark:border-slate-600 p-4 bg-white dark:bg-slate-900/40"
-              >
-                <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-white mb-2">
-                  <MapPin className="h-4 w-4 opacity-70" />
-                  {a.name}
-                </div>
-                <dl className="grid grid-cols-2 gap-2 text-sm">
-                  <dt className="text-slate-500">Activité</dt>
-                  <dd className="text-right font-medium">{money(a.ventes)}</dd>
-                  <dt className="text-slate-500">Places</dt>
-                  <dd className="text-right">{a.billets}</dd>
-                  <dt className="text-slate-500">Colis</dt>
-                  <dd className="text-right">{a.colis}</dd>
-                  <dt className="text-slate-500">Remplissage</dt>
-                  <dd className="text-right">
-                    {a.remplissage != null ? `${a.remplissage} %` : "—"}
-                  </dd>
-                </dl>
+        <section className="w-full rounded-xl bg-white p-6 shadow-sm dark:bg-gray-900">
+          {activityLoading ? (
+            <Skeleton className="h-[118px] rounded-xl" />
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">Montant encaissé</p>
+                <InfoTooltip label="Total issu du journal d'activité sur la période sélectionnée." />
               </div>
-            ))}
-          </div>
-        )}
-      </SectionCard>
+              <p className="text-4xl font-bold tabular-nums text-slate-900 dark:text-white">{money(caTotal)}</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{periodLabel}</p>
+              <div className="pt-2 text-sm text-slate-600 dark:text-slate-300">
+                Agences actives: <span className="font-semibold">{activeAgenciesCount}</span> / {agencies.length || "—"}
+              </div>
+            </div>
+          )}
+        </section>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Détail par trajet</CardTitle>
-        </CardHeader>
-        <CardContent>
+        <SectionCard
+          title="Par agence"
+          icon={Building2}
+          className="overflow-x-hidden rounded-xl border-0 bg-white shadow-sm dark:bg-gray-900"
+          description={null}
+          help={<InfoTooltip label="Classement des agences par montant encaissé sur la période." />}
+        >
+          {activityLoading ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">Chargement…</p>
+          ) : (
+            <ul className="w-full space-y-2">
+              {agencyRowsWithNames.map((a) => {
+                const ventesFormatted = money(a.ventes);
+                return (
+                  <li
+                    key={a.agencyId}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-800/60"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{a.name}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Transactions: {a.placesGuichet + a.placesOnline + a.colis}
+                      </p>
+                    </div>
+                    <p className="shrink-0 text-sm font-semibold tabular-nums text-slate-900 dark:text-white" title={ventesFormatted}>
+                      {ventesFormatted}
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </SectionCard>
+
+        <Card className="mb-0 rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900">
+          <CardHeader className="px-5 pb-2 pt-5 md:px-6">
+            <CardTitle className="text-lg">Détail par trajet</CardTitle>
+          </CardHeader>
+          <CardContent className="px-5 pb-5 md:px-6 md:pb-6">
           {activityLoading ? (
             <p className="text-sm text-slate-500">Chargement…</p>
           ) : routeRows.length === 0 ? (
@@ -381,41 +313,44 @@ export default function ReservationsReseauPage() {
               </table>
             </div>
           )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Évolution</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <RevenueReservationsChart
-            data={
-              chartData.length > 0
-                ? chartData
-                : startStr === endStr
-                  ? Array.from({ length: 24 }, (_, h) => ({
-                      date: `${startStr}T${String(h).padStart(2, "0")}`,
-                      revenue: 0,
-                      reservations: 0,
-                    }))
-                  : (() => {
-                      const empty: { date: string; revenue: number; reservations: number }[] = [];
-                      for (let t = dateFrom.getTime(); t <= dateTo.getTime(); t += 86400000) {
-                        empty.push({ date: getDateKey(new Date(t)), revenue: 0, reservations: 0 });
-                      }
-                      return empty;
-                    })()
-            }
-            loading={reservationsLoading}
-            primaryColor={company?.couleurPrimaire as string | undefined}
-            secondaryColor={company?.couleurSecondaire as string | undefined}
-            range={range === "day" ? "day" : chartData.length <= 7 ? "week" : "month"}
-          />
-        </CardContent>
-      </Card>
-
-      <CompagnieReservationsPage embedded />
+        <Card className="rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900">
+          <CardHeader className="px-5 pb-2 pt-5 md:px-6">
+            <CardTitle className="text-lg">Évolution</CardTitle>
+            <p className="text-sm font-normal text-slate-500 dark:text-slate-400">
+              Même journal d’activité que les cartes : par heure sur un jour, par jour sur une plage.
+            </p>
+          </CardHeader>
+          <CardContent className="px-5 pb-5 md:px-6 md:pb-6">
+            <RevenueReservationsChart
+              data={
+                chartSeries.length > 0
+                  ? chartSeries
+                  : startStr === endStr
+                    ? Array.from({ length: 24 }, (_, h) => ({
+                        date: `${startStr}T${String(h).padStart(2, "0")}`,
+                        revenue: 0,
+                        reservations: 0,
+                      }))
+                    : (() => {
+                        const empty: ChartDataPoint[] = [];
+                        for (let t = dateFrom.getTime(); t <= dateTo.getTime(); t += 86400000) {
+                          empty.push({ date: getDateKey(new Date(t)), revenue: 0, reservations: 0 });
+                        }
+                        return empty;
+                      })()
+              }
+              loading={activityLoading}
+              primaryColor={company?.couleurPrimaire as string | undefined}
+              secondaryColor={company?.couleurSecondaire as string | undefined}
+              range={isSingleDayChart ? "day" : chartSeries.length <= 7 ? "week" : "month"}
+              secondaryMetricLabel="Places (billets)"
+            />
+          </CardContent>
+        </Card>
+      </div>
     </StandardLayoutWrapper>
   );
 }

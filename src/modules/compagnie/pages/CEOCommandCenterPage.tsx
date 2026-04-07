@@ -5,9 +5,8 @@ import React from "react";
 import { useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
-import { StandardLayoutWrapper, PageHeader } from "@/ui";
-import { Gauge } from "lucide-react";
-import { getPeriodLabel, type PeriodKind } from "@/shared/date/periodUtils";
+import { StandardLayoutWrapper } from "@/ui";
+import { type PeriodKind } from "@/shared/date/periodUtils";
 import CeoPilotageDashboard from "@/modules/compagnie/commandCenter/CeoPilotageDashboard";
 
 export default function CEOCommandCenterPage() {
@@ -29,54 +28,46 @@ export default function CEOCommandCenterPage() {
     [globalPeriod]
   );
 
-  const periodLabelShort =
-    period === "day"
-      ? "Jour"
-      : period === "week"
-        ? "Semaine"
-        : period === "month"
-          ? "Mois"
-          : "Période";
-
   return (
-    <StandardLayoutWrapper noVerticalPadding className="px-4 md:px-6 pt-2 md:pt-3 pb-4 md:pb-5 space-y-4">
-      <PageHeader
-        title="Dashboard"
-        subtitle={`${periodLabelShort} — ${getPeriodLabel(period, { start: new Date(globalPeriod.startDate), end: new Date(globalPeriod.endDate) }, customStart || undefined, customEnd || undefined)}`}
-        icon={Gauge}
-        className="mb-2"
-        right={
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={period}
-              onChange={(e) => setPeriod(e.target.value as PeriodKind)}
-              className="border border-gray-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
-            >
-              <option value="day">Aujourd&apos;hui</option>
-              <option value="week">Cette semaine</option>
-              <option value="month">Ce mois</option>
-              <option value="custom">Personnalisé</option>
-            </select>
-            {period === "custom" && (
-              <>
-                <input
-                  type="date"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                  className="border border-gray-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-sm bg-white dark:bg-slate-800"
-                />
-                <span className="text-gray-500">→</span>
-                <input
-                  type="date"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                  className="border border-gray-300 dark:border-slate-600 rounded-lg px-2 py-1.5 text-sm bg-white dark:bg-slate-800"
-                />
-              </>
-            )}
-          </div>
-        }
-      />
+    <StandardLayoutWrapper noVerticalPadding className="!py-4">
+      <header className="flex w-full flex-row flex-wrap items-center justify-between gap-3">
+        <h1 className="text-base font-semibold tracking-tight text-gray-900 dark:text-white">
+          Dashboard
+        </h1>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label htmlFor="ceo-period" className="sr-only">
+            Période
+          </label>
+          <select
+            id="ceo-period"
+            value={period}
+            onChange={(e) => setPeriod(e.target.value as PeriodKind)}
+            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+          >
+            <option value="day">Aujourd&apos;hui</option>
+            <option value="week">Cette semaine</option>
+            <option value="month">Ce mois</option>
+            <option value="custom">Personnalisé</option>
+          </select>
+          {period === "custom" && (
+            <>
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+              />
+              <span className="text-sm text-gray-500 dark:text-slate-400">au</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+              />
+            </>
+          )}
+        </div>
+      </header>
 
       {companyId ? (
         <CeoPilotageDashboard
@@ -86,7 +77,7 @@ export default function CEOCommandCenterPage() {
           periodKind={period}
         />
       ) : (
-        <p className="text-sm text-slate-500">Compagnie introuvable.</p>
+        <p className="text-sm text-slate-600 dark:text-slate-400">Compagnie introuvable.</p>
       )}
     </StandardLayoutWrapper>
   );

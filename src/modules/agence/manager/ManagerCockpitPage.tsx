@@ -616,7 +616,7 @@ export default function ManagerCockpitPage({
     paused: "En pause",
     closed: "Clôturé",
     pending: "En attente",
-    validated_agency: "Validé agence (en attente chef)",
+    validated_agency: "Validé comptable (en attente chef)",
     validated: "Validé",
   };
 
@@ -728,8 +728,8 @@ export default function ManagerCockpitPage({
 
   const periodHint =
     dateFilter.preset === "today"
-      ? `Journée agence (${agencyTz}) — ventes (createdAt).`
-      : "Période personnalisée — ventes filtrées par createdAt (fuseau agence).";
+      ? `Journée agence (${agencyTz}) — activité : ventes guichet + en ligne (même source que le réseau et la compta).`
+      : "Période personnalisée — activité ventes dans le fuseau agence (guichet + en ligne).";
 
   const dateFilterBar = (
     <DateFilterBar
@@ -898,7 +898,8 @@ export default function ManagerCockpitPage({
           </div>
           {!embedded && (
             <p className="mt-3 text-xs text-gray-500 dark:text-slate-400">
-              Source : réservations vendues, filtre <strong>createdAt</strong> dans le fuseau agence (même règle que le réseau). À ne pas confondre avec la comptabilité ou le ledger.
+              Total ventes = guichet + en ligne (billets payés), aligné réseau et comptabilité. La trésorerie (ledger) est
+              affichée à part.
             </p>
           )}
           <div className="mt-3 flex flex-wrap gap-4 text-sm text-gray-600 dark:text-slate-400">

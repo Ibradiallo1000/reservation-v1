@@ -4,12 +4,28 @@ import axios from "axios";
 import { useAuth } from "@/contexts/AuthContext";
 import { useCompanyImageUpload } from "@/shared/hooks/useCompanyImageUpload";
 
+export type UploadImageCloudinaryProps = {
+  label: string;
+  dossier: string;
+  onUpload?: (imageUrl: string) => void | Promise<void>;
+  className?: string;
+  /** Sous-collection compagnie : priorité sur le `companyId` du profil (URL / tenant). */
+  companyId?: string | null;
+  /**
+   * Si true (défaut), enregistre aussi dans `companies/{companyId}/imagesBibliotheque`.
+   * Mettre false pour un flux « Cloudinary + onUpload » uniquement (ex. collection `medias` plateforme).
+   */
+  saveToCompanyLibrary?: boolean;
+};
+
 const UploadImageCloudinary = ({
   label,
   dossier,
   onUpload,
   className,
-}: any) => {
+  companyId: companyIdProp,
+  saveToCompanyLibrary = true,
+}: UploadImageCloudinaryProps) => {
   const { user } = useAuth();
   const { uploadImage } = useCompanyImageUpload();
 
@@ -20,8 +36,20 @@ const UploadImageCloudinary = ({
     const file = input.files?.[0];
     if (!file) return;
 
-    if (!user?.companyId) {
-      alert("Accès refusé");
+    const targetCompanyId =
+      companyIdProp?.trim() || user?.companyId?.trim() || "";
+
+    if (saveToCompanyLibrary) {
+      if (!user) {
+        alert("Vous devez être connecté pour ajouter une image.");
+        return;
+      }
+      if (!targetCompanyId) {
+        alert("Aucune compagnie cible : impossible d’enregistrer l’image.");
+        return;
+      }
+    } else if (!user) {
+      alert("Vous devez être connecté.");
       return;
     }
 
@@ -40,17 +68,23 @@ const UploadImageCloudinary = ({
       const nom =
         window.prompt("Nom de l'image")?.trim() || "Image";
 
-      await uploadImage(user.companyId, {
-        url: imageUrl,
-        nom,
-        type: "image",
-        uploadedBy: user.uid,
-      });
+      if (saveToCompanyLibrary) {
+        await uploadImage(targetCompanyId, {
+          url: imageUrl,
+          nom,
+          type: "image",
+          uploadedBy: user!.uid,
+        });
+      }
 
       if (onUpload) await onUpload(imageUrl);
       alert("✅ Image ajoutée avec succès");
     } catch (err) {
-      console.error("Upload Cloudinary:", err);
+      if (axios.isAxiosError(err)) {
+        console.error("Upload Cloudinary (API):", err.response?.data ?? err.message);
+      } else {
+        console.error("Upload Cloudinary:", err);
+      }
       alert("❌ Erreur lors de l’upload");
     } finally {
       if (input) input.value = "";

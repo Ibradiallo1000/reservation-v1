@@ -45,6 +45,19 @@ function entryDocId(source: ComptaEncaissementSource, sessionId: string): string
   return source === "guichet" ? `shift_${sessionId}` : `courier_${sessionId}`;
 }
 
+/** Référence doc `comptaEncaissements/courier_{sessionId}` (lecture / suppression en transaction). */
+export function courierComptaEncaissementDocRef(companyId: string, agencyId: string, sessionId: string) {
+  return doc(
+    db,
+    "companies",
+    companyId,
+    "agences",
+    agencyId,
+    COMPTA_ENCAISSEMENTS_COLLECTION,
+    entryDocId("courrier", sessionId)
+  );
+}
+
 /**
  * Idempotent par session : même id de document si la transaction métier est rejouée.
  * À appeler dans la même transaction Firestore que la remise ledger (après les lectures).

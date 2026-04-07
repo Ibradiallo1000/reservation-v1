@@ -143,7 +143,7 @@ const MediaPage: React.FC = () => {
         <UploadImageCloudinary
           label="Ajouter une image à la bibliothèque plateforme"
           dossier="platform"
-          collectionName="medias"
+          saveToCompanyLibrary={false}
           onUpload={addFromUpload}
         />
       </div>

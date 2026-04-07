@@ -22,7 +22,10 @@ const ImageSelectorModal: React.FC<Props> = ({
   source = "company",
   companyId,
 }) => {
-  const { platformMedia, companyMedia, loading, error } = useMediaLibrary(companyId);
+  const { platformMedia, companyMedia, loading, error } = useMediaLibrary(
+    companyId,
+    source
+  );
   const images = source === "platform" ? platformMedia : companyMedia;
   const err = error ? "Impossible de charger les images. Réessayez plus tard." : null;
   const dialogRef = useRef<HTMLDivElement>(null);

@@ -42,6 +42,7 @@ import { createFinancialTransaction } from '@/modules/compagnie/treasury/financi
 import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
 import { assertReservationChannelInvariantsOnWrite } from '@/modules/agence/guichet/guichetSessionReservationModel';
 import { logGuichetSessionInconsistency } from '@/modules/agence/services/guichetSessionInconsistencyLogger';
+import { writeTicketGuichetActivityInTransaction } from '@/modules/compagnie/activity/activityLogsService';
 
 const GUICHET_SESSION_INVARIANT_PREFIX = 'GUICHET_SESSION_INVARIANT:';
 
@@ -476,6 +477,16 @@ export async function createGuichetReservation(
         });
       }
       tx.set(newRef, payload);
+      writeTicketGuichetActivityInTransaction(tx, {
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        reservationId: newId,
+        amount: params.montant,
+        seats: (params.seatsGo ?? 0) + (params.seatsReturn ?? 0),
+        createdAt: now,
+        depart: params.depart,
+        arrivee: params.arrivee,
+      });
       tx.set(idemRef, {
         reservationId: newId,
         sessionId: params.sessionId,

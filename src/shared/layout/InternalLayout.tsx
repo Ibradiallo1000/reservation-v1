@@ -465,8 +465,8 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
 
   return (
     <div
-      className="h-screen overflow-hidden"
-      style={{ ...chromeStyle, backgroundImage: "var(--agency-gradient-page)" }}
+      className="h-screen overflow-hidden bg-transparent"
+      style={chromeStyle}
     >
       {/* Mobile overlay */}
       {mobileOpen && (
@@ -510,10 +510,9 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         {/* Main content */}
         <div
           className={cn(
-            "flex min-w-0 flex-1 flex-col transition-all duration-300",
+            "flex min-w-0 flex-1 flex-col bg-transparent transition-all duration-300",
             collapsed ? "lg:ml-20" : "lg:ml-64",
           )}
-          style={{ backgroundImage: "var(--agency-gradient-page)" }}
         >
           {/* Header */}
           <header
@@ -606,8 +605,8 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
 
   return (
     <div
-      className="min-h-screen"
-      style={{ ...chromeStyle, backgroundImage: "var(--agency-gradient-page)" }}
+      className="min-h-screen bg-transparent"
+      style={chromeStyle}
     >
       {/* Header */}
       <header

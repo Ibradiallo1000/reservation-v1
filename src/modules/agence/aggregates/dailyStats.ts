@@ -257,6 +257,30 @@ export function updateDailyStatsOnCourierSessionValidatedByAgency(
   }, { merge: true });
 }
 
+/** Annulation validation comptable courrier : inverse {@link updateDailyStatsOnCourierSessionValidatedByAgency}. */
+export function revertDailyStatsOnCourierSessionAgencyValidation(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  date: string,
+  courierRevenue: number,
+  ianaTimezone?: string
+): void {
+  if (courierRevenue <= 0) return;
+  const ref = dailyStatsRef(companyId, agencyId, date);
+  tx.set(
+    ref,
+    {
+      ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
+      ...baseIncrements(),
+      courierRevenueAgency: increment(-courierRevenue),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
 /** Chef d'agence : VALIDATED_AGENCY → VALIDATED (revenus compagnie / total). */
 export function updateDailyStatsOnCourierSessionValidatedByCompany(
   tx: Transaction,

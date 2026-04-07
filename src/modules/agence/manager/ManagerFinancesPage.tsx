@@ -15,7 +15,10 @@ import { getLedgerBalances } from "@/modules/compagnie/treasury/financialTransac
 import { listExpenses, PENDING_STATUSES } from "@/modules/compagnie/treasury/expenses";
 import { chefExceptionalValidation } from "@/modules/agence/services/chefExceptionalValidation";
 import { validateSessionByHeadAccountant } from "@/modules/agence/services/sessionService";
-import { validateCourierSessionByHeadAccountant } from "@/modules/logistics/services/courierSessionService";
+import {
+  validateCourierSessionByHeadAccountant,
+  returnCourierSessionToAgencyAccountant,
+} from "@/modules/logistics/services/courierSessionService";
 import { listChefIncidents } from "@/modules/agence/manager/incidentStore";
 import {
   Banknote, Wallet, TrendingDown, ArrowRightLeft,
@@ -115,7 +118,7 @@ export default function ManagerFinancesPage({
   const [courierExpectedBySessionId, setCourierExpectedBySessionId] = useState<Record<string, number>>({});
   const [shiftReportsById, setShiftReportsById] = useState<Record<string, ShiftReportDoc>>({});
   const [busyShiftId, setBusyShiftId] = useState<string | null>(null);
-  const [busyCourierSessionId, setBusyCourierSessionId] = useState<string | null>(null);
+  const [busyCourier, setBusyCourier] = useState<{ sessionId: string; action: "approve" | "return" } | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [refundTargetId, setRefundTargetId] = useState<string | null>(null);
@@ -440,7 +443,7 @@ export default function ManagerFinancesPage({
 
   const handleApproveCourierSession = async (sessionId: string) => {
     if (!companyId || !agencyId || !user?.uid) return;
-    setBusyCourierSessionId(sessionId);
+    setBusyCourier({ sessionId, action: "approve" });
     try {
       await validateCourierSessionByHeadAccountant({
         companyId,
@@ -452,7 +455,30 @@ export default function ManagerFinancesPage({
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : "Erreur lors de la validation courrier");
     } finally {
-      setBusyCourierSessionId(null);
+      setBusyCourier(null);
+    }
+  };
+
+  const handleReturnCourierSessionToAccountant = async (sessionId: string) => {
+    if (!companyId || !agencyId || !user?.uid) return;
+    const ok = window.confirm(
+      "Renvoyer cette session au comptable ? Les effets de la validation comptable (remise caisse, stats) seront annulés si un montant avait été saisi."
+    );
+    if (!ok) return;
+    setBusyCourier({ sessionId, action: "return" });
+    try {
+      await returnCourierSessionToAgencyAccountant({
+        companyId,
+        agencyId,
+        sessionId,
+        actor: { id: user.uid, name: user.displayName ?? user.nom ?? user.email ?? "Chef d'agence" },
+      });
+      toast.success("Session renvoyée au comptable.");
+      notifyAgencyFinancialChange();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Impossible de renvoyer la session.");
+    } finally {
+      setBusyCourier(null);
     }
   };
 
@@ -738,15 +764,34 @@ export default function ManagerFinancesPage({
                         </td>
                         <td className={table.td}><StatusBadge status="info">Validé compta — à approuver</StatusBadge></td>
                         <td className={table.tdRight}>
-                          <ActionButton
-                            disabled={busyCourierSessionId === s.id}
-                            onClick={() => handleApproveCourierSession(s.id)}
-                            variant="primary"
-                            size="sm"
-                          >
-                            {busyCourierSessionId === s.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                            Approuver
-                          </ActionButton>
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <ActionButton
+                              disabled={busyCourier?.sessionId === s.id}
+                              onClick={() => handleReturnCourierSessionToAccountant(s.id)}
+                              variant="secondary"
+                              size="sm"
+                            >
+                              {busyCourier?.sessionId === s.id && busyCourier.action === "return" ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Undo2 className="h-4 w-4" />
+                              )}
+                              Renvoyer au comptable
+                            </ActionButton>
+                            <ActionButton
+                              disabled={busyCourier?.sessionId === s.id}
+                              onClick={() => handleApproveCourierSession(s.id)}
+                              variant="primary"
+                              size="sm"
+                            >
+                              {busyCourier?.sessionId === s.id && busyCourier.action === "approve" ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="h-4 w-4" />
+                              )}
+                              Approuver
+                            </ActionButton>
+                          </div>
                         </td>
                       </tr>
                       <tr className={tableRowClassName()}>
@@ -1141,15 +1186,34 @@ export default function ManagerFinancesPage({
                       </td>
                       <td className={table.td}><StatusBadge status="info">Validé compta — à approuver</StatusBadge></td>
                       <td className={table.tdRight}>
-                        <ActionButton
-                          disabled={busyCourierSessionId === s.id}
-                          onClick={() => handleApproveCourierSession(s.id)}
-                          variant="primary"
-                          size="sm"
-                        >
-                          {busyCourierSessionId === s.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                          Approuver
-                        </ActionButton>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <ActionButton
+                            disabled={busyCourier?.sessionId === s.id}
+                            onClick={() => handleReturnCourierSessionToAccountant(s.id)}
+                            variant="secondary"
+                            size="sm"
+                          >
+                            {busyCourier?.sessionId === s.id && busyCourier.action === "return" ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Undo2 className="w-4 h-4" />
+                            )}
+                            Renvoyer au comptable
+                          </ActionButton>
+                          <ActionButton
+                            disabled={busyCourier?.sessionId === s.id}
+                            onClick={() => handleApproveCourierSession(s.id)}
+                            variant="primary"
+                            size="sm"
+                          >
+                            {busyCourier?.sessionId === s.id && busyCourier.action === "approve" ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-4 h-4" />
+                            )}
+                            Approuver
+                          </ActionButton>
+                        </div>
                       </td>
                     </tr>
                     <tr className={tableRowClassName()}>

@@ -191,22 +191,52 @@ const CompagnieLayout: React.FC = () => {
     ? `/compagnie/${urlCompanyId}`
     : "/compagnie";
 
-  const sections: NavSection[] = [
-    { label: "Dashboard", icon: Gauge, path: `${basePath}/command-center` },
-    { label: "Activité réseau", icon: TrendingUp, path: `${basePath}/reservations-reseau`, end: false, badge: onlineProofsCount },
-    { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
-    {
-      label: "Audit & contrôle",
-      icon: FileCheck,
-      path: `${basePath}/audit-controle`,
-      badge: pendingCeoExpensesCount || undefined,
-    },
-    { label: "Flotte", icon: Truck, path: `${basePath}/flotte` },
-    { label: "Validation chef d'agence", icon: ShieldCheck, path: `${basePath}/comptabilite/validation` },
-    { label: "Clients", icon: Users, path: `${basePath}/customers` },
-    { label: "Avis clients", icon: MessageSquare, path: `${basePath}/avis-clients`, badge: pendingReviewsCount },
-    { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },
-  ];
+  const isPlateforme = user?.role === "admin_platforme";
+
+  const sections: NavSection[] = React.useMemo(() => {
+    const all: NavSection[] = [
+      { label: "Dashboard", icon: Gauge, path: `${basePath}/command-center` },
+      {
+        label: "Activité réseau",
+        icon: TrendingUp,
+        path: `${basePath}/reservations-reseau`,
+        end: false,
+        badge: onlineProofsCount,
+      },
+      { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
+      {
+        label: "Audit & contrôle",
+        icon: FileCheck,
+        path: `${basePath}/audit-controle`,
+        badge: pendingCeoExpensesCount || undefined,
+      },
+      { label: "Flotte", icon: Truck, path: `${basePath}/flotte` },
+      { label: "Validation chef d'agence", icon: ShieldCheck, path: `${basePath}/comptabilite/validation` },
+      { label: "Clients", icon: Users, path: `${basePath}/customers` },
+      {
+        label: "Avis clients",
+        icon: MessageSquare,
+        path: `${basePath}/avis-clients`,
+        badge: pendingReviewsCount,
+      },
+      { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },
+    ];
+    if (isPlateforme) return all;
+    return all
+      .filter(
+        (s) =>
+          !["Validation chef d'agence", "Clients", "Avis clients"].includes(s.label),
+      )
+      .map((s) =>
+        s.label === "Audit & contrôle" ? { ...s, label: "Alertes" } : s,
+      );
+  }, [
+    basePath,
+    isPlateforme,
+    onlineProofsCount,
+    pendingCeoExpensesCount,
+    pendingReviewsCount,
+  ]);
 
   useAgencyKeyboardShortcuts(sections);
 

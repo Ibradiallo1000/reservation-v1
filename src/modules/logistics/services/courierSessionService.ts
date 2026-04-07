@@ -13,6 +13,7 @@ import {
   runTransaction,
   serverTimestamp,
   getDoc,
+  deleteField,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { CourierSession, CourierSessionStatus } from "../domain/courierSession.types";
@@ -20,6 +21,7 @@ import { courierSessionsRef, courierSessionRef } from "../domain/courierSessionP
 import {
   updateDailyStatsOnCourierSessionValidatedByAgency,
   updateDailyStatsOnCourierSessionValidatedByCompany,
+  revertDailyStatsOnCourierSessionAgencyValidation,
   formatDateForDailyStats,
   dailyStatsTimezoneFromAgencyData,
 } from "@/modules/agence/aggregates/dailyStats";
@@ -28,14 +30,21 @@ import {
   updateAgencyLiveStateOnCourierSessionActivated,
   updateAgencyLiveStateOnCourierSessionClosed,
   updateAgencyLiveStateOnCourierSessionValidated,
+  updateAgencyLiveStateOnCourierSessionAgencyValidationReverted,
 } from "@/modules/agence/aggregates/agencyLiveState";
 import { getCourierSessionLedgerTotal } from "./courierSessionLedger";
-import { applyRemittancePendingToAgencyCashInTransaction } from "@/modules/compagnie/treasury/financialTransactions";
+import {
+  applyRemittancePendingToAgencyCashInTransaction,
+  reverseRemittancePendingToAgencyCashInTransaction,
+} from "@/modules/compagnie/treasury/financialTransactions";
 import {
   PENDING_CASH_LEDGER_SYSTEM_VERSION,
   type PendingCashRemittanceStatus,
 } from "@/modules/agence/comptabilite/pendingCashSafety";
-import { writeComptaEncaissementInTransaction } from "@/modules/agence/comptabilite/comptaEncaissementsService";
+import {
+  writeComptaEncaissementInTransaction,
+  courierComptaEncaissementDocRef,
+} from "@/modules/agence/comptabilite/comptaEncaissementsService";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 
 const OPEN_STATUSES: CourierSessionStatus[] = ["PENDING", "ACTIVE"];
@@ -407,6 +416,112 @@ export async function validateCourierSessionByHeadAccountant(params: {
       validationLevel: "chef_agence",
       channel: "courrier",
       courierAgentId: pre.agentId,
+    },
+  });
+}
+
+/**
+ * Chef d'agence : renvoie une session courrier au comptable (VALIDATED_AGENCY → CLOSED).
+ * Annule remise caisse + ligne compta si un montant avait été validé ; inverse stats agence et compteur live.
+ */
+export async function returnCourierSessionToAgencyAccountant(params: {
+  companyId: string;
+  agencyId: string;
+  sessionId: string;
+  actor: { id: string; name?: string | null };
+}): Promise<void> {
+  await authorizeActorInAgency({
+    userId: params.actor.id,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    allowedRoles: ["chefAgence", "admin_compagnie", "admin_platforme"],
+    deniedMessage: "Seul un chef d'agence peut renvoyer cette session au comptable.",
+  });
+
+  const sessionRef = courierSessionRef(db, params.companyId, params.agencyId, params.sessionId);
+  const preSnap = await getDoc(sessionRef);
+  if (!preSnap.exists()) throw new Error("Session courrier introuvable.");
+  const pre = preSnap.data() as CourierSession;
+  if (pre.status !== "VALIDATED_AGENCY") {
+    throw new Error(
+      "Seules les sessions validées par le comptable et en attente de votre accord peuvent être renvoyées au comptable."
+    );
+  }
+
+  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
+  const agencySnapForTz = await getDoc(doc(db, "companies", params.companyId, "agences", params.agencyId));
+  const agencyData = agencySnapForTz.data() as { timezone?: string; currency?: string } | undefined;
+  const agencyTz = dailyStatsTimezoneFromAgencyData(agencyData);
+  const agencyCurrency = String(agencyData?.currency ?? "XOF");
+  const statsDate = formatDateForDailyStats(pre.closedAt ?? pre.createdAt, agencyTz);
+  const validatedAmount = Number(pre.validatedAmount ?? 0);
+
+  await runTransaction(db, async (tx) => {
+    const sSnap = await tx.get(sessionRef);
+    if (!sSnap.exists()) throw new Error("Session courrier introuvable.");
+    const s = sSnap.data() as CourierSession;
+    if (s.status !== "VALIDATED_AGENCY") {
+      throw new Error("Cette session n'est plus en attente d'approbation : actualisez la page.");
+    }
+
+    const comptaRef = courierComptaEncaissementDocRef(params.companyId, params.agencyId, params.sessionId);
+    const comptaSnap = validatedAmount > 0 ? await tx.get(comptaRef) : null;
+
+    if (validatedAmount > 0) {
+      await reverseRemittancePendingToAgencyCashInTransaction(
+        tx,
+        params.companyId,
+        params.agencyId,
+        validatedAmount,
+        agencyCurrency,
+        { referenceType: "courier_session", referenceId: params.sessionId },
+        `courier session ${params.sessionId} returned to agency accountant`
+      );
+      if (comptaSnap?.exists()) {
+        tx.delete(comptaRef);
+      }
+    }
+
+    revertDailyStatsOnCourierSessionAgencyValidation(
+      tx,
+      params.companyId,
+      params.agencyId,
+      statsDate,
+      ledgerSessionTotal,
+      agencyTz
+    );
+    updateAgencyLiveStateOnCourierSessionAgencyValidationReverted(tx, params.companyId, params.agencyId);
+
+    tx.update(sessionRef, {
+      status: "CLOSED",
+      updatedAt: serverTimestamp(),
+      validatedAt: deleteField(),
+      validatedAmount: deleteField(),
+      difference: deleteField(),
+      remittanceStatus: deleteField(),
+      remittanceDiscrepancyAmount: deleteField(),
+      pendingCashLedgerVersion: deleteField(),
+      validatedBy: deleteField(),
+    });
+  });
+
+  const a = params.actor;
+  logAgentHistoryEvent({
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    agentId: a.id,
+    agentName: a.name ?? null,
+    role: "chefAgence",
+    type: "COURIER_SESSION_RETURNED_TO_ACCOUNTANT",
+    referenceId: params.sessionId,
+    amount: validatedAmount,
+    status: "REJETE",
+    createdBy: a.id,
+    metadata: {
+      channel: "courrier",
+      courierAgentId: pre.agentId,
+      ledgerSessionTotal,
+      previousValidatedAmount: validatedAmount,
     },
   });
 }

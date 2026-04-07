@@ -34,13 +34,13 @@ export const spacingClasses = {
   "2xl": "8",
 } as const;
 
-/** Page-level: horizontal padding (responsive) */
-export const pagePaddingX = "px-4 md:px-6";
-/** Page-level: vertical padding — réduit pour rapprocher contenu du header (16px) */
+/** Page-level: horizontal padding */
+export const pagePaddingX = "px-4";
+/** Page-level: vertical padding */
 export const pagePaddingY = "py-4";
 /** Page-level: all padding */
-export const pagePadding = "px-4 md:px-6 py-4";
-/** Vertical rhythm between sections — 16px entre header, titre et cartes */
+export const pagePadding = "px-4 py-4";
+/** Vertical rhythm between sections */
 export const pageVerticalGap = "space-y-4";
-/** Content max width + centering */
-export const pageMaxWidth = "max-w-7xl mx-auto";
+/** Contenu pleine largeur (pas de max-width / mx-auto) */
+export const pageMaxWidth = "w-full min-w-0";

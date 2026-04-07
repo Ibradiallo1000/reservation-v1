@@ -5,7 +5,16 @@ import {
   type MediaItem,
 } from "@/shared/services/media.service";
 
-export function useMediaLibrary(companyId?: string): {
+export type MediaLibrarySource = "platform" | "company";
+
+/**
+ * @param source Ne charger que le jeu de données affiché par la modale : évite un 403
+ * sur une collection non utilisée (ex. lecture `mediaPlatform` alors que seule la bibliothèque compagnie est demandée).
+ */
+export function useMediaLibrary(
+  companyId: string | undefined,
+  source: MediaLibrarySource = "company"
+): {
   platformMedia: MediaItem[];
   companyMedia: MediaItem[];
   loading: boolean;
@@ -23,10 +32,18 @@ export function useMediaLibrary(companyId?: string): {
       setLoading(true);
       setError(null);
       try {
-        const [platform, company] = await Promise.all([
-          getPlatformMedia(),
-          companyId ? getCompanyMedia(companyId) : Promise.resolve([]),
-        ]);
+        let platform: MediaItem[] = [];
+        let company: MediaItem[] = [];
+
+        if (source === "platform") {
+          platform = await getPlatformMedia();
+        } else {
+          company =
+            companyId && companyId.trim() !== ""
+              ? await getCompanyMedia(companyId)
+              : [];
+        }
+
         if (!cancelled) {
           setPlatformMedia(platform);
           setCompanyMedia(company);
@@ -48,7 +65,7 @@ export function useMediaLibrary(companyId?: string): {
     return () => {
       cancelled = true;
     };
-  }, [companyId]);
+  }, [companyId, source]);
 
   return { platformMedia, companyMedia, loading, error };
 }

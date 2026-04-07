@@ -45,6 +45,7 @@ import AgencyTreasuryNewOperationPage from '@/modules/agence/treasury/pages/Agen
 import AgencyTreasuryTransferPage from '@/modules/agence/treasury/pages/AgencyTreasuryTransferPage';
 import AgencyTreasuryNewPayablePage from '@/modules/agence/treasury/pages/AgencyTreasuryNewPayablePage';
 import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
+import { getUnifiedCommercialActivity } from '@/modules/compagnie/networkStats/activityCore';
 import { getCashTransactionsByLocation } from '@/modules/compagnie/cash/cashService';
 import type { AgencyCashPosition } from '@/modules/agence/comptabilite/agencyCashAuditService';
 import {
@@ -1232,8 +1233,12 @@ const AgenceComptabilitePage: React.FC = () => {
 
   const validateCourierSessionAction = useCallback(async (session: CourierSessionDoc) => {
     if (!user?.companyId || !user?.agencyId || !accountant) return;
-    const raw = (receptionInputsCourier[session.id] || { countedAmount: '' }).countedAmount || '0';
-    const counted = Number(String(raw).replace(/[^\d.,]/g, '').replace(',', '.'));
+    const rawTrim = String((receptionInputsCourier[session.id] || { countedAmount: '' }).countedAmount ?? '').trim();
+    if (rawTrim === '') {
+      alert('Saisissez le montant versé par l’agent courrier avant de valider.');
+      return;
+    }
+    const counted = Number(rawTrim.replace(/[^\d.,]/g, '').replace(',', '.'));
     if (!Number.isFinite(counted) || counted < 0) {
       alert('Montant compté invalide.');
       return;
@@ -1773,8 +1778,22 @@ const AgenceComptabilitePage: React.FC = () => {
         list = all.filter((t: { locationId?: string }) => t.locationId === user.agencyId);
       }
 
-      const ventesGuichet = { reservations: 0, tickets: 0, montant: 0 };
-      const ventesEnLigne = { reservations: 0, tickets: 0, montant: 0 };
+      const dayKey = normalizeDateToYYYYMMDD(dateStr);
+      const activity = await getUnifiedCommercialActivity(
+        user.companyId,
+        { dateFrom: dayKey, dateTo: dayKey },
+        { agencyId: user.agencyId, timeZone: agencyTz }
+      );
+      const ventesGuichet = {
+        reservations: activity.billets.guichet.reservationCount,
+        tickets: activity.billets.guichet.tickets,
+        montant: activity.billets.guichet.amount,
+      };
+      const ventesEnLigne = {
+        reservations: activity.billets.online.reservationCount,
+        tickets: activity.billets.online.tickets,
+        montant: activity.billets.online.amount,
+      };
       let encaissementsEspeces = 0;
       let encaissementsMobileMoney = 0;
 
@@ -1782,27 +1801,18 @@ const AgenceComptabilitePage: React.FC = () => {
       list.forEach((t) => {
         if ((t as { status?: string }).status === refunded) return;
         const amount = Number(t.amount || 0);
-        const seats = Number(t.seats || 0);
         const source = String((t as { sourceType?: string }).sourceType || '').toLowerCase();
         const payment = String((t as { paymentMethod?: string }).paymentMethod || '').toLowerCase();
 
         if (source === 'guichet') {
-          ventesGuichet.reservations += 1;
-          ventesGuichet.tickets += seats || 1;
-          ventesGuichet.montant += amount;
           if (payment.includes('cash') || payment.includes('esp')) encaissementsEspeces += amount;
           else if (payment.includes('mobile') || payment.includes('mm')) encaissementsMobileMoney += amount;
-        } else if (source === 'online') {
-          ventesEnLigne.reservations += 1;
-          ventesEnLigne.tickets += seats || 1;
-          ventesEnLigne.montant += amount;
         }
       });
 
       const encaissementsTotal = encaissementsEspeces + encaissementsMobileMoney;
       const ecart = ventesGuichet.montant - encaissementsTotal;
 
-      const dayKey = normalizeDateToYYYYMMDD(dateStr);
       let courrierOps = 0;
       let courrierMontant = 0;
       try {
@@ -2218,7 +2228,7 @@ const AgenceComptabilitePage: React.FC = () => {
                         s.status === 'active'           ? 'En service'  :
                         s.status === 'paused'           ? 'En pause'    :
                         s.status === 'closed'           ? 'Clôturé'     :
-                        s.status === 'validated_agency' ? 'Validé agence' :
+                        s.status === 'validated_agency' ? 'Validé comptable' :
                         s.status === 'validated'        ? 'Validé'      : 'En attente';
 
                       const periode = `${start ? start.toLocaleDateString('fr-FR') : '?'} → ${end ? end.toLocaleDateString('fr-FR') : '?'}`;
@@ -2834,7 +2844,7 @@ const AgenceComptabilitePage: React.FC = () => {
             <SectionCard
               title="Courrier — sessions fermées"
               icon={StopCircle}
-              description="Montant attendu (ventes) d’après les colis payés. Saisissez le montant compté, puis validez."
+              description="Montant attendu d’après les colis payés. Le montant versé par l’agent est obligatoire avant validation. Après validation comptable, seul le chef d’agence peut finaliser ou faire corriger une erreur de processus."
               right={
                 <StatusBadge status="neutral">
                   {closedCourierSessions.length} session{closedCourierSessions.length > 1 ? 's' : ''}
@@ -2844,10 +2854,16 @@ const AgenceComptabilitePage: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {closedCourierSessions.map((s) => {
                     const input = receptionInputsCourier[s.id] || { countedAmount: '' };
-                    const counted = Number(String(input.countedAmount).replace(/[^\d.,]/g, '').replace(',', '.'));
+                    const rawIn = String(input.countedAmount ?? '').trim();
+                    const counted =
+                      rawIn === ''
+                        ? NaN
+                        : Number(rawIn.replace(/[^\d.,]/g, '').replace(',', '.'));
                     const ledger = courierLedgerBySessionId[s.id];
                     const ledgerNum = Number(ledger);
                     const ecart = Number.isFinite(counted) && Number.isFinite(ledgerNum) ? counted - ledgerNum : NaN;
+                    const disableCourierValidate =
+                      rawIn === '' || !Number.isFinite(counted) || counted < 0 || !!savingCourierSessionIds[s.id];
                     return (
                       <CourierComptaSessionCard
                         key={s.id}
@@ -2866,12 +2882,14 @@ const AgenceComptabilitePage: React.FC = () => {
                               value={Number.isFinite(ecart) ? money(ecart) : '—'}
                             />
                             <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-2">Montant compté</label>
+                              <label className="block text-xs font-medium text-gray-700 mb-2">
+                                Montant versé (compté) <span className="text-red-500">*</span>
+                              </label>
                               <input
                                 type="text"
                                 inputMode="decimal"
                                 className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                                placeholder="0"
+                                placeholder="Obligatoire"
                                 value={input.countedAmount}
                                 onChange={(e) => setReceptionInputCourier(s.id, e.target.value)}
                               />
@@ -2880,7 +2898,7 @@ const AgenceComptabilitePage: React.FC = () => {
                         }
                         footer={
                           <ActionButton
-                            disabled={!Number.isFinite(counted) || counted < 0 || !!savingCourierSessionIds[s.id]}
+                            disabled={disableCourierValidate}
                             onClick={() => validateCourierSessionAction(s)}
                           >
                             <CheckCircle2 className="h-4 w-4 mr-2" />
@@ -2897,11 +2915,11 @@ const AgenceComptabilitePage: React.FC = () => {
               );
             })()}
 
-            {/* Postes validés agence (visibles pour le chef d'agence, en attente de son contrôle final) */}
+            {/* Postes validés par le comptable agence (en attente validation chef) */}
             {(validatedAgencyShifts.length > 0 || courierValidatedAgencySessions.length > 0) && (
               <SectionCard
-                title="Validé agence (en attente validation chef)"
-                help="Sessions déjà validées par le comptable agence ; en attente de validation par le chef d'agence."
+                title="Validé comptable (en attente validation chef)"
+                help="Sessions validées par le comptable agence ; le chef d’agence finalise le contrôle."
               >
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {validatedAgencyShifts.map((s) => {
@@ -2915,7 +2933,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           {s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} → {s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleString('fr-FR') : '—'}
                         </div>
                         <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(s.totalAmount ?? s.totalRevenue ?? 0)}</div>
-                        <div className="mt-2 text-xs text-teal-700">Billetterie · Validé agence · En attente chef d'agence</div>
+                        <div className="mt-2 text-xs text-teal-700">Billetterie · Validé comptable · En attente chef d&apos;agence</div>
                       </div>
                     );
                   })}
@@ -2932,7 +2950,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           {s.closedAt ? new Date((s.closedAt as { toDate?: () => Date }).toDate?.() ?? s.closedAt as Date).toLocaleString('fr-FR') : '—'}
                         </div>
                         <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(Number(s.validatedAmount ?? 0))}</div>
-                        <div className="mt-2 text-xs text-violet-800">Courrier · Validé agence · En attente chef d'agence</div>
+                        <div className="mt-2 text-xs text-violet-800">Courrier · Validé comptable · En attente chef d&apos;agence</div>
                       </div>
                     );
                   })}
@@ -3745,7 +3763,7 @@ const AgenceComptabilitePage: React.FC = () => {
             ) : (
               <>
                 <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs text-slate-700">
-                  <span className="font-semibold">Billets / montants vente :</span> {AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}.{" "}
+                  <span className="font-semibold">Ventes billets (guichet + en ligne)</span> — même calcul que l&apos;activité réseau.{" "}
                   <span className="font-semibold">Courrier :</span> {AGENCY_KPI_TIME.WORKFLOW_PAIEMENT}.{" "}
                   <span className="font-semibold">Écart caisse :</span> {AGENCY_KPI_TIME.SESSION_POSTE} — ce sont trois lectures différentes.
                 </div>
@@ -4113,7 +4131,7 @@ const SectionShifts: React.FC<{
     paused: "En pause",
     closed: "Clôturé",
     pending: "En attente",
-    validated_agency: "Validé agence (en attente chef d'agence)",
+    validated_agency: "Validé comptable (en attente chef d'agence)",
     validated: "Validé",
   };
   return (

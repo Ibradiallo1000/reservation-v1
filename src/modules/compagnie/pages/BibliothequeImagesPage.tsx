@@ -32,10 +32,9 @@ const BibliothequeImagesPage: React.FC = () => {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   
-  // Déterminer le companyId effectif :
-  // - Pour admin_compagnie : utiliser user.companyId
-  // - Pour admin_platforme en inspection : utiliser routeCompanyId
-  const effectiveCompanyId = user?.companyId || routeCompanyId;
+  // Même logique que Paramètres : le tenant vient de l’URL quand il est présent
+  // (évite décalage liste ↔ enregistrement si le profil et l’URL diffèrent).
+  const effectiveCompanyId = routeCompanyId ?? user?.companyId ?? "";
   
   // Mode inspection : admin plateforme regardant une autre compagnie
   const isInspectionMode = Boolean(user?.role === "admin_platforme" && routeCompanyId);
@@ -153,7 +152,7 @@ const BibliothequeImagesPage: React.FC = () => {
           <UploadImageCloudinary
             label="Ajouter une image"
             dossier={`companies/${effectiveCompanyId}`}
-            collectionName={`companies/${effectiveCompanyId}/imagesBibliotheque`}
+            companyId={effectiveCompanyId}
             onUpload={() => {
               // rien à faire, onSnapshot s’en charge
             }}

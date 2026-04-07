@@ -325,17 +325,14 @@ const DashboardAgencePage: React.FC = () => {
 
         <div className="mt-2 mb-6 space-y-2 text-xs text-gray-600 dark:text-gray-400">
           <p>
-            <span className="font-semibold">Création réservation (jour agence)</span> — billets / canaux via{" "}
-            <span className="font-mono text-[11px]">getAgencyStats</span>.{" "}
-            <span className="font-semibold">Colis</span> — création enregistrée sur la période (bornes fuseau agence).
+            <span className="font-semibold">Activité commerciale</span> — ventes guichet et en ligne (billets payés,
+            période dans le fuseau agence) et colis pris en compte dans le chiffre d&apos;activité.
           </p>
           <p>
-            <span className="font-semibold">Comptabilisé (ledger, jour agence)</span> — liquidité, encaissements et CA net (bloc 1–2
-            ci-dessous). Ne pas les comparer aux totaux « réservations » sans séparation.
+            <span className="font-semibold">Trésorerie (ledger)</span> — liquidité réelle et mouvements comptabilisés
+            (blocs ci-dessous). Ne pas confondre avec l&apos;activité ventes.
           </p>
-          <p>
-            La carte caisse : solde espèces ledger + trace opérationnelle du jour (autre temporalité).
-          </p>
+          <p>La carte caisse affiche le solde espèces (ledger) et l&apos;historique opérationnel.</p>
         </div>
 
         {agencyId && user?.companyId && (

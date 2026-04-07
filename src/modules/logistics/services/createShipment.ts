@@ -15,6 +15,7 @@ import { incrementParcelCount } from "@/modules/compagnie/tripInstances/tripInst
 import { generateTrackingPublicId, generateTrackingToken } from "../utils/shipmentTrackingCrypto";
 import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
+import { writeCourierActivityInTransaction } from "@/modules/compagnie/activity/activityLogsService";
 import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import { createPayment, getPaymentByReservationId, confirmPayment } from "@/services/paymentService";
 
@@ -180,6 +181,21 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       performedAt: serverTimestamp(),
     };
     tx.set(eventDoc, event);
+
+    const paidOriginOrDest =
+      params.paymentStatus === "PAID_ORIGIN" || params.paymentStatus === "PAID_DESTINATION";
+    if (paidOriginOrDest) {
+      const courierAmount = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
+      if (courierAmount > 0) {
+        writeCourierActivityInTransaction(tx, {
+          companyId: params.companyId,
+          originAgencyId: params.originAgencyId,
+          shipmentId,
+          amount: courierAmount,
+          source: params.sessionId ? "guichet" : "online",
+        });
+      }
+    }
   });
 
   logAgentHistoryEvent({

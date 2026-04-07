@@ -1,56 +1,34 @@
 /**
- * Finances — Liquidités (ledger) | Mouvements | Caisse (sessions + encaissements).
+ * Finances (CEO) — argent disponible, flux récents, état des validations (sans jargon technique).
  */
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import { DollarSign, Wallet, Banknote, ArrowRightLeft } from "lucide-react";
+import { DollarSign } from "lucide-react";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { TimeFilterBar, type RangeKey } from "@/modules/compagnie/admin/components/CompanyDashboard/TimeFilterBar";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
-import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
-import type { Company } from "@/types/companyTypes";
 import { useAuth } from "@/contexts/AuthContext";
 import FinancesLiquiditesTab from "../finances/pages/FinancesLiquiditesTab";
 import FinancesMouvementsTab from "../finances/pages/FinancesMouvementsTab";
 import FinancesCaisseTab from "../finances/pages/FinancesCaisseTab";
 
-const TAB_LIQUIDITES = "liquidites";
-const TAB_MOUVEMENTS = "mouvements";
-const TAB_CAISSE = "caisse";
-
-const TABS = [
-  { key: TAB_LIQUIDITES, label: "Liquidités", icon: Wallet },
-  { key: TAB_MOUVEMENTS, label: "Mouvements", icon: ArrowRightLeft },
-  { key: TAB_CAISSE, label: "Caisse", icon: Banknote },
-];
-
-type TabKey = typeof TAB_LIQUIDITES | typeof TAB_MOUVEMENTS | typeof TAB_CAISSE;
-
 export default function FinancesPage() {
-  const { user, company } = useAuth();
+  const { user } = useAuth();
   const globalPeriod = useGlobalPeriodContext();
   const { companyId: companyIdFromUrl } = useParams<{ companyId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
 
-  const tabParam = searchParams.get("tab");
-  const tabFromUrl = (TABS.some((t) => t.key === tabParam) ? tabParam : TAB_LIQUIDITES) as TabKey;
-  const [activeTab, setActiveTab] = useState<TabKey>(
-    tabParam === "ca" ? TAB_LIQUIDITES : tabFromUrl
-  );
-
-  useEffect(() => {
-    if (tabParam === "ca") {
+  /** Compat : anciens liens ?tab=mouvements|caisse|liquidites — ignorés, page unique. */
+  React.useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && ["mouvements", "caisse", "liquidites", "ca"].includes(tab)) {
       const next = new URLSearchParams(searchParams);
-      next.set("tab", TAB_LIQUIDITES);
+      next.delete("tab");
       setSearchParams(next, { replace: true });
-      setActiveTab(TAB_LIQUIDITES);
-      return;
     }
-    setActiveTab(TABS.some((t) => t.key === tabParam) ? (tabParam as TabKey) : TAB_LIQUIDITES);
-  }, [tabParam, searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams]);
 
-  const theme = useCompanyTheme((company as Company | null) ?? null);
   const range: RangeKey =
     globalPeriod.preset === "day"
       ? "day"
@@ -60,12 +38,6 @@ export default function FinancesPage() {
   const customStart = globalPeriod.preset === "custom" ? globalPeriod.startDate : null;
   const customEnd = globalPeriod.preset === "custom" ? globalPeriod.endDate : null;
 
-  const setTab = (tab: TabKey) => {
-    setActiveTab(tab);
-    const next = new URLSearchParams(searchParams);
-    next.set("tab", tab);
-    setSearchParams(next, { replace: true });
-  };
   const setRange = (v: RangeKey) => {
     if (v === "day") return globalPeriod.setPreset("day");
     if (v === "month") return globalPeriod.setPreset("month");
@@ -103,7 +75,7 @@ export default function FinancesPage() {
 
   if (!companyId) {
     return (
-      <StandardLayoutWrapper>
+      <StandardLayoutWrapper maxWidthClass="w-full" className="px-4">
         <PageHeader title="Finances" icon={DollarSign} />
         <p className="text-gray-500">Compagnie introuvable.</p>
       </StandardLayoutWrapper>
@@ -111,10 +83,10 @@ export default function FinancesPage() {
   }
 
   return (
-    <StandardLayoutWrapper>
+    <StandardLayoutWrapper maxWidthClass="w-full" className="px-4">
       <PageHeader
         title="Finances"
-        subtitle="Liquidités (grand livre), mouvements et caisse par session."
+        subtitle="Argent disponible, derniers flux et suivi des validations guichet."
         icon={DollarSign}
         right={
           <TimeFilterBar
@@ -127,32 +99,11 @@ export default function FinancesPage() {
           />
         }
       />
-      <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3 mb-4">
-        {TABS.map(({ key, label, icon: Icon }) => {
-          const tabKey = key as TabKey;
-          const active = activeTab === tabKey;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTab(tabKey)}
-              className={[
-                "inline-flex items-center gap-2 px-4 py-2.5 rounded-t-lg text-sm font-medium transition-all",
-                active
-                  ? "bg-white dark:bg-slate-800 border border-b-0 border-gray-200 dark:border-slate-600 shadow-sm -mb-px"
-                  : "text-gray-600 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 border border-transparent",
-              ].join(" ")}
-              style={active ? { borderBottomColor: "white", color: theme?.colors?.primary } : {}}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </button>
-          );
-        })}
+      <div className="space-y-4">
+        <FinancesLiquiditesTab />
+        <FinancesMouvementsTab />
+        <FinancesCaisseTab />
       </div>
-      {activeTab === TAB_LIQUIDITES && <FinancesLiquiditesTab />}
-      {activeTab === TAB_MOUVEMENTS && <FinancesMouvementsTab />}
-      {activeTab === TAB_CAISSE && <FinancesCaisseTab />}
     </StandardLayoutWrapper>
   );
 }

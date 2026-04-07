@@ -14,9 +14,9 @@ export const DESIGN = {
   cardShadow: "0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06)", // shadow-sm
   cardBorder: "1px solid hsl(214.3 31.8% 91.4%)", // border color from CSS vars
 
-  // ─── Page Layout ───
-  pagePadding: "px-4 sm:px-6 py-4",
-  pageWidth: "w-full max-w-7xl mx-auto",
+  // ─── Page Layout (mobile-first : pleine largeur, pas de centrage max-width) ───
+  pagePadding: "px-4 py-4",
+  pageWidth: "w-full min-w-0",
   verticalSpacing: "space-y-4",
 
   // ─── Typography (Teliya global) ───

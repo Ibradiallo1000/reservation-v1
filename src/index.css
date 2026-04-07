@@ -88,8 +88,10 @@ html.dark #root {
     margin: 0;
     padding: 0;
     height: 100%;
-    /* Splash natif unique : fond orange jusqu’à ce que React affiche le contenu (évite flash gris/blanc) */
-    background-color: var(--teliya-orange);
+  }
+  #root {
+    min-height: 100%;
+    background-color: transparent;
   }
   html, body { @apply text-foreground; }
 
@@ -103,8 +105,9 @@ html.dark #root {
     outline-offset: 2px;
   }
 
-  /* 2) Rendu texte plus net */
+  /* 2) Fond unique appli + texte net (zones métier : cartes blanches, pas de fond imbriqué) */
   body {
+    @apply bg-gray-50;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }

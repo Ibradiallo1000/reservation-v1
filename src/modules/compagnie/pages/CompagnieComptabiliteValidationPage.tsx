@@ -127,7 +127,7 @@ export default function CompagnieComptabiliteValidationPage() {
         subtitle="Sessions validées par le comptable agence — valider ou rejeter pour finaliser."
       />
       <SectionCard
-        title="Sessions validées agence"
+        title="Sessions validées comptable"
         icon={FileCheck}
         right={
           <Button variant="secondary" size="sm" onClick={load} disabled={loading}>
@@ -153,7 +153,7 @@ export default function CompagnieComptabiliteValidationPage() {
                   <th className="text-right py-2 px-2">Montant</th>
                   <th className="text-right py-2 px-2">Espèces</th>
                   <th className="text-right py-2 px-2">Digital</th>
-                  <th className="text-left py-2 px-2">Validé agence le</th>
+                  <th className="text-left py-2 px-2">Validé comptable le</th>
                   <th className="text-right py-2 px-2">Actions</th>
                 </tr>
               </thead>

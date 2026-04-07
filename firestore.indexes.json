@@ -901,6 +901,21 @@
         { "fieldPath": "destinationCity", "order": "ASCENDING" },
         { "fieldPath": "tripExecutionDate", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "activityLogs",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "agencyId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activityLogs",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

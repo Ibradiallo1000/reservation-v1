@@ -456,6 +456,137 @@ export async function applyRemittancePendingToAgencyCashInTransaction(
   console.info(`Balance updated from remittance: +${amt} (${context})`);
 }
 
+/**
+ * Annule une remise espèces (ex. session courrier renvoyée au comptable) : crédit pending, débit caisse physique.
+ * Idempotent via clé `reversal_remittance_*`. Exige que la remise d’origine existe (doc idempotence `remittance_*`).
+ */
+export async function reverseRemittancePendingToAgencyCashInTransaction(
+  tx: Transaction,
+  companyId: string,
+  agencyId: string,
+  reverseAmount: number,
+  currency: string,
+  remittanceRef: RemittanceLedgerReference,
+  context: string
+): Promise<void> {
+  const amt = Number(reverseAmount);
+  if (!Number.isFinite(amt) || amt <= 0) return;
+
+  const originalKey = `remittance_${remittanceRef.referenceType}_${remittanceRef.referenceId}`;
+  const originalIdemRef = idempotencyRef(companyId, originalKey);
+  const originalIdemSnap = await tx.get(originalIdemRef);
+  if (!originalIdemSnap.exists()) {
+    throw new Error(
+      "[ledger] Aucune remise enregistrée à annuler pour cette référence — impossible de renverser le mouvement caisse."
+    );
+  }
+
+  const reversalKey = `reversal_remittance_${remittanceRef.referenceType}_${remittanceRef.referenceId}`;
+  const reversalIdemRef = idempotencyRef(companyId, reversalKey);
+  const reversalIdemSnap = await tx.get(reversalIdemRef);
+  if (reversalIdemSnap.exists()) {
+    return;
+  }
+
+  const pendingId = agencyPendingCashAccountDocId(agencyId);
+  const cashId = agencyCashAccountDocId(agencyId);
+  const pendingRef = ledgerAccountDocRef(companyId, pendingId);
+  const cashRef = ledgerAccountDocRef(companyId, cashId);
+  const mirrorCashRef = financialAccountRef(companyId, agencyCashAccountId(agencyId));
+
+  const [pendingSnap, cashSnap, mirrorSnap] = await Promise.all([
+    tx.get(pendingRef),
+    tx.get(cashRef),
+    tx.get(mirrorCashRef),
+  ]);
+  assertExistingLedgerAccountMatchesSpec(pendingSnap, pendingId, "virtual_clearing");
+  assertExistingLedgerAccountMatchesSpec(cashSnap, cashId, "cash");
+
+  const sPending = specForLedgerDocId(pendingId, agencyId);
+  const sCash = specForLedgerDocId(cashId, agencyId);
+
+  ensureLedgerAccountDocsInTransaction(
+    tx,
+    companyId,
+    currency,
+    [
+      {
+        docId: pendingId,
+        type: sPending.type,
+        agencyId: sPending.agencyId,
+        label: sPending.label,
+        includeInLiquidity: sPending.includeInLiquidity,
+      },
+      {
+        docId: cashId,
+        type: sCash.type,
+        agencyId: sCash.agencyId,
+        label: sCash.label,
+        includeInLiquidity: sCash.includeInLiquidity,
+      },
+    ],
+    [pendingSnap.exists(), cashSnap.exists()]
+  );
+
+  const pendingBal = Number((pendingSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
+  const cashBal = Number((cashSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
+  const cashAfter = cashBal - amt;
+  const pendingAfter = pendingBal + amt;
+
+  if (!allowsNegativeBalance(cashId) && cashAfter < -0.0001) {
+    throw new Error(`[ledger] Solde caisse insuffisant pour annuler la remise (${cashBal} < ${amt})`);
+  }
+
+  tx.update(cashRef, { balance: increment(-amt), updatedAt: serverTimestamp() });
+  tx.update(pendingRef, { balance: increment(amt), updatedAt: serverTimestamp() });
+
+  if (mirrorSnap.exists()) {
+    tx.update(mirrorCashRef, { currentBalance: increment(-amt), updatedAt: serverTimestamp() });
+  }
+
+  const source = toSource("cash");
+  const newRef = doc(financialTransactionsRef(companyId));
+  const paymentMethod = resolveFinancialPaymentMethod({
+    type: "remittance",
+    paymentMethod: "cash",
+    paymentProvider: null,
+    paymentChannel: "guichet",
+    source: "cash",
+    metadata: { context, reversal: true },
+  });
+  const payload: FinancialTransactionDoc = {
+    type: "remittance",
+    source,
+    amount: amt,
+    currency,
+    companyId,
+    agencyId,
+    reservationId: null,
+    debitAccountId: cashId,
+    creditAccountId: pendingId,
+    debitAccountType: ledgerMirrorTypeFromKind(sCash.type),
+    creditAccountType: ledgerMirrorTypeFromKind(sPending.type),
+    balanceAfter: cashAfter,
+    status: "confirmed",
+    performedAt: Timestamp.now(),
+    createdAt: Timestamp.now(),
+    metadata: { context, debitAfter: cashAfter, creditAfter: pendingAfter, operationKind: "remittance_reversal" as const },
+    referenceType: remittanceRef.referenceType,
+    referenceId: remittanceRef.referenceId,
+    uniqueReferenceKey: reversalKey,
+    paymentChannel: "guichet",
+    paymentMethod,
+    paymentProvider: null,
+  };
+  tx.set(newRef, payload);
+  tx.set(reversalIdemRef, {
+    transactionId: newRef.id,
+    createdAt: serverTimestamp(),
+  });
+
+  console.info(`Balance updated from remittance reversal: -${amt} cash (${context})`);
+}
+
 /** Paramètres alignés sur `createFinancialTransaction` (écriture ledger + journal dans une transaction Firestore existante). */
 export type ApplyFinancialTransactionParams = {
   companyId: string;

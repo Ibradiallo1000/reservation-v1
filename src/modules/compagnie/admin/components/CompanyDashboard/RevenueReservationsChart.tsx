@@ -49,14 +49,16 @@ function formatXLabel(dateStr: string, range: ChartRangeKey): string {
   return d.format("DD");
 }
 
-/** Tooltip personnalisé : date, CA, réservations, agences actives */
+/** Tooltip personnalisé : date, CA, série secondaire (places / réservations), agences actives */
 function CustomTooltip({
   active,
   payload,
+  secondaryMetricLabel = "Réservations",
 }: {
   active?: boolean;
   payload?: Array<{ payload: Point }>;
   label?: string;
+  secondaryMetricLabel?: string;
 }) {
   if (!active || !payload?.length) return null;
   const data = payload[0].payload;
@@ -75,7 +77,7 @@ function CustomTooltip({
         </span>
       </div>
       <div className="flex justify-between gap-4 py-1">
-        <span className="text-gray-600 dark:text-slate-400">Réservations</span>
+        <span className="text-gray-600 dark:text-slate-400">{secondaryMetricLabel}</span>
         <span className="font-medium text-amber-600 dark:text-amber-400">
           {data.reservations ?? 0}
         </span>
@@ -96,6 +98,7 @@ export function RevenueReservationsChart({
   primaryColor,
   secondaryColor,
   range = "month",
+  secondaryMetricLabel = "Réservations",
 }: {
   data: Point[];
   loading?: boolean;
@@ -103,6 +106,8 @@ export function RevenueReservationsChart({
   secondaryColor?: string;
   /** Période affichée : day = 24h, week = Lun/Mar..., month = 01...31 */
   range?: ChartRangeKey;
+  /** Libellé axe / tooltip pour la série `reservations` (ex. places billets depuis activityLogs). */
+  secondaryMetricLabel?: string;
 }) {
   const primary = primaryColor || DEFAULT_PRIMARY;
   const secondary = secondaryColor || DEFAULT_SECONDARY;
@@ -118,21 +123,21 @@ export function RevenueReservationsChart({
 
   if (loading) {
     return (
-      <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
+      <div className="flex min-h-[200px] items-center justify-center text-sm text-muted-foreground">
         Chargement…
       </div>
     );
   }
   if (!data || data.length === 0) {
     return (
-      <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
+      <div className="flex min-h-[200px] items-center justify-center text-sm text-muted-foreground">
         Aucune donnée sur la période.
       </div>
     );
   }
 
   return (
-    <div className="h-72 w-full">
+    <div className="h-[min(280px,42vh)] min-h-[200px] w-full">
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
           <defs>
@@ -149,7 +154,7 @@ export function RevenueReservationsChart({
           <XAxis dataKey="label" tick={{ fontSize: 12 }} />
           <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
           <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<CustomTooltip secondaryMetricLabel={secondaryMetricLabel} />} />
           <Legend />
           <Area
             yAxisId="left"
@@ -166,7 +171,7 @@ export function RevenueReservationsChart({
             yAxisId="right"
             type="monotone"
             dataKey="reservations"
-            name="Réservations"
+            name={secondaryMetricLabel}
             stroke={secondary}
             strokeWidth={2}
             fill="url(#fillReservations)"

@@ -6,7 +6,8 @@ export const AGENCY_KPI_TIME = {
   LEDGER_BAMAKO: "Jour de l’agence (mouvements enregistrés)",
   SESSION_POSTE: "Session poste",
   DATE_VOYAGE: "Date de voyage",
-  CREATION_RESERVATION_BAMAKO: "Création réservation (jour agence)",
+  /** Billets vendus (guichet + en ligne), montants — période dans le fuseau agence, hors ledger. */
+  CREATION_RESERVATION_BAMAKO: "Ventes billets (période)",
   WORKFLOW_PAIEMENT: "Paiements courrier",
 } as const;
 

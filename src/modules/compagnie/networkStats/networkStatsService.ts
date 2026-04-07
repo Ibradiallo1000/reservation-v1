@@ -1,11 +1,19 @@
 /**
- * Source unique des indicateurs réseau TELIYA.
- * Toutes les pages (Poste de pilotage, Réservations réseau, tableau agences, Flotte)
- * doivent utiliser getNetworkStats() pour afficher les mêmes chiffres.
- * Les dates « jour » pour une agence utilisent `timeZone` (défaut Africa/Bamako).
+ * Indicateurs réseau et agrégats agence.
+ * L’activité commerciale lit uniquement `companies/{id}/activityLogs` (voir `activityLogsService`).
  */
 
-import { collectionGroup, getDocs, query, where, orderBy, limit, Timestamp } from "firebase/firestore";
+import {
+  collectionGroup,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  limit,
+  Timestamp,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import {
   TZ_BAMAKO,
@@ -21,10 +29,6 @@ import {
   getHourInTimezone,
   normalizeDateToYYYYMMDD,
 } from "@/shared/date/dateUtilsTz";
-import {
-  isConfirmedTransactionStatus,
-  listFinancialTransactionsByPeriod,
-} from "@/modules/compagnie/treasury/financialTransactions";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -36,6 +40,11 @@ import { listTripInstancesByDateRange } from "@/modules/compagnie/tripInstances/
 import { getBusesInProgressCountToday } from "@/modules/compagnie/tripInstances/tripInstanceService";
 import { listVehicles } from "@/modules/compagnie/fleet/vehiclesService";
 import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/vehicleTransitions";
+import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
+import {
+  aggregateActivityLogDocs,
+  buildActivityChartBucketsFromLogs,
+} from "@/modules/compagnie/networkStats/activityCore";
 
 /** Billets vendus = uniquement statut confirme ou paye (après normalisation). */
 export function isSoldReservation(statut: string | undefined): boolean {
@@ -44,9 +53,9 @@ export function isSoldReservation(statut: string | undefined): boolean {
 }
 
 export interface NetworkStats {
-  /** CA total : somme des payment_received confirmés (ledger) sur la période */
+  /** Chiffre d’activité : billets vendus (réservations payées, createdAt) + courrier payé — hors ledger. */
   totalRevenue: number;
-  /** Billets vendus : réservations créées sur la période (createdAt), toute période (jour/semaine/mois) */
+  /** Places vendues (somme des sièges aller / A/R) sur la période — même règle que l’activité réseau. */
   totalTickets: number;
   /** Agences actives : nombre de agencyId distincts parmi les réservations créées sur la période */
   activeAgencies: number;
@@ -116,29 +125,6 @@ async function getReservationsByCreatedAtRange(
   });
 }
 
-async function getLedgerPaymentReceivedByPeriod(
-  companyId: string,
-  startDate: Date,
-  endDate: Date
-): Promise<Array<{ amount: number; performedAt: Date }>> {
-  const rows = await listFinancialTransactionsByPeriod(
-    companyId,
-    Timestamp.fromDate(startDate),
-    Timestamp.fromDate(endDate)
-  );
-  return rows
-    .filter((r) => r.type === "payment_received" && isConfirmedTransactionStatus(r.status))
-    .map((r) => {
-      const ts = r.performedAt as Timestamp | undefined;
-      const performedAt = ts?.toDate?.() ?? new Date(0);
-      return {
-        amount: Number(r.amount ?? 0) || 0,
-        performedAt,
-      };
-    })
-    .filter((r) => r.amount > 0);
-}
-
 /** Réservation chargée une seule fois pour la page Réservations réseau (tableau, cartes, graphique). */
 export interface ReservationInRange {
   id: string;
@@ -147,6 +133,7 @@ export interface ReservationInRange {
   createdAt: Date;
   montant: number;
   seatsGo: number;
+  seatsReturn?: number;
   depart?: string;
   arrivee?: string;
 }
@@ -182,6 +169,7 @@ export async function getReservationsInRange(
       createdAt,
       montant: Number(data.montant ?? data.amount ?? 0) || 0,
       seatsGo: Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1,
+      seatsReturn: Number(data.seatsReturn ?? 0) || 0,
       depart: String(data.depart ?? data.departure ?? "").trim() || undefined,
       arrivee: String(data.arrivee ?? data.arrival ?? "").trim() || undefined,
     };
@@ -262,19 +250,20 @@ export async function getNetworkCapacityOnly(
 }
 
 export interface AgencyStats {
+  /** Places vendues (activité billets). */
   totalTickets: number;
+  /** Billets + courrier payé (activité commerciale, hors ledger). */
   totalRevenue: number;
+  /** Nombre de réservations en ligne (payées). */
   onlineTickets: number;
+  /** Nombre de réservations guichet (payées). */
   counterTickets: number;
   /** Graphique journalier/horaires aligné sur CEO (même structure que ChartDataPoint). */
   dailyChartData: ChartDataPoint[];
 }
 
 /**
- * Statistiques d'une agence unique, avec les mêmes règles que le CEO :
- * - Billets vendus = réservations créées (createdAt Bamako) dont statut canonique ∈ {confirme, paye}
- * - Période définie par [dateFrom, dateTo] (YYYY-MM-DD) dans le fuseau `timeZone` (souvent `agency.timezone`)
- * - Découpage journalier ou horaire identique à buildChartDataFromReservations/getNetworkStatsChartData
+ * Statistiques d'une agence — même moteur que l’activité réseau / CEO (`activityCore`).
  */
 export async function getAgencyStats(
   companyId: string,
@@ -285,98 +274,24 @@ export async function getAgencyStats(
 ): Promise<AgencyStats> {
   const periodStart = getStartOfDayForDate(dateFrom, timeZone);
   const periodEnd = getEndOfDayForDate(dateTo, timeZone);
-
-  const startTs = Timestamp.fromDate(periodStart);
-  const endTs = Timestamp.fromDate(periodEnd);
-
-  const q = query(
-    collectionGroup(db, "reservations"),
-    where("companyId", "==", companyId),
-    where("agencyId", "==", agencyId),
-    where("createdAt", ">=", startTs),
-    where("createdAt", "<=", endTs),
-    orderBy("createdAt", "asc"),
-    limit(5000)
-  );
-
-  const snap = await getDocs(q);
-  const reservations = snap.docs.map((d) => {
-    const data = d.data();
-    const createdAt = data.createdAt?.toDate?.() ?? new Date(0);
-    const statut = (data.statut ?? data.status ?? "").toString();
-    const montant = Number(data.montant ?? data.amount ?? 0) || 0;
-    const seatsGo = Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1;
-    const canalRaw = (data.canal ?? "").toString().toLowerCase().trim();
-    const canalNorm = canalRaw.replace(/\s|_|-/g, "");
-    const isOnline =
-      canalNorm.includes("ligne") || canalNorm === "online" || canalNorm === "web";
-    const canal: "online" | "counter" = isOnline ? "online" : "counter";
-    return {
-      createdAt,
-      statut,
-      montant,
-      seatsGo,
-      canal,
-    };
-  });
-
-  const sold = reservations.filter((r) => isSoldReservation(r.statut));
-  const totalTickets = sold.length;
-  const totalRevenue = sold.reduce((sum, r) => sum + r.montant, 0);
-  const onlineTickets = sold.filter((r) => r.canal === "online").length;
-  const counterTickets = sold.filter((r) => r.canal === "counter").length;
-
-  // Construire dailyChartData à partir des sold (mêmes règles que buildChartDataFromReservations).
-  const isSingleDay = dateFrom === dateTo;
-  const map = new Map<string, { revenue: number; reservations: number }>();
-
-  if (isSingleDay) {
-    for (let h = 0; h < 24; h++) {
-      map.set(`${dateFrom}T${String(h).padStart(2, "0")}`, { revenue: 0, reservations: 0 });
-    }
-    sold.forEach((r) => {
-      const hour = getHourInTimezone(r.createdAt, timeZone);
-      const key = `${dateFrom}T${String(hour).padStart(2, "0")}`;
-      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
-      curr.revenue += r.montant;
-      curr.reservations += r.seatsGo;
-      map.set(key, curr);
-    });
-  } else {
-    const fromNorm = normalizeDateToYYYYMMDD(dateFrom);
-    const toNorm = normalizeDateToYYYYMMDD(dateTo);
-    let cur = dayjs.tz(`${fromNorm}T12:00:00`, timeZone);
-    for (;;) {
-      const key = cur.format("YYYY-MM-DD");
-      map.set(key, { revenue: 0, reservations: 0 });
-      if (key >= toNorm) break;
-      cur = cur.add(1, "day");
-    }
-    sold.forEach((r) => {
-      const key = getDateKeyInTimezone(r.createdAt, timeZone);
-      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
-      curr.revenue += r.montant;
-      curr.reservations += r.seatsGo;
-      map.set(key, curr);
-    });
-  }
-
+  const docs = await queryActivityLogsInRange(companyId, periodStart, periodEnd, agencyId);
+  const activity = aggregateActivityLogDocs(docs);
+  const map = buildActivityChartBucketsFromLogs(docs, dateFrom, dateTo, timeZone);
   const dailyChartData: ChartDataPoint[] = Array.from(map.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, v]) => ({ date, revenue: v.revenue, reservations: v.reservations }));
 
   return {
-    totalTickets,
-    totalRevenue,
-    onlineTickets,
-    counterTickets,
+    totalTickets: activity.billets.tickets,
+    totalRevenue: activity.totalAmount,
+    onlineTickets: activity.billets.online.reservationCount,
+    counterTickets: activity.billets.guichet.reservationCount,
     dailyChartData,
   };
 }
 
 /**
- * Source unique : tous les indicateurs réseau pour une période.
- * Logique des ventes : billets vendus = réservations créées (createdAt) pour toutes les périodes (jour, semaine, mois).
+ * Indicateurs réseau pour une période : ventes / billets depuis `activityLogs` ; capacité et flotte depuis le planning (hors journal d’activité).
  */
 export async function getNetworkStats(
   companyId: string,
@@ -389,56 +304,34 @@ export async function getNetworkStats(
   const periodStart = getStartOfDayInBamako(dateFrom);
   const periodEnd = getEndOfDayInBamako(dateTo);
 
-  if (typeof console !== "undefined" && console.log) {
-    console.log("networkStats [date tz]", {
-      today,
-      dateFrom,
-      dateTo,
-      periodStart: periodStart.toISOString(),
-      periodEnd: periodEnd.toISOString(),
-    });
-  }
-
-  const [ledgerPayments, reservationsByCreatedAt, tripInstances, busesInTransit, vehicles] = await Promise.all([
-    getLedgerPaymentReceivedByPeriod(companyId, periodStart, periodEnd),
-    getReservationsByCreatedAtRange(companyId, periodStart, periodEnd),
+  const [activityDocs, tripInstances, busesInTransit, vehicles] = await Promise.all([
+    queryActivityLogsInRange(companyId, periodStart, periodEnd),
     listTripInstancesByDateRange(companyId, dateFrom, dateTo, { limitCount: 2000 }),
     getBusesInProgressCountToday(companyId),
     listVehicles(companyId, 500),
   ]);
 
-  if (typeof console !== "undefined" && console.log) {
-    console.log("reservations source", {
-      collection: "companies/{id}/agences/{id}/reservations (collectionGroup)",
-      filter: "createdAt >= periodStart && createdAt <= periodEnd (toutes périodes)",
-      docsCount: reservationsByCreatedAt.length,
-      sample: reservationsByCreatedAt.slice(0, 3),
-    });
+  const netActivity = aggregateActivityLogDocs(activityDocs);
+  const totalRevenue = netActivity.totalAmount;
+  const totalTickets = netActivity.billets.tickets;
+
+  const activeAgenciesSet = new Set<string>();
+  for (const d of activityDocs) {
+    const x = d.data() as { agencyId?: string; status?: string };
+    if (String(x.status ?? "") !== "confirmed") continue;
+    const aid = String(x.agencyId ?? "").trim();
+    if (aid) activeAgenciesSet.add(aid);
   }
-
-  const totalRevenue = ledgerPayments.reduce((s, t) => s + (Number(t.amount) || 0), 0);
-
-  const soldReservations = reservationsByCreatedAt.filter((r) => isSoldReservation(r.statut));
-  const totalTickets = soldReservations.length;
-  const activeAgenciesSet = new Set(soldReservations.map((r) => r.agencyId).filter(Boolean));
   const activeAgencies = activeAgenciesSet.size;
 
-  const soldToday = soldReservations.filter(
-    (r) => r.createdAt >= startOfDay && r.createdAt <= endOfDay
-  );
-  const reservationsToday = soldToday.length;
-
-  if (typeof console !== "undefined" && console.log) {
-    console.log("networkStats [ventes createdAt]", {
-      today,
-      reservationsLoaded: reservationsByCreatedAt.length,
-      totalTickets,
-      reservationsToday,
-      source: "createdAt (jour, semaine, mois)",
-    });
-    console.log("reservationsTodayCount", reservationsToday);
-    console.log("networkStats source", { totalTickets, reservationsToday, activeAgencies });
-  }
+  const reservationsToday = activityDocs.filter((d) => {
+    const x = d.data() as { type?: string; status?: string; createdAt?: { toDate?: () => Date } };
+    if (String(x.status ?? "") !== "confirmed") return false;
+    const t = String(x.type ?? "");
+    if (t !== "ticket" && t !== "online") return false;
+    const c = x.createdAt?.toDate?.() ?? new Date(0);
+    return c >= startOfDay && c <= endOfDay;
+  }).length;
 
   const vehiclesAvailable = vehicles.filter(
     (v) =>
@@ -455,7 +348,7 @@ export async function getNetworkStats(
     return sum + cap;
   }, 0);
 
-  const stats: NetworkStats = {
+  return {
     totalRevenue,
     totalTickets,
     activeAgencies,
@@ -465,21 +358,28 @@ export async function getNetworkStats(
     busesInTransit,
     networkCapacity,
   };
-
-  if (typeof console !== "undefined" && console.log) {
-    console.log("networkStats", stats);
-  }
-
-  return stats;
 }
 
 export type ChartDataPoint = { date: string; revenue: number; reservations: number };
 
 /**
- * Données du graphique "Évolution CA / réservations" à partir de la MÊME source que les cartes.
- * - CA = payment_received confirmés (ledger), agrégé par jour ou par heure.
- * - Réservations = réservations créées (createdAt), non annulées, agrégées par jour ou par heure.
- * Ainsi le graphique reflète exactement les totaux affichés dans les cartes.
+ * Points du graphique réseau : **uniquement** `activityLogs` (même filtre que `aggregateActivityLogDocs` : pas de dailyStats, réservations, sessions, ledger).
+ * Un jour → un point par heure (0–23) ; plusieurs jours → un point par jour. La somme des `revenue` = CA d’activité ; somme des `reservations` = places billets.
+ */
+export function buildNetworkChartDataFromActivityLogDocs(
+  docs: QueryDocumentSnapshot<DocumentData>[],
+  dateFrom: string,
+  dateTo: string,
+  timeZone: string = TZ_BAMAKO
+): ChartDataPoint[] {
+  const map = buildActivityChartBucketsFromLogs(docs, dateFrom, dateTo, timeZone);
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, v]) => ({ date, revenue: v.revenue, reservations: v.reservations }));
+}
+
+/**
+ * Même série que {@link buildNetworkChartDataFromActivityLogDocs} après une lecture Firestore des logs.
  */
 export async function getNetworkStatsChartData(
   companyId: string,
@@ -488,64 +388,6 @@ export async function getNetworkStatsChartData(
 ): Promise<ChartDataPoint[]> {
   const periodStart = getStartOfDayInBamako(dateFrom);
   const periodEnd = getEndOfDayInBamako(dateTo);
-  const isSingleDay = dateFrom === dateTo;
-
-  const [ledgerPayments, reservationsByCreatedAt] = await Promise.all([
-    getLedgerPaymentReceivedByPeriod(companyId, periodStart, periodEnd),
-    getReservationsByCreatedAtRange(companyId, periodStart, periodEnd),
-  ]);
-
-  const soldReservations = reservationsByCreatedAt.filter((r) => isSoldReservation(r.statut));
-
-  const map = new Map<string, { revenue: number; reservations: number }>();
-
-  if (isSingleDay) {
-    for (let h = 0; h < 24; h++) {
-      const key = `${dateFrom}T${String(h).padStart(2, "0")}`;
-      map.set(key, { revenue: 0, reservations: 0 });
-    }
-    ledgerPayments.forEach((t) => {
-      const hour = getHourBamako(t.performedAt);
-      const key = `${dateFrom}T${String(hour).padStart(2, "0")}`;
-      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
-      curr.revenue += Number(t.amount) || 0;
-      map.set(key, curr);
-    });
-    soldReservations.forEach((r) => {
-      const hour = getHourBamako(r.createdAt);
-      const key = `${dateFrom}T${String(hour).padStart(2, "0")}`;
-      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
-      curr.reservations += 1;
-      map.set(key, curr);
-    });
-  } else {
-    const start = new Date(dateFrom + "T00:00:00");
-    const end = new Date(dateTo + "T23:59:59");
-    for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
-      const key = getDateKeyBamako(new Date(t));
-      map.set(key, { revenue: 0, reservations: 0 });
-    }
-    ledgerPayments.forEach((t) => {
-      const key = getDateKeyBamako(t.performedAt);
-      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
-      curr.revenue += Number(t.amount) || 0;
-      map.set(key, curr);
-    });
-    soldReservations.forEach((r) => {
-      const key = getDateKeyBamako(r.createdAt);
-      const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
-      curr.reservations += 1;
-      map.set(key, curr);
-    });
-  }
-
-  const chartData = Array.from(map.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, v]) => ({ date, revenue: v.revenue, reservations: v.reservations }));
-
-  if (typeof console !== "undefined" && console.log) {
-    console.log("chartData (same source as cards)", chartData);
-  }
-
-  return chartData;
+  const docs = await queryActivityLogsInRange(companyId, periodStart, periodEnd);
+  return buildNetworkChartDataFromActivityLogDocs(docs, dateFrom, dateTo, TZ_BAMAKO);
 }

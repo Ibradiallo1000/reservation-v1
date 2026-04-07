@@ -13,6 +13,7 @@ import {
   normalizeDateToYYYYMMDD,
 } from "@/shared/date/dateUtilsTz";
 import { isSoldReservation, getNetworkCapacityOnly } from "@/modules/compagnie/networkStats/networkStatsService";
+import { getUnifiedCommercialActivity } from "@/modules/compagnie/networkStats/activityCore";
 import { getCashTransactionsByPaidAtRange, type CashTransactionDocWithId } from "@/modules/compagnie/cash/cashService";
 import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
 
@@ -30,36 +31,13 @@ export async function getTotalSales(
   agencyId?: string,
   timeZone: string = DEFAULT_AGENCY_TIMEZONE
 ): Promise<{ total: number; tickets: number; reservationCount: number }> {
-  const periodStart = getStartOfDayForDate(period.dateFrom, timeZone);
-  const periodEnd = getEndOfDayForDate(period.dateTo, timeZone);
-  const startTs = Timestamp.fromDate(periodStart);
-  const endTs = Timestamp.fromDate(periodEnd);
-
-  const constraints = [
-    where("companyId", "==", companyId),
-    where("createdAt", ">=", startTs),
-    where("createdAt", "<=", endTs),
-    orderBy("createdAt", "asc"),
-    limit(5000),
-  ];
-  if (agencyId) {
-    (constraints as unknown[]).unshift(where("agencyId", "==", agencyId));
-  }
-  const q = query(collectionGroup(db, "reservations"), ...constraints);
-  const snap = await getDocs(q);
-  let total = 0;
-  let tickets = 0; // somme des places (seatsGo), pas le nombre de réservations
-  let reservationCount = 0;
-  snap.docs.forEach((d) => {
-    const data = d.data();
-    const statut = (data.statut ?? data.status ?? "").toString();
-    if (isSoldReservation(statut)) {
-      reservationCount += 1;
-      tickets += Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1;
-      total += Number(data.montant ?? data.amount ?? 0) || 0;
-    }
-  });
-  return { total, tickets, reservationCount };
+  const u = await getUnifiedCommercialActivity(companyId, period, { agencyId, timeZone });
+  const b = u.billets;
+  return {
+    total: b.amount,
+    tickets: b.tickets,
+    reservationCount: b.reservationCount,
+  };
 }
 
 /** Ventes réseau (réservations vendues, createdAt). Alias explicite pour usage commun. */
@@ -145,22 +123,6 @@ export async function getTotalCash(
     dateTo,
     timeZone
   );
-
-  const firstTransaction = list[0];
-  // eslint-disable-next-line no-console
-  console.log("[TELIYA getTotalCash]", {
-    dateFrom,
-    dateTo,
-    timeZone,
-    resultsCount: list.length,
-    sample: firstTransaction
-      ? {
-          id: firstTransaction.id,
-          amount: firstTransaction.amount,
-          createdAt: (firstTransaction as { createdAt?: unknown }).createdAt,
-        }
-      : null,
-  });
 
   // Inclut toutes les sources métier (guichet + online). On ne filtre PAS sur sourceType
   // pour ne pas exclure les paiements en ligne, seulement sur le statut PAID.

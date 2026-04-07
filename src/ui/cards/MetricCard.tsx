@@ -38,6 +38,12 @@ export interface MetricCardProps {
   valueColorVar?: string;
   /** Extra class for wrapper */
   className?: string;
+  /** Optional inline styles on the card root (e.g. accent border color). */
+  style?: React.CSSProperties;
+  /** Classes for the value line (e.g. larger bold). */
+  valueClassName?: string;
+  /** Classes for the icon wrapper (e.g. larger tinted circle). */
+  iconWrapperClassName?: string;
   /** Decorative mode (soft gradient + icon badge) */
   decorative?: boolean;
   /** Variation vs période précédente (ex: "+12 %", "-8 %") — affichée sous la valeur en vert/rouge/gris */
@@ -56,6 +62,9 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   criticalMessage,
   valueColorVar,
   className,
+  style,
+  valueClassName,
+  iconWrapperClassName,
   decorative = false,
   variation,
   variationLabel,
@@ -66,6 +75,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({
       decorative && !critical && "bg-gradient-to-br from-white via-slate-50 to-indigo-50/40",
       className
     )}
+    style={style}
   >
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0 pr-1">
@@ -85,10 +95,11 @@ export const MetricCard: React.FC<MetricCardProps> = ({
         Icon && (
           <span
             className={cn(
-              "inline-flex h-7 w-7 items-center justify-center rounded-full",
+              "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
               decorative
                 ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
-                : "text-gray-400 dark:text-gray-500"
+                : "text-gray-400 dark:text-gray-500",
+              iconWrapperClassName
             )}
           >
             <Icon className="h-4 w-4" aria-hidden />
@@ -100,7 +111,8 @@ export const MetricCard: React.FC<MetricCardProps> = ({
       className={cn(
         "mt-2 overflow-hidden text-ellipsis whitespace-nowrap text-xl sm:text-2xl",
         typography.valueLarge,
-        critical ? "text-red-700 dark:text-red-300" : ""
+        critical ? "text-red-700 dark:text-red-300" : "",
+        valueClassName
       )}
       style={
         !critical && valueColorVar ? { color: valueColorVar } : undefined
