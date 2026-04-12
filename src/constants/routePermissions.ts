@@ -24,12 +24,31 @@ export const routePermissions = {
   ] as const,
   /** Sous-écrans trésorerie (dépense, virement, payable) : pas le chef seul — manipulation caisse réservée au comptable agence (+ admins). */
   comptabiliteTreasury: ["agency_accountant", "admin_compagnie", "admin_platforme"] as const,
+  /** Documents terrain: accès compta agence pour consultation/impression/archive. */
+  financialDocumentsAgency: [
+    "agency_accountant",
+    "chefAgence",
+    "superviseur",
+    "admin_compagnie",
+    "admin_platforme",
+  ] as const,
+  /** Documents siège: comptabilité centrale + direction financière + admin. */
+  financialDocumentsCompany: [
+    "company_accountant",
+    "financial_director",
+    "admin_compagnie",
+    "admin_platforme",
+  ] as const,
   validationsAgence: ["chefAgence", "superviseur", "admin_compagnie"] as const,
   receiptGuichet: ["chefAgence", "guichetier", "escale_manager", "admin_compagnie"] as const,
   adminLayout: ["admin_platforme"] as const,
   tripCosts: ["chefAgence", "company_accountant", "financial_director", "admin_compagnie", "admin_platforme"] as const,
   courrier: ["agentCourrier", "chefAgence", "admin_compagnie"] as const,
-  cashControl: ["guichetier", "agentCourrier", "agency_accountant", "chefAgence", "escale_manager", "admin_compagnie"] as const,
+  /**
+   * Controle caisse global (sessions transverse guichet + courrier):
+   * reserve a la supervision agence et a la comptabilite.
+   */
+  cashControl: ["agency_accountant", "chefAgence", "superviseur", "admin_compagnie", "admin_platforme"] as const,
   /** File d’attente paiements online pending : uniquement opérateur digital (+ admins). Compta = données validées ailleurs. */
   digitalCash: ["operator_digital", "admin_compagnie", "admin_platforme"] as const,
   /** Journal agentHistory : supervision chef / comptable / admin agence. */

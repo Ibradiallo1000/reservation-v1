@@ -1,21 +1,20 @@
 /**
- * Menu Audit & contrôle (audit CEO) : fusion Contrôle & Audit + Dépenses.
- * Affiche : anomalies caisse, dépenses à valider, alertes critiques.
+ * Menu Audit & contrôle (audit CEO) : dépenses + contrôle financier.
  */
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { FileCheck, ShieldCheck } from "lucide-react";
-import { StandardLayoutWrapper, PageHeader } from "@/ui";
+import { StandardLayoutWrapper, PageHeader, PageTabs } from "@/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import CEOExpensesPage from "./CEOExpensesPage";
-import CompagnieComptabilitePage from "./CompagnieComptabilitePage";
+import HeadAccountantControlPage from "@/modules/compagnie/accounting/pages/HeadAccountantControlPage";
 
 const TAB_DEPENSES = "depenses";
 const TAB_CONTROLE = "controle";
 
 const TABS = [
   { key: TAB_DEPENSES, label: "Dépenses à valider", icon: ShieldCheck },
-  { key: TAB_CONTROLE, label: "Contrôle & Audit", icon: FileCheck },
+  { key: TAB_CONTROLE, label: "Contrôle financier", icon: FileCheck },
 ];
 
 type TabKey = typeof TAB_DEPENSES | typeof TAB_CONTROLE;
@@ -29,6 +28,7 @@ export default function AuditControlePage() {
   const tabParam = searchParams.get("tab");
   const tabFromUrl = tabParam === TAB_CONTROLE ? TAB_CONTROLE : TAB_DEPENSES;
   const [activeTab, setActiveTab] = useState<TabKey>(tabFromUrl);
+
   useEffect(() => {
     setActiveTab(tabFromUrl);
   }, [tabFromUrl]);
@@ -51,32 +51,15 @@ export default function AuditControlePage() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Audit & contrôle"
-        subtitle="Dépenses à valider, anomalies caisse et alertes critiques."
+        subtitle="Dépenses à valider et contrôle financier consolidé."
       />
-      <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3 mb-4">
-        {TABS.map(({ key, label, icon: Icon }) => {
-          const tabKey = key as TabKey;
-          const active = activeTab === tabKey;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTab(tabKey)}
-              className={[
-                "inline-flex items-center gap-2 px-4 py-2.5 rounded-t-lg text-sm font-medium transition-all",
-                active
-                  ? "bg-white dark:bg-slate-800 border border-b-0 border-gray-200 dark:border-slate-600 shadow-sm -mb-px"
-                  : "text-gray-600 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-700 border border-transparent",
-              ].join(" ")}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      <PageTabs
+        items={TABS}
+        activeKey={activeTab}
+        onChange={(key) => setTab(key as TabKey)}
+      />
       {activeTab === TAB_DEPENSES && <CEOExpensesPage embedded />}
-      {activeTab === TAB_CONTROLE && <CompagnieComptabilitePage />}
+      {activeTab === TAB_CONTROLE && <HeadAccountantControlPage />}
     </StandardLayoutWrapper>
   );
 }

@@ -203,18 +203,18 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
       {!embedded && (
       <PageHeader
         title="Contrôle caisse"
-        subtitle="Sessions terrain par agent (guichet / courrier) — non comptabilisées"
+        subtitle="Sessions terrain par agent (guichet / courrier) — suivi de caisse opérationnelle"
       />
       )}
       {embedded && (
         <p className="text-xs text-gray-500 mb-3 dark:text-slate-400">
-          Contrôle terrain (complément du ledger). La validation comptable des clôtures se fait selon les rôles.
+          Contrôle terrain complémentaire. La validation comptable des clôtures dépend du rôle utilisateur.
         </p>
       )}
 
       <OperationalHintRow>
         Les sessions et écarts ci-dessous servent au <strong>contrôle terrain</strong> ; la comptabilité officielle reste le{" "}
-        <strong>ledger</strong> (financialTransactions / comptes).
+        <strong>journal financier</strong> de l'agence.
       </OperationalHintRow>
 
       <div className="grid gap-4 md:grid-cols-3 mb-6">
@@ -485,7 +485,7 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
                 <div className="w-full max-w-md rounded-xl border-2 border-red-300 bg-red-50 p-5 shadow-xl dark:border-red-700 dark:bg-red-950/25">
                   <div className="text-base font-semibold text-red-900 dark:text-red-100">Action critique - Suspension</div>
                   <p className="mt-1 text-sm text-red-800 dark:text-red-200">
-                    This will block all operations for this session.
+                    Cette action bloque toutes les opérations de cette session.
                   </p>
                   <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">
                     Motif obligatoire
