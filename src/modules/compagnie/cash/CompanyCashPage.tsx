@@ -186,7 +186,7 @@ export default function CompanyCashPage({ embedded = false, financesTabMode = fa
                   icon={Wallet}
                 />
                 <MetricCard
-                  label="Mobile money"
+                  label="Digital mobile money"
                   value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.mobileMoney)}
                   icon={Smartphone}
                 />

@@ -93,6 +93,17 @@ export function toPaymentChannelLabel(channel: string | null | undefined): strin
   return channel ?? "Autre";
 }
 
+export function toPaymentProviderLabel(provider: string | null | undefined): string {
+  const token = normalizeToken(provider);
+  if (!token) return "Autre";
+  if (token === "wave") return "Wave";
+  if (token === "orange") return "Orange Money";
+  if (token === "moov") return "Moov Money";
+  if (token === "sarali") return "Sarali";
+  if (token === "cash" || token === "especes") return "Especes";
+  return provider ?? "Autre";
+}
+
 export function toFlowTypeLabel(flowType: string | null | undefined): string {
   const token = normalizeToken(flowType);
   if (!token) return "Autre";

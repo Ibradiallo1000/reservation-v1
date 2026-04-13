@@ -4,7 +4,7 @@
  */
 
 export type PaymentChannel = "guichet" | "online" | "courrier";
-export type PaymentProvider = "wave" | "orange" | "moov" | "cash";
+export type PaymentProvider = "wave" | "orange" | "moov" | "sarali" | "cash";
 /** Apres validation operateur / guichet : statut "validated". */
 export type PaymentStatus = "pending" | "validated" | "rejected" | "refunded";
 /** Statut de synchronisation payment -> ledger. */

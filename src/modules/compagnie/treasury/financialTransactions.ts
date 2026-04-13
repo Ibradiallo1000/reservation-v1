@@ -142,7 +142,15 @@ function isGuichetChannel(channel: string | null | undefined, source: string | n
 
 function isOnlineChannel(channel: string | null | undefined, source: string | null | undefined): boolean {
   const c = normalizeChannel(channel ?? source ?? "");
-  return c === "online" || c === "en_ligne" || c === "mobile_money" || c === "wave" || c === "orange";
+  return (
+    c === "online" ||
+    c === "en_ligne" ||
+    c === "mobile_money" ||
+    c === "wave" ||
+    c === "orange" ||
+    c === "moov" ||
+    c === "sarali"
+  );
 }
 
 /**
@@ -166,7 +174,7 @@ export function resolveFinancialPaymentMethod(params: {
 
   const prov = String(params.paymentProvider ?? params.metadata?.provider ?? "").toLowerCase().trim();
   if (prov === "cash") return "cash";
-  if (prov === "wave" || prov === "orange" || prov === "moov") return "mobile_money";
+  if (prov === "wave" || prov === "orange" || prov === "moov" || prov === "sarali") return "mobile_money";
   if (prov === "card" || prov === "stripe") return "card";
 
   const metaPm = params.metadata?.paymentMethod;
@@ -193,7 +201,14 @@ export function resolveFinancialPaymentMethod(params: {
 
   const ch = normalizeChannel(params.paymentChannel ?? params.source ?? "");
   if (ch === "guichet" || ch === "cash" || ch === "espèces") return "cash";
-  if (ch === "online" || ch === "mobile_money" || ch === "wave" || ch === "orange" || ch === "moov") {
+  if (
+    ch === "online" ||
+    ch === "mobile_money" ||
+    ch === "wave" ||
+    ch === "orange" ||
+    ch === "moov" ||
+    ch === "sarali"
+  ) {
     return "mobile_money";
   }
   return "card";

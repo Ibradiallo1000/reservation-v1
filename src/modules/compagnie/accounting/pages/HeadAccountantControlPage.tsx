@@ -5,9 +5,7 @@ import {
   collectionGroup,
   getDocs,
   limit,
-  orderBy,
   query,
-  Timestamp,
   where,
 } from "firebase/firestore";
 import {
@@ -24,10 +22,19 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { ActionButton, MetricCard, SectionCard, StatusBadge } from "@/ui";
 import { listReportsValidatedByAgencyForCompany } from "@/modules/agence/services/shiftApi";
 import { listTransferRequests } from "@/modules/agence/treasury/transferRequestsService";
+import {
+  isCanonicalLedgerFailedPayment,
+  isCanonicalLedgerPendingPayment,
+  isCanonicalOnlinePaymentToMonitor,
+  loadCanonicalPaymentsForPeriod,
+  type CanonicalPaymentMonitorRow,
+} from "@/modules/finance/payments/canonicalPaymentMonitor";
 import InfoTooltip from "@/shared/ui/InfoTooltip";
 import {
   FINANCIAL_UI_TOOLTIPS,
   toLedgerStatusLabel,
+  toPaymentChannelLabel,
+  toPaymentProviderLabel,
   toTechnicalFailureLabel,
   toWorkflowStatusLabel,
 } from "@/modules/finance/ui/financialLanguage";
@@ -46,17 +53,7 @@ type ShiftReportRow = {
   updatedAt?: unknown;
 };
 
-type PaymentRow = {
-  id: string;
-  agencyId: string | null;
-  channel: string;
-  status: string;
-  ledgerStatus: string;
-  amount: number;
-  createdAt?: unknown;
-  validatedAt?: unknown;
-  ledgerError?: string | null;
-};
+type PaymentRow = CanonicalPaymentMonitorRow;
 
 type TransferRequestRow = {
   id: string;
@@ -156,48 +153,6 @@ function inWindow(ms: number | null, startMs: number, endMs: number): boolean {
   return ms >= startMs && ms <= endMs;
 }
 
-async function loadPaymentsForPeriod(companyId: string, start: Date, end: Date): Promise<PaymentRow[]> {
-  const paymentsRef = collection(db, `companies/${companyId}/payments`);
-  const startTs = Timestamp.fromDate(start);
-  const endTs = Timestamp.fromDate(end);
-
-  const mapDoc = (id: string, raw: Record<string, unknown>): PaymentRow => ({
-    id,
-    agencyId: typeof raw.agencyId === "string" ? raw.agencyId : null,
-    channel: String(raw.channel ?? ""),
-    status: String(raw.status ?? ""),
-    ledgerStatus: String(raw.ledgerStatus ?? "pending"),
-    amount: toAmount(raw.amount),
-    createdAt: raw.createdAt,
-    validatedAt: raw.validatedAt,
-    ledgerError:
-      raw.ledgerError == null
-        ? null
-        : typeof raw.ledgerError === "string"
-          ? raw.ledgerError
-          : String(raw.ledgerError),
-  });
-
-  try {
-    const snap = await getDocs(
-      query(
-        paymentsRef,
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "desc"),
-        limit(2000)
-      )
-    );
-    return snap.docs.map((d) => mapDoc(d.id, d.data() as Record<string, unknown>));
-  } catch (err) {
-    console.warn("[HeadAccountantControl] payments range query fallback:", err);
-    const snap = await getDocs(query(paymentsRef, orderBy("createdAt", "desc"), limit(2000)));
-    return snap.docs
-      .map((d) => mapDoc(d.id, d.data() as Record<string, unknown>))
-      .filter((row) => inWindow(toMillis(row.createdAt) ?? toMillis(row.validatedAt), start.getTime(), end.getTime()));
-  }
-}
-
 export default function HeadAccountantControlPage() {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
@@ -255,7 +210,7 @@ export default function HeadAccountantControlPage() {
       );
       const paymentsPromise = resolveOptional(
         "payments",
-        loadPaymentsForPeriod(companyId, periodWindow.start, periodWindow.end),
+        loadCanonicalPaymentsForPeriod(companyId, periodWindow.start, periodWindow.end, { limitCount: 2000 }),
         [] as PaymentRow[]
       );
       const pendingTransfersPromise = resolveOptional(
@@ -341,13 +296,9 @@ export default function HeadAccountantControlPage() {
         (row) => Math.abs(toAmount(row.validationAudit?.computedDifference)) > 0
       );
 
-      const onlineMonitorRows = payments.filter(
-        (p) => p.channel === "online" && (p.status !== "validated" || p.ledgerStatus !== "posted")
-      );
-      const ledgerPendingRows = payments.filter(
-        (p) => p.status === "validated" && p.ledgerStatus === "pending"
-      );
-      const ledgerFailedRows = payments.filter((p) => p.ledgerStatus === "failed");
+      const onlineMonitorRows = payments.filter(isCanonicalOnlinePaymentToMonitor);
+      const ledgerPendingRows = payments.filter(isCanonicalLedgerPendingPayment);
+      const ledgerFailedRows = payments.filter(isCanonicalLedgerFailedPayment);
 
       const transferPendingRows = (pendingTransfersRaw as Array<TransferRequestRow>).filter((row) =>
         inWindow(toMillis(row.createdAt), startMs, endMs)
@@ -422,6 +373,18 @@ export default function HeadAccountantControlPage() {
       ),
     };
   }, [agencyFilter, data, regularizedFilter]);
+
+  const paymentWatchRows = useMemo(() => {
+    if (!filtered) return [] as PaymentRow[];
+    const deduped = new Map<string, PaymentRow>();
+    [...filtered.onlineMonitorRows, ...filtered.ledgerFailedRows].forEach((row) => {
+      const current = deduped.get(row.id);
+      if (!current || (current.ledgerStatus !== "failed" && row.ledgerStatus === "failed")) {
+        deduped.set(row.id, row);
+      }
+    });
+    return [...deduped.values()];
+  }, [filtered]);
 
   const controlPriorityItems = useMemo(() => {
     if (!filtered) return [];
@@ -767,11 +730,15 @@ export default function HeadAccountantControlPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...filtered.onlineMonitorRows, ...filtered.ledgerFailedRows]
-                    .slice(0, 40)
-                    .map((row) => (
+                  {paymentWatchRows.slice(0, 40).map((row) => (
                       <tr key={`pay-${row.id}`} className="border-t border-gray-100">
-                        <td className="px-3 py-2">{row.id.slice(0, 12)}...</td>
+                        <td className="px-3 py-2">
+                          <div className="font-medium">{row.id.slice(0, 12)}...</div>
+                          <div className="text-xs text-gray-500">
+                            {toPaymentChannelLabel(row.channel)}
+                            {row.provider ? ` • ${toPaymentProviderLabel(row.provider)}` : ""}
+                          </div>
+                        </td>
                         <td className="px-3 py-2">
                           {row.agencyId ? data.agencyNameById[row.agencyId] ?? row.agencyId : "Niveau compagnie"}
                         </td>

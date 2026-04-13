@@ -334,7 +334,7 @@ export default function CeoPilotageDashboard({
         if (gY.level !== "ok" && gapY > 0 && actY >= 10_000) {
           alertBag.push({
             id: "period-gap",
-            title: "Desalignement caisse vs activite",
+            title: "Desalignement encaissements vs activite",
             severity: gY.level === "bad" ? "bad" : "warn",
             cause: "Validations guichet et paiements en ligne en retard.",
             impact: `${formatCurrency(gapY, currency)} non visibles dans la tresorerie utile.`,
@@ -365,7 +365,7 @@ export default function CeoPilotageDashboard({
             id: "multi-day-gap",
             title: "Ecarts repetes de rapprochement",
             severity: "bad",
-            cause: `${anomalyDays} jours sur 7 au-dessus du seuil activity/caisse.`,
+            cause: `${anomalyDays} jours sur 7 au-dessus du seuil activite/encaissements.`,
             impact: "Lecture de tresorerie instable pour arbitrer les depenses.",
             action: "Analyser les ecarts jour par jour",
             confidence: "high",
@@ -691,7 +691,7 @@ export default function CeoPilotageDashboard({
     (decisionSecondaryRoute.includes("finances") ? "Vue tresorerie" : "Vue reseau");
 
   const mask = hideTreasury ? "••••••" : null;
-  const moneyFocusLine = `Tresorerie ${mask ?? money(ledger?.total ?? 0)} | Encaisse ${money(yesterdayEnc ?? 0)}`;
+  const moneyFocusLine = `Tresorerie ${mask ?? money(ledger?.total ?? 0)} | Encaissements ${money(yesterdayEnc ?? 0)}`;
 
   const hasPeriodSales = namedTrendRows.some(
     (r) => (Number(r.ventes) || 0) > 0 || (Number(r.colis) || 0) > 0
@@ -1003,7 +1003,7 @@ export default function CeoPilotageDashboard({
                 {loading ? "..." : mask ?? money(ledger?.total ?? 0)}
               </p>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                Encaisse: {loading ? "..." : money(yesterdayEnc ?? 0)}
+                Encaissements periode: {loading ? "..." : money(yesterdayEnc ?? 0)}
               </p>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                 Couverture vs activite: {formatDeltaPercent(encaissementCoverageDelta)}

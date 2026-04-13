@@ -21,7 +21,16 @@ export function normalizeStatus(s?: string): string {
 export function normalizeChannel(channel?: string): string {
   const n = (channel ?? "").toString().toLowerCase().trim().replace(/[\s-]+/g, "_");
   if (n === "guichet" || n === "cash") return "guichet";
-  if (n === "online" || n === "mobile_money" || n === "wave" || n === "orange" || n === "moov") return "online";
+  if (
+    n === "online" ||
+    n === "mobile_money" ||
+    n === "wave" ||
+    n === "orange" ||
+    n === "moov" ||
+    n === "sarali"
+  ) {
+    return "online";
+  }
   if (n === "bank" || n === "banque") return "bank";
   if (n === "courrier" || n === "courier") return "courrier";
   return n;

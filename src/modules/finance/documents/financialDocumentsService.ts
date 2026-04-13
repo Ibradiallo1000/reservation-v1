@@ -1747,7 +1747,7 @@ export async function createAgencyDailyReportDocument(
       const status = normalizeSearch(String(row.status ?? ""));
       if (status !== "validated") return false;
       const provider = normalizeSearch(String(row.provider ?? ""));
-      return provider === "wave" || provider === "orange" || provider === "moov";
+      return provider === "wave" || provider === "orange" || provider === "moov" || provider === "sarali";
     });
 
   const remises = docs.filter((row) => row.documentType === "session_remittance");

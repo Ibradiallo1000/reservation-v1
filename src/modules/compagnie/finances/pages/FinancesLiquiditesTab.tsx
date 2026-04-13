@@ -1,10 +1,10 @@
 /**
- * Section "Argent disponible" - liquidite ledger (total, caisse, banque)
- * + encaissements en ligne par moyen.
+ * Section "Argent disponible" - liquidite ledger (total, caisse, digital, banque)
+ * + encaissements digitaux valides par wallet sur la periode.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { collection, getDoc, getDocs, doc, limit, orderBy, query, where } from "firebase/firestore";
+import { collection, getDoc, getDocs, doc, query, where } from "firebase/firestore";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -17,6 +17,8 @@ import { dashboardKpiMinWidth } from "@/ui/foundation";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { getUnifiedCompanyFinance } from "@/modules/finance/services/unifiedFinanceService";
 import { getLedgerBalances } from "@/modules/compagnie/treasury/financialTransactions";
+import { loadCanonicalPaymentsForPeriod } from "@/modules/finance/payments/canonicalPaymentMonitor";
+import { toPaymentProviderLabel } from "@/modules/finance/ui/financialLanguage";
 import { AlertTriangle, Landmark, Smartphone, Wallet } from "lucide-react";
 import {
   aggregateOnlinePaidByPreuveVia,
@@ -106,17 +108,13 @@ export default function FinancesLiquiditesTab() {
       setLoading(true);
       try {
         const companyRef = doc(db, "companies", companyId);
-        const [bal, pmSnap, companySnap, paymentsSnap] = await Promise.all([
+        const periodStart = dayjs.tz(`${globalPeriod.startDate}T00:00:00`, TZ_BAMAKO).toDate();
+        const periodEnd = dayjs.tz(`${globalPeriod.endDate}T23:59:59`, TZ_BAMAKO).toDate();
+        const [bal, pmSnap, companySnap, payments] = await Promise.all([
           getLedgerBalances(companyId),
           getDocs(query(collection(db, "paymentMethods"), where("companyId", "==", companyId))),
           getDoc(companyRef),
-          getDocs(
-            query(
-              collection(db, "companies", companyId, "payments"),
-              orderBy("createdAt", "desc"),
-              limit(1500)
-            )
-          ),
+          loadCanonicalPaymentsForPeriod(companyId, periodStart, periodEnd, { limitCount: 1500 }),
         ]);
         if (cancelled) return;
 
@@ -131,24 +129,17 @@ export default function FinancesLiquiditesTab() {
         });
         mth.sort((a, b) => a.name.localeCompare(b.name, "fr"));
 
-        // Source de verite finance: seulement paiements online valides ET ledger postes.
+        // Source de verite finance: seulement paiements online valides ET ledger postes, sur la periode.
         const resRows: ReservationLike[] = [];
-        paymentsSnap.docs.forEach((d) => {
-          const p = d.data() as {
-            status?: string;
-            ledgerStatus?: string;
-            channel?: string;
-            amount?: number;
-            provider?: string;
-          };
-          if (String(p.status ?? "") !== "validated") return;
-          if (String(p.ledgerStatus ?? "") !== "posted") return;
-          if (String(p.channel ?? "") !== "online") return;
+        payments.forEach((payment) => {
+          if (payment.status !== "validated") return;
+          if (payment.ledgerStatus !== "posted") return;
+          if (payment.channel !== "online") return;
           resRows.push({
             paymentChannel: "online",
             paymentStatus: "paid",
-            preuveVia: String(p.provider ?? "inconnu"),
-            montant: Number(p.amount ?? 0) || 0,
+            preuveVia: toPaymentProviderLabel(payment.provider),
+            montant: payment.amount,
           });
         });
 
@@ -176,7 +167,7 @@ export default function FinancesLiquiditesTab() {
     return () => {
       cancelled = true;
     };
-  }, [companyId]);
+  }, [companyId, globalPeriod.endDate, globalPeriod.startDate]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -232,7 +223,7 @@ export default function FinancesLiquiditesTab() {
         paymentTotals,
         configuredMethodNames: methods.map((m) => m.name).filter(Boolean),
         companyPaymentMethodFieldKeys: companyPaymentMethodKeys,
-      }),
+      }).filter((key) => (paymentTotals.get(key) ?? 0) > 0),
     [paymentTotals, methods, companyPaymentMethodKeys]
   );
 
@@ -342,7 +333,7 @@ export default function FinancesLiquiditesTab() {
         title="Argent disponible"
         icon={Wallet}
         help={
-          <InfoTooltip label="Solde reel consolide (caisse agences + banque). Repartition calculee depuis les paiements effectivement recus." />
+          <InfoTooltip label="Solde reel consolide (caisse agences + digital mobile money + banque). Les encaissements digitaux affiches plus bas sont hors caisse physique." />
         }
       >
         {loading && !ledger ? (
@@ -422,7 +413,7 @@ export default function FinancesLiquiditesTab() {
                 iconWrapperClassName={liquidityMetricIconClassName}
               />
               <MetricCard
-                label="Mobile money"
+                label="Digital mobile money"
                 value={ledger ? money(ledger.mobileMoney) : "Donnee non disponible"}
                 icon={Smartphone}
                 className={`${liquidityMetricCardBaseClassName} ${dashboardKpiMinWidth} h-full`}
@@ -482,12 +473,12 @@ export default function FinancesLiquiditesTab() {
 
             <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
               <div className="mb-2 flex items-center justify-between gap-2 border-b border-slate-200 pb-2 dark:border-slate-700">
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Paiements en ligne par moyen</h3>
-                <InfoTooltip label="Liste dynamique des moyens reels vus dans les reservations en ligne payees (champ preuve)." />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Encaissements digitaux valides par wallet</h3>
+                <InfoTooltip label="Liste dynamique des wallets/providers observes sur les paiements online validates et comptabilises pendant la periode." />
               </div>
               {displayKeys.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-slate-600 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-300">
-                  Aucun moyen en ligne detecte. Verifiez la configuration des moyens et l'activite des agences.
+                  Aucun encaissement digital valide sur la periode.
                 </div>
               ) : (
                 <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -516,7 +507,7 @@ export default function FinancesLiquiditesTab() {
               )}
               {includedCount > 0 ? (
                 <p className="mt-3 text-xs text-slate-600 dark:text-slate-400">
-                  {includedCount} reservation{includedCount > 1 ? "s" : ""} - total {money(reservationsAmountSum)}
+                  {includedCount} paiement{includedCount > 1 ? "s" : ""} valide{includedCount > 1 ? "s" : ""} - total periode {money(reservationsAmountSum)}
                 </p>
               ) : null}
             </div>

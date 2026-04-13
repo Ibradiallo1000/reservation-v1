@@ -705,7 +705,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             icon={Landmark}
             title="Trésorerie réelle (ledger)"
             tooltip="Trésorerie réelle : argent disponible actuellement selon les comptes du grand livre. Sans stats journalières ni montants encore dans les sessions ouvertes."
-            subtitle="Source : soldes agrégés des comptes liquidités (espèces caisse agences, mobile money, banque). À ne pas lire comme chiffre d'affaires."
+            subtitle="Source : soldes agrégés des comptes liquidités (espèces caisse agences, digital mobile money, banque). À ne pas lire comme chiffre d'affaires."
           />
           {unifiedFinanceLoading && (
             <p className="text-sm text-slate-600 dark:text-slate-400">Chargement des soldes…</p>
@@ -726,8 +726,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
               </div>
               <div className="rounded-lg border border-emerald-200/90 bg-white/70 p-3 dark:border-emerald-900/60 dark:bg-slate-900/50">
                 <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
-                  Mobile money
-                  <InfoHint text="Soldes ledger des comptes mobile money entreprise." />
+                  Digital mobile money
+                  <InfoHint text="Soldes ledger des comptes digitaux mobile money entreprise. A ne pas lire comme caisse physique agence." />
                 </div>
                 <div className="mt-1 font-semibold text-emerald-950 dark:text-emerald-100">
                   {money(unifiedFinance.realMoney.mobileMoney)}
@@ -745,7 +745,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
               <div className="rounded-lg border-2 border-emerald-400/70 bg-emerald-100/50 p-3 dark:border-emerald-700 dark:bg-emerald-900/40">
                 <div className="flex items-center gap-1 text-xs font-medium text-emerald-900 dark:text-emerald-100">
                   Liquidité totale
-                  <InfoHint text="Somme espèces caisses + mobile money + banque selon le ledger." />
+                  <InfoHint text="Somme espèces caisses + digital mobile money + banque selon le ledger." />
                 </div>
                 <div className="mt-1 text-lg font-bold text-emerald-950 dark:text-emerald-50">
                   {money(unifiedFinance.realMoney.total)}
@@ -761,7 +761,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             icon={DollarSign}
             title="Chiffre d'affaires (activité)"
             tooltip="Chiffre d'affaires : total des ventes et mouvements d'activité sur la période. Ce n'est pas l'équivalent de l'argent disponible dans les caisses."
-            subtitle={`Période : ${periodLabelFr}. Ventes = réservations ; encaissements et répartition guichet / en ligne = transactions confirmées sur cette période.`}
+            subtitle={`Période : ${periodLabelFr}. Ventes = activité commerciale ; encaissements et répartition par canal = transactions confirmées sur cette période.`}
           />
           {unifiedFinanceLoading && (
             <p className="text-sm text-slate-600 dark:text-slate-400">Chargement de l'activité…</p>
@@ -779,8 +779,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
               </div>
               <div className="rounded-lg border border-sky-200/90 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-900/50">
                 <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
-                  Ventes guichet (encaissements espèces)
-                  <InfoHint text="Encaissements classés guichet sur la période (transactions confirmées). Toujours distinct du solde caisse instantané." />
+                  Encaissements canal guichet
+                  <InfoHint text="Encaissements classés guichet sur la période : espèces et mobile money saisis au guichet. Toujours distincts du solde caisse instantané." />
                 </div>
                 <div className="mt-1 font-semibold text-sky-950 dark:text-sky-100">
                   {money(unifiedFinance.activity.split.paiementsGuichet)}
@@ -788,8 +788,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
               </div>
               <div className="rounded-lg border border-sky-200/90 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-900/50">
                 <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
-                  Ventes en ligne (carte / mobile money)
-                  <InfoHint text="Encaissements classés en ligne sur la période (transactions confirmées)." />
+                  Encaissements digitaux
+                  <InfoHint text="Encaissements classés online sur la période : mobile money et autres paiements digitaux validés. Hors caisse physique agence." />
                 </div>
                 <div className="mt-1 font-semibold text-sky-950 dark:text-sky-100">
                   {money(unifiedFinance.activity.split.paiementsEnLigne)}

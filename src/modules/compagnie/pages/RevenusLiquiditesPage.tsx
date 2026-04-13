@@ -63,7 +63,7 @@ export default function RevenusLiquiditesPage() {
     <StandardLayoutWrapper>
       <PageHeader
         title="Revenus & Liquidités"
-        subtitle="Pilotage financier : chiffre d'affaires, encaissements réels et trésorerie nette."
+        subtitle="Pilotage financier : activité commerciale, encaissements par canal et trésorerie nette."
       />
       <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-slate-600 pb-3">
         {tabs.map(({ key, label, icon: Icon, description }) => {

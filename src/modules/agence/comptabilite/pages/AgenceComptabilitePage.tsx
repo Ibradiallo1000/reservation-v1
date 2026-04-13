@@ -89,6 +89,12 @@ import {
   getSessionRemittanceReceiptDocumentId,
 } from '@/modules/finance/documents/financialDocumentsService';
 import { listFinancialDocumentAnomalies } from '@/modules/finance/documents/financialDocumentAnomaliesService';
+import {
+  isCanonicalCommercialSale,
+  isCanonicalPhysicalCashSale,
+  normalizeReservationDocument,
+} from '@/modules/reservations/canonicalReservation';
+import { toPaymentProviderLabel } from '@/modules/finance/ui/financialLanguage';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -1212,7 +1218,6 @@ const AgenceComptabilitePage: React.FC = () => {
     
     (async () => {
       if (!user?.companyId || !user?.agencyId) return;
-      const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
       const map: Record<string, ShiftAgg> = {};
       
       console.log(`[AgenceCompta] ${closedShifts.length} poste(s) clôturé(s) à analyser`);
@@ -1224,16 +1229,19 @@ const AgenceComptabilitePage: React.FC = () => {
         docs.forEach(d => {
           const r = d.data() as Record<string, unknown>;
           if (!belongsToGuichetSession(r, s.id, s.userId)) return;
+          const canonical = normalizeReservationDocument(r, { id: d.id });
+          if (!isCanonicalCommercialSale(canonical)) return;
           reservations += 1;
-          tickets += (Number(r.seatsGo) || 0) + (Number(r.seatsReturn) || 0);
-          const montant = Number(r.montant) || 0;
+          tickets += canonical.seats.total;
+          const montant = canonical.amounts.total;
           amount += montant;
-          
-          const pay = String(r.paiement || '').toLowerCase();
-          if (pay.includes('esp')) {
+
+          if (isCanonicalPhysicalCashSale(canonical)) {
             cashExpected += montant;
-          }
-          if (pay.includes('mobile') || pay.includes('mm')) {
+          } else if (
+            canonical.reservation.channel === 'guichet' &&
+            canonical.payment.category === 'mobile_money'
+          ) {
             mmExpected += montant;
           }
         });
@@ -1558,7 +1566,6 @@ const AgenceComptabilitePage: React.FC = () => {
 
     try {
       const base = `companies/${user.companyId}/agences/${user.agencyId}`;
-      const rRef = collection(db, `${base}/reservations`);
       const sRef = doc(db, `${base}/shifts/${shiftId}`);
       const sSnap = await getDoc(sRef);
       const sDoc: any = sSnap.exists() ? sSnap.data() : {};
@@ -1570,25 +1577,36 @@ const AgenceComptabilitePage: React.FC = () => {
       });
 
       const mk = (d: any) => {
-        const r = d.data() as any;
-        const canal = 'guichet';
-        const encaissement = 'agence' as const;
+        const r = d.data() as Record<string, unknown>;
+        const canonical = normalizeReservationDocument(r, { id: d.id });
+        if (!isCanonicalCommercialSale(canonical)) return null;
+
+        const canal = canonical.reservation.channel === 'online' ? 'en_ligne' : 'guichet';
+        const encaissement = canonical.payment.category === 'cash' ? 'agence' as const : 'compagnie' as const;
+        const paiement =
+          canonical.payment.category === 'cash'
+            ? 'Especes'
+            : canonical.payment.walletProvider
+              ? toPaymentProviderLabel(canonical.payment.walletProvider)
+              : canonical.payment.category === 'mobile_money'
+                ? 'Mobile money'
+                : String(r.paiement || r.paymentMethod || '—');
 
         return {
           id: d.id,
-          referenceCode: r.referenceCode,
-          date: r.date,
-          heure: r.heure,
-          depart: r.depart,
-          arrivee: r.arrivee,
-          nomClient: r.nomClient,
-          telephone: r.telephone,
-          seatsGo: r.seatsGo || 1,
-          seatsReturn: r.seatsReturn || 0,
-          montant: r.montant || 0,
-          paiement: r.paiement,
+          referenceCode: canonical.reservation.referenceCode ?? String(r.referenceCode || ''),
+          date: canonical.trip.date ?? String(r.date || ''),
+          heure: canonical.trip.heure ?? String(r.heure || ''),
+          depart: canonical.trip.depart ?? String(r.depart || ''),
+          arrivee: canonical.trip.arrivee ?? String(r.arrivee || ''),
+          nomClient: canonical.customer.name ?? String(r.nomClient || ''),
+          telephone: canonical.customer.phoneRaw ?? String(r.telephone || ''),
+          seatsGo: canonical.seats.go || 1,
+          seatsReturn: canonical.seats.return || 0,
+          montant: canonical.amounts.total || 0,
+          paiement,
           createdAt: r.createdAt,
-          guichetierCode: r.guichetierCode || '',
+          guichetierCode: canonical.counterSale?.cashierCode ?? String(r.guichetierCode || ''),
           canal,
           encaissement,
         } as TicketRow;
@@ -1597,7 +1615,9 @@ const AgenceComptabilitePage: React.FC = () => {
       const rawDocs = merged.filter((d) =>
         belongsToGuichetSession(d.data() as Record<string, unknown>, shiftId, userId)
       );
-      const raw = rawDocs.map(mk);
+      const raw = rawDocs
+        .map(mk)
+        .filter((row): row is TicketRow => row !== null);
 
       // Déduplication basée sur les références uniques
       const norm = (v?: string) => String(v || '').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();

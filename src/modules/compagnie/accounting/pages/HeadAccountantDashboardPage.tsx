@@ -5,9 +5,7 @@ import {
   collectionGroup,
   getDocs,
   limit,
-  orderBy,
   query,
-  Timestamp,
   where,
 } from "firebase/firestore";
 import {
@@ -28,10 +26,20 @@ import { getUnifiedCompanyFinance } from "@/modules/finance/services/unifiedFina
 import { listReportsValidatedByAgencyForCompany } from "@/modules/agence/services/shiftApi";
 import { listTransferRequests } from "@/modules/agence/treasury/transferRequestsService";
 import { listFinancialDocumentAnomalies } from "@/modules/finance/documents/financialDocumentAnomaliesService";
+import {
+  isCanonicalLedgerFailedPayment,
+  isCanonicalLedgerPendingPayment,
+  isCanonicalOnlinePaymentToMonitor,
+  isCanonicalPendingOperatorPayment,
+  loadCanonicalPaymentsForPeriod,
+  type CanonicalPaymentMonitorRow,
+} from "@/modules/finance/payments/canonicalPaymentMonitor";
 import InfoTooltip from "@/shared/ui/InfoTooltip";
 import {
   FINANCIAL_UI_TOOLTIPS,
   toAnomalyTypeLabel,
+  toPaymentChannelLabel,
+  toPaymentProviderLabel,
   toTechnicalFailureLabel,
 } from "@/modules/finance/ui/financialLanguage";
 
@@ -49,17 +57,7 @@ type ShiftReportDoc = {
   validationAudit?: { computedDifference?: number };
 };
 
-type PaymentDocLite = {
-  id: string;
-  agencyId: string | null;
-  channel: string;
-  status: string;
-  ledgerStatus: string;
-  amount: number;
-  createdAt?: unknown;
-  validatedAt?: unknown;
-  ledgerError?: string | null;
-};
+type PaymentDocLite = CanonicalPaymentMonitorRow;
 
 type TransferRequestLite = {
   id: string;
@@ -240,55 +238,6 @@ function inWindow(ms: number | null, startMs: number, endMs: number): boolean {
   return ms >= startMs && ms <= endMs;
 }
 
-async function loadPaymentsForPeriod(
-  companyId: string,
-  start: Date,
-  end: Date
-): Promise<PaymentDocLite[]> {
-  const ref = collection(db, `companies/${companyId}/payments`);
-  const startTs = Timestamp.fromDate(start);
-  const endTs = Timestamp.fromDate(end);
-
-  const mapDoc = (id: string, raw: Record<string, unknown>): PaymentDocLite => ({
-    id,
-    agencyId: typeof raw.agencyId === "string" ? raw.agencyId : null,
-    channel: String(raw.channel ?? ""),
-    status: String(raw.status ?? ""),
-    ledgerStatus: String(raw.ledgerStatus ?? "pending"),
-    amount: toAmount(raw.amount),
-    createdAt: raw.createdAt,
-    validatedAt: raw.validatedAt,
-    ledgerError:
-      raw.ledgerError == null
-        ? null
-        : typeof raw.ledgerError === "string"
-          ? raw.ledgerError
-          : String(raw.ledgerError),
-  });
-
-  try {
-    const snap = await getDocs(
-      query(
-        ref,
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "desc"),
-        limit(1500)
-      )
-    );
-    return snap.docs.map((d) => mapDoc(d.id, d.data() as Record<string, unknown>));
-  } catch (primaryError) {
-    console.warn("[HeadAccountantDashboard] payments range query fallback:", primaryError);
-    const snap = await getDocs(query(ref, orderBy("createdAt", "desc"), limit(1500)));
-    return snap.docs
-      .map((d) => mapDoc(d.id, d.data() as Record<string, unknown>))
-      .filter((row) => {
-        const ms = toMillis(row.createdAt) ?? toMillis(row.validatedAt);
-        return inWindow(ms, start.getTime(), end.getTime());
-      });
-  }
-}
-
 export default function HeadAccountantDashboardPage() {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
@@ -345,7 +294,7 @@ export default function HeadAccountantDashboardPage() {
       );
       const paymentsPromise = resolveOptional(
         "payments",
-        loadPaymentsForPeriod(companyId, periodWindow.start, periodWindow.end),
+        loadCanonicalPaymentsForPeriod(companyId, periodWindow.start, periodWindow.end, { limitCount: 1500 }),
         [] as PaymentDocLite[]
       );
       const transfersPromise = resolveOptional(
@@ -509,14 +458,10 @@ export default function HeadAccountantDashboardPage() {
 
       const pendingValidationRows = shiftReports.filter((row) => row.status === "pending_validation");
 
-      const paymentsPendingOperator = payments.filter((p) => p.status === "pending");
-      const paymentsLedgerPending = payments.filter(
-        (p) => p.status === "validated" && p.ledgerStatus === "pending"
-      );
-      const paymentsLedgerFailed = payments.filter((p) => p.ledgerStatus === "failed");
-      const onlinePaymentsToMonitor = payments.filter(
-        (p) => p.channel === "online" && (p.status !== "validated" || p.ledgerStatus !== "posted")
-      );
+      const paymentsPendingOperator = payments.filter(isCanonicalPendingOperatorPayment);
+      const paymentsLedgerPending = payments.filter(isCanonicalLedgerPendingPayment);
+      const paymentsLedgerFailed = payments.filter(isCanonicalLedgerFailedPayment);
+      const onlinePaymentsToMonitor = payments.filter(isCanonicalOnlinePaymentToMonitor);
 
       const transferRequests = (transferRequestsRaw as Array<TransferRequestLite>).filter((req) =>
         inWindow(toMillis(req.createdAt), startMs, endMs)
@@ -930,7 +875,7 @@ export default function HeadAccountantDashboardPage() {
                 help={<InfoTooltip label={FINANCIAL_UI_TOOLTIPS.realMoney} />}
               />
               <MetricCard label="Caisse agence validee" value={money(data.realMoney.cash)} icon={CheckCircle2} />
-              <MetricCard label="Mobile money reel" value={money(data.realMoney.mobileMoney)} icon={ShoppingCart} />
+              <MetricCard label="Digital mobile money" value={money(data.realMoney.mobileMoney)} icon={ShoppingCart} />
               <MetricCard label="Banque compagnie" value={money(data.realMoney.bank)} icon={Landmark} />
             </div>
 
@@ -940,7 +885,7 @@ export default function HeadAccountantDashboardPage() {
                   <tr>
                     <th className="px-3 py-2 text-left">Poche / agence</th>
                     <th className="px-3 py-2 text-right">Caisse validee</th>
-                    <th className="px-3 py-2 text-right">Mobile money reel</th>
+                    <th className="px-3 py-2 text-right">Digital mobile money</th>
                     <th className="px-3 py-2 text-right">Banque</th>
                     <th className="px-3 py-2 text-right">Total reel</th>
                   </tr>
@@ -1181,7 +1126,13 @@ export default function HeadAccountantDashboardPage() {
                       <tbody>
                         {data.failedPayments.map((p) => (
                           <tr key={p.id} className="border-t border-gray-100">
-                            <td className="px-3 py-2">{p.id.slice(0, 10)}...</td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium">{p.id.slice(0, 10)}...</div>
+                              <div className="text-xs text-gray-500">
+                                {toPaymentChannelLabel(p.channel)}
+                                {p.provider ? ` • ${toPaymentProviderLabel(p.provider)}` : ""}
+                              </div>
+                            </td>
                             <td className="px-3 py-2 text-right">{money(p.amount)}</td>
                             <td className="px-3 py-2 text-xs text-red-700">
                               {toTechnicalFailureLabel(p.ledgerError)}

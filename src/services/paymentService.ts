@@ -34,7 +34,7 @@ import { upsertMobileMoneyValidationDocument } from "@/modules/finance/documents
 function explicitPaymentMethodFromPayment(p: { channel: string; provider?: string }): FinancialPaymentMethod {
   const prov = String(p.provider ?? "").toLowerCase();
   if (prov === "cash") return "cash";
-  if (prov === "wave" || prov === "orange" || prov === "moov") return "mobile_money";
+  if (prov === "wave" || prov === "orange" || prov === "moov" || prov === "sarali") return "mobile_money";
   const ch = String(p.channel ?? "");
   if (ch === "guichet") return prov === "cash" ? "cash" : "mobile_money";
   if (ch === "online") return "mobile_money";
@@ -324,7 +324,7 @@ export async function confirmPayment(
 
   const provider = String(updated.provider ?? "").toLowerCase();
   const isMobileMoneyProvider =
-    provider === "wave" || provider === "orange" || provider === "moov";
+    provider === "wave" || provider === "orange" || provider === "moov" || provider === "sarali";
   if (isMobileMoneyProvider) {
     const actorRole = Array.isArray(options?.actorRole)
       ? String(options?.actorRole?.[0] ?? "").trim() || "operator_digital"
@@ -583,6 +583,7 @@ export async function getPaymentByReservationId(
 
 function inferOnlinePaymentProvider(label: string | null | undefined): PaymentProvider {
   const s = (label || "").toLowerCase();
+  if (s.includes("sarali")) return "sarali";
   if (s.includes("orange")) return "orange";
   if (s.includes("moov")) return "moov";
   if (s.includes("wave")) return "wave";

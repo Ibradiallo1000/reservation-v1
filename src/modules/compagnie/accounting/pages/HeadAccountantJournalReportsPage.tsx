@@ -3,11 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   collection,
   getDocs,
-  limit,
-  orderBy,
-  query,
   Timestamp,
-  where,
 } from "firebase/firestore";
 import {
   AlertTriangle,
@@ -23,27 +19,26 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { ActionButton, MetricCard, SectionCard, StatusBadge } from "@/ui";
 import { listFinancialTransactionsByPeriod } from "@/modules/compagnie/treasury/financialTransactions";
 import { createMonthlyConsolidatedReportDocument } from "@/modules/finance/documents/financialDocumentsService";
+import {
+  isCanonicalLedgerFailedPayment,
+  isCanonicalLedgerPendingPayment,
+  loadCanonicalPaymentsForPeriod,
+  type CanonicalPaymentMonitorRow,
+} from "@/modules/finance/payments/canonicalPaymentMonitor";
 import InfoTooltip from "@/shared/ui/InfoTooltip";
 import {
   FINANCIAL_UI_TOOLTIPS,
   toFlowTypeLabel,
   toLedgerStatusLabel,
   toPaymentChannelLabel,
+  toPaymentProviderLabel,
   toTechnicalFailureLabel,
   toWorkflowStatusLabel,
 } from "@/modules/finance/ui/financialLanguage";
 
 type PeriodKey = "today" | "week" | "month";
 
-type PaymentLite = {
-  id: string;
-  channel: string;
-  status: string;
-  ledgerStatus: string;
-  validatedBy: string | null;
-  ledgerError: string | null;
-  createdAt?: unknown;
-};
+type PaymentLite = CanonicalPaymentMonitorRow;
 
 type JournalRow = {
   id: string;
@@ -52,6 +47,7 @@ type JournalRow = {
   agencyName: string;
   actor: string;
   channel: string;
+  paymentProvider: string | null;
   flowType: string;
   status: string;
   amount: number;
@@ -135,51 +131,6 @@ function downloadCsv(filename: string, headers: string[], rows: string[][]) {
   URL.revokeObjectURL(url);
 }
 
-async function loadPaymentsForPeriod(companyId: string, start: Date, end: Date): Promise<PaymentLite[]> {
-  const paymentsRef = collection(db, `companies/${companyId}/payments`);
-  const startTs = Timestamp.fromDate(start);
-  const endTs = Timestamp.fromDate(end);
-
-  const mapDoc = (id: string, raw: Record<string, unknown>): PaymentLite => ({
-    id,
-    channel: String(raw.channel ?? ""),
-    status: String(raw.status ?? ""),
-    ledgerStatus: String(raw.ledgerStatus ?? "pending"),
-    validatedBy: typeof raw.validatedBy === "string" ? raw.validatedBy : null,
-    ledgerError:
-      raw.ledgerError == null
-        ? null
-        : typeof raw.ledgerError === "string"
-          ? raw.ledgerError
-          : String(raw.ledgerError),
-    createdAt: raw.createdAt,
-  });
-
-  try {
-    const snap = await getDocs(
-      query(
-        paymentsRef,
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "desc"),
-        limit(2500)
-      )
-    );
-    return snap.docs.map((d) => mapDoc(d.id, d.data() as Record<string, unknown>));
-  } catch (err) {
-    console.warn("[HeadAccountantJournal] payments range query fallback:", err);
-    const snap = await getDocs(query(paymentsRef, orderBy("createdAt", "desc"), limit(2500)));
-    const startMs = start.getTime();
-    const endMs = end.getTime();
-    return snap.docs
-      .map((d) => mapDoc(d.id, d.data() as Record<string, unknown>))
-      .filter((row) => {
-        const ms = toMillis(row.createdAt);
-        return ms != null && ms >= startMs && ms <= endMs;
-      });
-  }
-}
-
 export default function HeadAccountantJournalReportsPage() {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
@@ -231,7 +182,9 @@ export default function HeadAccountantJournalReportsPage() {
         Timestamp.fromDate(periodWindow.start),
         Timestamp.fromDate(periodWindow.end)
       );
-      const paymentsPromise = loadPaymentsForPeriod(companyId, periodWindow.start, periodWindow.end);
+      const paymentsPromise = loadCanonicalPaymentsForPeriod(companyId, periodWindow.start, periodWindow.end, {
+        limitCount: 2500,
+      });
 
       const [agenciesSnap, txRows, payments] = await Promise.all([
         agenciesSnapPromise,
@@ -269,6 +222,10 @@ export default function HeadAccountantJournalReportsPage() {
           agencyName: agencyId ? agencyNameById[agencyId] ?? agencyId : "Niveau compagnie",
           actor,
           channel,
+          paymentProvider:
+            typeof row.paymentProvider === "string"
+              ? row.paymentProvider
+              : paymentRef?.provider ?? null,
           flowType: String(row.type ?? ""),
           status: String(row.status ?? ""),
           amount: Number(row.amount ?? 0),
@@ -283,8 +240,8 @@ export default function HeadAccountantJournalReportsPage() {
       setData({
         agencyNameById,
         rows,
-        failedPayments: payments.filter((p) => p.ledgerStatus === "failed"),
-        pendingLedgerPayments: payments.filter((p) => p.status === "validated" && p.ledgerStatus === "pending"),
+        failedPayments: payments.filter(isCanonicalLedgerFailedPayment),
+        pendingLedgerPayments: payments.filter(isCanonicalLedgerPendingPayment),
       });
     } catch (err) {
       console.error("[HeadAccountantJournal] load failed:", err);
@@ -315,6 +272,7 @@ export default function HeadAccountantJournalReportsPage() {
         row.agencyName,
         row.actor,
         row.channel,
+        row.paymentProvider ?? "",
         row.flowType,
         row.status,
         row.referenceType,
@@ -545,7 +503,12 @@ export default function HeadAccountantJournalReportsPage() {
                       <td className="px-3 py-2">{row.ms == null ? "-" : new Date(row.ms).toLocaleString("fr-FR")}</td>
                       <td className="px-3 py-2">{row.agencyName}</td>
                       <td className="px-3 py-2">{row.actor}</td>
-                      <td className="px-3 py-2">{toPaymentChannelLabel(row.channel)}</td>
+                      <td className="px-3 py-2">
+                        <div>{toPaymentChannelLabel(row.channel)}</div>
+                        {row.paymentProvider ? (
+                          <div className="text-xs text-gray-500">{toPaymentProviderLabel(row.paymentProvider)}</div>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-2">{toFlowTypeLabel(row.flowType)}</td>
                       <td className="px-3 py-2">
                         <StatusBadge status={row.status === "failed" ? "danger" : row.status === "pending" ? "warning" : "info"}>
@@ -597,7 +560,13 @@ export default function HeadAccountantJournalReportsPage() {
                       <tbody>
                         {data.failedPayments.map((row) => (
                           <tr key={row.id} className="border-t border-gray-100">
-                            <td className="px-3 py-2">{row.id.slice(0, 12)}...</td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium">{row.id.slice(0, 12)}...</div>
+                              <div className="text-xs text-gray-500">
+                                {toPaymentChannelLabel(row.channel)}
+                                {row.provider ? ` • ${toPaymentProviderLabel(row.provider)}` : ""}
+                              </div>
+                            </td>
                             <td className="px-3 py-2"><StatusBadge status="danger">{toLedgerStatusLabel(row.ledgerStatus)}</StatusBadge></td>
                             <td className="px-3 py-2 text-xs text-red-700">{toTechnicalFailureLabel(row.ledgerError)}</td>
                           </tr>
@@ -618,6 +587,7 @@ export default function HeadAccountantJournalReportsPage() {
                       const rows = data.failedPayments.map((row) => [
                         row.id,
                         toPaymentChannelLabel(row.channel),
+                        row.provider ? toPaymentProviderLabel(row.provider) : "",
                         toWorkflowStatusLabel(row.status),
                         toLedgerStatusLabel(row.ledgerStatus),
                         row.validatedBy ?? "",
@@ -625,7 +595,15 @@ export default function HeadAccountantJournalReportsPage() {
                       ]);
                       downloadCsv(
                         `anomalies-ledger-${toDateKey(new Date())}.csv`,
-                        ["paiement_id", "canal", "workflow", "comptabilisation", "valide_par", "detail_anomalie"],
+                        [
+                          "paiement_id",
+                          "canal",
+                          "wallet_provider",
+                          "workflow",
+                          "comptabilisation",
+                          "valide_par",
+                          "detail_anomalie",
+                        ],
                         rows
                       );
                     }}
@@ -644,6 +622,7 @@ export default function HeadAccountantJournalReportsPage() {
                           row.ms == null ? "" : new Date(row.ms).toISOString(),
                           row.agencyName,
                           toFlowTypeLabel(row.flowType),
+                          row.paymentProvider ? toPaymentProviderLabel(row.paymentProvider) : "",
                           toWorkflowStatusLabel(row.status),
                           String(row.amount),
                           row.referenceType,
@@ -651,7 +630,16 @@ export default function HeadAccountantJournalReportsPage() {
                         ]);
                       downloadCsv(
                         `corrections-ledger-${toDateKey(new Date())}.csv`,
-                        ["date", "agence", "type_flux", "statut", "montant", "reference_type", "reference_id"],
+                        [
+                          "date",
+                          "agence",
+                          "type_flux",
+                          "wallet_provider",
+                          "statut",
+                          "montant",
+                          "reference_type",
+                          "reference_id",
+                        ],
                         rows
                       );
                     }}

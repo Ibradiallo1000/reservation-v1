@@ -5,8 +5,9 @@ import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { collection, collectionGroup, onSnapshot, orderBy, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
-import { getNetworkCapacityOnly, isSoldReservation } from "@/modules/compagnie/networkStats/networkStatsService";
+import { getNetworkCapacityOnly } from "@/modules/compagnie/networkStats/networkStatsService";
 import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
+import { isCanonicalCommercialSale, normalizeReservationDocument } from "@/modules/reservations/canonicalReservation";
 
 export type GlobalDataSnapshot = {
   sales: number;
@@ -47,15 +48,15 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
   const [error, setError] = React.useState<string | null>(null);
 
   // Cache for realtime computation (avoid re-fetch per page).
-  const reservationsRef = React.useRef<Array<{ statut?: string; montant?: number; seatsGo?: number }>>([]);
+  const reservationsRef = React.useRef<Array<{ sold: boolean; amount: number; tickets: number }>>([]);
   const cashTxRef = React.useRef<Array<{ status?: string; amount?: number }>>([]);
   const capacityRef = React.useRef<number | null>(null);
   const scheduleRef = React.useRef<number | null>(null);
 
   const computeAndSetSnapshot = React.useCallback(() => {
-    const sold = reservationsRef.current.filter((r) => isSoldReservation(r.statut));
-    const tickets = sold.reduce((s, r) => s + (Number(r.seatsGo) || 1), 0);
-    const sales = sold.reduce((s, r) => s + (Number(r.montant) || 0), 0);
+    const sold = reservationsRef.current.filter((r) => r.sold);
+    const tickets = sold.reduce((s, r) => s + (Number(r.tickets) || 1), 0);
+    const sales = sold.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const cash = cashTxRef.current
       .filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID)
       .reduce((s, t) => s + (Number(t.amount) || 0), 0);
@@ -131,11 +132,12 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
       qRes,
       (snap) => {
         reservationsRef.current = snap.docs.map((d) => {
-          const data = d.data() as any;
+          const data = d.data() as Record<string, unknown>;
+          const canonical = normalizeReservationDocument(data, { id: d.id });
           return {
-            statut: (data.statut ?? data.status ?? "").toString(),
-            montant: Number(data.montant ?? data.amount ?? 0) || 0,
-            seatsGo: Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1,
+            sold: isCanonicalCommercialSale(canonical),
+            amount: canonical.amounts.total,
+            tickets: canonical.seats.total > 0 ? canonical.seats.total : 1,
           };
         });
         setLoading(false);
@@ -193,4 +195,3 @@ export function useGlobalDataSnapshot(): Ctx {
   if (!ctx) throw new Error("useGlobalDataSnapshot must be used within GlobalDataSnapshotProvider");
   return ctx;
 }
-

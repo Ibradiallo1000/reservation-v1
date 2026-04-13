@@ -1,2421 +1,1231 @@
-// src/pages/chef-comptable/ReservationsEnLigne.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  collection, query, where, orderBy, limit, doc,
-  deleteDoc, onSnapshot, getDoc, updateDoc, serverTimestamp, getDocs, Timestamp
-} from 'firebase/firestore';
-import { db } from '@/firebaseConfig';
-import { getStartOfDayBamako, getEndOfDayBamako } from '@/shared/date/dateUtilsTz';
-import { useAuth } from '@/contexts/AuthContext';
-import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
-import { useAgencyDarkMode } from '@/modules/agence/shared';
-import { 
-  RotateCw, 
-  Search, 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
-  AlertCircle, 
-  Eye, 
-  Filter, 
-  Download,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  Timestamp,
+  where,
+} from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
+import {
   Building2,
-  CreditCard,
-  TrendingUp,
-  AlertTriangle,
-  RefreshCw,
-  FileText,
-  Smartphone,
-  Info,
-  ChevronDown,
-  ChevronUp,
-  Bell,
-  Calendar,
-  Receipt,
-  MessageCircle,
+  CheckCircle2,
+  Clock3,
   Copy,
-  Sun,
+  Eye,
+  History,
+  LogOut,
+  MessageCircle,
   Moon,
-  LogOut
-} from 'lucide-react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { toast } from 'sonner';
-import { useNavigate } from 'react-router-dom';
-import type { Reservation, ReservationStatus } from '@/types/reservation';
-import InternalLayout from '@/shared/layout/InternalLayout';
+  RefreshCw,
+  Search,
+  Sun,
+  Wallet,
+  XCircle,
+} from "lucide-react";
+import { toast } from "sonner";
+import { db } from "@/firebaseConfig";
+import { useAuth } from "@/contexts/AuthContext";
+import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
+import { useAgencyDarkMode } from "@/modules/agence/shared";
+import { Button } from "@/shared/ui/button";
+import type { Reservation } from "@/types/reservation";
+import { ensurePendingOnlinePaymentFromReservation, getPaymentByReservationId } from "@/services/paymentService";
+import {
+  rejectPendingOnlinePaymentAndSyncReservation,
+  validatePendingOnlinePaymentAndSyncReservation,
+} from "@/services/onlinePaymentOperatorService";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
+import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
+import { mobileToBankTransfer } from "@/modules/compagnie/treasury/treasuryTransferService";
+import { listFinancialDocuments, upsertBankDepositDocument } from "@/modules/finance/documents/financialDocumentsService";
+import type { FinancialDocumentStatus } from "@/modules/finance/documents/financialDocuments.types";
+import {
+  isCanonicalPendingOnlineReview,
+  normalizeReservationDocument,
+  type CanonicalReservationDocument,
+} from "@/modules/reservations/canonicalReservation";
 
-/** Réservation avec champs preuve (Firestore peut avoir paymentReference) */
-type ReservationWithProof = Reservation & { paymentReference?: string };
-import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
-import { Button } from '@/shared/ui/button';
-import { MetricCard, SectionCard, StatusBadge, type StatusVariant, StandardLayoutWrapper, PageHeader } from '@/ui';
-import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
-import { decrementReservedSeats } from '@/modules/compagnie/tripInstances/tripInstanceService';
-import { ensurePendingOnlinePaymentFromReservation, getPaymentByReservationId } from '@/services/paymentService';
-import { validatePendingOnlinePaymentAndSyncReservation } from '@/services/onlinePaymentOperatorService';
+type Tab = "to_process" | "wallets" | "transfers" | "history";
+type Provider = "all" | "orange" | "moov" | "wave" | "sarali" | "other";
+type DateFilter = "today" | "7d" | "30d" | "all";
+type HistoryType = "all" | "validation" | "rejet" | "transfert";
+type TransferStateFilter = "all" | "confirmed" | "non_confirmed";
 
-/** Son Shopify (alarme / preuve reçue) : public/splash/son.mp3 */
-const NOTIFICATION_SOUND_URL = '/splash/son.mp3';
-
-/* ================= NORMALISATION DES STATUTS ================= */
-/** Modèle Firestore `status` : en_attente | payé | annulé (+ ticketValidatedAt pour billet validé). */
-const normalizeReservationRowStatus = (d: Record<string, unknown>): ReservationStatus => {
-  const status = String(d.status ?? "").toLowerCase();
-  if (status === "annulé" || status === "annule") return "annule";
-  if (status === "en_attente") return "en_attente";
-  if (status === "payé" || status === "paye") {
-    return d.ticketValidatedAt ? "confirme" : "verification";
-  }
-  const raw = String(d.statut ?? "");
-  return normalizeStatutLegacy(raw);
+type AuthUser = {
+  uid?: string;
+  companyId?: string;
+  role?: string | string[] | null;
+  displayName?: string;
+  email?: string;
+  phone?: string;
 };
 
-const normalizeStatutLegacy = (raw?: string): ReservationStatus => {
-  if (!raw) return "en_attente";
-  const s = raw.toLowerCase().trim();
-  if (s.includes("preuve")) return "verification";
-  if (s.includes("verif")) return "verification";
-  if (s.includes("pay")) return "confirme";
-  if (s.includes("confirm")) return "confirme";
-  if (s.includes("valid")) return "confirme";
-  if (s.includes("refus")) return "refuse";
-  if (s.includes("annul")) return "annule";
-  if (s.includes("cancel")) return "annule";
-  if (s.includes("attente")) return "en_attente";
-  if (s === "pending") return "en_attente";
-  return "en_attente";
+type AuthCompany = {
+  nom?: string;
+  name?: string;
+  brandName?: string;
+  slug?: string;
+  logoUrl?: string;
+  logo?: string;
 };
 
-const ITEMS_PER_PAGE = 20;
-
-/* ================= TYPES POUR LA PAGINATION ET FILTRES ================= */
-interface FilterOptions {
-  period: 'today' | 'tomorrow' | 'week' | 'all';
-  startDate?: Date;
-  endDate?: Date;
-}
-
-/* ================= HOOK POUR LA NOTIFICATION SONORE (son Shopify : splash/son.mp3) ================= */
-const useNotificationSound = () => {
-  const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
-  const [playedReservations, setPlayedReservations] = useState<Set<string>>(new Set());
-  const [isAudioReady, setIsAudioReady] = useState(false);
-
-  const initializeAudio = () => {
-    if (audio || typeof window === 'undefined') return;
-    const audioElement = new Audio(NOTIFICATION_SOUND_URL);
-    audioElement.preload = 'auto';
-    audioElement.load();
-    audioElement.addEventListener('canplaythrough', () => {
-      setAudio(audioElement);
-      setIsAudioReady(true);
-    });
-    audioElement.addEventListener('error', () => setIsAudioReady(false));
-  };
-
-  const playNotification = (reservationId: string) => {
-    if (!isAudioReady || !audio || playedReservations.has(reservationId)) return;
-    audio.currentTime = 0;
-    audio.play().catch(() => {});
-    setPlayedReservations(prev => {
-      const next = new Set(prev);
-      next.add(reservationId);
-      return next;
-    });
-  };
-
-  /** Joue le son (ex. après validation) sans déduplication. */
-  const playSoundNow = () => {
-    if (audio && isAudioReady) {
-      audio.currentTime = 0;
-      audio.play().catch(() => {});
-    } else {
-      const a = new Audio(NOTIFICATION_SOUND_URL);
-      a.play().catch(() => {});
-    }
-  };
-
-  const resetNotification = (reservationId: string) => {
-    setPlayedReservations(prev => {
-      const next = new Set(prev);
-      next.delete(reservationId);
-      return next;
-    });
-  };
-
-  return { initializeAudio, playNotification, resetNotification, playSoundNow, isAudioReady };
-};
-
-/* ================= CONFIGURATION DES STATUTS ================= */
-const getStatusConfig = (status?: ReservationStatus): { label: string; statusVariant: StatusVariant; icon: React.ReactNode; priority: number } => {
-  switch (status) {
-    case 'en_attente':
-      return { label: 'En attente', statusVariant: 'info', icon: <Clock className="h-3 w-3" />, priority: 0 };
-    case 'verification':
-      return { label: 'À vérifier', statusVariant: 'warning', icon: <AlertCircle className="h-3 w-3" />, priority: 1 };
-    case 'confirme':
-      return { label: 'Validé', statusVariant: 'success', icon: <CheckCircle className="h-3 w-3" />, priority: 2 };
-    case 'refuse':
-      return { label: 'Refusé', statusVariant: 'danger', icon: <XCircle className="h-3 w-3" />, priority: 3 };
-    case 'annule':
-      return { label: 'Annulé', statusVariant: 'neutral', icon: <XCircle className="h-3 w-3" />, priority: 4 };
-    default:
-      return { label: 'Inconnu', statusVariant: 'neutral', icon: <AlertCircle className="h-3 w-3" />, priority: 5 };
-  }
-};
-
-type PaymentUiStatus = "auto_detected" | "declared_paid" | "rejected" | "validated" | "pending" | "unknown";
-type PaymentValidationLevel = "valid" | "suspicious" | "invalid" | "unknown";
-
-const getPaymentInfo = (reservation: Reservation) => {
-  const p = ((reservation as any).payment ?? {}) as {
+type ReservationRow = Reservation & {
+  status?: string;
+  nomClient?: string;
+  payment?: {
     status?: string;
+    provider?: string;
     validationLevel?: string;
     parsed?: { amount?: number; transactionId?: string };
     totalAmount?: number;
   };
-  const paymentStatus = String(p.status ?? "").toLowerCase();
-  const validationLevel = String(p.validationLevel ?? "").toLowerCase();
-  return {
-    paymentStatus: (
-      paymentStatus === "auto_detected" ||
-      paymentStatus === "declared_paid" ||
-      paymentStatus === "rejected" ||
-      paymentStatus === "validated" ||
-      paymentStatus === "pending"
-        ? paymentStatus
-        : "unknown"
-    ) as PaymentUiStatus,
-    validationLevel: (
-      validationLevel === "valid" || validationLevel === "suspicious" || validationLevel === "invalid"
-        ? validationLevel
-        : "unknown"
-    ) as PaymentValidationLevel,
-    parsedAmount:
-      typeof p?.parsed?.amount === "number"
-        ? p.parsed.amount
-        : typeof p.totalAmount === "number"
-          ? p.totalAmount
-          : null,
-    parsedTransactionId: p?.parsed?.transactionId ? String(p.parsed.transactionId) : null,
-    totalAmount: typeof p.totalAmount === "number" ? p.totalAmount : null,
-  };
+  ticketValidatedAt?: unknown;
+  canonical?: CanonicalReservationDocument;
 };
 
-const getPriorityRank = (reservation: Reservation): number => {
-  const info = getPaymentInfo(reservation);
-  if (info.paymentStatus === "auto_detected" && info.validationLevel === "valid") return 1;
-  if (info.paymentStatus === "auto_detected" && info.validationLevel === "suspicious") return 2;
-  if (info.paymentStatus === "declared_paid") return 3;
-  return 4;
+type AccountRow = {
+  id: string;
+  agencyId: string | null;
+  accountType: string;
+  accountName: string;
+  currentBalance: number;
+  currency: string;
 };
 
-/* ================= COMPOSANT PRINCIPAL ================= */
-/** Construit l'URL publique du billet pour une réservation */
-const getBilletUrl = (r: Reservation, companySlugFallback?: string) => {
-  const slug = companySlugFallback || r.companySlug || "";
-  if (!slug || !r.id) return "";
+type PaymentHistoryRow = {
+  id: string;
+  reservationId: string;
+  agencyId: string;
+  amount: number;
+  currency: string;
+  provider: string;
+  status: string;
+  ledgerStatus: string;
+  validatedAt: unknown;
+  createdAt: unknown;
+  rejectionReason: string | null;
+};
 
-  const getBaseUrl = () => window.location.origin;
-  const origin = getBaseUrl();
-  const hostname = window.location.hostname;
+type TransferRow = {
+  id: string;
+  amount: number;
+  currency: string;
+  referenceId: string;
+  performedAt: unknown;
+  sourceLabel: string;
+  destinationLabel: string;
+  documentId: string | null;
+  documentNumber: string | null;
+  documentStatus: FinancialDocumentStatus | null;
+};
 
-  // Local dev: http://localhost:5173/mali-trans/reservation/abc123
-  const isLocal =
-    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
-  if (isLocal) {
-    return `${origin}/${slug}/reservation/${r.id}`;
+const PENDING_LIMIT = 80;
+const HISTORY_LIMIT = 700;
+const TRANSFER_LIMIT = 300;
+const DOC_LIMIT = 900;
+
+const normalize = (v: unknown): string =>
+  String(v ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+const toMillis = (v: unknown): number => {
+  if (v instanceof Timestamp) return v.toMillis();
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  if (typeof v === "string") {
+    const parsed = Date.parse(v);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
-
-  // Production (subdomain): https://<slug>.<root-domain>/reservation/abc123
-  // On dérive le root domain depuis le hostname courant (pas de hardcode).
-  const hasSubdomain = hostname.includes(".");
-  if (hasSubdomain) {
-    const rootDomain = hostname.split(".").slice(1).join(".");
-    const proto = window.location.protocol.replace(":", "");
-    return `${proto}://${slug}.${rootDomain}/reservation/${r.id}`;
+  if (v && typeof v === "object" && "seconds" in (v as Record<string, unknown>)) {
+    const sec = Number((v as { seconds?: unknown }).seconds ?? 0);
+    return Number.isFinite(sec) ? sec * 1000 : 0;
   }
-
-  // Fallback (même format que dev si possible)
-  return `${origin}/${slug}/reservation/${r.id}`;
+  return 0;
 };
 
-const parseYYYYMMDDToLocalDate = (raw: unknown) => {
-  if (typeof raw !== "string") return null;
-  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]) - 1;
-  const d = Number(m[3]);
-  const dt = new Date(y, mo, d);
-  return isNaN(dt.getTime()) ? null : dt;
-};
-
-const formatDepartureDateFr = (raw: unknown) => {
-  if (!raw) return "—";
-  let d: Date | null = null;
-
-  if (raw instanceof Timestamp) d = raw.toDate();
-  else if (raw instanceof Date) d = raw;
-  else if (typeof raw === "string") d = parseYYYYMMDDToLocalDate(raw) || new Date(raw);
-
-  if (!d || isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("fr-FR", {
-    day: "numeric",
-    month: "long",
+const formatDateTime = (v: unknown): string => {
+  const ms = toMillis(v);
+  if (!ms) return "—";
+  return new Date(ms).toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
     year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 };
 
-const formatDepartureTime = (raw: unknown) => {
-  if (!raw) return "—";
-  const s = String(raw).trim();
-  const m = s.match(/^(\d{2}):(\d{2})/);
-  if (m) return `${m[1]}:${m[2]}`;
-  const d = new Date(s);
-  if (!isNaN(d.getTime())) {
-    return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", hour12: false });
+const isToday = (v: unknown): boolean => {
+  const ms = toMillis(v);
+  if (!ms) return false;
+  const d = new Date(ms);
+  const n = new Date();
+  return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear();
+};
+
+const inCurrentMonth = (v: unknown): boolean => {
+  const ms = toMillis(v);
+  if (!ms) return false;
+  const d = new Date(ms);
+  const n = new Date();
+  return d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear();
+};
+
+const inDateFilter = (v: unknown, filter: DateFilter): boolean => {
+  if (filter === "all") return true;
+  if (filter === "today") return isToday(v);
+  const ms = toMillis(v);
+  if (!ms) return false;
+  const limitDays = filter === "7d" ? 7 : 30;
+  const min = new Date();
+  min.setDate(min.getDate() - limitDays);
+  return ms >= min.getTime();
+};
+
+const providerFrom = (v: unknown): Provider => {
+  const n = normalize(v);
+  if (n.includes("orange")) return "orange";
+  if (n.includes("moov")) return "moov";
+  if (n.includes("wave")) return "wave";
+  if (n.includes("sarali")) return "sarali";
+  return "other";
+};
+
+const providerLabel = (p: Provider): string => {
+  if (p === "orange") return "Orange Money";
+  if (p === "moov") return "Moov Money";
+  if (p === "wave") return "Wave";
+  if (p === "sarali") return "Sarali";
+  return "Autre wallet";
+};
+
+const providerBadge = (p: Provider): string => {
+  if (p === "orange") return "bg-orange-100 text-orange-700 border-orange-200";
+  if (p === "moov") return "bg-blue-100 text-blue-700 border-blue-200";
+  if (p === "wave") return "bg-cyan-100 text-cyan-700 border-cyan-200";
+  if (p === "sarali") return "bg-lime-100 text-lime-700 border-lime-200";
+  return "bg-gray-100 text-gray-700 border-gray-200";
+};
+
+const inputDate = (): string => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const newId = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `mobile_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const proofUrl = (r: ReservationRow): string | null =>
+  r.preuveUrl ?? r.paymentProofUrl ?? r.paiementPreuveUrl ?? r.proofUrl ?? r.receiptUrl ?? null;
+
+const isImage = (url: string | null): boolean => !!url && /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
+
+const getCanonicalReservation = (row: ReservationRow): CanonicalReservationDocument =>
+  row.canonical ?? normalizeReservationDocument(row as unknown as Record<string, unknown>, { id: row.id });
+
+const billetUrl = (r: ReservationRow, slugFallback?: string): string => {
+  if (!r.id || typeof window === "undefined") return "";
+  const slug = slugFallback || r.companySlug || "";
+  if (!slug) return "";
+  const origin = window.location.origin;
+  const hostname = window.location.hostname;
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]") {
+    return `${origin}/${slug}/reservation/${r.id}`;
   }
-  return "—";
+  if (hostname.includes(".")) {
+    const root = hostname.split(".").slice(1).join(".");
+    const proto = window.location.protocol.replace(":", "");
+    return `${proto}://${slug}.${root}/reservation/${r.id}`;
+  }
+  return `${origin}/${slug}/reservation/${r.id}`;
 };
 
-/** Message WhatsApp professionnel (sauts de ligne EXACTS) */
-const getBilletConfirmationMessage = (
-  r: Reservation,
-  billetUrl: string,
-  companyName: string
-) => {
-  const departure = r.depart || "—";
-  const arrival = r.arrivee || "—";
-  const formattedDate = formatDepartureDateFr(r.date);
-  const time = formatDepartureTime((r as any).heure);
+const whatsappPhone = (v: string): string => v.replace(/\D/g, "");
 
-  const lines = [
-    `🚍 ${companyName}`,
-    "",
-    "Bonjour,",
-    "",
-    "Votre réservation a été validée avec succès ✅",
-    "",
-    `🧾 Trajet : ${departure} → ${arrival}`,
-    `📅 Date de départ : ${formattedDate}`,
-    `⏰ Heure de départ : ${time}`,
-    "",
-    "📍 Merci de vous présenter au point de départ au moins 1 heure avant le départ.",
-    "",
-    "🎫 Consultez votre billet ici :",
-    `${billetUrl}`,
-    "",
-    `Merci d'avoir fait confiance à ${companyName} 🙏`,
-    "Bon voyage !",
-  ];
-
-  return lines.join("\n");
+const getPaymentInfo = (r: ReservationRow) => {
+  const canonical = getCanonicalReservation(r);
+  const pay = r.payment ?? {};
+  return {
+    status: canonical.payment.status,
+    digitalValidationStatus: canonical.payment.digitalValidationStatus,
+    provider: providerFrom(canonical.payment.walletProvider ?? pay.provider ?? r.paymentMethodLabel ?? ""),
+    validationLevel: normalize(canonical.onlinePayment?.validationLevel ?? pay.validationLevel) || "unknown",
+    detectedAmount:
+      canonical.onlinePayment?.parsedAmount ??
+      (typeof pay.parsed?.amount === "number" ? pay.parsed.amount : typeof pay.totalAmount === "number" ? pay.totalAmount : null),
+    txRef:
+      canonical.payment.reference ??
+      (typeof pay.parsed?.transactionId === "string" ? pay.parsed.transactionId : r.paymentReference || r.referenceCode || ""),
+  };
 };
 
-/** Numéro au format wa.me (chiffres uniquement, sans +) */
-const toWhatsAppPhone = (phone: string) => (phone || '').replace(/\D/g, '');
-
-const ReservationsEnLigne: React.FC = () => {
-  const { user, company, logout } = useAuth() as any;
+const DigitalCashReservationsPage: React.FC = () => {
+  const { user, company, logout } = useAuth() as { user?: AuthUser; company?: AuthCompany; logout: () => Promise<void> };
   const navigate = useNavigate();
-  const theme = useCompanyTheme(company) || { primary: '#2563eb', secondary: '#3b82f6' };
-  const money = useFormatCurrency();
-  const { initializeAudio, playNotification, resetNotification, playSoundNow, isAudioReady } = useNotificationSound();
+  const theme = useCompanyTheme(company as any) || { primary: "#FF6600", secondary: "#F97316" };
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
 
-  const [verificationReservations, setVerificationReservations] = useState<Reservation[]>([]);
-  /** Réservations venant d'être validées : on garde la carte visible avec "Billet validé" + actions */
-  const [recentlyValidatedReservations, setRecentlyValidatedReservations] = useState<Reservation[]>([]);
-  const [otherReservations, setOtherReservations] = useState<Reservation[]>([]);
-  const [agencies, setAgencies] = useState<Record<string, {name: string, ville: string}>>({});
-  const [loading, setLoading] = useState(true);
+  const companyId = user?.companyId ?? "";
+
+  const [tab, setTab] = useState<Tab>("to_process");
+  const [agencies, setAgencies] = useState<Record<string, string>>({});
+  const [companyBanks, setCompanyBanks] = useState<Record<string, string>>({});
+
+  const [pendingReservations, setPendingReservations] = useState<ReservationRow[]>([]);
+  const [payments, setPayments] = useState<PaymentHistoryRow[]>([]);
+  const [transfers, setTransfers] = useState<TransferRow[]>([]);
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+
+  const [loadingPending, setLoadingPending] = useState(true);
+  const [loadingSecondary, setLoadingSecondary] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  // Focus operator_digital: par défaut, on affiche uniquement les réservations "preuve_recue"
-  // (normalisées en statut UI = "verification").
-  const [filterStatus, setFilterStatus] = useState<ReservationStatus | ''>('verification');
-  const [otherPage, setOtherPage] = useState(1);
-  const [showStats, setShowStats] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  // Temporal filtering mobile-first: aujourd'hui / demain / semaine / tout.
-  const [filterPeriod, setFilterPeriod] = useState<FilterOptions['period']>('all');
-  const [filterAgencyId, setFilterAgencyId] = useState<string>('');
-  const [expandedCardKeys, setExpandedCardKeys] = useState<Record<string, boolean>>({});
-  const [requestedOtherReservations, setRequestedOtherReservations] = useState(false);
-  const [filterTab, setFilterTab] = useState<"today" | "pending" | "history" | "all">("pending");
-  const [recentlyRefusedReservations, setRecentlyRefusedReservations] = useState<Reservation[]>([]);
 
-  const toggleExpandedCard = (key: string) => {
-    setExpandedCardKeys((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  const [search, setSearch] = useState("");
+  const [agencyFilter, setAgencyFilter] = useState("");
+  const [providerFilter, setProviderFilter] = useState<Provider>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "review">("all");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  /* ================= FONCTIONS UTILITAIRES DATE ================= */
-  const getPeriodDates = (period: FilterOptions['period']) => {
-    const now = new Date();
+  const [transferFilter, setTransferFilter] = useState<TransferStateFilter>("all");
+  const [historyType, setHistoryType] = useState<HistoryType>("all");
+  const [historyDateFilter, setHistoryDateFilter] = useState<DateFilter>("30d");
+  const [historySearch, setHistorySearch] = useState("");
 
-    const todayStart = getStartOfDayBamako();
-    const todayEnd = getEndOfDayBamako();
+  const [sourceWalletId, setSourceWalletId] = useState("");
+  const [destinationBankId, setDestinationBankId] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
+  const [transferDate, setTransferDate] = useState(inputDate());
+  const [transferReference, setTransferReference] = useState("");
+  const [bankAgencyName, setBankAgencyName] = useState("");
+  const [transferObservation, setTransferObservation] = useState("");
+  const [manualPiece, setManualPiece] = useState(false);
+  const [submittingTransfer, setSubmittingTransfer] = useState(false);
+  const [lastDocument, setLastDocument] = useState<{ id: string; number: string; status: FinancialDocumentStatus } | null>(null);
 
-    if (period === 'all') {
-      return { start: new Date(0), end: now };
-    }
+  const walletAccounts = useMemo(
+    () => accounts.filter((a) => a.accountType === "company_mobile_money" || a.accountType === "mobile_money"),
+    [accounts]
+  );
+  const bankAccounts = useMemo(() => accounts.filter((a) => a.accountType === "company_bank"), [accounts]);
 
-    if (period === 'today') {
-      return { start: todayStart, end: todayEnd };
-    }
+  const accountById = useMemo(() => {
+    const map = new Map<string, AccountRow>();
+    accounts.forEach((row) => map.set(row.id, row));
+    return map;
+  }, [accounts]);
 
-    if (period === 'tomorrow') {
-      const tomorrowStart = new Date(todayStart);
-      tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-      const tomorrowEnd = new Date(tomorrowStart);
-      tomorrowEnd.setHours(23, 59, 59, 999);
-      return { start: tomorrowStart, end: tomorrowEnd };
-    }
-
-    // week: aujourd'hui + 6 jours (prochaine semaine)
-    const weekStart = todayStart;
-    const weekEnd = new Date(todayStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    weekEnd.setHours(23, 59, 59, 999);
-    return { start: weekStart, end: weekEnd };
-  };
-
-  /* ================= INITIALISATION AUDIO AU PREMIER CLIC ================= */
   useEffect(() => {
-    const handleFirstInteraction = () => {
-      initializeAudio();
-      document.removeEventListener('click', handleFirstInteraction);
-      document.removeEventListener('keydown', handleFirstInteraction);
-      document.removeEventListener('touchstart', handleFirstInteraction);
-    };
+    if (!sourceWalletId && walletAccounts.length > 0) setSourceWalletId(walletAccounts[0].id);
+  }, [sourceWalletId, walletAccounts]);
 
-    document.addEventListener('click', handleFirstInteraction);
-    document.addEventListener('keydown', handleFirstInteraction);
-    document.addEventListener('touchstart', handleFirstInteraction);
-
-    return () => {
-      document.removeEventListener('click', handleFirstInteraction);
-      document.removeEventListener('keydown', handleFirstInteraction);
-      document.removeEventListener('touchstart', handleFirstInteraction);
-    };
-  }, []);
-
-  /* ================= CHARGEMENT DES AGENCES ================= */
   useEffect(() => {
-    if (!user?.companyId) return;
+    if (!destinationBankId && bankAccounts.length > 0) setDestinationBankId(bankAccounts[0].id);
+  }, [destinationBankId, bankAccounts]);
 
-    (async () => {
+  useEffect(() => {
+    if (!companyId) return;
+    const loadRefs = async () => {
       try {
-        const agenciesSnap = await getDocs(
-          collection(db, 'companies', user.companyId, 'agences')
-        );
-        
-        const agenciesMap: Record<string, {name: string, ville: string}> = {};
-        agenciesSnap.forEach(doc => {
-          const data = doc.data() as any;
-          agenciesMap[doc.id] = {
-            name: data.nomAgence || data.nom || data.ville || 'Agence',
-            ville: data.ville || data.city || ''
-          };
-        });
-        
-        setAgencies(agenciesMap);
-      } catch (error) {
-        console.error('Erreur chargement agences:', error);
-        toast.error('Erreur', { description: 'Impossible de charger les agences' });
-      }
-    })();
-  }, [user?.companyId]);
+        const [agencySnap, bankSnap] = await Promise.all([
+          getDocs(collection(db, "companies", companyId, "agences")),
+          getDocs(collection(db, "companies", companyId, "companyBanks")),
+        ]);
 
-  /* ================= CHARGEMENT EN TEMPS RÉEL - RÉSERVATIONS À VÉRIFIER ================= */
+        const agencyMap: Record<string, string> = {};
+        agencySnap.forEach((d) => {
+          const data = d.data() as { nom?: string; nomAgence?: string; name?: string; ville?: string };
+          agencyMap[d.id] = data.nom ?? data.nomAgence ?? data.name ?? data.ville ?? d.id;
+        });
+        setAgencies(agencyMap);
+
+        const bankMap: Record<string, string> = {};
+        bankSnap.forEach((d) => {
+          const data = d.data() as { name?: string; isActive?: boolean };
+          if (data.isActive === false) return;
+          bankMap[d.id] = data.name ?? d.id;
+        });
+        setCompanyBanks(bankMap);
+      } catch (error) {
+        console.error("[DigitalCash] loadRefs", error);
+        toast.error("Impossible de charger agences et banques.");
+      }
+    };
+    void loadRefs();
+  }, [companyId]);
+
   useEffect(() => {
-    if (!user?.companyId) {
-      setLoading(false);
+    if (!companyId) {
+      setPendingReservations([]);
+      setLoadingPending(false);
       return;
     }
 
-    let unsubs: Array<() => void> = [];
+    setLoadingPending(true);
+    const unsubs: Array<() => void> = [];
+    const byAgency = new Map<string, ReservationRow[]>();
 
-    (async () => {
+    const rebuild = () => {
+      const merged = Array.from(byAgency.values()).flat();
+      const unique = new Map<string, ReservationRow>();
+      merged.forEach((row) => unique.set(`${row.agencyId}_${row.id ?? ""}`, row));
+      setPendingReservations(Array.from(unique.values()).sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)));
+    };
+
+    const start = async () => {
       try {
-        const agencesSnap = await getDocs(
-          collection(db, 'companies', user.companyId, 'agences')
-        );
-        
-        if (agencesSnap.empty) {
-          setLoading(false);
+        const agencySnap = await getDocs(collection(db, "companies", companyId, "agences"));
+        if (agencySnap.empty) {
+          setLoadingPending(false);
           return;
         }
-        
-        const agenceIds = agencesSnap.docs.map((d) => d.id);
-
-        // Paiement déclaré côté client : status payé, en attente de validation opérateur
-        agenceIds.forEach((agencyId) => {
-          const qRef = query(
-            collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
-            where('status', '==', 'payé'),
-            orderBy('createdAt', 'desc'),
-            limit(50)
+        agencySnap.docs.forEach((agencyDoc) => {
+          const agencyId = agencyDoc.id;
+          const q = query(
+            collection(db, "companies", companyId, "agences", agencyId, "reservations"),
+            where("status", "==", "payé"),
+            orderBy("createdAt", "desc"),
+            limit(PENDING_LIMIT)
           );
+          const stop = onSnapshot(
+            q,
+            (snap) => {
+              const rows = snap.docs
+                .map((reservationDoc) => {
+                  const data = reservationDoc.data() as Record<string, unknown>;
+                  const canonical = normalizeReservationDocument(data, { id: reservationDoc.id });
+                  const row: ReservationRow = {
+                    ...(data as unknown as Partial<ReservationRow>),
+                    id: reservationDoc.id,
+                    companyId: String(data.companyId ?? companyId),
+                    agencyId: String(data.agencyId ?? agencyId),
+                    statut: String(data.statut ?? "en_attente") as Reservation["statut"],
+                    clientNom: String(data.nomClient ?? data.clientNom ?? ""),
+                    createdAt: data.createdAt ?? Timestamp.now(),
+                    canonical,
+                  };
+                  return row;
+                })
+                .filter((row) => isCanonicalPendingOnlineReview(getCanonicalReservation(row)));
 
-          const unsub = onSnapshot(qRef, (snap) => {
-            // CORRECTION CRITIQUE ICI : Utiliser une Map pour gérer proprement les changements
-            setVerificationReservations(prev => {
-              const map = new Map<string, Reservation>();
-
-              // Garder l'existant
-              prev.forEach(r => {
-                map.set(`${r.agencyId}_${r.id}`, r);
-              });
-
-              // Appliquer les changements
-              snap.docChanges().forEach(chg => {
-                const d = chg.doc.data() as any;
-                const keyEarly = `${d.agencyId ?? agencyId}_${chg.doc.id}`;
-                if (d.ticketValidatedAt) {
-                  map.delete(keyEarly);
-                  if (chg.type === 'removed') resetNotification(keyEarly);
-                  return;
-                }
-
-                const row: Reservation = {
-                  ...d,
-                  id: chg.doc.id,
-                  companyId: d.companyId ?? user.companyId!,
-                  agencyId: d.agencyId ?? agencyId,
-                  statut: normalizeReservationRowStatus(d as Record<string, unknown>),
-                  clientNom: d.nomClient ?? d.clientNom,
-                  createdAt: d.createdAt ?? Timestamp.now(),
-                } as Reservation;
-
-                const key = `${row.agencyId}_${row.id}`;
-
-                if (chg.type === 'removed') {
-                  map.delete(key);
-                  resetNotification(key);
-                } else {
-                  // Ajout ou modification
-                  if (chg.type === 'added' && row.statut === 'verification') {
-                    // Jouer le son uniquement pour les nouvelles réservations à vérifier
-                    if (isAudioReady) {
-                      playNotification(key);
-                    }
-                    
-                    toast('Nouveau justificatif reçu', {
-                      description: `${row.clientNom || 'Client'} a envoyé un justificatif de paiement`,
-                      duration: 4000,
-                      action: {
-                        label: 'Voir',
-                        onClick: () => {
-                          const element = document.getElementById(`reservation-${row.id}`);
-                          if (element) {
-                            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            element.classList.add('ring-2', 'ring-amber-500');
-                            setTimeout(() => {
-                              element.classList.remove('ring-2', 'ring-amber-500');
-                            }, 2000);
-                          }
-                        }
-                      }
-                    });
-                  }
-                  
-                  map.set(key, row);
-                }
-              });
-
-              // Convertir en tableau et trier par date décroissante
-              return Array.from(map.values()).sort((a, b) => {
-                const ta = a.createdAt instanceof Timestamp 
-                  ? a.createdAt.toMillis() 
-                  : new Date(a.createdAt).getTime();
-                const tb = b.createdAt instanceof Timestamp 
-                  ? b.createdAt.toMillis() 
-                  : new Date(b.createdAt).getTime();
-                return tb - ta;
-              });
-            });
-          }, (error) => {
-            console.error('Erreur Firestore (verification):', error);
-            toast.error('Erreur de connexion', {
-              description: 'Impossible de charger les réservations à vérifier',
-            });
-          });
-
-          unsubs.push(unsub);
+              byAgency.set(agencyId, rows);
+              rebuild();
+              setLoadingPending(false);
+            },
+            (error) => {
+              console.error("[DigitalCash] pending listener", error);
+              toast.error("Impossible de suivre les paiements en attente.");
+            }
+          );
+          unsubs.push(stop);
         });
-
-        setLoading(false);
       } catch (error) {
-        console.error('Erreur initiale:', error);
-        setLoading(false);
-        toast.error('Erreur', {
-          description: 'Impossible de charger les agences',
-        });
+        console.error("[DigitalCash] pending init", error);
+        setLoadingPending(false);
+        toast.error("Chargement des paiements en attente impossible.");
       }
-    })();
-
-    return () => {
-      unsubs.forEach((u) => u());
     };
-  }, [user?.companyId, isAudioReady]);
 
-  /* ================= CHARGEMENT PAGINÉ DES AUTRES RÉSERVATIONS ================= */
-  const loadOtherReservations = async (page: number = 1) => {
-    if (!user?.companyId) return;
+    void start();
+    return () => unsubs.forEach((u) => u());
+  }, [companyId]);
 
-    try {
-      const agencesSnap = await getDocs(
-        collection(db, 'companies', user.companyId, 'agences')
-      );
-      
-      if (agencesSnap.empty) return;
-
-      const agenceIds = agencesSnap.docs.map((d) => d.id);
-      const allOtherReservations: Reservation[] = [];
-
-      for (const agencyId of agenceIds) {
-        const qRef = query(
-          collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
-          where('status', 'in', ['payé', 'annulé']),
-          orderBy('createdAt', 'desc'),
-          limit(ITEMS_PER_PAGE * page)
-        );
-
-        const snap = await getDocs(qRef);
-        snap.docs.forEach(doc => {
-          const d = doc.data() as any;
-          const normalizedStatus = normalizeReservationRowStatus(d as Record<string, unknown>);
-          
-          // CORRECTION : S'assurer que les réservations confirmées sont bien incluses
-          allOtherReservations.push({
-            ...d,
-            id: doc.id,
-            companyId: d.companyId ?? user.companyId!,
-            agencyId: d.agencyId ?? agencyId,
-            statut: normalizedStatus,
-            clientNom: d.nomClient ?? d.clientNom,
-            createdAt: d.createdAt ?? Timestamp.now(),
-          } as Reservation);
-        });
-      }
-
-      // Supprimer les doublons potentiels
-      const uniqueReservations = Array.from(
-        new Map(allOtherReservations.map(r => [`${r.agencyId}_${r.id}`, r])).values()
-      );
-      
-      setOtherReservations(uniqueReservations);
-      setOtherPage(page);
-    } catch (error) {
-      console.error('Erreur chargement autres réservations:', error);
-    }
-  };
-
-  /* ================= CORRECTION CRITIQUE : FUSION DES RÉSERVATIONS POUR LE FILTRAGE ================= */
-  const allReservations = useMemo(() => {
-    // Fusionner les deux listes en évitant les doublons
-    const combinedMap = new Map<string, Reservation>();
-    
-    // Ajouter d'abord les réservations à vérifier
-    verificationReservations.forEach(r => {
-      const key = `${r.agencyId}_${r.id}`;
-      combinedMap.set(key, r);
-    });
-    
-    // Ajouter les autres réservations (elles remplacent celles qui auraient changé de statut)
-    otherReservations.forEach(r => {
-      const key = `${r.agencyId}_${r.id}`;
-      // Ne pas écraser une réservation qui est encore à vérifier
-      if (!combinedMap.has(key) || combinedMap.get(key)?.statut !== 'verification') {
-        combinedMap.set(key, r);
-      }
-    });
-    
-    return Array.from(combinedMap.values()).sort((a, b) => {
-      const ta = a.createdAt instanceof Timestamp 
-        ? a.createdAt.toMillis() 
-        : new Date(a.createdAt).getTime();
-      const tb = b.createdAt instanceof Timestamp 
-        ? b.createdAt.toMillis() 
-        : new Date(b.createdAt).getTime();
-      return tb - ta;
-    });
-  }, [verificationReservations, otherReservations]);
-
-  /* ================= FILTRAGE AVEC PÉRIODE ================= */
-  const filterReservationsByPeriod = (reservations: Reservation[], period: FilterOptions['period']) => {
-    const { start, end } = getPeriodDates(period);
-    
-    return reservations.filter(reservation => {
-      let reservationDate: Date;
-      
-      if (reservation.createdAt instanceof Timestamp) {
-        reservationDate = reservation.createdAt.toDate();
-      } else if (typeof reservation.createdAt === 'string') {
-        reservationDate = new Date(reservation.createdAt);
-      } else if (reservation.createdAt instanceof Date) {
-        reservationDate = reservation.createdAt;
-      } else {
-        return false;
-      }
-      
-      return reservationDate >= start && reservationDate <= end;
-    });
-  };
-
-  /* ================= CORRECTION DU BUG DU FILTRE "CONFIRMÉES" ================= */
-  const filteredReservations = useMemo(() => {
-    // Appliquer d'abord les filtres par période
-    const periodFilteredAll = filterReservationsByPeriod(allReservations, filterPeriod);
-    const periodFilteredVerification = filterReservationsByPeriod(verificationReservations, filterPeriod);
-
-    // Puis appliquer le filtre par agence (si sélectionnée)
-    const agencyFilteredAll = filterAgencyId
-      ? periodFilteredAll.filter(r => r.agencyId === filterAgencyId)
-      : periodFilteredAll;
-    const agencyFilteredVerification = filterAgencyId
-      ? periodFilteredVerification.filter(r => r.agencyId === filterAgencyId)
-      : periodFilteredVerification;
-
-    // Enfin appliquer le filtre par statut
-    let result = agencyFilteredAll;
-    if (filterStatus === 'verification') {
-      result = agencyFilteredVerification;
-    } else if (filterStatus) {
-      // 🔧 CORRECTION CRITIQUE : Bien filtrer par statut normalisé
-      result = agencyFilteredAll.filter(r => r.statut === filterStatus);
-    }
-    
-    // Enfin appliquer la recherche textuelle
-    if (!searchTerm) return result;
-    
-    const term = searchTerm.toLowerCase();
-    return result.filter((r) => {
-      const searchable = [
-        r.clientNom || '',
-        r.telephone || '',
-        r.referenceCode || '',
-        r.depart || '',
-        r.arrivee || '',
-        r.email || '',
-        (r as ReservationWithProof).paymentReference || r.preuveMessage || '',
-      ].join(' ').toLowerCase();
-      
-      return searchable.includes(term);
-    });
-  }, [allReservations, verificationReservations, searchTerm, filterStatus, filterPeriod, filterAgencyId]);
-
-  /* ================= STATISTIQUES AVEC FILTRE DE PÉRIODE ================= */
-  const stats = useMemo(() => {
-    const periodFilteredAll = filterReservationsByPeriod(allReservations, filterPeriod);
-    const periodFilteredVerification = filterReservationsByPeriod(verificationReservations, filterPeriod);
-
-    const agencyFilteredAll = filterAgencyId
-      ? periodFilteredAll.filter(r => r.agencyId === filterAgencyId)
-      : periodFilteredAll;
-    const agencyFilteredVerification = filterAgencyId
-      ? periodFilteredVerification.filter(r => r.agencyId === filterAgencyId)
-      : periodFilteredVerification;
-    
-    return {
-      enAttente: agencyFilteredAll.filter(r => r.statut === 'en_attente').length,
-      verification: agencyFilteredVerification.length,
-      confirme: agencyFilteredAll.filter(r => r.statut === 'confirme').length,
-      refuse: agencyFilteredAll.filter(r => r.statut === 'refuse').length,
-      annule: agencyFilteredAll.filter(r => r.statut === 'annule').length,
-      total: agencyFilteredAll.length,
-      totalAmount: agencyFilteredAll.reduce((sum, r) => sum + (r.montant || 0), 0)
-    };
-  }, [allReservations, verificationReservations, filterPeriod, filterAgencyId]);
-
-  /* ================= ACTIONS ================= */
-  const handleValidate = async (reservation: Reservation) => {
-    if (!user?.companyId || !reservation.agencyId || !reservation.id) {
-      toast.error('Erreur', { description: 'Informations manquantes' });
+  const refreshSecondary = useCallback(async () => {
+    if (!companyId) {
+      setPayments([]);
+      setTransfers([]);
+      setAccounts([]);
+      setLoadingSecondary(false);
       return;
     }
-    
-    setProcessingId(reservation.id);
+    setLoadingSecondary(true);
     try {
-      const reservationRef = doc(
-        db,
-        'companies',
-        user.companyId,
-        'agences',
-        reservation.agencyId,
-        'reservations',
-        reservation.id
-      );
-      const snap = await getDoc(reservationRef);
-      if (!snap.exists()) {
-        toast.error('Erreur', { description: 'Réservation introuvable' });
-        return;
-      }
-      const data = snap.data() as any;
-      const lifecycle = String(data?.status ?? '');
-      const legacy = (data?.statut ?? '').toString().toLowerCase();
-      const canConfirm =
-        (lifecycle === 'payé' && !data?.ticketValidatedAt) || legacy === 'preuve_recue';
-      if (!canConfirm) {
-        toast.error('Erreur', { description: 'Cette réservation ne peut plus être confirmée' });
-        return;
-      }
-      const montant = Number(data?.montant ?? reservation.montant ?? 0);
-      const paymentMethodLabel = (data?.paymentMethod ?? data?.paiement ?? '').toString();
-      const ensured = await ensurePendingOnlinePaymentFromReservation({
-        companyId: user.companyId,
-        agencyId: reservation.agencyId,
-        reservationId: reservation.id,
-        montant,
-        paymentMethodLabel,
-      });
-      if (!ensured.ok) {
-        toast.error('Erreur', {
-          description: ensured.error ?? 'Impossible de préparer le paiement en ligne pour cette réservation.',
-        });
-        return;
-      }
+      const [accountsRows, paymentsSnap, transfersSnap, docs] = await Promise.all([
+        listAccounts(companyId),
+        getDocs(query(collection(db, "companies", companyId, "payments"), where("channel", "==", "online"), limit(HISTORY_LIMIT))),
+        getDocs(query(collection(db, "companies", companyId, "financialTransactions"), where("referenceType", "==", "mobile_to_bank"), limit(TRANSFER_LIMIT))),
+        listFinancialDocuments({ companyId, limitCount: DOC_LIMIT, filters: { documentType: "bank_deposit_slip" } }),
+      ]);
 
-      const payment = await getPaymentByReservationId(user.companyId, reservation.id);
-      if (!payment) {
-        toast.error('Erreur', {
-          description: 'Aucun paiement en attente pour cette réservation. Vérifiez la configuration ou contactez le support.',
-        });
-        return;
-      }
-      if (payment.status === 'pending') {
-        await validatePendingOnlinePaymentAndSyncReservation(payment, user.companyId, {
-          uid: user.uid ?? '',
-          role: (user as { role?: string | string[] }).role,
-        });
-        const refreshedPayment = await getPaymentByReservationId(user.companyId, reservation.id);
-        const reservationPatch: Record<string, unknown> = {
-          "payment.status": "validated",
-          "payment.validatedAt": serverTimestamp(),
-          "payment.validatedBy": user.uid ?? "",
-          "payment.ledgerStatus": refreshedPayment?.ledgerStatus ?? "pending",
-          updatedAt: serverTimestamp(),
-        };
-        if (refreshedPayment?.ledgerStatus === "failed") {
-          reservationPatch.paymentStatus = "finance_side_effects_failed";
-          reservationPatch["payment.ledgerError"] = refreshedPayment.ledgerError ?? "ledger_write_failed";
-        }
-        await updateDoc(reservationRef, {
-          ...reservationPatch,
-        });
-      } else {
-        toast.error('Erreur', {
-          description:
-            `Ce paiement n'est pas en attente (statut : ${payment.status}). Validation impossible depuis cet ecran tant que le flux de confirmation n'est pas en attente.`,
-        });
-        return;
-      }
+      setAccounts(accountsRows);
 
-      // CRM: sync customer (create or update stats by phone)
-      const phone = (data?.telephone ?? data?.telephoneOriginal ?? reservation.telephone ?? '')?.toString() || '';
-      const departureDate = (data?.date ?? reservation.date ?? '')?.toString() || '';
-      if (phone) {
-        upsertCustomerFromReservation({
-          companyId: user.companyId,
-          name: (data?.nomClient ?? data?.clientNom ?? reservation.clientNom ?? '')?.toString() || '',
-          phone,
-          email: (data?.email ?? reservation.email) ?? null,
-          montant: Number(data?.montant ?? reservation.montant ?? 0),
-          departureDate: departureDate || new Date().toISOString().slice(0, 10),
-        }).catch(() => {});
-      }
-      
-      // Garder la carte visible avec état "Billet validé" + boutons (PDF, WhatsApp, Copier)
-      const validatedRow: Reservation = {
-        ...reservation,
-        ...data,
-        id: reservation.id,
-        agencyId: reservation.agencyId,
-        companyId: reservation.companyId ?? user.companyId,
-        statut: 'confirme',
-        companySlug: reservation.companySlug || data?.companySlug || (company as { slug?: string })?.slug,
-        clientNom: data?.nomClient ?? data?.clientNom ?? reservation.clientNom,
-        telephone: data?.telephone ?? reservation.telephone,
-        depart: data?.depart ?? reservation.depart,
-        arrivee: data?.arrivee ?? reservation.arrivee,
-        date: data?.date ?? reservation.date,
-        montant: Number(data?.montant ?? reservation.montant ?? 0),
-      };
-      setRecentlyValidatedReservations(prev => [validatedRow, ...prev]);
+      const payRows: PaymentHistoryRow[] = paymentsSnap.docs
+        .map((d) => {
+          const data = d.data() as Record<string, unknown>;
+          return {
+            id: d.id,
+            reservationId: String(data.reservationId ?? ""),
+            agencyId: String(data.agencyId ?? ""),
+            amount: Number(data.amount ?? 0),
+            currency: String(data.currency ?? "XOF"),
+            provider: String(data.provider ?? ""),
+            status: String(data.status ?? ""),
+            ledgerStatus: String(data.ledgerStatus ?? "pending"),
+            validatedAt: data.validatedAt ?? null,
+            createdAt: data.createdAt ?? null,
+            rejectionReason: typeof data.rejectionReason === "string" && data.rejectionReason.trim().length > 0 ? data.rejectionReason : null,
+          };
+        })
+        .sort((a, b) => (toMillis(b.validatedAt) || toMillis(b.createdAt)) - (toMillis(a.validatedAt) || toMillis(a.createdAt)));
+      setPayments(payRows);
 
-      // Retirer de la liste des réservations à vérifier (le snapshot le fera aussi)
-      setVerificationReservations(prev => 
-        prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
-      );
+      const docBySource = new Map<string, { id: string; number: string; status: FinancialDocumentStatus; createdAt: unknown }>();
+      docs
+        .filter((r) => r.documentType === "bank_deposit_slip" && normalize(r.details?.natureFonds ?? "").includes("mobile"))
+        .forEach((r) => {
+          const current = docBySource.get(r.sourceId);
+          if (!current || toMillis(r.createdAt) > toMillis(current.createdAt)) {
+            docBySource.set(r.sourceId, { id: r.id, number: r.documentNumber, status: r.status, createdAt: r.createdAt });
+          }
+        });
 
-      // Afficher immédiatement les actions de suivi (copie lien + WhatsApp)
-      setFilterTab('history');
-      
-      // Réinitialiser la notification pour cette réservation
-      resetNotification(`${reservation.agencyId}_${reservation.id}`);
-      
-      // UI simplifiée : on ne recharge plus l'historique (seule la liste "preuve_recue" est affichée)
-      
-      toast.success('Réservation confirmée', {
-        description: `Le billet est maintenant disponible pour ${reservation.clientNom}`,
-      });
-      playSoundNow();
+      const transferRows: TransferRow[] = transfersSnap.docs
+        .map((d) => {
+          const data = d.data() as Record<string, unknown>;
+          const meta = (data.metadata ?? {}) as Record<string, unknown>;
+          const sourceId = typeof meta.fromAccountId === "string" ? meta.fromAccountId : "";
+          const destinationId = typeof meta.toAccountId === "string" ? meta.toAccountId : "";
+          const ref = String(data.referenceId ?? d.id);
+          const linked = docBySource.get(ref);
+          return {
+            id: d.id,
+            amount: Number(data.amount ?? 0),
+            currency: String(data.currency ?? "XOF"),
+            referenceId: ref,
+            performedAt: data.performedAt ?? data.createdAt ?? null,
+            sourceLabel: sourceId ? accountById.get(sourceId)?.accountName ?? sourceId : "Wallet mobile",
+            destinationLabel: destinationId ? accountById.get(destinationId)?.accountName ?? destinationId : "Banque",
+            documentId: linked?.id ?? null,
+            documentNumber: linked?.number ?? null,
+            documentStatus: linked?.status ?? null,
+          };
+        })
+        .sort((a, b) => toMillis(b.performedAt) - toMillis(a.performedAt));
+
+      setTransfers(transferRows);
     } catch (error) {
-      console.error('Erreur lors de la validation:', error);
-      toast.error('Erreur', {
-        description: 'Impossible de confirmer la réservation',
-      });
+      console.error("[DigitalCash] refreshSecondary", error);
+      toast.error("Chargement soldes / transferts / historique impossible.");
     } finally {
-      setProcessingId(null);
+      setLoadingSecondary(false);
+      setRefreshing(false);
     }
-  };
+  }, [accountById, companyId]);
 
-  const handleRefuse = async (reservation: Reservation) => {
-    if (!user?.companyId || !reservation.agencyId || !reservation.id) {
-      toast.error('Erreur', { description: 'Informations manquantes' });
-      return;
-    }
-    
-    setProcessingId(reservation.id);
-    try {
-      const reservationRef = doc(
-        db,
-        'companies',
-        user.companyId,
-        'agences',
-        reservation.agencyId,
-        'reservations',
-        reservation.id
-      );
-      const snap = await getDoc(reservationRef);
-      if (!snap.exists()) {
-        toast.error('Erreur', { description: 'Réservation introuvable' });
-        return;
-      }
-      const data = snap.data() as any;
-      const lifecycle = String(data?.status ?? '');
-      const legacy = (data?.statut ?? '').toString().toLowerCase();
-      const canRefuse =
-        (lifecycle === 'payé' && !data?.ticketValidatedAt) || legacy === 'preuve_recue';
-      if (!canRefuse) {
-        toast.error('Erreur', { description: 'Cette réservation ne peut plus être refusée' });
-        return;
-      }
-      await updateDoc(reservationRef, {
-        status: 'annulé',
-        refusedBy: user.uid ?? '',
-        refusedAt: serverTimestamp(),
-        refusalReason: 'Refus opérateur digital',
-        "payment.status": "rejected",
-        "payment.rejectedAt": serverTimestamp(),
-        "payment.rejectedBy": user.uid ?? "",
-        updatedAt: serverTimestamp(),
-      });
-
-      const tripInstanceId = data.tripInstanceId ?? null;
-      const seats = (data.seatsGo ?? 0) + (data.seatsReturn ?? 0);
-      if (tripInstanceId && seats > 0) {
-        decrementReservedSeats(user.companyId, tripInstanceId, seats, {
-          originStopOrder: data?.originStopOrder as number | null | undefined,
-          destinationStopOrder: data?.destinationStopOrder as number | null | undefined,
-          depart: String(data?.depart ?? ""),
-          arrivee: String(data?.arrivee ?? ""),
-        }).catch((err) => {
-          console.error('[ReservationsEnLigne] decrementReservedSeats on refuse:', err);
-        });
-      }
-
-      // Ajouter à l'historique UI (refus) pour éviter toute perte d'information.
-      const refusedRow: Reservation = {
-        ...reservation,
-        ...data,
-        id: reservation.id,
-        agencyId: reservation.agencyId,
-        companyId: reservation.companyId ?? user.companyId,
-        statut: 'refuse',
-        clientNom: data?.nomClient ?? data?.clientNom ?? reservation.clientNom,
-        telephone: data?.telephone ?? reservation.telephone,
-        depart: data?.depart ?? reservation.depart,
-        arrivee: data?.arrivee ?? reservation.arrivee,
-        date: data?.date ?? reservation.date,
-        montant: Number(data?.montant ?? reservation.montant ?? 0),
-      };
-      setRecentlyRefusedReservations((prev) => [refusedRow, ...prev]);
-      
-      // Retirer de la liste des réservations à vérifier
-      setVerificationReservations(prev => 
-        prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
-      );
-
-      // Afficher l'historique tout de suite
-      setFilterTab('history');
-      
-      // Réinitialiser la notification pour cette réservation
-      resetNotification(`${reservation.agencyId}_${reservation.id}`);
-      
-      // UI simplifiée : on ne recharge plus l'historique (seule la liste "preuve_recue" est affichée)
-      
-      toast.info('Réservation refusée', {
-        description: `La réservation de ${reservation.clientNom} a été refusée`,
-      });
-    } catch (error) {
-      console.error('Erreur lors du refus:', error);
-      toast.error('Erreur', {
-        description: 'Impossible de refuser la réservation',
-      });
-    } finally {
-      setProcessingId(null);
-    }
-  };
-
-  const handleDelete = async (reservation: Reservation) => {
-    if (!user?.companyId || !reservation.agencyId || !reservation.id) {
-      toast.error('Erreur', { description: 'Informations manquantes' });
-      return;
-    }
-    
-    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette réservation ?')) {
-      return;
-    }
-    
-    setProcessingId(reservation.id);
-    try {
-      await deleteDoc(
-        doc(
-          db,
-          'companies',
-          user.companyId,
-          'agences',
-          reservation.agencyId,
-          'reservations',
-          reservation.id
-        )
-      );
-      
-      // Retirer des listes locales
-      if (reservation.statut === 'verification') {
-        setVerificationReservations(prev => 
-          prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
-        );
-        resetNotification(`${reservation.agencyId}_${reservation.id}`);
-      } else {
-        setOtherReservations(prev => 
-          prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
-        );
-      }
-      
-      toast.success('Réservation supprimée', {
-        description: 'La réservation a été supprimée avec succès',
-      });
-    } catch (error) {
-      console.error('Erreur lors de la suppression:', error);
-      toast.error('Erreur', {
-        description: 'Impossible de supprimer la réservation',
-      });
-    } finally {
-      setProcessingId(null);
-    }
-  };
-
-  const handleViewDetails = (reservation: Reservation) => {
-    if (!reservation.companySlug || !reservation.id) {
-      toast.error('Erreur', { description: 'Impossible d\'afficher les détails' });
-      return;
-    }
-    
-    navigate(`/${reservation.companySlug}/reservation/${reservation.id}`, {
-      state: { 
-        companyId: user?.companyId,
-        agencyId: reservation.agencyId,
-        companyInfo: { id: user?.companyId }
-      }
-    });
-  };
+  useEffect(() => {
+    void refreshSecondary();
+  }, [refreshSecondary]);
 
   const handleRefresh = () => {
     setRefreshing(true);
-    loadOtherReservations(otherPage);
-    setTimeout(() => setRefreshing(false), 1000);
+    void refreshSecondary();
   };
 
-  const loadMoreReservations = () => {
-    loadOtherReservations(otherPage + 1);
-  };
+  const toggleCard = (id: string) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
 
-  /* ================= TOP AGENCES ================= */
-  const topAgencies = useMemo(() => {
-    const periodFiltered = filterReservationsByPeriod(allReservations, filterPeriod);
-    const agencyStats: Record<string, { count: number, amount: number }> = {};
-    
-    periodFiltered.forEach(r => {
-      if (r.agencyId && agencies[r.agencyId]) {
-        if (!agencyStats[r.agencyId]) {
-          agencyStats[r.agencyId] = { count: 0, amount: 0 };
-        }
-        agencyStats[r.agencyId].count++;
-        agencyStats[r.agencyId].amount += r.montant || 0;
+  const handleValidate = async (row: ReservationRow) => {
+    if (!companyId || !row.agencyId || !row.id || !user?.uid) return;
+    setProcessingId(row.id);
+    try {
+      const reservationRef = doc(db, "companies", companyId, "agences", row.agencyId, "reservations", row.id);
+      const snap = await getDoc(reservationRef);
+      if (!snap.exists()) {
+        toast.error("Réservation introuvable.");
+        return;
       }
-    });
-    
-    return Object.entries(agencyStats)
-      .map(([id, stats]) => ({
-        id,
-        name: agencies[id]?.name || 'Agence inconnue',
-        ville: agencies[id]?.ville || '',
-        count: stats.count,
-        amount: stats.amount
-      }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-  }, [allReservations, agencies, filterPeriod]);
-
-  /* ================= FORMATTERS ================= */
-  const fmtMoney = (n: number) => money(n);
-  const fmtDate = (date?: string | Date | Timestamp | null) => {
-    if (!date) return 'N/A';
-    
-    let jsDate: Date;
-    if (date instanceof Timestamp) {
-      jsDate = date.toDate();
-    } else if (typeof date === 'string') {
-      jsDate = new Date(date);
-    } else if (date instanceof Date) {
-      jsDate = date;
-    } else {
-      return 'N/A';
+      const data = snap.data() as Record<string, unknown>;
+      const ensured = await ensurePendingOnlinePaymentFromReservation({
+        companyId,
+        agencyId: row.agencyId,
+        reservationId: row.id,
+        montant: Number(data.montant ?? row.montant ?? 0),
+        paymentMethodLabel: String(
+          row.canonical?.raw.legacyWalletProvider ??
+            row.canonical?.payment.walletProvider ??
+            data.preuveVia ??
+            data.paymentMethod ??
+            data.paiement ??
+            row.paymentMethodLabel ??
+            ""
+        ),
+      });
+      if (!ensured.ok) {
+        toast.error(ensured.error ?? "Préparation paiement impossible.");
+        return;
+      }
+      const payment = await getPaymentByReservationId(companyId, row.id);
+      if (!payment || payment.status !== "pending") {
+        toast.error("Aucun paiement pending pour cette réservation.");
+        return;
+      }
+      await validatePendingOnlinePaymentAndSyncReservation(payment, companyId, { uid: user.uid, role: user.role ?? null });
+      setPendingReservations((prev) => prev.filter((r) => !(r.id === row.id && r.agencyId === row.agencyId)));
+      toast.success("Paiement validé.");
+      void refreshSecondary();
+    } catch (error) {
+      console.error("[DigitalCash] handleValidate", error);
+      toast.error("Validation impossible.");
+    } finally {
+      setProcessingId(null);
     }
-    
-    return jsDate.toLocaleDateString('fr-FR', {
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
   };
 
-  const getProofUrl = (reservation: Reservation) => {
-    return reservation.preuveUrl ??
-           reservation.paymentProofUrl ??
-           reservation.paiementPreuveUrl ??
-           reservation.proofUrl ??
-           reservation.receiptUrl;
+  const handleReject = async (row: ReservationRow) => {
+    if (!companyId || !row.agencyId || !row.id || !user?.uid) return;
+    setProcessingId(row.id);
+    try {
+      const ensured = await ensurePendingOnlinePaymentFromReservation({
+        companyId,
+        agencyId: row.agencyId,
+        reservationId: row.id,
+        montant: Number(row.montant ?? 0),
+        paymentMethodLabel: String(
+          row.canonical?.raw.legacyWalletProvider ??
+            row.canonical?.payment.walletProvider ??
+            row.paymentMethodLabel ??
+            ""
+        ),
+      });
+      if (!ensured.ok) {
+        toast.error(ensured.error ?? "Préparation rejet impossible.");
+        return;
+      }
+      const payment = await getPaymentByReservationId(companyId, row.id);
+      if (!payment || payment.status !== "pending") {
+        toast.error("Ce paiement n'est plus pending.");
+        return;
+      }
+      await rejectPendingOnlinePaymentAndSyncReservation(payment, companyId, { uid: user.uid, role: user.role ?? null }, "À revoir opérateur digital");
+      setPendingReservations((prev) => prev.filter((r) => !(r.id === row.id && r.agencyId === row.agencyId)));
+      toast.success("Paiement rejeté / à revoir.");
+      void refreshSecondary();
+    } catch (error) {
+      console.error("[DigitalCash] handleReject", error);
+      toast.error("Rejet impossible.");
+    } finally {
+      setProcessingId(null);
+    }
   };
 
-  const isImageProofUrl = (url?: string | null) => {
-    if (!url) return false;
-    const s = url.toLowerCase();
-    if (s.startsWith("data:image/")) return true;
-    return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/.test(s);
-  };
-
-  const getCardKey = (r: Reservation) => `${r.agencyId}_${r.id ?? ""}`;
-
-  const handleCopyBilletLink = async (reservation: Reservation) => {
-    const billetUrl = getBilletUrl(reservation, (company as any)?.slug);
-    if (!billetUrl) {
-      toast.error("Billet indisponible");
+  const handleCopyBillet = async (row: ReservationRow) => {
+    const url = billetUrl(row, company?.slug);
+    if (!url) {
+      toast.error("Lien billet indisponible.");
       return;
     }
     try {
-      await navigator.clipboard.writeText(billetUrl);
-      toast.success("Lien copié");
+      await navigator.clipboard.writeText(url);
+      toast.success("Lien billet copié.");
     } catch {
-      toast.error("Erreur", { description: "Impossible de copier le lien." });
+      toast.error("Impossible de copier le lien billet.");
     }
   };
 
-  const handleOpenWhatsApp = (reservation: Reservation) => {
-    const phone = toWhatsAppPhone(
-      reservation.telephone || (reservation as any).telephoneOriginal || ""
-    );
+  const handleWhatsapp = (row: ReservationRow) => {
+    const phone = whatsappPhone(String(row.telephone ?? ""));
     if (!phone) {
-      toast.error("Téléphone manquant", { description: "Impossible d'ouvrir WhatsApp." });
+      toast.error("Téléphone client manquant.");
       return;
     }
-    const companyName =
-      (company as any)?.name || (company as any)?.nom || (company as any)?.brandName || "Compagnie";
-    const billetUrl = getBilletUrl(reservation, (company as any)?.slug);
-    if (!billetUrl) {
-      toast.error("Billet indisponible", { description: "Impossible de générer le lien WhatsApp." });
-      return;
-    }
-
-    const message = getBilletConfirmationMessage(reservation, billetUrl, companyName);
-    const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-    window.open(waUrl, "_blank", "noopener,noreferrer");
+    const url = billetUrl(row, company?.slug);
+    const msg = [
+      `Bonjour ${row.clientNom ?? ""},`,
+      `Votre réservation ${row.referenceCode ?? ""} est suivie par l'opérateur digital.`,
+      `Trajet: ${row.depart ?? "—"} -> ${row.arrivee ?? "—"}`,
+      url ? `Billet: ${url}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
   };
 
-  /* Chargement "sur demande" des autres statuts */
-  useEffect(() => {
-    if (!user?.companyId) return;
-    if (filterTab !== "pending" && otherReservations.length === 0) {
-      if (!requestedOtherReservations) {
-        setRequestedOtherReservations(true);
-        loadOtherReservations(1);
+  const handleSubmitTransfer = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!companyId || !user?.uid) return;
+    if (!sourceWalletId || !destinationBankId) {
+      toast.error("Sélectionnez wallet source et banque destination.");
+      return;
+    }
+    const amount = Number(transferAmount.replace(",", "."));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Montant transféré invalide.");
+      return;
+    }
+
+    const source = accountById.get(sourceWalletId);
+    const destination = accountById.get(destinationBankId);
+    const operationRef = transferReference.trim() || newId();
+    const actorName = String(user.displayName ?? user.email ?? user.uid).trim() || user.uid;
+    const actorRole = Array.isArray(user.role)
+      ? String(user.role[0] ?? "").trim() || "operator_digital"
+      : String(user.role ?? "").trim() || "operator_digital";
+
+    setSubmittingTransfer(true);
+    try {
+      await mobileToBankTransfer({
+        companyId,
+        mobileMoneyAccountId: sourceWalletId,
+        companyBankAccountId: destinationBankId,
+        amount,
+        currency: source?.currency ?? "XOF",
+        performedBy: user.uid,
+        performedByRole: actorRole,
+        idempotencyKey: operationRef,
+        description: transferObservation.trim() || "Transfert mobile money vers banque",
+      });
+
+      const docResult = await upsertBankDepositDocument({
+        companyId,
+        sourceId: operationRef,
+        agencyId: source?.agencyId ?? null,
+        compteSourceLibelle: source?.accountName ?? sourceWalletId,
+        banqueNom: destination?.accountName ?? destinationBankId,
+        agenceBancaireNom: bankAgencyName.trim() || null,
+        referenceDepotBancaire: operationRef,
+        montantVerse: amount,
+        devise: source?.currency ?? "XOF",
+        natureFonds: "mobile_money",
+        motifVersement: transferObservation.trim() || "Transfert mobile money vers banque",
+        initiateur: { uid: user.uid, name: actorName, role: actorRole, phone: user.phone ?? null },
+        executant: { uid: user.uid, name: actorName, role: actorRole, phone: user.phone ?? null },
+        commentaire: transferObservation.trim() || null,
+        preuveJointeDisponible: manualPiece,
+        nombrePiecesJointes: manualPiece ? 1 : 0,
+        dateCreation: new Date(),
+        dateExecution: new Date(`${transferDate}T08:00:00`),
+        status: "ready_to_print",
+        createdByUid: user.uid,
+      });
+
+      setLastDocument({ id: docResult.id, number: docResult.documentNumber, status: docResult.status });
+      setTransferAmount("");
+      setTransferReference("");
+      setBankAgencyName("");
+      setTransferObservation("");
+      setManualPiece(false);
+
+      toast.success("Transfert mobile money vers banque enregistré.");
+      void refreshSecondary();
+    } catch (error) {
+      console.error("[DigitalCash] handleSubmitTransfer", error);
+      toast.error(error instanceof Error ? error.message : "Transfert impossible.");
+    } finally {
+      setSubmittingTransfer(false);
+    }
+  };
+
+  const filteredPending = useMemo(() => {
+    const term = normalize(search);
+    return pendingReservations.filter((r) => {
+      const p = getPaymentInfo(r);
+      if (agencyFilter && r.agencyId !== agencyFilter) return false;
+      if (providerFilter !== "all" && p.provider !== providerFilter) return false;
+      if (!inDateFilter(r.createdAt, dateFilter)) return false;
+      const isReview =
+        p.validationLevel === "suspicious" ||
+        p.status === "rejected" ||
+        p.digitalValidationStatus === "rejected";
+      if (statusFilter === "review" && !isReview) return false;
+      if (statusFilter === "pending" && isReview) return false;
+      if (term) {
+        const searchable = normalize(`${r.clientNom ?? ""} ${r.telephone ?? ""} ${r.referenceCode ?? ""} ${r.depart ?? ""} ${r.arrivee ?? ""} ${p.txRef ?? ""}`);
+        if (!searchable.includes(term)) return false;
       }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterTab, user?.companyId, otherReservations.length, requestedOtherReservations]);
-
-  /* ================= RENDU ================= */
-  const pendingReservations = verificationReservations;
-
-  const historyReservations = useMemo(() => {
-    const merged: Reservation[] = [
-      ...recentlyValidatedReservations,
-      ...recentlyRefusedReservations,
-      ...otherReservations.filter((r) => r.statut === "confirme" || r.statut === "refuse"),
-    ];
-
-    // Dedup par clé
-    const map = new Map<string, Reservation>();
-    merged.forEach((r) => {
-      const key = `${r.agencyId}_${r.id}`;
-      map.set(key, r);
+      return true;
     });
-    return Array.from(map.values()).sort((a, b) => {
-      const ta =
-        a.createdAt instanceof Timestamp ? a.createdAt.toMillis() : new Date(a.createdAt as any).getTime();
-      const tb =
-        b.createdAt instanceof Timestamp ? b.createdAt.toMillis() : new Date(b.createdAt as any).getTime();
-      return tb - ta;
+  }, [agencyFilter, dateFilter, pendingReservations, providerFilter, search, statusFilter]);
+
+  const reviewRows = useMemo(
+    () => payments.filter((p) => normalize(p.status) === "rejected").filter((p) => (!agencyFilter ? true : p.agencyId === agencyFilter)),
+    [agencyFilter, payments]
+  );
+
+  const transferRows = useMemo(() => {
+    return transfers.filter((t) => {
+      if (!inDateFilter(t.performedAt, historyDateFilter)) return false;
+      const confirmed = t.documentStatus === "signed" || t.documentStatus === "archived";
+      if (transferFilter === "confirmed" && !confirmed) return false;
+      if (transferFilter === "non_confirmed" && confirmed) return false;
+      const term = normalize(historySearch);
+      if (!term) return true;
+      return normalize(`${t.referenceId} ${t.sourceLabel} ${t.destinationLabel} ${t.documentNumber ?? ""}`).includes(term);
     });
-  }, [recentlyValidatedReservations, recentlyRefusedReservations, otherReservations]);
+  }, [historyDateFilter, historySearch, transferFilter, transfers]);
 
-  const visibleReservations = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
+  const summary = useMemo(() => {
+    const validated = payments.filter((p) => normalize(p.status) === "validated");
+    const validatedToday = validated.filter((p) => isToday(p.validatedAt || p.createdAt));
+    const validatedMonth = validated.filter((p) => inCurrentMonth(p.validatedAt || p.createdAt));
+    const walletsTotal = walletAccounts.reduce((sum, w) => sum + Number(w.currentBalance ?? 0), 0);
 
-    let list: Reservation[] = [];
-    if (filterTab === "pending") {
-      list = pendingReservations;
-    } else if (filterTab === "history") {
-      list = historyReservations;
-    } else if (filterTab === "today") {
-      list = filterReservationsByPeriod(
-        [...pendingReservations, ...historyReservations],
-        "today"
-      );
-    } else {
-      // all
-      list = [...pendingReservations, ...historyReservations];
-    }
+    const byProvider: Record<Provider, number> = { all: 0, orange: 0, moov: 0, wave: 0, sarali: 0, other: 0 };
+    walletAccounts.forEach((w) => {
+      const provider = providerFrom(w.accountName || w.id);
+      byProvider[provider] += Number(w.currentBalance ?? 0);
+      byProvider.all += Number(w.currentBalance ?? 0);
+    });
 
-    if (filterAgencyId) list = list.filter((r) => r.agencyId === filterAgencyId);
+    const unconfirmedTransfers = transfers.filter((t) => !(t.documentStatus === "signed" || t.documentStatus === "archived"));
 
-    if (filterTab === "pending") {
-      list = [...list].sort((a, b) => {
-        const pa = getPriorityRank(a);
-        const pb = getPriorityRank(b);
-        if (pa !== pb) return pa - pb;
-        const ta = a.createdAt instanceof Timestamp ? a.createdAt.toMillis() : new Date(a.createdAt as any).getTime();
-        const tb = b.createdAt instanceof Timestamp ? b.createdAt.toMillis() : new Date(b.createdAt as any).getTime();
-        return tb - ta;
+    return {
+      pendingCount: pendingReservations.length,
+      rejectedCount: reviewRows.length,
+      validatedTodayCount: validatedToday.length,
+      validatedTodayAmount: validatedToday.reduce((sum, p) => sum + p.amount, 0),
+      validatedMonthAmount: validatedMonth.reduce((sum, p) => sum + p.amount, 0),
+      walletsTotal,
+      byProvider,
+      unconfirmedTransfers: unconfirmedTransfers.length,
+    };
+  }, [payments, pendingReservations.length, reviewRows.length, transfers, walletAccounts]);
+
+  const historyRows = useMemo(() => {
+    const items: Array<{
+      id: string;
+      type: "validation" | "rejet" | "transfert";
+      amount: number;
+      currency: string;
+      date: unknown;
+      title: string;
+      subtitle: string;
+      status: string;
+      ref: string;
+    }> = [];
+
+    payments.forEach((p) => {
+      const st = normalize(p.status);
+      if (st !== "validated" && st !== "rejected") return;
+      items.push({
+        id: `pay_${p.id}`,
+        type: st === "validated" ? "validation" : "rejet",
+        amount: p.amount,
+        currency: p.currency,
+        date: p.validatedAt || p.createdAt,
+        title: st === "validated" ? "Validation mobile money" : "Rejet / à revoir",
+        subtitle: `Réservation ${p.reservationId || "—"}`,
+        status: st === "validated" ? `Ledger ${p.ledgerStatus}` : p.rejectionReason || "Rejet opérateur",
+        ref: p.id,
       });
-    }
-
-    if (!term) return list;
-
-    return list.filter((r) => {
-      const proofText =
-        (r as ReservationWithProof).paymentReference || r.preuveMessage || "";
-      const info = getPaymentInfo(r);
-      const searchable = [
-        r.clientNom || "",
-        r.telephone || "",
-        r.referenceCode || "",
-        proofText,
-        String(info.parsedTransactionId ?? ""),
-        String(info.parsedAmount ?? ""),
-        r.depart || "",
-        r.arrivee || "",
-      ]
-        .join(" ")
-        .toLowerCase();
-      return searchable.includes(term);
     });
-  }, [
-    filterTab,
-    pendingReservations,
-    historyReservations,
-    filterAgencyId,
-    searchTerm,
-  ]);
 
-  const waitingCount = useMemo(() => {
-    let list = pendingReservations;
-    if (filterAgencyId) list = list.filter((r) => r.agencyId === filterAgencyId);
-
-    const term = searchTerm.trim().toLowerCase();
-    if (term) {
-      list = list.filter((r) => {
-        const searchable = [
-          r.clientNom || "",
-          r.telephone || "",
-          r.referenceCode || "",
-          (r as ReservationWithProof).paymentReference || r.preuveMessage || "",
-        ]
-          .join(" ")
-          .toLowerCase();
-        return searchable.includes(term);
+    transfers.forEach((t) => {
+      items.push({
+        id: `tr_${t.id}`,
+        type: "transfert",
+        amount: t.amount,
+        currency: t.currency,
+        date: t.performedAt,
+        title: "Transfert wallet vers banque",
+        subtitle: `${t.sourceLabel} -> ${t.destinationLabel}`,
+        status: t.documentStatus ? `Document ${t.documentStatus}` : "Document à contrôler",
+        ref: t.referenceId,
       });
-    }
+    });
 
-    return list.length;
-  }, [pendingReservations, filterAgencyId, searchTerm]);
+    const term = normalize(historySearch);
+    return items
+      .filter((it) => (historyType === "all" ? true : it.type === historyType))
+      .filter((it) => inDateFilter(it.date, historyDateFilter))
+      .filter((it) => (term ? normalize(`${it.title} ${it.subtitle} ${it.status} ${it.ref}`).includes(term) : true))
+      .sort((a, b) => toMillis(b.date) - toMillis(a.date));
+  }, [historyDateFilter, historySearch, historyType, payments, transfers]);
 
-  if (true) {
-    const companyName =
-      (company as any)?.nom || (company as any)?.name || (company as any)?.brandName || "Compagnie";
-    const logoUrl = (company as any)?.logoUrl || (company as any)?.logo;
-    const displayName = user?.displayName || user?.email || "Utilisateur";
-    const role = user?.role ? String(user.role) : "operator_digital";
-    const roleLabel =
-      role === "operator_digital"
-        ? "Opérateur digital"
-        : role.replace(/_/g, " ");
+  const roleTokens = useMemo(() => {
+    if (Array.isArray(user?.role)) return user.role.map((r) => normalize(r)).filter(Boolean);
+    return String(user?.role ?? "")
+      .split(",")
+      .map((r) => normalize(r))
+      .filter(Boolean);
+  }, [user?.role]);
 
-    return (
-      <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white">
-        <header
-          className="w-full flex items-center justify-between gap-2 px-2 py-2 flex-nowrap"
-          style={{ backgroundColor: (theme as any)?.primary ?? "#FF6600" }}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            {logoUrl ? (
-              <img
-                src={logoUrl}
-                alt={companyName}
-                className="w-7 h-7 rounded-full object-cover bg-white/20 border border-white/20"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).style.display = "none";
-                }}
-              />
+  const canOpenPrint = useMemo(
+    () => roleTokens.some((r) => ["admin_compagnie", "admin_platforme", "company_accountant", "financial_director"].includes(r)),
+    [roleTokens]
+  );
+
+  if (!companyId) return <div className="p-4 text-sm text-gray-600">Compagnie introuvable.</div>;
+
+  const companyName = company?.nom || company?.name || company?.brandName || "Compagnie";
+  const logo = company?.logoUrl || company?.logo || "";
+  const userLabel = user?.displayName || user?.email || "Utilisateur";
+  const roleLabel = roleTokens.includes("operator_digital") ? "Opérateur digital" : String(user?.role ?? "");
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-white">
+      <header className="sticky top-0 z-20 border-b border-white/20" style={{ backgroundColor: theme.primary }}>
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            {logo ? (
+              <img src={logo} alt={companyName} className="h-8 w-8 rounded-full border border-white/30 object-cover" />
             ) : (
-              <div className="w-7 h-7 rounded-full bg-white/15 border border-white/20 flex items-center justify-center text-xs font-bold text-white shrink-0">
-                {(companyName || "C").slice(0, 1).toUpperCase()}
+              <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-white/20 text-xs font-bold text-white">
+                {companyName.slice(0, 1).toUpperCase()}
               </div>
             )}
             <div className="min-w-0">
-              <div className="text-sm font-bold text-white truncate whitespace-nowrap">
-                {companyName}
-              </div>
+              <div className="truncate text-sm font-bold text-white">{companyName}</div>
+              <div className="truncate text-[11px] text-white/80">{userLabel} • {roleLabel}</div>
             </div>
           </div>
-
-          <div className="flex items-center gap-2 flex-nowrap min-w-0">
-            <div className="min-w-0 text-right">
-              <div className="text-[11px] text-white/90 truncate whitespace-nowrap">
-                {displayName}
-              </div>
-              <div className="text-[10px] text-white/75 truncate whitespace-nowrap">
-                {roleLabel}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={toggleDarkMode}
-              className="h-8 w-8 rounded-lg bg-white/15 hover:bg-white/25 border border-white/20 transition text-white shrink-0 flex items-center justify-center"
-              aria-label="Mode sombre"
-              title="Mode sombre"
-            >
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={toggleDarkMode} className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/30 bg-white/15 text-white">
               {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
-
             <button
               type="button"
+              className="inline-flex h-8 items-center gap-2 rounded-lg border border-white/30 bg-white/15 px-3 text-xs font-semibold text-white"
               onClick={async () => {
                 try {
                   await logout();
                   navigate("/login");
-                } catch (e) {
-                  console.error(e);
+                } catch (error) {
+                  console.error("logout", error);
                 }
               }}
-              className="h-8 px-3 rounded-lg bg-white/15 hover:bg-white/25 border border-white/20 transition text-white shrink-0 text-xs font-medium whitespace-nowrap flex items-center gap-2"
-              aria-label="Déconnexion"
-              title="Déconnexion"
             >
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline">Déconnexion</span>
             </button>
           </div>
-        </header>
+        </div>
+      </header>
 
-        <div className="px-2 py-2 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 px-3 py-1 text-xs font-semibold text-amber-800 dark:text-amber-200 truncate">
-              🔥 {waitingCount} en attente
-            </span>
+      <main className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-3 py-3">
+        <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold">À traiter maintenant</div>
+            <Button size="sm" variant="secondary" onClick={handleRefresh} disabled={refreshing}>
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} /> Actualiser
+            </Button>
           </div>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <button type="button" onClick={() => setTab("to_process")} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left">
+              <div className="text-[11px] text-amber-700">Paiements en attente</div>
+              <div className="text-lg font-bold text-amber-800">{summary.pendingCount}</div>
+            </button>
+            <button type="button" onClick={() => setTab("to_process")} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left">
+              <div className="text-[11px] text-red-700">Rejetés / à revoir</div>
+              <div className="text-lg font-bold text-red-800">{summary.rejectedCount}</div>
+            </button>
+            <button type="button" onClick={() => setTab("transfers")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-left">
+              <div className="text-[11px] text-blue-700">Transferts non confirmés</div>
+              <div className="text-lg font-bold text-blue-800">{summary.unconfirmedTransfers}</div>
+            </button>
+            <button type="button" onClick={() => setTab("wallets")} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-left">
+              <div className="text-[11px] text-emerald-700">Validés aujourd'hui</div>
+              <div className="text-lg font-bold text-emerald-800">{summary.validatedTodayCount}</div>
+            </button>
+          </div>
+        </section>
 
-          {/* Barre filtre compacte */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 flex-nowrap">
-            <div className="relative flex-1 min-w-[140px]">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 dark:text-gray-400" />
-              <input
-                type="text"
-                className="w-full pl-10 pr-3 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-transparent"
-                placeholder="Rechercher..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+        <section className="rounded-xl border border-gray-200 bg-white p-2 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <button type="button" onClick={() => setTab("to_process")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "to_process" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><Clock3 className="mr-1 inline h-4 w-4" />À traiter</button>
+            <button type="button" onClick={() => setTab("wallets")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "wallets" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><Wallet className="mr-1 inline h-4 w-4" />Soldes mobile money</button>
+            <button type="button" onClick={() => setTab("transfers")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "transfers" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><Building2 className="mr-1 inline h-4 w-4" />Transferts vers banque</button>
+            <button type="button" onClick={() => setTab("history")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "history" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><History className="mr-1 inline h-4 w-4" />Historique</button>
+          </div>
+        </section>
+
+        {tab === "to_process" && (
+          <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-5">
+              <label className="relative md:col-span-2">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Rechercher client, téléphone, référence" className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
+              </label>
+              <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                <option value="">Toutes agences</option>
+                {Object.entries(agencies).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+              </select>
+              <div className="grid grid-cols-2 gap-2 md:col-span-2">
+                <select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value as Provider)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                  <option value="all">Tous opérateurs</option>
+                  <option value="orange">Orange</option>
+                  <option value="moov">Moov</option>
+                  <option value="wave">Wave</option>
+                  <option value="sarali">Sarali</option>
+                  <option value="other">Autres</option>
+                </select>
+                <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                  <option value="all">Toutes dates</option>
+                  <option value="today">Aujourd'hui</option>
+                  <option value="7d">7 jours</option>
+                  <option value="30d">30 jours</option>
+                </select>
+                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "pending" | "review")} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                  <option value="all">Tous statuts</option>
+                  <option value="pending">En attente</option>
+                  <option value="review">À revoir</option>
+                </select>
+              </div>
             </div>
 
-            <select
-              value={filterTab}
-              onChange={(e) => setFilterTab(e.target.value as "today" | "pending" | "history" | "all")}
-              className="h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white px-2 text-sm shrink-0"
-            >
-              <option value="all">Tout</option>
-              <option value="today">Aujourd'hui</option>
-              <option value="pending">En attente</option>
-              <option value="history">Historique</option>
-            </select>
-
-            <select
-              value={filterAgencyId}
-              onChange={(e) => setFilterAgencyId(e.target.value)}
-              className="h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white px-2 text-sm shrink-0"
-              disabled={Object.keys(agencies).length === 0}
-            >
-              <option value="">Agence</option>
-              {Object.entries(agencies).map(([agencyId, agency]) => (
-                <option key={agencyId} value={agencyId}>
-                  {agency.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Liste cartes compactes */}
-          <AnimatePresence mode="popLayout">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {visibleReservations.map((reservation) => {
-                const cardKey = `${reservation.agencyId}_${reservation.id}`;
-                const isExpanded = Boolean(expandedCardKeys[cardKey]);
-                const proofUrl = getProofUrl(reservation);
-                const proofText =
-                  (reservation as ReservationWithProof).paymentReference || reservation.preuveMessage || "";
-                const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
-                const statusConfig = getStatusConfig(reservation.statut);
-                const isProcessing = processingId === reservation.id;
-                const paymentInfo = getPaymentInfo(reservation);
-                const referenceCode =
-                  reservation.referenceCode ||
-                  (reservation as ReservationWithProof).paymentReference ||
-                  "";
-                const rawPaymentMethod =
-                  reservation.paymentMethodLabel ||
-                  (reservation as any).paymentMethod ||
-                  (reservation as any).paiement ||
-                  "";
-                const pm = String(rawPaymentMethod || "").toLowerCase();
-                const paymentMethodLabel =
-                  pm.includes("orange") || pm.includes("mobile_money")
-                    ? "Orange Money"
-                    : pm === "transfer" || pm.includes("virement")
-                      ? "Virement"
-                      : rawPaymentMethod
-                        ? String(rawPaymentMethod)
-                        : "—";
-
-                return (
-                  <motion.div
-                    key={cardKey}
-                    layout
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 8 }}
-                    transition={{ duration: 0.16 }}
-                    className="w-full"
-                  >
-                    <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden shadow-sm">
-                      {/* Header agence + badge */}
-                      <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-gray-900 dark:text-white truncate">
-                            {agencyInfo?.name || "—"}
-                          </div>
+            {loadingPending ? (
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement des paiements en attente...</div>
+            ) : filteredPending.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun paiement en attente pour ces filtres.</div>
+            ) : (
+              <div className="space-y-3">
+                {filteredPending.map((row) => {
+                  const cardId = `${row.agencyId}_${row.id ?? ""}`;
+                  const isOpen = Boolean(expanded[cardId]);
+                  const canonical = getCanonicalReservation(row);
+                  const p = getPaymentInfo(row);
+                  const proof = proofUrl(row);
+                  const isBusy = processingId === row.id;
+                  return (
+                    <article key={cardId} className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900">
+                      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold">{row.clientNom || "Client"}</div>
+                          <div className="text-xs text-gray-500">{agencies[row.agencyId] ?? row.agencyId} • {row.telephone || "—"}</div>
                         </div>
                         <div className="flex items-center gap-1">
-                          <StatusBadge status={statusConfig.statusVariant}>{statusConfig.label}</StatusBadge>
-                          {paymentInfo.paymentStatus === "auto_detected" && (
-                            <StatusBadge status="success">Paiement détecté</StatusBadge>
-                          )}
-                          {paymentInfo.paymentStatus === "declared_paid" && (
-                            <StatusBadge status="warning">Paiement déclaré</StatusBadge>
-                          )}
-                          {paymentInfo.paymentStatus === "rejected" && (
-                            <StatusBadge status="danger">Rejeté</StatusBadge>
-                          )}
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] ${providerBadge(p.provider)}`}>{providerLabel(p.provider)}</span>
+                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">{p.status === "pending" ? "En attente" : "À vérifier"}</span>
                         </div>
                       </div>
 
-                      <div className="px-2 pb-2 space-y-1">
-                        {/* Client + téléphone */}
-                        <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                          {reservation.clientNom || "—"} • {reservation.telephone || "N/A"}
-                        </div>
+                      <div className="grid grid-cols-1 gap-1 text-xs text-gray-700 dark:text-gray-200 sm:grid-cols-2">
+                        <div><span className="font-medium">Service:</span> {row.depart || "—"} {"→"} {row.arrivee || "—"}</div>
+                        <div><span className="font-medium">Montant attendu:</span> {formatCurrency(Number(row.montant ?? 0), "XOF")}</div>
+                        <div><span className="font-medium">Montant détecté:</span> {p.detectedAmount != null ? formatCurrency(p.detectedAmount, "XOF") : "—"}</div>
+                        <div><span className="font-medium">Référence transaction:</span> {p.txRef || "—"}</div>
+                        <div><span className="font-medium">Fiabilité:</span> {p.validationLevel === "valid" ? "Fiable" : p.validationLevel === "suspicious" ? "Suspect" : p.validationLevel === "invalid" ? "Invalide" : "Non définie"}</div>
+                        <div><span className="font-medium">Date / heure:</span> {formatDateTime(row.createdAt)}</div>
+                      </div>
 
-                        {/* Trajet */}
-                        <div className="text-xs text-gray-700 dark:text-gray-200 truncate">
-                          {reservation.depart || "—"} → {reservation.arrivee || "—"}
-                        </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        <Button size="sm" variant="secondary" onClick={() => toggleCard(cardId)}><Eye className="h-4 w-4" />Voir preuve</Button>
+                        <Button size="sm" variant="primary" disabled={isBusy} onClick={() => void handleValidate(row)}><CheckCircle2 className="h-4 w-4" />{isBusy ? "Validation..." : "Valider"}</Button>
+                        <Button size="sm" variant="danger" disabled={isBusy} onClick={() => void handleReject(row)}><XCircle className="h-4 w-4" />Rejeter / à revoir</Button>
+                        <Button size="sm" variant="secondary" onClick={() => void handleCopyBillet(row)}><Copy className="h-4 w-4" />Copier lien billet</Button>
+                        <Button size="sm" variant="secondary" onClick={() => handleWhatsapp(row)}><MessageCircle className="h-4 w-4" />Ouvrir WhatsApp</Button>
+                        <Button size="sm" variant="secondary" onClick={() => toggleCard(cardId)}>Détails</Button>
+                      </div>
 
-                        {/* Voir preuve */}
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="w-full justify-center h-8 px-3 text-sm gap-2 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                          onClick={() => toggleExpandedCard(cardKey)}
-                        >
-                          🧾 Voir preuve
-                        </Button>
-
-                        {/* Référence */}
-                        <div className="text-[11px] font-mono text-gray-600 dark:text-gray-300 truncate">
-                          Ref: {referenceCode || "—"}
-                        </div>
-
-                        {/* Montant + moyen paiement */}
-                        <div className="text-sm font-extrabold text-gray-900 dark:text-white truncate">
-                          {fmtMoney(reservation.montant || 0)} • {paymentMethodLabel}
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {paymentInfo.validationLevel === "valid" && (
-                            <StatusBadge status="success">Fiable</StatusBadge>
-                          )}
-                          {paymentInfo.validationLevel === "suspicious" && (
-                            <StatusBadge status="warning">À vérifier</StatusBadge>
-                          )}
-                          {paymentInfo.validationLevel === "invalid" && (
-                            <StatusBadge status="danger">Invalide</StatusBadge>
-                          )}
-                          <span className="text-[11px] text-gray-600 dark:text-gray-300">
-                            Montant détecté: {paymentInfo.parsedAmount != null ? fmtMoney(paymentInfo.parsedAmount) : "—"}
-                          </span>
-                          <span className="text-[11px] font-mono text-gray-600 dark:text-gray-300">
-                            Réf: {paymentInfo.parsedTransactionId || "—"}
-                          </span>
-                        </div>
-
-                        {/* Expanded preuve */}
-                        {isExpanded && (
-                          <div className="pt-1 border-t border-gray-200 dark:border-gray-700">
-                            {proofUrl && (
-                              <div className="pt-1">
-                                {isImageProofUrl(proofUrl) ? (
-                                  <img
-                                    src={proofUrl}
-                                    alt="Preuve de paiement"
-                                    className="w-full max-h-36 object-contain rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800"
-                                  />
-                                ) : (
-                                  <a
-                                    href={proofUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center justify-center w-full h-9 rounded-lg bg-[var(--btn-primary,#FF6600)] text-white font-medium hover:brightness-90"
-                                  >
-                                    Ouvrir preuve
-                                  </a>
-                                )}
-                              </div>
-                            )}
-
-                            {proofText && (
-                              <div className="text-xs text-gray-800 dark:text-gray-100 break-words mt-2">
-                                {proofText}
-                              </div>
-                            )}
-
-                            <div className="text-xs font-mono text-gray-600 dark:text-gray-300 mt-1 truncate">
-                              Ref: {referenceCode || "—"}
+                      {isOpen && (
+                        <div className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-950">
+                          {proof ? (
+                            isImage(proof) ? <img src={proof} alt="Preuve" className="max-h-64 w-full rounded-md border border-gray-200 object-contain dark:border-gray-700" /> : <a href={proof} target="_blank" rel="noopener noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white">Ouvrir la preuve</a>
+                          ) : <div className="text-xs text-gray-500">Aucune preuve jointe.</div>}
+                          {(canonical.onlinePayment?.proofMessage ?? row.preuveMessage) ? (
+                            <div className="rounded-md bg-gray-50 p-2 text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-200">
+                              {canonical.onlinePayment?.proofMessage ?? row.preuveMessage}
                             </div>
-
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
-                              {fmtDate(reservation.createdAt)}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Actions */}
-                      <div className="px-2 py-1.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50/30 dark:bg-gray-800/30">
-                        <div className="grid grid-cols-3 gap-2">
-                          {reservation.statut === "confirme" ? (
-                            <>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                className="w-full h-8 px-3 text-sm justify-center bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                                onClick={() => handleCopyBilletLink(reservation)}
-                              >
-                                Copier lien billet
-                              </Button>
-                              <Button
-                                variant="primary"
-                                size="sm"
-                                className="w-full h-8 px-3 text-sm justify-center"
-                                onClick={() => handleOpenWhatsApp(reservation)}
-                              >
-                                Ouvrir WhatsApp
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                className="w-full h-8 px-3 text-sm justify-center bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                                onClick={() => toggleExpandedCard(cardKey)}
-                              >
-                                Détails
-                              </Button>
-                            </>
-                          ) : reservation.statut === "refuse" ? (
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              className="col-span-3 w-full h-8 px-3 text-sm justify-center bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                              onClick={() => toggleExpandedCard(cardKey)}
-                            >
-                              Détails
-                            </Button>
-                          ) : (
-                            <>
-                              <Button
-                                variant="primary"
-                                size="sm"
-                                className="w-full h-8 px-3 text-sm justify-center"
-                                onClick={() => handleValidate(reservation)}
-                                disabled={isProcessing}
-                              >
-                                {isProcessing ? "Validation..." : "Valider"}
-                              </Button>
-                              <Button
-                                variant="danger"
-                                size="sm"
-                                className="w-full h-8 px-3 text-sm justify-center"
-                                onClick={() => handleRefuse(reservation)}
-                                disabled={isProcessing}
-                              >
-                                {isProcessing ? "..." : "Refuser"}
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                className="w-full h-8 px-3 text-sm justify-center bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                                onClick={() => toggleExpandedCard(cardKey)}
-                              >
-                                Détails
-                              </Button>
-                            </>
-                          )}
+                          ) : null}
                         </div>
-                      </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="mt-4">
+              <div className="mb-2 text-sm font-semibold">Paiements rejetés / à revoir ({reviewRows.length})</div>
+              {reviewRows.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-center text-xs text-gray-500">Aucun rejet récent.</div>
+              ) : (
+                <div className="space-y-2">
+                  {reviewRows.slice(0, 12).map((p) => (
+                    <div key={p.id} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                      <div className="font-semibold">Paiement #{p.id}</div>
+                      <div>Agence: {(agencies[p.agencyId] ?? p.agencyId) || "—"}</div>
+                      <div>Montant: {formatCurrency(p.amount, p.currency)} • {providerLabel(providerFrom(p.provider))}</div>
+                      <div>Motif: {p.rejectionReason || "À revoir opérateur digital"}</div>
                     </div>
-                  </motion.div>
-                );
-              })}
-              {visibleReservations.length === 0 && (
-                <div className="col-span-full text-center py-6 text-sm text-gray-600 dark:text-gray-300">
-                  Aucune réservation en attente.
+                  ))}
                 </div>
               )}
             </div>
-          </AnimatePresence>
-        </div>
-      </div>
-    );
-  }
+          </section>
+        )}
 
-  /* Legacy UI (supprimée du flux opérationnel) */
-  return (
-    <InternalLayout
-      sections={[
-        {
-          label: "Caisse digitale",
-          icon: CreditCard,
-          path: `/compagnie/${user?.companyId ?? ""}/digital-cash`,
-          end: true,
-        },
-      ]}
-      role="operator_digital"
-      userName={user?.displayName ?? undefined}
-      userEmail={user?.email ?? undefined}
-      brandName={(company as any)?.nom || (company as any)?.name || "Compagnie"}
-      logoUrl={(company as any)?.logoUrl || (company as any)?.logo}
-      primaryColor={(theme as any)?.primary ?? "#FF6600"}
-      secondaryColor={(theme as any)?.secondary ?? "#F97316"}
-      onLogout={async () => {
-        try {
-          await logout();
-          navigate("/login");
-        } catch (e) {
-          console.error(e);
-        }
-      }}
-    >
-      <StandardLayoutWrapper className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950 text-gray-900 dark:text-white">
-        <PageHeader title="Caisse digitale — Validation des paiements en ligne" />
-        <div className="space-y-6">
-          {/* ================= EN-TÊTE ================= */}
-          <SectionCard
-            title="Réservations à traiter"
-            help={<span className="text-sm font-normal text-gray-500 dark:text-gray-300">Validation des paiements en ligne et paiements</span>}
-        right={
-          <button
-            onClick={handleRefresh}
-                className="p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:text-white dark:hover:bg-gray-800 rounded-xl transition-colors"
-            title="Actualiser manuellement"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
-        }
-      >
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className={`h-3 w-3 rounded-full ${verificationReservations.length > 0 ? 'bg-amber-500 animate-pulse' : 'bg-gray-300'}`} />
-            <span className="text-sm text-gray-600">
-              {verificationReservations.length > 0
-                ? `${verificationReservations.length} en attente de validation`
-                : 'Tout est à jour'}
-            </span>
-          </div>
-          <span className="text-sm text-gray-400">• Mise à jour en temps réel</span>
-        </div>
-      </SectionCard>
+        {tab === "wallets" && (
+          <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            {loadingSecondary ? (
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement des soldes...</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Orange Money</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.orange, "XOF")}</div></div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Moov Money</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.moov, "XOF")}</div></div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Wave</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.wave, "XOF")}</div></div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Sarali</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.sarali, "XOF")}</div></div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Autres wallets</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.other, "XOF")}</div></div>
+                </div>
 
-      {/* ================= FILTRES RAPIDES ================= */}
-      <SectionCard title="Recherche et filtres">
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <div className="sm:col-span-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 dark:text-gray-400" />
-              <input
-                type="text"
-                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
-                style={{ outlineColor: theme.primary }}
-                placeholder="Rechercher par nom, téléphone ou référence..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-          </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><div className="text-xs text-emerald-700">Total mobile disponible</div><div className="text-lg font-bold text-emerald-800">{formatCurrency(summary.walletsTotal, "XOF")}</div></div>
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-3"><div className="text-xs text-blue-700">Validé aujourd'hui</div><div className="text-lg font-bold text-blue-800">{formatCurrency(summary.validatedTodayAmount, "XOF")}</div></div>
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3"><div className="text-xs text-indigo-700">Validé ce mois</div><div className="text-lg font-bold text-indigo-800">{formatCurrency(summary.validatedMonthAmount, "XOF")}</div></div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="text-xs text-amber-700">Non transféré vers banque</div><div className="text-lg font-bold text-amber-800">{formatCurrency(summary.walletsTotal, "XOF")}</div></div>
+                </div>
 
-          <div>
-            <select
-              value={filterPeriod}
-              onChange={(e) => setFilterPeriod(e.target.value as FilterOptions['period'])}
-              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
-              style={{ outlineColor: theme.primary }}
-            >
-              <option value="today">Aujourd'hui</option>
-              <option value="week">Semaine</option>
-              <option value="all">Tout</option>
-            </select>
-          </div>
-
-          <div>
-            <select
-              value={filterAgencyId}
-              onChange={(e) => setFilterAgencyId(e.target.value)}
-              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
-              style={{ outlineColor: theme.primary }}
-              disabled={Object.keys(agencies).length === 0}
-            >
-              <option value="">Toutes les agences</option>
-              {Object.entries(agencies).map(([agencyId, agency]) => (
-                <option key={agencyId} value={agencyId}>
-                  {agency.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* ================= STATISTIQUES (PLIABLE) ================= */}
-      {showStats && (
-        <>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-            <MetricCard label="En attente de validation" value={stats.verification.toString()} icon={AlertCircle} valueColorVar="#b45309" />
-            <MetricCard label="En attente" value={stats.enAttente.toString()} icon={Clock} valueColorVar="#1d4ed8" />
-            <MetricCard label="Confirmées" value={stats.confirme.toString()} icon={CheckCircle} valueColorVar="#047857" />
-            <MetricCard label="Refusées" value={stats.refuse.toString()} icon={XCircle} critical />
-            <MetricCard label="Annulées" value={stats.annule.toString()} icon={XCircle} />
-          </div>
-
-          {/* ================= PÉRIODE ACTIVE ================= */}
-          <SectionCard
-            title={`Période : ${filterPeriod === 'today' ? "Aujourd'hui" : filterPeriod === 'week' ? 'Semaine' : 'Tout'}`}
-            icon={Calendar}
-            right={<span className="text-sm text-gray-600">Total : {stats.total} réservations • {fmtMoney(stats.totalAmount)}</span>}
-          >
-            <div className="text-sm text-gray-500">Total : {stats.total} réservations • {fmtMoney(stats.totalAmount)}</div>
-          </SectionCard>
-
-          {/* ================= TOP AGENCES ================= */}
-          {topAgencies.length > 0 && (
-            <SectionCard title="Top 5 Agences" help={<span className="text-sm font-normal text-gray-500">Par nombre de réservations</span>}>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                {topAgencies.map((agency, index) => (
-                  <div key={agency.id} className="p-4 rounded-lg border border-gray-200 bg-gray-50/50">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="h-10 w-10 rounded-lg bg-gray-200 flex items-center justify-center">
-                        <div className="text-sm font-bold text-gray-700">#{index + 1}</div>
+                <div className="mt-3 rounded-lg border border-gray-200">
+                  <div className="border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-600">Soldes réels par wallet</div>
+                  <div className="divide-y divide-gray-100">
+                    {walletAccounts.map((w) => (
+                      <div key={w.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                        <div><div className="font-medium">{w.accountName || w.id}</div><div className="text-xs text-gray-500">{providerLabel(providerFrom(w.accountName || w.id))}</div></div>
+                        <div className="font-semibold">{formatCurrency(w.currentBalance, w.currency)}</div>
                       </div>
-                      <div className="min-w-0">
-                        <div className="font-medium text-gray-900 truncate">{agency.name}</div>
-                        <div className="text-xs text-gray-500 truncate">{agency.ville}</div>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-500">Réservations</span>
-                        <span className="font-bold text-gray-900">{agency.count}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-500">Montant</span>
-                        <span className="font-bold text-gray-900">{fmtMoney(agency.amount)}</span>
-                      </div>
-                    </div>
+                    ))}
+                    {walletAccounts.length === 0 && <div className="px-3 py-4 text-center text-xs text-gray-500">Aucun wallet mobile money trouvé.</div>}
                   </div>
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
+        {tab === "transfers" && (
+          <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <article className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+              <div className="mb-3 text-sm font-semibold">Nouveau transfert mobile money {"→"} banque</div>
+              <form onSubmit={handleSubmitTransfer} className="space-y-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Portefeuille source</label>
+                  <select value={sourceWalletId} onChange={(e) => setSourceWalletId(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                    <option value="">Sélectionner</option>
+                    {walletAccounts.map((w) => <option key={w.id} value={w.id}>{w.accountName || w.id} • {formatCurrency(w.currentBalance, w.currency)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Banque destination</label>
+                  <select value={destinationBankId} onChange={(e) => setDestinationBankId(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                    <option value="">Sélectionner</option>
+                    {bankAccounts.map((b) => {
+                      const bankName = b.id.startsWith("company_bank_") ? companyBanks[b.id.replace("company_bank_", "")] ?? b.accountName : b.accountName;
+                      return <option key={b.id} value={b.id}>{bankName || b.id}</option>;
+                    })}
+                  </select>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-600">Montant transféré</label>
+                    <input type="number" min={0} value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-600">Date du transfert</label>
+                    <input type="date" value={transferDate} onChange={(e) => setTransferDate(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Référence transfert / reçu</label>
+                  <input type="text" value={transferReference} onChange={(e) => setTransferReference(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Agence bancaire (optionnel)</label>
+                  <input type="text" value={bankAgencyName} onChange={(e) => setBankAgencyName(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Observation (optionnel)</label>
+                  <textarea value={transferObservation} onChange={(e) => setTransferObservation(e.target.value)} className="min-h-[70px] w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900" />
+                </div>
+                <label className="flex items-center gap-2 text-xs text-gray-600"><input type="checkbox" checked={manualPiece} onChange={(e) => setManualPiece(e.target.checked)} />Pièce manuelle / saisie après coup</label>
+                <Button type="submit" size="sm" variant="primary" disabled={submittingTransfer}>{submittingTransfer ? "Enregistrement..." : "Enregistrer le transfert"}</Button>
+              </form>
+
+              {lastDocument && (
+                <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                  <div className="font-semibold">Bordereau généré</div>
+                  <div>Numéro: {lastDocument.number}</div>
+                  <div>Statut: {lastDocument.status}</div>
+                  {canOpenPrint && <div className="mt-2"><Button size="sm" variant="secondary" onClick={() => navigate(`/compagnie/${companyId}/accounting/documents/${lastDocument.id}/print`)}>Voir / imprimer le bordereau</Button></div>}
+                </div>
+              )}
+            </article>
+
+            <article className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold">Transferts récents</div>
+                <select value={transferFilter} onChange={(e) => setTransferFilter(e.target.value as TransferStateFilter)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs dark:border-gray-700 dark:bg-gray-900">
+                  <option value="all">Tous</option>
+                  <option value="non_confirmed">Non confirmés</option>
+                  <option value="confirmed">Confirmés</option>
+                </select>
+              </div>
+
+              {loadingSecondary ? (
+                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement des transferts...</div>
+              ) : transferRows.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun transfert sur la période.</div>
+              ) : (
+                <div className="space-y-2">
+                  {transferRows.slice(0, 25).map((t) => {
+                    const confirmed = t.documentStatus === "signed" || t.documentStatus === "archived";
+                    return (
+                      <div key={t.id} className="rounded-lg border border-gray-200 bg-gray-50 p-2 text-xs">
+                        <div className="flex items-center justify-between gap-2"><div className="font-semibold">{formatCurrency(t.amount, t.currency)}</div><span className={`rounded-full px-2 py-0.5 text-[11px] ${confirmed ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{confirmed ? "Confirmé" : "Non confirmé"}</span></div>
+                        <div className="mt-1 text-gray-600">{t.sourceLabel} {"→"} {t.destinationLabel}</div>
+                        <div className="mt-1 text-gray-500">Référence: {t.referenceId}</div>
+                        <div className="text-gray-500">Date: {formatDateTime(t.performedAt)}</div>
+                        <div className="text-gray-500">Bordereau: {t.documentNumber ?? "non généré"}{t.documentStatus ? ` (${t.documentStatus})` : ""}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </article>
+          </section>
+        )}
+
+        {tab === "history" && (
+          <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
+              <label className="relative md:col-span-2"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" /><input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} placeholder="Recherche historique" className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-3 text-sm dark:border-gray-700 dark:bg-gray-900" /></label>
+              <select value={historyType} onChange={(e) => setHistoryType(e.target.value as HistoryType)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900"><option value="all">Tous types</option><option value="validation">Validations</option><option value="rejet">Rejets</option><option value="transfert">Transferts</option></select>
+              <select value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value as DateFilter)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900"><option value="today">Aujourd'hui</option><option value="7d">7 jours</option><option value="30d">30 jours</option><option value="all">Toute période</option></select>
+            </div>
+
+            {loadingSecondary ? (
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement de l'historique...</div>
+            ) : historyRows.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun élément historique.</div>
+            ) : (
+              <div className="space-y-2">
+                {historyRows.slice(0, 80).map((h) => (
+                  <article key={h.id} className="rounded-lg border border-gray-200 bg-gray-50 p-2 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2"><div className="font-semibold">{h.title}</div><div className="text-gray-500">{formatDateTime(h.date)}</div></div>
+                    <div className="mt-1 text-gray-700">{h.subtitle}</div>
+                    <div className="mt-1 text-gray-500">Référence: {h.ref}</div>
+                    <div className="mt-1 text-gray-500">Statut: {h.status}</div>
+                    <div className="mt-1 font-medium">{formatCurrency(h.amount, h.currency)}</div>
+                  </article>
                 ))}
               </div>
-            </SectionCard>
-          )}
-        </>
-      )}
+            )}
+          </section>
+        )}
 
-      {/* ================= LISTE DES RÉSERVATIONS À VÉRIFIER + VALIDÉES À L'INSTANT ================= */}
-      {((recentlyValidatedReservations.length > 0) || verificationReservations.length > 0) && (!filterStatus || filterStatus === 'verification') && (
-        <SectionCard
-          title="En attente de validation"
-          icon={AlertCircle}
-          right={
-            <span className="flex items-center gap-2">
-              {recentlyValidatedReservations.length > 0 && (
-                <StatusBadge status="success">{recentlyValidatedReservations.length} billet(s) validé(s)</StatusBadge>
-              )}
-              <StatusBadge status="warning">{verificationReservations.length} en attente de validation</StatusBadge>
-            </span>
-          }
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            <AnimatePresence mode="popLayout">
-            {[
-              ...recentlyValidatedReservations,
-              ...filterReservationsByPeriod(verificationReservations, filterPeriod).filter(
-                r => !recentlyValidatedReservations.some(v => v.id === r.id && v.agencyId === r.agencyId)
-              ),
-            ]
-              .filter(r =>
-                !searchTerm ||
-                [
-                  r.clientNom,
-                  r.telephone,
-                  r.referenceCode,
-                  (r as ReservationWithProof).paymentReference,
-                  r.preuveMessage
-                ]
-                  .join(' ')
-                  .toLowerCase()
-                  .includes(searchTerm.toLowerCase())
-              )
-              .map((reservation) => {
-                const isJustValidated = recentlyValidatedReservations.some(
-                  v => v.id === reservation.id && v.agencyId === reservation.agencyId
-                );
-                const billetUrl = getBilletUrl(reservation, (company as { slug?: string })?.slug);
-                const confirmationMessage = getBilletConfirmationMessage(
-                  reservation,
-                  billetUrl,
-                  (company as any)?.name || (company as any)?.nom || "Compagnie"
-                );
-                const phoneForWhatsApp = toWhatsAppPhone(reservation.telephone || '');
-                const whatsAppUrl = phoneForWhatsApp
-                  ? `https://wa.me/${phoneForWhatsApp}?text=${encodeURIComponent(confirmationMessage)}`
-                  : '';
-                const proofUrl = getProofUrl(reservation);
-                const proofText =
-                  (reservation as ReservationWithProof).paymentReference || reservation.preuveMessage;
-                const cardKey = `${reservation.agencyId}_${reservation.id}`;
-                const isExpanded = Boolean(expandedCardKeys[cardKey]);
-
-                if (isJustValidated) {
-                  return (
-                    <motion.div
-                      key={cardKey}
-                      layout
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 12 }}
-                      transition={{ duration: 0.18 }}
-                    >
-                      <div
-                        id={`reservation-${reservation.id}`}
-                        className="border border-green-200 rounded-xl overflow-hidden bg-white shadow-md dark:bg-gray-900"
-                      >
-                      {/* Bandeau vert : Billet validé */}
-                      <div className="flex items-center justify-center gap-2 py-3 px-4 bg-green-600 text-white">
-                        <CheckCircle className="h-5 w-5 shrink-0" aria-hidden />
-                        <span className="font-semibold">Billet validé</span>
-                        {reservation.referenceCode && (
-                          <span className="ml-auto text-xs font-mono text-green-100">#{reservation.referenceCode}</span>
-                        )}
-                      </div>
-                      <div className="p-3 space-y-2">
-                        {/* Client + téléphone (compact) */}
-                        <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 border border-gray-200 dark:border-gray-700">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="text-xs font-medium text-gray-500 dark:text-gray-300 truncate">Client</div>
-                              <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                                {reservation.clientNom || 'Sans nom'}
-                              </div>
-                              <div className="flex items-center gap-2 mt-1">
-                                <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                                <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
-                                  {reservation.telephone || 'Non renseigné'}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Montant + Trajet */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
-                            <span className="text-sm font-bold text-gray-900 dark:text-white">
-                              {fmtMoney(reservation.montant || 0)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
-                            <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
-                              {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Indicateur preuve + expand */}
-                        <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <FileText className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                            <span className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">Preuve</span>
-                            {proofText ? (
-                              <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{proofText}</span>
-                            ) : (
-                              <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
-                            )}
-                          </div>
-                          <Button
-                            variant="secondary"
-                            className="h-9 px-3 flex items-center justify-center gap-2 border-blue-200 dark:border-blue-300 text-blue-700 dark:text-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/30"
-                            onClick={() => toggleExpandedCard(cardKey)}
-                          >
-                            <FileText className="h-4 w-4" />
-                            {isExpanded ? 'Réduire' : 'Voir preuve'}
-                          </Button>
-                        </div>
-
-                        {/* Expanded: preuve complète + actions */}
-                        {isExpanded && (
-                          <div className="space-y-2">
-                            {proofUrl && (
-                              <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2">
-                                {isImageProofUrl(proofUrl) ? (
-                                  <img
-                                    src={proofUrl}
-                                    alt="Preuve de paiement"
-                                    className="w-full h-auto max-h-48 object-contain rounded-lg"
-                                  />
-                                ) : (
-                                  <a
-                                    href={proofUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85"
-                                  >
-                                    <FileText className="h-4 w-4" />
-                                    Ouvrir preuve
-                                  </a>
-                                )}
-                              </div>
-                            )}
-
-                            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3">
-                              <div className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-1">Message / Référence</div>
-                              <div className="text-sm text-gray-800 dark:text-gray-100 break-words">
-                                {proofText || '—'}
-                              </div>
-                            </div>
-
-                            {reservation.referenceCode && (
-                              <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
-                                Référence: #{reservation.referenceCode}
-                              </div>
-                            )}
-
-                            <div className="text-xs text-gray-400 dark:text-gray-400">
-                              Reçu le: {fmtDate(reservation.createdAt)}
-                            </div>
-
-                            {/* Actions "validé" conservées, mais déployées */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              <Button
-                                variant="primary"
-                                className="w-full flex items-center justify-center gap-2"
-                                onClick={() => billetUrl && window.open(billetUrl, '_blank')}
-                              >
-                                <Download className="h-4 w-4" />
-                                Télécharger PDF
-                              </Button>
-
-                              <Button
-                                variant="secondary"
-                                className="w-full flex items-center justify-center gap-2 border-green-300 dark:border-green-400 text-green-800 dark:text-green-200 hover:bg-green-50 dark:hover:bg-green-950/30"
-                                onClick={() => {
-                                  if (whatsAppUrl) {
-                                    window.open(whatsAppUrl, '_blank');
-                                    toast.success('WhatsApp ouvert avec le message prêt');
-                                  }
-                                }}
-                                disabled={!phoneForWhatsApp}
-                              >
-                                <MessageCircle className="h-4 w-4" />
-                                WhatsApp
-                              </Button>
-                            </div>
-
-                            <Button
-                              variant="secondary"
-                              className="w-full flex items-center justify-center gap-2"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(confirmationMessage);
-                                  toast.success('Message copié dans le presse-papiers');
-                                } catch {
-                                  toast.error('Erreur', { description: 'Impossible de copier le message dans le presse-papiers.' });
-                                }
-                              }}
-                            >
-                              <Copy className="h-4 w-4" />
-                              Copier message
-                            </Button>
-
-                            {/* Lien "Voir billet" (toujours disponible) */}
-                            <a
-                              href={billetUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85 disabled:pointer-events-none disabled:opacity-50"
-                            >
-                              <Eye className="h-4 w-4" />
-                              Voir billet
-                            </a>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Actions (compactes) */}
-                      <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                        <div className="grid grid-cols-2 gap-2">
-                          <a
-                            href={billetUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85 disabled:pointer-events-none disabled:opacity-50"
-                          >
-                            <Eye className="h-4 w-4" />
-                            Billet
-                          </a>
-                          <Button
-                            variant="secondary"
-                            className="w-full flex items-center justify-center gap-2"
-                            onClick={() => toggleExpandedCard(cardKey)}
-                          >
-                            <FileText className="h-4 w-4" />
-                            Détails
-                          </Button>
-                        </div>
-                      </div>
-                      </div>
-                    </motion.div>
-                  );
-                }
-
-                const statusConfig = getStatusConfig(reservation.statut);
-                const isProcessing = processingId === reservation.id;
-                const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
-
-                return (
-                  <motion.div
-                    key={cardKey}
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 12 }}
-                    transition={{ duration: 0.18 }}
-                  >
-                    <div
-                      id={`reservation-${reservation.id}`}
-                      className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-all duration-300 bg-white dark:bg-gray-900"
-                    >
-                    {/* Header avec agence */}
-                    <div className="p-4 border-b border-gray-200 bg-gray-50/50 dark:border-gray-700 dark:bg-gray-900/30">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="h-6 w-6 rounded-md bg-gray-200 dark:bg-gray-800 flex items-center justify-center">
-                            <Building2 className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-                          </div>
-                          <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {agencyInfo?.name || 'Agence inconnue'}
-                          </span>
-                        </div>
-                        <StatusBadge status="warning">À vérifier</StatusBadge>
-                      </div>
-                      
-                      {reservation.referenceCode && (
-                        <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
-                          #{reservation.referenceCode}
-                        </div>
-                      )}
-                    </div>
-                    
-                    {/* Détails compacts — mobile-first (focus preuve) */}
-                    <div className="p-3 space-y-2">
-                      {/* Agence: titre (badge) + statut déjà en header ; ici on affiche client/tél */}
-                      <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-xs font-medium text-gray-500 dark:text-gray-300 truncate">
-                              Client
-                            </div>
-                            <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                              {reservation.clientNom || 'Sans nom'}
-                            </div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                              <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
-                                {reservation.telephone || 'Non renseigné'}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Montant + Trajet */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
-                          <span className="text-sm font-bold text-gray-900 dark:text-white">
-                            {fmtMoney(reservation.montant || 0)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
-                          <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
-                            {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Indicateur preuve (toujours accessible rapidement) */}
-                      <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <FileText className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                          <span className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">
-                            Preuve
-                          </span>
-                          {proofText ? (
-                            <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{proofText}</span>
-                          ) : (
-                            <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
-                          )}
-                        </div>
-                        <Button
-                          variant="secondary"
-                          className="h-9 px-3 flex items-center justify-center gap-2 border-blue-200 text-blue-700 dark:border-blue-300 dark:text-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/30"
-                          onClick={() => toggleExpandedCard(cardKey)}
-                        >
-                          <FileText className="h-4 w-4" />
-                          {isExpanded ? 'Réduire' : 'Voir preuve'}
-                        </Button>
-                      </div>
-
-                      {/* Expanded: preview + message complet + référence + date */}
-                      {isExpanded && (
-                        <div className="space-y-2">
-                          {proofUrl && (
-                            <div className="rounded-xl border border-gray-200 bg-white dark:bg-gray-900 p-2">
-                              {isImageProofUrl(proofUrl) ? (
-                                <img
-                                  src={proofUrl}
-                                  alt="Preuve de paiement"
-                                  className="w-full h-auto max-h-48 object-contain rounded-lg"
-                                />
-                              ) : (
-                                <a
-                                  href={proofUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85"
-                                >
-                                  <FileText className="h-4 w-4" />
-                                  Ouvrir preuve
-                                </a>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="rounded-xl border border-gray-200 bg-gray-50 dark:bg-gray-800 p-3">
-                            <div className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-1">Message / Référence</div>
-                            <div className="text-sm text-gray-800 dark:text-gray-100 break-words">
-                              {proofText || '—'}
-                            </div>
-                          </div>
-
-                          {reservation.referenceCode && (
-                            <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
-                              Référence: #{reservation.referenceCode}
-                            </div>
-                          )}
-
-                          <div className="text-xs text-gray-400 dark:text-gray-400">
-                            Reçu le: {fmtDate(reservation.createdAt)}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Actions compactes (visibles) */}
-                    <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                      <div className="grid grid-cols-3 gap-2">
-                        <Button
-                          variant="primary"
-                          onClick={() => handleValidate(reservation)}
-                          disabled={isProcessing}
-                          className="flex items-center justify-center gap-2"
-                        >
-                          {isProcessing ? (
-                            <motion.div
-                              animate={{ rotate: 360 }}
-                              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                            >
-                              <RotateCw className="h-4 w-4" />
-                            </motion.div>
-                          ) : (
-                            <>
-                              <CheckCircle className="h-4 w-4" />
-                              Valider
-                            </>
-                          )}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => handleRefuse(reservation)}
-                          disabled={isProcessing}
-                          className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-400 dark:text-red-200 dark:hover:bg-red-950/20"
-                        >
-                          <XCircle className="h-4 w-4" />
-                          Refuser
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => toggleExpandedCard(cardKey)}
-                          className="flex items-center justify-center gap-2"
-                        >
-                          <Eye className="h-4 w-4" />
-                          Détails
-                        </Button>
-                      </div>
-                    </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
+        <footer className="pb-4 text-[11px] text-gray-500">
+          <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-gray-800 dark:bg-gray-900">
+            Espace limité au pilotage mobile money: validations, soldes wallet, transferts vers banque, historique.
+            Aucun écran de caisse agence, dépenses locales ou comptabilité générale.
           </div>
-        </SectionCard>
-      )}
-
-      {/* ================= AUTRES RÉSERVATIONS ================= */}
-      {((filterStatus !== 'verification' && filterStatus !== '') || 
-        (filterStatus === '' && otherReservations.length > 0)) && (
-        <SectionCard
-          title={filterStatus ? `${getStatusConfig(filterStatus as ReservationStatus).label}s` : 'Toutes les réservations'}
-          icon={Receipt}
-          right={<span className="text-sm text-gray-600">{filterStatus ? `${filteredReservations.filter(r => r.statut !== 'verification').length} réservation${filteredReservations.filter(r => r.statut !== 'verification').length > 1 ? 's' : ''}` : 'Historique'}</span>}
-        >
-            <button
-              onClick={() => setShowHistory(!showHistory)}
-              className="mb-4 text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              {showHistory ? (
-                <>
-                  <ChevronUp className="h-4 w-4" />
-                  Réduire
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-4 w-4" />
-                  Développer
-                </>
-              )}
-            </button>
-          
-          {showHistory && (
-            <>
-              {filteredReservations.filter(r => r.statut !== 'verification').length === 0 ? (
-                <div className="text-center py-8 border border-gray-200 rounded-lg">
-                  <div className="text-gray-500">Aucune réservation à afficher</div>
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {filteredReservations
-                      .filter(r => r.statut !== 'verification')
-                      .map((reservation) => {
-                        const statusConfig = getStatusConfig(reservation.statut);
-                        const isProcessing = processingId === reservation.id;
-                        const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
-                        const proofUrl = getProofUrl(reservation);
-                        const proofText =
-                          (reservation as ReservationWithProof).paymentReference || reservation.preuveMessage;
-                        
-                        return (
-                          <div
-                            key={`${reservation.agencyId}_${reservation.id}`}
-                            className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-all duration-300 bg-white"
-                          >
-                            {/* Header avec agence */}
-                            <div className="p-4 border-b border-gray-200 bg-gray-50/50">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <div className="h-6 w-6 rounded-md bg-gray-200 flex items-center justify-center">
-                                    <Building2 className="h-3 w-3 text-gray-600" />
-                                  </div>
-                                  <span className="text-sm font-medium text-gray-900 truncate">
-                                    {agencyInfo?.name || 'Agence inconnue'}
-                                  </span>
-                                </div>
-                                <StatusBadge status={statusConfig.statusVariant}>{statusConfig.label}</StatusBadge>
-                              </div>
-                              
-                              {reservation.referenceCode && (
-                                <div className="text-xs font-mono text-gray-600">
-                                  #{reservation.referenceCode}
-                                </div>
-                              )}
-                            </div>
-                            
-                            {/* Détails */}
-                            <div className="p-4 space-y-3">
-                              {/* 📞 Téléphone client (priorité) */}
-                              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <Smartphone className="h-4 w-4 text-gray-600" />
-                                  <span className="text-sm font-medium text-gray-700">Téléphone client</span>
-                                </div>
-                                <div className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight break-words">
-                                  {reservation.telephone || 'Non renseigné'}
-                                </div>
-                              </div>
-
-                              {/* 🧾 Preuve de paiement */}
-                              {proofText && (
-                                <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <FileText className="h-4 w-4 text-gray-600" />
-                                    <span className="text-sm font-medium text-gray-700">Preuve de paiement</span>
-                                  </div>
-                                  <div className="text-sm text-gray-800 break-words">{proofText}</div>
-
-                                  {proofUrl && (
-                                    <Button
-                                      variant="secondary"
-                                      className="mt-3 w-full flex items-center justify-center gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
-                                      onClick={() => window.open(proofUrl, '_blank')}
-                                    >
-                                      <FileText className="h-4 w-4" />
-                                      Voir le justificatif
-                                    </Button>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Montant */}
-                              <div className="flex items-center justify-between px-1">
-                                <span className="text-sm text-gray-500">Montant</span>
-                                <span className="text-base sm:text-lg font-extrabold text-gray-900">
-                                  {fmtMoney(reservation.montant || 0)}
-                                </span>
-                              </div>
-
-                              {/* Trajet */}
-                              <div className="flex items-center justify-between px-1">
-                                <span className="text-sm text-gray-500">Trajet</span>
-                                <span className="text-sm font-medium text-gray-900 text-right">
-                                  {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
-                                </span>
-                              </div>
-
-                              {/* Client (après les priorités) */}
-                              <div className="flex items-center justify-between px-1">
-                                <span className="text-sm text-gray-500">Client</span>
-                                <span className="text-sm font-medium text-gray-900 truncate max-w-[170px] text-right">
-                                  {reservation.clientNom || 'Sans nom'}
-                                </span>
-                              </div>
-
-                              <div className="text-xs text-gray-400">
-                                Créé le: {fmtDate(reservation.createdAt)}
-                              </div>
-                            </div>
-                            
-                            {/* Actions */}
-                            <div className="p-4 border-t bg-gray-50 space-y-2">
-                              <Button 
-                                variant="secondary"
-                                onClick={() => handleViewDetails(reservation)}
-                                className="w-full flex items-center justify-center gap-2"
-                              >
-                                <Eye className="h-4 w-4" />
-                                Voir détails
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                  
-                  {/* Bouton Charger plus pour les autres réservations */}
-                  {!filterStatus && otherReservations.length > 0 && otherPage * ITEMS_PER_PAGE <= otherReservations.length && (
-                    <div className="text-center pt-6">
-                      <Button variant="secondary" onClick={loadMoreReservations}>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Charger plus de réservations
-                      </Button>
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </SectionCard>
-      )}
-        </div>
-      </StandardLayoutWrapper>
-    </InternalLayout>
+        </footer>
+      </main>
+    </div>
   );
 };
 
-export default ReservationsEnLigne;
-
+export default DigitalCashReservationsPage;
 

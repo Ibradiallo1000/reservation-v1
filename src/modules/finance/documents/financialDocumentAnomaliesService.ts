@@ -64,7 +64,7 @@ type AnomalyOverrideDoc = {
 const STALE_DOCUMENT_THRESHOLD_HOURS = 48;
 const STALE_DOCUMENT_THRESHOLD_MS = STALE_DOCUMENT_THRESHOLD_HOURS * 60 * 60 * 1000;
 
-const MOBILE_MONEY_PROVIDERS = new Set(["wave", "orange", "moov"]);
+const MOBILE_MONEY_PROVIDERS = new Set(["wave", "orange", "moov", "sarali"]);
 const PAYABLE_EXECUTION_DOCUMENT_TYPES = new Set<FinancialDocumentType>([
   "cash_disbursement",
   "supplier_payment_order",

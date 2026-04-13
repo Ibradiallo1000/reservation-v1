@@ -10,6 +10,7 @@ import {
   getEndOfDayForDate,
   getStartOfDayForDate,
 } from "@/shared/date/dateUtilsTz";
+import { normalizeChannel } from "@/utils/reservationStatusUtils";
 
 /** Argent réel = uniquement somme des soldes `accounts` (ledger). */
 export interface UnifiedRealMoney {
@@ -45,25 +46,45 @@ function isRefund(row: { type?: string }): boolean {
   return normalizeTxType(row.type) === "refund";
 }
 
-function splitEncaissementsByPaymentMethod(
-  rows: Array<{ type?: string; amount?: number; status?: string; paymentMethod?: string | null }>
+export function splitConfirmedEncaissementsByChannel(
+  rows: Array<{
+    type?: string;
+    amount?: number;
+    status?: string;
+    paymentMethod?: string | null;
+    paymentChannel?: string | null;
+    source?: string | null;
+  }>
 ) {
   let total = 0;
   let online = 0;
   let guichet = 0;
   rows.forEach((r) => {
     if (!isPaymentReceived(r) || !isConfirmedTransactionStatus(r.status as any)) return;
-    const amount = Number(r.amount) || 0;
+    const amount = Math.abs(Number(r.amount) || 0);
     total += amount;
+    const channel = normalizeChannel(String(r.paymentChannel ?? r.source ?? ""));
     const pm = String(r.paymentMethod ?? "").toLowerCase();
-    if (pm === "cash") guichet += amount;
-    else if (pm === "mobile_money" || pm === "card") online += amount;
-    else {
-      console.error(
-        "[unifiedFinance] payment_method_manquant_ou_invalide sur payment_received confirmé — exécuter migration transactions / corriger données.",
-        r
-      );
+    if (channel === "guichet") {
+      guichet += amount;
+      return;
     }
+    if (channel === "online") {
+      online += amount;
+      return;
+    }
+    if (pm === "cash") {
+      guichet += amount;
+      return;
+    }
+    if (pm === "mobile_money" || pm === "card") {
+      online += amount;
+      return;
+    }
+    console.error(
+      "[unifiedFinance] payment_channel et payment_method manquants ou invalides sur payment_received confirmé — corriger les données ledger.",
+      r
+    );
   });
   return { total, online, guichet };
 }
@@ -97,7 +118,7 @@ export async function getUnifiedAgencyFinance(
     getLedgerBalances(companyId, agencyId),
   ]);
 
-  const enc = splitEncaissementsByPaymentMethod(txRows as any);
+  const enc = splitConfirmedEncaissementsByChannel(txRows as any);
   const net = sumCaNet(txRows as any);
 
   return {
@@ -135,7 +156,7 @@ export async function getUnifiedCompanyFinance(
     getLedgerBalances(companyId),
   ]);
 
-  const enc = splitEncaissementsByPaymentMethod(txRows as any);
+  const enc = splitConfirmedEncaissementsByChannel(txRows as any);
   const net = sumCaNet(txRows as any);
 
   return {

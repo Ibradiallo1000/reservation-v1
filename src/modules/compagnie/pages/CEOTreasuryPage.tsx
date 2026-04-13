@@ -32,7 +32,7 @@ const ACCOUNT_TYPE_LABEL: Record<string, string> = {
   agency_cash: "Caisse agence",
   agency_bank: "Banque agence",
   company_bank: "Banque compagnie",
-  mobile_money: "Mobile money",
+  mobile_money: "Digital mobile money",
   expense_reserve: "Réserve dépenses",
 };
 const PIN_MAX_ATTEMPTS = 3;
@@ -519,7 +519,7 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
           <MetricCard label="Caisse (agences)" value={money(cashByType.cash)} icon={Banknote} valueColorVar="#b45309" />
           <MetricCard label="Banque" value={bankMoney(cashByType.bank)} icon={Building2} valueColorVar="#1d4ed8" />
-          <MetricCard label="Mobile money" value={money(cashByType.mobile)} icon={Smartphone} valueColorVar="#15803d" />
+          <MetricCard label="Digital mobile money" value={money(cashByType.mobile)} icon={Smartphone} valueColorVar="#15803d" />
           <MetricCard label="Réserve dépenses" value={money(cashByType.reserve)} icon={PiggyBank} />
         </div>
       </SectionCard>
@@ -633,7 +633,7 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
         right={<span className="text-xs text-gray-500">{agencyWalletRows.length} portefeuille(s) agence</span>}
       >
         <div className="text-xs text-gray-500 mb-2">
-          Portefeuilles operationnels des agences (caisses et mobile money d&apos;agence).
+          Comptes opérationnels rattachés aux agences : caisse physique, banque agence et digital mobile money.
         </div>
         {agencyWalletRows.length === 0 ? (
           <p className="text-sm text-gray-500">Aucun portefeuille agence actif.</p>

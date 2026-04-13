@@ -168,7 +168,7 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
             </div>
           </div>
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
-            <div className="text-xs text-gray-700">Mobile money (ledger)</div>
+            <div className="text-xs text-gray-700">Digital mobile money (ledger)</div>
             <div className="text-base font-bold text-emerald-700">{money(ledgerMobileMoneyAmount)}</div>
             <div className="text-[11px] text-slate-500">Solde comptes type=mobile_money (accounts).</div>
           </div>

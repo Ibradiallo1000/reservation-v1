@@ -176,7 +176,8 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
   const isMobileMoneyProvider =
     providerNormalized === "wave" ||
     providerNormalized === "orange" ||
-    providerNormalized === "moov";
+    providerNormalized === "moov" ||
+    providerNormalized === "sarali";
   if (isMobileMoneyProvider && confirmed?.status === "validated") {
     const actorRoleLabel = Array.isArray(user.role)
       ? String(user.role[0] ?? "").trim() || "operator_digital"

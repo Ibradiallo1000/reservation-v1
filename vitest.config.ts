@@ -4,7 +4,7 @@ import path from "node:path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/modules/**/*.test.ts", "src/tests/reservation.test.ts"],
+    include: ["src/modules/**/*.test.ts", "src/tests/**/*.test.ts"],
     exclude: ["**/e2e/**"],
   },
   resolve: {

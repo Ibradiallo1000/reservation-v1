@@ -16,6 +16,11 @@ import {
 import { Button } from '@/shared/ui/button';
 import { StandardLayoutWrapper, PageHeader, MetricCard, SectionCard, StatusBadge } from '@/ui';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
+import {
+  isCanonicalCommercialSale,
+  isCanonicalPhysicalCashSale,
+  normalizeReservationDocument,
+} from '@/modules/reservations/canonicalReservation';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -295,37 +300,43 @@ const CompagnieComptabilitePage: React.FC = () => {
           getDocs(qMov)
         ]);
         
-        // Calculer les ventes
+        // Calculer les ventes avec le modele canonique pour separer cash physique et digital.
         let ventesGuichet = 0;
         let ventesEnLigne = 0;
         let nbReservations = 0;
         let nbBillets = 0;
+        let mobileMoneyRecu = 0;
+        let onlineRecu = 0;
         
         resSnap.forEach(doc => {
-          const data = doc.data();
-          const canal = String(data.canal || '').toLowerCase();
-          const montant = Number(data.montant || 0);
-          const seats = (data.seatsGo || 0) + (data.seatsReturn || 0);
-          
+          const data = doc.data() as Record<string, unknown>;
+          const canonical = normalizeReservationDocument(data, { id: doc.id });
+          if (!isCanonicalCommercialSale(canonical)) return;
+
+          const montant = canonical.amounts.total;
+          const seats = canonical.seats.total > 0 ? canonical.seats.total : 1;
+          const isPhysicalCash = isCanonicalPhysicalCashSale(canonical);
+
           nbReservations += 1;
           nbBillets += seats;
-          
-          if (canal === 'guichet' || canal === '') {
+
+          if (isPhysicalCash) {
             ventesGuichet += montant;
-          } else if (canal === 'en_ligne') {
+          } else {
             ventesEnLigne += montant;
+            mobileMoneyRecu += montant;
+            if (canonical.reservation.channel === 'online') {
+              onlineRecu += montant;
+            }
           }
         });
         
         // Calculer les encaissements
         let especesRecues = 0;
-        let mobileMoneyRecu = 0;
-        let onlineRecu = 0;
         
         cashSnap.forEach(doc => {
           const data = doc.data();
           especesRecues += Number(data.cashReceived || 0);
-          mobileMoneyRecu += Number(data.mmExpected || 0); // À vérifier selon ta structure
         });
         
         // Calculer mouvements de caisse
@@ -371,7 +382,7 @@ const CompagnieComptabilitePage: React.FC = () => {
           
           especesRecues,
           mobileMoneyRecu,
-          onlineRecu: ventesEnLigne, // À adapter selon ta structure
+          onlineRecu,
           
           entreesManuelles,
           sortiesAgence,
@@ -743,8 +754,8 @@ const DashboardTab: React.FC<{
         valueColorVar={totals.soldeTotalCaisse >= 0 ? "#15803d" : "#b91c1c"}
       />
       <MetricCard
-        label="Argent compagnie"
-        value={money(totals.mobileMoneyRecu + totals.onlineRecu)}
+        label="Digital hors caisse"
+        value={money(totals.mobileMoneyRecu)}
         icon={CreditCard}
         valueColorVar="#15803d"
       />
@@ -818,7 +829,7 @@ const DashboardTab: React.FC<{
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Agence</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Total</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Guichet</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Ligne</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CA Digital</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Solde Caisse</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Écart</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Statut</th>
@@ -1235,7 +1246,7 @@ const ReportsTab: React.FC<{
       Agence: agency.agenceNom,
       'CA Total': agency.ventesTotal,
       'CA Guichet': agency.ventesGuichet,
-      'CA Ligne': agency.ventesEnLigne,
+      'CA Digital': agency.ventesEnLigne,
       'Espèces Reçues': agency.especesRecues,
       'Solde Caisse': agency.soldeCaisse,
       'Écart': agency.ecartEspeces,
@@ -1311,8 +1322,8 @@ const ReportsTab: React.FC<{
                     <span className="font-medium">{money(totals.especesRecues)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Argent compagnie (MM + ligne):</span>
-                    <span className="font-medium">{money(totals.mobileMoneyRecu + totals.onlineRecu)}</span>
+                    <span className="text-gray-600">Encaissement digital:</span>
+                    <span className="font-medium">{money(totals.mobileMoneyRecu)}</span>
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -1476,7 +1487,7 @@ const AgencyDetailsModal: React.FC<{
                     <span className="font-medium">{money(agency.performance.ventesGuichet)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Ventes en ligne:</span>
+                    <span className="text-gray-600">Ventes digitales:</span>
                     <span className="font-medium">{money(agency.performance.ventesEnLigne)}</span>
                   </div>
                   <div className="flex justify-between">
