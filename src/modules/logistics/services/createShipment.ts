@@ -17,7 +17,7 @@ import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 import { writeCourierActivityInTransaction } from "@/modules/compagnie/activity/activityLogsService";
 import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
-import { createPayment, getPaymentByReservationId, confirmPayment } from "@/services/paymentService";
+import { createPayment, getPaymentByReservationId, confirmPayment, markPaymentLedgerStatus } from "@/services/paymentService";
 
 const SHIPMENT_SEQ_PAD = 5;
 
@@ -218,16 +218,17 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     });
   }
 
-  // Encaissement à l'origine : Payment + financialTransactions (best effort, non bloquant UI).
+  // Encaissement a l'origine : Payment + financialTransactions (best effort, non bloquant UI).
   if (params.paymentStatus === "PAID_ORIGIN") {
     const amount = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
     if (amount > 0 && params.createdBy) {
       void (async () => {
+        let paymentId: string | null = null;
         try {
           let ledgerWrittenViaConfirmPayment = false;
           const existing = await getPaymentByReservationId(params.companyId, shipmentId);
           if (!existing) {
-            await createPayment({
+            paymentId = await createPayment({
               reservationId: shipmentId,
               companyId: params.companyId,
               agencyId: params.originAgencyId,
@@ -238,14 +239,23 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
               status: "validated",
               validatedBy: params.createdBy,
             });
-          } else if (existing.status === "validated") {
-            // déjà enregistré
-          } else if (existing.status === "pending") {
-            await confirmPayment(params.companyId, existing.id, params.createdBy);
-            ledgerWrittenViaConfirmPayment = true;
+          } else {
+            paymentId = existing.id;
+            if (existing.status === "validated" && existing.ledgerStatus === "posted") {
+              ledgerWrittenViaConfirmPayment = true;
+            } else if (existing.status === "pending") {
+              const confirmed = await confirmPayment(params.companyId, existing.id, params.createdBy);
+              ledgerWrittenViaConfirmPayment = confirmed?.ledgerStatus === "posted";
+            }
           }
 
+          if (!paymentId) return;
+
           if (!ledgerWrittenViaConfirmPayment) {
+            const ledgerReferenceId =
+              existing && existing.status === "validated"
+                ? shipmentId
+                : paymentId;
             const pm =
               params.paymentMethod === "mobile_money"
                 ? "mobile_money"
@@ -264,7 +274,7 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
               agencyId: params.originAgencyId,
               reservationId: shipmentId,
               referenceType: "payment",
-              referenceId: shipmentId,
+              referenceId: ledgerReferenceId,
               metadata: {
                 channel: "courrier",
                 mode: params.offlineMeta?.mode ?? "online",
@@ -272,6 +282,13 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
                 offlineDeviceId: params.offlineMeta?.deviceId ?? null,
                 ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
               },
+            });
+            await markPaymentLedgerStatus({
+              companyId: params.companyId,
+              paymentId,
+              ledgerStatus: "posted",
+            }).catch((statusErr) => {
+              console.warn("[createShipment] unable to set payment ledgerStatus=posted:", statusErr);
             });
             logAgentHistoryEvent({
               companyId: params.companyId,
@@ -290,6 +307,16 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
             });
           }
         } catch (err) {
+          if (paymentId) {
+            await markPaymentLedgerStatus({
+              companyId: params.companyId,
+              paymentId,
+              ledgerStatus: "failed",
+              errorMessage: err instanceof Error ? err.message : String(err),
+            }).catch((statusErr) => {
+              console.warn("[createShipment] unable to set payment ledgerStatus=failed:", statusErr);
+            });
+          }
           console.warn("[createShipment] create Payment+ledger courrier failed:", err);
         }
       })();

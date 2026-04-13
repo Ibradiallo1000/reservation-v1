@@ -3,7 +3,7 @@
  * Trésorerie, dépenses et contrôle : onglets (pas de page interminable).
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { Banknote, ClipboardCheck, Landmark, Receipt, Wallet } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -13,6 +13,7 @@ import AgencyTreasuryPage from "@/modules/agence/pages/AgencyTreasuryPage";
 import ManagerExpensesPage from "../ManagerExpensesPage";
 import CashSessionsPage from "@/modules/agence/cashControl/CashSessionsPage";
 import { dispatchAgencyCashUiRefresh } from "@/modules/agence/constants/agencyCashUiRefresh";
+import { useManagerAlertsContext } from "../ManagerAlertsContext";
 
 type CashTabId = "caisse-sessions" | "caisse-tresorerie" | "caisse-depenses" | "caisse-controle";
 
@@ -25,9 +26,14 @@ function hashToTab(hash: string, canExpenses: boolean): CashTabId {
 
 export default function AgencyCashDomainPage() {
   const { user } = useAuth() as { user?: { role?: string | string[] } };
-  const roles: string[] = Array.isArray(user?.role) ? user!.role : user?.role ? [user.role] : [];
+  const roles: string[] = (Array.isArray(user?.role) ? user!.role : user?.role ? [user.role] : [])
+    .map((role) => String(role ?? "").trim().toLowerCase())
+    .filter(Boolean);
   const canValidateExpenses =
-    roles.includes("chefAgence") || roles.includes("superviseur") || roles.includes("admin_compagnie");
+    roles.includes("chefagence") || roles.includes("superviseur") || roles.includes("admin_compagnie");
+  const canAccessCashDomain =
+    canValidateExpenses || roles.includes("agency_accountant") || roles.includes("admin_platforme");
+  const { alerts } = useManagerAlertsContext();
 
   const { hash, pathname } = useLocation();
   const navigate = useNavigate();
@@ -45,22 +51,62 @@ export default function AgencyCashDomainPage() {
   );
 
   const tabs = useMemo(() => {
-    const base: Array<{ id: CashTabId; label: string; icon: typeof Banknote }> = [
-      { id: "caisse-sessions", label: "Sessions", icon: ClipboardCheck },
+    const badgeByTab = {
+      "caisse-sessions": 0,
+      "caisse-tresorerie": 0,
+      "caisse-depenses": 0,
+      "caisse-controle": 0,
+    } as Record<CashTabId, number>;
+    alerts.forEach((alert) => {
+      const id = String(alert.id ?? "");
+      if (id.includes("pending-compta") || id.includes("pending-chef") || id.includes("stale-compta")) {
+        badgeByTab["caisse-sessions"] += 1;
+      }
+      if (id.includes("pending-recon") || id.includes("pending-balance")) {
+        badgeByTab["caisse-tresorerie"] += 1;
+      }
+      if (
+        id.includes("cash-exceptions") ||
+        id.includes("courier-discrepancies") ||
+        id.includes("guichet-activity-litiges") ||
+        id.includes("open-incidents")
+      ) {
+        badgeByTab["caisse-controle"] += 1;
+      }
+    });
+    const base: Array<{ id: CashTabId; label: string; icon: typeof Banknote; badge?: number }> = [
+      { id: "caisse-sessions", label: "Activité", icon: ClipboardCheck },
       { id: "caisse-tresorerie", label: "Trésorerie", icon: Landmark },
     ];
     if (canValidateExpenses) {
-      base.push({ id: "caisse-depenses", label: "Dépenses", icon: Receipt });
+      base.push({ id: "caisse-depenses", label: "Dépenses", icon: Receipt, badge: badgeByTab["caisse-depenses"] });
     }
-    base.push({ id: "caisse-controle", label: "Contrôle", icon: Wallet });
-    return base;
-  }, [canValidateExpenses]);
+    base.push({ id: "caisse-controle", label: "Contrôle de caisse", icon: Wallet, badge: badgeByTab["caisse-controle"] });
+    return base.map((tabRow) => ({
+      ...tabRow,
+      badge:
+        tabRow.badge != null
+          ? tabRow.badge
+          : tabRow.id === "caisse-sessions"
+            ? badgeByTab["caisse-sessions"]
+            : tabRow.id === "caisse-tresorerie"
+              ? badgeByTab["caisse-tresorerie"]
+              : 0,
+    }));
+  }, [alerts, canValidateExpenses]);
+
+  if (!canAccessCashDomain) {
+    if (roles.includes("agentcourrier")) return <Navigate to="/agence/courrier" replace />;
+    if (roles.includes("escale_agent") || roles.includes("escale_manager")) return <Navigate to="/agence/escale" replace />;
+    if (roles.includes("agency_fleet_controller")) return <Navigate to="/agence/fleet" replace />;
+    return <Navigate to="/agence/activite" replace />;
+  }
 
   return (
     <StandardLayoutWrapper className="pb-24 md:pb-8">
       <PageHeader
-        title="Caisse"
-        subtitle="Valider d’abord les sessions, puis trésorerie & contrôle si besoin"
+        title="Supervision financière"
+        subtitle="Vue chef d’agence : activité, trésorerie, écarts et vérifications."
         icon={Banknote}
       />
 
@@ -92,6 +138,11 @@ export default function AgencyCashDomainPage() {
             >
               <Icon className="h-4 w-4 shrink-0 opacity-80" aria-hidden />
               {t.label}
+              {t.badge && t.badge > 0 ? (
+                <span className="rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                  {t.badge > 99 ? "99+" : t.badge}
+                </span>
+              ) : null}
             </button>
           );
         })}
@@ -122,6 +173,11 @@ export default function AgencyCashDomainPage() {
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden />
               <span className="truncate">{t.label}</span>
+              {t.badge && t.badge > 0 ? (
+                <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                  {t.badge > 99 ? "99+" : t.badge}
+                </span>
+              ) : null}
             </button>
           );
         })}

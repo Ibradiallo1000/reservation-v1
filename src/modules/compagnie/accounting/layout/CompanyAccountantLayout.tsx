@@ -1,17 +1,15 @@
 // src/modules/compagnie/accounting/layout/CompanyAccountantLayout.tsx
 // Dedicated layout for company_accountant / financial_director.
 // Strictly scoped: NO access to CEO menus (fleet, agencies, config, etc.)
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import {
   Globe,
-  CreditCard,
-  TrendingUp,
   FileText,
-  Settings,
   Wallet,
   Receipt,
   BookOpen,
+  Archive,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
@@ -19,11 +17,6 @@ import { db } from "@/firebaseConfig";
 import {
   doc,
   getDoc,
-  collection,
-  getDocs,
-  query,
-  where,
-  onSnapshot,
 } from "firebase/firestore";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
@@ -92,41 +85,51 @@ const CompanyAccountantLayout: React.FC = () => {
 
   const pendingExpensesCount = usePendingExpensesCount(currentCompanyId, user?.role);
 
-  /* ===== Navigation — accountant-scoped only ===== */
+  /* ===== Navigation - accountant-scoped only ===== */
   const basePath = `/compagnie/${currentCompanyId}/accounting`;
 
   const sections: NavSection[] = [
-    { label: "Pilotage consolidé", icon: Globe, path: basePath, end: true },
     {
-      label: "Réservations réseau",
-      icon: CreditCard,
-      path: `${basePath}/reservations-reseau`,
+      label: "Tableau de bord financier",
+      icon: Globe,
+      path: `${basePath}/dashboard-financier`,
     },
-    { label: "Finances consolidées", icon: TrendingUp, path: `${basePath}/finances` },
-    { label: "Comptabilité", icon: BookOpen, path: `${basePath}/compta` },
     {
-      label: "Dépenses",
-      icon: Receipt,
-      path: `${basePath}/expenses`,
-      badge: pendingExpensesCount || undefined,
+      label: "Contrôles et validations",
+      icon: BookOpen,
+      path: `${basePath}/controle-validations`,
       children: [
-        { label: "Validation & paiement", path: `${basePath}/expenses`, end: true },
-        { label: "Analyse des dépenses", path: `${basePath}/expenses-dashboard` },
+        { label: "Vue de contrôle", path: `${basePath}/controle-validations`, end: true },
+        { label: "Diagnostics", path: `${basePath}/consistency-diagnostics` },
       ],
     },
     {
-      label: "Trésorerie",
+      label: "Trésorerie réseau",
       icon: Wallet,
-      path: `${basePath}/treasury`,
+      path: `${basePath}/tresorerie-reseau`,
       children: [
-        { label: "Nouvelle opération", path: `${basePath}/treasury/new-operation` },
-        { label: "Transfert", path: `${basePath}/treasury/transfer` },
-        { label: "Nouveau payable", path: `${basePath}/treasury/new-payable` },
+        { label: "Nouvelle opération", path: `${basePath}/tresorerie-reseau/new-operation` },
+        { label: "Transferts réseau", path: `${basePath}/tresorerie-reseau/transfer` },
+        { label: "À payer", path: `${basePath}/tresorerie-reseau/new-payable` },
         { label: "Paiements fournisseurs", path: `${basePath}/supplier-payments` },
       ],
     },
-    { label: "Rapports", icon: FileText, path: `${basePath}/rapports` },
-    { label: "Paramètres", icon: Settings, path: `${basePath}/parametres` },
+    {
+      label: "Dépenses",
+      icon: Receipt,
+      path: `${basePath}/depenses`,
+      badge: pendingExpensesCount || undefined,
+    },
+    {
+      label: "Journal et rapports",
+      icon: FileText,
+      path: `${basePath}/journal-rapports`,
+    },
+    {
+      label: "Documents et archives",
+      icon: Archive,
+      path: `${basePath}/documents`,
+    },
   ];
 
   useAgencyKeyboardShortcuts(sections);
@@ -207,3 +210,4 @@ const CompanyAccountantLayout: React.FC = () => {
 };
 
 export default CompanyAccountantLayout;
+

@@ -410,7 +410,8 @@ export async function applyRemittancePendingToAgencyCashInTransaction(
   tx.update(cashRef, { balance: increment(amt), updatedAt: serverTimestamp() });
 
   if (mirrorSnap.exists()) {
-    tx.update(mirrorCashRef, { currentBalance: increment(amt), updatedAt: serverTimestamp() });
+    // Keep financialAccounts mirror aligned with ledger exact balance (self-heals legacy drift).
+    tx.update(mirrorCashRef, { currentBalance: creditAfter, updatedAt: serverTimestamp() });
   }
 
   const source = toSource("cash");
@@ -541,7 +542,8 @@ export async function reverseRemittancePendingToAgencyCashInTransaction(
   tx.update(pendingRef, { balance: increment(amt), updatedAt: serverTimestamp() });
 
   if (mirrorSnap.exists()) {
-    tx.update(mirrorCashRef, { currentBalance: increment(-amt), updatedAt: serverTimestamp() });
+    // Keep financialAccounts mirror aligned with ledger exact balance (self-heals legacy drift).
+    tx.update(mirrorCashRef, { currentBalance: cashAfter, updatedAt: serverTimestamp() });
   }
 
   const source = toSource("cash");
@@ -726,8 +728,34 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
     existingFlags
   );
 
+  // Synchronize agency cash mirror accounts from exact ledger balances (not increments).
+  const mirrorTargetsByAgency = new Map<
+    string,
+    { ref: ReturnType<typeof financialAccountRef>; balance: number }
+  >();
+  if (s0.type === "cash" && s0.agencyId) {
+    mirrorTargetsByAgency.set(s0.agencyId, {
+      ref: financialAccountRef(companyId, agencyCashAccountId(s0.agencyId)),
+      balance: debitAfter,
+    });
+  }
+  if (s1.type === "cash" && s1.agencyId) {
+    mirrorTargetsByAgency.set(s1.agencyId, {
+      ref: financialAccountRef(companyId, agencyCashAccountId(s1.agencyId)),
+      balance: creditAfter,
+    });
+  }
+  const mirrorTargets = Array.from(mirrorTargetsByAgency.values());
+  const mirrorSnaps = mirrorTargets.length
+    ? await Promise.all(mirrorTargets.map((target) => tx.get(target.ref)))
+    : [];
+
   tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
   tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
+  mirrorTargets.forEach((target, index) => {
+    if (!mirrorSnaps[index]?.exists()) return;
+    tx.update(target.ref, { currentBalance: target.balance, updatedAt: serverTimestamp() });
+  });
 
   const newRef = doc(financialTransactionsRef(companyId));
   const kpiChannel = isGuichetChannel(params.paymentChannel, params.source) ? "guichet" : "online";

@@ -1,11 +1,11 @@
 /**
- * Libellés et formats affichage page Finances (CEO) — aucun calcul métier, mapping UI uniquement.
+ * Display mapping for Finances page (UI only).
  */
 import type { FinancialTransactionDoc } from "@/modules/compagnie/treasury/types";
 
-/** JJ/MM/AAAA */
+/** DD/MM/YYYY */
 export function formatDateFrSlash(d: Date): string {
-  if (!d || Number.isNaN(d.getTime())) return "—";
+  if (!d || Number.isNaN(d.getTime())) return "-";
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yyyy = d.getFullYear();
@@ -14,12 +14,15 @@ export function formatDateFrSlash(d: Date): string {
 
 export type FluxRecentLine = {
   amountAbs: number;
-  signChar: "+" | "−";
+  signChar: "+" | "-" | "?";
   label: string;
 };
 
 /**
- * Ligne « Flux récents » : libellé métier, signe indicatif (pas de jargon type remittance / payment_received).
+ * Keep only actionable treasury flows:
+ * - caisse validations
+ * - caisse/bank transfers
+ * - internal movements
  */
 export function mapTransactionToFluxRecent(row: FinancialTransactionDoc): FluxRecentLine | null {
   const raw = Number(row.amount);
@@ -28,43 +31,33 @@ export function mapTransactionToFluxRecent(row: FinancialTransactionDoc): FluxRe
   const t = String(row.type ?? "");
   const refT = String(row.referenceType ?? "");
 
-  let sign: "+" | "−" = "+";
-  let label = "Opération";
-
-  if (t === "payment_received") {
-    sign = "+";
-    if (refT === "courier_session") {
-      label = "Encaissement colis";
-    } else if (refT === "shift" || refT === "cash_session") {
-      label = "Encaissement guichet";
-    } else if (refT === "reservation") {
-      label = "Encaissement client";
-    } else {
-      label = "Paiement reçu";
-    }
-  } else if (t === "remittance") {
-    sign = "+";
-    label = "Transfert vers caisse agence";
-  } else if (t === "transfer" || t === "transfer_to_bank") {
-    sign = "−";
-    label = "Transfert";
-  } else if (t === "expense") {
-    sign = "−";
-    label = "Dépense";
-  } else if (t === "refund") {
-    sign = "−";
-    label = "Remboursement client";
-  } else if (t === "bank_withdrawal") {
-    sign = "+";
-    label = "Approvisionnement caisse";
-  } else {
-    label = "Opération";
-    sign = raw < 0 ? "−" : "+";
+  if (t === "remittance") {
+    return {
+      signChar: "+",
+      amountAbs: abs,
+      label: "Validation de caisse",
+    };
   }
 
-  return {
-    signChar: sign,
-    amountAbs: abs,
-    label,
-  };
+  if (t === "bank_withdrawal") {
+    return {
+      signChar: "+",
+      amountAbs: abs,
+      label: "Transfert banque vers caisse",
+    };
+  }
+
+  if (t === "transfer" || t === "transfer_to_bank") {
+    let label = "Mouvement interne";
+    if (refT === "agency_deposit") label = "Transfert caisse vers banque";
+    else if (refT === "mobile_to_bank") label = "Transfert mobile vers banque";
+    else if (refT === "internal_transfer") label = "Mouvement interne";
+    return {
+      signChar: "?",
+      amountAbs: abs,
+      label,
+    };
+  }
+
+  return null;
 }

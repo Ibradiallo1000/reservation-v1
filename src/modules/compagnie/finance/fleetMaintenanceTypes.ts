@@ -27,6 +27,7 @@ export interface FleetMaintenanceDocCreate {
   linkedExpenseId?: string | null;
   linkedPayableId?: string | null;
   createdBy: string;
+  createdByRole?: string;
 }
 
 export const FLEET_MAINTENANCE_COLLECTION = "fleetMaintenance";

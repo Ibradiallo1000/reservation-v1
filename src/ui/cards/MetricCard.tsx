@@ -11,12 +11,12 @@ import type { LucideIcon } from "lucide-react";
 
 const cardBase = cn(
   "flex min-h-[110px] flex-col justify-between border border-gray-200 bg-white p-4 sm:p-5 dark:border-gray-700 dark:bg-gray-900",
-  "rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
+  "rounded-2xl shadow-sm transition-shadow duration-200 hover:shadow-md"
 );
 
 const cardCritical = cn(
   "flex min-h-[110px] flex-col justify-between border-2 border-red-400 bg-red-50/50 p-4 sm:p-5 dark:border-red-500 dark:bg-red-900/20",
-  "rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
+  "rounded-2xl shadow-sm transition-shadow duration-200 hover:shadow-md"
 );
 
 export interface MetricCardProps {
@@ -79,10 +79,10 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   >
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0 pr-1">
-        <p className={cn(typography.kpiLabel, "leading-snug")}>
-          {label}
-          {help}
-        </p>
+        <div className="flex items-start gap-2">
+          <p className={cn(typography.kpiLabel, "min-w-0 flex-1 leading-snug")}>{label}</p>
+          {help ? <span className="inline-flex shrink-0">{help}</span> : null}
+        </div>
         {hint && (
           <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
             {hint}

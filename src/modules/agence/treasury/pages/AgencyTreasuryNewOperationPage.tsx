@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
 import { createExpense, EXPENSE_CATEGORIES } from "@/modules/compagnie/treasury/expenses";
@@ -23,12 +23,22 @@ const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   other: "Autre",
 };
 
+function toRoleList(role: string | string[] | undefined): string[] {
+  if (Array.isArray(role)) return role.map((r) => String(r ?? "").trim().toLowerCase()).filter(Boolean);
+  if (!role) return [];
+  return [String(role).trim().toLowerCase()].filter(Boolean);
+}
+
 export default function AgencyTreasuryNewOperationPage() {
   const { user } = useAuth() as any;
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const companyId = user?.companyId ?? "";
   const defaultAgencyId = user?.agencyId ?? "";
+  const roles = toRoleList(user?.role);
+  const canManageTreasuryOperations = roles.some((role) =>
+    role === "agency_accountant" || role === "admin_compagnie" || role === "admin_platforme"
+  );
   const fallbackAgencyName = user?.agencyNom ?? user?.agencyName ?? "Agence";
   const treasuryBasePath = pathname.startsWith("/agence/comptabilite/treasury")
     ? "/agence/comptabilite/treasury"
@@ -131,6 +141,7 @@ export default function AgencyTreasuryNewOperationPage() {
         amount: numericAmount,
         accountId: agencyCashAccount.id,
         createdBy: user.uid,
+        createdByRole: String(user.role ?? 'agency_accountant'),
         expenseCategory: category,
       });
       toast.success("Demande de dépense soumise.");
@@ -142,6 +153,10 @@ export default function AgencyTreasuryNewOperationPage() {
       setSubmitting(false);
     }
   };
+
+  if (!canManageTreasuryOperations) {
+    return <Navigate to="/agence/caisse#caisse-tresorerie" replace />;
+  }
 
   if (!companyId) {
     const missing = <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
@@ -177,6 +192,15 @@ export default function AgencyTreasuryNewOperationPage() {
           >
             Nouveau payable
           </button>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <ActionButton
+            type="button"
+            variant="secondary"
+            onClick={() => navigate("/agence/comptabilite/documents")}
+          >
+            Documents & archives
+          </ActionButton>
         </div>
       </SectionCard>
 

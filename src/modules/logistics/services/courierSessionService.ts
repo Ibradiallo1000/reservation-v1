@@ -14,6 +14,7 @@ import {
   serverTimestamp,
   getDoc,
   deleteField,
+  Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { CourierSession, CourierSessionStatus } from "../domain/courierSession.types";
@@ -46,8 +47,25 @@ import {
   courierComptaEncaissementDocRef,
 } from "@/modules/agence/comptabilite/comptaEncaissementsService";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
+import {
+  getSessionRemittanceDocumentId,
+  upsertAccountingRemittanceReceiptDocument,
+  upsertSessionRemittanceDocument,
+} from "@/modules/finance/documents/financialDocumentsService";
 
 const OPEN_STATUSES: CourierSessionStatus[] = ["PENDING", "ACTIVE"];
+
+function toTimestampOrNull(value: Date | Timestamp | string | number | null | undefined): Timestamp | null {
+  if (value == null) return null;
+  if (value instanceof Timestamp) return value;
+  if (value instanceof Date) return Timestamp.fromDate(value);
+  if (typeof value === "number" && Number.isFinite(value)) return Timestamp.fromMillis(value);
+  if (typeof value === "string") {
+    const ms = Date.parse(value);
+    if (!Number.isNaN(ms)) return Timestamp.fromMillis(ms);
+  }
+  return null;
+}
 
 /** Returns existing open session id for this agent, or null. */
 export async function getOpenCourierSessionId(
@@ -210,6 +228,15 @@ export async function validateCourierSession(params: {
   sessionId: string;
   validatedAmount: number;
   validatedBy: { id: string; name?: string | null };
+  captureMode?: "normal" | "after_entry";
+  manualDocumentUsed?: boolean;
+  manualDocumentType?: string | null;
+  manualDocumentNumber?: string | null;
+  manualReceiptNumber?: string | null;
+  effectiveOperationDate?: Date | Timestamp | string | number | null;
+  regularizedByUid?: string | null;
+  regularizedByName?: string | null;
+  regularizedAt?: Date | Timestamp | string | number | null;
 }): Promise<{ difference: number; ledgerSessionTotal: number }> {
   const sessionRef = courierSessionRef(db, params.companyId, params.agencyId, params.sessionId);
   const snap = await getDoc(sessionRef);
@@ -234,6 +261,17 @@ export async function validateCourierSession(params: {
   const agencyTz = dailyStatsTimezoneFromAgencyData(agencyData);
   const agencyCurrency = String(agencyData?.currency ?? "XOF");
   const statsDate = formatDateForDailyStats(data.closedAt ?? data.createdAt, agencyTz);
+  const captureMode = params.captureMode === "after_entry" ? "after_entry" : "normal";
+  const manualDocumentUsed = Boolean(params.manualDocumentUsed);
+  const manualDocumentType = String(params.manualDocumentType ?? "").trim() || null;
+  const manualDocumentNumber = String(params.manualDocumentNumber ?? "").trim() || null;
+  const manualReceiptNumber = String(params.manualReceiptNumber ?? "").trim() || null;
+  const effectiveOperationDate = toTimestampOrNull(params.effectiveOperationDate ?? null);
+  const regularizedByUid = String(params.regularizedByUid ?? "").trim() || null;
+  const regularizedByName = String(params.regularizedByName ?? "").trim() || null;
+  const regularizedAt =
+    toTimestampOrNull(params.regularizedAt ?? null) ??
+    (captureMode === "after_entry" ? Timestamp.now() : null);
 
   await runTransaction(db, async (tx) => {
     const sSnap = await tx.get(sessionRef);
@@ -268,6 +306,15 @@ export async function validateCourierSession(params: {
       remittanceStatus,
       remittanceDiscrepancyAmount,
       pendingCashLedgerVersion: PENDING_CASH_LEDGER_SYSTEM_VERSION,
+      captureMode,
+      manualDocumentUsed,
+      manualDocumentType,
+      manualDocumentNumber,
+      manualReceiptNumber,
+      effectiveOperationDate,
+      regularizedByUid,
+      regularizedByName,
+      regularizedAt,
       validatedBy: {
         id: params.validatedBy.id,
         name: params.validatedBy.name ?? null,
@@ -331,6 +378,101 @@ export async function validateCourierSession(params: {
       difference,
     },
   });
+
+  const modeObservation = [
+    captureMode === "after_entry" ? "Saisie apres coup regularisee." : null,
+    manualDocumentUsed
+      ? `Piece manuelle utilisee (${manualDocumentType ?? "piece_manuelle"}${
+          manualDocumentNumber ? ` #${manualDocumentNumber}` : ""
+        }).`
+      : null,
+    manualReceiptNumber ? `Recu manuel: ${manualReceiptNumber}.` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  try {
+    await upsertSessionRemittanceDocument({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      sessionId: params.sessionId,
+      sessionType: "courrier",
+      sourceType: "courier_session",
+      periodStart: data.openedAt ?? data.createdAt ?? null,
+      periodEnd: data.closedAt ?? null,
+      agent: {
+        uid: data.agentId,
+        role: "agentCourrier",
+        name: data.agentCode ?? data.agentId,
+      },
+      receiver: {
+        uid: params.validatedBy.id,
+        name: params.validatedBy.name ?? null,
+        role: "agency_accountant",
+      },
+      controller: null,
+      amountTheoretical: ledgerSessionTotal,
+      amountRemitted: params.validatedAmount,
+      amountDifference: difference,
+      currency: agencyCurrency,
+      ventilationByMode: {
+        cash: ledgerSessionTotal,
+      },
+      status: "ready_to_print",
+      observations:
+        [
+          Math.abs(difference) > 0
+            ? "Ecart detecte entre montant attendu courrier et montant verse."
+            : null,
+          modeObservation || null,
+        ]
+          .filter(Boolean)
+          .join(" ") || null,
+      createdByUid: params.validatedBy.id,
+    });
+    await upsertAccountingRemittanceReceiptDocument({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      sessionId: params.sessionId,
+      sourceType: "courier_session",
+      agent: {
+        uid: data.agentId,
+        role: "agentCourrier",
+        name: data.agentCode ?? data.agentId,
+      },
+      accountant: {
+        uid: params.validatedBy.id,
+        name: params.validatedBy.name ?? null,
+        role: "agency_accountant",
+      },
+      amountRemitted: params.validatedAmount,
+      amountDifference: difference,
+      currency: agencyCurrency,
+      referenceSessionRemittanceId: getSessionRemittanceDocumentId(
+        "courier_session",
+        params.sessionId
+      ),
+      dateHeure: new Date(),
+      observations:
+        [
+          Math.abs(difference) > 0
+            ? "Recu comptable emis avec ecart sur session courrier."
+            : "Recu comptable emis pour session courrier.",
+          modeObservation || null,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      status: "ready_to_print",
+      createdByUid: params.validatedBy.id,
+    });
+  } catch (docError) {
+    console.error("[courierSession] echec generation fiche remise session courrier", {
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      sessionId: params.sessionId,
+      docError,
+    });
+  }
 
   return { difference, ledgerSessionTotal };
 }
@@ -418,6 +560,74 @@ export async function validateCourierSessionByHeadAccountant(params: {
       courierAgentId: pre.agentId,
     },
   });
+
+  try {
+    await upsertSessionRemittanceDocument({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      sessionId: params.sessionId,
+      sessionType: "courrier",
+      sourceType: "courier_session",
+      periodStart: pre.openedAt ?? pre.createdAt ?? null,
+      periodEnd: pre.closedAt ?? null,
+      agent: {
+        uid: pre.agentId,
+        role: "agentCourrier",
+        name: pre.agentCode ?? pre.agentId,
+      },
+      receiver: {
+        uid: (pre.validatedBy as { id?: string } | undefined)?.id ?? null,
+        role: "agency_accountant",
+        name: (pre.validatedBy as { name?: string } | undefined)?.name ?? null,
+      },
+      controller: {
+        uid: params.validatedBy.id,
+        role: "chefAgence",
+        name: params.validatedBy.name ?? null,
+      },
+      amountTheoretical: ledgerSessionTotal,
+      amountRemitted: Number(pre.validatedAmount ?? 0),
+      amountDifference: Number(pre.difference ?? 0),
+      status: "ready_to_print",
+      observations: "Validation finale chef d'agence effectuee pour la session courrier.",
+      createdByUid: params.validatedBy.id,
+    });
+    await upsertAccountingRemittanceReceiptDocument({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      sessionId: params.sessionId,
+      sourceType: "courier_session",
+      agent: {
+        uid: pre.agentId,
+        role: "agentCourrier",
+        name: pre.agentCode ?? pre.agentId,
+      },
+      accountant: {
+        uid: (pre.validatedBy as { id?: string } | undefined)?.id ?? null,
+        role: "agency_accountant",
+        name: (pre.validatedBy as { name?: string } | undefined)?.name ?? null,
+      },
+      amountRemitted: Number(pre.validatedAmount ?? 0),
+      amountDifference: Number(pre.difference ?? 0),
+      currency: "XOF",
+      referenceSessionRemittanceId: getSessionRemittanceDocumentId(
+        "courier_session",
+        params.sessionId
+      ),
+      dateHeure: new Date(),
+      observations:
+        "Recu comptable confirme apres validation finale chef d'agence (courrier).",
+      status: "ready_to_print",
+      createdByUid: params.validatedBy.id,
+    });
+  } catch (docError) {
+    console.error("[courierSession] echec mise a jour fiche remise apres validation chef", {
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      sessionId: params.sessionId,
+      docError,
+    });
+  }
 }
 
 /**

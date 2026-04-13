@@ -1,6 +1,5 @@
 /**
- * Sync métier lorsque l’opérateur digital valide / rejette un paiement en ligne.
- * La page Digital Cash ne lit pas directement la collection `reservations` : toute la logique est ici.
+ * Business sync when digital operator validates / rejects an online payment.
  */
 
 import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
@@ -15,6 +14,7 @@ import {
 } from "@/modules/agence/services/reservationStatutService";
 import type { Payment } from "@/types/payment";
 import { confirmPayment, rejectPayment } from "./paymentService";
+import { upsertMobileMoneyValidationDocument } from "@/modules/finance/documents/financialDocumentsService";
 
 function paymentMethodFromProvider(provider: string | undefined | null): string {
   const p = provider?.toLowerCase?.() ?? provider;
@@ -24,16 +24,60 @@ function paymentMethodFromProvider(provider: string | undefined | null): string 
   return "transfer";
 }
 
+function normalizeLifecycleStatus(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
 export type DigitalOperatorUser = { uid: string; role?: string | string[] | null };
 
+const DIGITAL_OPERATOR_ALLOWED_ROLES = new Set<string>([
+  "operator_digital",
+  "admin_compagnie",
+  "admin_platforme",
+]);
+
+function normalizeRoleTokens(role: string | string[] | null | undefined): string[] {
+  if (Array.isArray(role)) {
+    return role
+      .map((r) => String(r ?? "").trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return String(role ?? "")
+    .split(",")
+    .map((r) => r.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function assertDigitalOperatorAuthorized(user: DigitalOperatorUser, action: "validate" | "reject"): void {
+  const uid = String(user.uid ?? "").trim();
+  if (!uid) {
+    throw new Error("Utilisateur manquant pour le flux operateur digital.");
+  }
+  const roles = normalizeRoleTokens(user.role);
+  const allowed = roles.some((r) => DIGITAL_OPERATOR_ALLOWED_ROLES.has(r));
+  if (!allowed) {
+    throw new Error(
+      action === "validate"
+        ? "Role non autorise pour valider un paiement online."
+        : "Role non autorise pour rejeter un paiement online."
+    );
+  }
+}
+
 /**
- * Valide le flux online : réservation (si présente) + cashTransaction + payment → validated + financialMovement.
+ * Validate online flow: reservation + cashTransaction + payment validated + ledger posting.
  */
 export async function validatePendingOnlinePaymentAndSyncReservation(
   payment: Payment,
   companyId: string,
   user: DigitalOperatorUser
 ): Promise<void> {
+  assertDigitalOperatorAuthorized(user, "validate");
+
   const uid = user.uid ?? "";
   const role = Array.isArray(user.role) ? user.role.join(",") : String(user.role ?? "");
 
@@ -47,17 +91,20 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
     payment.reservationId
   );
   const reservationSnap = await getDoc(reservationRef);
+  let reservationDataForDocument: Record<string, unknown> | null = null;
   if (reservationSnap.exists()) {
     const reservationData = reservationSnap.data() as Record<string, unknown>;
-    const lifecycle = String(reservationData?.status ?? "");
+    reservationDataForDocument = reservationData;
+    const lifecycleNormalized = normalizeLifecycleStatus(reservationData?.status);
+    const lifecycleIsPaid = lifecycleNormalized === "paye";
     const legacyStatut = String(reservationData?.statut ?? "").toLowerCase();
     const isConfirmable =
-      (lifecycle === "payé" && reservationData?.ticketValidatedAt == null) ||
+      (lifecycleIsPaid && reservationData?.ticketValidatedAt == null) ||
       legacyStatut === "preuve_recue" ||
       legacyStatut === "verification" ||
       legacyStatut === "en_attente_paiement";
     if (!isConfirmable) {
-      throw new Error("Cette réservation ne peut plus être confirmée.");
+      throw new Error("Cette reservation ne peut plus etre confirmee.");
     }
 
     await transitionToConfirmedOrPaidWithDailyStats(
@@ -121,11 +168,93 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
     }
   }
 
-  await confirmPayment(companyId, payment.id, uid);
+  const confirmed = await confirmPayment(companyId, payment.id, uid, {
+    actorRole: user.role,
+  });
+
+  const providerNormalized = String(payment.provider ?? "").toLowerCase();
+  const isMobileMoneyProvider =
+    providerNormalized === "wave" ||
+    providerNormalized === "orange" ||
+    providerNormalized === "moov";
+  if (isMobileMoneyProvider && confirmed?.status === "validated") {
+    const actorRoleLabel = Array.isArray(user.role)
+      ? String(user.role[0] ?? "").trim() || "operator_digital"
+      : String(user.role ?? "").trim() || "operator_digital";
+    const statutValidation =
+      confirmed.ledgerStatus === "posted"
+        ? "validee_ledger_posted"
+        : confirmed.ledgerStatus === "failed"
+          ? "validee_ledger_failed"
+          : "validee_ledger_pending";
+    const clientNom =
+      String(
+        reservationDataForDocument?.nomClient ??
+          reservationDataForDocument?.clientName ??
+          reservationDataForDocument?.fullName ??
+          ""
+      ).trim() || null;
+    const numeroClient =
+      String(
+        reservationDataForDocument?.telephone ??
+          reservationDataForDocument?.clientPhone ??
+          reservationDataForDocument?.phone ??
+          ""
+      ).trim() || null;
+    try {
+      await upsertMobileMoneyValidationDocument({
+        companyId,
+        paymentId: payment.id,
+        reservationOuOperationId: payment.reservationId,
+        agencyId: payment.agencyId,
+        clientNom,
+        numeroClient,
+        montant: Number(payment.amount ?? 0),
+        operateur: {
+          uid,
+          role: actorRoleLabel,
+          name: uid,
+        },
+        preuveVerifiee: true,
+        referenceTransactionMobileMoney: payment.id,
+        statutValidation,
+        commentaire:
+          confirmed.ledgerStatus === "failed"
+            ? confirmed.ledgerError ?? "Validation mobile money: echec posting ledger."
+            : "Validation mobile money operationnelle.",
+        visaControle: null,
+        dateHeure: new Date(),
+        status: "ready_to_print",
+        createdByUid: uid,
+      });
+    } catch (docError) {
+      console.error("[onlinePaymentOperatorService] echec fiche validation mobile money", {
+        companyId,
+        paymentId: payment.id,
+        docError,
+      });
+    }
+  }
+
+  if (reservationSnap.exists()) {
+    const ledgerStatus = confirmed?.ledgerStatus ?? "pending";
+    const reservationPatch: Record<string, unknown> = {
+      ledgerStatus,
+      "payment.ledgerStatus": ledgerStatus,
+      updatedAt: serverTimestamp(),
+    };
+    if (ledgerStatus === "failed") {
+      reservationPatch.paymentStatus = "finance_side_effects_failed";
+      reservationPatch["payment.ledgerError"] = confirmed?.ledgerError ?? "ledger_write_failed";
+    }
+    await updateDoc(reservationRef, reservationPatch).catch((err) => {
+      console.warn("[onlinePaymentOperatorService] reservation ledger patch failed:", err);
+    });
+  }
 }
 
 /**
- * Rejette le payment puis annule la réservation liée (si elle existe).
+ * Reject payment then cancel linked reservation (if exists).
  */
 export async function rejectPendingOnlinePaymentAndSyncReservation(
   payment: Payment,
@@ -133,6 +262,8 @@ export async function rejectPendingOnlinePaymentAndSyncReservation(
   user: DigitalOperatorUser,
   reason?: string
 ): Promise<void> {
+  assertDigitalOperatorAuthorized(user, "reject");
+
   const uid = user.uid ?? "";
   const role = Array.isArray(user.role) ? user.role.join(",") : String(user.role ?? "");
 
@@ -151,11 +282,12 @@ export async function rejectPendingOnlinePaymentAndSyncReservation(
   if (!reservationSnap.exists()) return;
 
   const reservationData = reservationSnap.data() as Record<string, unknown>;
-  const lifecycle = String(reservationData?.status ?? "");
-  if (lifecycle === "payé" || lifecycle === "en_attente") {
+  const lifecycleNormalized = normalizeLifecycleStatus(reservationData?.status);
+  const lifecycleIsPaid = lifecycleNormalized === "paye";
+  if (lifecycleIsPaid || lifecycleNormalized === "en_attente") {
     await updateDoc(reservationRef, {
       status: "annulé",
-      refusalReason: reason ?? "Raison non spécifiée",
+      refusalReason: reason ?? "Raison non specifiee",
       refusedBy: uid,
       refusedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -166,7 +298,7 @@ export async function rejectPendingOnlinePaymentAndSyncReservation(
       "refuse",
       { userId: uid, userRole: role },
       {
-        refusalReason: reason ?? "Raison non spécifiée",
+        refusalReason: reason ?? "Raison non specifiee",
         refusedBy: uid,
         refusedAt: serverTimestamp(),
       }

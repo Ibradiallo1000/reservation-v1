@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { useSearchParams, useParams } from "react-router-dom";
+import { useSearchParams, useParams, useNavigate } from "react-router-dom";
 import { SectionCard, ActionButton } from "@/ui";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
@@ -14,6 +14,10 @@ import { db } from "@/firebaseConfig";
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
+import {
+  upsertBankDepositDocument,
+  upsertInternalTreasuryTransferDocument,
+} from "@/modules/finance/documents/financialDocumentsService";
 
 type TransferMode = "internal_transfer" | "agency_deposit" | "mobile_to_bank";
 
@@ -34,6 +38,7 @@ const makeIdempotencyKey = () =>
 export default function TreasuryTransferPage() {
   const { user } = useAuth() as any;
   const params = useParams<{ companyId: string }>();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const companyId = params.companyId ?? searchParams.get("companyId") ?? user?.companyId ?? "";
 
@@ -114,11 +119,20 @@ export default function TreasuryTransferPage() {
       toast.error("Montant invalide.");
       return;
     }
+
+    const operationRef = makeIdempotencyKey();
+    const actorRole = Array.isArray(user.role)
+      ? String(user.role[0] ?? "").trim() || "treasury_operator"
+      : String(user.role ?? "").trim() || "treasury_operator";
+    const actorName =
+      String(user.displayName ?? user.nomComplet ?? user.name ?? "").trim() ||
+      user.uid;
+
     setSubmitting(true);
     try {
       if (mode === "internal_transfer") {
         if (!fromAccountId || !toAccountId) {
-          toast.error("Sélectionnez les comptes source et destination.");
+          toast.error("Selectionnez les comptes source et destination.");
           return;
         }
         await transferBetweenAccounts({
@@ -129,12 +143,44 @@ export default function TreasuryTransferPage() {
           currency,
           performedBy: user.uid,
           performedByRole: user.role ?? null,
-          idempotencyKey: makeIdempotencyKey(),
+          idempotencyKey: operationRef,
           description: description.trim() || "Transfert interne",
         });
+
+        try {
+          await upsertInternalTreasuryTransferDocument({
+            companyId,
+            sourceId: operationRef,
+            agencyId: selectedFrom?.agencyId ?? selectedTo?.agencyId ?? null,
+            sourceTypeLabel: selectedFrom?.accountType ?? null,
+            sourceLibelle: selectedFrom?.accountName ?? fromAccountId,
+            destinationTypeLabel: selectedTo?.accountType ?? null,
+            destinationLibelle: selectedTo?.accountName ?? toAccountId,
+            montant: numericAmount,
+            devise: currency,
+            motif: description.trim() || "Transfert interne",
+            initiateur: {
+              uid: user.uid,
+              name: actorName,
+              role: actorRole,
+              phone: user.phone ?? null,
+            },
+            observations: description.trim() || null,
+            dateCreation: new Date(),
+            dateExecution: new Date(),
+            status: "ready_to_print",
+            createdByUid: user.uid,
+          });
+        } catch (docError) {
+          console.error("[TreasuryTransferPage] echec generation bordereau transfert interne", {
+            companyId,
+            operationRef,
+            docError,
+          });
+        }
       } else if (mode === "agency_deposit") {
         if (!fromAccountId || !toAccountId) {
-          toast.error("Sélectionnez la caisse agence et la banque compagnie.");
+          toast.error("Selectionnez la caisse agence et la banque compagnie.");
           return;
         }
         await agencyDepositToBank({
@@ -145,12 +191,56 @@ export default function TreasuryTransferPage() {
           currency,
           performedBy: user.uid,
           performedByRole: user.role ?? null,
-          idempotencyKey: makeIdempotencyKey(),
-          description: description.trim() || "Dépôt caisse vers banque",
+          idempotencyKey: operationRef,
+          description: description.trim() || "Depot caisse vers banque",
         });
+
+        try {
+          const bankId = toAccountId.startsWith("company_bank_")
+            ? toAccountId.slice("company_bank_".length)
+            : "";
+          await upsertBankDepositDocument({
+            companyId,
+            sourceId: operationRef,
+            agencyId: selectedFrom?.agencyId ?? null,
+            compteSourceLibelle: selectedFrom?.accountName ?? fromAccountId,
+            banqueNom: companyBanksById[bankId] ?? selectedTo?.accountName ?? null,
+            numeroCompte: null,
+            titulaireCompte: null,
+            referenceDepotBancaire: operationRef,
+            montantVerse: numericAmount,
+            devise: currency,
+            natureFonds: "cash_agence",
+            motifVersement: description.trim() || "Depot caisse vers banque",
+            initiateur: {
+              uid: user.uid,
+              name: actorName,
+              role: actorRole,
+              phone: user.phone ?? null,
+            },
+            executant: {
+              uid: user.uid,
+              name: actorName,
+              role: actorRole,
+              phone: user.phone ?? null,
+            },
+            preuveJointeDisponible: false,
+            nombrePiecesJointes: 0,
+            dateCreation: new Date(),
+            dateExecution: new Date(),
+            status: "ready_to_print",
+            createdByUid: user.uid,
+          });
+        } catch (docError) {
+          console.error("[TreasuryTransferPage] echec generation bordereau versement banque", {
+            companyId,
+            operationRef,
+            docError,
+          });
+        }
       } else {
         if (!fromAccountId || !toAccountId) {
-          toast.error("Sélectionnez le compte mobile money et la banque compagnie.");
+          toast.error("Selectionnez le compte mobile money et la banque compagnie.");
           return;
         }
         await mobileToBankTransfer({
@@ -161,11 +251,56 @@ export default function TreasuryTransferPage() {
           currency,
           performedBy: user.uid,
           performedByRole: user.role ?? null,
-          idempotencyKey: makeIdempotencyKey(),
+          idempotencyKey: operationRef,
           description: description.trim() || "Transfert mobile money vers banque",
         });
+
+        try {
+          const bankId = toAccountId.startsWith("company_bank_")
+            ? toAccountId.slice("company_bank_".length)
+            : "";
+          await upsertBankDepositDocument({
+            companyId,
+            sourceId: operationRef,
+            agencyId: selectedFrom?.agencyId ?? null,
+            compteSourceLibelle: selectedFrom?.accountName ?? fromAccountId,
+            banqueNom: companyBanksById[bankId] ?? selectedTo?.accountName ?? null,
+            numeroCompte: null,
+            titulaireCompte: null,
+            referenceDepotBancaire: operationRef,
+            montantVerse: numericAmount,
+            devise: currency,
+            natureFonds: "mobile_money",
+            motifVersement: description.trim() || "Transfert mobile money vers banque",
+            initiateur: {
+              uid: user.uid,
+              name: actorName,
+              role: actorRole,
+              phone: user.phone ?? null,
+            },
+            executant: {
+              uid: user.uid,
+              name: actorName,
+              role: actorRole,
+              phone: user.phone ?? null,
+            },
+            preuveJointeDisponible: false,
+            nombrePiecesJointes: 0,
+            dateCreation: new Date(),
+            dateExecution: new Date(),
+            status: "ready_to_print",
+            createdByUid: user.uid,
+          });
+        } catch (docError) {
+          console.error("[TreasuryTransferPage] echec generation bordereau mobile->banque", {
+            companyId,
+            operationRef,
+            docError,
+          });
+        }
       }
-      toast.success("Transfert enregistré.");
+
+      toast.success("Transfert enregistre.");
       setAmount("");
       setDescription("");
     } catch (error) {
@@ -174,7 +309,6 @@ export default function TreasuryTransferPage() {
       setSubmitting(false);
     }
   };
-
   if (!companyId) {
     return <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
   }
@@ -186,6 +320,15 @@ export default function TreasuryTransferPage() {
           <div className="py-8 text-center text-gray-500">Chargement des comptes...</div>
         ) : (
           <div className="space-y-4">
+            <div className="flex justify-end">
+              <ActionButton
+                type="button"
+                variant="secondary"
+                onClick={() => navigate(`/compagnie/${companyId}/accounting/documents`)}
+              >
+                Documents & archives
+              </ActionButton>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <button
                 type="button"
@@ -287,4 +430,6 @@ export default function TreasuryTransferPage() {
     </div>
   );
 }
+
+
 

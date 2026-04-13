@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { SectionCard, ActionButton } from "@/ui";
 import { listAccounts } from "@/modules/compagnie/treasury/financialAccounts";
 import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
@@ -36,6 +36,7 @@ const makeIdempotencyKey = () =>
 
 export default function TreasurySupplierPaymentPage() {
   const { user } = useAuth() as any;
+  const navigate = useNavigate();
   const params = useParams<{ companyId: string }>();
   const [searchParams] = useSearchParams();
   const companyId = params.companyId ?? searchParams.get("companyId") ?? user?.companyId ?? "";
@@ -152,6 +153,15 @@ export default function TreasurySupplierPaymentPage() {
           <div className="py-8 text-center text-gray-500">Chargement...</div>
         ) : (
           <div className="space-y-4">
+            <div className="flex justify-end">
+              <ActionButton
+                type="button"
+                variant="secondary"
+                onClick={() => navigate(`/compagnie/${companyId}/accounting/documents`)}
+              >
+                Documents & archives
+              </ActionButton>
+            </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Facture fournisseur (payable)</label>
               <select
@@ -214,4 +224,3 @@ export default function TreasurySupplierPaymentPage() {
     </div>
   );
 }
-

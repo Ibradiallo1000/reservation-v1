@@ -1,12 +1,14 @@
 /**
- * Entité Payment — unification des flux guichet + online.
+ * Entite Payment - unification des flux guichet + online.
  * Collection: companies/{companyId}/payments/{paymentId}
  */
 
 export type PaymentChannel = "guichet" | "online" | "courrier";
 export type PaymentProvider = "wave" | "orange" | "moov" | "cash";
-/** Après validation opérateur / guichet : statut "validated" (ledger + compta). */
+/** Apres validation operateur / guichet : statut "validated". */
 export type PaymentStatus = "pending" | "validated" | "rejected" | "refunded";
+/** Statut de synchronisation payment -> ledger. */
+export type PaymentLedgerStatus = "pending" | "posted" | "failed";
 
 export interface Payment {
   id: string;
@@ -18,6 +20,12 @@ export interface Payment {
   channel: PaymentChannel;
   provider: PaymentProvider;
   status: PaymentStatus;
+  /** Source de verite finance: posted uniquement quand l'ecriture ledger est enregistree. */
+  ledgerStatus: PaymentLedgerStatus;
+  ledgerPostedAt?: unknown;
+  ledgerLastAttemptAt?: unknown;
+  ledgerError?: string | null;
+  ledgerRetryCount?: number;
   createdAt: unknown;
   validatedAt?: unknown;
   validatedBy?: string;
@@ -36,8 +44,8 @@ export interface CreatePaymentData {
   status?: PaymentStatus;
   validatedBy?: string;
   /**
-   * Si défini : `setDoc` avec cet ID (ex. réservation en ligne = même id que `reservationId`)
-   * pour permettre getDoc public + règles Firestore sans requête list.
+   * Si defini : `setDoc` avec cet ID (ex. reservation en ligne = meme id que `reservationId`)
+   * pour permettre getDoc public + regles Firestore sans requete list.
    */
   paymentDocumentId?: string;
 }

@@ -21,19 +21,13 @@ const ConditionsPage = lazy(() => import("@/modules/compagnie/public/pages/Condi
 const CookiesPage = lazy(() => import("@/modules/compagnie/public/pages/CookiesPage"));
 const ReservationDetailsPage = lazy(() => import("./modules/compagnie/public/pages/ReservationDetailsPage"));
 const AdminParametresPlatformPage = lazy(() => import("./modules/plateforme/pages/AdminParametresPlatformPage"));
-const VueGlobale = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.VueGlobale })));
-const Finances = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Finances })));
-const Rapports = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Rapports })));
-const Parametres = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Parametres })));
 const DepensesPage = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.DepensesPage })));
-const ExpenseDashboard = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.ExpenseDashboard })));
 const DigitalCashReservationsPage = lazy(() =>
   import("@/modules/compagnie/finances/pages/DigitalCashReservationsPage")
 );
 const FinancialConsistencyDiagnosticsPage = lazy(
   () => import("@/modules/compagnie/finances/pages/FinancialConsistencyDiagnosticsPage")
 );
-const ComptaPage = lazy(() => import("@/modules/compagnie/compta/pages/ComptaPage"));
 const ReservationPrintPage = lazy(() => import("@/modules/agence/guichet/pages/ReservationPrintPage"));
 
 const HomePage = lazy(() => import("./modules/plateforme/pages/HomePage"));
@@ -64,6 +58,9 @@ const AdminRevenueDashboard = lazy(() => import("./modules/plateforme/pages/Admi
 const CompagnieLayout = lazy(() => import("@/modules/compagnie/admin/layout/CompagnieLayout"));
 const GarageLayout = lazy(() => import("@/modules/compagnie/layout/GarageLayout"));
 const CompanyAccountantLayout = lazy(() => import("@/modules/compagnie/accounting/layout/CompanyAccountantLayout"));
+const HeadAccountantDashboardPage = lazy(() => import("@/modules/compagnie/accounting/pages/HeadAccountantDashboardPage"));
+const HeadAccountantControlPage = lazy(() => import("@/modules/compagnie/accounting/pages/HeadAccountantControlPage"));
+const HeadAccountantJournalReportsPage = lazy(() => import("@/modules/compagnie/accounting/pages/HeadAccountantJournalReportsPage"));
 const CompagnieDashboard = lazy(() => import("./modules/compagnie/pages/CompagnieDashboard"));
 const CEOCommandCenterPage = lazy(() => import("@/modules/compagnie/pages/CEOCommandCenterPage"));
 const CEOPaymentApprovalsPage = lazy(() =>
@@ -83,7 +80,6 @@ const CompagnieParametresTabsPage = lazy(() => import("./modules/compagnie/pages
 const CompagnieReservationsPage = lazy(() => import("./modules/compagnie/pages/CompagnieReservationsPage"));
 const CompagnieCustomersPage = lazy(() => import("./modules/compagnie/pages/CompagnieCustomersPage"));
 const CompagnieCustomerProfilePage = lazy(() => import("./modules/compagnie/pages/CompagnieCustomerProfilePage"));
-const CompagnieComptabilitePage = lazy(() => import("./modules/compagnie/pages/CompagnieComptabilitePage"));
 const BibliothequeImagesPage = lazy(() => import("./modules/compagnie/pages/BibliothequeImagesPage"));
 const CompanyPaymentSettingsPage = lazy(() => import("./modules/compagnie/pages/CompanyPaymentSettingsPage"));
 const AvisModerationPage = lazy(() => import("./modules/compagnie/pages/AvisModerationPage"));
@@ -108,6 +104,12 @@ const TreasuryNewOperationPage = lazy(() => import("./modules/compagnie/treasury
 const TreasuryTransferPage = lazy(() => import("./modules/compagnie/treasury/pages/TreasuryTransferPage"));
 const TreasurySupplierPaymentPage = lazy(() => import("./modules/compagnie/treasury/pages/TreasurySupplierPaymentPage"));
 const TreasuryNewPayablePage = lazy(() => import("./modules/compagnie/treasury/pages/TreasuryNewPayablePage"));
+const FinancialDocumentsArchivePage = lazy(
+  () => import("@/modules/finance/documents/FinancialDocumentsArchivePage")
+);
+const FinancialDocumentPrintPage = lazy(
+  () => import("@/modules/finance/documents/FinancialDocumentPrintPage")
+);
 
 // ── Agency Manager (refactored) ──
 const ManagerShellPage = lazy(() => import("./modules/agence/manager/ManagerShellPage"));
@@ -446,6 +448,8 @@ const AppRoutes = () => {
           <Route path="comptabilite/validation" element={<CompagnieComptabiliteValidationPage />} />
           <Route path="comptabilite" element={<Navigate to="audit-controle?tab=controle" replace />} />
           <Route path="audit-controle" element={<AuditControlePage />} />
+          <Route path="documents" element={<FinancialDocumentsArchivePage />} />
+          <Route path="documents/:documentId/print" element={<FinancialDocumentPrintPage />} />
           <Route path="system-errors" element={<CompanySystemErrorsPage />} />
           <Route path="agences" element={<CompagnieAgencesPage />} />
           <Route path="parametres" element={<CompagnieParametresTabsPage />} />
@@ -508,38 +512,30 @@ const AppRoutes = () => {
             </PrivateRoute>
           }
         >
-          <Route index element={<VueGlobale />} />
-          <Route
-            path="reservations-reseau"
-            element={
-              <GlobalPeriodProvider>
-                <GlobalDataSnapshotProvider>
-                  <ReservationsReseauPage />
-                </GlobalDataSnapshotProvider>
-              </GlobalPeriodProvider>
-            }
-          />
-          <Route
-            path="reservations-reseau/reservations"
-            element={
-              <GlobalPeriodProvider>
-                <GlobalDataSnapshotProvider>
-                  <CompagnieReservationsPage />
-                </GlobalDataSnapshotProvider>
-              </GlobalPeriodProvider>
-            }
-          />
-          <Route path="finances" element={<Finances />} />
-          <Route path="compta" element={<ComptaPage />} />
-          <Route path="expenses" element={<DepensesPage />} />
-          <Route path="expenses-dashboard" element={<ExpenseDashboard />} />
-          <Route path="treasury" element={<CEOTreasuryPage />} />
-          <Route path="treasury/new-operation" element={<TreasuryNewOperationPage />} />
-          <Route path="treasury/new-payable" element={<TreasuryNewPayablePage />} />
-          <Route path="treasury/transfer" element={<TreasuryTransferPage />} />
+          <Route index element={<Navigate to="dashboard-financier" replace />} />
+          <Route path="dashboard-financier" element={<HeadAccountantDashboardPage />} />
+          <Route path="controle-validations" element={<HeadAccountantControlPage />} />
+          <Route path="tresorerie-reseau" element={<CEOTreasuryPage />} />
+          <Route path="tresorerie-reseau/new-operation" element={<TreasuryNewOperationPage />} />
+          <Route path="tresorerie-reseau/new-payable" element={<TreasuryNewPayablePage />} />
+          <Route path="tresorerie-reseau/transfer" element={<TreasuryTransferPage />} />
           <Route path="supplier-payments" element={<TreasurySupplierPaymentPage />} />
-          <Route path="rapports" element={<Rapports />} />
-          <Route path="parametres" element={<Parametres />} />
+          <Route path="depenses" element={<DepensesPage />} />
+          <Route path="journal-rapports" element={<HeadAccountantJournalReportsPage />} />
+          <Route path="documents" element={<FinancialDocumentsArchivePage />} />
+          <Route path="documents/:documentId/print" element={<FinancialDocumentPrintPage />} />
+          <Route path="finances" element={<Navigate to="../dashboard-financier" replace />} />
+          <Route path="reservations-reseau" element={<Navigate to="../dashboard-financier" replace />} />
+          <Route path="reservations-reseau/reservations" element={<Navigate to="../dashboard-financier" replace />} />
+          <Route path="compta" element={<Navigate to="../controle-validations" replace />} />
+          <Route path="expenses" element={<Navigate to="../depenses" replace />} />
+          <Route path="expenses-dashboard" element={<Navigate to="../depenses" replace />} />
+          <Route path="treasury" element={<Navigate to="../tresorerie-reseau" replace />} />
+          <Route path="treasury/new-operation" element={<Navigate to="../tresorerie-reseau/new-operation" replace />} />
+          <Route path="treasury/new-payable" element={<Navigate to="../tresorerie-reseau/new-payable" replace />} />
+          <Route path="treasury/transfer" element={<Navigate to="../tresorerie-reseau/transfer" replace />} />
+          <Route path="rapports" element={<Navigate to="../journal-rapports" replace />} />
+          <Route path="parametres" element={<Navigate to="../dashboard-financier" replace />} />
           <Route
             path="consistency-diagnostics"
             element={<FinancialConsistencyDiagnosticsPage />}
@@ -560,7 +556,14 @@ const AppRoutes = () => {
           <Route index element={<Navigate to="activite" replace />} />
           <Route path="activite" element={<AgencyActivityDomainPage />} />
           <Route path="activity-log" element={<AgencyActivityLogPage />} />
-          <Route path="caisse" element={<AgencyCashDomainPage />} />
+          <Route
+            path="caisse"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.cashControl} withCurrency>
+                <AgencyCashDomainPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="dashboard" element={<Navigate to="/agence/activite" replace />} />
           <Route path="operations" element={<Navigate to="/agence/activite#activite-operations" replace />} />
           <Route path="trajets" element={<ProtectedRoute allowedRoles={routePermissions.agenceShell} withCurrency><AgenceTrajetsPage /></ProtectedRoute>} />
@@ -575,9 +578,30 @@ const AppRoutes = () => {
           />
           <Route path="expenses" element={<Navigate to="/agence/caisse#caisse-depenses" replace />} />
           <Route path="treasury" element={<Navigate to="/agence/caisse#caisse-tresorerie" replace />} />
-          <Route path="treasury/new-operation" element={<AgencyTreasuryNewOperationPage />} />
-          <Route path="treasury/transfer" element={<AgencyTreasuryTransferPage />} />
-          <Route path="treasury/new-payable" element={<AgencyTreasuryNewPayablePage />} />
+          <Route
+            path="treasury/new-operation"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency>
+                <AgencyTreasuryNewOperationPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="treasury/transfer"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.cashControl} withCurrency>
+                <AgencyTreasuryTransferPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="treasury/new-payable"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency>
+                <AgencyTreasuryNewPayablePage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="team" element={<ManagerTeamPage />} />
           <Route
             path="validation-departs"
@@ -604,6 +628,14 @@ const AppRoutes = () => {
             }
           />
           <Route path="reports" element={<ManagerReportsPage />} />
+          <Route
+            path="documents"
+            element={
+              <ProtectedRoute allowedRoles={routePermissions.financialDocumentsAgency} withCurrency>
+                <Navigate to="/agence/comptabilite/documents" replace />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="agent-history"
             element={
@@ -695,6 +727,14 @@ const AppRoutes = () => {
         <Route
           path="/agence/comptabilite"
           element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} withCurrency><AgenceComptabilitePage /></ProtectedRoute>}
+        />
+        <Route
+          path="/agence/comptabilite/documents"
+          element={<ProtectedRoute allowedRoles={routePermissions.financialDocumentsAgency} withCurrency><FinancialDocumentsArchivePage /></ProtectedRoute>}
+        />
+        <Route
+          path="/agence/comptabilite/documents/:documentId/print"
+          element={<ProtectedRoute allowedRoles={routePermissions.financialDocumentsAgency} withCurrency><FinancialDocumentPrintPage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/treasury/new-operation"

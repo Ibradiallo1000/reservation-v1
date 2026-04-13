@@ -16,6 +16,10 @@ import {
   paymentProposalRef,
 } from "./paymentProposalsService";
 import type { PaymentProposalDoc, ApprovalHistoryEntry } from "./paymentProposalsTypes";
+import {
+  upsertCashDisbursementDocument,
+  upsertSupplierPaymentOrderDocument,
+} from "@/modules/finance/documents/financialDocumentsService";
 
 const REFERENCE_TYPE: ReferenceType = "payable_payment";
 
@@ -40,6 +44,116 @@ function computeStatus(totalAmount: number, amountPaid: number): PayableStatus {
   if (amountPaid <= 0) return "pending";
   if (amountPaid >= totalAmount) return "paid";
   return "partially_paid";
+}
+
+async function syncPayableDisbursementDocument(params: {
+  companyId: string;
+  sourceType: "payable_payment" | "payment_proposal";
+  sourceId: string;
+  eventKey?: string | null;
+  payableId: string;
+  fromAccountId: string;
+  amount: number;
+  currency: string;
+  requesterUid: string;
+  requesterRole?: string | null;
+  approverUid?: string | null;
+  approverRole?: string | null;
+  agencyId?: string | null;
+  beneficiaryName?: string | null;
+  reason?: string | null;
+  validationLevel: string;
+  status: "draft" | "ready_to_print" | "archived";
+  observations?: string | null;
+  executionDate?: unknown;
+  createdByUid?: string | null;
+}): Promise<void> {
+  try {
+    const accountSnap = await getDoc(financialAccountRef(params.companyId, params.fromAccountId));
+    const accountData = accountSnap.exists()
+      ? (accountSnap.data() as { accountName?: string; currency?: string; accountType?: string })
+      : {};
+    await upsertCashDisbursementDocument({
+      companyId: params.companyId,
+      agencyId: params.agencyId ?? null,
+      sourceType: params.sourceType,
+      sourceId: params.sourceId,
+      eventKey: params.eventKey ?? null,
+      requester: {
+        uid: params.requesterUid,
+        role: String(params.requesterRole ?? "requester").trim() || "requester",
+      },
+      approver: params.approverUid
+        ? {
+            uid: params.approverUid,
+            role: String(params.approverRole ?? "validator").trim() || "validator",
+          }
+        : null,
+      beneficiaryName: params.beneficiaryName ?? null,
+      amount: Number(params.amount ?? 0),
+      currency: String(accountData.currency ?? params.currency ?? "XOF"),
+      expenseCategory: "supplier_payment",
+      reason: params.reason ?? `Paiement fournisseur (${params.payableId})`,
+      accountSourceLabel:
+        String(accountData.accountName ?? "").trim() || params.fromAccountId,
+      validationLevel: params.validationLevel,
+      executionDate: params.executionDate ?? Timestamp.now(),
+      observations: params.observations ?? null,
+      status: params.status,
+      createdByUid: params.createdByUid ?? params.requesterUid,
+    });
+    const modePaiement = String(accountData.accountType ?? "").includes("mobile")
+      ? "mobile_money"
+      : String(accountData.accountType ?? "").includes("bank")
+        ? "virement_banque"
+        : "cash";
+    await upsertSupplierPaymentOrderDocument({
+      companyId: params.companyId,
+      sourceType: params.sourceType,
+      sourceId: params.sourceId,
+      eventKey: params.eventKey ?? null,
+      agenceId: params.agencyId ?? null,
+      fournisseurNom: params.beneficiaryName ?? null,
+      fournisseurTelephone: null,
+      fournisseurAdresse: null,
+      fournisseurReference: params.payableId,
+      factureNumero: null,
+      devisNumero: null,
+      objetPaiement: params.reason ?? null,
+      montantHT: null,
+      montantTTC: Number(params.amount ?? 0),
+      montantAPayer: Number(params.amount ?? 0),
+      devise: String(accountData.currency ?? params.currency ?? "XOF"),
+      modePaiement,
+      sourcePaiement:
+        String(accountData.accountName ?? "").trim() || params.fromAccountId,
+      dateExecution: params.executionDate ?? Timestamp.now(),
+      depenseLieeId: params.payableId,
+      validationChefComptable: params.approverUid
+        ? {
+            uid: params.approverUid,
+            role: params.approverRole ?? "validator",
+          }
+        : null,
+      validationDirection: params.approverUid
+        ? {
+            uid: params.approverUid,
+            role: params.approverRole ?? "validator",
+          }
+        : null,
+      observations: params.observations ?? null,
+      status: params.status,
+      createdByUid: params.createdByUid ?? params.requesterUid,
+    });
+  } catch (docError) {
+    console.error("[paymentsService] echec sync documents paiement fournisseur", {
+      companyId: params.companyId,
+      sourceType: params.sourceType,
+      sourceId: params.sourceId,
+      payableId: params.payableId,
+      docError,
+    });
+  }
 }
 
 /**
@@ -115,6 +229,27 @@ export async function payPayable(params: PayPayableParams): Promise<PayPayableRe
       createdByRole: params.performedByRole ?? "unknown",
       idempotencyKey: params.idempotencyKey,
     });
+    await syncPayableDisbursementDocument({
+      companyId: params.companyId,
+      sourceType: "payment_proposal",
+      sourceId: proposalId,
+      payableId: params.payableId,
+      fromAccountId: params.fromAccountId,
+      amount,
+      currency: params.currency,
+      requesterUid: params.performedBy,
+      requesterRole: params.performedByRole ?? "unknown",
+      approverUid: null,
+      approverRole: null,
+      agencyId: payableData.agencyId ?? null,
+      beneficiaryName: payableData.supplierName ?? null,
+      reason: payableData.description ?? null,
+      validationLevel: "pending_ceo_approval",
+      status: "draft",
+      observations: "Proposition de paiement en attente d'approbation CEO.",
+      executionDate: Timestamp.now(),
+      createdByUid: params.performedBy,
+    });
     return { status: "pending_ceo_approval", proposalId };
   }
 
@@ -151,6 +286,28 @@ export async function payPayable(params: PayPayableParams): Promise<PayPayableRe
   } catch {
     /* keep payable state as source */
   }
+  await syncPayableDisbursementDocument({
+    companyId: params.companyId,
+    sourceType: "payable_payment",
+    sourceId: params.payableId,
+    eventKey: params.idempotencyKey,
+    payableId: params.payableId,
+    fromAccountId: params.fromAccountId,
+    amount,
+    currency: params.currency,
+    requesterUid: params.performedBy,
+    requesterRole: params.performedByRole ?? "unknown",
+    approverUid: payableData.approvedBy ?? null,
+    approverRole: payableData.approvedByRole ?? null,
+    agencyId: payableData.agencyId ?? null,
+    beneficiaryName: payableData.supplierName ?? null,
+    reason: payableData.description ?? null,
+    validationLevel: "executed_direct",
+    status: "ready_to_print",
+    observations: "Paiement fournisseur execute.",
+    executionDate: Timestamp.now(),
+    createdByUid: params.performedBy,
+  });
 
   return { status: "executed" };
 }
@@ -228,19 +385,43 @@ export async function approvePaymentProposal(params: ApprovePaymentProposalParam
     const acc = accSnap.exists()
       ? (accSnap.data() as { accountType?: string | null; agencyId?: string | null })
       : {};
+    const payableSnap = await getDoc(payableRef(params.companyId, p.payableId));
+    const payableData = payableSnap.exists() ? (payableSnap.data() as PayableDoc) : null;
     const debitId = ledgerDocIdFromFinancialAccountData(acc);
-    if (!debitId) return;
-    await createFinancialTransaction({
+    if (debitId) {
+      await createFinancialTransaction({
+        companyId: params.companyId,
+        type: "expense",
+        expenseDebitLedgerDocId: debitId,
+        source: String(acc.accountType ?? "").includes("mobile") ? "mobile_money" : String(acc.accountType ?? "").includes("bank") ? "bank" : "cash",
+        amount: Number(p.amount ?? 0),
+        currency: p.currency,
+        agencyId: p.agencyId ?? null,
+        referenceType: REFERENCE_TYPE,
+        referenceId: `${p.payableId}_ceo_${params.proposalId}`,
+        metadata: { payableId: p.payableId, proposalId: params.proposalId },
+      });
+    }
+    await syncPayableDisbursementDocument({
       companyId: params.companyId,
-      type: "expense",
-      expenseDebitLedgerDocId: debitId,
-      source: String(acc.accountType ?? "").includes("mobile") ? "mobile_money" : String(acc.accountType ?? "").includes("bank") ? "bank" : "cash",
+      sourceType: "payment_proposal",
+      sourceId: params.proposalId,
+      payableId: p.payableId,
+      fromAccountId: p.fromAccountId,
       amount: Number(p.amount ?? 0),
       currency: p.currency,
+      requesterUid: p.proposedBy,
+      requesterRole: p.createdByRole ?? "requester",
+      approverUid: params.approvedBy,
+      approverRole: approvedByRole,
       agencyId: p.agencyId ?? null,
-      referenceType: REFERENCE_TYPE,
-      referenceId: `${p.payableId}_ceo_${params.proposalId}`,
-      metadata: { payableId: p.payableId, proposalId: params.proposalId },
+      beneficiaryName: payableData?.supplierName ?? null,
+      reason: payableData?.description ?? null,
+      validationLevel: "ceo_approved",
+      status: "ready_to_print",
+      observations: "Proposition de paiement approuvee et executee.",
+      executionDate: Timestamp.now(),
+      createdByUid: params.approvedBy,
     });
   } catch {
     /* ignore: approval already persisted */
@@ -281,5 +462,28 @@ export async function rejectPaymentProposal(params: RejectPaymentProposalParams)
     approvedByRole,
     rejectionReason: params.rejectionReason ?? null,
     approvalHistory: history,
+  });
+  const payableSnap = await getDoc(payableRef(params.companyId, proposal.payableId));
+  const payableData = payableSnap.exists() ? (payableSnap.data() as PayableDoc) : null;
+  await syncPayableDisbursementDocument({
+    companyId: params.companyId,
+    sourceType: "payment_proposal",
+    sourceId: params.proposalId,
+    payableId: proposal.payableId,
+    fromAccountId: proposal.fromAccountId,
+    amount: Number(proposal.amount ?? 0),
+    currency: proposal.currency,
+    requesterUid: proposal.proposedBy,
+    requesterRole: proposal.createdByRole ?? "requester",
+    approverUid: params.approvedBy,
+    approverRole: approvedByRole,
+    agencyId: proposal.agencyId ?? null,
+    beneficiaryName: payableData?.supplierName ?? null,
+    reason: payableData?.description ?? null,
+    validationLevel: "ceo_rejected",
+    status: "archived",
+    observations: params.rejectionReason ?? "Proposition de paiement rejetee.",
+    executionDate: Timestamp.now(),
+    createdByUid: params.approvedBy,
   });
 }

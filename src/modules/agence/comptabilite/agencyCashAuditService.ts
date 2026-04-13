@@ -14,6 +14,7 @@ import {
   serverTimestamp,
   startAfter,
   Timestamp,
+  updateDoc,
   type DocumentData,
   type QueryDocumentSnapshot,
   where,
@@ -40,6 +41,45 @@ const MAX_PAGES = 40;
 const CLOSED_SESSION_STATUSES = ["closed", "CLOSED", "validated", "VALIDATED", "validated_agency"] as const;
 
 const MIRROR_LEDGER_EPSILON = 0.02;
+const MIRROR_REPAIR_COOLDOWN_MS = 5 * 60 * 1000;
+const lastMirrorRepairAttemptByKey = new Map<string, number>();
+
+async function maybeRepairAgencyCashMirror(params: {
+  companyId: string;
+  agencyId: string;
+  ledgerCash: number;
+  mirrorCash: number;
+  logContext: string;
+}): Promise<void> {
+  if (Math.abs(params.mirrorCash - params.ledgerCash) <= MIRROR_LEDGER_EPSILON) return;
+
+  const key = `${params.companyId}:${params.agencyId}:${params.ledgerCash}:${params.mirrorCash}`;
+  const nowMs = Date.now();
+  const lastAttempt = lastMirrorRepairAttemptByKey.get(key) ?? 0;
+  if (nowMs - lastAttempt < MIRROR_REPAIR_COOLDOWN_MS) return;
+  lastMirrorRepairAttemptByKey.set(key, nowMs);
+
+  try {
+    await updateDoc(financialAccountRef(params.companyId, agencyCashAccountId(params.agencyId)), {
+      currentBalance: params.ledgerCash,
+      updatedAt: serverTimestamp(),
+    });
+    console.warn("[caisse] Miroir financialAccounts recale sur ledger.", {
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      ledgerCash: params.ledgerCash,
+      mirrorCashBefore: params.mirrorCash,
+      context: params.logContext,
+    });
+  } catch (err) {
+    console.error("[caisse] Echec re-synchronisation miroir financialAccounts.", {
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      context: params.logContext,
+      err,
+    });
+  }
+}
 
 /**
  * Caisse espèces agence pour la trésorerie : **uniquement** le solde ledger (`accounts`).
@@ -75,6 +115,13 @@ export async function getAgencyTreasuryLedgerCashDisplay(
       agencyId,
       ledgerCash,
       mirrorCash,
+    });
+    void maybeRepairAgencyCashMirror({
+      companyId,
+      agencyId,
+      ledgerCash,
+      mirrorCash,
+      logContext: "getAgencyTreasuryLedgerCashDisplay",
     });
   }
   return { ledgerCash, mirrorCash, currency };
@@ -247,6 +294,13 @@ export async function getAgencyCashPosition(
       soldeLedger: soldeCash,
       mirror: mirrorBal,
       comptaMoinsSortiesIndicatif: caisseDisponibleAgregat,
+    });
+    void maybeRepairAgencyCashMirror({
+      companyId,
+      agencyId,
+      ledgerCash: soldeCash,
+      mirrorCash: mirrorBal,
+      logContext: "getAgencyCashPosition",
     });
   }
 

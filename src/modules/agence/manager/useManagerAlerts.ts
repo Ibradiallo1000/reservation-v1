@@ -232,9 +232,24 @@ export function useManagerAlerts(): ManagerAlertsResult {
       const incidents = listChefIncidents(companyId, agencyId);
       setOpenIncidentCount(incidents.filter((i) => i.status === "open").length);
     };
-    refresh();
-    const id = setInterval(refresh, 5000);
-    return () => clearInterval(id);
+    const refreshIfVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      refresh();
+    };
+    const onVisibilityOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      refresh();
+    };
+
+    refreshIfVisible();
+    const id = window.setInterval(refreshIfVisible, 30_000);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
+    };
   }, [companyId, agencyId]);
 
   useEffect(() => {
@@ -256,11 +271,23 @@ export function useManagerAlerts(): ManagerAlertsResult {
           if (!cancelled) setPendingCashRecon(null);
         });
     };
-    run();
-    const id = setInterval(run, 90_000);
+    const runIfVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      run();
+    };
+    const onVisibilityOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      run();
+    };
+    runIfVisible();
+    const id = window.setInterval(runIfVisible, 120_000);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      window.clearInterval(id);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
   }, [companyId, agencyId, shifts.length]);
 

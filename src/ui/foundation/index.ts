@@ -2,7 +2,18 @@
  * Teliya Design System — Foundation tokens (authoritative).
  * Single import for all design tokens.
  */
-export { spacing, spacingClasses, pagePaddingX, pagePaddingY, pagePadding, pageVerticalGap, pageMaxWidth } from "./spacing";
+export {
+  spacing,
+  spacingClasses,
+  pagePaddingX,
+  pagePaddingY,
+  pagePadding,
+  pageVerticalGap,
+  pageMaxWidth,
+  pageMaxWidthFluid,
+  dashboardKpiGrid,
+  dashboardKpiMinWidth,
+} from "./spacing";
 export { typography } from "./typography";
 export type { TypographyKey } from "./typography";
 export { radius } from "./radius";

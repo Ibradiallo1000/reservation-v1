@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
 import { CASH_TRANSACTION_STATUS, LOCATION_TYPE } from "@/modules/compagnie/cash/cashTypes";
+import { isConfirmedTransactionStatus } from "@/modules/compagnie/treasury/financialTransactions";
 import { USE_PAYMENTS_AS_SOURCE } from "@/config/featureFlags";
 
 export type MoneyPositionsSnapshot = {
@@ -44,7 +45,7 @@ export type MoneyPositionsSnapshot = {
     | { agencyId: string; type: "TX_WITHOUT_SESSION"; count: number }
     | { agencyId: string; type: "VALIDATED_WITHOUT_TX"; sessionId: string }
   >;
-  /** Total des payments confirmés sur la période (flux unifié, lecture seule). Conservé en parallèle de cashTransactions. */
+  /** Total des payments validés ET ledger postés sur la période (pas de pending/failed). */
   paymentsConfirmedTotal?: number;
   lastUpdatedAt: Date | null;
   mode?: "realtime";
@@ -95,9 +96,6 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
   const bySessionRef = React.useRef<MoneyPositionsSnapshot["bySession"]>({});
   const inconsistenciesRef = React.useRef<MoneyPositionsSnapshot["inconsistencies"]>([]);
   const paymentsConfirmedRef = React.useRef(0);
-  const paymentsConfirmedByAgencyRef = React.useRef<Record<string, number>>({});
-  const validatedAgencyOnlineRef = React.useRef(0);
-  const validatedAgencyByAgencyOnlineRef = React.useRef<Record<string, number>>({});
   const validatedAgencyShiftOnlyRef = React.useRef(0);
   const validatedAgencyByAgencyShiftOnlyRef = React.useRef<Record<string, number>>({});
   const validatedAgencyBySessionShiftOnlyRef = React.useRef<Record<string, Record<string, number>>>({});
@@ -203,6 +201,7 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
           let duplicates = 0;
           snap.docs.forEach((d) => {
             const m = d.data() as any;
+            if (!isConfirmedTransactionStatus(String(m.status ?? "") as any)) return;
             const key = String(m.uniqueReferenceKey ?? d.id);
             if (seen.has(key)) duplicates += 1;
             else seen.add(key);
@@ -218,6 +217,7 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
           const bySession: Record<string, Record<string, number>> = {};
           snap.docs.forEach((d) => {
             const m = d.data() as any;
+            if (!isConfirmedTransactionStatus(String(m.status ?? "") as any)) return;
             const agencyId = String(m.agencyId ?? "");
             const sid = String(m.sourceSessionId ?? "");
             if (!agencyId || !sid) return;
@@ -304,24 +304,15 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
     };
 
     const recomputeValidatedAgencyTotals = () => {
-      // "Validé agence" = validation agence (shiftReports) + validations online (payments.status=validated)
-      const totalValidated =
-        validatedAgencyShiftOnlyRef.current +
-        paymentsConfirmedRef.current +
-        validatedAgencyOnlineRef.current;
+      // Source de verite "valide agence" : uniquement shiftReports (validation comptable agence).
+      const totalValidated = validatedAgencyShiftOnlyRef.current;
       const byAgencyMerged: Record<string, number> = {
         ...validatedAgencyByAgencyShiftOnlyRef.current,
       };
-      Object.entries(paymentsConfirmedByAgencyRef.current).forEach(([aid, amt]) => {
-        byAgencyMerged[aid] = (byAgencyMerged[aid] ?? 0) + (Number(amt) || 0);
-      });
-      Object.entries(validatedAgencyByAgencyOnlineRef.current).forEach(([aid, amt]) => {
-        byAgencyMerged[aid] = (byAgencyMerged[aid] ?? 0) + (Number(amt) || 0);
-      });
 
       validatedAgencyRef.current = totalValidated;
       validatedAgencyByAgencyRef.current = byAgencyMerged;
-      // Les validations online n'ont pas de session guichet: on garde le détail session basé sur shiftReports.
+      // Les validations online n'ont pas de session guichet: on garde le detail session base sur shiftReports.
       validatedAgencyBySessionRef.current = validatedAgencyBySessionShiftOnlyRef.current;
       pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
     };
@@ -333,9 +324,7 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
         qMovementsPayment,
         (snap) => {
           let totalPaid = 0;
-          let onlineValidated = 0;
           const byAgency: Record<string, number> = {};
-          const byAgencyOnline: Record<string, number> = {};
           const bySession: Record<string, Record<string, number>> = {};
           snap.docs.forEach((d) => {
             const m = d.data() as {
@@ -345,7 +334,9 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
               sourceType?: string;
               paymentChannel?: string;
               source?: string;
+              status?: string;
             };
+            if (!isConfirmedTransactionStatus(String(m?.status ?? "") as any)) return;
             // Le KPI "pendingGuichet" doit rester aligné sur encaissements guichet/online.
             // Les paiements courrier (sourceType="courrier") alimentent le ledger mais ne doivent pas polluer ce KPI.
             const st = String(m?.sourceType ?? m?.paymentChannel ?? m?.source ?? "");
@@ -354,18 +345,12 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
             totalPaid += amt;
             const agencyId = String(m?.agencyId ?? "");
             if (agencyId) byAgency[agencyId] = (byAgency[agencyId] ?? 0) + amt;
-            if (st === "online") {
-              onlineValidated += amt;
-              if (agencyId) byAgencyOnline[agencyId] = (byAgencyOnline[agencyId] ?? 0) + amt;
-            }
             const sid = String(m?.sourceSessionId ?? "");
             if (agencyId && sid) {
               bySession[agencyId] = bySession[agencyId] ?? {};
               bySession[agencyId][sid] = (bySession[agencyId][sid] ?? 0) + amt;
             }
           });
-          validatedAgencyOnlineRef.current = onlineValidated;
-          validatedAgencyByAgencyOnlineRef.current = byAgencyOnline;
           recomputeValidatedAgencyTotals();
           applyCashPayload(totalPaid, byAgency, bySession, {});
         },
@@ -379,9 +364,7 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
         qCashTx,
         (snap) => {
           let totalPaid = 0;
-          let onlineValidated = 0;
           const byAgency: Record<string, number> = {};
-          const byAgencyOnline: Record<string, number> = {};
           const bySession: Record<string, Record<string, number>> = {};
           const txWithoutSessionByAgency: Record<string, number> = {};
           snap.docs.forEach((d) => {
@@ -396,10 +379,6 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
             if (agencyId) byAgency[agencyId] = (byAgency[agencyId] ?? 0) + amt;
             const sid = String(t.sessionId ?? "");
             const sourceType = String(t.sourceType ?? "");
-            if (sourceType === "online") {
-              onlineValidated += amt;
-              if (agencyId) byAgencyOnline[agencyId] = (byAgencyOnline[agencyId] ?? 0) + amt;
-            }
             if (sourceType === "guichet" && (!sid || sid.trim().length === 0)) {
               if (agencyId) txWithoutSessionByAgency[agencyId] = (txWithoutSessionByAgency[agencyId] ?? 0) + 1;
             }
@@ -408,8 +387,6 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
               bySession[agencyId][sid] = (bySession[agencyId][sid] ?? 0) + amt;
             }
           });
-          validatedAgencyOnlineRef.current = onlineValidated;
-          validatedAgencyByAgencyOnlineRef.current = byAgencyOnline;
           recomputeValidatedAgencyTotals();
           applyCashPayload(totalPaid, byAgency, bySession, txWithoutSessionByAgency);
         },
@@ -469,11 +446,10 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
       }
     );
 
-    // Lecture payments (confirmés sur la période) — flux unifié, en parallèle de cashTransactions / shiftReports
+    // Lecture payments (valides + ledger poste sur la periode), en parallele des flux operationnels.
     const paymentsRef = collection(db, "companies", companyId, "payments");
     const qPayments = query(
       paymentsRef,
-      where("status", "==", "validated"),
       where("validatedAt", ">=", startTs),
       where("validatedAt", "<=", endTs),
       orderBy("validatedAt", "asc")
@@ -484,14 +460,20 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
         let total = 0;
         const byAgency: Record<string, number> = {};
         snap.docs.forEach((d) => {
-          const data = d.data() as { amount?: number; agencyId?: string };
+          const data = d.data() as {
+            amount?: number;
+            agencyId?: string;
+            status?: string;
+            ledgerStatus?: string;
+          };
+          if (String(data?.status ?? "") !== "validated") return;
+          if (String(data?.ledgerStatus ?? "pending") !== "posted") return;
           const amount = Number(data?.amount ?? 0) || 0;
           total += amount;
           const aid = String(data?.agencyId ?? "");
           if (aid) byAgency[aid] = (byAgency[aid] ?? 0) + amount;
         });
         paymentsConfirmedRef.current = total;
-        paymentsConfirmedByAgencyRef.current = byAgency;
         recomputeValidatedAgencyTotals();
         // Migration progressive : fallback sur payments si cashTransactions indisponibles.
         if (cashPaidTotalRef.current <= 0 && total > 0) {
@@ -540,4 +522,3 @@ export function useGlobalMoneyPositions(): Ctx {
   if (!ctx) throw new Error("useGlobalMoneyPositions must be used within GlobalMoneyPositionsProvider");
   return ctx;
 }
-

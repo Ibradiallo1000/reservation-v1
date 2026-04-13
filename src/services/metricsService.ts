@@ -18,6 +18,7 @@ import {
 import { db } from "@/firebaseConfig";
 import { getPaymentsByStatus } from "./paymentService";
 import { getUnifiedCompanyFinance } from "@/modules/finance/services/unifiedFinanceService";
+import { isConfirmedTransactionStatus } from "@/modules/compagnie/treasury/financialTransactions";
 
 const METRICS_COLLECTION = "metrics";
 const DIVERGENCE_DOC_ID = "divergence";
@@ -40,7 +41,9 @@ function divergenceRef(companyId: string) {
  */
 async function getPaymentsTotal(companyId: string): Promise<number> {
   const validated = await getPaymentsByStatus(companyId, "validated");
-  return validated.reduce((sum, p) => sum + p.amount, 0);
+  return validated
+    .filter((p) => p.ledgerStatus === "posted")
+    .reduce((sum, p) => sum + p.amount, 0);
 }
 
 /**
@@ -52,10 +55,11 @@ async function getMovementsTotal(companyId: string): Promise<number> {
   const snap = await getDocs(q);
   let total = 0;
   snap.docs.forEach((d) => {
-    const data = d.data() as { amount?: number; type?: string };
+    const data = d.data() as { amount?: number; type?: string; status?: string };
+    if (!isConfirmedTransactionStatus(data?.status as any)) return;
     const amount = Number(data?.amount ?? 0) || 0;
     const type = String(data?.type ?? "");
-    total += type === "refund" ? -amount : amount;
+    total += type === "refund" ? -Math.abs(amount) : Math.max(0, amount);
   });
   return total;
 }
@@ -112,7 +116,6 @@ export async function computeDivergenceInPeriod(
   const paymentsTotalPromise = (async () => {
     const q = query(
       paymentsRef,
-      where("status", "==", "validated"),
       where("validatedAt", ">=", startTs),
       where("validatedAt", "<=", endTs),
       orderBy("validatedAt", "asc")
@@ -120,7 +123,9 @@ export async function computeDivergenceInPeriod(
     const snap = await getDocs(q);
     let total = 0;
     snap.docs.forEach((d) => {
-      const data = d.data() as { amount?: number };
+      const data = d.data() as { amount?: number; status?: string; ledgerStatus?: string };
+      if (String(data?.status ?? "") !== "validated") return;
+      if (String(data?.ledgerStatus ?? "pending") !== "posted") return;
       total += Number(data?.amount ?? 0) || 0;
     });
     return total;
@@ -138,10 +143,11 @@ export async function computeDivergenceInPeriod(
     const snap = await getDocs(q);
     let total = 0;
     snap.docs.forEach((d) => {
-      const data = d.data() as { amount?: number; type?: string };
+      const data = d.data() as { amount?: number; type?: string; status?: string };
+      if (!isConfirmedTransactionStatus(data?.status as any)) return;
       const amount = Number(data?.amount ?? 0) || 0;
       const type = String(data?.type ?? "");
-      total += type === "refund" ? -amount : amount;
+      total += type === "refund" ? -Math.abs(amount) : Math.max(0, amount);
     });
     return total;
   })();

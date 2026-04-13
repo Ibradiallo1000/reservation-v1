@@ -20,9 +20,9 @@ export const AppCard: React.FC<AppCardProps> = ({
 }) => (
   <div
     className={cn(
-      "rounded-xl bg-white dark:bg-slate-800 shadow-md hover:shadow-lg transition-all duration-200",
+      "rounded-2xl bg-white shadow-sm transition-shadow duration-200 hover:shadow-md dark:bg-slate-900",
       "border border-gray-200 dark:border-slate-700 text-gray-900 dark:text-white",
-      noPad ? "" : "p-6",
+      noPad ? "" : "p-4 sm:p-5",
       className
     )}
     {...props}

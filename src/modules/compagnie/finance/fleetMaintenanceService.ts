@@ -2,6 +2,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   query,
   where,
@@ -16,6 +17,7 @@ import { db } from "@/firebaseConfig";
 import type { FleetMaintenanceDoc, FleetMaintenanceDocCreate } from "./fleetMaintenanceTypes";
 import { FLEET_MAINTENANCE_COLLECTION } from "./fleetMaintenanceTypes";
 import { createExpense } from "@/modules/compagnie/treasury/expenses";
+import { upsertMaintenanceRequestDocument } from "@/modules/finance/documents/financialDocumentsService";
 
 function fleetMaintenanceRef(companyId: string) {
   return collection(db, `companies/${companyId}/${FLEET_MAINTENANCE_COLLECTION}`);
@@ -35,9 +37,32 @@ export async function createFleetMaintenance(
   if (shouldCreateExpense && !input.accountId) {
     throw new Error("accountId est requis pour créer la dépense de maintenance.");
   }
+  if (shouldCreateExpense && !input.createdByRole) {
+    throw new Error("createdByRole est requis pour créer la dépense de maintenance.");
+  }
 
   const ref = doc(fleetMaintenanceRef(companyId));
   const now = Timestamp.now();
+  let registration: string | null = null;
+  try {
+    const vehicleSnap = await getDoc(doc(db, "companies", companyId, "vehicles", input.vehicleId));
+    if (vehicleSnap.exists()) {
+      const vehicleData = vehicleSnap.data() as {
+        immatriculation?: string;
+        matricule?: string;
+        registration?: string;
+      };
+      registration =
+        String(
+          vehicleData.immatriculation ??
+            vehicleData.matricule ??
+            vehicleData.registration ??
+            ""
+        ).trim() || null;
+    }
+  } catch {
+    registration = null;
+  }
   await setDoc(ref, {
     vehicleId: input.vehicleId,
     agencyId: input.agencyId,
@@ -50,6 +75,39 @@ export async function createFleetMaintenance(
     createdBy: input.createdBy,
     createdAt: now,
   });
+  await upsertMaintenanceRequestDocument({
+    companyId,
+    agencyId: input.agencyId ?? null,
+    sourceType: "fleet_maintenance",
+    sourceId: ref.id,
+    vehicle: input.vehicleId ?? null,
+    registration,
+    incidentType:
+      input.costType === "credit"
+        ? "approvisionnement"
+        : "maintenance",
+    urgency: "normale",
+    requiredItems: input.description ?? null,
+    estimatedAmount: shouldCreateExpense ? amount : null,
+    currency: "XOF",
+    proposedSupplier: null,
+    requester: {
+      uid: input.createdBy,
+      role: input.createdByRole ?? "requester",
+    },
+    expectedValidation: "validation operationnelle et financiere",
+    linkedExpenseId: input.linkedExpenseId ?? null,
+    linkedPayableId: input.linkedPayableId ?? null,
+    observations: "Demande maintenance/approvisionnement creee.",
+    status: "draft",
+    createdByUid: input.createdBy,
+  }).catch((docError) => {
+    console.error("[fleetMaintenance] echec creation document demande", {
+      companyId,
+      maintenanceId: ref.id,
+      docError,
+    });
+  });
 
   if (shouldCreateExpense) {
     const expenseId = await createExpense({
@@ -61,12 +119,44 @@ export async function createFleetMaintenance(
       amount,
       accountId: input.accountId as string,
       createdBy: input.createdBy,
+      createdByRole: input.createdByRole as string,
       vehicleId: input.vehicleId,
       linkedMaintenanceId: ref.id,
     });
     await updateDoc(ref, {
       linkedExpenseId: expenseId,
       updatedAt: serverTimestamp(),
+    });
+    await upsertMaintenanceRequestDocument({
+      companyId,
+      agencyId: input.agencyId ?? null,
+      sourceType: "fleet_maintenance",
+      sourceId: ref.id,
+      vehicle: input.vehicleId ?? null,
+      registration,
+      incidentType: "maintenance",
+      urgency: "normale",
+      requiredItems: input.description ?? null,
+      estimatedAmount: amount,
+      currency: "XOF",
+      proposedSupplier: null,
+      requester: {
+        uid: input.createdBy,
+        role: input.createdByRole ?? "requester",
+      },
+      expectedValidation: "depense de maintenance en cours",
+      linkedExpenseId: expenseId,
+      linkedPayableId: input.linkedPayableId ?? null,
+      observations: "Depense de maintenance liee a la demande.",
+      status: "ready_to_print",
+      createdByUid: input.createdBy,
+    }).catch((docError) => {
+      console.error("[fleetMaintenance] echec maj document demande apres depense", {
+        companyId,
+        maintenanceId: ref.id,
+        expenseId,
+        docError,
+      });
     });
   }
 
@@ -93,3 +183,4 @@ export async function listFleetMaintenance(
 }
 
 export type { FleetMaintenanceDoc, FleetMaintenanceDocCreate };
+

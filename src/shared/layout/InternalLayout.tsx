@@ -517,7 +517,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
           {/* Header */}
           <header
             className={cn(
-              "sticky top-0 flex min-w-0 items-center gap-2 border-b border-gray-200/60 px-3 shadow-sm dark:border-slate-600/50 sm:gap-4 sm:px-4 md:px-6",
+              "sticky top-0 flex min-w-0 items-center gap-2 border-b border-gray-200/60 px-4 shadow-sm dark:border-slate-600/50 sm:gap-4 md:px-6 lg:px-8",
               DESIGN.zIndex.header,
               DESIGN.layout.headerHeight,
             )}
@@ -616,7 +616,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
         )}
         style={{ backgroundImage: "var(--agency-gradient-header)" }}
       >
-        <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-3 md:px-6 py-2.5 flex items-center justify-between gap-2 flex-nowrap overflow-hidden")}>
+        <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 py-2.5 md:px-6 lg:px-8 flex items-center justify-between gap-2 flex-nowrap overflow-hidden")}>
           {/* Brand */}
           <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             {logoUrl ? (
@@ -688,7 +688,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
           className="border-t border-gray-200/60 dark:border-slate-600/50"
           style={{ backgroundImage: "var(--agency-gradient-subheader)" }}
         >
-          <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-2")}>
+          <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 py-2 md:px-6 lg:px-8")}>
             <div className="flex flex-nowrap gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap pb-1 -mb-1 scrollbar-thin">
               {sections.map(({ label, icon: Icon, path, badge, end }) => (
                 <NavLink

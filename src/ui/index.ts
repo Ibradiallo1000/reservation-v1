@@ -31,8 +31,15 @@ export type {
 } from "./foundation";
 
 // Layout
-export { StandardLayoutWrapper, PageHeader, Breadcrumb } from "./layout";
-export type { StandardLayoutWrapperProps, PageHeaderProps, BreadcrumbProps, BreadcrumbItem } from "./layout";
+export { StandardLayoutWrapper, PageHeader, PageTabs, Breadcrumb } from "./layout";
+export type {
+  StandardLayoutWrapperProps,
+  PageHeaderProps,
+  PageTabsProps,
+  PageTabItem,
+  BreadcrumbProps,
+  BreadcrumbItem,
+} from "./layout";
 
 // Cards
 export { SectionCard, MetricCard, AppCard } from "./cards";

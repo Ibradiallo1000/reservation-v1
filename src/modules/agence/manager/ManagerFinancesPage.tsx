@@ -256,9 +256,24 @@ export default function ManagerFinancesPage({
         }));
       setOpenIncidents(incidents);
     };
-    refresh();
-    const id = setInterval(refresh, 5000);
-    return () => clearInterval(id);
+    const refreshIfVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      refresh();
+    };
+    const onVisibilityOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      refresh();
+    };
+
+    refreshIfVisible();
+    const id = window.setInterval(refreshIfVisible, 30_000);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
+    };
   }, [companyId, agencyId]);
 
   /* ── Date-filtered revenue (métier / unified hint) et dépenses ── */
@@ -379,6 +394,91 @@ export default function ManagerFinancesPage({
         return isOld && !s.exceptionalValidation?.requested;
       }),
     [closedShifts]
+  );
+
+  const managerPriorityItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      level: "critical" | "todo" | "info";
+      title: string;
+      detail: string;
+      actionLabel?: string;
+      action?: () => void;
+    }> = [];
+
+    const approvalsCount = pendingApproval.length + pendingCourierChefApproval.length;
+    if (approvalsCount > 0) {
+      items.push({
+        id: "approvals",
+        level: approvalsCount > 5 ? "critical" : "todo",
+        title: `${approvalsCount} arbitrage(s) à valider`,
+        detail: "Sessions guichet/courrier validées compta en attente de décision chef.",
+      });
+    }
+
+    if (openIncidents.length > 0) {
+      items.push({
+        id: "incidents",
+        level: "critical",
+        title: `${openIncidents.length} incident(s) ouvert(s)`,
+        detail: "Blocages terrain ou anomalies signalées à traiter rapidement.",
+      });
+    }
+
+    if (hasAccountsVsLedgerTxVariance) {
+      items.push({
+        id: "cash-gap",
+        level: "critical",
+        title: "Écart caisse entre comptes et écritures",
+        detail: `Écart détecté: ${money(Math.abs(accountsVsLedgerTxVariance))}${ledgerCashFromTransactions?.capped ? " (lecture partielle)" : ""}.`,
+      });
+    }
+
+    if (blockedClosedShifts.length > 0) {
+      items.push({
+        id: "blocked-shifts",
+        level: "todo",
+        title: `${blockedClosedShifts.length} session(s) bloquée(s)`,
+        detail: "Clôturées depuis longtemps sans traitement comptable complet.",
+      });
+    }
+
+    const waitingComptaCount = closedShifts.length + closedCourierSessions.length;
+    if (waitingComptaCount > 0) {
+      items.push({
+        id: "waiting-compta",
+        level: "info",
+        title: `${waitingComptaCount} session(s) en attente comptable`,
+        detail: "Suivi supervision: relancer sans entrer dans la saisie opérationnelle.",
+      });
+    }
+
+    if (items.length === 0) {
+      items.push({
+        id: "ok",
+        level: "info",
+        title: "Aucune urgence de supervision",
+        detail: "La caisse et les arbitrages sont globalement à jour.",
+      });
+    }
+
+    return items.slice(0, 5);
+  }, [
+    accountsVsLedgerTxVariance,
+    blockedClosedShifts.length,
+    closedCourierSessions.length,
+    closedShifts.length,
+    hasAccountsVsLedgerTxVariance,
+    ledgerCashFromTransactions?.capped,
+    money,
+    openIncidents.length,
+    pendingApproval.length,
+    pendingCourierChefApproval.length,
+  ]);
+
+  const managerPriorityCount = useMemo(
+    () => managerPriorityItems.filter((item) => item.level === "critical" || item.level === "todo").length,
+    [managerPriorityItems]
   );
 
   const refundModalRow = refundTargetId ? ledgerRows.find((r) => r.id === refundTargetId) : null;
@@ -561,6 +661,37 @@ export default function ManagerFinancesPage({
           </span>
         </div>
       )}
+
+      <SectionCard title="À suivre aujourd'hui" icon={CheckCircle2} className="mb-4">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-gray-600 dark:text-slate-400">
+            Supervision chef d'agence: écarts, arbitrages et incidents sans formulaires de saisie.
+          </p>
+          <StatusBadge status={managerPriorityCount > 0 ? "warning" : "success"}>
+            {managerPriorityCount > 0 ? `${managerPriorityCount} action(s)` : "Rien d'urgent"}
+          </StatusBadge>
+        </div>
+        <div className="space-y-2">
+          {managerPriorityItems.map((item) => {
+            const badgeStatus = item.level === "critical" ? "danger" : item.level === "todo" ? "warning" : "info";
+            const badgeLabel = item.level === "critical" ? "Critique" : item.level === "todo" ? "A traiter" : "Info";
+            return (
+              <div
+                key={item.id}
+                className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 sm:flex-row sm:items-center sm:justify-between dark:border-slate-700 dark:bg-slate-900/40"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge status={badgeStatus}>{badgeLabel}</StatusBadge>
+                    <div className="text-sm font-medium text-gray-900 dark:text-white">{item.title}</div>
+                  </div>
+                  <div className="mt-0.5 text-xs text-gray-600 dark:text-slate-400">{item.detail}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </SectionCard>
 
       {embedded && (
         <SectionCard title="Incidents ouverts (supervision)" icon={CheckCircle2} className="mb-4">

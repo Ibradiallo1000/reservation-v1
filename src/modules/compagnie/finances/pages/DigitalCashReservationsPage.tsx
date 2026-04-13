@@ -791,16 +791,25 @@ const ReservationsEnLigne: React.FC = () => {
           uid: user.uid ?? '',
           role: (user as { role?: string | string[] }).role,
         });
-        await updateDoc(reservationRef, {
+        const refreshedPayment = await getPaymentByReservationId(user.companyId, reservation.id);
+        const reservationPatch: Record<string, unknown> = {
           "payment.status": "validated",
           "payment.validatedAt": serverTimestamp(),
           "payment.validatedBy": user.uid ?? "",
+          "payment.ledgerStatus": refreshedPayment?.ledgerStatus ?? "pending",
           updatedAt: serverTimestamp(),
+        };
+        if (refreshedPayment?.ledgerStatus === "failed") {
+          reservationPatch.paymentStatus = "finance_side_effects_failed";
+          reservationPatch["payment.ledgerError"] = refreshedPayment.ledgerError ?? "ledger_write_failed";
+        }
+        await updateDoc(reservationRef, {
+          ...reservationPatch,
         });
       } else {
         toast.error('Erreur', {
           description:
-            `Ce paiement n'est pas en attente (statut : ${payment.status}). Impossible de valider depuis cet écran sans flux confirmPayment pending.`,
+            `Ce paiement n'est pas en attente (statut : ${payment.status}). Validation impossible depuis cet ecran tant que le flux de confirmation n'est pas en attente.`,
         });
         return;
       }
@@ -2408,4 +2417,5 @@ const ReservationsEnLigne: React.FC = () => {
 };
 
 export default ReservationsEnLigne;
+
 

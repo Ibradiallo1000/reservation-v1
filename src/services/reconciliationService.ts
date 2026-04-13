@@ -18,6 +18,7 @@ import {
 import { db } from "@/firebaseConfig";
 import { getPaymentsByStatus, getPaymentById } from "./paymentService";
 import type { Payment } from "@/types/payment";
+import { isConfirmedTransactionStatus } from "@/modules/compagnie/treasury/financialTransactions";
 
 const RECONCILIATION_LOGS_COLLECTION = "reconciliationLogs";
 
@@ -47,6 +48,7 @@ async function getValidatedPaymentsInPeriod(
   const startTs = startDate.getTime();
   const endTs = endDate.getTime();
   return all.filter((p) => {
+    if (p.ledgerStatus !== "posted") return false;
     const v = p.validatedAt;
     if (!v) return false;
     const t = v instanceof Timestamp ? v.toMillis() : typeof v === "number" ? v : new Date(v as string).getTime();
@@ -73,14 +75,18 @@ async function getPaymentTransactionsInPeriod(
     orderBy("performedAt", "asc")
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => {
-    const data = d.data() as { referenceId?: string; referenceType?: string };
-    return {
-      id: d.id,
-      referenceId: String(data?.referenceId ?? ""),
-      referenceType: String(data?.referenceType ?? ""),
-    };
-  });
+  return snap.docs
+    .map((d) => {
+      const data = d.data() as { referenceId?: string; referenceType?: string; status?: string };
+      return {
+        id: d.id,
+        referenceId: String(data?.referenceId ?? ""),
+        referenceType: String(data?.referenceType ?? ""),
+        status: String(data?.status ?? ""),
+      };
+    })
+    .filter((m) => isConfirmedTransactionStatus(m.status as any))
+    .map(({ id, referenceId, referenceType }) => ({ id, referenceId, referenceType }));
 }
 
 /**

@@ -21,7 +21,7 @@ import {
   StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, EmptyState, ActionButton, table, tableRowClassName, typography,
 } from "@/ui";
 import { useDateFilterContext } from "./DateFilterContext";
-import { useManagerAlerts } from "./useManagerAlerts";
+import { useManagerAlertsContext } from "./ManagerAlertsContext";
 import { buildManagerDecisions, type DecisionEngineResult } from "@/modules/compagnie/commandCenter/decisionEngine";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPaths";
@@ -189,7 +189,7 @@ export default function ManagerCockpitPage({
   );
 
   const dateFilter = useDateFilterContext();
-  const { alerts: managerAlerts } = useManagerAlerts();
+  const { alerts: managerAlerts } = useManagerAlertsContext();
 
   const [shifts, setShifts] = useState<ShiftDoc[]>([]);
   const shiftsRef = useRef(shifts);

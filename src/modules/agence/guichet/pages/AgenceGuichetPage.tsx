@@ -301,6 +301,7 @@ const AgenceGuichetPage: React.FC = () => {
   const [reportSearch, setReportSearch] = useState("");
   const [tariffKey, setTariffKey] = useState("plein");
   const [additionalPassengers, setAdditionalPassengers] = useState<Array<{ name: string; phone: string }>>([]);
+  const [mobileSaleOpen, setMobileSaleOpen] = useState(false);
 
   // ── Session summary (données du rapport de clôture = même source que "Sessions en attente de validation") ──
   const [showSummary, setShowSummary] = useState(false);
@@ -1315,6 +1316,78 @@ const AgenceGuichetPage: React.FC = () => {
     return { billets, montant };
   }, [mergedSessionTickets]);
 
+  const guichetPriorityItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      level: "critical" | "todo" | "info";
+      title: string;
+      detail: string;
+      actionLabel?: string;
+      onAction?: () => void;
+    }> = [];
+
+    if (!isOnline) {
+      items.push({
+        id: "offline",
+        level: "critical",
+        title: "Réseau instable",
+        detail: "Les ventes doivent être synchronisées dès le retour en ligne.",
+      });
+    }
+
+    if (sessionLockedByOtherDevice) {
+      items.push({
+        id: "locked",
+        level: "critical",
+        title: "Poste verrouillé sur un autre appareil",
+        detail: "Impossible d'encaisser ici tant que ce verrouillage n'est pas levé.",
+        actionLabel: "Rafraîchir",
+        onAction: () => {
+          void refresh().catch(() => {});
+        },
+      });
+    }
+
+    if (status === "pending") {
+      items.push({
+        id: "pending-activation",
+        level: "todo",
+        title: "Session en attente d'activation",
+        detail: "Le comptable doit activer la session avant de reprendre les ventes.",
+        actionLabel: "Rafraîchir",
+        onAction: () => {
+          void refresh().catch(() => {});
+        },
+      });
+    }
+
+    if (status === "active" || status === "paused") {
+      items.push({
+        id: "session-open",
+        level: "todo",
+        title: "Session ouverte non clôturée",
+        detail: "Clôturez la session et préparez la remise en fin de service.",
+        actionLabel: "Ouvrir le rapport",
+        onAction: () => handleTabChange("rapport"),
+      });
+    }
+
+    if (status === "closed" || status === "none") {
+      items.push({
+        id: "session-closed",
+        level: "info",
+        title: "Aucune session active",
+        detail: "Ouvrez un poste pour reprendre l'encaissement guichet.",
+        actionLabel: "Ouvrir le poste",
+        onAction: () => {
+          void startShift().catch((e: any) => alert(e?.message || "Erreur"));
+        },
+      });
+    }
+
+    return items.slice(0, 4);
+  }, [handleTabChange, isOnline, refresh, sessionLockedByOtherDevice, startShift, status]);
+
   const reportDateLabel = useMemo(() => {
     const start = activeShift?.startAt?.toDate?.() || activeShift?.startTime?.toDate?.();
     if (!start) return new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -1332,6 +1405,12 @@ const AgenceGuichetPage: React.FC = () => {
       t.id.toLowerCase().includes(q)
     );
   }, [mergedSessionTickets, reportSearch]);
+
+  useEffect(() => {
+    if (tab !== "vente" || !isCounterOpen || sessionLockedByOtherDevice) {
+      setMobileSaleOpen(false);
+    }
+  }, [tab, isCounterOpen, sessionLockedByOtherDevice]);
 
   // ═══════════════ SESSION CLOSE WITH SUMMARY ═══════════════
   /** Convertit les détails du rapport de clôture (même source que "Sessions en attente de validation") en lignes pour le popup. */
@@ -1372,6 +1451,35 @@ const AgenceGuichetPage: React.FC = () => {
       handleTabChange("rapport");
     } catch (e: any) { alert(e?.message || "Erreur"); }
   }, [closeShift, detailsToSummaryRows, soundEnabled, handleTabChange, sessionStartedAt, sessionTotals.montant]);
+
+  const salePanelNode = (
+    <SalePanel
+      selectedTrip={selectedTrip}
+      canSell={canSell}
+      status={status}
+      nomClient={nomClient}
+      onNomChange={setNomClient}
+      telephone={telephone}
+      onTelChange={setTelephone}
+      placesAller={placesAller}
+      onPlacesAllerChange={setPlacesAller}
+      totalPrice={totalPrice}
+      canValidate={canValidateSale}
+      isProcessing={isProcessing}
+      onValidate={handleReservation}
+      formatMoney={money}
+      primaryColor={theme.primary}
+      secondaryColor={theme.secondary}
+      validationHint={validationHint}
+      activationByEscaleManager={agencyType === "escale"}
+      clientSuggestions={clientSuggestions}
+      tariffKey={tariffKey}
+      onTariffChange={setTariffKey}
+      tariffMultiplier={tariffMultiplier}
+      additionalPassengers={additionalPassengers}
+      onAdditionalPassengersChange={setAdditionalPassengers}
+    />
+  );
 
   // ═══════════════════════════════════════════════════════════════
   //  RENDER
@@ -1419,13 +1527,13 @@ const AgenceGuichetPage: React.FC = () => {
 
       {/* Tab navigation */}
       <div
-        className="border-b border-gray-200/60 px-4 lg:px-6"
+        className="border-b border-gray-200/60 px-4 md:px-6 lg:px-8"
         style={{ backgroundImage: "var(--agency-gradient-subheader)" }}
       >
-        <div className="max-w-[1600px] mx-auto flex items-center gap-1">
+        <div className="max-w-[1200px] mx-auto flex items-center gap-1">
           {([
             { key: "vente" as const, label: "Guichet", icon: Receipt },
-            { key: "rapport" as const, label: "Rapport", icon: CalendarDays },
+            { key: "rapport" as const, label: "Rapport de session", icon: CalendarDays },
             { key: "historique" as const, label: "Historique", icon: History },
           ]).map(({ key, label, icon: Icon }) => (
             <button
@@ -1481,9 +1589,49 @@ const AgenceGuichetPage: React.FC = () => {
         </div>
       </div>
 
+      <div className="border-b border-gray-200/60 bg-white/90 px-4 py-2 md:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-[1200px] flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-gray-900">À traiter maintenant</div>
+            <StatusBadge
+              status={guichetPriorityItems.some((item) => item.level === "critical" || item.level === "todo") ? "warning" : "success"}
+            >
+              {guichetPriorityItems.some((item) => item.level === "critical" || item.level === "todo")
+                ? "Action requise"
+                : "Rien d'urgent"}
+            </StatusBadge>
+          </div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {guichetPriorityItems.map((item) => {
+              const badgeStatus = item.level === "critical" ? "danger" : item.level === "todo" ? "warning" : "info";
+              const badgeLabel = item.level === "critical" ? "Critique" : item.level === "todo" ? "À traiter" : "Info";
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50/85 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge status={badgeStatus}>{badgeLabel}</StatusBadge>
+                      <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                    </div>
+                    <div className="mt-0.5 text-xs text-gray-600">{item.detail}</div>
+                  </div>
+                  {item.onAction && item.actionLabel ? (
+                    <ActionButton size="sm" variant="secondary" onClick={item.onAction}>
+                      {item.actionLabel}
+                    </ActionButton>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
       {/* Main content with tab animation */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div key={tabKey} className={`agency-content-transition ${tab === "vente" ? "h-full" : ""}`}>
+        <div key={tabKey} className={`agency-content-transition ${tab === "vente" ? "h-full pb-20 lg:pb-0" : ""}`}>
           {/* ═══════ VENTE TAB ═══════ */}
           {tab === "vente" && (
             !isCounterOpen && !sessionLockedByOtherDevice ? (
@@ -1507,10 +1655,10 @@ const AgenceGuichetPage: React.FC = () => {
                 activationByEscaleManager={agencyType === "escale"}
               />
             ) : (
-              <div className="max-w-[1600px] mx-auto p-3 md:p-4 lg:p-6 h-full flex flex-col min-h-0">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 lg:gap-5 flex-1 min-h-0 w-full overflow-x-hidden">
-                  {/* LEFT: Journey selection (3/5) — scroll si besoin */}
-                  <div className="md:col-span-1 lg:col-span-2 xl:col-span-3 space-y-3 md:space-y-4 lg:space-y-4 overflow-visible md:overflow-y-auto min-h-0 min-w-0">
+              <div className="max-w-[1200px] mx-auto h-full min-h-0 w-full px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-6">
+                <div className="grid h-full min-h-0 w-full grid-cols-1 gap-3 md:gap-4 lg:grid-cols-12 lg:gap-5">
+                  {/* LEFT: zone principale (recherche + resultats) */}
+                  <div className="space-y-3 overflow-visible min-h-0 min-w-0 md:space-y-4 lg:col-span-8 lg:overflow-y-auto lg:pr-1">
                     {/* Destination (départ = agence ou escale fixe) */}
                     <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
                       {isEscaleMode && (
@@ -1599,43 +1747,67 @@ const AgenceGuichetPage: React.FC = () => {
 
                   </div>
 
-                  {/* RIGHT: Sale panel (2/5) — toujours visible, bouton Encaisser en bas */}
-                  <div className="md:col-span-1 lg:col-span-1 xl:col-span-1 flex flex-col min-h-0 min-w-0">
-                    <SalePanel
-                      selectedTrip={selectedTrip}
-                      canSell={canSell}
-                      status={status}
-                      nomClient={nomClient}
-                      onNomChange={setNomClient}
-                      telephone={telephone}
-                      onTelChange={setTelephone}
-                      placesAller={placesAller}
-                      onPlacesAllerChange={setPlacesAller}
-                      totalPrice={totalPrice}
-                      canValidate={canValidateSale}
-                      isProcessing={isProcessing}
-                      onValidate={handleReservation}
-                      formatMoney={money}
-                      primaryColor={theme.primary}
-                      secondaryColor={theme.secondary}
-                      validationHint={validationHint}
-                      activationByEscaleManager={agencyType === "escale"}
-                      clientSuggestions={clientSuggestions}
-                      tariffKey={tariffKey}
-                      onTariffChange={setTariffKey}
-                      tariffMultiplier={tariffMultiplier}
-                      additionalPassengers={additionalPassengers}
-                      onAdditionalPassengersChange={setAdditionalPassengers}
-                    />
+                  {/* RIGHT: vente en cours (desktop sticky) */}
+                  <div className="hidden min-h-0 min-w-0 lg:col-span-4 lg:block">
+                    <div className="lg:sticky lg:top-4 lg:max-h-[calc(100dvh-11.5rem)] lg:overflow-y-auto">
+                      {salePanelNode}
+                    </div>
                   </div>
                 </div>
               </div>
             )
           )}
 
+          {tab === "vente" && isCounterOpen && !sessionLockedByOtherDevice && (
+            <>
+              <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200/80 bg-white/95 p-3 backdrop-blur lg:hidden">
+                <div className="mx-auto flex max-w-[1200px] items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Vente en cours</p>
+                    <p className="truncate text-sm font-semibold text-slate-900">
+                      {selectedTrip ? `${selectedTrip.departure} -> ${selectedTrip.arrival} - ${selectedTrip.time}` : "Selectionner un trajet"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobileSaleOpen(true)}
+                    className="shrink-0 rounded-xl px-3 py-2 text-sm font-semibold text-white"
+                    style={{ backgroundColor: theme.primary }}
+                  >
+                    Ouvrir vente
+                  </button>
+                </div>
+              </div>
+
+              {mobileSaleOpen && (
+                <div className="fixed inset-0 z-40 lg:hidden">
+                  <button
+                    type="button"
+                    className="absolute inset-0 h-full w-full bg-black/40"
+                    onClick={() => setMobileSaleOpen(false)}
+                    aria-label="Fermer le panneau de vente"
+                  />
+                  <div className="absolute inset-x-0 bottom-0 max-h-[86vh] overflow-hidden rounded-t-2xl border border-gray-200 bg-white shadow-2xl">
+                    <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+                      <p className="text-sm font-semibold text-slate-900">Vente en cours</p>
+                      <button
+                        type="button"
+                        onClick={() => setMobileSaleOpen(false)}
+                        className="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                      >
+                        Fermer
+                      </button>
+                    </div>
+                    <div className="max-h-[calc(86vh-3.25rem)] overflow-y-auto p-3">{salePanelNode}</div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
           {/* ═══════ RAPPORT TAB ═══════ */}
           {tab === "rapport" && (
-            <div className="max-w-[1600px] mx-auto p-3 md:p-4 lg:p-6 space-y-3 md:space-y-4 lg:space-y-5">
+            <div className="max-w-[1200px] mx-auto px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-6 space-y-3 md:space-y-4 lg:space-y-5">
               <SectionCard
                 title="Rapport de session"
                 right={
@@ -1803,7 +1975,7 @@ const AgenceGuichetPage: React.FC = () => {
 
           {/* ═══════ HISTORIQUE TAB ═══════ */}
           {tab === "historique" && (
-            <div className="max-w-[1600px] mx-auto p-3 md:p-4 lg:p-6 space-y-3 md:space-y-4 lg:space-y-5">
+            <div className="max-w-[1200px] mx-auto px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-6 space-y-3 md:space-y-4 lg:space-y-5">
               <SectionCard title="Historique des sessions validées">
                 <p className={typography.muted}>{user?.displayName || user?.email || "—"} ({(sellerCodeCached || staffCodeForSale || "GUEST")})</p>
               </SectionCard>

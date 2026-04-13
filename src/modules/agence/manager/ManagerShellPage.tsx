@@ -14,12 +14,14 @@ import {
   Boxes,
   CalendarRange,
   ClipboardCheck,
+  Archive,
 } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection, NavSectionChild } from "@/shared/layout/InternalLayout";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { DateFilterProvider } from "./DateFilterContext";
 import { useManagerAlerts } from "./useManagerAlerts";
+import { ManagerAlertsProvider, useManagerAlertsContext } from "./ManagerAlertsContext";
 import { NotificationBell } from "./ui";
 import { listExpenses } from "@/modules/compagnie/treasury/expenses";
 import {
@@ -34,7 +36,7 @@ const courierChildren = (includeCourier: boolean): NavSectionChild[] =>
     ? [
         { label: "Courrier — session", path: "/agence/courrier/session", end: true },
         { label: "Courrier — nouvel envoi", path: "/agence/courrier/nouveau", end: true },
-        { label: "Courrier — arrivages", path: "/agence/courrier/arrivages", end: true },
+        { label: "Courrier — réceptions", path: "/agence/courrier/arrivages", end: true },
         { label: "Courrier — remise", path: "/agence/courrier/remise", end: true },
       ]
     : [];
@@ -117,7 +119,7 @@ const ManagerShellInner: React.FC = () => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const theme = useCompanyTheme(company);
-  const { alerts, totalAlertCount, badgeByModule, dismissAlert, markAllAlertsRead } = useManagerAlerts();
+  const { alerts, totalAlertCount, badgeByModule, dismissAlert, markAllAlertsRead } = useManagerAlertsContext();
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
   const [pendingManagerExpensesCount, setPendingManagerExpensesCount] = React.useState(0);
@@ -130,6 +132,7 @@ const ManagerShellInner: React.FC = () => {
     "Validation départs": 6,
     "Arrivées attendues": 7,
     Rapports: 8,
+    Documents: 8,
     "Journal agents": 8,
     Courrier: 8,
     Exploitation: 8,
@@ -158,11 +161,24 @@ const ManagerShellInner: React.FC = () => {
       }
     };
 
-    void load();
-    const interval = setInterval(() => void load(), 30000);
+    const refreshIfVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void load();
+    };
+    const onVisibilityOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void load();
+    };
+
+    refreshIfVisible();
+    const interval = window.setInterval(refreshIfVisible, 60_000);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
   }, [companyId, agencyId]);
 
@@ -176,11 +192,18 @@ const ManagerShellInner: React.FC = () => {
     }
     const isCourierOnly = has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie");
     const canValidateAgencyExpenses = has("chefAgence") || has("superviseur") || has("admin_compagnie");
+    const canAccessCashDomain =
+      has("agency_accountant") || has("chefAgence") || has("superviseur") || has("admin_compagnie");
+    const canAccessFinancialDocuments =
+      has("agency_accountant") ||
+      has("chefAgence") ||
+      has("superviseur") ||
+      has("admin_compagnie");
     const list: NavSection[] = isCourierOnly
       ? [
-          { label: "Courrier", icon: Boxes, path: "/agence/courrier/session", end: true },
+          { label: "Envoi", icon: Boxes, path: "/agence/courrier/session", end: true },
           { label: "Nouvel envoi", icon: Boxes, path: "/agence/courrier/nouveau", end: true },
-          { label: "Arrivages", icon: Boxes, path: "/agence/courrier/arrivages", end: true },
+          { label: "Réceptions", icon: Boxes, path: "/agence/courrier/arrivages", end: true },
           { label: "Remise", icon: Boxes, path: "/agence/courrier/remise", end: true },
         ]
       : BASE_SECTIONS.map((s) => {
@@ -188,6 +211,9 @@ const ManagerShellInner: React.FC = () => {
             return null;
           }
           if (s.label === "Arrivées attendues" && !has("chefAgence") && !has("chefagence")) {
+            return null;
+          }
+          if (s.label === "Caisse" && !canAccessCashDomain) {
             return null;
           }
           const opBadge = (badgeByModule as Record<string, number>).operations ?? 0;
@@ -243,6 +269,14 @@ const ManagerShellInner: React.FC = () => {
           children: buildFleetOpsChildren(includeCourier),
         });
       }
+    }
+    if (!isCourierOnly && canAccessFinancialDocuments) {
+      list.push({
+        label: "Documents",
+        icon: Archive,
+        path: "/agence/comptabilite/documents",
+        end: true,
+      });
     }
 
     return isCourierOnly ? list : list.sort((a, b) => (sectionOrder[a.label] ?? 99) - (sectionOrder[b.label] ?? 99));
@@ -365,10 +399,13 @@ const ManagerShellInner: React.FC = () => {
 
 const ManagerShellPage: React.FC = () => {
   const { company } = useAuth() as any;
+  const managerAlerts = useManagerAlerts();
   return (
     <CurrencyProvider currency={company?.devise}>
       <DateFilterProvider>
-        <ManagerShellInner />
+        <ManagerAlertsProvider value={managerAlerts}>
+          <ManagerShellInner />
+        </ManagerAlertsProvider>
       </DateFilterProvider>
     </CurrencyProvider>
   );

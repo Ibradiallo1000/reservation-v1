@@ -12,6 +12,7 @@ import {
   FileCheck,
   Users,
   ShieldCheck,
+  Archive,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -179,11 +180,23 @@ const CompagnieLayout: React.FC = () => {
         if (!cancelled) setPendingCeoExpensesCount(0);
       }
     };
-    void load();
-    const interval = setInterval(() => void load(), 30000);
+    const loadIfVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void load();
+    };
+    const onVisibilityOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void load();
+    };
+    loadIfVisible();
+    const interval = window.setInterval(loadIfVisible, 60_000);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
     };
   }, [currentCompanyId]);
 
@@ -195,7 +208,7 @@ const CompagnieLayout: React.FC = () => {
 
   const sections: NavSection[] = React.useMemo(() => {
     const all: NavSection[] = [
-      { label: "Dashboard", icon: Gauge, path: `${basePath}/command-center` },
+      { label: "Pilotage", icon: Gauge, path: `${basePath}/command-center` },
       {
         label: "Activité réseau",
         icon: TrendingUp,
@@ -204,8 +217,9 @@ const CompagnieLayout: React.FC = () => {
         badge: onlineProofsCount,
       },
       { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
+      { label: "Documents & archives", icon: Archive, path: `${basePath}/documents` },
       {
-        label: "Audit & contrôle",
+        label: "Alertes & risques",
         icon: FileCheck,
         path: `${basePath}/audit-controle`,
         badge: pendingCeoExpensesCount || undefined,
@@ -222,14 +236,10 @@ const CompagnieLayout: React.FC = () => {
       { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },
     ];
     if (isPlateforme) return all;
-    return all
-      .filter(
-        (s) =>
-          !["Validation chef d'agence", "Clients", "Avis clients"].includes(s.label),
-      )
-      .map((s) =>
-        s.label === "Audit & contrôle" ? { ...s, label: "Alertes" } : s,
-      );
+    return all.filter(
+      (s) =>
+        !["Validation chef d'agence", "Clients", "Avis clients", "Flotte"].includes(s.label),
+    );
   }, [
     basePath,
     isPlateforme,

@@ -1,5 +1,5 @@
 /**
- * Poste de pilotage — période globale + tableau de bord synthèse (trésorerie ledger, activité, alertes, tendance).
+ * Poste de pilotage â€” pÃ©riode globale + tableau de bord synthÃ¨se (trÃ©sorerie ledger, activitÃ©, alertes, tendance).
  */
 import React from "react";
 import { useParams } from "react-router-dom";
@@ -29,14 +29,19 @@ export default function CEOCommandCenterPage() {
   );
 
   return (
-    <StandardLayoutWrapper noVerticalPadding className="!py-4">
+    <StandardLayoutWrapper noVerticalPadding className="!py-3 sm:!py-4">
       <header className="flex w-full flex-row flex-wrap items-center justify-between gap-3">
-        <h1 className="text-base font-semibold tracking-tight text-gray-900 dark:text-white">
-          Dashboard
-        </h1>
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight text-gray-900 dark:text-white">
+            Pilotage CEO
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Vue décisionnelle : risque, trésorerie et priorités réseau.
+          </p>
+        </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <label htmlFor="ceo-period" className="sr-only">
-            Période
+            PÃ©riode
           </label>
           <select
             id="ceo-period"
@@ -47,7 +52,7 @@ export default function CEOCommandCenterPage() {
             <option value="day">Aujourd&apos;hui</option>
             <option value="week">Cette semaine</option>
             <option value="month">Ce mois</option>
-            <option value="custom">Personnalisé</option>
+            <option value="custom">PersonnalisÃ©</option>
           </select>
           {period === "custom" && (
             <>

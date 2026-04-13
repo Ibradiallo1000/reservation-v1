@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
+import { collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 const EXPENSE_NOTIFICATION_TYPES = new Set([
@@ -41,6 +41,7 @@ export function useUnreadCompanyNotificationsCount(
     const q = query(
       collection(db, "companies", companyId, "notifications"),
       orderBy("createdAt", "desc"),
+      limit(300),
     );
 
     const unsubscribe = onSnapshot(

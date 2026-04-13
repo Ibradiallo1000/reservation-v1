@@ -37,7 +37,7 @@ import {
   resolveStopByStopId,
   warnIfStopIdOrderMismatch,
 } from '@/modules/compagnie/routes/stopResolution';
-import { createPayment } from '@/services/paymentService';
+import { createPayment, markPaymentLedgerStatus } from '@/services/paymentService';
 import { createFinancialTransaction } from '@/modules/compagnie/treasury/financialTransactions';
 import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
 import { assertReservationChannelInvariantsOnWrite } from '@/modules/agence/guichet/guichetSessionReservationModel';
@@ -522,6 +522,7 @@ export async function createGuichetReservation(
   }
 
   if (montant > 0) {
+    let paymentId: string | null = null;
     try {
       const provider = params.paymentMethod === 'mobile_money' ? 'wave' : (params.paymentMethod === 'bank' ? 'wave' : 'cash');
       const paymentMethodLedger = params.paymentMethod === 'mobile_money'
@@ -529,7 +530,7 @@ export async function createGuichetReservation(
         : params.paymentMethod === 'bank'
           ? 'card'
           : 'cash';
-      const paymentId = await createPayment({
+      paymentId = await createPayment({
         reservationId: resultReservationId,
         companyId: params.companyId,
         agencyId: params.agencyId,
@@ -543,6 +544,7 @@ export async function createGuichetReservation(
       await Promise.all([
         updateDoc(reservationDocRef, {
           paymentId,
+          ledgerStatus: 'pending',
           updatedAt: serverTimestamp(),
         }),
         createFinancialTransaction({
@@ -557,7 +559,7 @@ export async function createGuichetReservation(
           agencyId: params.agencyId,
           reservationId: resultReservationId,
           referenceType: 'payment',
-          referenceId: resultReservationId,
+          referenceId: paymentId,
           metadata: {
             channel: 'guichet',
             sourceType: 'guichet',
@@ -571,6 +573,17 @@ export async function createGuichetReservation(
           },
         }),
       ]);
+      await markPaymentLedgerStatus({
+        companyId: params.companyId,
+        paymentId,
+        ledgerStatus: 'posted',
+      }).catch((statusErr) => {
+        console.warn('[guichetReservationService] unable to set payment ledgerStatus=posted:', statusErr);
+      });
+      await updateDoc(reservationDocRef, {
+        ledgerStatus: 'posted',
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
       logAgentHistoryEvent({
         companyId: params.companyId,
         agencyId: params.agencyId,
@@ -589,6 +602,16 @@ export async function createGuichetReservation(
       });
     } catch (err) {
       console.error('[guichetReservationService] financial side-effects failed:', err);
+      if (paymentId) {
+        await markPaymentLedgerStatus({
+          companyId: params.companyId,
+          paymentId,
+          ledgerStatus: 'failed',
+          errorMessage: err instanceof Error ? err.message : String(err),
+        }).catch((statusErr) => {
+          console.warn('[guichetReservationService] unable to set payment ledgerStatus=failed:', statusErr);
+        });
+      }
       await logGuichetFinanceAuthDebug({
         companyId: params.companyId,
         agencyId: params.agencyId,
@@ -596,6 +619,7 @@ export async function createGuichetReservation(
       });
       await updateDoc(reservationDocRef, {
         paymentStatus: 'finance_side_effects_failed',
+        ledgerStatus: 'failed',
         updatedAt: serverTimestamp(),
       }).catch(() => {});
     }

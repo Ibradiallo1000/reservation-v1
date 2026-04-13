@@ -83,6 +83,12 @@ import {
   belongsToGuichetSession,
   fetchReservationDocsForShiftSlot,
 } from '@/modules/agence/guichet/guichetSessionReservationModel';
+import {
+  createAgencyDailyReportDocument,
+  getSessionRemittanceDocumentId,
+  getSessionRemittanceReceiptDocumentId,
+} from '@/modules/finance/documents/financialDocumentsService';
+import { listFinancialDocumentAnomalies } from '@/modules/finance/documents/financialDocumentAnomaliesService';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -205,6 +211,43 @@ function aggregateCashDaysByDate(rows: CashDay[]): CashDay[] {
 
 type TreasuryModalView = 'new-operation' | 'transfer' | 'new-payable' | null;
 
+type RemittanceValidationMode = 'immediate' | 'after_entry';
+type RemittanceValidationKind = 'guichet' | 'courrier';
+
+type PendingRemittanceValidation = {
+  kind: RemittanceValidationKind;
+  sessionId: string;
+  sessionLabel: string;
+  countedAmount: number;
+};
+
+type RemittanceValidationFormState = {
+  mode: RemittanceValidationMode;
+  manualReceiptUsed: boolean;
+  manualReceiptNumber: string;
+  operationDateFr: string;
+};
+
+type RemittanceValidationSuccessState = {
+  kind: RemittanceValidationKind;
+  sessionId: string;
+  sessionLabel: string;
+  countedAmount: number;
+  difference: number;
+  remittanceDocumentId: string;
+  receiptDocumentId: string;
+};
+
+type ComptaPriorityLevel = 'critical' | 'todo' | 'info';
+type ComptaPriorityItem = {
+  id: string;
+  level: ComptaPriorityLevel;
+  title: string;
+  detail: string;
+  actionLabel: string;
+  onAction: () => void;
+};
+
 /* ============================================================================
    SECTION : TYPES RÉCONCILIATION
    Description : Structures pour la réconciliation des ventes vs encaissements
@@ -252,6 +295,32 @@ const fmtD  = (dISO?: string) => {
   return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit', year:'numeric' });
 };
 
+function toFrenchDateInput(value: Date): string {
+  const day = String(value.getDate()).padStart(2, '0');
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const year = String(value.getFullYear());
+  return `${day}/${month}/${year}`;
+}
+
+function parseFrenchDateInput(value: string): string | null {
+  const trimmed = String(value ?? '').trim();
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(trimmed);
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+  if (!Number.isInteger(day) || !Number.isInteger(month) || !Number.isInteger(year)) return null;
+  const candidate = new Date(year, month - 1, day);
+  if (
+    candidate.getFullYear() !== year ||
+    candidate.getMonth() !== month - 1 ||
+    candidate.getDate() !== day
+  ) {
+    return null;
+  }
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 /** Saisie montant avec virgule ou point (contrôle caisse). */
 const parseLooseAmount = (s: string) => {
   const t = s.trim().replace(/\s/g, '').replace(/,/g, '.');
@@ -283,6 +352,15 @@ const paymentStatusLabelFr = (s: string) => {
   if (u === 'PAID_DESTINATION') return 'Payé (destination)';
   return s || '—';
 };
+
+function comptaPriorityLevelUi(level: ComptaPriorityLevel): {
+  badgeStatus: 'danger' | 'warning' | 'info';
+  badgeLabel: string;
+} {
+  if (level === 'critical') return { badgeStatus: 'danger', badgeLabel: 'Critique' };
+  if (level === 'todo') return { badgeStatus: 'warning', badgeLabel: 'À traiter' };
+  return { badgeStatus: 'info', badgeLabel: 'Info' };
+}
 
 const courierStatusToBadge: Record<string, 'active' | 'pending' | 'success' | 'warning' | 'neutral'> = {
   PENDING: 'pending',
@@ -454,6 +532,15 @@ const AgenceComptabilitePage: React.FC = () => {
   const [accountant, setAccountant] = useState<AccountantProfile | null>(null);
   const [accountantCode, setAccountantCode] = useState<string>('Comptable');
   const [userRole, setUserRole] = useState<string>('');
+  const [documentAnomalySummary, setDocumentAnomalySummary] = useState({
+    open: 0,
+    critical: 0,
+    documentsMissing: 0,
+    signedScanMissing: 0,
+    printedNotSigned: 0,
+    signedNotArchived: 0,
+  });
+  const [documentAnomalyLoading, setDocumentAnomalyLoading] = useState(false);
   const prevCourierPendingCountRef = useRef(0);
 
   const rbacRoles = useMemo(() => {
@@ -481,10 +568,76 @@ const AgenceComptabilitePage: React.FC = () => {
     }
   }, [requestedTab, allowedTabs, rbacRoles, setSearchParams]);
 
+  const handleGenerateDailyReportDocument = useCallback(async () => {
+    if (!user?.companyId || !user?.agencyId || !user?.uid) {
+      toast.error('Contexte utilisateur incomplet pour generer le rapport journalier.');
+      return;
+    }
+    try {
+      const role = normalizeUserRoles(user?.role)[0] ?? userRole ?? 'agency_accountant';
+      const created = await createAgencyDailyReportDocument({
+        companyId: user.companyId,
+        agencyId: user.agencyId,
+        date: new Date(),
+        responsableJournee: {
+          uid: user.uid,
+          name:
+            String(user.displayName ?? user.nomComplet ?? user.name ?? '').trim() || user.uid,
+          role,
+          phone: user.phone ?? null,
+        },
+        createdByUid: user.uid,
+      });
+      toast.success('Rapport journalier agence genere.');
+      navigate(`/agence/comptabilite/documents/${created.id}/print`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Echec generation rapport journalier agence.'
+      );
+    }
+  }, [navigate, user?.agencyId, user?.companyId, user?.displayName, user?.name, user?.nomComplet, user?.phone, user?.role, user?.uid, userRole]);
+
   /* ============================================================================
      SECTION : ÉTATS REACT - SESSIONS COURRIER (séparé du Guichet)
      Description : Listes et saisies pour l'onglet Courrier uniquement
      ============================================================================ */
+  useEffect(() => {
+    if (!user?.companyId || !user?.agencyId) return;
+    let cancelled = false;
+    setDocumentAnomalyLoading(true);
+    (async () => {
+      try {
+        const result = await listFinancialDocumentAnomalies({
+          companyId: user.companyId,
+          filters: {
+            agencyId: user.agencyId,
+            status: "open",
+          },
+        });
+        if (cancelled) return;
+        setDocumentAnomalySummary({
+          open: result.summary.open,
+          critical: result.summary.critical,
+          documentsMissing: result.summary.documentsMissing,
+          signedScanMissing: result.summary.signedScanMissing,
+          printedNotSigned: result.summary.printedNotSigned,
+          signedNotArchived: result.summary.signedNotArchived,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.error("[AgenceCompta] echec chargement anomalies documentaires", error);
+        }
+      } finally {
+        if (!cancelled) setDocumentAnomalyLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.agencyId, user?.companyId]);
+
   const [pendingCourierSessions, setPendingCourierSessions] = useState<CourierSessionDoc[]>([]);
   const [activeCourierSessions, setActiveCourierSessions] = useState<CourierSessionDoc[]>([]);
   const [closedCourierSessions, setClosedCourierSessions] = useState<CourierSessionDoc[]>([]);
@@ -533,6 +686,19 @@ const AgenceComptabilitePage: React.FC = () => {
   
   const [receptionInputs, setReceptionInputs] = useState<Record<string, { cashReceived: string }>>({});
   const [savingShiftIds, setSavingShiftIds] = useState<Record<string, boolean>>({});
+  const [pendingRemittanceValidation, setPendingRemittanceValidation] =
+    useState<PendingRemittanceValidation | null>(null);
+  const [remittanceValidationForm, setRemittanceValidationForm] =
+    useState<RemittanceValidationFormState>({
+      mode: 'immediate',
+      manualReceiptUsed: false,
+      manualReceiptNumber: '',
+      operationDateFr: toFrenchDateInput(new Date()),
+    });
+  const [remittanceValidationError, setRemittanceValidationError] = useState<string | null>(null);
+  const [remittanceValidationSubmitting, setRemittanceValidationSubmitting] = useState(false);
+  const [remittanceValidationSuccess, setRemittanceValidationSuccess] =
+    useState<RemittanceValidationSuccessState | null>(null);
 
   /* ============================================================================
      SECTION : ÉTATS REACT - CACHES ET STATISTIQUES LIVE
@@ -1146,68 +1312,60 @@ const AgenceComptabilitePage: React.FC = () => {
   const setReceptionInput = (shiftId: string, value: string) =>
     setReceptionInputs(prev => ({ ...prev, [shiftId]: { cashReceived: value } }));
 
-  const validateReception = useCallback(async (shift: ShiftDoc) => {
-    console.log(`[AgenceCompta] Validation de la réception pour le poste ${shift.id}`);
-    
-    if (!user?.companyId || !user?.agencyId || !accountant) {
-      console.warn('[AgenceCompta] Données manquantes pour la validation');
-      return;
-    }
-    
-    if (savingShiftIds[shift.id]) {
-      console.log(`[AgenceCompta] Validation déjà en cours pour le poste ${shift.id}`);
-      return;
-    }
-    
-    setSavingShiftIds(p => ({ ...p, [shift.id]: true }));
+  const toValidationAmount = useCallback((rawValue: string) => {
+    const raw = String(rawValue ?? '').trim();
+    if (raw === '') return NaN;
+    const clean = raw.replace(/[^\d.,]/g, '').replace(',', '.');
+    if (clean === '' || clean === '.') return NaN;
+    const amount = Number(clean);
+    return Number.isFinite(amount) && amount >= 0 ? amount : NaN;
+  }, []);
 
+  const resetRemittanceValidationForm = useCallback(() => {
+    setRemittanceValidationForm({
+      mode: 'immediate',
+      manualReceiptUsed: false,
+      manualReceiptNumber: '',
+      operationDateFr: toFrenchDateInput(new Date()),
+    });
+    setRemittanceValidationError(null);
+  }, []);
+
+  const closeRemittanceValidationModal = useCallback(() => {
+    if (remittanceValidationSubmitting) return;
+    setPendingRemittanceValidation(null);
+    resetRemittanceValidationForm();
+  }, [remittanceValidationSubmitting, resetRemittanceValidationForm]);
+
+  const openPrintDocument = useCallback(
+    (documentId: string) => {
+      const path = `/agence/comptabilite/documents/${documentId}/print`;
+      navigate(path);
+    },
+    [navigate]
+  );
+
+  const validateReception = useCallback((shift: ShiftDoc) => {
+    if (savingShiftIds[shift.id]) return;
     const inputs = receptionInputs[shift.id] ?? { cashReceived: '' };
-    const toAmount = (s: string) => {
-      const raw = String(s ?? '').trim();
-      if (raw === '') return NaN;
-      const clean = raw.replace(/[^\d.,]/g, '').replace(',', '.');
-      if (clean === '' || clean === '.') return NaN;
-      const n = Number(clean);
-      return Number.isFinite(n) && n >= 0 ? n : NaN;
-    };
-
-    const cashRcv = toAmount(inputs.cashReceived ?? '');
+    const cashRcv = toValidationAmount(inputs.cashReceived ?? '');
     if (!Number.isFinite(cashRcv)) {
-      alert('Saisissez le montant espèces reçu (champ obligatoire). Le montant attendu est affiché sur la carte du poste.');
-      setSavingShiftIds(p => ({ ...p, [shift.id]: false }));
+      toast.error('Saisissez le montant especes recu avant validation.');
       return;
     }
 
-    try {
-      const { computedDifference } = await validateSessionByAccountant({
-        companyId: user.companyId,
-        agencyId: user.agencyId,
-        shiftId: shift.id,
-        receivedCashAmount: cashRcv,
-        validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
-        accountantDeviceFingerprint: getDeviceFingerprint(),
-      });
+    const ui = usersCache[shift.userId] || {};
+    const name = ui.name || shift.userName || shift.userEmail || shift.userId;
+    const code = ui.code || shift.userCode || 'POSTE';
 
-      try {
-        await reloadCashRef.current?.();
-      } catch (reErr) {
-        console.warn('[AgenceCompta] Rafraîchissement caisse après validation:', reErr);
-      }
-      dispatchAgencyCashUiRefresh();
-
-      setReceptionInputs(prev => ({ ...prev, [shift.id]: { cashReceived: '' } }));
-      if (computedDifference !== 0) {
-        alert(`Validation enregistrée. Écart (reçu − montant attendu) : ${computedDifference >= 0 ? '+' : ''}${computedDifference.toFixed(0)} ${currencySymbol}`);
-      } else {
-        alert('Validation enregistrée ✓');
-      }
-    } catch (e: unknown) {
-      console.error(`[AgenceCompta] Erreur validation poste ${shift.id}:`, e);
-      alert(e instanceof Error ? e.message : 'Erreur lors de la validation.');
-    } finally {
-      setSavingShiftIds(p => ({ ...p, [shift.id]: false }));
-    }
-  }, [user?.companyId, user?.agencyId, accountant, receptionInputs, currencySymbol, savingShiftIds]);
+    setPendingRemittanceValidation({
+      kind: 'guichet',
+      sessionId: shift.id,
+      sessionLabel: `${name} (${code})`,
+      countedAmount: cashRcv,
+    });
+    resetRemittanceValidationForm();
+  }, [receptionInputs, resetRemittanceValidationForm, savingShiftIds, toValidationAmount, usersCache]);
 
   /* ============================================================================
      SECTION : ACTIONS COURRIER (activation et validation, séparé du Guichet)
@@ -1231,47 +1389,154 @@ const AgenceComptabilitePage: React.FC = () => {
     }
   }, [user?.companyId, user?.agencyId, accountant]);
 
-  const validateCourierSessionAction = useCallback(async (session: CourierSessionDoc) => {
-    if (!user?.companyId || !user?.agencyId || !accountant) return;
-    const rawTrim = String((receptionInputsCourier[session.id] || { countedAmount: '' }).countedAmount ?? '').trim();
-    if (rawTrim === '') {
-      alert('Saisissez le montant versé par l’agent courrier avant de valider.');
-      return;
-    }
-    const counted = Number(rawTrim.replace(/[^\d.,]/g, '').replace(',', '.'));
-    if (!Number.isFinite(counted) || counted < 0) {
-      alert('Montant compté invalide.');
-      return;
-    }
+  const validateCourierSessionAction = useCallback((session: CourierSessionDoc) => {
     if (savingCourierSessionIds[session.id]) return;
-    setSavingCourierSessionIds(p => ({ ...p, [session.id]: true }));
+    const raw = String((receptionInputsCourier[session.id] || { countedAmount: '' }).countedAmount ?? '');
+    const counted = toValidationAmount(raw);
+    if (!Number.isFinite(counted)) {
+      toast.error("Saisissez le montant verse par l'agent courrier avant validation.");
+      return;
+    }
+
+    const ui = usersCache[session.agentId] || {};
+    const name = ui.name || session.agentId;
+    const code = ui.code || session.agentCode || 'COURRIER';
+
+    setPendingRemittanceValidation({
+      kind: 'courrier',
+      sessionId: session.id,
+      sessionLabel: `${name} (${code})`,
+      countedAmount: counted,
+    });
+    resetRemittanceValidationForm();
+  }, [receptionInputsCourier, resetRemittanceValidationForm, savingCourierSessionIds, toValidationAmount, usersCache]);
+
+  const submitRemittanceValidation = useCallback(async () => {
+    if (!pendingRemittanceValidation) return;
+    if (!user?.companyId || !user?.agencyId || !accountant) {
+      toast.error('Contexte comptable incomplet pour valider le versement.');
+      return;
+    }
+
+    const effectiveOperationDate = parseFrenchDateInput(remittanceValidationForm.operationDateFr);
+    if (!effectiveOperationDate) {
+      setRemittanceValidationError('Date reelle invalide. Utilisez le format jj/mm/aaaa.');
+      return;
+    }
+    if (
+      remittanceValidationForm.manualReceiptUsed &&
+      !String(remittanceValidationForm.manualReceiptNumber ?? '').trim()
+    ) {
+      setRemittanceValidationError('Saisissez le numero du recu manuel.');
+      return;
+    }
+
+    const captureMode = remittanceValidationForm.mode === 'after_entry' ? 'after_entry' : 'normal';
+    const manualReceiptNumber = remittanceValidationForm.manualReceiptUsed
+      ? String(remittanceValidationForm.manualReceiptNumber ?? '').trim()
+      : '';
+    const regularizedByName = accountant.displayName || accountant.email || accountant.id;
+    const sessionId = pendingRemittanceValidation.sessionId;
+    const isGuichet = pendingRemittanceValidation.kind === 'guichet';
+
+    setRemittanceValidationSubmitting(true);
+    setRemittanceValidationError(null);
+    if (isGuichet) {
+      setSavingShiftIds((prev) => ({ ...prev, [sessionId]: true }));
+    } else {
+      setSavingCourierSessionIds((prev) => ({ ...prev, [sessionId]: true }));
+    }
+
     try {
-      const { difference } = await validateCourierSession({
-        companyId: user.companyId,
-        agencyId: user.agencyId,
-        sessionId: session.id,
-        validatedAmount: counted,
-        validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
-      });
+      if (isGuichet) {
+        const { computedDifference } = await validateSessionByAccountant({
+          companyId: user.companyId,
+          agencyId: user.agencyId,
+          shiftId: sessionId,
+          receivedCashAmount: pendingRemittanceValidation.countedAmount,
+          validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
+          accountantDeviceFingerprint: getDeviceFingerprint(),
+          captureMode,
+          manualDocumentUsed: remittanceValidationForm.manualReceiptUsed,
+          manualDocumentType: remittanceValidationForm.manualReceiptUsed ? 'recu_manuel' : null,
+          manualDocumentNumber: remittanceValidationForm.manualReceiptUsed ? manualReceiptNumber : null,
+          manualReceiptNumber: remittanceValidationForm.manualReceiptUsed ? manualReceiptNumber : null,
+          effectiveOperationDate,
+          regularizedByUid: captureMode === 'after_entry' ? accountant.id : null,
+          regularizedByName: captureMode === 'after_entry' ? regularizedByName : null,
+          regularizedAt: captureMode === 'after_entry' ? new Date() : null,
+        });
+
+        setReceptionInputs((prev) => ({ ...prev, [sessionId]: { cashReceived: '' } }));
+        setRemittanceValidationSuccess({
+          kind: 'guichet',
+          sessionId,
+          sessionLabel: pendingRemittanceValidation.sessionLabel,
+          countedAmount: pendingRemittanceValidation.countedAmount,
+          difference: computedDifference,
+          remittanceDocumentId: getSessionRemittanceDocumentId('shift_session', sessionId),
+          receiptDocumentId: getSessionRemittanceReceiptDocumentId('shift_session', sessionId),
+        });
+      } else {
+        const { difference } = await validateCourierSession({
+          companyId: user.companyId,
+          agencyId: user.agencyId,
+          sessionId,
+          validatedAmount: pendingRemittanceValidation.countedAmount,
+          validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
+          captureMode,
+          manualDocumentUsed: remittanceValidationForm.manualReceiptUsed,
+          manualDocumentType: remittanceValidationForm.manualReceiptUsed ? 'recu_manuel' : null,
+          manualDocumentNumber: remittanceValidationForm.manualReceiptUsed ? manualReceiptNumber : null,
+          manualReceiptNumber: remittanceValidationForm.manualReceiptUsed ? manualReceiptNumber : null,
+          effectiveOperationDate,
+          regularizedByUid: captureMode === 'after_entry' ? accountant.id : null,
+          regularizedByName: captureMode === 'after_entry' ? regularizedByName : null,
+          regularizedAt: captureMode === 'after_entry' ? new Date() : null,
+        });
+
+        setReceptionInputsCourier((prev) => ({ ...prev, [sessionId]: { countedAmount: '' } }));
+        setRemittanceValidationSuccess({
+          kind: 'courrier',
+          sessionId,
+          sessionLabel: pendingRemittanceValidation.sessionLabel,
+          countedAmount: pendingRemittanceValidation.countedAmount,
+          difference,
+          remittanceDocumentId: getSessionRemittanceDocumentId('courier_session', sessionId),
+          receiptDocumentId: getSessionRemittanceReceiptDocumentId('courier_session', sessionId),
+        });
+      }
+
       try {
         await reloadCashRef.current?.();
       } catch (reErr) {
-        console.warn('[AgenceCompta] Rafraîchissement caisse après validation courrier:', reErr);
+        console.warn('[AgenceCompta] Rafraichissement caisse apres validation:', reErr);
       }
       dispatchAgencyCashUiRefresh();
-      setReceptionInputsCourier(prev => ({ ...prev, [session.id]: { countedAmount: '' } }));
-      if (difference !== 0) {
-        alert(`Validation enregistrée. Écart (compté − montant attendu) : ${difference >= 0 ? '+' : ''}${difference.toFixed(0)} ${currencySymbol}`);
-      } else {
-        alert('Validation enregistrée ✓');
-      }
+      setPendingRemittanceValidation(null);
+      resetRemittanceValidationForm();
     } catch (e: unknown) {
-      console.error('[AgenceCompta] Erreur validation session courrier:', e);
-      alert(e instanceof Error ? e.message : 'Erreur lors de la validation.');
+      console.error('[AgenceCompta] Erreur validation versement:', e);
+      toast.error(e instanceof Error ? e.message : 'Erreur lors de la validation du versement.');
     } finally {
-      setSavingCourierSessionIds(p => ({ ...p, [session.id]: false }));
+      if (isGuichet) {
+        setSavingShiftIds((prev) => ({ ...prev, [sessionId]: false }));
+      } else {
+        setSavingCourierSessionIds((prev) => ({ ...prev, [sessionId]: false }));
+      }
+      setRemittanceValidationSubmitting(false);
     }
-  }, [user?.companyId, user?.agencyId, accountant, receptionInputsCourier, currencySymbol, savingCourierSessionIds]);
+  }, [
+    accountant,
+    pendingRemittanceValidation,
+    remittanceValidationForm.manualReceiptNumber,
+    remittanceValidationForm.manualReceiptUsed,
+    remittanceValidationForm.mode,
+    remittanceValidationForm.operationDateFr,
+    resetRemittanceValidationForm,
+    user?.agencyId,
+    user?.companyId,
+  ]);
 
   /* ============================================================================
      SECTION : RAPPORTS DÉTAILLÉS (GUICHET — SESSION + VENDEUR)
@@ -1484,6 +1749,102 @@ const AgenceComptabilitePage: React.FC = () => {
   );
   const receptionsPendingTotal =
     receptionsBilletteriePendingCount + closedCourierSessions.length;
+
+  const comptaPriorityItems = useMemo<ComptaPriorityItem[]>(() => {
+    const rows: ComptaPriorityItem[] = [];
+
+    if (receptionsPendingTotal > 0 && allowedTabs.includes('versements')) {
+      rows.push({
+        id: 'pending-remittances',
+        level: receptionsPendingTotal > 4 ? 'critical' : 'todo',
+        title: `${receptionsPendingTotal} remise(s) à enregistrer`,
+        detail:
+          receptionsBilletteriePendingCount > 0 && closedCourierSessions.length > 0
+            ? `${receptionsBilletteriePendingCount} guichet + ${closedCourierSessions.length} courrier.`
+            : receptionsBilletteriePendingCount > 0
+              ? `${receptionsBilletteriePendingCount} session(s) guichet clôturée(s).`
+              : `${closedCourierSessions.length} session(s) courrier clôturée(s).`,
+        actionLabel: 'Ouvrir Versements',
+        onAction: () => setComptaTab('versements'),
+      });
+    }
+
+    if (documentAnomalySummary.critical > 0) {
+      rows.push({
+        id: 'document-critical',
+        level: 'critical',
+        title: `${documentAnomalySummary.critical} anomalie(s) documentaire(s) critique(s)`,
+        detail: 'Pièces manquantes, signatures ou scans à régulariser.',
+        actionLabel: 'Traiter les anomalies',
+        onAction: () => navigate('/agence/comptabilite/documents'),
+      });
+    } else if (documentAnomalySummary.open > 0) {
+      rows.push({
+        id: 'document-open',
+        level: 'todo',
+        title: `${documentAnomalySummary.open} anomalie(s) documentaire(s) ouverte(s)`,
+        detail: 'Impression, signature ou archivage à finaliser.',
+        actionLabel: 'Ouvrir documents',
+        onAction: () => navigate('/agence/comptabilite/documents'),
+      });
+    }
+
+    if (pendingShifts.length > 0 && allowedTabs.includes('ventes')) {
+      rows.push({
+        id: 'pending-shifts',
+        level: 'todo',
+        title: `${pendingShifts.length} poste(s) guichet en attente d'activation`,
+        detail: 'Les ventes ne peuvent pas démarrer sans activation de poste.',
+        actionLabel: 'Voir Ventes',
+        onAction: () => setComptaTab('ventes'),
+      });
+    }
+
+    if (pendingCourierSessions.length > 0 && allowedTabs.includes('ventes')) {
+      rows.push({
+        id: 'pending-courier',
+        level: 'todo',
+        title: `${pendingCourierSessions.length} session(s) courrier en attente`,
+        detail: "Activation comptable requise avant les actions terrain de l'agent.",
+        actionLabel: 'Voir Ventes',
+        onAction: () => setComptaTab('ventes'),
+      });
+    }
+
+    if (rows.length === 0) {
+      rows.push({
+        id: 'no-urgent',
+        level: 'info',
+        title: 'Aucune urgence bloquante',
+        detail: 'Suivi normal des sessions, remises et pièces documentaires.',
+        actionLabel: 'Ouvrir Ventes',
+        onAction: () => setComptaTab('ventes'),
+      });
+    }
+
+    return rows.slice(0, 5);
+  }, [
+    allowedTabs,
+    closedCourierSessions.length,
+    documentAnomalySummary.critical,
+    documentAnomalySummary.open,
+    navigate,
+    pendingCourierSessions.length,
+    pendingShifts.length,
+    receptionsBilletteriePendingCount,
+    receptionsPendingTotal,
+    setComptaTab,
+  ]);
+
+  const comptaNotificationBadge = useMemo(
+    () =>
+      comptaPriorityItems.filter((row) => row.level === 'critical' || row.level === 'todo').length,
+    [comptaPriorityItems]
+  );
+  const ventesBadgeCount = useMemo(
+    () => pendingShifts.length + pendingCourierSessions.length,
+    [pendingShifts.length, pendingCourierSessions.length]
+  );
 
   /* ============================================================================
      SECTION : GESTION DE LA CAISSE - CONFIGURATION
@@ -1823,6 +2184,7 @@ const AgenceComptabilitePage: React.FC = () => {
           if (p.agencyId !== user.agencyId) continue;
           if (p.channel !== 'courrier') continue;
           if (p.status !== 'validated') continue;
+          if (p.ledgerStatus !== 'posted') continue;
           courrierOps += 1;
           courrierMontant += Number(p.amount) || 0;
         }
@@ -1963,9 +2325,9 @@ const AgenceComptabilitePage: React.FC = () => {
                 <Bell className="h-4 w-4" />
                 {userRole === 'agency_accountant' &&
                   allowedTabs.includes('versements') &&
-                  pendingCourierSessions.length > 0 && (
+                  comptaNotificationBadge > 0 && (
                   <span className="absolute -top-1 -right-1 min-w-[1rem] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-4 text-center">
-                    {pendingCourierSessions.length > 99 ? '99+' : pendingCourierSessions.length}
+                    {comptaNotificationBadge > 99 ? '99+' : comptaNotificationBadge}
                   </span>
                 )}
               </button>
@@ -2021,7 +2383,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   theme={theme}
                   badgeCount={
                     userRole === 'agency_accountant' && allowedTabs.includes('ventes')
-                      ? pendingCourierSessions.length
+                      ? ventesBadgeCount
                       : 0
                   }
                 />
@@ -2049,7 +2411,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 <TabButton
                   active={tab === 'audit'}
                   onClick={() => setComptaTab('audit')}
-                  label="Contrôle"
+                  label="Contrôle de caisse"
                   icon={<Scale className="h-4 w-4" />}
                   theme={theme}
                 />
@@ -2058,7 +2420,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 <TabButton
                   active={tab === 'corrections'}
                   onClick={() => setComptaTab('corrections')}
-                  label="Corrections"
+                  label="Régularisations"
                   icon={<Shield className="h-4 w-4" />}
                   theme={theme}
                 />
@@ -2074,6 +2436,118 @@ const AgenceComptabilitePage: React.FC = () => {
          ============================================================================ */}
       
       <StandardLayoutWrapper className="min-w-0">
+        <div className="mb-4 flex flex-col gap-3 rounded-xl border border-indigo-200 bg-indigo-50/70 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 text-sm text-indigo-950">
+            <div className="font-semibold">Documents et archives financiers</div>
+            <p className="mt-0.5 text-indigo-900/90">
+              Consulter les fiches de remise, bordereaux, bons de decaissement et demandes maintenance.
+            </p>
+          </div>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <ActionButton
+              type="button"
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => void handleGenerateDailyReportDocument()}
+            >
+              Rapport journalier imprimable
+            </ActionButton>
+            <Link
+              to="/agence/comptabilite/documents"
+              className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-700 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-800 sm:w-auto"
+            >
+              Ouvrir le registre documentaire
+            </Link>
+          </div>
+        </div>
+        <div className="mb-4 rounded-xl border border-slate-200 bg-white/95 px-4 py-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-slate-900">À traiter maintenant</div>
+            <StatusBadge status={comptaNotificationBadge > 0 ? 'warning' : 'success'}>
+              {comptaNotificationBadge > 0
+                ? `${comptaNotificationBadge} action(s)`
+                : 'Aucune action urgente'}
+            </StatusBadge>
+          </div>
+          <div className="space-y-2">
+            {comptaPriorityItems.map((item) => {
+              const levelUi = comptaPriorityLevelUi(item.level);
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50/75 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge status={levelUi.badgeStatus}>{levelUi.badgeLabel}</StatusBadge>
+                      <div className="text-sm font-medium text-slate-900">{item.title}</div>
+                    </div>
+                    <div className="mt-0.5 text-xs text-slate-600">{item.detail}</div>
+                  </div>
+                  <ActionButton type="button" size="sm" variant="secondary" onClick={item.onAction}>
+                    {item.actionLabel}
+                  </ActionButton>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {tab !== 'ventes' && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-amber-900">
+              <div className="font-semibold">Pieces manquantes / anomalies documentaires</div>
+              <p className="mt-0.5 text-amber-900/90">
+                Suivi terrain des documents a regulariser (impression, signature, scan signe, archivage).
+              </p>
+            </div>
+            <Link
+              to="/agence/comptabilite/documents"
+              className="inline-flex items-center justify-center rounded-lg bg-amber-700 px-3 py-2 text-sm font-medium text-white hover:bg-amber-800"
+            >
+              Ouvrir les anomalies
+            </Link>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-6">
+            <div className="rounded-lg border border-amber-200 bg-white px-2 py-1.5">
+              <div className="text-[11px] text-gray-500">Ouvertes</div>
+              <div className="text-base font-semibold text-gray-900">
+                {documentAnomalyLoading ? "..." : documentAnomalySummary.open}
+              </div>
+            </div>
+            <div className="rounded-lg border border-rose-200 bg-white px-2 py-1.5">
+              <div className="text-[11px] text-rose-600">Critiques</div>
+              <div className="text-base font-semibold text-rose-700">
+                {documentAnomalyLoading ? "..." : documentAnomalySummary.critical}
+              </div>
+            </div>
+            <div className="rounded-lg border border-rose-200 bg-white px-2 py-1.5">
+              <div className="text-[11px] text-rose-600">Docs manquants</div>
+              <div className="text-base font-semibold text-rose-700">
+                {documentAnomalyLoading ? "..." : documentAnomalySummary.documentsMissing}
+              </div>
+            </div>
+            <div className="rounded-lg border border-rose-200 bg-white px-2 py-1.5">
+              <div className="text-[11px] text-rose-600">Scans manquants</div>
+              <div className="text-base font-semibold text-rose-700">
+                {documentAnomalyLoading ? "..." : documentAnomalySummary.signedScanMissing}
+              </div>
+            </div>
+            <div className="rounded-lg border border-amber-200 bg-white px-2 py-1.5">
+              <div className="text-[11px] text-amber-700">Imprimes non signes</div>
+              <div className="text-base font-semibold text-amber-700">
+                {documentAnomalyLoading ? "..." : documentAnomalySummary.printedNotSigned}
+              </div>
+            </div>
+            <div className="rounded-lg border border-amber-200 bg-white px-2 py-1.5">
+              <div className="text-[11px] text-amber-700">Signes non archives</div>
+              <div className="text-base font-semibold text-amber-700">
+                {documentAnomalyLoading ? "..." : documentAnomalySummary.signedNotArchived}
+              </div>
+            </div>
+          </div>
+          </div>
+        )}
         {userRole === 'agency_accountant' &&
           allowedTabs.includes('versements') &&
           receptionsPendingTotal > 0 &&
@@ -2702,6 +3176,19 @@ const AgenceComptabilitePage: React.FC = () => {
 
               return (
                 <>
+                  <SectionCard
+                    title="Statuts terrain de remise"
+                    icon={CheckCircle2}
+                    description="Progression simple pour les sessions et les pieces de caisse."
+                  >
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <StatusBadge status="warning">Session cloturee</StatusBadge>
+                      <StatusBadge status="info">Remise recue</StatusBadge>
+                      <StatusBadge status="success">Controlee par le chef d'agence</StatusBadge>
+                      <StatusBadge status="neutral">Piece archivee</StatusBadge>
+                    </div>
+                  </SectionCard>
+
                   {!hasBilletterieReception && !hasCourrierReception ? (
                     <SectionCard title="Versements à valider" icon={HandIcon}>
                       <UIEmptyState message="Rien à valider pour le moment — guichet et courrier sont à jour." />
@@ -4018,7 +4505,7 @@ const AgenceComptabilitePage: React.FC = () => {
         {tab === 'corrections' && (
           <div className="space-y-6">
             <SectionCard
-              title="Corrections exceptionnelles"
+              title="Régularisations exceptionnelles"
               help="Réservé aux cas rares : toujours avec la compagnie."
             >
               <p className="text-sm text-gray-700 leading-relaxed">
@@ -4026,6 +4513,209 @@ const AgenceComptabilitePage: React.FC = () => {
                 contactez le <strong>comptable compagnie</strong> ou l’<strong>admin compagnie</strong>.
               </p>
             </SectionCard>
+          </div>
+        )}
+
+        {pendingRemittanceValidation && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/50 p-0 sm:items-center sm:p-4 md:p-6"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl">
+              <div className="border-b border-gray-200 px-4 py-3 sm:px-6">
+                <div className="text-base font-semibold text-gray-900">Validation du versement</div>
+                <div className="mt-1 text-sm text-gray-600">
+                  Session: <span className="font-medium text-gray-900">{pendingRemittanceValidation.sessionLabel}</span>
+                </div>
+                <div className="text-sm text-gray-600">
+                  Montant verse:{" "}
+                  <span className="font-medium text-gray-900">{money(pendingRemittanceValidation.countedAmount)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-4 px-4 py-4 sm:px-6">
+                <div>
+                  <div className="mb-2 text-sm font-medium text-gray-800">Mode d'enregistrement</div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <label className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="remittance_mode"
+                        checked={remittanceValidationForm.mode === 'immediate'}
+                        onChange={() =>
+                          setRemittanceValidationForm((prev) => ({ ...prev, mode: 'immediate' }))
+                        }
+                      />
+                      Immediat
+                    </label>
+                    <label className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="remittance_mode"
+                        checked={remittanceValidationForm.mode === 'after_entry'}
+                        onChange={() =>
+                          setRemittanceValidationForm((prev) => ({ ...prev, mode: 'after_entry' }))
+                        }
+                      />
+                      Apres coup
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-sm font-medium text-gray-800">Recu manuel utilise ?</div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <label className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="manual_receipt_used"
+                        checked={remittanceValidationForm.manualReceiptUsed}
+                        onChange={() =>
+                          setRemittanceValidationForm((prev) => ({
+                            ...prev,
+                            manualReceiptUsed: true,
+                          }))
+                        }
+                      />
+                      Oui
+                    </label>
+                    <label className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="manual_receipt_used"
+                        checked={!remittanceValidationForm.manualReceiptUsed}
+                        onChange={() =>
+                          setRemittanceValidationForm((prev) => ({
+                            ...prev,
+                            manualReceiptUsed: false,
+                            manualReceiptNumber: '',
+                          }))
+                        }
+                      />
+                      Non
+                    </label>
+                  </div>
+                </div>
+
+                {remittanceValidationForm.manualReceiptUsed ? (
+                  <label className="block text-sm text-gray-700">
+                    Numero du recu manuel
+                    <input
+                      type="text"
+                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      value={remittanceValidationForm.manualReceiptNumber}
+                      onChange={(e) =>
+                        setRemittanceValidationForm((prev) => ({
+                          ...prev,
+                          manualReceiptNumber: e.target.value,
+                        }))
+                      }
+                      placeholder="Reference papier"
+                    />
+                  </label>
+                ) : null}
+
+                <label className="block text-sm text-gray-700">
+                  Date reelle de remise
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    value={remittanceValidationForm.operationDateFr}
+                    onChange={(e) =>
+                      setRemittanceValidationForm((prev) => ({
+                        ...prev,
+                        operationDateFr: e.target.value,
+                      }))
+                    }
+                    placeholder="jj/mm/aaaa"
+                  />
+                </label>
+
+                {remittanceValidationError ? (
+                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    {remittanceValidationError}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+                  <ActionButton
+                    type="button"
+                    variant="secondary"
+                    onClick={closeRemittanceValidationModal}
+                    disabled={remittanceValidationSubmitting}
+                  >
+                    Annuler
+                  </ActionButton>
+                  <ActionButton
+                    type="button"
+                    onClick={() => void submitRemittanceValidation()}
+                    disabled={remittanceValidationSubmitting}
+                  >
+                    {remittanceValidationSubmitting ? 'Validation...' : 'Valider le versement'}
+                  </ActionButton>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {remittanceValidationSuccess && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/50 p-0 sm:items-center sm:p-4 md:p-6"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="mx-auto w-full max-w-xl overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl">
+              <div className="border-b border-gray-200 px-4 py-3 sm:px-6">
+                <div className="text-base font-semibold text-gray-900">Versement valide</div>
+                <div className="mt-1 text-sm text-gray-600">Les documents sont prets a imprimer</div>
+              </div>
+              <div className="space-y-4 px-4 py-4 sm:px-6">
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                  <div>
+                    Session: <span className="font-medium text-gray-900">{remittanceValidationSuccess.sessionLabel}</span>
+                  </div>
+                  <div>
+                    Montant valide:{" "}
+                    <span className="font-medium text-gray-900">{money(remittanceValidationSuccess.countedAmount)}</span>
+                  </div>
+                  <div>
+                    Ecart:{" "}
+                    <span className="font-medium text-gray-900">{money(remittanceValidationSuccess.difference)}</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <ActionButton
+                    type="button"
+                    onClick={() => openPrintDocument(remittanceValidationSuccess.remittanceDocumentId)}
+                  >
+                    Imprimer la fiche de remise
+                  </ActionButton>
+                  <ActionButton
+                    type="button"
+                    onClick={() => openPrintDocument(remittanceValidationSuccess.receiptDocumentId)}
+                  >
+                    Imprimer le recu comptable
+                  </ActionButton>
+                  <ActionButton
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setRemittanceValidationSuccess(null)}
+                  >
+                    Fermer
+                  </ActionButton>
+                </div>
+
+                <div className="border-t border-gray-100 pt-3 text-sm text-gray-600">
+                  Besoin d'un suivi complet ?{" "}
+                  <Link to="/agence/comptabilite/documents" className="font-medium text-indigo-700 hover:underline">
+                    Ouvrir le registre documentaire
+                  </Link>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -4129,10 +4819,10 @@ const SectionShifts: React.FC<{
   const statusLabels: Record<string, string> = {
     active: "En service",
     paused: "En pause",
-    closed: "Clôturé",
+    closed: "Session cloturee",
     pending: "En attente",
-    validated_agency: "Validé comptable (en attente chef d'agence)",
-    validated: "Validé",
+    validated_agency: "Remise recue",
+    validated: "Controlee par le chef d'agence",
   };
   return (
     <SectionCard
@@ -4284,3 +4974,6 @@ function exportCsv(rows: CashDay[], currencySymbol: string) {
 }
 
 export default AgenceComptabilitePage;
+
+
+

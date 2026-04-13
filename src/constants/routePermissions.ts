@@ -14,13 +14,11 @@ export const routePermissions = {
   companyFleet: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
   guichet: ["guichetier", "chefAgence", "escale_agent", "escale_manager", "admin_compagnie"] as const,
   escaleDashboard: ["escale_agent", "escale_manager", "chefAgence", "admin_compagnie"] as const,
-  /** Page compta agence : guichetier (ses sessions / ventes), comptable, chef, superviseur, admin compagnie. */
+  /** Page compta agence : espace operationnel reserve au comptable agence (+ admins). */
   comptabilite: [
     "agency_accountant",
-    "guichetier",
-    "chefAgence",
-    "superviseur",
     "admin_compagnie",
+    "admin_platforme",
   ] as const,
   /** Sous-écrans trésorerie (dépense, virement, payable) : pas le chef seul — manipulation caisse réservée au comptable agence (+ admins). */
   comptabiliteTreasury: ["agency_accountant", "admin_compagnie", "admin_platforme"] as const,

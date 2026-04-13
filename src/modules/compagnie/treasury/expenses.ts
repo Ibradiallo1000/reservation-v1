@@ -27,6 +27,11 @@ import { formatCurrency } from "@/shared/utils/formatCurrency";
 import {
   applyFinancialTransactionInExistingFirestoreTransaction,
 } from "./financialTransactions";
+import {
+  upsertCashDisbursementDocument,
+  upsertLocalExpenseRequestDocument,
+} from "@/modules/finance/documents/financialDocumentsService";
+import type { FinancialDocumentStatus } from "@/modules/finance/documents/financialDocuments.types";
 
 const EXPENSES_COLLECTION = "expenses";
 const EXPENSE_RESERVE_ACCOUNT_ID = "company_expense_reserve";
@@ -63,6 +68,16 @@ export const EXPENSE_CATEGORIES = [
 ] as const;
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
+const EXPENSE_CREATOR_ROLES = [
+  "agency_accountant",
+  "company_accountant",
+  "financial_director",
+  "chefagence",
+  "chef_agence",
+  "admin_compagnie",
+  "admin_platforme",
+] as const;
+
 export interface ExpenseDoc {
   companyId: string;
   agencyId: string | null;
@@ -81,6 +96,7 @@ export interface ExpenseDoc {
   rejectionReason: string | null;
   paidAt: Timestamp | null;
   createdBy: string;
+  createdByRole?: string | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   vehicleId?: string | null;
@@ -129,6 +145,121 @@ async function getExpenseTypeFromAccount(
   return accountType === "agency_cash" ? "agency" : "company";
 }
 
+function mapExpenseStatusToDocumentStatus(status: ExpenseStatus): FinancialDocumentStatus {
+  if (status === "rejected") return "archived";
+  if (status === "approved" || status === "paid") return "ready_to_print";
+  return "draft";
+}
+
+async function syncExpenseCashDisbursementDocument(params: {
+  companyId: string;
+  expenseId: string;
+  expense: ExpenseDoc;
+  status: ExpenseStatus;
+  actorUid?: string | null;
+  actorRole?: string | null;
+  approverUid?: string | null;
+  approverRole?: string | null;
+  executionDate?: unknown;
+  observations?: string | null;
+}): Promise<void> {
+  try {
+    const accountSnap = await getDoc(financialAccountRef(params.companyId, params.expense.accountId));
+    const accountData = accountSnap.exists()
+      ? (accountSnap.data() as { accountName?: string; currency?: string })
+      : {};
+    const validationLevel = params.status === "pending" ? "pending_manager" : params.status;
+    await upsertCashDisbursementDocument({
+      companyId: params.companyId,
+      agencyId: params.expense.agencyId ?? null,
+      sourceType: "expense",
+      sourceId: params.expenseId,
+      requester: {
+        uid: params.expense.createdBy ?? params.actorUid ?? null,
+        role:
+          String(
+            params.expense.createdByRole ??
+              params.actorRole ??
+              "requester"
+          ).trim() || "requester",
+      },
+      approver: params.approverUid
+        ? {
+            uid: params.approverUid,
+            role: String(params.approverRole ?? "validator").trim() || "validator",
+          }
+        : params.expense.approvedBy
+          ? {
+              uid: params.expense.approvedBy,
+              role: "validator",
+            }
+          : null,
+      beneficiaryName: params.expense.supplierName ?? null,
+      amount: Number(params.expense.amount ?? 0),
+      currency: String(accountData.currency ?? "XOF"),
+      expenseCategory: String(
+        params.expense.expenseCategory ?? params.expense.category ?? "operational"
+      ),
+      reason: params.expense.description ?? null,
+      accountSourceLabel: String(accountData.accountName ?? "").trim() || params.expense.accountId,
+      validationLevel,
+      executionDate: params.executionDate ?? params.expense.paidAt ?? params.expense.createdAt ?? Timestamp.now(),
+      observations:
+        params.observations ??
+        (params.status === "rejected" ? params.expense.rejectionReason : null),
+      status: mapExpenseStatusToDocumentStatus(params.status),
+      createdByUid: params.actorUid ?? params.expense.createdBy ?? null,
+    });
+    if (params.expense.agencyId) {
+      await upsertLocalExpenseRequestDocument({
+        companyId: params.companyId,
+        depenseId: params.expenseId,
+        agenceId: params.expense.agencyId,
+        demandeur: {
+          uid: params.expense.createdBy ?? params.actorUid ?? null,
+          role:
+            String(
+              params.expense.createdByRole ??
+                params.actorRole ??
+                "requester"
+            ).trim() || "requester",
+        },
+        categorie: String(
+          params.expense.expenseCategory ?? params.expense.category ?? "operational"
+        ),
+        motif: params.expense.description ?? null,
+        montantEstime: Number(params.expense.amount ?? 0),
+        devise: String(accountData.currency ?? "XOF"),
+        urgence: "normale",
+        fournisseurPressenti: params.expense.supplierName ?? null,
+        telephoneFournisseur: null,
+        dateSouhaitee:
+          params.executionDate ??
+          params.expense.paidAt ??
+          params.expense.createdAt ??
+          Timestamp.now(),
+        justificatifDisponible: Array.isArray(params.expense.receiptUrls)
+          ? params.expense.receiptUrls.length > 0
+          : false,
+        validationAttendue: validationLevel,
+        observations:
+          params.observations ??
+          (params.status === "rejected"
+            ? params.expense.rejectionReason
+            : null),
+        status: mapExpenseStatusToDocumentStatus(params.status),
+        createdByUid: params.actorUid ?? params.expense.createdBy ?? null,
+      });
+    }
+  } catch (docError) {
+    console.error("[expenses] echec sync documents depense", {
+      companyId: params.companyId,
+      expenseId: params.expenseId,
+      docError,
+    });
+  }
+}
+
 /** Create expense (initial status from thresholds). agency_accountant submits → pending_manager / pending_accountant / pending_ceo. */
 export async function createExpense(params: {
   companyId: string;
@@ -138,6 +269,7 @@ export async function createExpense(params: {
   amount: number;
   accountId: string;
   createdBy: string;
+  createdByRole: string;
   expenseCategory?: ExpenseCategory | string | null;
   vehicleId?: string | null;
   tripId?: string | null;
@@ -148,6 +280,17 @@ export async function createExpense(params: {
   supplierName?: string | null;
   receiptUrls?: string[] | null;
 }): Promise<string> {
+  const creatorRoles = String(params.createdByRole ?? "")
+    .split(",")
+    .map((r) => r.trim().toLowerCase())
+    .filter(Boolean);
+  const creatorAllowed = creatorRoles.some((r) =>
+    EXPENSE_CREATOR_ROLES.includes(r as (typeof EXPENSE_CREATOR_ROLES)[number])
+  );
+  if (!creatorAllowed) {
+    throw new Error("Role non autorise pour creer une depense.");
+  }
+
   const thresholds = await getExpenseApprovalThresholds(params.companyId);
   const initialStatus = getInitialExpenseStatus(params.amount, thresholds);
   const expenseType = await getExpenseTypeFromAccount(params.companyId, params.accountId);
@@ -170,6 +313,7 @@ export async function createExpense(params: {
     rejectionReason: null,
     paidAt: null,
     createdBy: params.createdBy,
+    createdByRole: params.createdByRole ?? null,
     createdAt: now,
     updatedAt: serverTimestamp(),
   };
@@ -183,6 +327,44 @@ export async function createExpense(params: {
   if (params.supplierName != null) data.supplierName = params.supplierName;
   if (params.receiptUrls != null) data.receiptUrls = params.receiptUrls;
   await setDoc(ref, data);
+  await syncExpenseCashDisbursementDocument({
+    companyId: params.companyId,
+    expenseId: ref.id,
+    expense: {
+      companyId: params.companyId,
+      agencyId: params.agencyId ?? null,
+      expenseType,
+      category: params.category,
+      expenseCategory: params.expenseCategory ?? null,
+      description: params.description,
+      amount: params.amount,
+      accountId: params.accountId,
+      status: initialStatus,
+      approvedBy: null,
+      approvedAt: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      rejectionReason: null,
+      paidAt: null,
+      createdBy: params.createdBy,
+      createdByRole: params.createdByRole ?? null,
+      createdAt: now,
+      updatedAt: now,
+      vehicleId: params.vehicleId ?? null,
+      tripId: params.tripId ?? null,
+      linkedMaintenanceId: params.linkedMaintenanceId ?? null,
+      linkedPayableId: params.linkedPayableId ?? null,
+      expenseDate: params.expenseDate ?? null,
+      supplierId: params.supplierId ?? null,
+      supplierName: params.supplierName ?? null,
+      receiptUrls: params.receiptUrls ?? null,
+    },
+    status: initialStatus,
+    actorUid: params.createdBy,
+    actorRole: params.createdByRole,
+    executionDate: now,
+    observations: "Demande de decaissement en cours de validation.",
+  });
   const title = "Nouvelle dépense soumise";
   const body = `${params.description.slice(0, 80)} — ${formatCurrency(params.amount)} en attente de validation.`;
   try {
@@ -263,6 +445,18 @@ export async function approveExpense(
         approvedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      await syncExpenseCashDisbursementDocument({
+        companyId,
+        expenseId,
+        expense: data,
+        status: "approved",
+        actorUid: approvedBy,
+        actorRole: role,
+        approverUid: approvedBy,
+        approverRole: role,
+        executionDate: Timestamp.now(),
+        observations: "Depense approuvee au niveau chef d'agence.",
+      });
       try {
         await notifyCompanyRoles({
           companyId,
@@ -282,6 +476,16 @@ export async function approveExpense(
     await updateDoc(ref, {
       status: "pending_accountant",
       updatedAt: serverTimestamp(),
+    });
+    await syncExpenseCashDisbursementDocument({
+      companyId,
+      expenseId,
+      expense: data,
+      status: "pending_accountant",
+      actorUid: approvedBy,
+      actorRole: role,
+      executionDate: Timestamp.now(),
+      observations: "Validation chef agence terminee, attente chef comptable.",
     });
     try {
       await notifyCompanyRoles({
@@ -311,6 +515,18 @@ export async function approveExpense(
         approvedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      await syncExpenseCashDisbursementDocument({
+        companyId,
+        expenseId,
+        expense: data,
+        status: "approved",
+        actorUid: approvedBy,
+        actorRole: role,
+        approverUid: approvedBy,
+        approverRole: role,
+        executionDate: Timestamp.now(),
+        observations: "Depense approuvee au niveau comptabilite centrale.",
+      });
       try {
         await notifyCompanyRoles({
           companyId,
@@ -330,6 +546,16 @@ export async function approveExpense(
     await updateDoc(ref, {
       status: "pending_ceo",
       updatedAt: serverTimestamp(),
+    });
+    await syncExpenseCashDisbursementDocument({
+      companyId,
+      expenseId,
+      expense: data,
+      status: "pending_ceo",
+      actorUid: approvedBy,
+      actorRole: role,
+      executionDate: Timestamp.now(),
+      observations: "Depense en attente d'approbation CEO.",
     });
     try {
       await notifyCompanyRoles({
@@ -357,6 +583,18 @@ export async function approveExpense(
       approvedBy,
       approvedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+    });
+    await syncExpenseCashDisbursementDocument({
+      companyId,
+      expenseId,
+      expense: data,
+      status: "approved",
+      actorUid: approvedBy,
+      actorRole: role,
+      approverUid: approvedBy,
+      approverRole: role,
+      executionDate: Timestamp.now(),
+      observations: "Depense approuvee au niveau CEO.",
     });
     try {
       await notifyCompanyRoles({
@@ -408,6 +646,21 @@ export async function rejectExpense(
     rejectedAt: serverTimestamp(),
     rejectionReason: rejectionReason?.trim()?.slice(0, 500) ?? "",
     updatedAt: serverTimestamp(),
+  });
+  await syncExpenseCashDisbursementDocument({
+    companyId,
+    expenseId,
+    expense: {
+      ...data,
+      rejectionReason: rejectionReason?.trim()?.slice(0, 500) ?? "",
+    },
+    status: "rejected",
+    actorUid: rejectedBy,
+    actorRole: role,
+    approverUid: rejectedBy,
+    approverRole: role,
+    executionDate: Timestamp.now(),
+    observations: rejectionReason?.trim() || "Depense refusee.",
   });
   try {
     await notifyCompanyRoles({
@@ -484,6 +737,20 @@ export async function payExpense(
   try {
     const snap = await getDoc(ref);
     const data = snap.exists() ? (snap.data() as ExpenseDoc) : null;
+    if (data) {
+      await syncExpenseCashDisbursementDocument({
+        companyId,
+        expenseId,
+        expense: data,
+        status: "paid",
+        actorUid: performedBy,
+        actorRole: "treasury_operator",
+        approverUid: data.approvedBy ?? null,
+        approverRole: data.createdByRole ?? null,
+        executionDate: data.paidAt ?? Timestamp.now(),
+        observations: "Decaissement execute et comptabilise.",
+      });
+    }
     await notifyCompanyRoles({
       companyId,
       roles: ["company_accountant", "financial_director", "chefAgence", "agency_accountant", "admin_compagnie"],

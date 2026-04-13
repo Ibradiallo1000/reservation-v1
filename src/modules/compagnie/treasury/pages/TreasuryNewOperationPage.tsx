@@ -106,6 +106,7 @@ export default function TreasuryNewOperationPage() {
         amount: numericAmount,
         accountId,
         createdBy: user.uid,
+        createdByRole: String(user.role ?? 'company_accountant'),
         expenseCategory: category,
       });
       toast.success("Demande de dépense soumise.");
@@ -147,6 +148,15 @@ export default function TreasuryNewOperationPage() {
           >
             Paiement fournisseur
           </button>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <ActionButton
+            type="button"
+            variant="secondary"
+            onClick={() => navigate(`/compagnie/${companyId}/accounting/documents`)}
+          >
+            Documents & archives
+          </ActionButton>
         </div>
       </SectionCard>
 
@@ -256,4 +266,3 @@ export default function TreasuryNewOperationPage() {
     </div>
   );
 }
-

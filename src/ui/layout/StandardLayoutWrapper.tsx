@@ -1,11 +1,11 @@
 /**
  * Teliya Design System — Standard page content wrapper (authoritative).
  * Use inside every shell (Agence, Comptable, CEO, Guichet, Courrier, Compagnie, Admin).
- * Pleine largeur, px-4, rythme vertical space-y-4 (pas de max-width / mx-auto).
+ * Global container: max width + centered + responsive horizontal paddings.
  */
 import React from "react";
 import { cn } from "@/lib/utils";
-import { pageMaxWidth, pageVerticalGap } from "@/ui/foundation";
+import { pageMaxWidth, pageVerticalGap, pagePaddingX } from "@/ui/foundation";
 
 export interface StandardLayoutWrapperProps {
   children: React.ReactNode;
@@ -26,7 +26,8 @@ export const StandardLayoutWrapper: React.FC<StandardLayoutWrapperProps> = ({
   <div
     className={cn(
       maxWidthClass ?? pageMaxWidth,
-      "w-full px-4",
+      "w-full",
+      pagePaddingX,
       pageVerticalGap,
       noVerticalPadding ? "" : "py-4",
       className

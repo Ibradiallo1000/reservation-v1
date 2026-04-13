@@ -56,6 +56,11 @@ import {
   belongsToGuichetSession,
   fetchReservationDocsForShiftSlot,
 } from '@/modules/agence/guichet/guichetSessionReservationModel';
+import {
+  getSessionRemittanceDocumentId,
+  upsertAccountingRemittanceReceiptDocument,
+  upsertSessionRemittanceDocument,
+} from '@/modules/finance/documents/financialDocumentsService';
 
 type SessionAccountantHistoryLog = {
   expectedCash: number;
@@ -140,6 +145,18 @@ function yyyymmdd(d = new Date()): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${y}${m}${dd}`;
+}
+
+function toTimestampOrNull(value: Date | Timestamp | string | number | null | undefined): Timestamp | null {
+  if (value == null) return null;
+  if (value instanceof Timestamp) return value;
+  if (value instanceof Date) return Timestamp.fromDate(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return Timestamp.fromMillis(value);
+  if (typeof value === 'string') {
+    const ms = Date.parse(value);
+    if (!Number.isNaN(ms)) return Timestamp.fromMillis(ms);
+  }
+  return null;
 }
 
 /**
@@ -634,8 +651,17 @@ export type ValidationAudit = {
   validatedBy: { id: string; name?: string | null };
   validatedAt: Timestamp;
   receivedCashAmount: number;
-  computedDifference: number; // reçu - attendu (négatif = manquant)
+  computedDifference: number; // recu - attendu (negatif = manquant)
   accountantDeviceFingerprint: string;
+  captureMode?: 'normal' | 'after_entry';
+  manualDocumentUsed?: boolean;
+  manualDocumentType?: string | null;
+  manualDocumentNumber?: string | null;
+  manualReceiptNumber?: string | null;
+  effectiveOperationDate?: Timestamp | null;
+  regularizedByUid?: string | null;
+  regularizedByName?: string | null;
+  regularizedAt?: Timestamp | null;
 };
 
 export async function validateSessionByAccountant(params: {
@@ -645,6 +671,15 @@ export async function validateSessionByAccountant(params: {
   receivedCashAmount: number;
   validatedBy: { id: string; name?: string | null };
   accountantDeviceFingerprint: string;
+  captureMode?: 'normal' | 'after_entry';
+  manualDocumentUsed?: boolean;
+  manualDocumentType?: string | null;
+  manualDocumentNumber?: string | null;
+  manualReceiptNumber?: string | null;
+  effectiveOperationDate?: Date | Timestamp | string | number | null;
+  regularizedByUid?: string | null;
+  regularizedByName?: string | null;
+  regularizedAt?: Date | Timestamp | string | number | null;
 }): Promise<{ computedDifference: number }> {
   await authorizeActorInAgency({
     userId: params.validatedBy.id,
@@ -657,6 +692,17 @@ export async function validateSessionByAccountant(params: {
   const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
   const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
+  const captureMode = params.captureMode === 'after_entry' ? 'after_entry' : 'normal';
+  const manualDocumentUsed = Boolean(params.manualDocumentUsed);
+  const manualDocumentType = String(params.manualDocumentType ?? '').trim() || null;
+  const manualDocumentNumber = String(params.manualDocumentNumber ?? '').trim() || null;
+  const manualReceiptNumber = String(params.manualReceiptNumber ?? '').trim() || null;
+  const effectiveOperationDate = toTimestampOrNull(params.effectiveOperationDate ?? null);
+  const regularizedByUid = String(params.regularizedByUid ?? '').trim() || null;
+  const regularizedByName = String(params.regularizedByName ?? '').trim() || null;
+  const regularizedAt =
+    toTimestampOrNull(params.regularizedAt ?? null) ??
+    (captureMode === 'after_entry' ? Timestamp.now() : null);
 
   type AccountantTxOutcome = {
     computedDifference: number;
@@ -706,6 +752,15 @@ export async function validateSessionByAccountant(params: {
       receivedCashAmount: params.receivedCashAmount,
       computedDifference,
       accountantDeviceFingerprint: params.accountantDeviceFingerprint,
+      captureMode,
+      manualDocumentUsed,
+      manualDocumentType,
+      manualDocumentNumber,
+      manualReceiptNumber,
+      effectiveOperationDate,
+      regularizedByUid,
+      regularizedByName,
+      regularizedAt,
     };
 
     /**
@@ -733,6 +788,15 @@ export async function validateSessionByAccountant(params: {
       remittanceStatus,
       remittanceDiscrepancyAmount,
       pendingCashLedgerVersion: PENDING_CASH_LEDGER_SYSTEM_VERSION,
+      captureMode,
+      manualDocumentUsed,
+      manualDocumentType,
+      manualDocumentNumber,
+      manualReceiptNumber,
+      effectiveOperationDate,
+      regularizedByUid,
+      regularizedByName,
+      regularizedAt,
       cashStatus: mapLegacyToCash(nextLegacyStatus),
       discrepancyOverrideConfirmed: Math.abs(Number(s.ecart ?? 0)) > 0 ? true : Boolean(s.discrepancyOverrideConfirmed),
       discrepancyOverrideBy: Math.abs(Number(s.ecart ?? 0)) > 0 ? params.validatedBy : (s.discrepancyOverrideBy ?? null),
@@ -747,6 +811,15 @@ export async function validateSessionByAccountant(params: {
       validationAudit,
       accountantValidated: true,
       accountantValidatedAt: now,
+      captureMode,
+      manualDocumentUsed,
+      manualDocumentType,
+      manualDocumentNumber,
+      manualReceiptNumber,
+      effectiveOperationDate,
+      regularizedByUid,
+      regularizedByName,
+      regularizedAt,
       updatedAt: serverTimestamp(),
     }));
 
@@ -821,6 +894,104 @@ export async function validateSessionByAccountant(params: {
       createdBy: v.id,
       metadata: { ...metaBase, validationLevel: 'agency_accountant' },
     });
+
+    const modeObservation = [
+      captureMode === 'after_entry' ? 'Saisie apres coup regularisee.' : null,
+      manualDocumentUsed
+        ? `Piece manuelle utilisee (${manualDocumentType ?? 'piece_manuelle'}${
+            manualDocumentNumber ? ` #${manualDocumentNumber}` : ''
+          }).`
+        : null,
+      manualReceiptNumber ? `Recu manuel: ${manualReceiptNumber}.` : null,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    try {
+      const shiftSnap = await getDoc(shiftRef);
+      const shiftData = shiftSnap.exists() ? (shiftSnap.data() as Record<string, unknown>) : {};
+      await upsertSessionRemittanceDocument({
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        sessionId: params.shiftId,
+        sessionType: 'guichet',
+        sourceType: 'shift_session',
+        periodStart: shiftData.startAt ?? shiftData.startTime ?? null,
+        periodEnd: shiftData.endAt ?? shiftData.endTime ?? shiftData.closedAt ?? null,
+        agent: {
+          uid: accountantSessionLog.sellerUid,
+          name: accountantSessionLog.sellerName,
+          role: 'guichetier',
+        },
+        receiver: {
+          uid: params.validatedBy.id,
+          name: params.validatedBy.name ?? null,
+          role: 'agency_accountant',
+        },
+        controller: null,
+        amountTheoretical: accountantSessionLog.expectedCash,
+        amountRemitted: accountantSessionLog.receivedCash,
+        amountDifference: accountantSessionLog.computedDiff,
+        currency: String(shiftData.currency ?? 'XOF'),
+        ventilationByMode: {
+          cash: Number(shiftData.totalCash ?? 0),
+          digital: Number(shiftData.totalDigital ?? 0),
+        },
+        observations:
+          [
+            Math.abs(accountantSessionLog.computedDiff) > 0
+              ? 'Ecart detecte entre montant theorique et montant remis.'
+              : null,
+            modeObservation || null,
+          ]
+            .filter(Boolean)
+            .join(' ') || null,
+        status: 'ready_to_print',
+        createdByUid: params.validatedBy.id,
+      });
+      await upsertAccountingRemittanceReceiptDocument({
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        sessionId: params.shiftId,
+        sourceType: 'shift_session',
+        agent: {
+          uid: accountantSessionLog.sellerUid,
+          name: accountantSessionLog.sellerName,
+          role: 'guichetier',
+        },
+        accountant: {
+          uid: params.validatedBy.id,
+          name: params.validatedBy.name ?? null,
+          role: 'agency_accountant',
+        },
+        amountRemitted: accountantSessionLog.receivedCash,
+        amountDifference: accountantSessionLog.computedDiff,
+        currency: String(shiftData.currency ?? 'XOF'),
+        referenceSessionRemittanceId: getSessionRemittanceDocumentId(
+          'shift_session',
+          params.shiftId
+        ),
+        dateHeure: Timestamp.now(),
+        observations:
+          [
+            Math.abs(accountantSessionLog.computedDiff) > 0
+              ? 'Recu emis avec ecart; visa chef agence requis.'
+              : 'Recu comptable emis.',
+            modeObservation || null,
+          ]
+            .filter(Boolean)
+            .join(' '),
+        status: 'ready_to_print',
+        createdByUid: params.validatedBy.id,
+      });
+    } catch (docError) {
+      console.error('[sessionService] echec generation fiche remise session', {
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        shiftId: params.shiftId,
+        docError,
+      });
+    }
   }
 
   return { computedDifference };
@@ -923,6 +1094,92 @@ export async function validateSessionByHeadAccountant(params: {
         shiftAgentName: headValidationLog.sellerName ?? undefined,
       },
     });
+
+    try {
+      const shiftSnap = await getDoc(shiftRef);
+      const shiftData = shiftSnap.exists() ? (shiftSnap.data() as Record<string, unknown>) : {};
+      const audit = (shiftData.validationAudit ?? null) as
+        | { receivedCashAmount?: number }
+        | null;
+      const expectedCash = Number(shiftData.totalCash ?? 0);
+      const receivedCash = Number(audit?.receivedCashAmount ?? expectedCash);
+      await upsertSessionRemittanceDocument({
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        sessionId: params.shiftId,
+        sessionType: 'guichet',
+        sourceType: 'shift_session',
+        periodStart: shiftData.startAt ?? shiftData.startTime ?? null,
+        periodEnd: shiftData.endAt ?? shiftData.endTime ?? shiftData.closedAt ?? null,
+        agent: {
+          uid: headValidationLog.sellerUid,
+          name: headValidationLog.sellerName ?? null,
+          role: 'guichetier',
+        },
+        receiver: {
+          uid: (shiftData.validationAudit as { validatedBy?: { id?: string; name?: string } } | undefined)?.validatedBy?.id ?? null,
+          name:
+            (shiftData.validationAudit as { validatedBy?: { name?: string } } | undefined)?.validatedBy?.name ??
+            null,
+          role: 'agency_accountant',
+        },
+        controller: {
+          uid: params.validatedBy.id,
+          name: params.validatedBy.name ?? null,
+          role: 'chefAgence',
+        },
+        amountTheoretical: expectedCash,
+        amountRemitted: receivedCash,
+        amountDifference: receivedCash - expectedCash,
+        currency: String(shiftData.currency ?? 'XOF'),
+        ventilationByMode: {
+          cash: Number(shiftData.totalCash ?? 0),
+          digital: Number(shiftData.totalDigital ?? 0),
+        },
+        status: 'ready_to_print',
+        observations:
+          "Validation finale chef d'agence effectuee.",
+        createdByUid: params.validatedBy.id,
+      });
+      await upsertAccountingRemittanceReceiptDocument({
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        sessionId: params.shiftId,
+        sourceType: 'shift_session',
+        agent: {
+          uid: headValidationLog.sellerUid,
+          name: headValidationLog.sellerName ?? null,
+          role: 'guichetier',
+        },
+        accountant: {
+          uid:
+            (shiftData.validationAudit as { validatedBy?: { id?: string; name?: string } } | undefined)
+              ?.validatedBy?.id ?? null,
+          name:
+            (shiftData.validationAudit as { validatedBy?: { name?: string } } | undefined)?.validatedBy
+              ?.name ?? null,
+          role: 'agency_accountant',
+        },
+        amountRemitted: receivedCash,
+        amountDifference: receivedCash - expectedCash,
+        currency: String(shiftData.currency ?? 'XOF'),
+        referenceSessionRemittanceId: getSessionRemittanceDocumentId(
+          'shift_session',
+          params.shiftId
+        ),
+        dateHeure: Timestamp.now(),
+        observations: "Recu confirme apres validation finale chef d'agence.",
+        status: 'ready_to_print',
+        createdByUid: params.validatedBy.id,
+      });
+    } catch (docError) {
+      console.error('[sessionService] echec mise a jour fiche remise apres validation chef', {
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        shiftId: params.shiftId,
+        docError,
+      });
+    }
   }
 }
 
@@ -1198,3 +1455,4 @@ export async function validateByAccountant(
 
 export { SHIFT_REPORTS_COLLECTION, SHIFT_STATUS };
 export type { ShiftStatusValue };
+

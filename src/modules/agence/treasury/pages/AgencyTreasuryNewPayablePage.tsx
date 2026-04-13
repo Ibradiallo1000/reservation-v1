@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
 import { PAYABLE_CATEGORIES, type PayableCategory } from "@/modules/compagnie/finance/payablesTypes";
@@ -36,12 +36,22 @@ const compactDigits = (value: string) => {
   return compact || "0";
 };
 
+const toRoleList = (role: string | string[] | undefined): string[] => {
+  if (Array.isArray(role)) return role.map((r) => String(r ?? "").trim().toLowerCase()).filter(Boolean);
+  if (!role) return [];
+  return [String(role).trim().toLowerCase()].filter(Boolean);
+};
+
 export default function AgencyTreasuryNewPayablePage() {
   const { pathname } = useLocation();
   const isStandaloneComptaTreasury = pathname.startsWith("/agence/comptabilite/treasury");
   const { user } = useAuth() as any;
   const companyId =
     user?.companyId ?? user?.compagnieId ?? user?.company?.id ?? user?.company?.companyId ?? "";
+  const roles = toRoleList(user?.role);
+  const canManageTreasuryOperations = roles.some((role) =>
+    role === "agency_accountant" || role === "admin_compagnie" || role === "admin_platforme"
+  );
   const agencyId =
     user?.agencyId ?? user?.agenceId ?? user?.currentAgencyId ?? user?.agency?.id ?? user?.agence?.id ?? "";
   const fallbackAgencyName = user?.agencyNom ?? user?.agencyName ?? "Agence";
@@ -225,6 +235,10 @@ export default function AgencyTreasuryNewPayablePage() {
       setSubmitting(false);
     }
   };
+
+  if (!canManageTreasuryOperations) {
+    return <Navigate to="/agence/caisse#caisse-tresorerie" replace />;
+  }
 
   if (!companyId) {
     const missing = <div className="p-6 text-gray-500">Compagnie introuvable.</div>;

@@ -14,6 +14,7 @@ import {
   setDoc,
   serverTimestamp,
   getDoc,
+  Timestamp,
 } from 'firebase/firestore';
 import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
@@ -565,6 +566,7 @@ export default function ReservationClientPage() {
       }
 
       const nowMs = Date.now();
+      const nowTs = Timestamp.now();
       const expiresAtMs = nowMs + RESERVATION_DURATION_MS;
       const telephoneInput = passenger.phone.trim();
       const phoneNorm = normalizePhone(telephoneInput);
@@ -623,7 +625,8 @@ export default function ReservationClientPage() {
         dropoffStatus: 'pending',
         journeyStatus: 'booked',
         expiresAt: expiresAtMs,
-        createdAt: nowMs,
+        // Financial/reporting queries read reservations.createdAt as Firestore Timestamp.
+        createdAt: nowTs,
         updatedAt: serverTimestamp(),
       };
 

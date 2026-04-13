@@ -1283,7 +1283,7 @@ service cloud.firestore {
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
-      /* Versements caisse agence → banque : workflow pending_manager → executed | rejected */
+      /* Versements / transferts : workflow pending_manager -> ... -> in_transit_* -> deposited/received or rejected */
       match /treasuryTransferRequests/{requestId} {
         allow get, list: if isAuth() && (
           userCompanyId() == companyId ||
@@ -1291,7 +1291,10 @@ service cloud.firestore {
           getUserRole() == 'admin_compagnie' ||
           (
             userAgencyBelongsToCompany(companyId) &&
-            resource.data.get('agencyId', '') == getUserAgencyId() &&
+            (
+              resource.data.get('agencyId', '') == getUserAgencyId() ||
+              resource.data.get('destinationAgencyId', '') == getUserAgencyId()
+            ) &&
             (
               getUserRole() == 'agency_accountant' ||
               getUserRole() == 'chefAgence' ||
@@ -1300,48 +1303,242 @@ service cloud.firestore {
             )
           )
         );
-        allow create: if isAuth() && userCompanyId() == companyId && (
-          getUserRole() == 'admin_platforme' ||
-          (
-            getUserRole() == 'admin_compagnie' &&
-            request.resource.data.get('companyId', '') == companyId
-          ) ||
-          (
-            getUserRole() == 'agency_accountant' &&
-            request.resource.data.get('agencyId', '') == getUserAgencyId() &&
-            request.resource.data.get('companyId', '') == companyId
+        allow create: if isAuth()
+          && (userCompanyId() == companyId || getUserRole() == 'admin_platforme')
+          && (
+            hasUserRole('agency_accountant') ||
+            hasUserRole('admin_compagnie') ||
+            hasUserRole('admin_platforme')
           )
-        )
-          && request.resource.data.get('status', '') == 'pending_manager'
+          && request.resource.data.get('companyId', '') == companyId
+          && request.resource.data.get('agencyId', '') == getUserAgencyId()
           && request.resource.data.get('initiatedBy', '') == request.auth.uid
           && request.resource.data.get('amount', 0) is number
           && request.resource.data.get('amount', 0) > 0
           && request.resource.data.get('amount', 0) < 100000000
           && request.resource.data.get('fromAccountId', '').size() > 0
-          && request.resource.data.get('toAccountId', '').size() > 0;
-        allow update: if isAuth() && userCompanyId() == companyId
-          && resource.data.get('status', '') == 'pending_manager'
-          && request.auth.uid != resource.data.get('initiatedBy', '')
+          && request.resource.data.get('toAccountId', '').size() > 0
           && (
-            getUserRole() == 'admin_platforme' ||
-            getUserRole() == 'admin_compagnie' ||
-            (
-              resource.data.get('agencyId', '') == getUserAgencyId() &&
-              (
-                getUserRole() == 'chefAgence' ||
-                getUserRole() == 'chefagence' ||
-                getUserRole() == 'superviseur'
-              )
-            )
+            request.resource.data.get('flowType', 'bank_deposit') == 'bank_deposit' ||
+            request.resource.data.get('flowType', 'bank_deposit') == 'inter_agency_transfer'
           )
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'managerDecisionBy', 'managerDecisionAt', 'managerDecisionReason',
-            'executedBy', 'executedAt', 'updatedAt'
-          ])
           && (
-            (request.resource.data.get('status', '') == 'executed'
-              && request.resource.data.get('executedBy', '') == request.auth.uid)
-            || request.resource.data.get('status', '') == 'rejected'
+            request.resource.data.get('status', '') == 'pending_manager' ||
+            (
+              request.resource.data.get('flowType', 'bank_deposit') == 'bank_deposit'
+              && request.resource.data.get('approvalLevelRequired', '') == 'agency_only'
+              && request.resource.data.get('status', '') == 'in_transit_bank'
+              && request.resource.data.get('authorizedBy', '').size() > 0
+              && request.resource.data.get('managerDecisionBy', '').size() > 0
+              && request.resource.data.get('inTransitBy', '') == request.auth.uid
+              && request.resource.data.get('executedBy', '') == request.auth.uid
+            ) ||
+            (
+              request.resource.data.get('flowType', 'bank_deposit') == 'bank_deposit'
+              && request.resource.data.get('approvalLevelRequired', '') == 'agency_only'
+              && request.resource.data.get('status', '') == 'deposited_bank'
+              && request.resource.data.get('authorizedBy', '').size() > 0
+              && request.resource.data.get('managerDecisionBy', '').size() > 0
+              && request.resource.data.get('depositConfirmedBy', '') == request.auth.uid
+              && request.resource.data.get('executedBy', '') == request.auth.uid
+              && request.resource.data.get('amountDeposited', 0) is number
+              && request.resource.data.get('amountDeposited', 0) > 0
+            )
+          );
+        allow update: if isAuth()
+          && (userCompanyId() == companyId || getUserRole() == 'admin_platforme')
+          && (
+            (
+              resource.data.get('status', '') == 'pending_manager'
+              && request.auth.uid != resource.data.get('initiatedBy', '')
+              && (
+                hasUserRole('chefAgence') ||
+                hasUserRole('chefagence') ||
+                hasUserRole('superviseur') ||
+                hasUserRole('admin_compagnie') ||
+                hasUserRole('admin_platforme')
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'managerDecisionBy',
+                'managerDecisionAt',
+                'managerDecisionReason',
+                'authorizedBy',
+                'authorizedAt',
+                'updatedAt'
+              ])
+              && (
+                request.resource.data.get('status', '') == 'pending_head_accountant' ||
+                request.resource.data.get('status', '') == 'authorized'
+              )
+              && request.resource.data.get('managerDecisionBy', '') == request.auth.uid
+            )
+            ||
+            (
+              resource.data.get('status', '') == 'pending_head_accountant'
+              && (
+                hasUserRole('company_accountant') ||
+                hasUserRole('financial_director') ||
+                hasUserRole('admin_compagnie') ||
+                hasUserRole('admin_platforme')
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'headAccountantDecisionBy',
+                'headAccountantDecisionAt',
+                'headAccountantDecisionReason',
+                'authorizedBy',
+                'authorizedAt',
+                'updatedAt'
+              ])
+              && (
+                request.resource.data.get('status', '') == 'pending_dg' ||
+                request.resource.data.get('status', '') == 'authorized'
+              )
+              && request.resource.data.get('headAccountantDecisionBy', '') == request.auth.uid
+            )
+            ||
+            (
+              resource.data.get('status', '') == 'pending_dg'
+              && (
+                hasUserRole('company_ceo') ||
+                hasUserRole('admin_compagnie') ||
+                hasUserRole('admin_platforme')
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'dgDecisionBy',
+                'dgDecisionAt',
+                'dgDecisionReason',
+                'authorizedBy',
+                'authorizedAt',
+                'updatedAt'
+              ])
+              && request.resource.data.get('status', '') == 'authorized'
+              && request.resource.data.get('dgDecisionBy', '') == request.auth.uid
+            )
+            ||
+            (
+              resource.data.get('status', '') == 'authorized'
+              && (
+                hasUserRole('agency_accountant') ||
+                hasUserRole('chefAgence') ||
+                hasUserRole('chefagence') ||
+                hasUserRole('superviseur') ||
+                hasUserRole('admin_compagnie') ||
+                hasUserRole('admin_platforme')
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'inTransitBy',
+                'inTransitAt',
+                'executedBy',
+                'executedAt',
+                'executionObservation',
+                'effectiveOperationDate',
+                'captureMode',
+                'manualDocumentUsed',
+                'manualDocumentType',
+                'manualDocumentNumber',
+                'regularizedByUid',
+                'regularizedByName',
+                'regularizedAt',
+                'updatedAt'
+              ])
+              && (
+                request.resource.data.get('status', '') == 'in_transit_bank' ||
+                request.resource.data.get('status', '') == 'in_transit_inter_agency'
+              )
+              && request.resource.data.get('inTransitBy', '') == request.auth.uid
+            )
+            ||
+            (
+              resource.data.get('status', '') == 'in_transit_bank'
+              && (
+                hasUserRole('agency_accountant') ||
+                hasUserRole('chefAgence') ||
+                hasUserRole('chefagence') ||
+                hasUserRole('superviseur') ||
+                hasUserRole('admin_compagnie') ||
+                hasUserRole('admin_platforme')
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'executedBy',
+                'executedAt',
+                'depositConfirmedBy',
+                'depositConfirmedAt',
+                'amountDeposited',
+                'effectiveOperationDate',
+                'effectiveOperationHour',
+                'bankReceiptNumber',
+                'manualReceiptNumber',
+                'executionObservation',
+                'captureMode',
+                'manualDocumentUsed',
+                'manualDocumentType',
+                'manualDocumentNumber',
+                'regularizedByUid',
+                'regularizedByName',
+                'regularizedAt',
+                'updatedAt'
+              ])
+              && request.resource.data.get('status', '') == 'deposited_bank'
+              && request.resource.data.get('depositConfirmedBy', '') == request.auth.uid
+            )
+            ||
+            (
+              resource.data.get('status', '') == 'in_transit_inter_agency'
+              && (
+                hasUserRole('agency_accountant') ||
+                hasUserRole('chefAgence') ||
+                hasUserRole('chefagence') ||
+                hasUserRole('superviseur') ||
+                hasUserRole('admin_compagnie') ||
+                hasUserRole('admin_platforme')
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'receivedBy',
+                'receivedAt',
+                'executedBy',
+                'executedAt',
+                'amountReceived',
+                'receivedDifference',
+                'effectiveOperationDate',
+                'effectiveOperationHour',
+                'manualReceiptNumber',
+                'executionObservation',
+                'captureMode',
+                'manualDocumentUsed',
+                'manualDocumentType',
+                'manualDocumentNumber',
+                'regularizedByUid',
+                'regularizedByName',
+                'regularizedAt',
+                'updatedAt'
+              ])
+              && request.resource.data.get('status', '') == 'received_inter_agency'
+              && request.resource.data.get('receivedBy', '') == request.auth.uid
+            )
+            ||
+            (
+              (
+                resource.data.get('status', '') == 'pending_manager' ||
+                resource.data.get('status', '') == 'pending_head_accountant' ||
+                resource.data.get('status', '') == 'pending_dg' ||
+                resource.data.get('status', '') == 'authorized'
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'managerDecisionBy',
+                'managerDecisionAt',
+                'managerDecisionReason',
+                'updatedAt'
+              ])
+              && request.resource.data.get('status', '') == 'rejected'
+              && request.resource.data.get('managerDecisionBy', '') == request.auth.uid
+            )
           );
         allow delete: if false;
       }
@@ -1490,6 +1687,87 @@ service cloud.firestore {
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && getUserRole() == 'admin_compagnie'
           && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['approvalStatus', 'approvedBy', 'approvedAt', 'executedMovementId', 'rejectionReason', 'approvalHistory', 'expiresAt', 'approvedByRole']);
+        allow delete: if false;
+      }
+
+      /* Phase C1.1 - Documents & archives financieres (preuves imprimables / pieces signees). */
+      match /financialDocuments/{documentId} {
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'company_accountant' ||
+          getUserRole() == 'financial_director' ||
+          (
+            userAgencyBelongsToCompany(companyId) &&
+            (
+              getUserRole() == 'agency_accountant' ||
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur'
+            )
+          )
+        );
+        allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          getUserRole() == 'admin_platforme' ||
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'company_accountant' ||
+          getUserRole() == 'financial_director' ||
+          (
+            userAgencyBelongsToCompany(companyId) &&
+            request.resource.data.get('agencyId', '') == getUserAgencyId() &&
+            (
+              getUserRole() == 'agency_accountant' ||
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur'
+            )
+          )
+        ) && request.resource.data.get('companyId', '') == companyId;
+        allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          getUserRole() == 'admin_platforme' ||
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'company_accountant' ||
+          getUserRole() == 'financial_director' ||
+          (
+            userAgencyBelongsToCompany(companyId) &&
+            resource.data.get('agencyId', '') == getUserAgencyId() &&
+            request.resource.data.get('agencyId', '') == getUserAgencyId() &&
+            (
+              getUserRole() == 'agency_accountant' ||
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur'
+            )
+          )
+        ) && request.resource.data.get('companyId', '') == companyId;
+        allow delete: if false;
+      }
+
+      /* Overrides de statut d'anomalies documentaires (resolution / ignore / reouverture). */
+      match /financialDocumentAnomalyOverrides/{anomalyId} {
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'company_accountant' ||
+          getUserRole() == 'financial_director' ||
+          (
+            userAgencyBelongsToCompany(companyId) &&
+            (
+              getUserRole() == 'agency_accountant' ||
+              getUserRole() == 'chefAgence' ||
+              getUserRole() == 'chefagence' ||
+              getUserRole() == 'superviseur'
+            )
+          )
+        );
+        allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
+          getUserRole() == 'admin_platforme' ||
+          getUserRole() == 'admin_compagnie' ||
+          getUserRole() == 'company_accountant' ||
+          getUserRole() == 'financial_director'
+        ) && request.resource.data.get('status', '') in ['open', 'resolved', 'ignored'];
         allow delete: if false;
       }
 
@@ -1860,3 +2138,4 @@ service cloud.firestore {
     }
   }
 }
+

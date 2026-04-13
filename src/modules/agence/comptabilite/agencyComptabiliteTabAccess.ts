@@ -51,8 +51,8 @@ function hasRole(roles: Role[], r: Role): boolean {
  * Règles :
  * - Ventes : guichetier, chef d'agence, superviseur (+ admins).
  * - Versements, Caisse : comptable agence, chef, superviseur (+ admins).
- * - Contrôle : comptable agence + chef d'agence + superviseur (+ admins) (validation ensuite restreinte via `canRunAgencyCashControlAudit`).
- * - Corrections : comptable agence, chef, superviseur (+ admins).
+ * - Contrôle de caisse : comptable agence + chef d'agence + superviseur (+ admins) (validation ensuite restreinte via `canRunAgencyCashControlAudit`).
+ * - Régularisations : comptable agence, chef, superviseur (+ admins).
  */
 export function getAllowedComptaTabs(roles: Role[]): ComptaTabKey[] {
   if (hasRole(roles, "admin_platforme") || hasRole(roles, "admin_compagnie")) {

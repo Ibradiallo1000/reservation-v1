@@ -21,7 +21,7 @@ import FinancialSettingsPage from '@/modules/compagnie/settings/FinancialSetting
 import ParametresCourierColis from '@/modules/compagnie/components/parametres/ParametresCourierColis';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { StandardLayoutWrapper, PageHeader } from '@/ui';
+import { StandardLayoutWrapper, PageHeader, PageTabs } from '@/ui';
 
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
@@ -163,31 +163,12 @@ const CompagnieParametresTabsPage: React.FC = () => {
         title="Configuration"
         subtitle="Réglages structurels de la compagnie : organisation, vitrine, sécurité, paiements et conformité."
       />
-      <div className="flex flex-wrap gap-2 md:gap-3 mb-6">
-        {TABS.map(tab => {
-          const active = selectedTab === tab.key;
-
-          return (
-            <button
-              key={tab.key}
-              onClick={() => setSelectedTab(tab.key)}
-              className={[
-                'px-4 py-2 rounded-full text-sm font-medium transition-all border',
-                active ? 'shadow-sm' : 'hover:bg-gray-50',
-              ].join(' ')}
-              style={{
-                backgroundColor: active ? theme.colors.primary : '#fff',
-                color: active ? '#fff' : '#1f2937',
-                borderColor: active
-                  ? `${theme.colors.primary}55`
-                  : '#e5e7eb',
-              }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      <PageTabs
+        items={TABS}
+        activeKey={selectedTab}
+        onChange={(key) => setSelectedTab(key as TabKey)}
+        accentColor={theme.colors.primary}
+      />
 
       {loading ? (
         <div className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-8 text-center text-gray-600 dark:text-slate-400">

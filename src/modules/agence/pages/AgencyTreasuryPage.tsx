@@ -26,7 +26,7 @@ import { ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financ
 import { Wallet, ArrowRightLeft, FileText, Plus, Loader2 } from "lucide-react";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
-import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState, table, tableRowClassName, ActionButton } from "@/ui";
+import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState, table, tableRowClassName, ActionButton, StatusBadge } from "@/ui";
 import { toast } from "sonner";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
@@ -46,9 +46,17 @@ const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   payment_received: "Encaissement",
   expense: "Dépense",
   transfer: "Transfert",
-  transfer_to_bank: "Versement compagnie",
+  transfer_to_bank: "Dépôt banque",
   refund: "Remboursement",
 };
+
+const CASH_OPERATION_ROLES = new Set(["agency_accountant", "admin_compagnie", "admin_platforme"]);
+
+function toRoleList(role: string | string[] | undefined): string[] {
+  if (Array.isArray(role)) return role.map((r) => String(r ?? "").trim().toLowerCase()).filter(Boolean);
+  if (!role) return [];
+  return [String(role).trim().toLowerCase()].filter(Boolean);
+}
 
 export type AgencyTreasuryPageProps = { embedded?: boolean };
 
@@ -59,6 +67,11 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   const isOnline = useOnlineStatus();
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
+  const roles = useMemo(() => toRoleList((user as { role?: string | string[] } | null)?.role), [user]);
+  const canInitiateTreasuryActions = useMemo(
+    () => roles.some((role) => CASH_OPERATION_ROLES.has(role)),
+    [roles]
+  );
 
   const [accounts, setAccounts] = useState<{ id: string; accountName: string; currentBalance: number; currency: string; accountType: string }[]>([]);
   const [operationalCash, setOperationalCash] = useState<{
@@ -149,13 +162,17 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
 
   const handleSubmitExpense = async () => {
     if (!companyId || !agencyId || !user?.uid) return;
+    if (!canInitiateTreasuryActions) {
+      toast.error("Saisie reservee au comptable agence.");
+      return;
+    }
     const amount = Number(formAmount?.replace(/\s/g, "").replace(",", "."));
     if (!formDescription.trim() || amount <= 0 || !formAccountId) {
       toast.error("Renseignez la description, le montant et le compte.");
       return;
     }
     if (operationalCash != null && amount > operationalCash.availableCash + 0.0001) {
-      toast.error("Montant supérieur à la caisse disponible (solde ledger).");
+      toast.error("Montant superieur a la caisse disponible (solde ledger).");
       return;
     }
     setSubmitting(true);
@@ -168,12 +185,13 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
         amount,
         accountId: formAccountId,
         createdBy: user.uid,
+        createdByRole: String((user as { role?: string }).role ?? "agency_accountant"),
         expenseCategory: formCategory,
         supplierId: formSupplierId || null,
         supplierName: suppliers.find((s) => s.id === formSupplierId)?.name ?? null,
         receiptUrls: formReceiptUrl.trim() ? [formReceiptUrl.trim()] : [],
       });
-      toast.success("Dépense soumise. Elle sera validée selon le montant (chef agence, chef comptable ou CEO).");
+      toast.success("Depense soumise. Elle sera validee selon le montant (chef agence, chef comptable ou CEO).");
       setFormDescription("");
       setFormAmount("");
       setFormReceiptUrl("");
@@ -211,7 +229,7 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     }, () => {
       setError(
         !isOnline
-          ? "Connexion indisponible. Mouvements non synchronisés."
+          ? "Connexion indisponible. Mouvements non synchronises."
           : "Erreur lors du chargement des mouvements."
       );
     });
@@ -220,24 +238,39 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
 
   useEffect(() => {
     if (!companyId) return;
-    listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 20 })
-      .then((list) =>
-        setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
-      )
-      .catch(() => {
+    const loadPendingExpenses = async () => {
+      try {
+        const list = await listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 20 });
+        setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })));
+      } catch {
         setError(
           !isOnline
             ? "Connexion indisponible. Dépenses non disponibles."
             : "Erreur lors du chargement des dépenses."
         );
-      });
-    const interval = setInterval(() => {
-      listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 20 }).then((list) =>
-        setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
-      ).catch(() => {});
-    }, 30000);
-    return () => clearInterval(interval);
+      }
+    };
+    const loadIfVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void loadPendingExpenses();
+    };
+    const onVisibilityOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void loadPendingExpenses();
+    };
+
+    loadIfVisible();
+    const interval = window.setInterval(loadIfVisible, 60_000);
+    window.addEventListener("focus", onVisibilityOrFocus);
+    document.addEventListener("visibilitychange", onVisibilityOrFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
+    };
   }, [companyId, agencyId, isOnline]);
+
+  
 
   const caisseDevise =
     agencyCashAccounts[0]?.currency ?? (company as { devise?: string })?.devise ?? "XOF";
@@ -246,6 +279,69 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   const pendingExpensesTotal = useMemo(
     () => pendingExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0),
     [pendingExpenses]
+  );
+  const treasuryPriorityItems = useMemo(() => {
+    const rows: Array<{
+      id: string;
+      level: "critical" | "todo" | "info";
+      title: string;
+      detail: string;
+      actionLabel?: string;
+      action?: () => void;
+    }> = [];
+
+    if (displayedCash <= 0.01) {
+      rows.push({
+        id: "cash-empty",
+        level: "critical",
+        title: "Caisse disponible très faible",
+        detail: "Prioriser les dépôts/approvisionnements avant nouvelles sorties.",
+        actionLabel: "Ouvrir Dépôts et transferts",
+        action: () => navigate("/agence/treasury/transfer"),
+      });
+    }
+
+    if (pendingExpenses.length > 0) {
+      rows.push({
+        id: "pending-expenses",
+        level: "todo",
+        title: `${pendingExpenses.length} dépense(s) en attente`,
+        detail: `Montant en attente: ${money(pendingExpensesTotal)}.`,
+        actionLabel: canInitiateTreasuryActions ? "Revoir les demandes" : undefined,
+      });
+    }
+
+    if (mirrorCashSecondary != null && Math.abs(mirrorCashSecondary - displayedCash) > 0.01) {
+      rows.push({
+        id: "mirror-gap",
+        level: "info",
+        title: "Écart entre caisse ledger et compte miroir",
+        detail: "La supervision suit le ledger; le miroir reste indicatif.",
+      });
+    }
+
+    if (rows.length === 0) {
+      rows.push({
+        id: "ok",
+        level: "info",
+        title: "Aucune urgence trésorerie",
+        detail: "Les sorties et validations sont sous contrôle.",
+      });
+    }
+
+    return rows.slice(0, 4);
+  }, [
+    canInitiateTreasuryActions,
+    displayedCash,
+    mirrorCashSecondary,
+    money,
+    navigate,
+    pendingExpenses.length,
+    pendingExpensesTotal,
+  ]);
+  const treasuryPriorityCount = useMemo(
+    () => treasuryPriorityItems.filter((item) => item.level === "critical" || item.level === "todo").length,
+    [treasuryPriorityItems]
   );
 
   if (!companyId || !agencyId) {
@@ -275,19 +371,29 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
           <div>
             <h2 className="text-base font-semibold text-gray-900 dark:text-white">Trésorerie</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Pilotage chef d&apos;agence : position caisse, demandes en attente et actions rapides.
+              {canInitiateTreasuryActions
+                ? "Pilotage caisse: position, sorties de caisse et suivi des mouvements."
+                : "Pilotage supervision: position caisse, alertes et validations sans saisie."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <ActionButton size="sm" onClick={() => navigate("/agence/treasury/new-operation")}>
-              Soumettre dépense
-            </ActionButton>
-            <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/treasury/transfer")}>
-              Versement compagnie
-            </ActionButton>
-            <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/treasury/new-payable")}>
-              Payable fournisseur
-            </ActionButton>
+            {canInitiateTreasuryActions ? (
+              <>
+                <ActionButton size="sm" onClick={() => navigate("/agence/treasury/new-operation")}>
+                  Soumettre dépense
+                </ActionButton>
+                <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/treasury/transfer")}>
+                  Dépôt banque
+                </ActionButton>
+                <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/treasury/new-payable")}>
+                  Payable fournisseur
+                </ActionButton>
+              </>
+            ) : (
+              <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/treasury/transfer")}>
+                Dépôts et transferts
+              </ActionButton>
+            )}
           </div>
         </div>
       ) : (
@@ -297,27 +403,74 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
         icon={Wallet}
         right={
           <div className="flex min-w-0 flex-wrap items-stretch justify-end gap-2">
-            <ActionButton className="w-full sm:w-auto" onClick={() => navigate("/agence/treasury/new-operation")}>
-              Soumettre dépense
-            </ActionButton>
-            <ActionButton
-              className="w-full sm:w-auto"
-              variant="secondary"
-              onClick={() => navigate("/agence/treasury/transfer")}
-            >
-              Versement banque compagnie
-            </ActionButton>
-            <ActionButton
-              className="w-full sm:w-auto"
-              variant="secondary"
-              onClick={() => navigate("/agence/treasury/new-payable")}
-            >
-              Paiement fournisseur
-            </ActionButton>
+            {canInitiateTreasuryActions ? (
+              <>
+                <ActionButton className="w-full sm:w-auto" onClick={() => navigate("/agence/treasury/new-operation")}>
+                  Soumettre dépense
+                </ActionButton>
+                <ActionButton
+                  className="w-full sm:w-auto"
+                  variant="secondary"
+                  onClick={() => navigate("/agence/treasury/transfer")}
+                >
+                  Dépôt banque
+                </ActionButton>
+                <ActionButton
+                  className="w-full sm:w-auto"
+                  variant="secondary"
+                  onClick={() => navigate("/agence/treasury/new-payable")}
+                >
+                  Paiement fournisseur
+                </ActionButton>
+              </>
+            ) : (
+              <ActionButton
+                className="w-full sm:w-auto"
+                variant="secondary"
+                onClick={() => navigate("/agence/treasury/transfer")}
+              >
+                Dépôts et transferts
+              </ActionButton>
+            )}
           </div>
         }
       />
       )}
+      <SectionCard title="Priorités du jour" icon={Wallet}>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-gray-600">
+            Alertes utiles uniquement: caisse disponible, dépenses en attente et contrôle ledger.
+          </p>
+          <StatusBadge status={treasuryPriorityCount > 0 ? "warning" : "success"}>
+            {treasuryPriorityCount > 0 ? `${treasuryPriorityCount} action(s)` : "Rien d'urgent"}
+          </StatusBadge>
+        </div>
+        <div className="space-y-2">
+          {treasuryPriorityItems.map((item) => {
+            const badgeStatus = item.level === "critical" ? "danger" : item.level === "todo" ? "warning" : "info";
+            const badgeLabel = item.level === "critical" ? "Critique" : item.level === "todo" ? "À traiter" : "Info";
+            return (
+              <div
+                key={item.id}
+                className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50/75 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge status={badgeStatus}>{badgeLabel}</StatusBadge>
+                    <div className="text-sm font-medium text-slate-900">{item.title}</div>
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-600">{item.detail}</div>
+                </div>
+                {item.action && item.actionLabel ? (
+                  <ActionButton size="sm" variant="secondary" onClick={item.action}>
+                    {item.actionLabel}
+                  </ActionButton>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </SectionCard>
 
       <SectionCard title="Vue rapide" icon={Wallet}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -326,7 +479,7 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
             <div className="text-lg font-semibold text-indigo-800">{money(displayedCash)}</div>
           </div>
           <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2">
-            <div className="text-xs text-amber-700">Demandes en attente</div>
+            <div className="text-xs text-amber-700">Dépenses en attente</div>
             <div className="text-lg font-semibold text-amber-800">{pendingExpenses.length}</div>
           </div>
           <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2">
@@ -404,7 +557,8 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
         ) : null}
       </SectionCard>
 
-      {embedded ? (
+      {canInitiateTreasuryActions ? (
+        embedded ? (
         <details className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
           <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white [&::-webkit-details-marker]:hidden">
             Nouvelle demande de dépense (caisse)
@@ -593,9 +747,16 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
           </div>
         </div>
       </SectionCard>
+        )
+      ) : (
+      <SectionCard title="Dépenses (lecture seule)" icon={Plus}>
+        <p className="text-sm text-gray-600">
+          La saisie des dépenses est réservée au comptable agence. Cette vue reste en supervision.
+        </p>
+      </SectionCard>
       )}
 
-      <SectionCard title="Demandes en attente de validation" icon={FileText}>
+      <SectionCard title="Dépenses en attente de validation" icon={FileText}>
         {pendingExpenses.length === 0 ? (
           <EmptyState message="Aucune dépense en attente." />
         ) : (
@@ -625,3 +786,5 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     </StandardLayoutWrapper>
   );
 }
+
+
