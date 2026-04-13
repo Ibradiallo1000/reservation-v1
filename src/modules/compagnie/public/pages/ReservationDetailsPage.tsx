@@ -155,6 +155,7 @@ const ReservationDetailsPage: React.FC = () => {
   const token = qs.get('r') || '';
   const reservationRef = useRef<DocumentReference | null>(null);
   const publicTokenRef = useRef<string | null>(null);
+  const proofSubmitInFlightRef = useRef(false);
 
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [agencyName, setAgencyName] = useState<string>('');
@@ -415,7 +416,7 @@ const ReservationDetailsPage: React.FC = () => {
 
   const submitProof = useCallback(async () => {
     const ref = reservationRef.current;
-    if (!ref || !reservation) return;
+    if (proofSubmitInFlightRef.current || proofUploading || !ref || !reservation) return;
     if (!paymentMethodKey) {
       setProofError('Sélectionnez un moyen de paiement');
       return;
@@ -428,16 +429,17 @@ const ReservationDetailsPage: React.FC = () => {
       setProofError('Cette réservation a expiré ou a déjà été traitée.');
       return;
     }
+    proofSubmitInFlightRef.current = true;
     setProofUploading(true);
     setProofError(null);
     try {
       const inputReference = (proofMessage || '').trim();
-      await commitProofReceivedWithSeatBooking(db, ref, {
+      const commitResult = await commitProofReceivedWithSeatBooking(db, ref, {
         status: 'payé',
         paymentReference: inputReference,
         proofSubmittedAt: serverTimestamp(),
       });
-      const tok = publicTokenRef.current;
+      const tok = publicTokenRef.current ?? commitResult.publicToken;
       if (tok) {
         await updateDoc(doc(db, 'publicReservations', tok), {
           status: 'payé',
@@ -466,11 +468,16 @@ const ReservationDetailsPage: React.FC = () => {
       setProofMessage('');
       setProofError(null);
     } catch (e: any) {
-      setProofError(e?.message || "L'envoi n'a pas abouti. Réessayez.");
+      if (e?.code === 'resource-exhausted') {
+        setProofError('Trop de demandes simultanées sur le serveur. Attendez quelques secondes puis réessayez.');
+      } else {
+        setProofError(e?.message || "L'envoi n'a pas abouti. Réessayez.");
+      }
     } finally {
+      proofSubmitInFlightRef.current = false;
       setProofUploading(false);
     }
-  }, [reservation, paymentMethodKey, proofMessage]);
+  }, [reservation, paymentMethodKey, proofMessage, proofUploading]);
 
   /* ===== Décision d'affichage (utilitaire partagé) ===== */
   const isTicketAvailable = showTicketDirectUtil(reservation);

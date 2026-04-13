@@ -7,12 +7,20 @@ import { runTransaction, serverTimestamp, type DocumentReference, type Firestore
 import { bookSeatsOnTripInstanceInTransaction, tripInstanceRef } from "./tripInstanceService";
 import { isReservationAwaitingPayment } from "@/modules/compagnie/public/utils/onlineReservationStatus";
 
+export type CommitProofReceivedResult = {
+  publicToken: string | null;
+  companyId: string | null;
+  agencyId: string | null;
+  reservationId: string;
+  amount: number;
+};
+
 export async function commitProofReceivedWithSeatBooking(
   firestore: Firestore,
   reservationRef: DocumentReference,
   reservationUpdates: Record<string, unknown>
-): Promise<void> {
-  await runTransaction(firestore, async (tx) => {
+): Promise<CommitProofReceivedResult> {
+  return runTransaction(firestore, async (tx) => {
     const resSnap = await tx.get(reservationRef);
     if (!resSnap.exists()) throw new Error("Réservation introuvable");
     const data = resSnap.data() as Record<string, unknown>;
@@ -21,6 +29,9 @@ export async function commitProofReceivedWithSeatBooking(
     }
     const cid = String(data.companyId ?? "");
     const tid = String(data.tripInstanceId ?? "");
+    const publicToken = typeof data.publicToken === "string" ? data.publicToken : null;
+    const agencyId = typeof data.agencyId === "string" ? data.agencyId : null;
+    const amount = Number((data.payment as { totalAmount?: unknown } | undefined)?.totalAmount ?? data.montant ?? 0) || 0;
     if (data.seatHoldOnly === true && cid && tid) {
       const seats = Math.max(0, Number(data.seatsGo) || 0);
       if (seats > 0) {
@@ -46,5 +57,12 @@ export async function commitProofReceivedWithSeatBooking(
       seatsHeld: 0,
       updatedAt: serverTimestamp(),
     });
+    return {
+      publicToken,
+      companyId: cid || null,
+      agencyId,
+      reservationId: resSnap.id,
+      amount,
+    };
   });
 }

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db } from '@/firebaseConfig';
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { commitProofReceivedWithSeatBooking } from '@/modules/compagnie/tripInstances/onlineReservationProofCommit';
 import {
   clearPendingReservation,
@@ -127,6 +127,7 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
   const [paymentMethod, setPaymentMethod] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitInFlightRef = useRef(false);
   /** expired | not_found | other — pas de « Réessayer » : chemins d’action clairs uniquement. */
   const [loadErrorKind, setLoadErrorKind] = useState<'expired' | 'not_found' | 'invalid' | 'other' | null>(null);
 
@@ -317,12 +318,13 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
   }, [loadingData, reservationDraft, companyInfo]);
 
   const handleSubmitProof = async () => {
-    if (!smsText.trim() || validation === "invalid") return;
+    if (submitInFlightRef.current || uploading || !smsText.trim() || validation === "invalid") return;
     if (!reservationDraft || !reservationDraft.id) {
       setError('Réservation introuvable.');
       return;
     }
 
+    submitInFlightRef.current = true;
     setUploading(true);
     setError(null);
     log.group('handleSubmitProof');
@@ -337,22 +339,11 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         'reservations',
         reservationDraft.id!
       );
-      const docSnap = await getDoc(reservationRef);
-      if (!docSnap.exists()) {
-        setError('Réservation introuvable.');
-        return;
-      }
-      const data = docSnap.data() as Record<string, unknown>;
-      if (!isReservationAwaitingPayment(data.status)) {
-        setError('Cette réservation a expiré ou a déjà été traitée.');
-        return;
-      }
-
       const trimmed = smsText.trim();
       const level: Exclude<SmsValidationLevel, null> = validation === "valid" ? "valid" : validation === "suspicious" ? "suspicious" : "invalid";
       const paymentStatus = validation === "valid" ? "auto_detected" : "declared_paid";
       const parsedForSave = parsed ?? parsePaymentSMS(trimmed);
-      await commitProofReceivedWithSeatBooking(db, reservationRef, {
+      const commitResult = await commitProofReceivedWithSeatBooking(db, reservationRef, {
         status: 'payé',
         preuveMessage: trimmed,
         paymentReference: parsedForSave.transactionId || trimmed,
@@ -363,13 +354,12 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
           parsed: parsedForSave,
           validationLevel: level,
           status: paymentStatus,
-          totalAmount: (data.payment as { totalAmount?: number } | undefined)?.totalAmount ?? reservationDraft.montant,
+          totalAmount: reservationDraft.montant,
         },
         proofSubmittedAt: serverTimestamp(),
       });
 
-      const afterSnap = await getDoc(reservationRef);
-      const pubTok = (afterSnap.data() as Record<string, unknown> | undefined)?.publicToken;
+      const pubTok = commitResult.publicToken;
       if (typeof pubTok === 'string' && pubTok) {
         await updateDoc(doc(db, 'publicReservations', pubTok), {
           status: 'payé',
@@ -379,10 +369,10 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       }
 
       const ensure = await ensurePendingOnlinePaymentFromReservation({
-        companyId: reservationDraft.companyId!,
-        agencyId: reservationDraft.agencyId,
-        reservationId: reservationDraft.id!,
-        montant: reservationDraft.montant,
+        companyId: commitResult.companyId ?? reservationDraft.companyId!,
+        agencyId: commitResult.agencyId ?? reservationDraft.agencyId,
+        reservationId: commitResult.reservationId,
+        montant: commitResult.amount || reservationDraft.montant,
         paymentMethodLabel: paymentMethod,
       });
       if (!ensure.ok) {
@@ -410,8 +400,17 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       });
     } catch (err) {
       log.error('handleSubmitProof error', err);
-      setError('Une erreur est survenue lors de l\'envoi.');
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: unknown }).code ?? '')
+          : '';
+      if (code === 'resource-exhausted') {
+        setError('Trop de demandes simultanées sur le serveur. Attendez quelques secondes puis réessayez.');
+      } else {
+        setError('Une erreur est survenue lors de l\'envoi.');
+      }
     } finally {
+      submitInFlightRef.current = false;
       setUploading(false);
       log.groupEnd();
     }
