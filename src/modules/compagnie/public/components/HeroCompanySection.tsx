@@ -124,7 +124,7 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
           <svg
             viewBox="0 0 500 100"
             preserveAspectRatio="none"
-            className="w-full h-[90px]"
+            className="w-full h-[130px]"
           >
             <path
               d="M0,60 C150,110 350,10 500,60 L500,100 L0,100 Z"

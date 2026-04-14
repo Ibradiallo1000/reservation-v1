@@ -21,67 +21,74 @@ const VilleSuggestionBar: React.FC<Props> = ({
 }) => {
   const money = useFormatCurrency();
   const { t } = useTranslation();
+
   const primary = company.couleurPrimaire || "#2563eb";
   const secondary = company.couleurSecondaire || "#f3f4f6";
 
-  const getFrequencyLabel = (days?: string[]) => {
-    if (!days || days.length === 0) return "";
-    if (days.length === 7) return t("dailyDepartures");
-    return t("departuresPerWeek", { count: days.length });
-  };
-
   return (
-    <section className="relative bg-gray-50 -mt-6 px-3 pt-8 pb-6">
+    <section className="relative bg-gray-50 -mt-8 px-3 pt-10 pb-6">
       <div className="max-w-5xl mx-auto">
 
         {/* TITRE */}
-        <div className="text-center mb-4">
+        <div className="text-center mb-6">
           <div className="flex justify-center items-center gap-2">
-            <Bus size={20} style={{ color: primary }} />
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">
+            <Bus size={18} style={{ color: primary }} />
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900">
               {t("destinationsPopular")}
             </h2>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        {/* GRID */}
+        <div className="grid grid-cols-3 gap-3">
+
+          {/* LOADING */}
           {loading
-            ? Array.from({ length: 4 }).map((_, index) => (
-                <div
-                  key={`skeleton-${index}`}
-                  className="bg-white rounded-xl p-4 border border-gray-200"
-                  style={{
-                    borderColor: `${primary}20`,
-                    boxShadow: `0 4px 15px ${primary}08`,
-                  }}
-                >
-                  <div className="h-4 w-3/4 rounded skeleton mb-3" />
-                  <div className="h-5 w-1/3 rounded-full skeleton mb-3" />
-                  <div className="h-3 w-1/2 rounded skeleton mb-4" />
-                  <div className="h-11 w-full rounded-lg skeleton" />
-                </div>
-              ))
-            : suggestions.slice(0, 4).map((trip, index) => (
+            ? Array.from({ length: 6 }).map((_, index) => (
                 <div
                   key={index}
-                  className="bg-white rounded-xl p-4 border border-gray-200 text-center"
+                  className="rounded-xl p-3"
                   style={{
-                    borderColor: `${primary}30`,
-                    boxShadow: `0 4px 15px ${primary}12`,
+                    background: "rgba(255,255,255,0.8)",
+                    backdropFilter: "blur(6px)",
+                    border: "1px solid #e5e7eb",
                   }}
                 >
-                  <div className="font-semibold text-sm text-gray-900">
+                  <div className="h-3 w-2/3 mb-2 skeleton rounded" />
+                  <div className="h-4 w-1/2 mb-2 skeleton rounded-full" />
+                  <div className="h-8 w-full skeleton rounded-lg" />
+                </div>
+              ))
+
+            : suggestions.slice(0, 6).map((trip, index) => (
+                <div
+                  key={index}
+                  className="rounded-xl p-3 text-center transition-all duration-300 active:scale-95"
+                  style={{
+                    background: "rgba(255,255,255,0.9)",
+                    backdropFilter: "blur(6px)",
+                    border: `1px solid ${primary}20`,
+                    boxShadow: `
+                      0 4px 12px rgba(0,0,0,0.06),
+                      0 2px 8px ${primary}15
+                    `,
+                  }}
+                >
+
+                  {/* TRAJET */}
+                  <div className="text-xs font-semibold text-gray-900 leading-tight">
                     {trip.departure} →{" "}
                     <span style={{ color: primary }}>
                       {trip.arrival}
                     </span>
                   </div>
 
+                  {/* PRIX */}
                   {trip.price !== undefined && (
                     <div
-                      className="mt-3 inline-block text-xs font-bold px-3 py-1 rounded-full"
+                      className="mt-2 text-[11px] font-bold px-2 py-1 rounded-full inline-block"
                       style={{
-                        backgroundColor: `${secondary}20`,
+                        background: `linear-gradient(90deg, ${primary}15, ${secondary}40)`,
                         color: primary,
                       }}
                     >
@@ -89,34 +96,36 @@ const VilleSuggestionBar: React.FC<Props> = ({
                     </div>
                   )}
 
-                  {getFrequencyLabel(trip.days) && (
-                    <div className="text-[11px] text-gray-500 mt-2">
-                      {getFrequencyLabel(trip.days)}
+                  {/* POPULARITÉ */}
+                  {trip.count !== undefined && (
+                    <div className="text-[10px] text-gray-400 mt-1">
+                      {trip.count} réservations
                     </div>
                   )}
 
+                  {/* CTA */}
                   <button
                     onClick={() =>
                       onSelect(trip.departure, trip.arrival)
                     }
-                    className="mt-4 w-full min-h-[44px] py-2 rounded-lg text-white text-sm font-semibold"
+                    className="mt-2 w-full h-8 rounded-lg text-[11px] font-semibold text-white transition-all"
                     style={{
                       background: `linear-gradient(90deg, ${primary}, ${secondary})`,
+                      boxShadow: `0 2px 8px ${primary}40`,
                     }}
                   >
-                    {t("reserveNowArrow")}
+                    {t("reserve")}
                   </button>
                 </div>
               ))}
         </div>
 
+        {/* EMPTY */}
         {!loading && suggestions.length === 0 && (
-          <div className="mt-4 rounded-xl border border-dashed border-gray-300 bg-white/80 p-4 text-center">
-            <p className="text-sm text-gray-700">
-              {offline
-                ? "Connexion indisponible : impossible de charger les destinations pour le moment."
-                : "Aucune destination populaire disponible pour le moment."}
-            </p>
+          <div className="mt-4 text-center text-sm text-gray-600">
+            {offline
+              ? "Connexion indisponible."
+              : "Aucune destination disponible."}
           </div>
         )}
       </div>

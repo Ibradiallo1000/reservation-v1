@@ -92,6 +92,9 @@ export interface TripSuggestion {
   days?: string[];
   imageUrl?: string;
   duration?: string;
+
+  /** Nombre de réservations (popularité) */
+  count?: number;
 }
 
 /* =========================
