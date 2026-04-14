@@ -1,8 +1,7 @@
-// src/modules/compagnie/public/components/HeroCompanySection.tsx
-// Design exact maquette : glassmorphism conteneur, champs ville blancs + MapPin, bouton swap glass, bouton recherche glass rouge.
+// HeroCompanySection.tsx
 
 import React, { useState } from "react";
-import { Search, ArrowLeftRight } from "lucide-react";
+import { ArrowLeftRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import VilleCombobox from "@/shared/ui/VilleCombobox";
 
@@ -27,10 +26,8 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const from = departure.trim();
-    const to = arrival.trim();
-    if (!from || !to || from.toLowerCase() === to.toLowerCase()) return;
-    onSearch(from, to);
+    if (!departure || !arrival || departure === arrival) return;
+    onSearch(departure, arrival);
   };
 
   const handleSwap = () => {
@@ -39,107 +36,103 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
   };
 
   const disabled =
-    !departure ||
-    !arrival ||
-    departure.toLowerCase() === arrival.toLowerCase();
-
-  const hasBgImage = Boolean(heroImageUrl);
-
-  /* Champs ville : fond BLANC solide, bordure gris clair, icône MapPin (design maquette) */
-  const cityInputWrapper =
-    "bg-white border border-gray-200 rounded-xl px-4 py-3 min-h-[48px] shadow-sm";
-  const cityInputText =
-    "text-gray-800 font-medium placeholder-gray-500 bg-transparent";
+    !departure || !arrival || departure.toLowerCase() === arrival.toLowerCase();
 
   return (
-    <section className="relative w-full min-w-0">
-      <div className="relative h-[380px] sm:h-[480px] md:h-[560px] lg:h-[600px] overflow-hidden">
-        {hasBgImage ? (
-          <>
-            <img
-              src={heroImageUrl}
-              className="absolute inset-0 w-full h-full object-cover object-center"
-              alt=""
-              aria-hidden
-            />
-            <div
-              className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/30 to-black/20 z-0"
-              aria-hidden
-            />
-          </>
-        ) : (
-          <div className="absolute inset-0 bg-neutral-900" aria-hidden />
-        )}
+    <section className="relative w-full">
+      <div className="relative h-[420px] sm:h-[500px] md:h-[560px] overflow-hidden">
 
-        <div className="public-hero-titles relative z-10 max-w-4xl mx-auto text-center px-4 sm:px-6 pt-20 sm:pt-24">
-          <h1 className="text-xl sm:text-2xl md:text-3xl font-medium text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.5)]">
+        {/* IMAGE */}
+        <img
+          src={heroImageUrl}
+          className="absolute inset-0 w-full h-full object-cover"
+          alt=""
+        />
+
+        {/* OVERLAY (plus propre) */}
+        <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/50 to-black/30" />
+
+        {/* CONTENU */}
+        <div className="relative z-10 max-w-3xl mx-auto px-4 pt-24 text-center">
+
+          <h1
+            className="text-lg sm:text-xl font-medium drop-shadow-[0_3px_8px_rgba(0,0,0,0.9)]"
+            style={{ color: secondaryColor }}
+          >
             {t("heroTitleWith")}
           </h1>
-          <h2 className="mt-1.5 sm:mt-2 text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)]">
-            {companyName || t("ourCompany")}
+
+          <h2 className="mt-1 text-2xl sm:text-3xl font-bold drop-shadow-[0_3px_10px_rgba(0,0,0,0.9)]">
+            <span style={{ color: secondaryColor }}>
+              {companyName}
+            </span>
           </h2>
 
-          {/* Conteneur unique glassmorphism : translucide, blur, dégradé léger, coins très arrondis */}
+          {/* SEARCH */}
           <form
             onSubmit={handleSubmit}
-            className="mt-6 sm:mt-8 mx-auto max-w-3xl rounded-3xl shadow-2xl p-4 sm:p-5 md:p-6 border border-white/25 bg-black/20 backdrop-blur-xl bg-gradient-to-b from-gray-900/40 to-gray-900/25"
+            className="mt-6 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-3 shadow-xl"
           >
-            <div className="flex flex-row items-stretch gap-3 w-full min-w-0">
-              <div className="flex-1 min-w-0 flex items-center">
+            <div className="flex items-center gap-2">
+
+              <div className="flex-1">
                 <VilleCombobox
                   value={departure}
                   onChange={setDeparture}
                   placeholder={t("depart")}
                   showLocationIcon
-                  wrapperClassName={cityInputWrapper}
-                  inputClassName={cityInputText}
+                  wrapperClassName="bg-white rounded-xl px-3 py-2 shadow-sm"
+                  inputClassName="text-gray-800 text-sm"
                 />
               </div>
 
-              {/* Bouton swap : circulaire, glass, icône gris foncé */}
               <button
                 type="button"
                 onClick={handleSwap}
-                aria-label={t("swapCities")}
-                className="flex-shrink-0 w-12 h-12 rounded-full border border-gray-300/80 bg-white/20 backdrop-blur-md hover:bg-white/30 flex items-center justify-center transition"
+                className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center"
               >
-                <ArrowLeftRight className="h-5 w-5 text-gray-700" aria-hidden />
+                <ArrowLeftRight className="w-4 h-4 text-white" />
               </button>
 
-              <div className="flex-1 min-w-0 flex items-center">
+              <div className="flex-1">
                 <VilleCombobox
                   value={arrival}
                   onChange={setArrival}
                   placeholder={t("arrival")}
                   showLocationIcon
-                  wrapperClassName={cityInputWrapper}
-                  inputClassName={cityInputText}
+                  wrapperClassName="bg-white rounded-xl px-3 py-2 shadow-sm"
+                  inputClassName="text-gray-800 text-sm"
                 />
               </div>
             </div>
 
-            {/* Bouton recherche : glass teinté rouge, icône rouge, texte blanc gras */}
-            <div className="mt-4 sm:mt-5">
-              <button
-                type="submit"
-                disabled={disabled}
-                className="w-full min-h-[52px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-bold text-white text-base transition disabled:opacity-60 disabled:cursor-not-allowed border border-white/30 shadow-lg backdrop-blur-md hover:opacity-95"
-                style={{
-                  backgroundColor: disabled
-                    ? "rgba(100,100,100,0.6)"
-                    : `${primaryColor}cc`,
-                }}
-              >
-                <Search
-                  className="h-5 w-5 shrink-0"
-                  style={{ color: primaryColor }}
-                  aria-hidden
-                />
-                {t("searchTrip")}
-              </button>
-            </div>
+            <button
+              type="submit"
+              disabled={disabled}
+              className="mt-3 w-full py-3 rounded-xl text-white font-semibold transition"
+              style={{
+                backgroundColor: disabled ? "#999" : primaryColor,
+              }}
+            >
+              {t("searchTrip")}
+            </button>
           </form>
         </div>
+
+        {/* 🔥 COURBE PRO (sans trait + plus naturelle) */}
+        <div className="absolute bottom-0 left-0 w-full overflow-hidden leading-none pointer-events-none">
+          <svg
+            viewBox="0 0 500 100"
+            preserveAspectRatio="none"
+            className="w-full h-[90px]"
+          >
+            <path
+              d="M0,60 C150,110 350,10 500,60 L500,100 L0,100 Z"
+              fill="#f9fafb"
+            />
+          </svg>
+        </div>
+
       </div>
     </section>
   );

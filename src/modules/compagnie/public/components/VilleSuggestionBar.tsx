@@ -31,9 +31,10 @@ const VilleSuggestionBar: React.FC<Props> = ({
   };
 
   return (
-    <section className="px-3 pt-4 pb-6">
+    <section className="relative bg-gray-50 -mt-6 px-3 pt-8 pb-6">
       <div className="max-w-5xl mx-auto">
-        {/* Titre : centré, icône Bus + texte, sobre, sans fond */}
+
+        {/* TITRE */}
         <div className="text-center mb-4">
           <div className="flex justify-center items-center gap-2">
             <Bus size={20} style={{ color: primary }} />
@@ -42,6 +43,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
             </h2>
           </div>
         </div>
+
         <div className="grid grid-cols-2 gap-4">
           {loading
             ? Array.from({ length: 4 }).map((_, index) => (
@@ -68,15 +70,13 @@ const VilleSuggestionBar: React.FC<Props> = ({
                     boxShadow: `0 4px 15px ${primary}12`,
                   }}
                 >
-                  {/* Trajet */}
-                  <div className="font-semibold text-sm leading-snug text-gray-900">
+                  <div className="font-semibold text-sm text-gray-900">
                     {trip.departure} →{" "}
                     <span style={{ color: primary }}>
                       {trip.arrival}
                     </span>
                   </div>
 
-                  {/* Prix */}
                   {trip.price !== undefined && (
                     <div
                       className="mt-3 inline-block text-xs font-bold px-3 py-1 rounded-full"
@@ -89,14 +89,12 @@ const VilleSuggestionBar: React.FC<Props> = ({
                     </div>
                   )}
 
-                  {/* Fréquence (affichée seulement si connue) */}
                   {getFrequencyLabel(trip.days) && (
                     <div className="text-[11px] text-gray-500 mt-2">
                       {getFrequencyLabel(trip.days)}
                     </div>
                   )}
 
-                  {/* Bouton */}
                   <button
                     onClick={() =>
                       onSelect(trip.departure, trip.arrival)
@@ -111,6 +109,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
                 </div>
               ))}
         </div>
+
         {!loading && suggestions.length === 0 && (
           <div className="mt-4 rounded-xl border border-dashed border-gray-300 bg-white/80 p-4 text-center">
             <p className="text-sm text-gray-700">

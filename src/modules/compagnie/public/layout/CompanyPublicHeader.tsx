@@ -1,8 +1,8 @@
 // src/modules/compagnie/public/layout/CompanyPublicHeader.tsx
-// Header fused directly on the hero: full-width bar, logo + company name (left), language + login (right)
+
 import React, { useEffect, useState } from 'react';
 import { User } from 'lucide-react';
-import LanguageSwitcher from '../components/LanguageSwitcher';
+import { useTranslation } from 'react-i18next';
 import { Company } from '@/types/companyTypes';
 
 interface HeaderProps {
@@ -24,6 +24,7 @@ const Header: React.FC<HeaderProps> = ({
   navigate,
   t,
 }) => {
+  const { i18n } = useTranslation();
   const [scrollProgress, setScrollProgress] = useState(0);
 
   useEffect(() => {
@@ -37,12 +38,6 @@ const Header: React.FC<HeaderProps> = ({
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  useEffect(() => {
-    if (!company?.logoUrl) return;
-    const img = new Image();
-    img.src = company.logoUrl;
-  }, [company?.logoUrl]);
-
   const primary = colors?.primary || '#3b82f6';
   const textColor = scrollProgress > 0.5 ? primary : '#ffffff';
   const bgOpacity = scrollProgress > 0.5 ? 0.92 : 0;
@@ -51,57 +46,88 @@ const Header: React.FC<HeaderProps> = ({
   const name =
     company?.nom || t('ourCompany', { defaultValue: 'Notre compagnie' });
 
+  const isFr = i18n.language === 'fr';
+
+  const toggleLang = () => {
+    i18n.changeLanguage(isFr ? 'en' : 'fr');
+  };
+
   return (
     <header
-      className="public-site-header fixed top-0 left-0 right-0 w-full z-50 flex items-center justify-between h-14 sm:h-16 px-4 sm:px-6 pointer-events-none"
+      className="fixed top-0 left-0 right-0 w-full z-50 flex items-center justify-between h-14 sm:h-16 px-4 sm:px-6 pointer-events-none"
       style={{ color: textColor }}
     >
       <div
         style={{
           backgroundColor: `rgba(255,255,255,${bgOpacity})`,
-          borderBottom: borderOpacity > 0 ? `1px solid rgba(0,0,0,${borderOpacity})` : 'none',
+          borderBottom:
+            borderOpacity > 0
+              ? `1px solid rgba(0,0,0,${borderOpacity})`
+              : 'none',
         }}
         className="absolute inset-0 backdrop-blur-sm transition-all duration-300 pointer-events-auto"
-        aria-hidden
       />
-      <div className="public-site-header-inner relative z-10 flex items-center justify-between w-full max-w-6xl mx-auto pointer-events-auto">
-        {/* Left: logo + company name (white en haut, couleur primaire au scroll) */}
+
+      <div className="relative z-10 flex items-center justify-between w-full max-w-6xl mx-auto pointer-events-auto">
+
+        {/* LEFT */}
         <button
           onClick={() => navigate('/')}
-          className="flex items-center gap-2 sm:gap-3 min-w-0 select-none"
-          aria-label={name}
-          style={{ color: textColor }}
+          className="flex items-center gap-3 min-w-0"
         >
           {company?.logoUrl ? (
             <img
               src={company.logoUrl}
-              alt=""
-              className="h-9 w-9 sm:h-10 sm:w-10 rounded-full object-cover ring-2 ring-white/30 shrink-0"
+              className="h-10 w-10 rounded-full object-cover ring-2 ring-white/40 shadow"
             />
           ) : (
-            <span
-              className="h-9 w-9 sm:h-10 sm:w-10 rounded-full flex items-center justify-center font-semibold text-sm shrink-0 ring-2 ring-white/30 bg-white/20"
-              style={{ color: textColor }}
-            >
-              {(name || 'C').trim().charAt(0).toUpperCase()}
-            </span>
+            <div className="h-10 w-10 rounded-full bg-white/20 flex items-center justify-center text-sm font-bold">
+              {name.charAt(0)}
+            </div>
           )}
-          <span className="font-semibold text-sm sm:text-base tracking-wide truncate max-w-[120px] sm:max-w-[200px]" style={{ color: textColor }}>
+
+          <span
+            className="font-bold text-base sm:text-lg truncate max-w-[180px]"
+            style={{ color: textColor }}
+          >
             {name}
           </span>
         </button>
 
-        {/* Right: langue (drapeaux) + connexion */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0" style={{ color: textColor }}>
-          <LanguageSwitcher variant="floating" scrollTextColor={textColor} primaryColor={primary} />
+        {/* RIGHT */}
+        <div className="flex items-center gap-3">
+
+          {/* LANGUAGE SWITCH */}
+          <button
+            onClick={toggleLang}
+            className="relative w-[60px] h-[30px] rounded-full bg-white/20 backdrop-blur flex items-center px-1"
+          >
+            <div
+              className="absolute w-[26px] h-[26px] rounded-full shadow transition-all duration-300"
+              style={{
+                backgroundColor: primary,
+                transform: isFr ? 'translateX(0)' : 'translateX(30px)',
+              }}
+            />
+
+            <div className="w-full flex justify-between text-[10px] font-bold px-1 z-10">
+              <span className={isFr ? 'text-white' : 'text-gray-600'}>
+                FR
+              </span>
+              <span className={!isFr ? 'text-white' : 'text-gray-600'}>
+                EN
+              </span>
+            </div>
+          </button>
+
+          {/* LOGIN */}
           <button
             onClick={() => navigate('/login')}
-            className="p-2 rounded-lg opacity-90 hover:opacity-100 hover:bg-black/10 transition inline-flex items-center justify-center min-h-[40px] min-w-[40px]"
-            aria-label={t('login')}
-            style={{ color: textColor }}
+            className="p-2 rounded-lg hover:bg-black/10 transition"
           >
-            <User className="h-5 w-5 sm:h-5 sm:w-5" />
+            <User className="h-5 w-5" />
           </button>
+
         </div>
       </div>
     </header>
