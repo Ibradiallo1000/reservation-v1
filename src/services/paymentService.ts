@@ -31,10 +31,20 @@ import { createFinancialTransaction } from "@/modules/compagnie/treasury/financi
 import type { FinancialPaymentMethod } from "@/modules/compagnie/treasury/types";
 import { upsertMobileMoneyValidationDocument } from "@/modules/finance/documents/financialDocumentsService";
 
-function explicitPaymentMethodFromPayment(p: { channel: string; provider?: string }): FinancialPaymentMethod {
+function explicitPaymentMethodFromPayment(p: {
+  channel: string;
+  provider?: string;
+}): FinancialPaymentMethod {
   const prov = String(p.provider ?? "").toLowerCase();
   if (prov === "cash") return "cash";
-  if (prov === "wave" || prov === "orange" || prov === "moov" || prov === "sarali") return "mobile_money";
+  if (
+    prov === "wave" ||
+    prov === "orange" ||
+    prov === "moov" ||
+    prov === "sarali"
+  ) {
+    return "mobile_money";
+  }
   const ch = String(p.channel ?? "");
   if (ch === "guichet") return prov === "cash" ? "cash" : "mobile_money";
   if (ch === "online") return "mobile_money";
@@ -79,12 +89,13 @@ function assertCanConfirmPaymentLedger(params: {
   paymentChannel: Payment["channel"];
   actorRole?: string | string[] | null;
 }): void {
-  // Only enforce explicit role checks for online confirmations.
   if (params.paymentChannel !== "online") return;
+
   const roles = normalizeRoleTokens(params.actorRole);
   if (roles.length === 0) {
     throw new Error("Confirmation de paiement en ligne refusee: role utilisateur manquant.");
   }
+
   const allowed = roles.some((r) => LEDGER_POSTING_ALLOWED_ROLES.has(r));
   if (!allowed) {
     throw new Error("Role non autorise pour confirmer un paiement en ligne.");
@@ -99,7 +110,7 @@ function normalizeLedgerStatus(
   if (raw === "pending" || raw === "posted" || raw === "failed") {
     return raw;
   }
-  // Legacy docs without ledgerStatus: any validated payment is considered pending ledger until explicit posting marker.
+
   const paymentStatus = String(status ?? "").toLowerCase();
   if (paymentStatus === "validated") return "pending";
   return "pending";
@@ -160,6 +171,16 @@ function buildLedgerPaymentPayload(payment: Payment, paymentId: string, performe
   };
 }
 
+async function getPaymentByCanonicalDocumentId(
+  companyId: string,
+  paymentDocumentId: string
+): Promise<Payment | null> {
+  const ref = paymentRef(companyId, paymentDocumentId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  return mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
+}
+
 export async function logPaymentAction(params: {
   companyId: string;
   paymentId: string;
@@ -182,6 +203,7 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
   const status = data.status ?? "pending";
   const validatedNow = status === "validated" ? serverTimestamp() : null;
   const validatedBy = status === "validated" ? (data.validatedBy ?? "system") : null;
+
   const payload = {
     reservationId: data.reservationId,
     companyId: data.companyId,
@@ -191,7 +213,6 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
     channel: data.channel,
     provider: data.provider,
     status,
-    // New field: payment is only financially recognized when ledgerStatus becomes posted.
     ledgerStatus: "pending" as PaymentLedgerStatus,
     ledgerPostedAt: null,
     ledgerLastAttemptAt: null,
@@ -202,10 +223,12 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
     validatedBy,
     rejectionReason: null,
   };
+
   if (data.paymentDocumentId) {
     const pref = doc(ref, data.paymentDocumentId);
     await setDoc(pref, payload);
     const pid = data.paymentDocumentId;
+
     if (status === "validated") {
       await logPaymentAction({
         companyId: data.companyId,
@@ -214,9 +237,12 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
         userId: data.validatedBy ?? "system",
       });
     }
+
     return pid;
   }
+
   const docRef = await addDoc(ref, payload);
+
   if (status === "validated") {
     await logPaymentAction({
       companyId: data.companyId,
@@ -225,6 +251,7 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
       userId: data.validatedBy ?? "system",
     });
   }
+
   return docRef.id;
 }
 
@@ -236,6 +263,7 @@ export async function markPaymentLedgerStatus(params: {
 }): Promise<void> {
   const ref = paymentRef(params.companyId, params.paymentId);
   const now = Timestamp.now();
+
   const patch: Record<string, unknown> = {
     ledgerStatus: params.ledgerStatus,
     ledgerLastAttemptAt: now,
@@ -267,8 +295,8 @@ export async function confirmPayment(
   const ref = paymentRef(companyId, paymentId);
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
-  const current = mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
 
+  const current = mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
   if (current.status !== "pending") {
     return current;
   }
@@ -279,6 +307,7 @@ export async function confirmPayment(
   });
 
   const now = Timestamp.now();
+
   await updateDoc(ref, {
     status: "validated",
     validatedAt: now,
@@ -309,6 +338,7 @@ export async function confirmPayment(
   } catch (err) {
     ledgerError = toLedgerErrorMessage(err);
     finalLedgerStatus = "failed";
+
     await markPaymentLedgerStatus({
       companyId,
       paymentId,
@@ -317,6 +347,7 @@ export async function confirmPayment(
     }).catch((statusErr) => {
       console.warn("[paymentService] markPaymentLedgerStatus failed:", statusErr);
     });
+
     console.warn("[paymentService] ledger posting failed after payment validation:", err);
   }
 
@@ -324,17 +355,23 @@ export async function confirmPayment(
 
   const provider = String(updated.provider ?? "").toLowerCase();
   const isMobileMoneyProvider =
-    provider === "wave" || provider === "orange" || provider === "moov" || provider === "sarali";
+    provider === "wave" ||
+    provider === "orange" ||
+    provider === "moov" ||
+    provider === "sarali";
+
   if (isMobileMoneyProvider) {
     const actorRole = Array.isArray(options?.actorRole)
       ? String(options?.actorRole?.[0] ?? "").trim() || "operator_digital"
       : String(options?.actorRole ?? "").trim() || "operator_digital";
+
     const statutValidation =
       finalLedgerStatus === "posted"
         ? "validee_ledger_posted"
         : finalLedgerStatus === "failed"
           ? "validee_ledger_failed"
           : "validee_ledger_pending";
+
     try {
       await upsertMobileMoneyValidationDocument({
         companyId,
@@ -376,7 +413,6 @@ export async function confirmPayment(
 
 /**
  * Retry only the payment -> ledger posting for a validated payment.
- * Keeps current business flow while making failures exploitable by finance modules.
  */
 export async function retryPaymentLedgerPosting(params: {
   companyId: string;
@@ -405,6 +441,7 @@ export async function retryPaymentLedgerPosting(params: {
   });
 
   const now = Timestamp.now();
+
   try {
     await createFinancialTransaction(buildLedgerPaymentPayload(current, params.paymentId, now));
     await markPaymentLedgerStatus({
@@ -412,6 +449,7 @@ export async function retryPaymentLedgerPosting(params: {
       paymentId: params.paymentId,
       ledgerStatus: "posted",
     });
+
     return {
       ...current,
       ledgerStatus: "posted",
@@ -421,6 +459,7 @@ export async function retryPaymentLedgerPosting(params: {
     };
   } catch (err) {
     const ledgerError = toLedgerErrorMessage(err);
+
     await markPaymentLedgerStatus({
       companyId: params.companyId,
       paymentId: params.paymentId,
@@ -429,6 +468,7 @@ export async function retryPaymentLedgerPosting(params: {
     }).catch((statusErr) => {
       console.warn("[paymentService] retry markPaymentLedgerStatus failed:", statusErr);
     });
+
     return {
       ...current,
       ledgerStatus: "failed",
@@ -450,14 +490,18 @@ export async function rejectPayment(
   const ref = paymentRef(companyId, paymentId);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("Payment introuvable.");
+
   const data = snap.data() as Record<string, unknown>;
-  if ((data.status as string) !== "pending") throw new Error("Seuls les paiements en attente peuvent etre rejetes.");
+  if ((data.status as string) !== "pending") {
+    throw new Error("Seuls les paiements en attente peuvent etre rejetes.");
+  }
 
   await updateDoc(ref, {
     status: "rejected",
     rejectionReason: reason ?? null,
     updatedAt: serverTimestamp(),
   });
+
   await logPaymentAction({ companyId, paymentId, action: "reject", userId });
 }
 
@@ -473,11 +517,14 @@ export async function refundPayment(
   const ref = paymentRef(companyId, paymentId);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("Payment introuvable.");
+
   const data = snap.data() as Record<string, unknown>;
   const currentStatus = String(data.status ?? "");
+
   if (currentStatus !== "validated") {
     throw new Error("Seuls les paiements valides peuvent etre rembourses.");
   }
+
   await updateDoc(ref, {
     status: "refunded",
     rejectionReason: reason ?? null,
@@ -485,6 +532,7 @@ export async function refundPayment(
     refundedBy: userId,
     updatedAt: serverTimestamp(),
   });
+
   await logPaymentAction({ companyId, paymentId, action: "refund", userId });
 
   try {
@@ -535,12 +583,14 @@ export async function getPaymentsByDateRange(
   const ref = paymentsRef(companyId);
   const startTs = Timestamp.fromDate(start);
   const endTs = Timestamp.fromDate(end);
+
   const q = query(
     ref,
     where("createdAt", ">=", startTs),
     where("createdAt", "<=", endTs),
     orderBy("createdAt", "desc")
   );
+
   const snap = await getDocs(q);
   return snap.docs.map((d) => mapPaymentDoc(d.id, d.data() as Record<string, unknown>));
 }
@@ -548,27 +598,28 @@ export async function getPaymentsByDateRange(
 /**
  * Get payment by id.
  */
-export async function getPaymentById(companyId: string, paymentId: string): Promise<Payment | null> {
+export async function getPaymentById(
+  companyId: string,
+  paymentId: string
+): Promise<Payment | null> {
   const ref = paymentRef(companyId, paymentId);
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
   return mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
 }
 
+/**
+ * Lookup helper kept for compatibility.
+ * Direct lookup by canonical doc id first, legacy query fallback second.
+ */
 export async function getPaymentByReservationId(
   companyId: string,
   reservationId: string
 ): Promise<Payment | null> {
+  const direct = await getPaymentByCanonicalDocumentId(companyId, reservationId);
+  if (direct) return direct;
+
   const ref = paymentsRef(companyId);
-
-  // Idempotence strategy: on online flow, doc id is often reservationId.
-  const directRef = doc(ref, reservationId);
-  const directSnap = await getDoc(directRef);
-  if (directSnap.exists()) {
-    return mapPaymentDoc(directSnap.id, directSnap.data() as Record<string, unknown>);
-  }
-
-  // Legacy fallback for older auto-generated payment ids.
   try {
     const q = query(ref, where("reservationId", "==", reservationId), limit(1));
     const snap = await getDocs(q);
@@ -576,7 +627,6 @@ export async function getPaymentByReservationId(
     const d = snap.docs[0];
     return mapPaymentDoc(d.id, d.data() as Record<string, unknown>);
   } catch {
-    // Visitor rules may block list queries.
     return null;
   }
 }
@@ -591,7 +641,10 @@ function inferOnlinePaymentProvider(label: string | null | undefined): PaymentPr
 }
 
 /**
- * If no payment doc exists for this reservation, create a pending online one.
+ * If no canonical payment doc exists for this reservation, create a pending online one.
+ * Important:
+ * - use direct document lookup only on this hot path
+ * - avoid legacy query fallback here to limit extra Firestore reads during proof upload
  */
 export async function ensurePendingOnlinePaymentFromReservation(params: {
   companyId: string;
@@ -601,17 +654,27 @@ export async function ensurePendingOnlinePaymentFromReservation(params: {
   paymentMethodLabel?: string | null;
 }): Promise<{ ok: boolean; paymentId?: string; skipped?: boolean; error?: string }> {
   const amount = Number(params.montant) || 0;
+
   if (!params.companyId || !params.reservationId || !params.agencyId || amount <= 0) {
     return {
       ok: false,
-      error: "ensurePendingOnlinePaymentFromReservation: companyId, agencyId, reservationId et montant > 0 requis",
+      error:
+        "ensurePendingOnlinePaymentFromReservation: companyId, agencyId, reservationId et montant > 0 requis",
     };
   }
+
   try {
-    const existing = await getPaymentByReservationId(params.companyId, params.reservationId);
+    // Hot path optimization:
+    // do not run a legacy list query here; use only the canonical payment doc id.
+    const existing = await getPaymentByCanonicalDocumentId(
+      params.companyId,
+      params.reservationId
+    );
+
     if (existing) {
       return { ok: true, paymentId: existing.id, skipped: true };
     }
+
     const paymentId = await createPayment({
       reservationId: params.reservationId,
       companyId: params.companyId,
@@ -623,6 +686,7 @@ export async function ensurePendingOnlinePaymentFromReservation(params: {
       status: "pending",
       paymentDocumentId: params.reservationId,
     });
+
     return { ok: true, paymentId };
   } catch (e) {
     console.error("[ensurePendingOnlinePaymentFromReservation]", e);
