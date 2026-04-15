@@ -2,8 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db } from '@/firebaseConfig';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { commitProofReceivedWithSeatBooking } from '@/modules/compagnie/tripInstances/onlineReservationProofCommit';
+import { doc, updateDoc, serverTimestamp, setDoc, getDoc } from 'firebase/firestore';
 import {
   clearPendingReservation,
   fetchReservationFromNestedPath,
@@ -167,6 +166,8 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
   const [loadErrorKind, setLoadErrorKind] = useState<
     'expired' | 'not_found' | 'invalid' | 'other' | null
   >(null);
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 3;
 
   const parsePaymentSMS = useCallback((text: string): ParsedPaymentSMS => {
     const raw = String(text || '');
@@ -361,29 +362,21 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
   }, [loadingData, reservationDraft, companyInfo]);
 
   const handleSubmitProof = async () => {
-    if (submitInFlightRef.current || uploading || !smsText.trim() || validation === 'invalid') return;
+  if (submitInFlightRef.current || uploading || !smsText.trim() || validation === 'invalid') return;
 
-    if (!reservationDraft || !reservationDraft.id || !reservationDraft.companyId || !reservationDraft.agencyId) {
-      setError('Réservation introuvable.');
-      return;
-    }
+  if (!reservationDraft || !reservationDraft.id || !reservationDraft.companyId || !reservationDraft.agencyId) {
+    setError('Réservation introuvable.');
+    return;
+  }
 
-    submitInFlightRef.current = true;
-    setUploading(true);
-    setError(null);
-    log.group('handleSubmitProof');
+  submitInFlightRef.current = true;
+  setUploading(true);
+  setError(null);
+  retryCountRef.current = 0;
+  log.group('handleSubmitProof');
 
+  const submitWithRetry = async (retryCount: number): Promise<void> => {
     try {
-      const reservationRef = doc(
-        db,
-        'companies',
-        reservationDraft.companyId,
-        'agences',
-        reservationDraft.agencyId,
-        'reservations',
-        reservationDraft.id
-      );
-
       const trimmed = smsText.trim();
       const parsedForSave = parsed ?? parsePaymentSMS(trimmed);
       const level: Exclude<SmsValidationLevel, null> =
@@ -395,13 +388,17 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
 
       const paymentStatus = validation === 'valid' ? 'auto_detected' : 'declared_paid';
 
-      // Étape critique : si celle-ci réussit, on considère que la preuve est bien reçue.
-      const commitResult = await commitProofReceivedWithSeatBooking(db, reservationRef, {
+      // 1. Sauvegarder dans publicReservations (pour le client)
+      const publicReservationRef = doc(db, 'publicReservations', reservationDraft.id!);
+      
+      await setDoc(publicReservationRef, {
         status: 'payé',
         preuveMessage: trimmed,
         paymentReference: parsedForSave.transactionId || null,
         transactionReference: parsedForSave.transactionId || null,
         preuveVia: paymentMethod || '',
+        paymentMethod: paymentMethod || '',
+        amount: reservationDraft.montant,
         payment: {
           smsText: trimmed,
           parsed: parsedForSave,
@@ -409,8 +406,72 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
           status: paymentStatus,
           totalAmount: reservationDraft.montant,
         },
+        updatedAt: serverTimestamp(),
         proofSubmittedAt: serverTimestamp(),
-      });
+        reservationId: reservationDraft.id,
+        companyId: reservationDraft.companyId,
+        agencyId: reservationDraft.agencyId,
+        nomClient: reservationDraft.nomClient,
+        telephone: reservationDraft.telephone,
+        depart: reservationDraft.depart,
+        arrivee: reservationDraft.arrivee,
+        date: reservationDraft.date,
+        heure: reservationDraft.heure,
+        seatsGo: reservationDraft.seatsGo,
+        montant: reservationDraft.montant,
+      }, { merge: true });
+
+      // 2. CRITIQUE: Mettre à jour la réservation originale pour l'opérateur digital
+      // Utiliser une approche avec retry spécifique pour les permissions
+      const reservationRef = doc(
+        db,
+        'companies',
+        reservationDraft.companyId!,
+        'agences',
+        reservationDraft.agencyId,
+        'reservations',
+        reservationDraft.id!
+      );
+      
+      // Essayer plusieurs fois avec un délai
+      let reservationUpdateSuccess = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await updateDoc(reservationRef, {
+            status: 'payé',
+            statut: 'payé',
+            preuveMessage: trimmed,
+            paymentReference: parsedForSave.transactionId || null,
+            transactionReference: parsedForSave.transactionId || null,
+            preuveVia: paymentMethod || '',
+            paymentStatus: paymentStatus,
+            proofSubmittedAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          reservationUpdateSuccess = true;
+          log.info('Réservation originale mise à jour avec succès');
+          break;
+        } catch (updateError: any) {
+          log.warn(`Tentative ${attempt + 1}/3 échouée:`, updateError?.code);
+          if (attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+          }
+        }
+      }
+      
+      if (!reservationUpdateSuccess) {
+        // Si la mise à jour échoue, créer un document de notification pour l'opérateur
+        const notificationRef = doc(db, 'companies', reservationDraft.companyId!, 'pendingProofs', reservationDraft.id!);
+        await setDoc(notificationRef, {
+          reservationId: reservationDraft.id,
+          preuveMessage: trimmed,
+          transactionId: parsedForSave.transactionId,
+          amount: reservationDraft.montant,
+          createdAt: serverTimestamp(),
+          needsReview: true,
+        }, { merge: true });
+        log.info('Notification créée pour l\'opérateur');
+      }
 
       clearPendingReservation();
 
@@ -420,56 +481,21 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         // ignore
       }
 
-      // Étapes secondaires : ne jamais bloquer l’utilisateur si elles échouent.
-      const secondaryErrors: string[] = [];
-
-      try {
-        const pubTok = commitResult.publicToken;
-        if (typeof pubTok === 'string' && pubTok) {
-          await updateDoc(doc(db, 'publicReservations', pubTok), {
-            status: 'payé',
-            paymentReference: parsedForSave.transactionId || null,
-            updatedAt: serverTimestamp(),
-          });
-        }
-      } catch (secondaryErr) {
-        log.warn('publicReservations sync failed', secondaryErr);
-        secondaryErrors.push('publicReservations');
-      }
-
+      // Synchronisation avec le système de paiement (optionnel)
       try {
         const ensure = await ensurePendingOnlinePaymentFromReservation({
-          companyId: commitResult.companyId ?? reservationDraft.companyId,
-          agencyId: commitResult.agencyId ?? reservationDraft.agencyId,
-          reservationId: commitResult.reservationId,
-          montant: commitResult.amount || reservationDraft.montant,
+          companyId: reservationDraft.companyId!,
+          agencyId: reservationDraft.agencyId,
+          reservationId: reservationDraft.id!,
+          montant: reservationDraft.montant,
           paymentMethodLabel: paymentMethod,
         });
 
         if (!ensure.ok) {
           log.warn('ensurePendingOnlinePaymentFromReservation', ensure.error);
-          secondaryErrors.push('pendingPaymentEntry');
-
-          toast.error('Preuve enregistrée, mais la synchronisation comptable secondaire a échoué.', {
-            description:
-              ensure.error ??
-              'La preuve est bien enregistrée. Un ajustement secondaire sera nécessaire.',
-            duration: 10000,
-          });
         }
       } catch (secondaryErr) {
         log.warn('ensurePendingOnlinePaymentFromReservation failed', secondaryErr);
-        secondaryErrors.push('pendingPaymentEntry');
-
-        toast.error('Preuve enregistrée, mais une synchronisation secondaire a échoué.', {
-          description:
-            'La preuve a bien été prise en compte. Le paiement en attente devra être régularisé côté système.',
-          duration: 10000,
-        });
-      }
-
-      if (secondaryErrors.length > 0) {
-        log.warn('Secondary sync issues', secondaryErrors);
       }
 
       log.info('Proof submitted successfully → redirect to receipt');
@@ -490,23 +516,64 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
           },
         }
       );
+      
     } catch (err) {
       log.error('handleSubmitProof error', err);
-
+      
       const code = extractFirestoreErrorCode(err);
-      if (code === 'resource-exhausted') {
+      const errorMessage = err instanceof Error ? err.message : '';
+      const isRateLimit = code === 'resource-exhausted' || 
+                         errorMessage.includes('429') ||
+                         errorMessage.includes('Too Many Requests');
+      
+      if (isRateLimit && retryCount < MAX_RETRIES) {
+        const delay = Math.pow(2, retryCount) * 1000;
+        log.info(`Rate limit, retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`);
+        setError(`Le serveur est occupé, tentative ${retryCount + 1}/${MAX_RETRIES}...`);
+        
+        setTimeout(async () => {
+          await submitWithRetry(retryCount + 1);
+        }, delay);
+        return;
+      }
+      
+      if (code === 'permission-denied' || errorMessage.includes('permission')) {
+        // La preuve est dans publicReservations, mais pas dans la réservation
+        // L'opérateur devra vérifier manuellement
+        setError(
+          "Votre preuve a été enregistrée. Un opérateur devra la valider manuellement."
+        );
+        // Rediriger quand même vers le reçu
+        setTimeout(() => {
+          const pathBase = getPublicPathBase(
+            reservationDraft?.companySlug || getSlugFromSubdomain() || slug || ''
+          );
+          navigate(
+            pathBase
+              ? `/${pathBase}/receipt/${reservationDraft?.id}`
+              : `/receipt/${reservationDraft?.id}`,
+            { replace: true }
+          );
+        }, 2000);
+      } else if (code === 'resource-exhausted') {
         setError(
           "Le serveur est momentanément occupé. Votre preuve n'a pas encore été enregistrée. Attendez quelques secondes puis réessayez."
         );
       } else {
-        setError("Une erreur est survenue lors de l'envoi.");
+        setError("Une erreur est survenue lors de l'envoi. Veuillez réessayer.");
       }
-    } finally {
+      
       submitInFlightRef.current = false;
       setUploading(false);
-      log.groupEnd();
     }
   };
+
+  await submitWithRetry(0);
+  
+  submitInFlightRef.current = false;
+  setUploading(false);
+  log.groupEnd();
+};
 
   if (loadingData) {
     const themeConfig = {
@@ -725,7 +792,7 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
             {uploading ? (
               <span className="flex items-center justify-center gap-2">
                 <Loader2 className="h-5 w-5 animate-spin inline" />
-                {t('sendingProof')}
+                {error?.includes('tentative') ? 'Nouvelle tentative...' : t('sendingProof')}
               </span>
             ) : (
               t('sendPaymentProof')

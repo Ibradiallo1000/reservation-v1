@@ -1,6 +1,7 @@
 /**
  * Service Payment - entite unifiee guichet + online + courrier.
  * Collection: companies/{companyId}/payments/{paymentId}
+ * 🔥 VERSION CORRIGÉE - AVEC RETRY LOGIC POUR ÉVITER LES 429
  */
 
 import {
@@ -30,6 +31,35 @@ import type {
 import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import type { FinancialPaymentMethod } from "@/modules/compagnie/treasury/types";
 import { upsertMobileMoneyValidationDocument } from "@/modules/finance/documents/financialDocumentsService";
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ⭐ FONCTION DE RETRY POUR LES ERREURS 429
+async function withRetryOnQuota<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  context = "operation"
+): Promise<T> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const isQuotaError = 
+        error?.message?.includes('Quota exceeded') || 
+        error?.message?.includes('Too Many Requests') ||
+        error?.code === 'resource-exhausted';
+      
+      if (isQuotaError && i < maxRetries - 1) {
+        const waitMs = Math.pow(2, i) * 1000; // 1s, 2s, 4s
+        console.warn(`[paymentService] ${context} - 429 Quota exceeded, retry ${i + 1}/${maxRetries} after ${waitMs}ms`);
+        await delay(waitMs);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Max retries exceeded for ${context}`);
+}
 
 function explicitPaymentMethodFromPayment(p: {
   channel: string;
@@ -176,7 +206,7 @@ async function getPaymentByCanonicalDocumentId(
   paymentDocumentId: string
 ): Promise<Payment | null> {
   const ref = paymentRef(companyId, paymentDocumentId);
-  const snap = await getDoc(ref);
+  const snap = await withRetryOnQuota(() => getDoc(ref), 2, "getPaymentByCanonicalDocumentId");
   if (!snap.exists()) return null;
   return mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
 }
@@ -187,12 +217,12 @@ export async function logPaymentAction(params: {
   action: PaymentAction;
   userId: string;
 }): Promise<void> {
-  await addDoc(collection(db, `companies/${params.companyId}/${PAYMENT_LOGS_COLLECTION}`), {
+  await withRetryOnQuota(() => addDoc(collection(db, `companies/${params.companyId}/${PAYMENT_LOGS_COLLECTION}`), {
     paymentId: params.paymentId,
     action: params.action,
     userId: params.userId,
     timestamp: serverTimestamp(),
-  });
+  }), 2, "logPaymentAction");
 }
 
 /**
@@ -226,7 +256,7 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
 
   if (data.paymentDocumentId) {
     const pref = doc(ref, data.paymentDocumentId);
-    await setDoc(pref, payload);
+    await withRetryOnQuota(() => setDoc(pref, payload), 2, "createPayment setDoc");
     const pid = data.paymentDocumentId;
 
     if (status === "validated") {
@@ -241,7 +271,7 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
     return pid;
   }
 
-  const docRef = await addDoc(ref, payload);
+  const docRef = await withRetryOnQuota(() => addDoc(ref, payload), 2, "createPayment addDoc");
 
   if (status === "validated") {
     await logPaymentAction({
@@ -280,20 +310,31 @@ export async function markPaymentLedgerStatus(params: {
     patch.ledgerError = null;
   }
 
-  await updateDoc(ref, patch);
+  await withRetryOnQuota(() => updateDoc(ref, patch), 2, "markPaymentLedgerStatus");
 }
 
 /**
- * Validate a payment (pending -> validated) and post ledger write.
+ * Validate a payment (pending -> validated) and optionally post ledger write.
+ * 🔥 Version avec retry logic pour éviter les 429
  */
 export async function confirmPayment(
   companyId: string,
   paymentId: string,
   userId: string,
-  options?: { actorRole?: string | string[] | null }
+  options?: { actorRole?: string | string[] | null; skipLedgerPosting?: boolean }
 ): Promise<Payment | null> {
+  // Délai augmenté à 500ms pour éviter les appels trop rapprochés
+  await delay(500);
+  
   const ref = paymentRef(companyId, paymentId);
-  const snap = await getDoc(ref);
+  
+  // Utilisation du retry pour getDoc
+  const snap = await withRetryOnQuota(
+    () => getDoc(ref),
+    2,
+    "getDoc in confirmPayment"
+  );
+  
   if (!snap.exists()) return null;
 
   const current = mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
@@ -307,16 +348,22 @@ export async function confirmPayment(
   });
 
   const now = Timestamp.now();
+  const skipLedger = options?.skipLedgerPosting === true;
 
-  await updateDoc(ref, {
-    status: "validated",
-    validatedAt: now,
-    validatedBy: userId,
-    ledgerStatus: "pending",
-    ledgerLastAttemptAt: now,
-    ledgerError: null,
-    updatedAt: serverTimestamp(),
-  });
+  // Mise à jour du statut du paiement avec retry
+  await withRetryOnQuota(
+    () => updateDoc(ref, {
+      status: "validated",
+      validatedAt: now,
+      validatedBy: userId,
+      ledgerStatus: "pending",
+      ledgerLastAttemptAt: now,
+      ledgerError: null,
+      updatedAt: serverTimestamp(),
+    }),
+    2,
+    "updateDoc in confirmPayment"
+  );
 
   const updated: Payment = {
     ...current,
@@ -331,24 +378,34 @@ export async function confirmPayment(
   let ledgerError: string | null = null;
   let finalLedgerStatus: PaymentLedgerStatus = "pending";
 
-  try {
-    await createFinancialTransaction(buildLedgerPaymentPayload(updated, paymentId, now));
-    await markPaymentLedgerStatus({ companyId, paymentId, ledgerStatus: "posted" });
-    finalLedgerStatus = "posted";
-  } catch (err) {
-    ledgerError = toLedgerErrorMessage(err);
-    finalLedgerStatus = "failed";
+  // Skip ledger posting si demandé (pour éviter les 429)
+  if (!skipLedger) {
+    try {
+      // Opération ledger complète avec retry (3 tentatives max)
+      await withRetryOnQuota(async () => {
+        await createFinancialTransaction(buildLedgerPaymentPayload(updated, paymentId, now));
+        await markPaymentLedgerStatus({ companyId, paymentId, ledgerStatus: "posted" });
+      }, 3, "ledger posting");
+      
+      finalLedgerStatus = "posted";
+    } catch (err) {
+      ledgerError = toLedgerErrorMessage(err);
+      finalLedgerStatus = "failed";
 
-    await markPaymentLedgerStatus({
-      companyId,
-      paymentId,
-      ledgerStatus: "failed",
-      errorMessage: ledgerError,
-    }).catch((statusErr) => {
-      console.warn("[paymentService] markPaymentLedgerStatus failed:", statusErr);
-    });
+      await markPaymentLedgerStatus({
+        companyId,
+        paymentId,
+        ledgerStatus: "failed",
+        errorMessage: ledgerError,
+      }).catch((statusErr) => {
+        console.warn("[paymentService] markPaymentLedgerStatus failed:", statusErr);
+      });
 
-    console.warn("[paymentService] ledger posting failed after payment validation:", err);
+      console.warn("[paymentService] ledger posting failed after payment validation:", err);
+    }
+  } else {
+    console.log("[paymentService] ledger posting skipped (skipLedgerPosting=true)");
+    await markPaymentLedgerStatus({ companyId, paymentId, ledgerStatus: "pending" });
   }
 
   await logPaymentAction({ companyId, paymentId, action: "confirm", userId });
@@ -370,7 +427,7 @@ export async function confirmPayment(
         ? "validee_ledger_posted"
         : finalLedgerStatus === "failed"
           ? "validee_ledger_failed"
-          : "validee_ledger_pending";
+          : "validee_sans_ledger";
 
     try {
       await upsertMobileMoneyValidationDocument({
@@ -389,7 +446,7 @@ export async function confirmPayment(
         preuveVerifiee: true,
         referenceTransactionMobileMoney: paymentId,
         statutValidation,
-        commentaire: ledgerError ?? null,
+        commentaire: ledgerError ?? (skipLedger ? "Ledger désactivé temporairement" : null),
         visaControle: null,
         dateHeure: now,
         status: "ready_to_print",
@@ -420,8 +477,16 @@ export async function retryPaymentLedgerPosting(params: {
   userId: string;
   actorRole?: string | string[] | null;
 }): Promise<Payment | null> {
+  await delay(500);
+  
   const ref = paymentRef(params.companyId, params.paymentId);
-  const snap = await getDoc(ref);
+  
+  const snap = await withRetryOnQuota(
+    () => getDoc(ref),
+    2,
+    "getDoc in retryPaymentLedgerPosting"
+  );
+  
   if (!snap.exists()) return null;
 
   const current = mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
@@ -443,12 +508,14 @@ export async function retryPaymentLedgerPosting(params: {
   const now = Timestamp.now();
 
   try {
-    await createFinancialTransaction(buildLedgerPaymentPayload(current, params.paymentId, now));
-    await markPaymentLedgerStatus({
-      companyId: params.companyId,
-      paymentId: params.paymentId,
-      ledgerStatus: "posted",
-    });
+    await withRetryOnQuota(async () => {
+      await createFinancialTransaction(buildLedgerPaymentPayload(current, params.paymentId, now));
+      await markPaymentLedgerStatus({
+        companyId: params.companyId,
+        paymentId: params.paymentId,
+        ledgerStatus: "posted",
+      });
+    }, 3, "retry ledger posting");
 
     return {
       ...current,
@@ -487,8 +554,10 @@ export async function rejectPayment(
   reason?: string | null,
   userId = "system"
 ): Promise<void> {
+  await delay(500);
+  
   const ref = paymentRef(companyId, paymentId);
-  const snap = await getDoc(ref);
+  const snap = await withRetryOnQuota(() => getDoc(ref), 2, "rejectPayment getDoc");
   if (!snap.exists()) throw new Error("Payment introuvable.");
 
   const data = snap.data() as Record<string, unknown>;
@@ -496,11 +565,11 @@ export async function rejectPayment(
     throw new Error("Seuls les paiements en attente peuvent etre rejetes.");
   }
 
-  await updateDoc(ref, {
+  await withRetryOnQuota(() => updateDoc(ref, {
     status: "rejected",
     rejectionReason: reason ?? null,
     updatedAt: serverTimestamp(),
-  });
+  }), 2, "rejectPayment updateDoc");
 
   await logPaymentAction({ companyId, paymentId, action: "reject", userId });
 }
@@ -514,8 +583,10 @@ export async function refundPayment(
   userId: string,
   reason?: string | null
 ): Promise<void> {
+  await delay(500);
+  
   const ref = paymentRef(companyId, paymentId);
-  const snap = await getDoc(ref);
+  const snap = await withRetryOnQuota(() => getDoc(ref), 2, "refundPayment getDoc");
   if (!snap.exists()) throw new Error("Payment introuvable.");
 
   const data = snap.data() as Record<string, unknown>;
@@ -525,18 +596,18 @@ export async function refundPayment(
     throw new Error("Seuls les paiements valides peuvent etre rembourses.");
   }
 
-  await updateDoc(ref, {
+  await withRetryOnQuota(() => updateDoc(ref, {
     status: "refunded",
     rejectionReason: reason ?? null,
     refundedAt: serverTimestamp(),
     refundedBy: userId,
     updatedAt: serverTimestamp(),
-  });
+  }), 2, "refundPayment updateDoc");
 
   await logPaymentAction({ companyId, paymentId, action: "refund", userId });
 
   try {
-    await createFinancialTransaction({
+    await withRetryOnQuota(() => createFinancialTransaction({
       companyId,
       type: "refund",
       source: (data.channel as "guichet" | "online" | "courrier") ?? "online",
@@ -553,7 +624,7 @@ export async function refundPayment(
       referenceType: "payment_refund",
       referenceId: paymentId,
       metadata: { reason: reason ?? null },
-    });
+    }), 2, "refundPayment createFinancialTransaction");
   } catch (err) {
     console.warn("[paymentService] createFinancialTransaction failed (refund):", err);
   }
@@ -568,7 +639,7 @@ export async function getPaymentsByStatus(
 ): Promise<Payment[]> {
   const ref = paymentsRef(companyId);
   const q = query(ref, where("status", "==", status), orderBy("createdAt", "desc"));
-  const snap = await getDocs(q);
+  const snap = await withRetryOnQuota(() => getDocs(q), 2, "getPaymentsByStatus");
   return snap.docs.map((d) => mapPaymentDoc(d.id, d.data() as Record<string, unknown>));
 }
 
@@ -591,7 +662,7 @@ export async function getPaymentsByDateRange(
     orderBy("createdAt", "desc")
   );
 
-  const snap = await getDocs(q);
+  const snap = await withRetryOnQuota(() => getDocs(q), 2, "getPaymentsByDateRange");
   return snap.docs.map((d) => mapPaymentDoc(d.id, d.data() as Record<string, unknown>));
 }
 
@@ -603,7 +674,7 @@ export async function getPaymentById(
   paymentId: string
 ): Promise<Payment | null> {
   const ref = paymentRef(companyId, paymentId);
-  const snap = await getDoc(ref);
+  const snap = await withRetryOnQuota(() => getDoc(ref), 2, "getPaymentById");
   if (!snap.exists()) return null;
   return mapPaymentDoc(snap.id, snap.data() as Record<string, unknown>);
 }
@@ -622,7 +693,7 @@ export async function getPaymentByReservationId(
   const ref = paymentsRef(companyId);
   try {
     const q = query(ref, where("reservationId", "==", reservationId), limit(1));
-    const snap = await getDocs(q);
+    const snap = await withRetryOnQuota(() => getDocs(q), 2, "getPaymentByReservationId");
     if (snap.empty) return null;
     const d = snap.docs[0];
     return mapPaymentDoc(d.id, d.data() as Record<string, unknown>);
@@ -642,9 +713,6 @@ function inferOnlinePaymentProvider(label: string | null | undefined): PaymentPr
 
 /**
  * If no canonical payment doc exists for this reservation, create a pending online one.
- * Important:
- * - use direct document lookup only on this hot path
- * - avoid legacy query fallback here to limit extra Firestore reads during proof upload
  */
 export async function ensurePendingOnlinePaymentFromReservation(params: {
   companyId: string;
@@ -664,8 +732,6 @@ export async function ensurePendingOnlinePaymentFromReservation(params: {
   }
 
   try {
-    // Hot path optimization:
-    // do not run a legacy list query here; use only the canonical payment doc id.
     const existing = await getPaymentByCanonicalDocumentId(
       params.companyId,
       params.reservationId

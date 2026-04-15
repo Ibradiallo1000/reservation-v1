@@ -1,11 +1,11 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
+  collectionGroup,
   doc,
   getDoc,
   getDocs,
   limit,
-  onSnapshot,
   orderBy,
   query,
   Timestamp,
@@ -27,6 +27,7 @@ import {
   Sun,
   Wallet,
   XCircle,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { db } from "@/firebaseConfig";
@@ -87,6 +88,8 @@ type ReservationRow = Reservation & {
   };
   ticketValidatedAt?: unknown;
   canonical?: CanonicalReservationDocument;
+  preuveMessage?: string;
+  proofSubmittedAt?: unknown;
 };
 
 type AccountRow = {
@@ -209,11 +212,11 @@ const providerLabel = (p: Provider): string => {
 };
 
 const providerBadge = (p: Provider): string => {
-  if (p === "orange") return "bg-orange-100 text-orange-700 border-orange-200";
-  if (p === "moov") return "bg-blue-100 text-blue-700 border-blue-200";
-  if (p === "wave") return "bg-cyan-100 text-cyan-700 border-cyan-200";
-  if (p === "sarali") return "bg-lime-100 text-lime-700 border-lime-200";
-  return "bg-gray-100 text-gray-700 border-gray-200";
+  if (p === "orange") return "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800";
+  if (p === "moov") return "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800";
+  if (p === "wave") return "bg-cyan-100 text-cyan-700 border-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400 dark:border-cyan-800";
+  if (p === "sarali") return "bg-lime-100 text-lime-700 border-lime-200 dark:bg-lime-900/30 dark:text-lime-400 dark:border-lime-800";
+  return "bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600";
 };
 
 const inputDate = (): string => {
@@ -273,6 +276,54 @@ const getPaymentInfo = (r: ReservationRow) => {
   };
 };
 
+// Fonction pour récupérer les preuves depuis publicReservations
+const fetchPublicReservationsProofs = async (companyId: string): Promise<ReservationRow[]> => {
+  try {
+    const q = query(
+      collection(db, "publicReservations"),
+      where("companyId", "==", companyId),
+      where("status", "==", "payé"),
+      orderBy("proofSubmittedAt", "desc"),
+      limit(PENDING_LIMIT)
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        companyId: data.companyId,
+        agencyId: data.agencyId,
+        statut: "payé",
+        status: "payé",
+        nomClient: data.nomClient || "Client",
+        clientNom: data.nomClient || "Client",
+        telephone: data.telephone || "",
+        depart: data.depart || "",
+        arrivee: data.arrivee || "",
+        date: data.date || "",
+        heure: data.heure || "",
+        montant: data.montant || 0,
+        seatsGo: data.seatsGo || 1,
+        createdAt: data.proofSubmittedAt || data.createdAt || Timestamp.now(),
+        preuveMessage: data.preuveMessage || "",
+        payment: {
+          status: "pending",
+          provider: data.paymentMethod || data.preuveVia,
+          parsed: { transactionId: data.transactionReference || data.paymentReference },
+          totalAmount: data.montant || 0
+        },
+        canonical: normalizeReservationDocument(data, { id: doc.id })
+      } as ReservationRow;
+    });
+  } catch (error) {
+    console.error("Erreur chargement publicReservations", error);
+    return [];
+  }
+};
+
+// Délai pour éviter les rate limits
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const DigitalCashReservationsPage: React.FC = () => {
   const { user, company, logout } = useAuth() as { user?: AuthUser; company?: AuthCompany; logout: () => Promise<void> };
   const navigate = useNavigate();
@@ -299,7 +350,6 @@ const DigitalCashReservationsPage: React.FC = () => {
   const [agencyFilter, setAgencyFilter] = useState("");
   const [providerFilter, setProviderFilter] = useState<Provider>("all");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "review">("all");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const [transferFilter, setTransferFilter] = useState<TransferStateFilter>("all");
@@ -369,7 +419,8 @@ const DigitalCashReservationsPage: React.FC = () => {
     void loadRefs();
   }, [companyId]);
 
-  useEffect(() => {
+  // Chargement manuel - combine les réservations et les preuves publicReservations
+  const loadPendingReservations = useCallback(async () => {
     if (!companyId) {
       setPendingReservations([]);
       setLoadingPending(false);
@@ -377,73 +428,68 @@ const DigitalCashReservationsPage: React.FC = () => {
     }
 
     setLoadingPending(true);
-    const unsubs: Array<() => void> = [];
-    const byAgency = new Map<string, ReservationRow[]>();
-
-    const rebuild = () => {
-      const merged = Array.from(byAgency.values()).flat();
-      const unique = new Map<string, ReservationRow>();
-      merged.forEach((row) => unique.set(`${row.agencyId}_${row.id ?? ""}`, row));
-      setPendingReservations(Array.from(unique.values()).sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)));
-    };
-
-    const start = async () => {
-      try {
-        const agencySnap = await getDocs(collection(db, "companies", companyId, "agences"));
-        if (agencySnap.empty) {
-          setLoadingPending(false);
-          return;
+    
+    try {
+      // 1. Charger les réservations normales
+      const q = query(
+        collectionGroup(db, "reservations"),
+        where("companyId", "==", companyId),
+        where("status", "==", "payé"),
+        orderBy("createdAt", "desc"),
+        limit(PENDING_LIMIT)
+      );
+      
+      const snapshot = await getDocs(q);
+      
+      const reservationsRows = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        const canonical = normalizeReservationDocument(data, { id: doc.id });
+        return {
+          id: doc.id,
+          companyId: String(data.companyId ?? companyId),
+          agencyId: String(data.agencyId ?? ""),
+          statut: String(data.statut ?? "en_attente") as Reservation["statut"],
+          clientNom: String(data.nomClient ?? data.clientNom ?? ""),
+          createdAt: data.createdAt ?? Timestamp.now(),
+          montant: Number(data.montant ?? 0),
+          depart: String(data.depart ?? ""),
+          arrivee: String(data.arrivee ?? ""),
+          telephone: String(data.telephone ?? ""),
+          preuveMessage: String(data.preuveMessage ?? ""),
+          canonical,
+        } as ReservationRow;
+      }).filter((row) => isCanonicalPendingOnlineReview(getCanonicalReservation(row)));
+      
+      // 2. Charger les preuves depuis publicReservations
+      const publicProofs = await fetchPublicReservationsProofs(companyId);
+      
+      // 3. Fusionner les deux sources (sans doublons)
+      const allRows = [...reservationsRows];
+      const existingIds = new Set(reservationsRows.map(r => r.id));
+      
+      for (const proof of publicProofs) {
+        if (!existingIds.has(proof.id)) {
+          allRows.push(proof);
+          existingIds.add(proof.id);
         }
-        agencySnap.docs.forEach((agencyDoc) => {
-          const agencyId = agencyDoc.id;
-          const q = query(
-            collection(db, "companies", companyId, "agences", agencyId, "reservations"),
-            where("status", "==", "payé"),
-            orderBy("createdAt", "desc"),
-            limit(PENDING_LIMIT)
-          );
-          const stop = onSnapshot(
-            q,
-            (snap) => {
-              const rows = snap.docs
-                .map((reservationDoc) => {
-                  const data = reservationDoc.data() as Record<string, unknown>;
-                  const canonical = normalizeReservationDocument(data, { id: reservationDoc.id });
-                  const row: ReservationRow = {
-                    ...(data as unknown as Partial<ReservationRow>),
-                    id: reservationDoc.id,
-                    companyId: String(data.companyId ?? companyId),
-                    agencyId: String(data.agencyId ?? agencyId),
-                    statut: String(data.statut ?? "en_attente") as Reservation["statut"],
-                    clientNom: String(data.nomClient ?? data.clientNom ?? ""),
-                    createdAt: data.createdAt ?? Timestamp.now(),
-                    canonical,
-                  };
-                  return row;
-                })
-                .filter((row) => isCanonicalPendingOnlineReview(getCanonicalReservation(row)));
-
-              byAgency.set(agencyId, rows);
-              rebuild();
-              setLoadingPending(false);
-            },
-            (error) => {
-              console.error("[DigitalCash] pending listener", error);
-              toast.error("Impossible de suivre les paiements en attente.");
-            }
-          );
-          unsubs.push(stop);
-        });
-      } catch (error) {
-        console.error("[DigitalCash] pending init", error);
-        setLoadingPending(false);
-        toast.error("Chargement des paiements en attente impossible.");
       }
-    };
-
-    void start();
-    return () => unsubs.forEach((u) => u());
+      
+      // 4. Trier par date
+      allRows.sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      
+      setPendingReservations(allRows);
+    } catch (error) {
+      console.error("[DigitalCash] loadPendingReservations error", error);
+      toast.error("Erreur de chargement des paiements");
+    } finally {
+      setLoadingPending(false);
+    }
   }, [companyId]);
+
+  // Chargement initial
+  useEffect(() => {
+    void loadPendingReservations();
+  }, [loadPendingReservations]);
 
   const refreshSecondary = useCallback(async () => {
     if (!companyId) {
@@ -533,62 +579,27 @@ const DigitalCashReservationsPage: React.FC = () => {
 
   const handleRefresh = () => {
     setRefreshing(true);
-    void refreshSecondary();
+    Promise.all([loadPendingReservations(), refreshSecondary()]).finally(() => setRefreshing(false));
   };
 
   const toggleCard = (id: string) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const handleValidate = async (row: ReservationRow) => {
-    if (!companyId || !row.agencyId || !row.id || !user?.uid) return;
-    setProcessingId(row.id);
-    try {
-      const reservationRef = doc(db, "companies", companyId, "agences", row.agencyId, "reservations", row.id);
-      const snap = await getDoc(reservationRef);
-      if (!snap.exists()) {
-        toast.error("Réservation introuvable.");
-        return;
-      }
-      const data = snap.data() as Record<string, unknown>;
-      const ensured = await ensurePendingOnlinePaymentFromReservation({
-        companyId,
-        agencyId: row.agencyId,
-        reservationId: row.id,
-        montant: Number(data.montant ?? row.montant ?? 0),
-        paymentMethodLabel: String(
-          row.canonical?.raw.legacyWalletProvider ??
-            row.canonical?.payment.walletProvider ??
-            data.preuveVia ??
-            data.paymentMethod ??
-            data.paiement ??
-            row.paymentMethodLabel ??
-            ""
-        ),
-      });
-      if (!ensured.ok) {
-        toast.error(ensured.error ?? "Préparation paiement impossible.");
-        return;
-      }
-      const payment = await getPaymentByReservationId(companyId, row.id);
-      if (!payment || payment.status !== "pending") {
-        toast.error("Aucun paiement pending pour cette réservation.");
-        return;
-      }
-      await validatePendingOnlinePaymentAndSyncReservation(payment, companyId, { uid: user.uid, role: user.role ?? null });
-      setPendingReservations((prev) => prev.filter((r) => !(r.id === row.id && r.agencyId === row.agencyId)));
-      toast.success("Paiement validé.");
-      void refreshSecondary();
-    } catch (error) {
-      console.error("[DigitalCash] handleValidate", error);
-      toast.error("Validation impossible.");
-    } finally {
-      setProcessingId(null);
+    if (!companyId || !row.agencyId || !row.id || !user?.uid) {
+      toast.error("Informations manquantes");
+      return;
     }
-  };
-
-  const handleReject = async (row: ReservationRow) => {
-    if (!companyId || !row.agencyId || !row.id || !user?.uid) return;
+    
+    if (processingId) {
+      toast.info("Une validation est déjà en cours");
+      return;
+    }
+    
     setProcessingId(row.id);
+    
     try {
+      await delay(500);
+      
       const ensured = await ensurePendingOnlinePaymentFromReservation({
         companyId,
         agencyId: row.agencyId,
@@ -601,19 +612,88 @@ const DigitalCashReservationsPage: React.FC = () => {
             ""
         ),
       });
+      
+      if (!ensured.ok) {
+        toast.error(ensured.error ?? "Préparation paiement impossible.");
+        return;
+      }
+      
+      const payment = await getPaymentByReservationId(companyId, row.id);
+      
+      if (!payment) {
+        toast.error("Aucun paiement trouvé pour cette réservation.");
+        return;
+      }
+      
+      if (payment.status !== "pending") {
+        toast.info(`Ce paiement est déjà ${payment.status}.`);
+        return;
+      }
+      
+      await validatePendingOnlinePaymentAndSyncReservation(payment, companyId, { 
+        uid: user.uid, 
+        role: user.role ?? null 
+      });
+      
+      await loadPendingReservations();
+      toast.success("✅ Paiement validé avec succès !");
+      void refreshSecondary();
+      
+    } catch (error: any) {
+      console.error("[DigitalCash] handleValidate", error);
+      toast.error(error?.message || "Validation impossible.");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleReject = async (row: ReservationRow) => {
+    if (!companyId || !row.agencyId || !row.id || !user?.uid) {
+      toast.error("Informations manquantes");
+      return;
+    }
+    
+    if (processingId) {
+      toast.info("Une action est déjà en cours");
+      return;
+    }
+    
+    setProcessingId(row.id);
+    
+    try {
+      await delay(500);
+      
+      const ensured = await ensurePendingOnlinePaymentFromReservation({
+        companyId,
+        agencyId: row.agencyId,
+        reservationId: row.id,
+        montant: Number(row.montant ?? 0),
+        paymentMethodLabel: String(
+          row.canonical?.raw.legacyWalletProvider ??
+            row.canonical?.payment.walletProvider ??
+            row.paymentMethodLabel ??
+            ""
+        ),
+      });
+      
       if (!ensured.ok) {
         toast.error(ensured.error ?? "Préparation rejet impossible.");
         return;
       }
+      
       const payment = await getPaymentByReservationId(companyId, row.id);
+      
       if (!payment || payment.status !== "pending") {
-        toast.error("Ce paiement n'est plus pending.");
+        toast.error("Ce paiement n'est plus en attente.");
         return;
       }
+      
       await rejectPendingOnlinePaymentAndSyncReservation(payment, companyId, { uid: user.uid, role: user.role ?? null }, "À revoir opérateur digital");
-      setPendingReservations((prev) => prev.filter((r) => !(r.id === row.id && r.agencyId === row.agencyId)));
-      toast.success("Paiement rejeté / à revoir.");
+      
+      await loadPendingReservations();
+      toast.success("Paiement rejeté.");
       void refreshSecondary();
+      
     } catch (error) {
       console.error("[DigitalCash] handleReject", error);
       toast.error("Rejet impossible.");
@@ -736,19 +816,13 @@ const DigitalCashReservationsPage: React.FC = () => {
       if (agencyFilter && r.agencyId !== agencyFilter) return false;
       if (providerFilter !== "all" && p.provider !== providerFilter) return false;
       if (!inDateFilter(r.createdAt, dateFilter)) return false;
-      const isReview =
-        p.validationLevel === "suspicious" ||
-        p.status === "rejected" ||
-        p.digitalValidationStatus === "rejected";
-      if (statusFilter === "review" && !isReview) return false;
-      if (statusFilter === "pending" && isReview) return false;
       if (term) {
-        const searchable = normalize(`${r.clientNom ?? ""} ${r.telephone ?? ""} ${r.referenceCode ?? ""} ${r.depart ?? ""} ${r.arrivee ?? ""} ${p.txRef ?? ""}`);
+        const searchable = normalize(`${r.clientNom ?? ""} ${r.telephone ?? ""} ${r.referenceCode ?? ""} ${r.depart ?? ""} ${r.arrivee ?? ""} ${p.txRef ?? ""} ${r.preuveMessage ?? ""}`);
         if (!searchable.includes(term)) return false;
       }
       return true;
     });
-  }, [agencyFilter, dateFilter, pendingReservations, providerFilter, search, statusFilter]);
+  }, [agencyFilter, dateFilter, pendingReservations, providerFilter, search]);
 
   const reviewRows = useMemo(
     () => payments.filter((p) => normalize(p.status) === "rejected").filter((p) => (!agencyFilter ? true : p.agencyId === agencyFilter)),
@@ -906,189 +980,349 @@ const DigitalCashReservationsPage: React.FC = () => {
       </header>
 
       <main className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-3 py-3">
+        {/* Section résumé */}
         <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <div className="mb-3 flex items-center justify-between gap-2">
             <div className="text-sm font-semibold">À traiter maintenant</div>
-            <Button size="sm" variant="secondary" onClick={handleRefresh} disabled={refreshing}>
+            <Button size="sm" variant="secondary" onClick={handleRefresh} disabled={refreshing} className="hidden sm:inline-flex">
               <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} /> Actualiser
             </Button>
           </div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <button type="button" onClick={() => setTab("to_process")} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left">
-              <div className="text-[11px] text-amber-700">Paiements en attente</div>
-              <div className="text-lg font-bold text-amber-800">{summary.pendingCount}</div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <button type="button" onClick={() => setTab("to_process")} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left dark:border-amber-800 dark:bg-amber-950/30">
+              <div className="text-[11px] text-amber-700 dark:text-amber-400">En attente</div>
+              <div className="text-lg font-bold text-amber-800 dark:text-amber-300">{summary.pendingCount}</div>
             </button>
-            <button type="button" onClick={() => setTab("to_process")} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left">
-              <div className="text-[11px] text-red-700">Rejetés / à revoir</div>
-              <div className="text-lg font-bold text-red-800">{summary.rejectedCount}</div>
+            <button type="button" onClick={() => setTab("to_process")} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left dark:border-red-800 dark:bg-red-950/30">
+              <div className="text-[11px] text-red-700 dark:text-red-400">Rejetés</div>
+              <div className="text-lg font-bold text-red-800 dark:text-red-300">{summary.rejectedCount}</div>
             </button>
-            <button type="button" onClick={() => setTab("transfers")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-left">
-              <div className="text-[11px] text-blue-700">Transferts non confirmés</div>
-              <div className="text-lg font-bold text-blue-800">{summary.unconfirmedTransfers}</div>
+            <button type="button" onClick={() => setTab("transfers")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-left dark:border-blue-800 dark:bg-blue-950/30">
+              <div className="text-[11px] text-blue-700 dark:text-blue-400">Transferts</div>
+              <div className="text-lg font-bold text-blue-800 dark:text-blue-300">{summary.unconfirmedTransfers}</div>
             </button>
-            <button type="button" onClick={() => setTab("wallets")} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-left">
-              <div className="text-[11px] text-emerald-700">Validés aujourd'hui</div>
-              <div className="text-lg font-bold text-emerald-800">{summary.validatedTodayCount}</div>
+            <button type="button" onClick={() => setTab("wallets")} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-left dark:border-emerald-800 dark:bg-emerald-950/30">
+              <div className="text-[11px] text-emerald-700 dark:text-emerald-400">Validés</div>
+              <div className="text-lg font-bold text-emerald-800 dark:text-emerald-300">{summary.validatedTodayCount}</div>
             </button>
           </div>
         </section>
 
+        {/* Navigation tabs - responsive */}
         <section className="rounded-xl border border-gray-200 bg-white p-2 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            <button type="button" onClick={() => setTab("to_process")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "to_process" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><Clock3 className="mr-1 inline h-4 w-4" />À traiter</button>
-            <button type="button" onClick={() => setTab("wallets")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "wallets" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><Wallet className="mr-1 inline h-4 w-4" />Soldes mobile money</button>
-            <button type="button" onClick={() => setTab("transfers")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "transfers" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><Building2 className="mr-1 inline h-4 w-4" />Transferts vers banque</button>
-            <button type="button" onClick={() => setTab("history")} className={`rounded-lg border px-3 py-2 text-sm font-semibold ${tab === "history" ? "border-orange-300 bg-orange-50 text-orange-700" : "border-gray-200 text-gray-700"}`}><History className="mr-1 inline h-4 w-4" />Historique</button>
+          <div className="grid grid-cols-4 gap-1 sm:gap-2">
+            <button type="button" onClick={() => setTab("to_process")} className={`rounded-lg border px-2 py-2 text-xs font-semibold sm:px-3 sm:text-sm ${tab === "to_process" ? "border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/50 dark:text-orange-400" : "border-gray-200 text-gray-700 dark:border-gray-700 dark:text-gray-300"}`}>
+              <Clock3 className="mx-auto h-4 w-4 sm:mr-1 sm:inline" />
+              <span className="hidden sm:inline">À traiter</span>
+            </button>
+            <button type="button" onClick={() => setTab("wallets")} className={`rounded-lg border px-2 py-2 text-xs font-semibold sm:px-3 sm:text-sm ${tab === "wallets" ? "border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/50 dark:text-orange-400" : "border-gray-200 text-gray-700 dark:border-gray-700 dark:text-gray-300"}`}>
+              <Wallet className="mx-auto h-4 w-4 sm:mr-1 sm:inline" />
+              <span className="hidden sm:inline">Soldes</span>
+            </button>
+            <button type="button" onClick={() => setTab("transfers")} className={`rounded-lg border px-2 py-2 text-xs font-semibold sm:px-3 sm:text-sm ${tab === "transfers" ? "border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/50 dark:text-orange-400" : "border-gray-200 text-gray-700 dark:border-gray-700 dark:text-gray-300"}`}>
+              <Building2 className="mx-auto h-4 w-4 sm:mr-1 sm:inline" />
+              <span className="hidden sm:inline">Transferts</span>
+            </button>
+            <button type="button" onClick={() => setTab("history")} className={`rounded-lg border px-2 py-2 text-xs font-semibold sm:px-3 sm:text-sm ${tab === "history" ? "border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/50 dark:text-orange-400" : "border-gray-200 text-gray-700 dark:border-gray-700 dark:text-gray-300"}`}>
+              <History className="mx-auto h-4 w-4 sm:mr-1 sm:inline" />
+              <span className="hidden sm:inline">Historique</span>
+            </button>
           </div>
         </section>
 
+        {/* Onglet À traiter - Version responsive */}
         {tab === "to_process" && (
           <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-5">
-              <label className="relative md:col-span-2">
+            {/* Filtres - version responsive */}
+            <div className="mb-3 space-y-2">
+              <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Rechercher client, téléphone, référence" className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
-              </label>
-              <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
-                <option value="">Toutes agences</option>
-                {Object.entries(agencies).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-              </select>
-              <div className="grid grid-cols-2 gap-2 md:col-span-2">
+                <input 
+                  value={search} 
+                  onChange={(e) => setSearch(e.target.value)} 
+                  placeholder="Rechercher client, téléphone..." 
+                  className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-3 text-sm dark:border-gray-700 dark:bg-gray-900" 
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                  <option value="">Toutes agences</option>
+                  {Object.entries(agencies).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
                 <select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value as Provider)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
                   <option value="all">Tous opérateurs</option>
                   <option value="orange">Orange</option>
                   <option value="moov">Moov</option>
                   <option value="wave">Wave</option>
                   <option value="sarali">Sarali</option>
-                  <option value="other">Autres</option>
                 </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
                 <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
                   <option value="all">Toutes dates</option>
                   <option value="today">Aujourd'hui</option>
                   <option value="7d">7 jours</option>
                   <option value="30d">30 jours</option>
                 </select>
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "pending" | "review")} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
-                  <option value="all">Tous statuts</option>
-                  <option value="pending">En attente</option>
-                  <option value="review">À revoir</option>
-                </select>
+                <Button size="sm" variant="secondary" onClick={handleRefresh} disabled={refreshing} className="h-10">
+                  <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                  <span className="ml-1 hidden sm:inline">Actualiser</span>
+                </Button>
               </div>
             </div>
 
             {loadingPending ? (
-              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement des paiements en attente...</div>
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700">Chargement...</div>
             ) : filteredPending.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun paiement en attente pour ces filtres.</div>
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700">Aucun paiement en attente.</div>
             ) : (
               <div className="space-y-3">
                 {filteredPending.map((row) => {
-                  const cardId = `${row.agencyId}_${row.id ?? ""}`;
-                  const isOpen = Boolean(expanded[cardId]);
                   const canonical = getCanonicalReservation(row);
                   const p = getPaymentInfo(row);
                   const proof = proofUrl(row);
                   const isBusy = processingId === row.id;
+                  const cardId = `${row.agencyId}_${row.id}`;
+                  const isOpen = Boolean(expanded[cardId]);
+                  
                   return (
-                    <article key={cardId} className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900">
-                      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <div className="text-sm font-semibold">{row.clientNom || "Client"}</div>
-                          <div className="text-xs text-gray-500">{agencies[row.agencyId] ?? row.agencyId} • {row.telephone || "—"}</div>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] ${providerBadge(p.provider)}`}>{providerLabel(p.provider)}</span>
-                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">{p.status === "pending" ? "En attente" : "À vérifier"}</span>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-1 text-xs text-gray-700 dark:text-gray-200 sm:grid-cols-2">
-                        <div><span className="font-medium">Service:</span> {row.depart || "—"} {"→"} {row.arrivee || "—"}</div>
-                        <div><span className="font-medium">Montant attendu:</span> {formatCurrency(Number(row.montant ?? 0), "XOF")}</div>
-                        <div><span className="font-medium">Montant détecté:</span> {p.detectedAmount != null ? formatCurrency(p.detectedAmount, "XOF") : "—"}</div>
-                        <div><span className="font-medium">Référence transaction:</span> {p.txRef || "—"}</div>
-                        <div><span className="font-medium">Fiabilité:</span> {p.validationLevel === "valid" ? "Fiable" : p.validationLevel === "suspicious" ? "Suspect" : p.validationLevel === "invalid" ? "Invalide" : "Non définie"}</div>
-                        <div><span className="font-medium">Date / heure:</span> {formatDateTime(row.createdAt)}</div>
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                        <Button size="sm" variant="secondary" onClick={() => toggleCard(cardId)}><Eye className="h-4 w-4" />Voir preuve</Button>
-                        <Button size="sm" variant="primary" disabled={isBusy} onClick={() => void handleValidate(row)}><CheckCircle2 className="h-4 w-4" />{isBusy ? "Validation..." : "Valider"}</Button>
-                        <Button size="sm" variant="danger" disabled={isBusy} onClick={() => void handleReject(row)}><XCircle className="h-4 w-4" />Rejeter / à revoir</Button>
-                        <Button size="sm" variant="secondary" onClick={() => void handleCopyBillet(row)}><Copy className="h-4 w-4" />Copier lien billet</Button>
-                        <Button size="sm" variant="secondary" onClick={() => handleWhatsapp(row)}><MessageCircle className="h-4 w-4" />Ouvrir WhatsApp</Button>
-                        <Button size="sm" variant="secondary" onClick={() => toggleCard(cardId)}>Détails</Button>
-                      </div>
-
-                      {isOpen && (
-                        <div className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-950">
-                          {proof ? (
-                            isImage(proof) ? <img src={proof} alt="Preuve" className="max-h-64 w-full rounded-md border border-gray-200 object-contain dark:border-gray-700" /> : <a href={proof} target="_blank" rel="noopener noreferrer" className="inline-flex w-full items-center justify-center rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white">Ouvrir la preuve</a>
-                          ) : <div className="text-xs text-gray-500">Aucune preuve jointe.</div>}
-                          {(canonical.onlinePayment?.proofMessage ?? row.preuveMessage) ? (
-                            <div className="rounded-md bg-gray-50 p-2 text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-200">
-                              {canonical.onlinePayment?.proofMessage ?? row.preuveMessage}
+                    <div 
+                      key={cardId}
+                      className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden dark:border-gray-700 dark:bg-gray-800"
+                    >
+                      {/* Version mobile : carte verticale */}
+                      <div className="p-3">
+                        <div className="flex gap-3">
+                          {/* Miniature preuve */}
+                          <div 
+                            className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-lg bg-gray-100 dark:bg-gray-700 cursor-pointer"
+                            onClick={() => proof && window.open(proof, '_blank')}
+                          >
+                            {proof ? (
+                              <img 
+                                src={proof} 
+                                alt="Preuve" 
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-xl">
+                                📷
+                              </div>
+                            )}
+                          </div>
+                          
+                          {/* Infos client */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-semibold text-gray-900 dark:text-white truncate text-sm">
+                                {row.clientNom || "Client"}
+                              </span>
+                              <span className={`inline-flex flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${providerBadge(p.provider)}`}>
+                                {providerLabel(p.provider)}
+                              </span>
                             </div>
-                          ) : null}
+                            <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
+                              {row.depart} → {row.arrivee}
+                            </div>
+                            <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                              {row.telephone || "—"} • {formatDateTime(row.createdAt)}
+                            </div>
+                            <div className="mt-1 text-base font-bold" style={{ color: theme.primary }}>
+                              {formatCurrency(Number(row.montant ?? 0), "XOF")}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Message preuve */}
+                        {(row.preuveMessage || canonical.onlinePayment?.proofMessage) && (
+                          <div className="mt-2 rounded-lg bg-blue-50 p-2 text-xs text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                            <span className="font-medium">💬 Message :</span>
+                            <span className="ml-1 line-clamp-2">{row.preuveMessage || canonical.onlinePayment?.proofMessage}</span>
+                          </div>
+                        )}
+
+                        {/* Actions principales */}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleValidate(row)}
+                            className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-white transition-all hover:opacity-90 disabled:opacity-50"
+                            style={{ backgroundColor: theme.primary }}
+                          >
+                            {isBusy ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="h-4 w-4" />
+                            )}
+                            {isBusy ? "..." : "Valider"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleReject(row)}
+                            className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition-all hover:bg-red-100 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400"
+                          >
+                            <XCircle className="h-4 w-4" />
+                            Rejeter
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleCard(cardId)}
+                            className="inline-flex items-center justify-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                          >
+                            <Eye className="h-4 w-4" />
+                            {isOpen ? "Masquer" : "Détails"}
+                          </button>
+                        </div>
+
+                        {/* Actions secondaires */}
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyBillet(row)}
+                            className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+                          >
+                            <Copy className="h-3 w-3" />
+                            Copier lien
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleWhatsapp(row)}
+                            className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400"
+                          >
+                            <MessageCircle className="h-3 w-3" />
+                            WhatsApp
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Section détails expansible */}
+                      {isOpen && (
+                        <div className="border-t border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900">
+                          <div className="space-y-2 text-sm">
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <div className="text-xs text-gray-500">Référence transaction</div>
+                                <div className="font-mono text-xs break-all">{p.txRef || "—"}</div>
+                              </div>
+                              <div>
+                                <div className="text-xs text-gray-500">Montant détecté</div>
+                                <div className="font-medium">{p.detectedAmount ? formatCurrency(p.detectedAmount, "XOF") : "—"}</div>
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500">Fiabilité</div>
+                              <div className="inline-flex items-center gap-1">
+                                <span className={`inline-block h-2 w-2 rounded-full ${
+                                  p.validationLevel === "valid" ? "bg-green-500" : 
+                                  p.validationLevel === "suspicious" ? "bg-yellow-500" : "bg-red-500"
+                                }`} />
+                                <span className="text-sm">
+                                  {p.validationLevel === "valid" ? "Fiable" : 
+                                   p.validationLevel === "suspicious" ? "Suspect" : 
+                                   p.validationLevel === "invalid" ? "Invalide" : "Non définie"}
+                                </span>
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500">Trajet complet</div>
+                              <div className="text-sm">{row.depart} → {row.arrivee}</div>
+                              <div className="text-xs text-gray-400">{row.date} • {row.heure}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500">Agence</div>
+                              <div className="text-sm">{agencies[row.agencyId] ?? row.agencyId}</div>
+                            </div>
+                            {proof && !isImage(proof) && (
+                              <div>
+                                <a 
+                                  href={proof} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-center text-sm font-semibold text-white transition hover:opacity-90"
+                                  style={{ backgroundColor: theme.primary }}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                  Voir la preuve complète
+                                </a>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       )}
-                    </article>
+                    </div>
                   );
                 })}
               </div>
             )}
 
-            <div className="mt-4">
-              <div className="mb-2 text-sm font-semibold">Paiements rejetés / à revoir ({reviewRows.length})</div>
-              {reviewRows.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-center text-xs text-gray-500">Aucun rejet récent.</div>
-              ) : (
-                <div className="space-y-2">
-                  {reviewRows.slice(0, 12).map((p) => (
-                    <div key={p.id} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-                      <div className="font-semibold">Paiement #{p.id}</div>
-                      <div>Agence: {(agencies[p.agencyId] ?? p.agencyId) || "—"}</div>
-                      <div>Montant: {formatCurrency(p.amount, p.currency)} • {providerLabel(providerFrom(p.provider))}</div>
-                      <div>Motif: {p.rejectionReason || "À revoir opérateur digital"}</div>
+            {/* Paiements rejetés - version compacte */}
+            {reviewRows.length > 0 && (
+              <div className="mt-4 border-t border-gray-200 pt-4 dark:border-gray-700">
+                <div className="mb-2 text-xs font-semibold text-gray-500">Rejetés récents ({reviewRows.length})</div>
+                <div className="space-y-1">
+                  {reviewRows.slice(0, 5).map((p) => (
+                    <div key={p.id} className="flex items-center justify-between rounded-lg bg-red-50 px-3 py-2 text-xs dark:bg-red-950/30">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-red-800 dark:text-red-400 truncate">{p.reservationId.slice(-8)}</div>
+                        <div className="text-red-600 dark:text-red-300">{formatCurrency(p.amount, p.currency)}</div>
+                      </div>
+                      <div className="text-red-500 text-[10px]">{providerLabel(providerFrom(p.provider))}</div>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </section>
         )}
 
+        {/* Onglet Soldes Wallets - Version simplifiée */}
         {tab === "wallets" && (
           <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
             {loadingSecondary ? (
-              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement des soldes...</div>
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700">Chargement des soldes...</div>
             ) : (
               <>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Orange Money</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.orange, "XOF")}</div></div>
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Moov Money</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.moov, "XOF")}</div></div>
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Wave</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.wave, "XOF")}</div></div>
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Sarali</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.sarali, "XOF")}</div></div>
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3"><div className="text-xs text-gray-500">Autres wallets</div><div className="text-lg font-bold">{formatCurrency(summary.byProvider.other, "XOF")}</div></div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 sm:p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400">Orange</div>
+                    <div className="text-sm sm:text-lg font-bold">{formatCurrency(summary.byProvider.orange, "XOF")}</div>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 sm:p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400">Moov</div>
+                    <div className="text-sm sm:text-lg font-bold">{formatCurrency(summary.byProvider.moov, "XOF")}</div>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 sm:p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400">Wave</div>
+                    <div className="text-sm sm:text-lg font-bold">{formatCurrency(summary.byProvider.wave, "XOF")}</div>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 sm:p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400">Sarali</div>
+                    <div className="text-sm sm:text-lg font-bold">{formatCurrency(summary.byProvider.sarali, "XOF")}</div>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 sm:p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400">Autres</div>
+                    <div className="text-sm sm:text-lg font-bold">{formatCurrency(summary.byProvider.other, "XOF")}</div>
+                  </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3"><div className="text-xs text-emerald-700">Total mobile disponible</div><div className="text-lg font-bold text-emerald-800">{formatCurrency(summary.walletsTotal, "XOF")}</div></div>
-                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-3"><div className="text-xs text-blue-700">Validé aujourd'hui</div><div className="text-lg font-bold text-blue-800">{formatCurrency(summary.validatedTodayAmount, "XOF")}</div></div>
-                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3"><div className="text-xs text-indigo-700">Validé ce mois</div><div className="text-lg font-bold text-indigo-800">{formatCurrency(summary.validatedMonthAmount, "XOF")}</div></div>
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="text-xs text-amber-700">Non transféré vers banque</div><div className="text-lg font-bold text-amber-800">{formatCurrency(summary.walletsTotal, "XOF")}</div></div>
-                </div>
-
-                <div className="mt-3 rounded-lg border border-gray-200">
-                  <div className="border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-600">Soldes réels par wallet</div>
-                  <div className="divide-y divide-gray-100">
-                    {walletAccounts.map((w) => (
-                      <div key={w.id} className="flex items-center justify-between px-3 py-2 text-sm">
-                        <div><div className="font-medium">{w.accountName || w.id}</div><div className="text-xs text-gray-500">{providerLabel(providerFrom(w.accountName || w.id))}</div></div>
-                        <div className="font-semibold">{formatCurrency(w.currentBalance, w.currency)}</div>
-                      </div>
-                    ))}
-                    {walletAccounts.length === 0 && <div className="px-3 py-4 text-center text-xs text-gray-500">Aucun wallet mobile money trouvé.</div>}
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 dark:border-emerald-800 dark:bg-emerald-950/30">
+                    <div className="text-[10px] sm:text-xs text-emerald-700 dark:text-emerald-400">Total mobile</div>
+                    <div className="text-sm sm:text-lg font-bold text-emerald-800 dark:text-emerald-300">{formatCurrency(summary.walletsTotal, "XOF")}</div>
+                  </div>
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-2 dark:border-blue-800 dark:bg-blue-950/30">
+                    <div className="text-[10px] sm:text-xs text-blue-700 dark:text-blue-400">Validé aujourd'hui</div>
+                    <div className="text-sm sm:text-lg font-bold text-blue-800 dark:text-blue-300">{formatCurrency(summary.validatedTodayAmount, "XOF")}</div>
+                  </div>
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-2 dark:border-indigo-800 dark:bg-indigo-950/30">
+                    <div className="text-[10px] sm:text-xs text-indigo-700 dark:text-indigo-400">Validé ce mois</div>
+                    <div className="text-sm sm:text-lg font-bold text-indigo-800 dark:text-indigo-300">{formatCurrency(summary.validatedMonthAmount, "XOF")}</div>
+                  </div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 dark:border-amber-800 dark:bg-amber-950/30">
+                    <div className="text-[10px] sm:text-xs text-amber-700 dark:text-amber-400">Non transféré</div>
+                    <div className="text-sm sm:text-lg font-bold text-amber-800 dark:text-amber-300">{formatCurrency(summary.walletsTotal, "XOF")}</div>
                   </div>
                 </div>
               </>
@@ -1096,20 +1330,21 @@ const DigitalCashReservationsPage: React.FC = () => {
           </section>
         )}
 
+        {/* Onglet Transferts - Version simplifiée */}
         {tab === "transfers" && (
           <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <article className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-              <div className="mb-3 text-sm font-semibold">Nouveau transfert mobile money {"→"} banque</div>
+              <div className="mb-3 text-sm font-semibold">Nouveau transfert → banque</div>
               <form onSubmit={handleSubmitTransfer} className="space-y-2">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-600">Portefeuille source</label>
+                  <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Portefeuille source</label>
                   <select value={sourceWalletId} onChange={(e) => setSourceWalletId(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
                     <option value="">Sélectionner</option>
                     {walletAccounts.map((w) => <option key={w.id} value={w.id}>{w.accountName || w.id} • {formatCurrency(w.currentBalance, w.currency)}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-600">Banque destination</label>
+                  <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Banque destination</label>
                   <select value={destinationBankId} onChange={(e) => setDestinationBankId(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
                     <option value="">Sélectionner</option>
                     {bankAccounts.map((b) => {
@@ -1120,36 +1355,31 @@ const DigitalCashReservationsPage: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-gray-600">Montant transféré</label>
+                    <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Montant</label>
                     <input type="number" min={0} value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-gray-600">Date du transfert</label>
+                    <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Date</label>
                     <input type="date" value={transferDate} onChange={(e) => setTransferDate(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-600">Référence transfert / reçu</label>
+                  <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Référence</label>
                   <input type="text" value={transferReference} onChange={(e) => setTransferReference(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-600">Agence bancaire (optionnel)</label>
-                  <input type="text" value={bankAgencyName} onChange={(e) => setBankAgencyName(e.target.value)} className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
+                  <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Observation</label>
+                  <textarea value={transferObservation} onChange={(e) => setTransferObservation(e.target.value)} className="min-h-[60px] w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900" />
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-600">Observation (optionnel)</label>
-                  <textarea value={transferObservation} onChange={(e) => setTransferObservation(e.target.value)} className="min-h-[70px] w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900" />
-                </div>
-                <label className="flex items-center gap-2 text-xs text-gray-600"><input type="checkbox" checked={manualPiece} onChange={(e) => setManualPiece(e.target.checked)} />Pièce manuelle / saisie après coup</label>
-                <Button type="submit" size="sm" variant="primary" disabled={submittingTransfer}>{submittingTransfer ? "Enregistrement..." : "Enregistrer le transfert"}</Button>
+                <Button type="submit" size="sm" variant="primary" disabled={submittingTransfer} className="w-full">
+                  {submittingTransfer ? "Enregistrement..." : "Enregistrer"}
+                </Button>
               </form>
 
               {lastDocument && (
-                <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
-                  <div className="font-semibold">Bordereau généré</div>
-                  <div>Numéro: {lastDocument.number}</div>
-                  <div>Statut: {lastDocument.status}</div>
-                  {canOpenPrint && <div className="mt-2"><Button size="sm" variant="secondary" onClick={() => navigate(`/compagnie/${companyId}/accounting/documents/${lastDocument.id}/print`)}>Voir / imprimer le bordereau</Button></div>}
+                <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-xs dark:border-emerald-800 dark:bg-emerald-950/30">
+                  <div className="font-semibold">Bordereau #{lastDocument.number}</div>
+                  {canOpenPrint && <Button size="sm" variant="secondary" onClick={() => navigate(`/compagnie/${companyId}/accounting/documents/${lastDocument.id}/print`)} className="mt-2">Imprimer</Button>}
                 </div>
               )}
             </article>
@@ -1157,7 +1387,7 @@ const DigitalCashReservationsPage: React.FC = () => {
             <article className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="text-sm font-semibold">Transferts récents</div>
-                <select value={transferFilter} onChange={(e) => setTransferFilter(e.target.value as TransferStateFilter)} className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-xs dark:border-gray-700 dark:bg-gray-900">
+                <select value={transferFilter} onChange={(e) => setTransferFilter(e.target.value as TransferStateFilter)} className="h-8 rounded-lg border px-2 text-xs dark:border-gray-700 dark:bg-gray-900">
                   <option value="all">Tous</option>
                   <option value="non_confirmed">Non confirmés</option>
                   <option value="confirmed">Confirmés</option>
@@ -1165,20 +1395,22 @@ const DigitalCashReservationsPage: React.FC = () => {
               </div>
 
               {loadingSecondary ? (
-                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement des transferts...</div>
+                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement...</div>
               ) : transferRows.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun transfert sur la période.</div>
+                <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun transfert</div>
               ) : (
-                <div className="space-y-2">
-                  {transferRows.slice(0, 25).map((t) => {
+                <div className="space-y-1">
+                  {transferRows.slice(0, 15).map((t) => {
                     const confirmed = t.documentStatus === "signed" || t.documentStatus === "archived";
                     return (
-                      <div key={t.id} className="rounded-lg border border-gray-200 bg-gray-50 p-2 text-xs">
-                        <div className="flex items-center justify-between gap-2"><div className="font-semibold">{formatCurrency(t.amount, t.currency)}</div><span className={`rounded-full px-2 py-0.5 text-[11px] ${confirmed ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{confirmed ? "Confirmé" : "Non confirmé"}</span></div>
-                        <div className="mt-1 text-gray-600">{t.sourceLabel} {"→"} {t.destinationLabel}</div>
-                        <div className="mt-1 text-gray-500">Référence: {t.referenceId}</div>
-                        <div className="text-gray-500">Date: {formatDateTime(t.performedAt)}</div>
-                        <div className="text-gray-500">Bordereau: {t.documentNumber ?? "non généré"}{t.documentStatus ? ` (${t.documentStatus})` : ""}</div>
+                      <div key={t.id} className="flex items-center justify-between rounded border p-2 text-xs dark:border-gray-700">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold">{formatCurrency(t.amount, t.currency)}</div>
+                          <div className="text-gray-500 truncate">{t.referenceId.slice(-8)}</div>
+                        </div>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] ${confirmed ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                          {confirmed ? "✅" : "⏳"}
+                        </span>
                       </div>
                     );
                   })}
@@ -1188,28 +1420,47 @@ const DigitalCashReservationsPage: React.FC = () => {
           </section>
         )}
 
+        {/* Onglet Historique - Version simplifiée */}
         {tab === "history" && (
           <section className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-              <label className="relative md:col-span-2"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" /><input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} placeholder="Recherche historique" className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-3 text-sm dark:border-gray-700 dark:bg-gray-900" /></label>
-              <select value={historyType} onChange={(e) => setHistoryType(e.target.value as HistoryType)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900"><option value="all">Tous types</option><option value="validation">Validations</option><option value="rejet">Rejets</option><option value="transfert">Transferts</option></select>
-              <select value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value as DateFilter)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900"><option value="today">Aujourd'hui</option><option value="7d">7 jours</option><option value="30d">30 jours</option><option value="all">Toute période</option></select>
+            <div className="mb-3 space-y-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} placeholder="Recherche..." className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-3 text-sm dark:border-gray-700 dark:bg-gray-900" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select value={historyType} onChange={(e) => setHistoryType(e.target.value as HistoryType)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                  <option value="all">Tous</option>
+                  <option value="validation">Validations</option>
+                  <option value="rejet">Rejets</option>
+                  <option value="transfert">Transferts</option>
+                </select>
+                <select value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value as DateFilter)} className="h-10 rounded-lg border border-gray-200 bg-white px-3 text-sm dark:border-gray-700 dark:bg-gray-900">
+                  <option value="today">Aujourd'hui</option>
+                  <option value="7d">7j</option>
+                  <option value="30d">30j</option>
+                  <option value="all">Tout</option>
+                </select>
+              </div>
             </div>
 
             {loadingSecondary ? (
-              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement de l'historique...</div>
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Chargement...</div>
             ) : historyRows.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun élément historique.</div>
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-8 text-center text-sm text-gray-500">Aucun historique</div>
             ) : (
-              <div className="space-y-2">
-                {historyRows.slice(0, 80).map((h) => (
-                  <article key={h.id} className="rounded-lg border border-gray-200 bg-gray-50 p-2 text-xs">
-                    <div className="flex flex-wrap items-center justify-between gap-2"><div className="font-semibold">{h.title}</div><div className="text-gray-500">{formatDateTime(h.date)}</div></div>
-                    <div className="mt-1 text-gray-700">{h.subtitle}</div>
-                    <div className="mt-1 text-gray-500">Référence: {h.ref}</div>
-                    <div className="mt-1 text-gray-500">Statut: {h.status}</div>
-                    <div className="mt-1 font-medium">{formatCurrency(h.amount, h.currency)}</div>
-                  </article>
+              <div className="space-y-1">
+                {historyRows.slice(0, 50).map((h) => (
+                  <div key={h.id} className="flex items-center justify-between rounded border p-2 text-xs dark:border-gray-700">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold truncate">{h.title}</div>
+                      <div className="text-gray-500 text-[10px] truncate">{h.subtitle.slice(0, 40)}</div>
+                    </div>
+                    <div className="text-right ml-2">
+                      <div className="font-medium">{formatCurrency(h.amount, h.currency)}</div>
+                      <div className="text-gray-400 text-[9px]">{formatDateTime(h.date)}</div>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
@@ -1218,8 +1469,7 @@ const DigitalCashReservationsPage: React.FC = () => {
 
         <footer className="pb-4 text-[11px] text-gray-500">
           <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-gray-800 dark:bg-gray-900">
-            Espace limité au pilotage mobile money: validations, soldes wallet, transferts vers banque, historique.
-            Aucun écran de caisse agence, dépenses locales ou comptabilité générale.
+            Espace opérateur digital - Validation mobile money
           </div>
         </footer>
       </main>
@@ -1228,4 +1478,3 @@ const DigitalCashReservationsPage: React.FC = () => {
 };
 
 export default DigitalCashReservationsPage;
-

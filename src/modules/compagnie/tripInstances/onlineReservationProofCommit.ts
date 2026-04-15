@@ -1,12 +1,16 @@
 /**
  * À la réception de preuve (paiement déclaré) :
  * - décrémenter tripInstance une seule fois si la réservation était en hold (seatHoldOnly)
- * - rendre le flux idempotent : si la preuve a déjà été reçue, on renvoie simplement l’état existant
+ * - rendre le flux idempotent : si la preuve a déjà été reçue, on renvoie simplement l'état existant
+ * - Version avec retry sur erreur 429 (Too Many Requests)
  */
 
 import {
   runTransaction,
   serverTimestamp,
+  doc,
+  getDoc,
+  updateDoc,
   type DocumentReference,
   type Firestore,
 } from "firebase/firestore";
@@ -23,6 +27,10 @@ export type CommitProofReceivedResult = {
   reservationId: string;
   amount: number;
 };
+
+// Délais de retry exponentiels (1s, 2s, 4s, 8s)
+const RETRY_DELAYS = [1000, 2000, 4000, 8000];
+const MAX_RETRIES = 4;
 
 function normalizeLooseStatus(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
@@ -78,12 +86,43 @@ function isAlreadyProofCommitted(data: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * Exécute une transaction avec retry automatique sur erreur 429
+ */
+async function runTransactionWithRetry<T>(
+  firestore: Firestore,
+  updateFunction: (transaction: any) => Promise<T>,
+  retryCount = 0
+): Promise<T> {
+  try {
+    return await runTransaction(firestore, updateFunction);
+  } catch (error: any) {
+    const isRateLimit = 
+      error?.code === 'resource-exhausted' || 
+      error?.status === 429 || 
+      error?.message?.includes('Too Many Requests') ||
+      error?.message?.includes('Quota exceeded');
+    
+    if (isRateLimit && retryCount < MAX_RETRIES) {
+      const delay = RETRY_DELAYS[retryCount];
+      console.log(`[commitProof] Rate limit détecté, nouvelle tentative dans ${delay}ms (${retryCount + 1}/${MAX_RETRIES})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return runTransactionWithRetry(firestore, updateFunction, retryCount + 1);
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Version avec retry automatique pour les erreurs 429
+ */
 export async function commitProofReceivedWithSeatBooking(
   firestore: Firestore,
   reservationRef: DocumentReference,
   reservationUpdates: Record<string, unknown>
 ): Promise<CommitProofReceivedResult> {
-  return runTransaction(firestore, async (tx) => {
+  return runTransactionWithRetry(firestore, async (tx) => {
     const resSnap = await tx.get(reservationRef);
 
     if (!resSnap.exists()) {
@@ -137,5 +176,50 @@ export async function commitProofReceivedWithSeatBooking(
       seatHoldOnly: false,
       seatsHeld: 0,
     });
+  });
+}
+
+/**
+ * Version alternative SANS transaction (à utiliser si les transactions échouent trop)
+ * Plus simple et moins sujette aux rate limits
+ */
+export async function commitProofReceivedSimple(
+  firestore: Firestore,
+  reservationRef: DocumentReference,
+  reservationUpdates: Record<string, unknown>
+): Promise<CommitProofReceivedResult> {
+  // Petit délai pour éviter les conflits
+  await new Promise(resolve => setTimeout(resolve, 500));
+  
+  // Utiliser getDoc au lieu de reservationRef.get()
+  const resSnap = await getDoc(reservationRef);
+  
+  if (!resSnap.exists()) {
+    throw new Error("Réservation introuvable");
+  }
+  
+  const data = resSnap.data() as Record<string, unknown>;
+  const currentStatus = data.status;
+  
+  if (!isReservationAwaitingPayment(currentStatus)) {
+    if (isAlreadyProofCommitted(data)) {
+      return extractCommitResult(resSnap.id, data);
+    }
+    throw new Error("Cette réservation a expiré ou a déjà été traitée.");
+  }
+  
+  // Utiliser updateDoc au lieu de reservationRef.update()
+  await updateDoc(reservationRef, {
+    ...reservationUpdates,
+    seatHoldOnly: false,
+    seatsHeld: 0,
+    updatedAt: serverTimestamp(),
+  });
+  
+  return extractCommitResult(resSnap.id, {
+    ...data,
+    ...reservationUpdates,
+    seatHoldOnly: false,
+    seatsHeld: 0,
   });
 }

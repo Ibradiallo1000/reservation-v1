@@ -50,6 +50,7 @@ import {
   fetchReservationFromNestedPath,
   RESERVATION_DURATION_MS,
 } from '../utils/pendingReservation';
+import { debounce } from 'lodash';
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -96,7 +97,7 @@ type ExistingReservation = {
 
 // ===== Téléphone Mali (8 chiffres, format 22 22 22 22) =====
 const formatMaliPhone = (value: string) => {
-  const digits = value.replace(/\D/g, '').slice(0, 8); // uniquement chiffres, max 8
+  const digits = value.replace(/\D/g, '').slice(0, 8);
   return digits.replace(/(\d{2})(?=\d)/g, '$1 ').trim();
 };
 
@@ -106,7 +107,6 @@ const isValidMaliPhone = (value: string) => {
 
 export default function ReservationClientPage() {
   const { slug: slugParam, id: reservationRouteId } = useParams<{ slug: string; id?: string }>();
-  /** En sous-domaine (mali-trans.teliya.app/booking), useParams renvoie slug="booking". On utilise le slug du sous-domaine pour charger la compagnie. */
   const slug = getSlugFromSubdomain() ?? slugParam ?? '';
   const pathBase = getPublicPathBase(slug);
 
@@ -117,6 +117,9 @@ export default function ReservationClientPage() {
 
   const nameInputRef = useRef<HTMLInputElement>(null);
   const phoneInputRef = useRef<HTMLInputElement>(null);
+  
+  // Ref pour éviter les appels multiples
+  const isCreatingRef = useRef(false);
 
   const routeState = (location.state || {}) as { companyId?: string; agencyId?: string; companyFromSearch?: { id?: string; nom?: string; logoUrl?: string; couleurPrimaire?: string; couleurSecondaire?: string } };
 
@@ -138,7 +141,6 @@ export default function ReservationClientPage() {
     return {
       primary: p,
       secondary: s,
-      /** Fonds légers mais visibles (hex #RRGGBBAA peu supporté / trop transparent). */
       veryLightPrimary: hexToRgba(p, 0.1),
       lightPrimary: hexToRgba(p, 0.26),
       lightSecondary: hexToRgba(s, 0.26),
@@ -165,7 +167,6 @@ export default function ReservationClientPage() {
     code?: string;
   }>({});
   const [validTrips, setValidTrips] = useState<Trip[]>([]);
-  /** Date YYYY-MM-DD sélectionnée (flux identique guichet : dates puis horaires). */
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTripId, setSelectedTripId] = useState('');
   const [seats, setSeats] = useState(1);
@@ -202,7 +203,7 @@ export default function ReservationClientPage() {
     }
   }, [existing, slug, navigate, pathBase]);
 
-  // Mode consultation (load existing for redirect) — accès via publicReservations uniquement
+  // Mode consultation (load existing for redirect)
   useEffect(() => {
     const loadExisting = async () => {
       if (!reservationRouteId || !slug) return;
@@ -299,7 +300,6 @@ export default function ReservationClientPage() {
         const depNorm = (search.get('departure') || '').trim();
         const arrNorm = (search.get('arrival') || '').trim();
 
-        // Places affichées : tripInstance − holds en ligne non expirés (seatHoldOnly), voir publicValidTripsService.
         const { validTrips } = await buildValidTripsFromWeeklyTrips({
           companyId: cdoc.id,
           depNorm,
@@ -360,7 +360,7 @@ export default function ReservationClientPage() {
     load();
   }, [slug, departureQ, arrivalQ, reservationRouteId]);
 
-  // Appliquer les couleurs de la compagnie au thème du navigateur (barre d'adresse, zone autour du clavier sur mobile)
+  // Appliquer les couleurs de la compagnie au thème du navigateur
   const DEFAULT_THEME_COLOR = '#FF6600';
   useEffect(() => {
     if (!company?.couleurPrimaire) return;
@@ -434,9 +434,9 @@ export default function ReservationClientPage() {
     }
     
     if (!passenger.phone.trim()) {
-    errors.phone = 'Le numéro de téléphone est requis';
+      errors.phone = 'Le numéro de téléphone est requis';
     } else if (!isValidMaliPhone(passenger.phone)) {
-    errors.phone = 'Numéro invalide (format attendu : 22 22 22 22)';
+      errors.phone = 'Numéro invalide (format attendu : 22 22 22 22)';
     }
     
     setFieldErrors(errors);
@@ -455,8 +455,14 @@ export default function ReservationClientPage() {
     return true;
   };
 
-  // ---------- Création draft ----------
+  // ---------- Création draft (version corrigée avec protection contre appels multiples) ----------
   const createReservationDraft = useCallback(async () => {
+    // Protection contre les appels simultanés
+    if (isCreatingRef.current) {
+      console.log('[ReservationClientPage] Création déjà en cours, ignoré');
+      return;
+    }
+    
     if (!validatePersonalInfo()) {
       setError('Veuillez corriger les erreurs ci-dessus');
       return;
@@ -467,12 +473,14 @@ export default function ReservationClientPage() {
     }
     if (creating || isSubmitting) return;
 
+    isCreatingRef.current = true;
     setCreating(true);
     setIsSubmitting(true);
     setSubmitError(null);
     setShowSlowConnectionHint(false);
     setError('');
     setFieldErrors({});
+    
     const slowHintTimer = window.setTimeout(() => {
       setShowSlowConnectionHint(true);
     }, 5000);
@@ -482,6 +490,7 @@ export default function ReservationClientPage() {
       let tripInstanceId = String(selectedTrip.id);
       const tiRefResolved = tripInstanceRef(companyId, tripInstanceId);
       let tiSnap = await getDoc(tiRefResolved);
+      
       if (!tiSnap.exists()) {
         const wtid = String((selectedTrip as { weeklyTripId?: string }).weeklyTripId ?? '').trim();
         if (!wtid) {
@@ -510,6 +519,7 @@ export default function ReservationClientPage() {
         tripInstanceId = tiDoc.id;
         tiSnap = await getDoc(tripInstanceRef(companyId, tripInstanceId));
       }
+      
       if (!tiSnap.exists()) {
         throw new Error('Trajet introuvable ou plus disponible.');
       }
@@ -519,6 +529,7 @@ export default function ReservationClientPage() {
 
       const compSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId));
       const comp = compSnap.exists() ? (compSnap.data() as any) : {};
+      
       function inferCompanyCode(name?: string) {
         if (!name) return '';
         const initials = name
@@ -531,25 +542,38 @@ export default function ReservationClientPage() {
       }
 
       const rawCompanyCode = (comp.code || company.code || '').toString().trim();
-
-      const companyCode =
-        rawCompanyCode
-          ? rawCompanyCode.toUpperCase()
-          : inferCompanyCode(comp.nom || comp.name);
-      const referenceCode = await generateWebReferenceCode({
-        companyId: selectedTrip.companyId,
-        companyCode,
-        agencyId: selectedTrip.agencyId,
-        agencyCode,
-        agencyName,
-        tripInstanceId
-      });
+      const companyCode = rawCompanyCode
+        ? rawCompanyCode.toUpperCase()
+        : inferCompanyCode(comp.nom || comp.name);
+      
+      // Génération du code avec gestion d'erreur
+      let referenceCode: string;
+      try {
+        referenceCode = await generateWebReferenceCode({
+          companyId: selectedTrip.companyId,
+          companyCode,
+          agencyId: selectedTrip.agencyId,
+          agencyCode,
+          agencyName,
+          tripInstanceId
+        });
+      } catch (genError: any) {
+        console.error('[ReservationClientPage] Erreur génération code:', genError);
+        // Fallback : générer un code temporaire unique
+        const timestamp = Date.now().toString().slice(-6);
+        const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+        referenceCode = `${companyCode}-${agencyCode || 'AG'}-WEB-${timestamp}-${random}`;
+        toast.warning('Code de référence généré en mode dégradé', {
+          description: 'Votre réservation est bien enregistrée'
+        });
+      }
 
       let originStopOrder: number | null = null;
       let destinationStopOrder: number | null = null;
       let originStopId: string | null = null;
       let destinationStopId: string | null = null;
       const routeId = String((selectedTrip as any).routeId ?? '').trim() || null;
+      
       if (routeId) {
         const resolved = await resolveJourneyStopIdsFromCities(
           selectedTrip.companyId,
@@ -585,7 +609,6 @@ export default function ReservationClientPage() {
         ? `${window.location.origin}/${pathBase}/mon-billet?r=${encodeURIComponent(token)}`
         : `${window.location.origin}/mon-billet?r=${encodeURIComponent(token)}`;
 
-      /** Même document en une seule écriture : évite hold sans token si l’update anonyme est refusée par les règles. */
       const reservation = {
         nomClient: passenger.fullName.trim(),
         telephone: telephoneInput,
@@ -625,7 +648,6 @@ export default function ReservationClientPage() {
         dropoffStatus: 'pending',
         journeyStatus: 'booked',
         expiresAt: expiresAtMs,
-        // Financial/reporting queries read reservations.createdAt as Firestore Timestamp.
         createdAt: nowTs,
         updatedAt: serverTimestamp(),
       };
@@ -640,13 +662,14 @@ export default function ReservationClientPage() {
       );
       const held = holdMap.get(holdKey) ?? 0;
       const baseRemaining = tripInstanceRemainingFromDoc(tiSnap.data()!);
+      
       if (baseRemaining - held < seats) {
         throw new Error('Plus assez de places disponibles sur ce trajet.');
       }
+      
       await setDoc(newResRef, reservation);
       const refDoc = { id: newResRef.id };
 
-      // Nouveau flux Payment (pending) — en parallèle, sans supprimer le flux réservation existant
       const rawProvider = String((reservation as any).paymentMethod ?? (reservation as any).paiement ?? '').toLowerCase();
       const provider = rawProvider.includes('orange')
         ? 'orange'
@@ -655,6 +678,7 @@ export default function ReservationClientPage() {
           : rawProvider.includes('cash') || rawProvider.includes('esp')
             ? 'cash'
             : 'wave';
+            
       try {
         await createPayment({
           reservationId: refDoc.id,
@@ -702,6 +726,7 @@ export default function ReservationClientPage() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
+      
       await setDoc(doc(db, 'publicReservations', token), publicSnapshot);
       await setDoc(doc(db, 'publicReservations', refDoc.id), {
         token,
@@ -730,6 +755,7 @@ export default function ReservationClientPage() {
         },
       });
     } catch (e: any) {
+      console.error('[ReservationClientPage] Erreur création:', e);
       setSubmitError('Erreur réseau ou places indisponibles');
       setError(e?.message || 'Impossible de créer la réservation');
     } finally { 
@@ -737,10 +763,26 @@ export default function ReservationClientPage() {
       setShowSlowConnectionHint(false);
       setCreating(false);
       setIsSubmitting(false);
+      isCreatingRef.current = false;
     }
   }, [selectedTrip, passenger, seats, creating, isSubmitting, slug, company, agencyInfo, navigate, validatePersonalInfo, pathBase]);
 
-  // ---------- UI: carte trajet épurée (logo retiré, déjà présent dans le header) ----------
+  // Version debounce de la création
+  const createReservationDebounced = useCallback(
+    debounce(() => {
+      createReservationDraft();
+    }, 500, { leading: true, trailing: false }),
+    [createReservationDraft]
+  );
+
+  // Nettoyage du debounce au démontage
+  useEffect(() => {
+    return () => {
+      createReservationDebounced.cancel();
+    };
+  }, [createReservationDebounced]);
+
+  // ---------- UI: carte trajet épurée ----------
   const RouteCard = (titleRight?: string) => (
     <div
       className="rounded-2xl overflow-hidden"
@@ -782,7 +824,7 @@ export default function ReservationClientPage() {
     </div>
   );
 
-  // ---------- Rendu chargement (recherche trajets) : logo, animation, message "Soyez patient" ----------
+  // ---------- Rendu chargement ----------
   const companyForLoading = routeState?.companyFromSearch || company;
   const loadingLogoUrl = companyForLoading?.logoUrl || company.logoUrl;
   const loadingPrimary = companyForLoading?.couleurPrimaire || company.couleurPrimaire || '#f43f5e';
@@ -828,7 +870,6 @@ export default function ReservationClientPage() {
     );
   }
 
-  // Pas de sous-titre trajet dans le header : la page affiche déjà les trajets (départ → arrivée, prix).
   // ---------- Rendu principal ----------
   return (
     <div className="min-h-screen bg-gradient-to-br from-white to-gray-50">
@@ -847,13 +888,11 @@ export default function ReservationClientPage() {
         </div>
       )}
 
-      {/* Redirecting when existing reservation (user opened booking with id) */}
       {existing ? (
         <div className="max-w-[1100px] mx-auto px-3 sm:px-4 py-12 flex flex-col items-center justify-center">
           <div className="animate-pulse text-gray-500 text-sm">Redirection…</div>
         </div>
       ) : (
-        /* Step 1 only: reservation form → then redirect to payment page */
         <main className="max-w-[1100px] mx-auto px-2.5 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
           {RouteCard()}
 
@@ -973,7 +1012,6 @@ export default function ReservationClientPage() {
             </div>
           </SectionCard>
 
-          {/* infos personnelles */}
           {selectedTrip && (
             <>
               <SectionCard
@@ -986,7 +1024,6 @@ export default function ReservationClientPage() {
                 }}
               >
                 <div className="grid sm:grid-cols-2 gap-4">
-                  {/* Nom */}
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
                       <User className="h-5 w-5" />
@@ -1011,7 +1048,6 @@ export default function ReservationClientPage() {
                     )}
                   </div>
 
-                  {/* Téléphone */}
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
                       <Phone className="h-5 w-5" />
@@ -1039,7 +1075,6 @@ export default function ReservationClientPage() {
                     )}
                   </div>
 
-                  {/* Places */}
                   <div
                     className="sm:col-span-2 flex flex-wrap items-center gap-3 rounded-lg border px-3 py-3"
                     style={{
@@ -1097,7 +1132,7 @@ export default function ReservationClientPage() {
 
                 <button
                   type="button"
-                  onClick={createReservationDraft}
+                  onClick={createReservationDebounced}
                   disabled={creating || isSubmitting}
                   className="mt-6 w-full h-12 rounded-xl font-semibold shadow-md disabled:opacity-60 transition hover:opacity-95 active:scale-[0.99] flex items-center justify-center gap-2 text-white"
                   style={{

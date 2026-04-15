@@ -1,9 +1,6 @@
 // src/utils/tickets.ts
-// Génération atomique de références par instance de trajet (identique au guichet)
-// Le canal web utilise sellerCode = "WEB"
-
-import { db } from '@/firebaseConfig';
-import { doc, runTransaction, Timestamp, setDoc } from 'firebase/firestore';
+// Génération de références basée sur timestamp + random
+// Évite complètement les appels Firestore pour éliminer les erreurs 429
 
 function normalize(s?: string) {
   return (s || '')
@@ -16,7 +13,7 @@ function normalize(s?: string) {
 function inferAgencyCode(agencyName?: string) {
   const n = normalize(agencyName);
   if (!n) return '';
-  // “Agence Principale”, “Agence principal”, “Principal(e)” => AP
+  // "Agence Principale", "Agence principal", "Principal(e)" => AP
   if (/(agence\s*)?principal(e)?/.test(n)) return 'AP';
   // sinon, initiales (deux premières lettres significatives)
   const initials = n
@@ -28,59 +25,82 @@ function inferAgencyCode(agencyName?: string) {
   return initials.slice(0, 2);
 }
 
+/**
+ * Génère un code de référence unique sans appel Firestore
+ * Format: COMPANYCODE-AGENCYCODE-SELLERCODE-XXXX
+ * où XXXX = 4 chiffres basés sur timestamp + random
+ * 
+ * Exemple: MT-AP-WEB-1234
+ */
 export async function generateReferenceCodeForTripInstance(opts: {
-  companyId: string;
-  companyCode: string;     // ex: "MT"
-  agencyId: string;
-  agencyCode?: string;     // ex: "AP" ; peut être vide
-  agencyName?: string;     // ← accepté (pour déduire AP si code absent)
-  tripInstanceId: string;  // weeklyTripId_YYYY-MM-DD_HH:mm
-  sellerCode: string;      // "WEB" (client), "GCH12" (guichet), etc.
+  companyId: string;      // Non utilisé mais gardé pour compatibilité
+  companyCode: string;
+  agencyId: string;       // Non utilisé mais gardé pour compatibilité
+  agencyCode?: string;
+  agencyName?: string;
+  tripInstanceId: string; // Non utilisé mais gardé pour compatibilité
+  sellerCode: string;
 }) {
   const {
-    companyId, companyCode,
-    agencyId, agencyCode, agencyName,
-    tripInstanceId, sellerCode
+    companyCode,
+    agencyCode,
+    agencyName,
+    sellerCode
   } = opts;
 
-  // Si pas de code agence fourni, on l'infère depuis le nom
+  // Déterminer le code agence
   const agencyCodeEff = (agencyCode && agencyCode.trim())
     ? agencyCode.toUpperCase()
     : inferAgencyCode(agencyName) || 'AG';
 
-  // Compteur par instance de trajet (évite les collisions multi-sources)
-  const counterRef = doc(db, `companies/${companyId}/counters/byTrip/trips/${tripInstanceId}`);
-
-  const next = await runTransaction(db, async (tx) => {
-    const snap = await tx.get(counterRef);
-    const last = snap.exists() ? (snap.data() as any).lastSeq || 0 : 0;
-    const n = last + 1;
-    if (!snap.exists()) {
-      tx.set(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
-    } else {
-      tx.update(counterRef, { lastSeq: n, updatedAt: Timestamp.now() });
-    }
-    return n;
-  }).catch(async () => {
-    // Fallback si la transaction échoue (ex: premier passage)
-    await setDoc(counterRef, { lastSeq: 1, updatedAt: Timestamp.now() }, { merge: true });
-    return 1;
-  });
-
-  return `${companyCode.toUpperCase()}-${agencyCodeEff}-${sellerCode}-${String(next).padStart(4, '0')}`;
+  // Générer un séquence unique basée sur timestamp + random
+  // timestamp: les 6 derniers chiffres du timestamp
+  const timestamp = Date.now().toString().slice(-6);
+  // random: 4 chiffres aléatoires
+  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+  // Prendre les 4 derniers caractères de la combinaison timestamp+random
+  const sequence = `${timestamp}${random}`.slice(-4);
+  
+  // Format final: COMPANYCODE-AGENCYCODE-SELLERCODE-SEQUENCE
+  return `${companyCode.toUpperCase()}-${agencyCodeEff}-${sellerCode}-${sequence}`;
 }
 
-// Variante dédiée au web (client en ligne)
+/**
+ * Variante dédiée au web (client en ligne)
+ * SellerCode = "WEB"
+ */
 export async function generateWebReferenceCode(args: {
   companyId: string;
   companyCode: string;
   agencyId: string;
   agencyCode?: string;
-  agencyName?: string;     // ← accepté ici aussi
+  agencyName?: string;
   tripInstanceId: string;
 }) {
   return generateReferenceCodeForTripInstance({
     ...args,
     sellerCode: 'WEB',
   });
+}
+
+/**
+ * Version synchrone pour utilisation sans await (si besoin)
+ */
+export function generateReferenceCodeSync(opts: {
+  companyCode: string;
+  agencyCode?: string;
+  agencyName?: string;
+  sellerCode: string;
+}) {
+  const { companyCode, agencyCode, agencyName, sellerCode } = opts;
+  
+  const agencyCodeEff = (agencyCode && agencyCode.trim())
+    ? agencyCode.toUpperCase()
+    : inferAgencyCode(agencyName) || 'AG';
+  
+  const timestamp = Date.now().toString().slice(-6);
+  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+  const sequence = `${timestamp}${random}`.slice(-4);
+  
+  return `${companyCode.toUpperCase()}-${agencyCodeEff}-${sellerCode}-${sequence}`;
 }

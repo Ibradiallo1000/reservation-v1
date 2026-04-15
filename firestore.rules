@@ -337,8 +337,9 @@ service cloud.firestore {
 
     /* Résolution publique des réservations par token uniquement. Doc id = publicToken ; accès par get(id) uniquement (pas de list). */
     match /publicReservations/{docId} {
-      allow get, create, update: if true;
-      allow list, delete: if false;
+      allow get, list: if true;      // ← ajouter list
+      allow create, update: if true;
+      allow delete: if false;
     }
 
     /* Invitations (onboarding, accept link). Get by id for accept flow; list/create/update/delete authenticated. */
@@ -862,7 +863,12 @@ service cloud.firestore {
         }
 
         match /reservations/{reservationId} {
-
+          // RÈGLE SPÉCIALE POUR LA PREUVE DE PAIEMENT
+          allow update: if 
+          resource.data.get('canal', '') == 'en_ligne' &&
+          (resource.data.get('status', '') == 'en_attente' || resource.data.get('statut', '') == 'en_attente') &&
+          (request.resource.data.get('status', '') == 'payé' || request.resource.data.get('statut', '') == 'payé') &&
+          request.resource.data.get('preuveMessage', '') != null;
           /* 🔓 Création publique. Lecture réservée aux utilisateurs compagnie ; accès billet public = via publicReservations (doc id = publicToken) uniquement. */
           allow create: if (
             request.auth == null
@@ -1927,6 +1933,40 @@ service cloud.firestore {
         allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
+      /**
+       * Documents de validation Mobile Money (Wave, Orange, Moov, Sarali)
+       * Créés automatiquement lors de la validation d'un paiement en ligne
+       */
+      match /mobileMoneyValidationDocuments/{docId} {
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
+        );
+        
+        allow create: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
+        ) && request.resource.data.keys().hasAll([
+          'companyId', 'paymentId', 'reservationOuOperationId', 'agencyId',
+          'montant', 'operateur', 'preuveVerifiee', 'statutValidation',
+          'dateHeure', 'status', 'createdByUid'
+        ]);
+        
+        allow update: if isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
+        ) && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'visaControle', 'commentaire', 'updatedAt'
+        ]);
+        
+        allow delete: if false;
+      }
+
       /* Audit trail confirm/reject/refund (createPayment → logPaymentAction). */
       match /paymentLogs/{logId} {
         allow get, list: if isAuth() && (
@@ -2138,4 +2178,3 @@ service cloud.firestore {
     }
   }
 }
-

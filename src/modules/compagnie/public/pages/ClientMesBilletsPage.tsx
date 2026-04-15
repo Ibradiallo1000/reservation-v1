@@ -8,7 +8,6 @@ import {
   where,
   DocumentData,
   type QueryDocumentSnapshot,
-  type QuerySnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import dayjs from "dayjs";
@@ -16,7 +15,6 @@ import "dayjs/locale/fr";
 import { useNavigate, useParams } from "react-router-dom";
 import { SectionCard } from "@/ui";
 import {
-  ChevronLeft,
   Search,
   Phone,
   Wallet,
@@ -35,6 +33,7 @@ import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageLoadingState } from "@/shared/ui/PageStates";
 import { normalizePhone, getDisplayPhone } from "@/utils/phoneUtils";
 import { getPublicPathBase } from "../utils/subdomain";
+import ReservationStepHeader from "../components/ReservationStepHeader";
 
 dayjs.locale("fr");
 
@@ -121,13 +120,9 @@ const ClientMesBilletsPage: React.FC = () => {
     primary: "#ea580c",
     secondary: "#f97316",
   });
-  const [companyCountryCode, setCompanyCountryCode] = useState<string | null>(
-    null
-  );
+  const [companyCountryCode, setCompanyCountryCode] = useState<string | null>(null);
 
-  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(
-    DEFAULT_COUNTRY_CODE
-  );
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(DEFAULT_COUNTRY_CODE);
   const [phoneDigits, setPhoneDigits] = useState("");
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<Reservation[]>([]);
@@ -136,15 +131,11 @@ const ClientMesBilletsPage: React.FC = () => {
   const [countryOpen, setCountryOpen] = useState(false);
   const isOnline = useOnlineStatus();
 
-  const title = useMemo(
-    () => (slug ? "Mon portefeuille" : "Retrouver mes billets"),
-    [slug]
-  );
+  const title = useMemo(() => (slug ? "Mon portefeuille" : "Retrouver mes billets"), [slug]);
+  const pathBase = getPublicPathBase(slug || "");
 
   const selectedCountry = useMemo(
-    () =>
-      WEST_AFRICA_COUNTRIES.find((c) => c.code === selectedCountryCode) ??
-      WEST_AFRICA_COUNTRIES[0],
+    () => WEST_AFRICA_COUNTRIES.find((c) => c.code === selectedCountryCode) ?? WEST_AFRICA_COUNTRIES[0],
     [selectedCountryCode]
   );
 
@@ -152,9 +143,7 @@ const ClientMesBilletsPage: React.FC = () => {
     (async () => {
       if (!slug) return;
       try {
-        const c = await getDocs(
-          query(collection(db, "companies"), where("slug", "==", slug))
-        );
+        const c = await getDocs(query(collection(db, "companies"), where("slug", "==", slug)));
         if (!c.empty) {
           const d = c.docs[0].data() as any;
           setTheme((t) => ({
@@ -189,8 +178,7 @@ const ClientMesBilletsPage: React.FC = () => {
       const p = localStorage.getItem(STORAGE_KEY_PHONE);
       const c = localStorage.getItem(STORAGE_KEY_COUNTRY);
       if (p) setPhoneDigits(p);
-      if (!slug && c && WEST_AFRICA_COUNTRIES.some((x) => x.code === c))
-        setSelectedCountryCode(c);
+      if (!slug && c && WEST_AFRICA_COUNTRIES.some((x) => x.code === c)) setSelectedCountryCode(c);
     } catch {
       /* ignore */
     }
@@ -232,26 +220,13 @@ const ClientMesBilletsPage: React.FC = () => {
    * Query by telephoneNormalized (primary) and telephone (backward compat).
    * normalizePhone handles Mali 223 + 8 digits so all formats match.
    */
-  const fetchForCompanyId = async (
-    companyId: string,
-    companyData: DocumentData,
-    phoneNorm: string
-  ) => {
-    const agences = await getDocs(
-      collection(db, "companies", companyId, "agences")
-    );
+  const fetchForCompanyId = async (companyId: string, companyData: DocumentData, phoneNorm: string) => {
+    const agences = await getDocs(collection(db, "companies", companyId, "agences"));
     const seen = new Set<string>();
     const out: Reservation[] = [];
 
     for (const ag of agences.docs) {
-      const base = collection(
-        db,
-        "companies",
-        companyId,
-        "agences",
-        ag.id,
-        "reservations"
-      );
+      const base = collection(db, "companies", companyId, "agences", ag.id, "reservations");
 
       const [snapNorm, snapLegacy] = await Promise.all([
         getDocs(query(base, where("telephoneNormalized", "==", phoneNorm))),
@@ -292,9 +267,7 @@ const ClientMesBilletsPage: React.FC = () => {
       let results: Reservation[] = [];
 
       if (slug) {
-        const companies = await getDocs(
-          query(collection(db, "companies"), where("slug", "==", slug))
-        );
+        const companies = await getDocs(query(collection(db, "companies"), where("slug", "==", slug)));
         if (companies.empty) {
           setError("Compagnie introuvable.");
         } else {
@@ -316,8 +289,7 @@ const ClientMesBilletsPage: React.FC = () => {
 
       results = results.filter((r) => shouldShowInWallet(r.statut));
 
-      if (!results.length)
-        setError("Aucun billet trouvé pour ce numéro.");
+      if (!results.length) setError("Aucun billet trouvé pour ce numéro.");
       setRows(results);
       try {
         localStorage.setItem(STORAGE_KEY_PHONE, phoneDigits);
@@ -345,14 +317,12 @@ const ClientMesBilletsPage: React.FC = () => {
     const annules: Reservation[] = [];
 
     const sortKey = (r: Reservation) =>
-      (toDayjs(r.date)?.valueOf() || 0) +
-      (r.heure ? dayjs(`1970-01-01T${r.heure}`).valueOf() % 86400000 : 0);
+      (toDayjs(r.date)?.valueOf() || 0) + (r.heure ? dayjs(`1970-01-01T${r.heure}`).valueOf() % 86400000 : 0);
 
     rows.forEach((r) => {
       const effective = getEffectiveStatut(r);
       const state = getWalletDisplayState(effective);
       if (!state) return;
-      // Section = statut effectif (expire côté UI si date + 30 j dépassée). "Voyages effectués" = embarqué seulement.
       if (state.section === "a_venir") aVenir.push(r);
       else if (state.section === "voyages_effectues") voyagesEffectues.push(r);
       else if (state.section === "en_verification") enVerification.push(r);
@@ -388,27 +358,17 @@ const ClientMesBilletsPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header
-        className="sticky top-0 z-20 border-b border-white/10"
-        style={{ backgroundColor: theme.primary }}
-      >
-        <div className="max-w-3xl mx-auto px-3 py-2.5 flex items-center gap-2 text-white">
-          <button
-            onClick={() => navigate(getPublicPathBase(slug || "") ? `/${getPublicPathBase(slug || "")}` : "/")}
-            className="p-2 rounded-lg hover:bg-white/10 transition-colors"
-            aria-label="Retour"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <h1 className="font-semibold text-base">{title}</h1>
-        </div>
-      </header>
+      {/* Header avec le même design que FindReservationPage */}
+      <ReservationStepHeader
+        onBack={() => navigate(pathBase ? `/${pathBase}` : "/")}
+        primaryColor={theme.primary}
+        secondaryColor={theme.secondary}
+        title={title}
+      />
 
-      <main className="max-w-3xl mx-auto p-4 space-y-5">
+      <main className="max-w-3xl mx-auto p-4 space-y-5 -mt-2">
         <SectionCard title="Recherche par téléphone" icon={Phone} className="shadow-md rounded-2xl">
-          <label className="block text-sm font-medium text-gray-800">
-            Numéro de téléphone
-          </label>
+          <label className="block text-sm font-medium text-gray-800">Numéro de téléphone</label>
           <p className="mt-1 text-xs text-gray-500">
             Saisissez le numéro utilisé pour vos billets (format international).
           </p>
@@ -427,11 +387,7 @@ const ClientMesBilletsPage: React.FC = () => {
                   </button>
                   {countryOpen && (
                     <>
-                      <div
-                        className="fixed inset-0 z-10"
-                        aria-hidden
-                        onClick={() => setCountryOpen(false)}
-                      />
+                      <div className="fixed inset-0 z-10" aria-hidden onClick={() => setCountryOpen(false)} />
                       <div
                         className="absolute left-0 top-full mt-1 z-20 w-56 max-h-64 overflow-auto rounded-xl border bg-white shadow-lg py-1"
                         style={{ borderColor: `${theme.primary}25` }}
@@ -446,15 +402,10 @@ const ClientMesBilletsPage: React.FC = () => {
                             }}
                             className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50"
                             style={{
-                              backgroundColor:
-                                c.code === selectedCountryCode
-                                  ? `${theme.primary}10`
-                                  : undefined,
+                              backgroundColor: c.code === selectedCountryCode ? `${theme.primary}10` : undefined,
                             }}
                           >
-                            <span className="tabular-nums text-gray-600 w-12">
-                              {c.dialCode}
-                            </span>
+                            <span className="tabular-nums text-gray-600 w-12">{c.dialCode}</span>
                             <span className="text-gray-900">{c.name}</span>
                           </button>
                         ))}
@@ -462,10 +413,7 @@ const ClientMesBilletsPage: React.FC = () => {
                     </>
                   )}
                 </div>
-                <div
-                  className="w-px h-8"
-                  style={{ backgroundColor: `${theme.primary}20` }}
-                />
+                <div className="w-px h-8" style={{ backgroundColor: `${theme.primary}20` }} />
                 <input
                   type="tel"
                   inputMode="numeric"
@@ -482,7 +430,10 @@ const ClientMesBilletsPage: React.FC = () => {
               onClick={search}
               disabled={loading}
               className="shrink-0 h-11 px-4 rounded-xl font-medium text-white shadow-sm disabled:opacity-60 inline-flex items-center gap-2 transition-opacity"
-              style={{ backgroundColor: theme.primary }}
+              style={{
+                background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
+                boxShadow: `0 8px 20px ${theme.secondary}55`,
+              }}
             >
               <Search className="w-4 h-4" />
               Rechercher
@@ -498,26 +449,35 @@ const ClientMesBilletsPage: React.FC = () => {
         <SectionCard
           title="Mon portefeuille"
           icon={Wallet}
-          right={rows.length > 0 ? <span className="text-xs text-gray-500">{rows.length} billet{rows.length !== 1 ? "s" : ""}</span> : undefined}
+          right={
+            rows.length > 0 ? (
+              <span className="text-xs text-gray-500">
+                {rows.length} billet{rows.length !== 1 ? "s" : ""}
+              </span>
+            ) : undefined
+          }
           className="shadow-md rounded-2xl"
           noPad
         >
-
           {loading ? (
             <PageLoadingState blocks={3} />
           ) : !hasSearched ? (
             <div className="p-8 text-center">
-              <p className="text-sm text-gray-600">Entrez le numéro utilisé pour vos billets pour les afficher ici.</p>
-              <p className="text-xs text-gray-500 mt-2">Une confirmation vous a été envoyée par SMS ou email après chaque réservation.</p>
+              <p className="text-sm text-gray-600">
+                Entrez le numéro utilisé pour vos billets pour les afficher ici.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                Une confirmation vous a été envoyée par SMS ou email après chaque réservation.
+              </p>
             </div>
           ) : sections.every((s) => s.items.length === 0) ? (
             <div className="p-8 text-center">
               <p className="text-sm text-gray-600">
-                {isOnline
-                  ? "Aucun billet trouvé pour ce numéro."
-                  : "Hors ligne: impossible de charger les billets pour le moment."}
+                {isOnline ? "Aucun billet trouvé pour ce numéro." : "Hors ligne: impossible de charger les billets pour le moment."}
               </p>
-              <p className="text-xs text-gray-500 mt-2">Vérifiez le numéro ou consultez vos réservations depuis la page d'accueil.</p>
+              <p className="text-xs text-gray-500 mt-2">
+                Vérifiez le numéro ou consultez vos réservations depuis la page d'accueil.
+              </p>
               <div className="mt-4">
                 <button
                   type="button"
@@ -540,26 +500,18 @@ const ClientMesBilletsPage: React.FC = () => {
                       </h2>
                       <ul className="space-y-2">
                         {sec.items.map((r) => {
-                          const depart =
-                            (r.depart ?? "").trim() || "—";
-                          const arrivee =
-                            (r.arrivee ?? r.arrival ?? "").trim() || "—";
+                          const depart = (r.depart ?? "").trim() || "—";
+                          const arrivee = (r.arrivee ?? r.arrival ?? "").trim() || "—";
                           const tripDate = toDayjs(r.date);
                           const dateHeure = tripDate
-                            ? tripDate.format("ddd D MMM") +
-                              (r.heure ? ` • ${r.heure}` : "")
+                            ? tripDate.format("ddd D MMM") + (r.heure ? ` • ${r.heure}` : "")
                             : "—";
-                          const places =
-                            r.nombre_places ?? r.seatsGo ?? undefined;
-                          const amount =
-                            r.montant_total ?? r.montant ?? undefined;
+                          const places = r.nombre_places ?? r.seatsGo ?? undefined;
+                          const amount = r.montant_total ?? r.montant ?? undefined;
                           const walletState = getWalletDisplayState(getEffectiveStatut(r));
 
                           return (
-                            <li
-                              key={`${r.companyId}_${r.agencyId}_${r.id}`}
-                              className="list-none"
-                            >
+                            <li key={`${r.companyId}_${r.agencyId}_${r.id}`} className="list-none">
                               <div
                                 className="rounded-2xl border bg-white p-3 shadow-sm transition-shadow active:shadow-md min-h-0"
                                 style={{
@@ -567,7 +519,7 @@ const ClientMesBilletsPage: React.FC = () => {
                                   borderRadius: "16px",
                                 }}
                               >
-                                {/* Ligne 1 : Depart → Arrivee  +  Prix */}
+                                {/* Ligne 1 : Depart → Arrivee + Prix */}
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="min-w-0 flex-1 text-sm font-semibold text-gray-900 truncate">
                                     <span>{depart}</span>
@@ -579,25 +531,20 @@ const ClientMesBilletsPage: React.FC = () => {
                                     <span>{arrivee}</span>
                                   </p>
                                   {typeof amount === "number" && (
-                                    <span
-                                      className="shrink-0 text-sm font-bold tabular-nums"
-                                      style={{ color: theme.primary }}
-                                    >
+                                    <span className="shrink-0 text-sm font-bold tabular-nums" style={{ color: theme.primary }}>
                                       {money(amount)}
                                     </span>
                                   )}
                                 </div>
                                 {/* Ligne 2 : Sam 21 fév • 05:00 */}
-                                <p className="mt-1 text-xs text-gray-500">
-                                  {dateHeure}
-                                </p>
+                                <p className="mt-1 text-xs text-gray-500">{dateHeure}</p>
                                 {/* Ligne 3 : X places */}
                                 {typeof places === "number" && (
                                   <p className="mt-0.5 text-xs text-gray-500">
                                     {places} place{places > 1 ? "s" : ""}
                                   </p>
                                 )}
-                                {/* Ligne 4 : [ Badge principal ] [ Canal ] + bouton Voir → */}
+                                {/* Ligne 4 : Badge principal + Canal + bouton Voir */}
                                 <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     {walletState && (
@@ -635,9 +582,7 @@ const ClientMesBilletsPage: React.FC = () => {
                                           color: theme.primary,
                                         }}
                                       >
-                                        {r.canal === "guichet"
-                                          ? "Guichet"
-                                          : "En ligne"}
+                                        {r.canal === "guichet" ? "Guichet" : "En ligne"}
                                       </span>
                                     )}
                                   </div>

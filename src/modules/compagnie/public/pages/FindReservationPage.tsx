@@ -177,7 +177,7 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
 
       <main className="max-w-[1100px] mx-auto px-3 sm:px-4 py-4 space-y-4 -mt-2">
         <p className="text-sm text-gray-600 text-center px-2">
-          Retrouvez vos réservations et billets en entrant votre numéro de téléphone.
+          Retrouvez vos réservations en cours.
         </p>
 
         {/* Form card */}

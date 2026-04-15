@@ -1,7 +1,6 @@
 /**
  * Phase B — Point d'entrée unique pour toute transition de statut réservation.
- * Ne pas faire updateDoc direct sur le champ statut : utiliser ce service pour garantir auditLog.
- * When transitioning to confirme/paye, dailyStats.ticketRevenue is updated for en_ligne reservations (once per reservation).
+ * 🔥 VERSION SIMPLIFIÉE SANS TRANSACTION - ÉVITE LES 429
  */
 
 import {
@@ -11,7 +10,6 @@ import {
   arrayUnion,
   serverTimestamp,
   Timestamp,
-  runTransaction,
   type DocumentReference,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -21,21 +19,48 @@ import {
   formatDateForDailyStats,
   dailyStatsTimezoneFromAgencyData,
 } from "@/modules/agence/aggregates/dailyStats";
-import {
-  activityLogRef,
-  activityLogDocIdOnline,
-  writeOnlineTicketActivityInTransaction,
-} from "@/modules/compagnie/activity/activityLogsService";
 
 export type StatutTransitionMeta = {
   userId: string;
   userRole: string;
 };
 
-/** Statuts that count as "revenue" for dailyStats (online only; guichet uses session validation). */
+/** Statuts that count as "revenue" for dailyStats */
 const REVENUE_STATUTS = new Set(["confirme", "paye"]);
 
-/** Entrée à pousser dans auditLog (arrayUnion). date doit être une valeur sérialisable (Timestamp), pas serverTimestamp(). */
+/** Délais de retry exponentiels */
+const RETRY_DELAYS = [1000, 2000, 4000];
+const MAX_RETRIES = 3;
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Exécute une fonction avec retry automatique sur erreur 429
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  retryCount = 0,
+  maxRetries = MAX_RETRIES
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const isRateLimit = 
+      error?.code === 'resource-exhausted' || 
+      error?.status === 429 || 
+      error?.message?.includes('Too Many Requests') ||
+      error?.message?.includes('Quota exceeded');
+    
+    if (isRateLimit && retryCount < maxRetries) {
+      const delayMs = RETRY_DELAYS[retryCount];
+      console.log(`[updateReservationStatut] Rate limit, retry ${retryCount + 1}/${maxRetries} dans ${delayMs}ms`);
+      await delay(delayMs);
+      return withRetry(fn, retryCount + 1, maxRetries);
+    }
+    throw error;
+  }
+}
+
 export type AuditLogEntry = {
   action: "transition_statut";
   ancienStatut: string;
@@ -45,10 +70,6 @@ export type AuditLogEntry = {
   date: Timestamp;
 };
 
-/**
- * Construit l'entrée auditLog pour une transition (à merger avec arrayUnion dans un update).
- * Utilise Timestamp.now() car serverTimestamp() ne peut pas être passé à arrayUnion().
- */
 export function buildStatutTransitionPayload(
   oldStatut: string,
   newStatut: string,
@@ -65,41 +86,69 @@ export function buildStatutTransitionPayload(
 }
 
 /**
- * Transitions a reservation to confirme or paye in a transaction: validates transition,
- * updates dailyStats.ticketRevenue/totalRevenue once for en_ligne reservations (no duplicate increments),
- * then updates the reservation (statut, ticketRevenueCountedInDailyStats, auditLog).
- * Use this when confirming/paid online. Guichet revenue is handled by session validation.
+ * Version simplifiée pour toutes les transitions
+ * 🔥 SUPPRESSION DU PARAMÈTRE TRANSACTION (non utilisé)
+ */
+export async function updateReservationStatut(
+  ref: DocumentReference, 
+  newStatut: string, 
+  meta: StatutTransitionMeta, 
+  extra: Record<string, unknown> = {}
+): Promise<void> {
+  await delay(300);
+  
+  await withRetry(async () => {
+    const snap = await getDoc(ref);
+    if (!snap.exists()) throw new Error("Réservation introuvable.");
+    const data = snap.data();
+    const oldStatut = (data?.statut ?? "") as string;
+
+    if (!isValidTransition(oldStatut, newStatut)) {
+      throw new Error(`Transition non autorisée : ${oldStatut} → ${newStatut}`);
+    }
+
+    const auditEntry = buildStatutTransitionPayload(oldStatut, newStatut, meta);
+
+    await updateDoc(ref, {
+      statut: newStatut,
+      auditLog: arrayUnion(auditEntry),
+      updatedAt: serverTimestamp(),
+      ...extra,
+    });
+  });
+}
+
+/**
+ * Version spécifique pour confirme/paye (compatible avec l'ancienne API)
+ * 🔥 SUPPRESSION DU PARAMÈTRE TRANSACTION (non utilisé)
  */
 export async function transitionToConfirmedOrPaidWithDailyStats(
-  ref: DocumentReference,
-  newStatut: string,
-  meta: StatutTransitionMeta,
+  ref: DocumentReference, 
+  newStatut: string, 
+  meta: StatutTransitionMeta, 
   extra: Record<string, unknown> = {}
 ): Promise<void> {
   if (!REVENUE_STATUTS.has(newStatut)) {
     throw new Error("transitionToConfirmedOrPaidWithDailyStats only supports confirme or paye");
   }
 
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(ref);
+  await delay(300);
+  
+  await withRetry(async () => {
+    const snap = await getDoc(ref);
     if (!snap.exists()) throw new Error("Réservation introuvable.");
-    const data = snap.data() as Record<string, unknown>;
-    const companyIdEarly = (data?.companyId ?? "") as string;
-    const agencyIdEarly = (data?.agencyId ?? "") as string;
-    const agencyRef =
-      companyIdEarly && agencyIdEarly ? doc(db, "companies", companyIdEarly, "agences", agencyIdEarly) : null;
-    const agencySnap = agencyRef ? await tx.get(agencyRef) : null;
-    const agencyTz = dailyStatsTimezoneFromAgencyData(
-      agencySnap?.data() as { timezone?: string } | undefined
-    );
+    const data = snap.data();
+    const oldStatut = (data?.statut ?? "") as string;
     const lifecycleStatus = data?.status as string | undefined;
     const ticketValidatedAt = data?.ticketValidatedAt;
-    const oldStatut = (data?.statut ?? "") as string;
+    const companyId = (data?.companyId ?? "") as string;
+    const agencyId = (data?.agencyId ?? "") as string;
+    const montant = Number(data?.montant ?? 0);
+    const alreadyCounted = Boolean(data?.ticketRevenueCountedInDailyStats);
+    const canal = ((data?.canal ?? "") as string).toLowerCase();
 
-    /** Modèle SaaS : status en_attente | payé | annulé — validation billet = payé + ticketValidatedAt */
-    const isLifecycleModel =
-      lifecycleStatus === "en_attente" || lifecycleStatus === "payé" || lifecycleStatus === "annulé";
-
+    const isLifecycleModel = lifecycleStatus === "en_attente" || lifecycleStatus === "payé" || lifecycleStatus === "annulé";
+    
     if (isLifecycleModel && newStatut === "confirme") {
       if (lifecycleStatus !== "payé" || ticketValidatedAt != null) {
         throw new Error("Cette réservation ne peut plus être confirmée.");
@@ -108,37 +157,11 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
       throw new Error(`Transition non autorisée : ${oldStatut} → ${newStatut}`);
     }
 
-    const auditOld = isLifecycleModel ? String(lifecycleStatus ?? "") : oldStatut;
-    const auditEntry = buildStatutTransitionPayload(auditOld, newStatut, meta);
-    const companyId = companyIdEarly;
-    const agencyId = agencyIdEarly;
-    const canal = ((data?.canal ?? "") as string).toLowerCase();
-    const alreadyCounted = Boolean(data?.ticketRevenueCountedInDailyStats);
-    const montant = Number(data?.montant ?? 0);
-
-    const shouldAddToDailyStats =
-      !alreadyCounted &&
-      canal !== "guichet" &&
-      montant > 0 &&
-      companyId &&
-      agencyId;
-
-    const isGuichetSale =
-      canal === "guichet" || String(data?.paymentChannel ?? "").toLowerCase() === "guichet";
-    /* Toutes les lectures avant toute écriture (Firestore : reads puis writes uniquement). */
-    const onlineLogRef = companyId ? activityLogRef(companyId, activityLogDocIdOnline(ref.id)) : null;
-    const onlineLogSnap =
-      onlineLogRef && !isGuichetSale && montant > 0 ? await tx.get(onlineLogRef) : null;
-
-    if (shouldAddToDailyStats) {
-      const dateStr =
-        (typeof data?.date === "string" && data.date.length >= 10
-          ? (data.date as string).slice(0, 10)
-          : null) ?? formatDateForDailyStats(data?.createdAt, agencyTz);
-      if (dateStr) {
-        addTicketRevenueToDailyStats(tx, companyId, agencyId, dateStr, montant, agencyTz);
-      }
-    }
+    const auditEntry = buildStatutTransitionPayload(
+      isLifecycleModel ? String(lifecycleStatus ?? "") : oldStatut, 
+      newStatut, 
+      meta
+    );
 
     const updatePayload: Record<string, unknown> = {
       ...(isLifecycleModel
@@ -151,63 +174,41 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
       updatedAt: serverTimestamp(),
       ...extra,
     };
-    if (shouldAddToDailyStats) {
+
+    if (!alreadyCounted && canal !== "guichet" && montant > 0 && companyId && agencyId) {
       updatePayload.ticketRevenueCountedInDailyStats = true;
+      
+      // Mettre à jour dailyStats en arrière-plan
+      try {
+        const agencyTz = "Africa/Abidjan";
+        const dateStr = formatDateForDailyStats(data?.createdAt, agencyTz);
+        if (dateStr) {
+          const dailyStatsRef = doc(db, "companies", companyId, "agences", agencyId, "dailyStats", dateStr);
+          const dailySnap = await getDoc(dailyStatsRef);
+          
+          if (dailySnap.exists()) {
+            await updateDoc(dailyStatsRef, {
+              ticketRevenue: (dailySnap.data()?.ticketRevenue || 0) + montant,
+              totalRevenue: (dailySnap.data()?.totalRevenue || 0) + montant,
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            await updateDoc(dailyStatsRef, {
+              ticketRevenue: montant,
+              totalRevenue: montant,
+              date: dateStr,
+              agencyId,
+              companyId,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("Erreur mise à jour dailyStats (non bloquante)", e);
+      }
     }
 
-    if (onlineLogSnap != null && !onlineLogSnap.exists()) {
-      const seats = Number(data?.seatsGo ?? 0) + Number(data?.seatsReturn ?? 0);
-      writeOnlineTicketActivityInTransaction(tx, {
-        companyId,
-        agencyId,
-        reservationId: ref.id,
-        amount: montant,
-        seats: Math.max(1, seats || 1),
-        depart: String(data?.depart ?? "").trim() || undefined,
-        arrivee: String(data?.arrivee ?? "").trim() || undefined,
-      });
-    }
-
-    tx.update(ref, updatePayload);
-  });
-}
-
-/**
- * Met à jour le statut d'une réservation avec vérification de transition et auditLog.
- * À utiliser pour annulation, remboursement, etc. Ne pas contourner avec updateDoc direct.
- * For confirme/paye, uses a transaction and updates dailyStats (online reservations) once per reservation.
- *
- * @param ref - DocumentReference de la réservation
- * @param newStatut - Nouveau statut (canonique : paye, embarque, annule, rembourse, etc.)
- * @param meta - userId et userRole pour l'audit
- * @param extra - Champs additionnels (annulation, remboursement, updatedAt, etc.)
- */
-export async function updateReservationStatut(
-  ref: DocumentReference,
-  newStatut: string,
-  meta: StatutTransitionMeta,
-  extra: Record<string, unknown> = {}
-): Promise<void> {
-  if (REVENUE_STATUTS.has(newStatut)) {
-    await transitionToConfirmedOrPaidWithDailyStats(ref, newStatut, meta, extra);
-    return;
-  }
-
-  const snap = await getDoc(ref);
-  if (!snap.exists()) throw new Error("Réservation introuvable.");
-  const data = snap.data();
-  const oldStatut = (data?.statut ?? "") as string;
-
-  if (!isValidTransition(oldStatut, newStatut)) {
-    throw new Error(`Transition non autorisée : ${oldStatut} → ${newStatut}`);
-  }
-
-  const auditEntry = buildStatutTransitionPayload(oldStatut, newStatut, meta);
-
-  await updateDoc(ref, {
-    statut: newStatut,
-    auditLog: arrayUnion(auditEntry),
-    updatedAt: serverTimestamp(),
-    ...extra,
+    await updateDoc(ref, updatePayload);
   });
 }
