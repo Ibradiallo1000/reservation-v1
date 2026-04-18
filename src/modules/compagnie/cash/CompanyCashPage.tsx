@@ -143,8 +143,7 @@ export default function CompanyCashPage({ embedded = false, financesTabMode = fa
       {!financesTabMode && (
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
           <span>
-            {globalSnapshot.snapshot.mode === "realtime" ? "Mis à jour en temps réel" : "Mis à jour"}{" "}
-            :{" "}
+            Mis à jour :{" "}
             {globalSnapshot.snapshot.lastUpdatedAt
               ? globalSnapshot.snapshot.lastUpdatedAt.toLocaleTimeString("fr-FR")
               : "—"}
