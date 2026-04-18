@@ -618,7 +618,7 @@ const DigitalCashReservationsPage: React.FC = () => {
         return;
       }
       
-      const payment = await getPaymentByReservationId(companyId, row.id);
+      const payment = await getPaymentByReservationId(companyId, row.id, { skipLegacyFallback: true });
       
       if (!payment) {
         toast.error("Aucun paiement trouvé pour cette réservation.");
@@ -681,7 +681,7 @@ const DigitalCashReservationsPage: React.FC = () => {
         return;
       }
       
-      const payment = await getPaymentByReservationId(companyId, row.id);
+      const payment = await getPaymentByReservationId(companyId, row.id, { skipLegacyFallback: true });
       
       if (!payment || payment.status !== "pending") {
         toast.error("Ce paiement n'est plus en attente.");

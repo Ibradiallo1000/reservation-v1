@@ -565,6 +565,46 @@ const AgenceComptabilitePage: React.FC = () => {
     ? requestedTab
     : getDefaultComptaTab(allowedTabs);
 
+  const isVentesTab = tab === 'ventes';
+  const isVersementsTab = tab === 'versements';
+  const isAuditTab = tab === 'audit';
+
+  const shouldLoadShiftData = isVentesTab || isVersementsTab || isAuditTab;
+  const shouldLoadCourierSessions = isVersementsTab;
+  const shouldLoadLiveSessionStats = isVentesTab;
+  const shouldComputeReceptionAggregates = isVersementsTab;
+
+  const loadShiftUserProfiles = useCallback(
+    async (needed: string[]) => {
+      if (!user?.companyId || !user?.agencyId || needed.length === 0) return;
+      const entries = await Promise.all(
+        needed.map(async (uid) => {
+          try {
+            const profile = await fetchAgencyStaffProfile(user.companyId, user.agencyId, uid);
+            return [
+              uid,
+              {
+                name: profile.name || '',
+                email: profile.email || '',
+                code: profile.code || '',
+                profileLookupDone: true,
+              },
+            ] as const;
+          } catch (error) {
+            console.warn('[AgenceCompta] Profil vendeur non résolu:', uid, error);
+            return [uid, { profileLookupDone: true }] as const;
+          }
+        })
+      );
+      setUsersCache((prev) => {
+        const next = { ...prev, ...Object.fromEntries(entries) };
+        usersCacheRef.current = next;
+        return next;
+      });
+    },
+    [user?.companyId, user?.agencyId]
+  );
+
   useEffect(() => {
     if (allowedTabs.length === 0) return;
     if (!allowedTabs.includes(requestedTab)) {
@@ -902,18 +942,18 @@ const AgenceComptabilitePage: React.FC = () => {
      ============================================================================ */
   
   useEffect(() => {
-    console.log('[AgenceCompta] Démarrage de l\'écoute des postes');
-    
-    if (!user?.companyId || !user?.agencyId) {
-      console.warn('[AgenceCompta] Abandon de l\'écoute - IDs manquants');
+    if (!user?.companyId || !user?.agencyId || !shouldLoadShiftData) {
+      if (!user?.companyId || !user?.agencyId) {
+        console.warn('[AgenceCompta] Abandon de l\'écoute - IDs manquants');
+      }
       return;
     }
-    
+
     const ref = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
-    const unsub = onSnapshot(ref, async (snap) => {
+    const unsub = onSnapshot(ref, (snap) => {
       console.log(`[AgenceCompta] Mise à jour des postes: ${snap.docs.length} document(s)`);
-      
-      const all = snap.docs.map(d => normalizeShift(d.id, d.data()));
+
+      const all = snap.docs.map((d) => normalizeShift(d.id, d.data()));
 
       // Cache vendeur : users/{uid} puis équipe agence (même logique que le guichet)
       const needed = Array.from(
@@ -930,30 +970,7 @@ const AgenceComptabilitePage: React.FC = () => {
       );
       if (needed.length) {
         console.log(`[AgenceCompta] Chargement de ${needed.length} utilisateur(s) (profil vendeur)`);
-        const entries = await Promise.all(
-          needed.map(async (uid) => {
-            try {
-              const profile = await fetchAgencyStaffProfile(user.companyId, user.agencyId, uid);
-              return [
-                uid,
-                {
-                  name: profile.name || '',
-                  email: profile.email || '',
-                  code: profile.code || '',
-                  profileLookupDone: true,
-                },
-              ] as const;
-            } catch (error) {
-              console.warn('[AgenceCompta] Profil vendeur non résolu:', uid, error);
-              return [uid, { profileLookupDone: true }] as const;
-            }
-          })
-        );
-        setUsersCache((prev) => {
-          const next = { ...prev, ...Object.fromEntries(entries) };
-          usersCacheRef.current = next;
-          return next;
-        });
+        void loadShiftUserProfiles(needed);
       }
 
       // Tri par temps
@@ -963,28 +980,28 @@ const AgenceComptabilitePage: React.FC = () => {
         (s.startTime?.toMillis?.() ?? 0);
 
       // Mise à jour des listes groupées par statut (incl. validated_agency pour visibilité chef)
-      setPendingShifts(all.filter(s => s.status === 'pending').sort((a,b)=>byTime(b)-byTime(a)));
-      setActiveShifts(all.filter(s => s.status === 'active').sort((a,b)=>byTime(b)-byTime(a)));
-      setPausedShifts(all.filter(s => s.status === 'paused').sort((a,b)=>byTime(b)-byTime(a)));
-      setClosedShifts(all.filter(s => s.status === 'closed').sort((a,b)=>byTime(b)-byTime(a)));
-      setValidatedAgencyShifts(all.filter(s => s.status === 'validated_agency').sort((a,b)=>byTime(b)-byTime(a)));
-      setValidatedShifts(all.filter(s => s.status === 'validated').sort((a,b)=>byTime(b)-byTime(a)));
+      setPendingShifts(all.filter((s) => s.status === 'pending').sort((a, b) => byTime(b) - byTime(a)));
+      setActiveShifts(all.filter((s) => s.status === 'active').sort((a, b) => byTime(b) - byTime(a)));
+      setPausedShifts(all.filter((s) => s.status === 'paused').sort((a, b) => byTime(b) - byTime(a)));
+      setClosedShifts(all.filter((s) => s.status === 'closed').sort((a, b) => byTime(b) - byTime(a)));
+      setValidatedAgencyShifts(all.filter((s) => s.status === 'validated_agency').sort((a, b) => byTime(b) - byTime(a)));
+      setValidatedShifts(all.filter((s) => s.status === 'validated').sort((a, b) => byTime(b) - byTime(a)));
 
       console.log('[AgenceCompta] Postes mis à jour:', {
-        pending: all.filter(s => s.status === 'pending').length,
-        active: all.filter(s => s.status === 'active').length,
-        paused: all.filter(s => s.status === 'paused').length,
-        closed: all.filter(s => s.status === 'closed').length,
-        validated_agency: all.filter(s => s.status === 'validated_agency').length,
-        validated: all.filter(s => s.status === 'validated').length
+        pending: all.filter((s) => s.status === 'pending').length,
+        active: all.filter((s) => s.status === 'active').length,
+        paused: all.filter((s) => s.status === 'paused').length,
+        closed: all.filter((s) => s.status === 'closed').length,
+        validated_agency: all.filter((s) => s.status === 'validated_agency').length,
+        validated: all.filter((s) => s.status === 'validated').length,
       });
     });
-    
+
     return () => {
       console.log('[AgenceCompta] Arrêt de l\'écoute des postes');
       unsub();
     };
-  }, [user?.companyId, user?.agencyId]);
+  }, [user?.companyId, user?.agencyId, shouldLoadShiftData, loadShiftUserProfiles]);
 
   /* KPI jour : statistiques réservations / ventes (fuseau agence). */
   useEffect(() => {
@@ -1009,26 +1026,26 @@ const AgenceComptabilitePage: React.FC = () => {
      Description : Écoute courierSessions pour l'onglet Courrier uniquement
      ============================================================================ */
   useEffect(() => {
-    if (!user?.companyId || !user?.agencyId) return;
+    if (!user?.companyId || !user?.agencyId || !shouldLoadCourierSessions) return;
     const col = courierSessionsRef(db, user.companyId, user.agencyId);
     const unsub = onSnapshot(col, (snap) => {
-      const all = snap.docs.map(d => ({ ...d.data(), id: d.id } as CourierSessionDoc));
+      const all = snap.docs.map((d) => ({ ...d.data(), id: d.id } as CourierSessionDoc));
       const byTime = (s: CourierSessionDoc) =>
         (s.validatedAt as { toMillis?: () => number })?.toMillis?.() ??
         (s.closedAt as { toMillis?: () => number })?.toMillis?.() ??
         (s.openedAt as { toMillis?: () => number })?.toMillis?.() ??
         (s.createdAt as { toMillis?: () => number })?.toMillis?.() ??
         0;
-      setPendingCourierSessions(all.filter(s => s.status === 'PENDING').sort((a, b) => byTime(b) - byTime(a)));
-      setActiveCourierSessions(all.filter(s => s.status === 'ACTIVE').sort((a, b) => byTime(b) - byTime(a)));
-      setClosedCourierSessions(all.filter(s => s.status === 'CLOSED').sort((a, b) => byTime(b) - byTime(a)));
+      setPendingCourierSessions(all.filter((s) => s.status === 'PENDING').sort((a, b) => byTime(b) - byTime(a)));
+      setActiveCourierSessions(all.filter((s) => s.status === 'ACTIVE').sort((a, b) => byTime(b) - byTime(a)));
+      setClosedCourierSessions(all.filter((s) => s.status === 'CLOSED').sort((a, b) => byTime(b) - byTime(a)));
       setCourierValidatedAgencySessions(
         all.filter((s) => s.status === 'VALIDATED_AGENCY').sort((a, b) => byTime(b) - byTime(a))
       );
-      setValidatedCourierSessions(all.filter(s => s.status === 'VALIDATED').sort((a, b) => byTime(b) - byTime(a)));
+      setValidatedCourierSessions(all.filter((s) => s.status === 'VALIDATED').sort((a, b) => byTime(b) - byTime(a)));
     });
     return () => unsub();
-  }, [user?.companyId, user?.agencyId]);
+  }, [user?.companyId, user?.agencyId, shouldLoadCourierSessions]);
 
   const courierShipmentWatchKey = useMemo(
     () =>
@@ -1930,7 +1947,7 @@ const AgenceComptabilitePage: React.FC = () => {
           txRef,
           where("agencyId", "==", user.agencyId),
           orderBy("createdAt", "desc"),
-          limit(200)
+          limit(50)
         );
         snap = await getDocs(qFallback);
       }

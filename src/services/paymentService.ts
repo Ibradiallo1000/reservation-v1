@@ -35,7 +35,7 @@ import { upsertMobileMoneyValidationDocument } from "@/modules/finance/documents
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ⭐ FONCTION DE RETRY POUR LES ERREURS 429
-async function withRetryOnQuota<T>(
+export async function withRetryOnQuota<T>(
   fn: () => Promise<T>,
   maxRetries = 3,
   context = "operation"
@@ -638,7 +638,7 @@ export async function getPaymentsByStatus(
   status: PaymentStatus
 ): Promise<Payment[]> {
   const ref = paymentsRef(companyId);
-  const q = query(ref, where("status", "==", status), orderBy("createdAt", "desc"));
+  const q = query(ref, where("status", "==", status), orderBy("createdAt", "desc"), limit(500));
   const snap = await withRetryOnQuota(() => getDocs(q), 2, "getPaymentsByStatus");
   return snap.docs.map((d) => mapPaymentDoc(d.id, d.data() as Record<string, unknown>));
 }
@@ -659,7 +659,8 @@ export async function getPaymentsByDateRange(
     ref,
     where("createdAt", ">=", startTs),
     where("createdAt", "<=", endTs),
-    orderBy("createdAt", "desc")
+    orderBy("createdAt", "desc"),
+    limit(500)
   );
 
   const snap = await withRetryOnQuota(() => getDocs(q), 2, "getPaymentsByDateRange");
@@ -685,10 +686,13 @@ export async function getPaymentById(
  */
 export async function getPaymentByReservationId(
   companyId: string,
-  reservationId: string
+  reservationId: string,
+  options?: { skipLegacyFallback?: boolean }
 ): Promise<Payment | null> {
   const direct = await getPaymentByCanonicalDocumentId(companyId, reservationId);
   if (direct) return direct;
+
+  if (options?.skipLegacyFallback) return null;
 
   const ref = paymentsRef(companyId);
   try {

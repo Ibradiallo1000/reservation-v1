@@ -27,6 +27,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { runFirestoreTransactionWithRetry } from "@/shared/firebase/runTransactionWithRetry";
+import { withRetryOnQuota } from "@/services/paymentService";
 import {
   applyVehicleSyncFromTripInstanceInTransaction,
   isVehicleCoherentWithTripInstance,
@@ -132,7 +133,8 @@ export type CreateTripInstanceResult = { id: string; created: boolean };
 export async function createTripInstance(
   companyId: string,
   params: CreateTripInstanceParams,
-  optionalId?: string
+  optionalId?: string,
+  skipTransactionCheck = false
 ): Promise<CreateTripInstanceResult> {
   const ref = optionalId
     ? doc(tripInstancesRef(companyId), optionalId)
@@ -214,6 +216,11 @@ export async function createTripInstance(
     ...(stopsSnapshot && stopsSnapshot.length >= 2 ? { stopsSnapshot } : {}),
   };
   if (optionalId) {
+    if (skipTransactionCheck) {
+      // Skip transaction check when we know the document doesn't exist
+      await setDoc(ref, data);
+      return { id: optionalId, created: true };
+    }
     const created = await runTransaction(db, async (tx) => {
       const snap = await tx.get(ref);
       if (snap.exists()) return false;
@@ -239,7 +246,7 @@ export async function findTripInstanceBySlot(
   const arr = (arrivalCity || "").trim();
   if (!dep || !arr || !date || !departureTime || !agencyId) return null;
   const ref = tripInstancesRef(companyId);
-  const qCanon = query(
+  const q = query(
     ref,
     where("agencyId", "==", agencyId),
     where("date", "==", date),
@@ -248,30 +255,13 @@ export async function findTripInstanceBySlot(
     where("arrivalCity", "==", arr),
     limit(1)
   );
-  const qLegacy = query(
-    ref,
-    where("agencyId", "==", agencyId),
-    where("date", "==", date),
-    where("departureTime", "==", departureTime),
-    where("departureCity", "==", dep),
-    where("arrivalCity", "==", arr),
-    limit(1)
+  const snap = await withRetryOnQuota(
+    () => getDocs(q),
+    3,
+    "findTripInstanceBySlot"
   );
-  try {
-    const snapCanon = await getDocs(qCanon);
-    if (!snapCanon.empty) {
-      const d = snapCanon.docs[0];
-      return { id: d.id, ...d.data() } as TripInstanceDocWithId;
-    }
-  } catch (e) {
-    console.warn(
-      "[tripInstanceService] findTripInstanceBySlot canonical query failed (index or data); using legacy only",
-      e
-    );
-  }
-  const snapLegacy = await getDocs(qLegacy);
-  if (snapLegacy.empty) return null;
-  const d = snapLegacy.docs[0];
+  if (snap.empty) return null;
+  const d = snap.docs[0];
   return { id: d.id, ...d.data() } as TripInstanceDocWithId;
 }
 
@@ -288,7 +278,7 @@ export async function getOrCreateTripInstanceForSlot(
     const ref = tripInstanceRef(companyId, deterministicId);
     const snap = await getDoc(ref);
     if (snap.exists()) return { id: snap.id, ...snap.data() } as TripInstanceDocWithId;
-    await createTripInstance(companyId, params, deterministicId);
+    await createTripInstance(companyId, params, deterministicId, true); // Skip transaction check
     const after = await getDoc(ref);
     return { id: after.id, ...after.data() } as TripInstanceDocWithId;
   }
@@ -924,7 +914,11 @@ export async function getTripInstance(
   companyId: string,
   tripInstanceId: string
 ): Promise<TripInstanceDocWithId | null> {
-  const snap = await getDoc(tripInstanceRef(companyId, tripInstanceId));
+  const snap = await withRetryOnQuota(
+    () => getDoc(tripInstanceRef(companyId, tripInstanceId)),
+    3,
+    "getTripInstance"
+  );
   if (!snap.exists()) return null;
   return { id: snap.id, ...snap.data() } as TripInstanceDocWithId;
 }

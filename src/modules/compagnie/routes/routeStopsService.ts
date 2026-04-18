@@ -18,6 +18,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { ROUTES_COLLECTION, ROUTE_STOPS_SUBCOLLECTION, ROUTE_DIRECTION, type RouteStopDoc, type RouteStopDocWithId, type RouteDirection } from "./routesTypes";
+import { withRetryOnQuota } from "@/services/paymentService";
 import { getRoute, capitalizeCityName } from "./routesService";
 
 /** Route shape sufficient for direction helpers (startCity/endCity or origin/destination). */
@@ -83,7 +84,7 @@ export async function getRouteStops(
 ): Promise<RouteStopDocWithId[]> {
   const ref = stopsRef(companyId, routeId);
   const q = query(ref, orderBy("order", "asc"));
-  const snap = await getDocs(q);
+  const snap = await withRetryOnQuota(() => getDocs(q), 3, "getRouteStops");
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as RouteStopDocWithId));
 }
 

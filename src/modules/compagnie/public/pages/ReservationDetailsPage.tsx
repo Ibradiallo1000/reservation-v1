@@ -76,6 +76,7 @@ interface Reservation {
   agencyId?: string;
   agencyNom?: string;
   agenceNom?: string;
+  agencyTelephone?: string;
   publicToken?: string;
 }
 
@@ -213,6 +214,7 @@ const ReservationDetailsPage: React.FC = () => {
       companyName: (data.companyName as string) ?? '',
       agencyId: (data.agencyId as string) ?? '',
       agencyNom: (data.agencyNom as string) ?? '',
+      agencyTelephone: (data.agencyTelephone as string) ?? '',
       updatedAt: (data.updatedAt as any)?.toDate?.()?.toISOString?.() ?? new Date().toISOString(),
     };
   }, []);
@@ -914,6 +916,8 @@ const ReservationDetailsPage: React.FC = () => {
               primaryColor={primaryColor}
               secondaryColor={secondaryColor}
               agencyName={agencyName}
+              agencyNom={reservation.agencyNom || reservation.agenceNom}
+              agencyTelephone={reservation.agencyTelephone}
               receiptNumber={reservation.referenceCode || reservation.id}
               statut={reservation.statut}
               nomClient={reservation.nomClient}

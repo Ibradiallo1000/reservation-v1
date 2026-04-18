@@ -280,7 +280,7 @@ export default function HeadAccountantDashboardPage() {
         getDocs(collection(db, `companies/${companyId}/agences`)),
         null
       );
-      const accountsSnapPromise = getDocs(query(collection(db, `companies/${companyId}/accounts`), limit(1000)));
+      const accountsSnapPromise = getDocs(query(collection(db, `companies/${companyId}/accounts`), limit(500)));
       const unifiedPromise = getUnifiedCompanyFinance(companyId, periodWindow.dateFrom, periodWindow.dateTo);
       const validatedAgencyPromise = resolveOptional(
         "shift_reports_validated_agency",
@@ -289,7 +289,7 @@ export default function HeadAccountantDashboardPage() {
       );
       const shiftReportsPromise = resolveOptional(
         "shift_reports",
-        getDocs(query(collectionGroup(db, "shiftReports"), where("companyId", "==", companyId), limit(1200))),
+        getDocs(query(collectionGroup(db, "shiftReports"), where("companyId", "==", companyId), limit(500))),
         null
       );
       const paymentsPromise = resolveOptional(

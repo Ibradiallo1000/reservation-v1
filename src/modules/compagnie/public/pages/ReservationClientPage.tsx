@@ -15,6 +15,7 @@ import {
   serverTimestamp,
   getDoc,
   Timestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { normalizePhone } from '@/utils/phoneUtils';
 import { db } from '@/firebaseConfig';
@@ -54,6 +55,116 @@ import { debounce } from 'lodash';
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+
+const isFirestoreRetryableError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const message = String((error as { message?: unknown }).message ?? '').toLowerCase();
+  const code = String((error as { code?: unknown }).code ?? '').toLowerCase();
+  return (
+    message.includes('quota exceeded') ||
+    message.includes('too many requests') ||
+    code === 'resource-exhausted' ||
+    code === 'unavailable' ||
+    code === 'internal'
+  );
+};
+
+// Circuit Breaker pour gérer les quotas Firestore
+class FirestoreCircuitBreaker {
+  private failures = 0;
+  private lastFailureTime = 0;
+  private state: 'closed' | 'open' | 'half-open' = 'closed';
+  private readonly failureThreshold = 5; // Nombre d'échecs consécutifs avant d'ouvrir
+  private readonly recoveryTimeout = 60000; // 1 minute avant de passer en half-open
+  private readonly successThreshold = 2; // Nombre de succès requis pour fermer
+  private halfOpenSuccesses = 0;
+
+  isOpen(): boolean {
+    if (this.state === 'closed') return false;
+    if (this.state === 'open') {
+      const now = Date.now();
+      if (now - this.lastFailureTime > this.recoveryTimeout) {
+        this.state = 'half-open';
+        this.halfOpenSuccesses = 0;
+        console.log('[CircuitBreaker] Transition to half-open');
+        return false;
+      }
+      return true;
+    }
+    return false; // half-open
+  }
+
+  recordSuccess(): void {
+    this.failures = 0;
+    if (this.state === 'half-open') {
+      this.halfOpenSuccesses++;
+      if (this.halfOpenSuccesses >= this.successThreshold) {
+        this.state = 'closed';
+        console.log('[CircuitBreaker] Circuit closed - service recovered');
+      }
+    }
+  }
+
+  recordFailure(): void {
+    this.failures++;
+    this.lastFailureTime = Date.now();
+    if (this.state === 'half-open' || this.failures >= this.failureThreshold) {
+      this.state = 'open';
+      console.log(`[CircuitBreaker] Circuit opened after ${this.failures} failures`);
+    }
+  }
+
+  getState(): string {
+    return this.state;
+  }
+
+  getTimeUntilRetry(): number {
+    if (this.state !== 'open') return 0;
+    const elapsed = Date.now() - this.lastFailureTime;
+    return Math.max(0, this.recoveryTimeout - elapsed);
+  }
+}
+
+const firestoreCircuitBreaker = new FirestoreCircuitBreaker();
+
+const retryFirestoreOperation = async <T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  baseDelayMs = 1000,
+  context = 'firestore'
+): Promise<T> => {
+  // Vérifier le circuit breaker
+  if (firestoreCircuitBreaker.isOpen()) {
+    const waitTime = firestoreCircuitBreaker.getTimeUntilRetry();
+    throw new Error(`Service temporairement indisponible. Réessayez dans ${Math.ceil(waitTime / 1000)} secondes.`);
+  }
+
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    try {
+      const result = await fn();
+      firestoreCircuitBreaker.recordSuccess();
+      return result;
+    } catch (error: unknown) {
+      if (!isFirestoreRetryableError(error)) {
+        throw error;
+      }
+      
+      firestoreCircuitBreaker.recordFailure();
+      
+      if (attempt === maxRetries - 1) {
+        throw error;
+      }
+      
+      const waitMs = baseDelayMs * 2 ** attempt + Math.random() * 1000; // Add jitter
+      console.warn(
+        `[ReservationClientPage] ${context} - retry ${attempt + 1}/${maxRetries} after ${waitMs}ms`,
+        error
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw new Error(`Retry failed for ${context}`);
+};
 
 // ---------- helpers ----------
 const normalize = (s: string) =>
@@ -181,6 +292,8 @@ export default function ReservationClientPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const [existing, setExisting] = useState<ExistingReservation | null>(null);
+  const [circuitBreakerState, setCircuitBreakerState] = useState<string>('closed');
+  const [circuitBreakerWaitTime, setCircuitBreakerWaitTime] = useState(0);
 
   // Redirect when user lands on booking with existing reservation → send to correct step
   useEffect(() => {
@@ -238,7 +351,7 @@ export default function ReservationClientPage() {
           id: agencyId,
           nom: ((snap.agencyNom as string) || (snap.nomAgence as string) || 'Agence'),
           telephone: (snap.telephone as string) || '',
-          code: undefined
+          code: ''
         });
 
         setExisting({
@@ -273,17 +386,30 @@ export default function ReservationClientPage() {
   // Mode création
   useEffect(() => {
     if (reservationRouteId) return;
-    if (!slug || !departureQ || !arrivalQ) { 
-      setLoading(false); 
-      return; 
+    if (!slug || !departureQ || !arrivalQ) {
+      setLoading(false);
+      return;
     }
 
     const load = async () => {
       setLoading(true);
       try {
+        const cacheKey = `preload_${slug}_${departureQ}_${arrivalQ}`;
+        const cached = sessionStorage.getItem(cacheKey);
+        if (cached) {
+          const preloadData = JSON.parse(cached);
+          setCompany(preloadData.company);
+          setValidTrips(preloadData.trips);
+          setAgencyInfo(preloadData.agencyInfo);
+          setSelectedDate(preloadData.selectedDate || '');
+          setSelectedTripId(preloadData.selectedTripId || '');
+          setLoading(false);
+          return;
+        }
+
         const cSnap = await getDocs(query(collection(db, 'companies'), where('slug', '==', slug)));
         if (cSnap.empty) throw new Error('Compagnie introuvable');
-        const cdoc = cSnap.docs[0]; 
+        const cdoc = cSnap.docs[0];
         const cdata = cdoc.data() as any;
 
         setCompany({
@@ -304,12 +430,12 @@ export default function ReservationClientPage() {
           companyId: cdoc.id,
           depNorm,
           arrNorm,
-          limitCount: 100,
+          limitCount: 100
         });
 
         const directTrips = validTrips.map((trip) => ({
           ...trip,
-          companyId: cdoc.id,
+          companyId: cdoc.id
         })) as Trip[];
         const now = new Date();
         const upcomingTrips = directTrips.filter((trip: any) => {
@@ -320,6 +446,7 @@ export default function ReservationClientPage() {
           return tripDt.getTime() >= now.getTime();
         });
         setValidTrips(upcomingTrips);
+
         const strip = getPublicScheduleDatesLocal(PUBLIC_RESERVATION_SCHEDULE_DAYS);
         let selDate = strip[0] ?? '';
         let selTripId = '';
@@ -334,30 +461,33 @@ export default function ReservationClientPage() {
         setSelectedDate(selDate);
         setSelectedTripId(selTripId);
 
-        sessionStorage.setItem(`preload_${slug}_${departureQ}_${arrivalQ}`, JSON.stringify({
+        const preloadData = {
           company: {
-            id: cdoc.id, 
+            id: cdoc.id,
             name: cdata.nom || '',
             couleurPrimaire: cdata.couleurPrimaire || '#f43f5e',
             couleurSecondaire: cdata.couleurSecondaire || '#f97316',
-            logoUrl: cdata.logoUrl || '', 
+            logoUrl: cdata.logoUrl || '',
             code: (cdata.code || 'MT').toString().toUpperCase()
-          }, 
+          },
           trips: directTrips,
-          agencyInfo: { 
-            nom: '', 
-            telephone: '', 
-            code: undefined 
-          }
-        }));
+          agencyInfo: {
+            nom: '',
+            telephone: '',
+            code: ''
+          },
+          selectedDate: selDate,
+          selectedTripId: selTripId
+        };
+        sessionStorage.setItem(cacheKey, JSON.stringify(preloadData));
       } catch (e: any) {
         setError(e?.message || 'Erreur de chargement');
-      } finally { 
-        setLoading(false); 
+      } finally {
+        setLoading(false);
       }
     };
 
-    load();
+    void load();
   }, [slug, departureQ, arrivalQ, reservationRouteId]);
 
   // Appliquer les couleurs de la compagnie au thème du navigateur
@@ -473,6 +603,13 @@ export default function ReservationClientPage() {
     }
     if (creating || isSubmitting) return;
 
+    // Vérifier le circuit breaker
+    if (firestoreCircuitBreaker.isOpen()) {
+      const waitTime = firestoreCircuitBreaker.getTimeUntilRetry();
+      setError(`Service temporairement indisponible en raison d'une surcharge. Réessayez dans ${Math.ceil(waitTime / 1000)} secondes.`);
+      return;
+    }
+
     isCreatingRef.current = true;
     setCreating(true);
     setIsSubmitting(true);
@@ -489,7 +626,12 @@ export default function ReservationClientPage() {
       const companyId = selectedTrip.companyId;
       let tripInstanceId = String(selectedTrip.id);
       const tiRefResolved = tripInstanceRef(companyId, tripInstanceId);
-      let tiSnap = await getDoc(tiRefResolved);
+      let tiSnap = await retryFirestoreOperation(
+        () => getDoc(tiRefResolved),
+        3,
+        1000,
+        'get trip instance'
+      );
       
       if (!tiSnap.exists()) {
         const wtid = String((selectedTrip as { weeklyTripId?: string }).weeklyTripId ?? '').trim();
@@ -504,20 +646,30 @@ export default function ReservationClientPage() {
           1,
           Number((selectedTrip as { seatCapacity?: number }).seatCapacity ?? selectedTrip.remainingSeats ?? 0) || 1
         );
-        const tiDoc = await getOrCreateTripInstanceForSlot(companyId, {
-          agencyId: String(selectedTrip.agencyId),
-          departureCity: selectedTrip.departure,
-          arrivalCity: selectedTrip.arrival,
-          date: String(selectedTrip.date),
-          departureTime: timeNorm,
-          weeklyTripId: wtid,
-          seatCapacity: cap,
-          price: selectedTrip.price,
-          routeId: String((selectedTrip as { routeId?: string }).routeId ?? '').trim() || null,
-          createdBy: 'public_reservation',
-        });
+        const tiDoc = await retryFirestoreOperation(
+          () => getOrCreateTripInstanceForSlot(companyId, {
+            agencyId: String(selectedTrip.agencyId),
+            departureCity: selectedTrip.departure,
+            arrivalCity: selectedTrip.arrival,
+            date: String(selectedTrip.date),
+            departureTime: timeNorm,
+            weeklyTripId: wtid,
+            seatCapacity: cap,
+            price: selectedTrip.price,
+            routeId: String((selectedTrip as { routeId?: string }).routeId ?? '').trim() || null,
+            createdBy: 'public_reservation',
+          }),
+          7,
+          3000,
+          'getOrCreate trip instance'
+        );
         tripInstanceId = tiDoc.id;
-        tiSnap = await getDoc(tripInstanceRef(companyId, tripInstanceId));
+        tiSnap = await retryFirestoreOperation(
+          () => getDoc(tripInstanceRef(companyId, tripInstanceId)),
+          3,
+          1000,
+          'get trip instance after create'
+        );
       }
       
       if (!tiSnap.exists()) {
@@ -527,7 +679,12 @@ export default function ReservationClientPage() {
       const agencyName = agencyInfo.nom || 'Agence';
       const agencyCode = agencyInfo.code;
 
-      const compSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId));
+      const compSnap = await retryFirestoreOperation(
+        () => getDoc(doc(db, 'companies', selectedTrip.companyId)),
+        3,
+        1000,
+        'get company'
+      );
       const comp = compSnap.exists() ? (compSnap.data() as any) : {};
       
       function inferCompanyCode(name?: string) {
@@ -667,8 +824,51 @@ export default function ReservationClientPage() {
         throw new Error('Plus assez de places disponibles sur ce trajet.');
       }
       
-      await setDoc(newResRef, reservation);
       const refDoc = { id: newResRef.id };
+
+      const publicSnapshot = {
+        reservationId: refDoc.id,
+        companyId: selectedTrip.companyId,
+        agencyId: selectedTrip.agencyId,
+        slug: slug!,
+        publicToken: token,
+        nomClient: reservation.nomClient,
+        telephone: reservation.telephone,
+        depart: reservation.depart,
+        arrivee: reservation.arrivee,
+        date: reservation.date,
+        heure: reservation.heure,
+        montant: reservation.montant,
+        seatsGo: reservation.seatsGo,
+        seatsReturn: reservation.seatsReturn,
+        tripType: reservation.tripType,
+        status: reservation.status,
+        canal: reservation.canal,
+        referenceCode: reservation.referenceCode,
+        companyName: reservation.companyName,
+        agencyNom: reservation.agencyNom,
+        companySlug: reservation.companySlug,
+        trajetId: reservation.trajetId,
+        tripInstanceId: reservation.tripInstanceId,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      const reservationBatch = writeBatch(db);
+      reservationBatch.set(newResRef, reservation);
+      reservationBatch.set(doc(db, 'publicReservations', token), publicSnapshot);
+      reservationBatch.set(doc(db, 'publicReservations', refDoc.id), {
+        token,
+        companyId: selectedTrip.companyId,
+        agencyId: selectedTrip.agencyId,
+        slug: slug!,
+      });
+      await retryFirestoreOperation(
+        () => reservationBatch.commit(),
+        5,
+        2000,
+        'commit reservation batch'
+      );
 
       const rawProvider = String((reservation as any).paymentMethod ?? (reservation as any).paiement ?? '').toLowerCase();
       const provider = rawProvider.includes('orange')
@@ -698,42 +898,6 @@ export default function ReservationClientPage() {
           duration: 8000,
         });
       }
-
-      const publicSnapshot = {
-        reservationId: refDoc.id,
-        companyId: selectedTrip.companyId,
-        agencyId: selectedTrip.agencyId,
-        slug: slug!,
-        publicToken: token,
-        nomClient: reservation.nomClient,
-        telephone: reservation.telephone,
-        depart: reservation.depart,
-        arrivee: reservation.arrivee,
-        date: reservation.date,
-        heure: reservation.heure,
-        montant: reservation.montant,
-        seatsGo: reservation.seatsGo,
-        seatsReturn: reservation.seatsReturn,
-        tripType: reservation.tripType,
-        status: reservation.status,
-        canal: reservation.canal,
-        referenceCode: reservation.referenceCode,
-        companyName: reservation.companyName,
-        agencyNom: reservation.agencyNom,
-        companySlug: reservation.companySlug,
-        trajetId: reservation.trajetId,
-        tripInstanceId: reservation.tripInstanceId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-      
-      await setDoc(doc(db, 'publicReservations', token), publicSnapshot);
-      await setDoc(doc(db, 'publicReservations', refDoc.id), {
-        token,
-        companyId: selectedTrip.companyId,
-        agencyId: selectedTrip.agencyId,
-        slug: slug!,
-      });
       
       try { 
         await navigator.clipboard.writeText(publicUrl); 
@@ -756,8 +920,15 @@ export default function ReservationClientPage() {
       });
     } catch (e: any) {
       console.error('[ReservationClientPage] Erreur création:', e);
-      setSubmitError('Erreur réseau ou places indisponibles');
-      setError(e?.message || 'Impossible de créer la réservation');
+      
+      // Gérer les erreurs de circuit breaker
+      if (e?.message?.includes('Service temporairement indisponible')) {
+        setSubmitError('Service temporairement indisponible');
+        setError(e.message);
+      } else {
+        setSubmitError('Erreur réseau ou places indisponibles');
+        setError(e?.message || 'Impossible de créer la réservation');
+      }
     } finally { 
       window.clearTimeout(slowHintTimer);
       setShowSlowConnectionHint(false);
@@ -781,6 +952,22 @@ export default function ReservationClientPage() {
       createReservationDebounced.cancel();
     };
   }, [createReservationDebounced]);
+
+  // Circuit breaker monitoring
+  useEffect(() => {
+    const updateCircuitBreakerState = () => {
+      setCircuitBreakerState(firestoreCircuitBreaker.getState());
+      setCircuitBreakerWaitTime(Math.ceil(firestoreCircuitBreaker.getTimeUntilRetry() / 1000));
+    };
+
+    // Update immediately
+    updateCircuitBreakerState();
+
+    // Update every second when circuit is open
+    const interval = setInterval(updateCircuitBreakerState, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // ---------- UI: carte trajet épurée ----------
   const RouteCard = (titleRight?: string) => (
@@ -1127,6 +1314,15 @@ export default function ReservationClientPage() {
                   <div className="mt-4 p-3 rounded-xl bg-red-50 border border-red-100 text-red-800 text-sm">
                     ❌ Impossible de créer la réservation
                     <div className="mt-1">🔁 Veuillez réessayer</div>
+                  </div>
+                )}
+
+                {circuitBreakerState === 'open' && (
+                  <div className="mt-4 p-3 rounded-xl bg-orange-50 border border-orange-100 text-orange-800 text-sm">
+                    ⚠️ Service temporairement surchargé
+                    <div className="mt-1">
+                      Réessayez dans {circuitBreakerWaitTime} seconde{circuitBreakerWaitTime > 1 ? 's' : ''}
+                    </div>
                   </div>
                 )}
 

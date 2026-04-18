@@ -36,66 +36,54 @@ export type CanonicalPaymentMonitorRow = {
   ledgerError: string | null;
 };
 
+// 🔥 cache global robuste (évite duplication multi-pages)
+const canonicalPaymentMonitorCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    rows: CanonicalPaymentMonitorRow[];
+  }
+>();
+
+// 🔥 cache plus long pour réduire les reads
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 function toAmount(value: unknown): number {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
 
-function toMillis(value: unknown): number | null {
-  if (!value) return null;
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const ms = Date.parse(value);
-    return Number.isNaN(ms) ? null : ms;
-  }
-  if (typeof value === "object") {
-    const asObj = value as { toMillis?: () => number; toDate?: () => Date; seconds?: number };
-    if (typeof asObj.toMillis === "function") {
-      const ms = asObj.toMillis();
-      return Number.isFinite(ms) ? ms : null;
-    }
-    if (typeof asObj.toDate === "function") {
-      const d = asObj.toDate();
-      return d instanceof Date ? d.getTime() : null;
-    }
-    if (typeof asObj.seconds === "number" && Number.isFinite(asObj.seconds)) {
-      return asObj.seconds * 1000;
-    }
-  }
-  return null;
-}
-
-function inWindow(ms: number | null, startMs: number, endMs: number): boolean {
-  if (ms == null) return false;
-  return ms >= startMs && ms <= endMs;
-}
-
 function normalizeMonitorProvider(value: unknown): CanonicalPaymentMonitorProvider {
   const raw = String(value ?? "").trim().toLowerCase();
   if (!raw) return null;
-  if (raw === "wave" || raw === "orange" || raw === "moov" || raw === "sarali" || raw === "cash") {
+
+  if (["wave", "orange", "moov", "sarali", "cash"].includes(raw)) {
     return raw as PaymentProvider;
   }
+
   return "other";
 }
 
 function normalizeMonitorStatus(value: unknown): PaymentStatus {
   const raw = String(value ?? "").trim().toLowerCase();
+
   if (raw === "validated" || raw === "rejected" || raw === "refunded") {
     return raw as PaymentStatus;
   }
+
   return "pending";
 }
 
-function normalizeMonitorLedgerStatus(value: unknown, status: PaymentStatus): PaymentLedgerStatus {
+function normalizeMonitorLedgerStatus(
+  value: unknown,
+  status: PaymentStatus
+): PaymentLedgerStatus {
   const raw = String(value ?? "").trim().toLowerCase();
+
   if (raw === "posted" || raw === "failed") {
     return raw as PaymentLedgerStatus;
   }
-  if (raw === "pending") {
-    return "pending";
-  }
+
   return status === "validated" ? "pending" : "pending";
 }
 
@@ -104,13 +92,17 @@ function normalizeMonitorChannel(
   provider: CanonicalPaymentMonitorProvider
 ): CanonicalPaymentMonitorChannel {
   const normalized = normalizeChannel(String(value ?? ""));
+
   if (normalized === "guichet" || normalized === "online" || normalized === "courrier") {
     return normalized;
   }
+
   if (provider === "cash") return "guichet";
-  if (provider === "wave" || provider === "orange" || provider === "moov" || provider === "sarali") {
+
+  if (["wave", "orange", "moov", "sarali"].includes(provider ?? "")) {
     return "online";
   }
+
   return "other";
 }
 
@@ -139,11 +131,12 @@ export function mapCanonicalPaymentMonitorRow(
       raw.ledgerError == null
         ? null
         : typeof raw.ledgerError === "string"
-          ? raw.ledgerError
-          : String(raw.ledgerError),
+        ? raw.ledgerError
+        : String(raw.ledgerError),
   };
 }
 
+// 🔥 fonctions métier (inchangées, correctes)
 export function isCanonicalPendingOperatorPayment(row: CanonicalPaymentMonitorRow): boolean {
   return row.channel === "online" && row.status === "pending";
 }
@@ -160,35 +153,42 @@ export function isCanonicalOnlinePaymentToMonitor(row: CanonicalPaymentMonitorRo
   return row.channel === "online" && (row.status !== "validated" || row.ledgerStatus !== "posted");
 }
 
+// 🔥 VERSION CORRIGÉE PRINCIPALE
 export async function loadCanonicalPaymentsForPeriod(
   companyId: string,
   start: Date,
   end: Date,
   options?: { limitCount?: number }
 ): Promise<CanonicalPaymentMonitorRow[]> {
-  const paymentsRef = collection(db, `companies/${companyId}/payments`);
-  const startTs = Timestamp.fromDate(start);
-  const endTs = Timestamp.fromDate(end);
-  const limitCount = options?.limitCount ?? 2000;
+  const limitCount = Math.min(options?.limitCount ?? 200, 300); // 🔥 cap dur
+  const cacheKey = `${companyId}:${start.getTime()}:${end.getTime()}:${limitCount}`;
 
-  try {
-    const snap = await getDocs(
-      query(
-        paymentsRef,
-        where("createdAt", ">=", startTs),
-        where("createdAt", "<=", endTs),
-        orderBy("createdAt", "desc"),
-        limit(limitCount)
-      )
-    );
-    return snap.docs.map((d) => mapCanonicalPaymentMonitorRow(d.id, d.data() as Record<string, unknown>));
-  } catch (err) {
-    console.warn("[canonicalPaymentMonitor] payments range query fallback:", err);
-    const snap = await getDocs(query(paymentsRef, orderBy("createdAt", "desc"), limit(limitCount)));
-    const startMs = start.getTime();
-    const endMs = end.getTime();
-    return snap.docs
-      .map((d) => mapCanonicalPaymentMonitorRow(d.id, d.data() as Record<string, unknown>))
-      .filter((row) => inWindow(toMillis(row.createdAt) ?? toMillis(row.validatedAt), startMs, endMs));
+  const cached = canonicalPaymentMonitorCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.rows;
   }
+
+  const paymentsRef = collection(db, `companies/${companyId}/payments`);
+
+  // 🔥 UNE SEULE requête — pas de fallback dangereux
+  const snap = await getDocs(
+    query(
+      paymentsRef,
+      where("createdAt", ">=", Timestamp.fromDate(start)),
+      where("createdAt", "<=", Timestamp.fromDate(end)),
+      orderBy("createdAt", "desc"),
+      limit(limitCount)
+    )
+  );
+
+  const rows = snap.docs.map((d) =>
+    mapCanonicalPaymentMonitorRow(d.id, d.data() as Record<string, unknown>)
+  );
+
+  canonicalPaymentMonitorCache.set(cacheKey, {
+    rows,
+    expiresAt: Date.now() + CACHE_DURATION,
+  });
+
+  return rows;
 }

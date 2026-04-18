@@ -331,32 +331,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         agencyLogoUrl: data.agencyLogoUrl,
       };
 
-      if (customUser.companyId && customUser.agencyId) {
-        try {
-          const agSnap = await getDoc(
-            doc(db, "companies", customUser.companyId, "agences", customUser.agencyId)
-          );
-          if (agSnap.exists()) {
-            customUser.agencyTimezone = resolveAgencyTimezone(
-              agSnap.data() as { timezone?: string | null }
-            );
-          }
-        } catch {
-          /* non-blocking : KPI utiliseront le fuseau par défaut */
-        }
-      }
-
       setUser(customUser);
 
       if (customUser.companyId) {
-        const companySnap = await getDoc(
-          doc(db, "companies", customUser.companyId)
-        );
+        const promises = [];
+        promises.push(getDoc(doc(db, "companies", customUser.companyId)));
+        if (customUser.agencyId) {
+          promises.push(getDoc(doc(db, "companies", customUser.companyId, "agences", customUser.agencyId)));
+        }
+        const [companySnap, agSnap] = await Promise.all(promises);
         setCompany(
           companySnap.exists()
             ? ({ ...(companySnap.data() as Company), id: companySnap.id })
             : null
         );
+        if (agSnap && agSnap.exists()) {
+          const updatedUser = { ...customUser };
+          updatedUser.agencyTimezone = resolveAgencyTimezone(
+            agSnap.data() as { timezone?: string | null }
+          );
+          setUser(updatedUser);
+        }
       } else {
         setCompany(null);
       }

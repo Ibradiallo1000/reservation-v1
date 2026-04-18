@@ -372,26 +372,17 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
   submitInFlightRef.current = true;
   setUploading(true);
   setError(null);
-  retryCountRef.current = 0;
-  log.group('handleSubmitProof');
 
-  const submitWithRetry = async (retryCount: number): Promise<void> => {
-    try {
-      const trimmed = smsText.trim();
-      const parsedForSave = parsed ?? parsePaymentSMS(trimmed);
-      const level: Exclude<SmsValidationLevel, null> =
-        validation === 'valid'
-          ? 'valid'
-          : validation === 'suspicious'
-            ? 'suspicious'
-            : 'invalid';
+  try {
+    const trimmed = smsText.trim();
+    const parsedForSave = parsed ?? parsePaymentSMS(trimmed);
 
-      const paymentStatus = validation === 'valid' ? 'auto_detected' : 'declared_paid';
+    const paymentStatus = validation === 'valid' ? 'auto_detected' : 'declared_paid';
 
-      // 1. Sauvegarder dans publicReservations (pour le client)
-      const publicReservationRef = doc(db, 'publicReservations', reservationDraft.id!);
-      
-      await setDoc(publicReservationRef, {
+    // ✅ 1. écriture principale (public)
+    await setDoc(
+      doc(db, 'publicReservations', reservationDraft.id!),
+      {
         status: 'payé',
         preuveMessage: trimmed,
         paymentReference: parsedForSave.transactionId || null,
@@ -399,180 +390,90 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         preuveVia: paymentMethod || '',
         paymentMethod: paymentMethod || '',
         amount: reservationDraft.montant,
-        payment: {
-          smsText: trimmed,
-          parsed: parsedForSave,
-          validationLevel: level,
-          status: paymentStatus,
-          totalAmount: reservationDraft.montant,
-        },
         updatedAt: serverTimestamp(),
         proofSubmittedAt: serverTimestamp(),
-        reservationId: reservationDraft.id,
-        companyId: reservationDraft.companyId,
-        agencyId: reservationDraft.agencyId,
-        nomClient: reservationDraft.nomClient,
-        telephone: reservationDraft.telephone,
-        depart: reservationDraft.depart,
-        arrivee: reservationDraft.arrivee,
-        date: reservationDraft.date,
-        heure: reservationDraft.heure,
-        seatsGo: reservationDraft.seatsGo,
-        montant: reservationDraft.montant,
-      }, { merge: true });
+      },
+      { merge: true }
+    );
 
-      // 2. CRITIQUE: Mettre à jour la réservation originale pour l'opérateur digital
-      // Utiliser une approche avec retry spécifique pour les permissions
-      const reservationRef = doc(
-        db,
-        'companies',
-        reservationDraft.companyId!,
-        'agences',
-        reservationDraft.agencyId,
-        'reservations',
-        reservationDraft.id!
-      );
-      
-      // Essayer plusieurs fois avec un délai
-      let reservationUpdateSuccess = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          await updateDoc(reservationRef, {
-            status: 'payé',
-            statut: 'payé',
-            preuveMessage: trimmed,
-            paymentReference: parsedForSave.transactionId || null,
-            transactionReference: parsedForSave.transactionId || null,
-            preuveVia: paymentMethod || '',
-            paymentStatus: paymentStatus,
-            proofSubmittedAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          reservationUpdateSuccess = true;
-          log.info('Réservation originale mise à jour avec succès');
-          break;
-        } catch (updateError: any) {
-          log.warn(`Tentative ${attempt + 1}/3 échouée:`, updateError?.code);
-          if (attempt < 2) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-          }
+    // ✅ 2. update réservation (UNE SEULE tentative)
+    try {
+      await updateDoc(
+        doc(
+          db,
+          'companies',
+          reservationDraft.companyId!,
+          'agences',
+          reservationDraft.agencyId,
+          'reservations',
+          reservationDraft.id!
+        ),
+        {
+          status: 'payé',
+          statut: 'payé',
+          preuveMessage: trimmed,
+          paymentReference: parsedForSave.transactionId || null,
+          transactionReference: parsedForSave.transactionId || null,
+          preuveVia: paymentMethod || '',
+          paymentStatus,
+          proofSubmittedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         }
-      }
-      
-      if (!reservationUpdateSuccess) {
-        // Si la mise à jour échoue, créer un document de notification pour l'opérateur
-        const notificationRef = doc(db, 'companies', reservationDraft.companyId!, 'pendingProofs', reservationDraft.id!);
-        await setDoc(notificationRef, {
+      );
+    } catch (err) {
+      // ✅ fallback simple (pas de boucle)
+      await setDoc(
+        doc(
+          db,
+          'companies',
+          reservationDraft.companyId!,
+          'pendingProofs',
+          reservationDraft.id!
+        ),
+        {
           reservationId: reservationDraft.id,
           preuveMessage: trimmed,
           transactionId: parsedForSave.transactionId,
           amount: reservationDraft.montant,
           createdAt: serverTimestamp(),
           needsReview: true,
-        }, { merge: true });
-        log.info('Notification créée pour l\'opérateur');
-      }
-
-      clearPendingReservation();
-
-      try {
-        sessionStorage.removeItem('lastUssdCode');
-      } catch {
-        // ignore
-      }
-
-      // Synchronisation avec le système de paiement (optionnel)
-      try {
-        const ensure = await ensurePendingOnlinePaymentFromReservation({
-          companyId: reservationDraft.companyId!,
-          agencyId: reservationDraft.agencyId,
-          reservationId: reservationDraft.id!,
-          montant: reservationDraft.montant,
-          paymentMethodLabel: paymentMethod,
-        });
-
-        if (!ensure.ok) {
-          log.warn('ensurePendingOnlinePaymentFromReservation', ensure.error);
-        }
-      } catch (secondaryErr) {
-        log.warn('ensurePendingOnlinePaymentFromReservation failed', secondaryErr);
-      }
-
-      log.info('Proof submitted successfully → redirect to receipt');
-
-      const pathBase = getPublicPathBase(
-        reservationDraft.companySlug || getSlugFromSubdomain() || slug || ''
+        },
+        { merge: true }
       );
-
-      navigate(
-        pathBase
-          ? `/${pathBase}/receipt/${reservationDraft.id}`
-          : `/receipt/${reservationDraft.id}`,
-        {
-          replace: true,
-          state: {
-            companyId: reservationDraft.companyId,
-            agencyId: reservationDraft.agencyId,
-          },
-        }
-      );
-      
-    } catch (err) {
-      log.error('handleSubmitProof error', err);
-      
-      const code = extractFirestoreErrorCode(err);
-      const errorMessage = err instanceof Error ? err.message : '';
-      const isRateLimit = code === 'resource-exhausted' || 
-                         errorMessage.includes('429') ||
-                         errorMessage.includes('Too Many Requests');
-      
-      if (isRateLimit && retryCount < MAX_RETRIES) {
-        const delay = Math.pow(2, retryCount) * 1000;
-        log.info(`Rate limit, retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`);
-        setError(`Le serveur est occupé, tentative ${retryCount + 1}/${MAX_RETRIES}...`);
-        
-        setTimeout(async () => {
-          await submitWithRetry(retryCount + 1);
-        }, delay);
-        return;
-      }
-      
-      if (code === 'permission-denied' || errorMessage.includes('permission')) {
-        // La preuve est dans publicReservations, mais pas dans la réservation
-        // L'opérateur devra vérifier manuellement
-        setError(
-          "Votre preuve a été enregistrée. Un opérateur devra la valider manuellement."
-        );
-        // Rediriger quand même vers le reçu
-        setTimeout(() => {
-          const pathBase = getPublicPathBase(
-            reservationDraft?.companySlug || getSlugFromSubdomain() || slug || ''
-          );
-          navigate(
-            pathBase
-              ? `/${pathBase}/receipt/${reservationDraft?.id}`
-              : `/receipt/${reservationDraft?.id}`,
-            { replace: true }
-          );
-        }, 2000);
-      } else if (code === 'resource-exhausted') {
-        setError(
-          "Le serveur est momentanément occupé. Votre preuve n'a pas encore été enregistrée. Attendez quelques secondes puis réessayez."
-        );
-      } else {
-        setError("Une erreur est survenue lors de l'envoi. Veuillez réessayer.");
-      }
-      
-      submitInFlightRef.current = false;
-      setUploading(false);
     }
-  };
 
-  await submitWithRetry(0);
-  
-  submitInFlightRef.current = false;
-  setUploading(false);
-  log.groupEnd();
+    clearPendingReservation();
+
+    const pathBase = getPublicPathBase(
+      reservationDraft.companySlug || getSlugFromSubdomain() || slug || ''
+    );
+
+    navigate(
+      pathBase
+        ? `/${pathBase}/receipt/${reservationDraft.id}`
+        : `/receipt/${reservationDraft.id}`,
+      {
+        replace: true,
+        state: {
+          companyId: reservationDraft.companyId,
+          agencyId: reservationDraft.agencyId,
+        },
+      }
+    );
+
+  } catch (err) {
+    const code = extractFirestoreErrorCode(err);
+
+    if (code === 'resource-exhausted') {
+      setError("Serveur occupé. Réessayez dans quelques secondes.");
+    } else {
+      setError("Erreur lors de l'envoi.");
+    }
+
+  } finally {
+    submitInFlightRef.current = false;
+    setUploading(false);
+  }
 };
 
   if (loadingData) {

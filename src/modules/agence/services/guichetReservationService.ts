@@ -37,7 +37,7 @@ import {
   resolveStopByStopId,
   warnIfStopIdOrderMismatch,
 } from '@/modules/compagnie/routes/stopResolution';
-import { createPayment, markPaymentLedgerStatus } from '@/services/paymentService';
+import { createPayment, markPaymentLedgerStatus, withRetryOnQuota } from '@/services/paymentService';
 import { createFinancialTransaction } from '@/modules/compagnie/treasury/financialTransactions';
 import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
 import { assertReservationChannelInvariantsOnWrite } from '@/modules/agence/guichet/guichetSessionReservationModel';
@@ -251,7 +251,7 @@ async function validateEscaleAgentReservation(
   tripInstanceId?: string | null
 ): Promise<void> {
   const agencyRef = doc(db, 'companies', companyId, 'agences', agencyId);
-  const agencySnap = await getDoc(agencyRef);
+  const agencySnap = await withRetryOnQuota(() => getDoc(agencyRef), 3, "validateEscaleAgentReservation agency");
   if (!agencySnap.exists()) return;
   const ad = agencySnap.data() as { type?: string; routeId?: string; stopOrder?: number; stopId?: string };
   const typ = (ad.type ?? 'principale').toLowerCase();
@@ -285,7 +285,7 @@ async function validateEscaleAgentReservation(
 
   if (tripInstanceId) {
     const tiRef = doc(db, 'companies', companyId, 'tripInstances', tripInstanceId);
-    const tiSnap = await getDoc(tiRef);
+    const tiSnap = await withRetryOnQuota(() => getDoc(tiRef), 3, "validateEscaleAgentReservation tripInstance");
     if (tiSnap.exists()) {
       const ti = tiSnap.data() as { routeId?: string | null };
       if (ti.routeId != null && ti.routeId !== routeId) {
@@ -431,71 +431,76 @@ export async function createGuichetReservation(
   let isNewReservation = true;
 
   try {
-    await runTransaction(db, async (tx) => {
-      const idemSnap = await tx.get(idemRef);
-      if (idemSnap.exists()) {
-        const prev = String((idemSnap.data() as { reservationId?: string }).reservationId ?? '').trim();
-        if (prev) {
-          resultReservationId = prev;
-          isNewReservation = false;
-          return;
-        }
-      }
+    await withRetryOnQuota(
+      () =>
+        runTransaction(db, async (tx) => {
+          const idemSnap = await tx.get(idemRef);
+          if (idemSnap.exists()) {
+            const prev = String((idemSnap.data() as { reservationId?: string }).reservationId ?? '').trim();
+            if (prev) {
+              resultReservationId = prev;
+              isNewReservation = false;
+              return;
+            }
+          }
 
-      const [shiftSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(agencyRef)]);
-      if (!shiftSnap.exists()) {
-        throw new Error(`${GUICHET_SESSION_INVARIANT_PREFIX} Poste introuvable.`);
-      }
-      const shiftData = shiftSnap.data() as Record<string, unknown>;
-      const sessionOwnerId = String(shiftData.userId ?? '').trim();
-      if (sessionOwnerId !== String(params.userId).trim()) {
-        throw new Error(`${GUICHET_SESSION_INVARIANT_PREFIX} L'agent ne correspond pas au titulaire du poste.`);
-      }
-      const status = String(shiftData.status ?? '');
-      if (status !== SHIFT_STATUS.ACTIVE) {
-        if (status === SHIFT_STATUS.PAUSED) {
-          throw new Error('Le poste est en pause. Reprenez la session pour enregistrer une vente.');
-        }
-        throw new Error(
-          `${GUICHET_SESSION_INVARIANT_PREFIX} Le poste n'est pas ouvert pour la vente (statut: ${status}).`
-        );
-      }
-      if (isShiftLocked(status)) throw new Error('Poste verrouillé.');
-      if (shiftData.deviceFingerprint && options?.deviceFingerprint && shiftData.deviceFingerprint !== options.deviceFingerprint) {
-        throw new Error('Session ouverte sur un autre appareil.');
-      }
-      const passengers = 1;
-      const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
-      if (tripInstanceIdForHold && seats > 0) {
-        const tiRef = tripInstanceRef(params.companyId, tripInstanceIdForHold);
-        const tiSnap = await tx.get(tiRef);
-        bookSeatsOnTripInstanceInTransaction(tx, tiRef, tiSnap, seats, {
-          originStopOrder: originStopOrder ?? undefined,
-          destinationStopOrder: destinationStopOrder ?? undefined,
-          depart: params.depart,
-          arrivee: params.arrivee,
-        });
-      }
-      tx.set(newRef, payload);
-      writeTicketGuichetActivityInTransaction(tx, {
-        companyId: params.companyId,
-        agencyId: params.agencyId,
-        reservationId: newId,
-        amount: params.montant,
-        seats: (params.seatsGo ?? 0) + (params.seatsReturn ?? 0),
-        createdAt: now,
-        depart: params.depart,
-        arrivee: params.arrivee,
-      });
-      tx.set(idemRef, {
-        reservationId: newId,
-        sessionId: params.sessionId,
-        agentId: params.userId,
-        createdAt: serverTimestamp(),
-      });
-      const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
-      updateDailyStatsOnReservationCreated(tx, params.companyId, params.agencyId, params.date, passengers, seats, agencyTz);
-    });
+          const [shiftSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(agencyRef)]);
+          if (!shiftSnap.exists()) {
+            throw new Error(`${GUICHET_SESSION_INVARIANT_PREFIX} Poste introuvable.`);
+          }
+          const shiftData = shiftSnap.data() as Record<string, unknown>;
+          const sessionOwnerId = String(shiftData.userId ?? '').trim();
+          if (sessionOwnerId !== String(params.userId).trim()) {
+            throw new Error(`${GUICHET_SESSION_INVARIANT_PREFIX} L'agent ne correspond pas au titulaire du poste.`);
+          }
+          const status = String(shiftData.status ?? '');
+          if (status !== SHIFT_STATUS.ACTIVE) {
+            if (status === SHIFT_STATUS.PAUSED) {
+              throw new Error('Le poste est en pause. Reprenez la session pour enregistrer une vente.');
+            }
+            throw new Error(
+              `${GUICHET_SESSION_INVARIANT_PREFIX} Le poste n'est pas ouvert pour la vente (statut: ${status}).`
+            );
+          }
+          if (isShiftLocked(status)) throw new Error('Poste verrouillé.');
+          if (shiftData.deviceFingerprint && options?.deviceFingerprint && shiftData.deviceFingerprint !== options.deviceFingerprint) {
+            throw new Error('Session ouverte sur un autre appareil.');
+          }
+          const passengers = 1;
+          const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
+          if (tripInstanceIdForHold && seats > 0) {
+            const tiRef = tripInstanceRef(params.companyId, tripInstanceIdForHold);
+            const tiSnap = await tx.get(tiRef);
+            bookSeatsOnTripInstanceInTransaction(tx, tiRef, tiSnap, seats, {
+              originStopOrder: originStopOrder ?? undefined,
+              destinationStopOrder: destinationStopOrder ?? undefined,
+              depart: params.depart,
+              arrivee: params.arrivee,
+            });
+          }
+          tx.set(newRef, payload);
+          writeTicketGuichetActivityInTransaction(tx, {
+            companyId: params.companyId,
+            agencyId: params.agencyId,
+            reservationId: newId,
+            amount: params.montant,
+            seats: (params.seatsGo ?? 0) + (params.seatsReturn ?? 0),
+            createdAt: now,
+            depart: params.depart,
+            arrivee: params.arrivee,
+          });
+          tx.set(idemRef, {
+            reservationId: newId,
+            sessionId: params.sessionId,
+            agentId: params.userId,
+            createdAt: serverTimestamp(),
+          });
+          const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
+          updateDailyStatsOnReservationCreated(tx, params.companyId, params.agencyId, params.date, passengers, seats, agencyTz);
+        }),
+      3,
+      "createGuichetReservation transaction"
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.startsWith(GUICHET_SESSION_INVARIANT_PREFIX)) {

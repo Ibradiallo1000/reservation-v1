@@ -431,20 +431,21 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
       }
     );
 
-    const unsubCentralAccounts = onSnapshot(
-      qCentralAccounts,
-      (snap) => {
-        const ids = snap.docs.map((d) => d.id);
-        centralAccountIdsRef.current = ids;
-        attachCentralMovementsListener(ids);
-        setLoading(false);
-        scheduleCommit();
-      },
-      (err) => {
-        setError(err?.message ?? "Erreur onSnapshot financialAccounts");
-        setLoading(false);
-      }
-    );
+    // Temporarily disabled to reduce Firestore listeners - centralised amounts calculated on demand
+    // const unsubCentralAccounts = onSnapshot(
+    //   qCentralAccounts,
+    //   (snap) => {
+    //     const ids = snap.docs.map((d) => d.id);
+    //     centralAccountIdsRef.current = ids;
+    //     attachCentralMovementsListener(ids);
+    //     setLoading(false);
+    //     scheduleCommit();
+    //   },
+    //   (err) => {
+    //     setError(err?.message ?? "Erreur onSnapshot financialAccounts");
+    //     setLoading(false);
+    //   }
+    // );
 
     // Lecture payments (valides + ledger poste sur la periode), en parallele des flux operationnels.
     const paymentsRef = collection(db, "companies", companyId, "payments");
@@ -454,57 +455,58 @@ export function GlobalMoneyPositionsProvider({ children }: { children: React.Rea
       where("validatedAt", "<=", endTs),
       orderBy("validatedAt", "asc")
     );
-    const unsubPayments = onSnapshot(
-      qPayments,
-      (snap) => {
-        let total = 0;
-        const byAgency: Record<string, number> = {};
-        snap.docs.forEach((d) => {
-          const data = d.data() as {
-            amount?: number;
-            agencyId?: string;
-            status?: string;
-            ledgerStatus?: string;
-          };
-          if (String(data?.status ?? "") !== "validated") return;
-          if (String(data?.ledgerStatus ?? "pending") !== "posted") return;
-          const amount = Number(data?.amount ?? 0) || 0;
-          total += amount;
-          const aid = String(data?.agencyId ?? "");
-          if (aid) byAgency[aid] = (byAgency[aid] ?? 0) + amount;
-        });
-        paymentsConfirmedRef.current = total;
-        recomputeValidatedAgencyTotals();
-        // Migration progressive : fallback sur payments si cashTransactions indisponibles.
-        if (cashPaidTotalRef.current <= 0 && total > 0) {
-          cashPaidTotalRef.current = total;
-          pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
-          const validatedByAgency = validatedAgencyByAgencyRef.current;
-          const out: MoneyPositionsSnapshot["byAgency"] = {};
-          Object.keys({ ...byAgency, ...validatedByAgency }).forEach((aid) => {
-            const cashPaid = byAgency[aid] ?? 0;
-            const val = validatedByAgency[aid] ?? 0;
-            const pend = cashPaid - val;
-            const cent = centralisedByAgencyRef.current[aid] ?? 0;
-            out[aid] = { cashPaid, validatedAgency: val, pendingGuichet: pend, centralised: cent };
-          });
-          byAgencyRef.current = out;
-        }
-        setLoading(false);
-        scheduleCommit();
-      },
-      (err) => {
-        console.warn("[GlobalMoneyPositions] payments snapshot:", err?.message);
-        setLoading(false);
-        scheduleCommit();
-      }
-    );
+    // Temporarily disabled to reduce Firestore listeners - payments can be calculated on demand
+    // const unsubPayments = onSnapshot(
+    //   qPayments,
+    //   (snap) => {
+    //     let total = 0;
+    //     const byAgency: Record<string, number> = {};
+    //     snap.docs.forEach((d) => {
+    //       const data = d.data() as {
+    //         amount?: number;
+    //         agencyId?: string;
+    //         status?: string;
+    //         ledgerStatus?: string;
+    //       };
+    //       if (String(data?.status ?? "") !== "validated") return;
+    //       if (String(data?.ledgerStatus ?? "pending") !== "posted") return;
+    //       const amount = Number(data?.amount ?? 0) || 0;
+    //       total += amount;
+    //       const aid = String(data?.agencyId ?? "");
+    //       if (aid) byAgency[aid] = (byAgency[aid] ?? 0) + amount;
+    //     });
+    //     paymentsConfirmedRef.current = total;
+    //     recomputeValidatedAgencyTotals();
+    //     // Migration progressive : fallback sur payments si cashTransactions indisponibles.
+    //     if (cashPaidTotalRef.current <= 0 && total > 0) {
+    //       cashPaidTotalRef.current = total;
+    //       pendingGuichetRef.current = cashPaidTotalRef.current - validatedAgencyRef.current;
+    //       const validatedByAgency = validatedAgencyByAgencyRef.current;
+    //       const out: MoneyPositionsSnapshot["byAgency"] = {};
+    //       Object.keys({ ...byAgency, ...validatedByAgency }).forEach((aid) => {
+    //         const cashPaid = byAgency[aid] ?? 0;
+    //         const val = validatedByAgency[aid] ?? 0;
+    //         const pend = cashPaid - val;
+    //         const cent = centralisedByAgencyRef.current[aid] ?? 0;
+    //         out[aid] = { cashPaid, validatedAgency: val, pendingGuichet: pend, centralised: cent };
+    //       });
+    //       byAgencyRef.current = out;
+    //     }
+    //     setLoading(false);
+    //     scheduleCommit();
+    //   },
+    //   (err) => {
+    //     console.warn("[GlobalMoneyPositions] payments snapshot:", err?.message);
+    //     setLoading(false);
+    //     scheduleCommit();
+    //   }
+    // );
 
     return () => {
       unsubCash();
       unsubValidatedAgency();
-      unsubCentralAccounts();
-      unsubPayments();
+      // unsubCentralAccounts();
+      // unsubPayments();
       if (unsubCentralMovements) unsubCentralMovements();
       if (scheduleRef.current != null) {
         window.clearTimeout(scheduleRef.current);

@@ -460,13 +460,15 @@ const AgenceGuichetPage: React.FC = () => {
           if (sc) setSellerCodeCached(sc);
         }
         if (!user?.companyId || !user?.agencyId) return;
-        const compSnap = await getDoc(doc(db, "companies", user.companyId));
+        const [compSnap, agSnap] = await Promise.all([
+          getDoc(doc(db, "companies", user.companyId)),
+          getDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}`))
+        ]);
         if (compSnap.exists()) {
           const c = compSnap.data() as any;
           const name = c.nom || c.name || "Compagnie";
           setCompanyMeta({ name, code: makeShortCode(name, c.code), slug: c.slug || DEFAULT_COMPANY_SLUG, logo: c.logoUrl || c.logo || null, phone: c.telephone || "" });
         }
-        const agSnap = await getDoc(doc(db, `companies/${user.companyId}/agences/${user.agencyId}`));
         let departureCity = "";
         if (agSnap.exists()) {
           const a = agSnap.data() as Record<string, unknown>;

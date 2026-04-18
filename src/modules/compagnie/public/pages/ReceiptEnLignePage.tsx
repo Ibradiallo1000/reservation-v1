@@ -53,6 +53,7 @@ interface Reservation {
   nomAgence?: string;
   agencyNom?: string;
   agenceNom?: string;
+  agencyTelephone?: string;
   statut?: ReservationStatus;
   canal?: string;
   seatsGo: number;
@@ -438,6 +439,8 @@ const ReceiptEnLignePage: React.FC = () => {
             primaryColor={primaryColor}
             secondaryColor={secondaryColor}
             agencyName={agencyName}
+            agencyNom={reservation.agencyNom || reservation.agenceNom}
+            agencyTelephone={reservation.agencyTelephone}
             receiptNumber={receiptNumber}
             statut={getEffectiveStatut(reservation) ?? reservation.statut}
             nomClient={reservation.nomClient}
