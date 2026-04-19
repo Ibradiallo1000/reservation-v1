@@ -1,8 +1,8 @@
-// src/modules/compagnie/public/layout/CompanyPublicHeader.tsx
-// Header fused directly on the hero: full-width bar, logo + company name (left), language + login (right)
+// ✅ CompanyPublicHeader.tsx — VERSION PRO
+
 import React, { useEffect, useState } from 'react';
 import { User } from 'lucide-react';
-import LanguageSwitcher from '../components/LanguageSwitcher';
+import { useTranslation } from 'react-i18next';
 import { Company } from '@/types/companyTypes';
 
 interface HeaderProps {
@@ -19,89 +19,120 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({
   company,
-  slug: _slug,
   colors,
   navigate,
   t,
 }) => {
-  const [scrollProgress, setScrollProgress] = useState(0);
+  const { i18n } = useTranslation();
+  const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => {
-      const maxScroll = 140;
-      const current = window.scrollY;
-      setScrollProgress(Math.min(current / maxScroll, 1));
+      setScrolled(window.scrollY > 60);
     };
     window.addEventListener('scroll', handleScroll);
-    handleScroll();
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  useEffect(() => {
-    if (!company?.logoUrl) return;
-    const img = new Image();
-    img.src = company.logoUrl;
-  }, [company?.logoUrl]);
-
   const primary = colors?.primary || '#3b82f6';
-  const textColor = scrollProgress > 0.5 ? primary : '#ffffff';
-  const bgOpacity = scrollProgress > 0.5 ? 0.92 : 0;
-  const borderOpacity = scrollProgress > 0.5 ? 0.15 : 0;
+  const secondary = colors?.secondary || '#6366f1';
 
   const name =
     company?.nom || t('ourCompany', { defaultValue: 'Notre compagnie' });
 
+  const isFr = i18n.language === 'fr';
+
+  const toggleLang = () => {
+    i18n.changeLanguage(isFr ? 'en' : 'fr');
+  };
+
   return (
-    <header
-      className="public-site-header fixed top-0 left-0 right-0 w-full z-50 flex items-center justify-between h-14 sm:h-16 px-4 sm:px-6 pointer-events-none"
-      style={{ color: textColor }}
-    >
+    <header className="fixed top-0 left-0 right-0 z-50">
+
+      {/* BACKGROUND */}
       <div
+        className="absolute inset-0 transition-all duration-300 backdrop-blur-md"
         style={{
-          backgroundColor: `rgba(255,255,255,${bgOpacity})`,
-          borderBottom: borderOpacity > 0 ? `1px solid rgba(0,0,0,${borderOpacity})` : 'none',
+          background: scrolled
+            ? 'rgba(255,255,255,0.95)'
+            : 'linear-gradient(to bottom, rgba(0,0,0,0.6), transparent)',
+          borderBottom: scrolled ? '1px solid rgba(0,0,0,0.08)' : 'none',
         }}
-        className="absolute inset-0 backdrop-blur-sm transition-all duration-300 pointer-events-auto"
-        aria-hidden
       />
-      <div className="public-site-header-inner relative z-10 flex items-center justify-between w-full max-w-6xl mx-auto pointer-events-auto">
-        {/* Left: logo + company name (white en haut, couleur primaire au scroll) */}
+
+      <div className="relative z-10 flex items-center justify-between h-16 px-4 sm:px-6 max-w-6xl mx-auto">
+
+        {/* LEFT */}
         <button
           onClick={() => navigate('/')}
-          className="flex items-center gap-2 sm:gap-3 min-w-0 select-none"
-          aria-label={name}
-          style={{ color: textColor }}
+          className="flex items-center gap-3 min-w-0"
         >
           {company?.logoUrl ? (
             <img
               src={company.logoUrl}
-              alt=""
-              className="h-9 w-9 sm:h-10 sm:w-10 rounded-full object-cover ring-2 ring-white/30 shrink-0"
+              className="h-11 w-11 rounded-full object-cover shadow-md ring-2 ring-white/50"
             />
           ) : (
-            <span
-              className="h-9 w-9 sm:h-10 sm:w-10 rounded-full flex items-center justify-center font-semibold text-sm shrink-0 ring-2 ring-white/30 bg-white/20"
-              style={{ color: textColor }}
-            >
-              {(name || 'C').trim().charAt(0).toUpperCase()}
-            </span>
+            <div className="h-11 w-11 rounded-full bg-white/20 flex items-center justify-center text-sm font-bold text-white">
+              {name.charAt(0)}
+            </div>
           )}
-          <span className="font-semibold text-sm sm:text-base tracking-wide truncate max-w-[120px] sm:max-w-[200px]" style={{ color: textColor }}>
+
+          <span
+            className="font-bold text-lg truncate max-w-[180px]"
+            style={{
+              color: scrolled ? '#111827' : '#ffffff',
+            }}
+          >
             {name}
           </span>
         </button>
 
-        {/* Right: langue (drapeaux) + connexion */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0" style={{ color: textColor }}>
-          <LanguageSwitcher variant="floating" scrollTextColor={textColor} primaryColor={primary} />
+        {/* RIGHT */}
+        <div className="flex items-center gap-3">
+
+          {/* SWITCH LANGUE PRO */}
+          <div
+            onClick={toggleLang}
+            className="relative w-[64px] h-[32px] rounded-full cursor-pointer"
+            style={{
+              backgroundColor: scrolled ? '#f3f4f6' : 'rgba(255,255,255,0.2)',
+            }}
+          >
+            {/* SLIDER */}
+            <div
+              className="absolute top-[3px] w-[26px] h-[26px] rounded-full shadow-md transition-all duration-300"
+              style={{
+                background: `linear-gradient(135deg, ${primary}, ${secondary})`,
+                transform: isFr
+                  ? 'translateX(4px)'
+                  : 'translateX(34px)',
+              }}
+            />
+
+            {/* LABELS */}
+            <div className="absolute inset-0 flex items-center justify-between px-2 text-[10px] font-semibold">
+              <span className={isFr ? 'text-white' : 'text-gray-500'}>
+                FR
+              </span>
+              <span className={!isFr ? 'text-white' : 'text-gray-500'}>
+                EN
+              </span>
+            </div>
+          </div>
+
+          {/* LOGIN */}
           <button
             onClick={() => navigate('/login')}
-            className="p-2 rounded-lg opacity-90 hover:opacity-100 hover:bg-black/10 transition inline-flex items-center justify-center min-h-[40px] min-w-[40px]"
-            aria-label={t('login')}
-            style={{ color: textColor }}
+            className="p-2 rounded-lg transition"
+            style={{
+              backgroundColor: scrolled ? '#f3f4f6' : 'rgba(255,255,255,0.2)',
+              color: scrolled ? primary : '#ffffff',
+            }}
           >
-            <User className="h-5 w-5 sm:h-5 sm:w-5" />
+            <User className="h-5 w-5" />
           </button>
+
         </div>
       </div>
     </header>

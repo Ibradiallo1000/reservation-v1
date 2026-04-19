@@ -6,7 +6,7 @@
     "skipLibCheck": true,
 
     /* Résolution compatible TypeScript */
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
     "composite": true,

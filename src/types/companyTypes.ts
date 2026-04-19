@@ -89,6 +89,7 @@ export interface TripSuggestion {
   departure: string;
   arrival: string;
   price?: number;
+  count?: number;
   days?: string[];
   imageUrl?: string;
   duration?: string;
