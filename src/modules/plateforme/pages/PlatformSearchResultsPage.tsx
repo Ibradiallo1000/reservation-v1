@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { formatCurrency } from "@/shared/utils/formatCurrency";
-import { collection, collectionGroup, getDocs } from 'firebase/firestore';
+import { collection, collectionGroup, getDocs, limit, query, where } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
 import { Bus, Search, ArrowLeft, ArrowRight, Wind, Wifi, Zap, Coffee, Sofa, Tv, WifiOff, Smartphone, Utensils, Droplet } from 'lucide-react';
 import { Button } from "@/shared/ui/button";
@@ -178,7 +178,13 @@ const PlatformSearchResultsPage: React.FC = () => {
         /* =========================
            Chargement des réservations (conservé pour compatibilité)
         ========================= */
-        const reservationsSnap = await getDocs(collectionGroup(db, 'reservations'));
+        const reservationsSnap = await getDocs(
+          query(
+            collectionGroup(db, 'reservations'),
+            where('statut', 'in', ['en_attente', 'payé', 'preuve_recue']),
+            limit(200)
+          )
+        );
 
         const reservedMap: Record<string, number> = {};
 

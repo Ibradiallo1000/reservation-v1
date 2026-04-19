@@ -1,7 +1,7 @@
 // src/modules/plateforme/pages/AdminDashboard.tsx
 // Phase 1 – Teliya SaaS: métriques plateforme uniquement + macro agrégées anonymisées
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, collectionGroup, getDocs } from "firebase/firestore";
+import { collection, collectionGroup, getDocs, limit, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
@@ -162,8 +162,14 @@ const AdminDashboard: React.FC = () => {
         setActiveSubscriptions(activeSubs);
         setMrr(mrrSum);
 
-      // Reservations (collectionGroup) – global only, no per-company
-        const resSnap = await getDocs(collectionGroup(db, "reservations"));
+      // Reservations (collectionGroup) – borné à la fenêtre réellement utilisée par ce dashboard.
+        const resSnap = await getDocs(
+          query(
+            collectionGroup(db, "reservations"),
+            where("createdAt", ">=", Timestamp.fromDate(startPrevMonth)),
+            limit(200)
+          )
+        );
         let gmv = 0;
         let commission = 0;
         let reservations = 0;

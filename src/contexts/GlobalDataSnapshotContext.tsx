@@ -2,7 +2,7 @@ import React from "react";
 import { useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
-import { collection, collectionGroup, onSnapshot, orderBy, query, Timestamp, where } from "firebase/firestore";
+import { collection, collectionGroup, limit, onSnapshot, orderBy, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
 import { getNetworkCapacityOnly, isSoldReservation } from "@/modules/compagnie/networkStats/networkStatsService";
@@ -103,7 +103,8 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
       where("companyId", "==", companyId),
       where("createdAt", ">=", startTs),
       where("createdAt", "<=", endTs),
-      orderBy("createdAt", "asc")
+      orderBy("createdAt", "asc"),
+      limit(200)
     );
 
     // cashTransactions est sous companies/{companyId}/cashTransactions (pas de champ companyId dans le doc).
@@ -112,7 +113,8 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
       cashRef,
       where("createdAt", ">=", startTs),
       where("createdAt", "<=", endTs),
-      orderBy("createdAt", "asc")
+      orderBy("createdAt", "asc"),
+      limit(200)
     );
 
     // Capacity isn't realtime-critical; fetch once per period.

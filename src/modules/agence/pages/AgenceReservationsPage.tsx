@@ -1,7 +1,7 @@
 // src/pages/AgenceReservationsPage.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  collection, doc, getDoc, onSnapshot, orderBy, query, Timestamp, where
+  collection, doc, getDoc, limit, onSnapshot, orderBy, query, Timestamp, where
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -172,7 +172,7 @@ const AgenceReservationsPage: React.FC = () => {
   useEffect(() => {
     if (!companyId || !agencyId) return;
     const ref = collection(db, `companies/${companyId}/agences/${agencyId}/shifts`);
-    const unsub = onSnapshot(ref, async snap => {
+    const unsub = onSnapshot(query(ref, limit(200)), async snap => {
       const all = snap.docs.map(d => {
         const r = d.data() as any;
         const s: ShiftDoc = {
@@ -228,7 +228,8 @@ const AgenceReservationsPage: React.FC = () => {
         rRef,
         where('shiftId','==',s.id),
         where('statut', 'in', ['paye', 'payé']),
-        where('canal','==','guichet')
+        where('canal','==','guichet'),
+        limit(100)
       );
       liveUnsubsRef.current[s.id] = onSnapshot(qy, ss => {
         let tickets=0, amount=0;
@@ -255,7 +256,8 @@ const AgenceReservationsPage: React.FC = () => {
       where('createdAt','>=', Timestamp.fromDate(range[0])),
       where('createdAt','<=', Timestamp.fromDate(range[1])),
       where('statut', 'in', ['paye', 'payé']),
-      orderBy('createdAt','asc')
+      orderBy('createdAt','asc'),
+      limit(200)
     );
     const unsub = onSnapshot(qy, snap => {
       const list: Reservation[] = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) }));
@@ -309,7 +311,7 @@ const AgenceReservationsPage: React.FC = () => {
   useEffect(() => {
     if (!companyId || !agencyId) return;
     const ref = collection(db, `companies/${companyId}/agences/${agencyId}/shifts`);
-    return onSnapshot(ref, snap => {
+    return onSnapshot(query(ref, limit(200)), snap => {
       const all = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) })) as any[];
       const list = all.filter(s => s.status === 'validated') as ShiftDoc[];
       setValidatedShifts(list);

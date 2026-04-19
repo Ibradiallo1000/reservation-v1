@@ -383,7 +383,7 @@ export default function AgencyChiefDashboardLite() {
         reservationsRef,
         where("sessionId", "in", chunk),
         where("canal", "==", "guichet"),
-        limit(1000)
+        limit(200)
       );
       unsubs.push(
         onSnapshot(
@@ -407,7 +407,7 @@ export default function AgencyChiefDashboardLite() {
         reservationsRef,
         where("shiftId", "in", chunk),
         where("canal", "==", "guichet"),
-        limit(1000)
+        limit(200)
       );
       unsubs.push(
         onSnapshot(
@@ -464,7 +464,7 @@ export default function AgencyChiefDashboardLite() {
     for (let i = 0; i < sessionIds.length; i += 10) {
       const chunk = sessionIds.slice(i, i + 10);
       const chunkIndex = i / 10;
-      const q = query(col, where("sessionId", "in", chunk), limit(500));
+      const q = query(col, where("sessionId", "in", chunk), limit(200));
       unsubs.push(
         onSnapshot(
           q,

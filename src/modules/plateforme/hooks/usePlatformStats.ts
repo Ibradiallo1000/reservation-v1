@@ -3,7 +3,7 @@
  * Uses Firestore counts; falls back to 0 on error or if counts are unavailable.
  */
 import { useEffect, useState } from "react";
-import { collection, collectionGroup, getCountFromServer } from "firebase/firestore";
+import { collection, collectionGroup, getCountFromServer, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 export interface PlatformStats {
@@ -27,10 +27,17 @@ export function usePlatformStats(): PlatformStats {
     let cancelled = false;
 
     const load = async () => {
+      const start = new Date();
+      start.setDate(start.getDate() - 30);
       const results = await Promise.allSettled([
         getCountFromServer(collection(db, "companies")),
         getCountFromServer(collectionGroup(db, "agences")),
-        getCountFromServer(collectionGroup(db, "reservations")),
+        getCountFromServer(
+          query(
+            collectionGroup(db, "reservations"),
+            where("createdAt", ">=", Timestamp.fromDate(start))
+          )
+        ),
       ]);
 
       if (cancelled) return;

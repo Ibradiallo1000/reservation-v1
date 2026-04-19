@@ -3,7 +3,7 @@
  * priorité à l'origine, libération automatique avant arrivée.
  */
 
-import { collectionGroup, doc, getDoc, getDocs, query, where, setDoc, serverTimestamp } from "firebase/firestore";
+import { collectionGroup, doc, getDoc, getDocs, limit, query, where, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getTripInstance } from "./tripInstanceService";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
@@ -103,7 +103,8 @@ async function getSoldFromStop(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
-    where("originStopOrder", "==", stopOrder)
+    where("originStopOrder", "==", stopOrder),
+    limit(200)
   );
   const snapOrder = await getDocs(qOrder);
   let docs = snapOrder.docs;
@@ -112,7 +113,8 @@ async function getSoldFromStop(
       collectionGroup(db, "reservations"),
       where("companyId", "==", companyId),
       where("tripInstanceId", "==", tripInstanceId),
-      where("originStopId", "==", originStopId)
+      where("originStopId", "==", originStopId),
+      limit(200)
     );
     const snapId = await getDocs(qId);
     docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);

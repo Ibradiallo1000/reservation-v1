@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  collection, getDocs, query, where, orderBy, doc, getDoc
+  collection, getDocs, limit, query, where, orderBy, doc, getDoc
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -84,10 +84,10 @@ const AgenceShiftHistoryPage: React.FC = () => {
 
       // 1) fetch shifts de toute l'agence
       const shiftsRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
-      let q: any = query(shiftsRef, orderBy('startTime', 'desc'));
+      let q: any = query(shiftsRef, orderBy('startTime', 'desc'), limit(200));
 
       if (status !== 'all') {
-        q = query(shiftsRef, where('status', '==', status), orderBy('startTime', 'desc'));
+        q = query(shiftsRef, where('status', '==', status), orderBy('startTime', 'desc'), limit(200));
       }
 
       // filtre période en mémoire (startTime/endTime sont des nombres/ts)
@@ -95,7 +95,7 @@ const AgenceShiftHistoryPage: React.FC = () => {
 
       // 2) précharge toutes les réservations (on filtrera par shiftId)
       const reservRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
-      const rSnap = await getDocs(reservRef);
+      const rSnap = await getDocs(query(reservRef, limit(200)));
       const allRes = rSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
 
       // 3) construit les lignes + filtres secondaires

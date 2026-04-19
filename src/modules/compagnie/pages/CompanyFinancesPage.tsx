@@ -420,13 +420,13 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
       const shiftsRef = collection(db, "companies", companyId, "agences", agency.id, "shifts");
       const reservationsRef = collection(db, "companies", companyId, "agences", agency.id, "reservations");
 
-      const unsubShifts = onSnapshot(query(shiftsRef, limit(1000)), (snap) => {
+      const unsubShifts = onSnapshot(query(shiftsRef, limit(200)), (snap) => {
         const rows = snap.docs.map((d) => ({ __id: d.id, ...(d.data() as ShiftDoc) }));
         shiftsByAgency.set(agency.id, rows);
         recompute();
       });
 
-      const unsubReservations = onSnapshot(query(reservationsRef, limit(4000)), (snap) => {
+      const unsubReservations = onSnapshot(query(reservationsRef, limit(200)), (snap) => {
         reservationsByAgency.set(agency.id, snap.docs.map((d) => d.data() as ReservationDoc));
         recompute();
       });

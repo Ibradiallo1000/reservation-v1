@@ -163,7 +163,7 @@ async function getOpenGuichetExpectedAmount(
       query(
         reservationsRef,
         where("createdInSessionId", "in", chunk),
-        limit(1000)
+        limit(200)
       )
     );
     for (const d of snap.docs) {

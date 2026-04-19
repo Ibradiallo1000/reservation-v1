@@ -4,7 +4,7 @@
  * ou l'espace Compagnie pour les données réservations. Page conservée pour compatibilité.
  */
 import React, { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { formatCurrency } from "@/shared/utils/formatCurrency";
 import { db } from '../../../firebaseConfig';
 import { AlertTriangle } from 'lucide-react';
@@ -28,7 +28,7 @@ const AdminReservationsPage: React.FC = () => {
 
   useEffect(() => {
     const fetchData = async () => {
-      const snapshot = await getDocs(collection(db, 'reservations'));
+      const snapshot = await getDocs(query(collection(db, 'reservations'), limit(200)));
       const data: ReservationEntry[] = snapshot.docs.map(doc => {
         const d = doc.data();
         return {

@@ -2,7 +2,7 @@
 // Phase 1 – Teliya SaaS: revenus plateforme uniquement (commissions + abonnements)
 import React, { useEffect, useState } from "react";
 import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
-import { collection, collectionGroup, getDocs } from "firebase/firestore";
+import { collection, collectionGroup, getDocs, limit, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
@@ -66,8 +66,17 @@ const AdminFinancesPage: React.FC = () => {
           }
         });
 
-        // Commissions depuis les réservations (collectionGroup, pas de détail par compagnie)
-        const resSnap = await getDocs(collectionGroup(db, "reservations"));
+        // Commissions depuis les réservations: lecture bornée à la période affichée.
+        const rangeStart = startDate ? new Date(`${startDate}T00:00:00`) : new Date(new Date().setDate(new Date().getDate() - 30));
+        const rangeEnd = endDate ? new Date(`${endDate}T23:59:59`) : new Date();
+        const resSnap = await getDocs(
+          query(
+            collectionGroup(db, "reservations"),
+            where("createdAt", ">=", Timestamp.fromDate(rangeStart)),
+            where("createdAt", "<=", Timestamp.fromDate(rangeEnd)),
+            limit(200)
+          )
+        );
         const toNum = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
         let totalCommission = 0;

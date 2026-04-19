@@ -9,7 +9,10 @@ import {
   collection,
   collectionGroup,
   getDocs,
+  limit,
+  query,
   Timestamp,
+  where,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import {
@@ -61,9 +64,17 @@ const AdminStatistiquesPage: React.FC = () => {
       setLoading(true);
       setError(null);
       try {
-        // ✅ Toutes les réservations (collectionGroup)
+        // Réservations récentes uniquement: évite un scan global plateforme.
+        const now = new Date();
+        const start = new Date(now);
+        start.setDate(start.getDate() - 30);
         const resSnap = await getDocs(
-          collectionGroup(db, "reservations")
+          query(
+            collectionGroup(db, "reservations"),
+            where("createdAt", ">=", Timestamp.fromDate(start)),
+            where("createdAt", "<=", Timestamp.fromDate(now)),
+            limit(200)
+          )
         );
         const resData = resSnap.docs.map(d => d.data() as Reservation);
 

@@ -3,7 +3,7 @@
  * Compatible avec les segments dynamiques (originStopOrder / destinationStopOrder).
  */
 
-import { collectionGroup, getDocs, query, where, QueryDocumentSnapshot } from "firebase/firestore";
+import { collectionGroup, getDocs, limit, query, where, QueryDocumentSnapshot } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getPassengersToDrop as getPassengersToDropFromDropoff } from "@/modules/compagnie/dropoff/dropoffService";
 import { getTripInstance } from "@/modules/compagnie/tripInstances/tripInstanceService";
@@ -69,7 +69,8 @@ export async function getPassengersOnBoard(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
-    where("boardingStatus", "==", "boarded")
+    where("boardingStatus", "==", "boarded"),
+    limit(200)
   );
   const snap = await getDocs(q);
   const list: ManifestPassenger[] = [];
@@ -111,7 +112,8 @@ export async function detectOvertravelPassengers(
   const q = query(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
-    where("tripInstanceId", "==", tripInstanceId)
+    where("tripInstanceId", "==", tripInstanceId),
+    limit(200)
   );
   const snap = await getDocs(q);
   const list: ManifestPassenger[] = [];

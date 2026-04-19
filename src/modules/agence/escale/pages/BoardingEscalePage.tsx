@@ -4,7 +4,7 @@
  * Accessible par escale_agent et escale_manager.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { collection, doc, getDoc, getDocs, orderBy, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, EmptyState, table, tableRowClassName } from "@/ui";
@@ -80,7 +80,8 @@ export default function BoardingEscalePage() {
           where("date", ">=", today),
           where("date", "<=", today),
           orderBy("date", "asc"),
-          orderBy("time", "asc")
+          orderBy("time", "asc"),
+          limit(50)
         )
       );
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
@@ -124,7 +125,7 @@ export default function BoardingEscalePage() {
       const idToOrder = buildStopIdToOrderMap(stops);
       const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
       const snap = await getDocs(
-        query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
+        query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"), limit(200))
       );
       const list: PassengerForBoarding[] = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as any), agencyId: trip.agencyId } as PassengerForBoarding))
@@ -160,7 +161,7 @@ export default function BoardingEscalePage() {
       const idToOrder = buildStopIdToOrderMap(stops);
       const reservationsRef = collection(db, "companies", user.companyId, "agences", trip.agencyId, "reservations");
       const snap = await getDocs(
-        query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"))
+        query(reservationsRef, where("tripInstanceId", "==", selectedTripId), orderBy("createdAt", "asc"), limit(200))
       );
       const list: PassengerToDrop[] = snap.docs
         .map((d) => ({ id: d.id, ...(d.data() as any), agencyId: trip.agencyId } as PassengerToDrop))

@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
 import {
-  collection, query, where, onSnapshot, Timestamp, getDocs, doc, getDoc, limit, CollectionReference,
+  collection, collectionGroup, query, where, onSnapshot, Timestamp, getDocs, doc, getDoc, limit,
 } from "firebase/firestore";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
@@ -89,29 +89,6 @@ function toDateSafe(v: any): Date | null {
   } catch { return null; }
 }
 
-/* ---------- Noms possibles de la sous-collection ---------- */
-const RESERVATION_COLLECTION_CANDIDATES = ["reservations","reservation","bookings","reserves","resas"];
-
-async function getReservationsCollectionRef(
-  companyId: string,
-  agencyId: string
-): Promise<{ ref: CollectionReference | null; nameTried: string[] }> {
-  const tried: string[] = [];
-  for (const name of RESERVATION_COLLECTION_CANDIDATES) {
-    tried.push(name);
-    const ref = collection(db, `companies/${companyId}/agences/${agencyId}/${name}`);
-    try {
-      console.log("▶ Test chemin:", `companies/${companyId}/agences/${agencyId}/${name}`);
-      await getDocs(query(ref));
-      return { ref, nameTried: tried };
-    } catch (e: any) {
-      console.warn(`⚠️ Chemin refusé (${name}) →`, e?.message || e);
-      continue;
-    }
-  }
-  return { ref: null, nameTried: tried };
-}
-
 /* ---------- Hook principal ---------- */
 export function useCompanyDashboardData({
   companyId, dateFrom, dateTo,
@@ -136,7 +113,7 @@ export function useCompanyDashboardData({
   // Agences
   useEffect(() => {
     if (!companyId) return;
-    const qAg = query(collection(db, `companies/${companyId}/agences`));
+    const qAg = query(collection(db, `companies/${companyId}/agences`), limit(200));
     console.log("📡 Listen agences:", `companies/${companyId}/agences`);
     const unsub = onSnapshot(qAg, (snap) => {
       const list = snap.docs.map(d => {
@@ -157,84 +134,48 @@ export function useCompanyDashboardData({
     const startTs = Timestamp.fromDate(dateFrom);
     const endTs = Timestamp.fromDate(dateTo);
 
-    let cancelled = false;
-    const unsubs: (() => void)[] = [];
+    const qRes = query(
+      collectionGroup(db, "reservations"),
+      where("companyId", "==", companyId),
+      where("createdAt", ">=", startTs),
+      where("createdAt", "<=", endTs),
+      limit(200)
+    );
 
-    (async () => {
-      try {
-        const agSnap = await getDocs(collection(db, `companies/${companyId}/agences`));
-        const agencyIds = agSnap.docs.map(d => d.id);
-        console.log("📄 Agences trouvées:", agencyIds.length, agencyIds);
+    const unsub = onSnapshot(qRes, (snap) => {
+      const items = snap.docs.map(d => {
+        const data = d.data() as any;
+        const aid = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
+        return {
+          id: d.id,
+          agencyId: aid,
+          agenceId: aid,
+          agencyNom: data.agencyNom,
+          agencyVille: data.agencyVille,
+          depart: data.depart,
+          arrival: data.arrival,
+          departNormalized: data.departNormalized,
+          arrivee: data.arrivee,
+          date: data.date, heure: data.heure,
+          canal: data.canal, statut: data.statut,
+          montant: data.montant || 0, seatsGo: data.seatsGo || 1,
+          clientPhone: data.clientPhone, clientId: data.clientId,
+          createdAt: data.createdAt,
+        } as ReservationDoc;
+      }).filter(r => {
+        const dt = toDateSafe(r.createdAt) ?? (r.date ? new Date(`${r.date}T${r.heure || "00:00"}:00`) : null);
+        return dt ? dt >= dateFrom && dt <= dateTo : false;
+      });
 
-        if (agencyIds.length === 0) {
-          if (!cancelled) { setReservations([]); setLoading(false); }
-          return;
-        }
+      setReservations(items);
+      setLoading(false);
+    }, (err) => {
+      console.error("Dashboard reservations collectionGroup listener error:", err);
+      setLoading(false);
+    });
 
-        const all: ReservationDoc[] = [];
-        let attached = 0;
+    return () => unsub();
 
-        for (const aid of agencyIds) {
-          const { ref, nameTried } = await getReservationsCollectionRef(companyId, aid);
-          if (!ref) {
-            console.error("✖ Impossible d'ouvrir une sous-collection de réservations pour", aid, " (essayé:", nameTried.join(", "), ")");
-            attached += 1;
-            if (attached === agencyIds.length && !cancelled) { setReservations(all); setLoading(false); }
-            continue;
-          }
-
-          const qRes = query(ref, where("createdAt", ">=", startTs), where("createdAt", "<=", endTs));
-          console.log("📡 Listen réservations:", ref.path);
-
-          const unsub = onSnapshot(qRes, (snap) => {
-            const items = snap.docs.map(d => {
-              const data = d.data() as any;
-              return {
-                id: d.id,
-                agencyId: aid,
-                agenceId: aid,
-                agencyNom: data.agencyNom,
-                agencyVille: data.agencyVille,
-                depart: data.depart,
-                arrival: data.arrival,
-                departNormalized: data.departNormalized,
-                arrivee: data.arrivee,
-                date: data.date, heure: data.heure,
-                canal: data.canal, statut: data.statut,
-                montant: data.montant || 0, seatsGo: data.seatsGo || 1,
-                clientPhone: data.clientPhone, clientId: data.clientId,
-                createdAt: data.createdAt,
-              } as ReservationDoc;
-            });
-
-            const filteredOut = all.filter(r => r.agencyId !== aid && r.agenceId !== aid);
-            all.splice(0, all.length, ...filteredOut, ...items);
-
-            const filtered = all.filter(r => {
-              const dt = toDateSafe(r.createdAt) ?? (r.date ? new Date(`${r.date}T${r.heure || "00:00"}:00`) : null);
-              return dt ? dt >= dateFrom && dt <= dateTo : false;
-            });
-
-            if (!cancelled) setReservations(filtered);
-          }, (err) => {
-            console.error(`✖ onSnapshot réservations (${ref.path}):`, err);
-          });
-
-          unsubs.push(unsub);
-          attached += 1;
-        }
-
-      } catch (e) {
-        console.error("✖ Dashboard attach error:", e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      unsubs.forEach(u => u());
-    };
   }, [companyId, dateFrom.getTime(), dateTo.getTime()]);
 
   // Période précédente (même durée) pour variation CA et par agence
@@ -248,31 +189,32 @@ export function useCompanyDashboardData({
 
     (async () => {
       try {
-        const agSnap = await getDocs(collection(db, `companies/${companyId}/agences`));
-        const agencyIds = agSnap.docs.map(d => d.id);
         const all: ReservationDoc[] = [];
-        for (const aid of agencyIds) {
-          const { ref } = await getReservationsCollectionRef(companyId, aid);
-          if (!ref) continue;
-          const q = query(ref, where("createdAt", ">=", startTsPrev), where("createdAt", "<=", endTsPrev), limit(500));
-          const snap = await getDocs(q);
-          snap.docs.forEach(d => {
-            const data = d.data() as any;
-            all.push({
-              id: d.id,
-              agencyId: aid,
-              agenceId: aid,
-              agencyNom: data.agencyNom,
-              agencyVille: data.agencyVille,
-              statut: data.statut,
-              montant: data.montant || 0,
-              seatsGo: data.seatsGo || 1,
-              createdAt: data.createdAt,
-              date: data.date,
-              heure: data.heure,
-            } as ReservationDoc);
-          });
-        }
+        const q = query(
+          collectionGroup(db, "reservations"),
+          where("companyId", "==", companyId),
+          where("createdAt", ">=", startTsPrev),
+          where("createdAt", "<=", endTsPrev),
+          limit(200)
+        );
+        const snap = await getDocs(q);
+        snap.docs.forEach(d => {
+          const data = d.data() as any;
+          const aid = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
+          all.push({
+            id: d.id,
+            agencyId: aid,
+            agenceId: aid,
+            agencyNom: data.agencyNom,
+            agencyVille: data.agencyVille,
+            statut: data.statut,
+            montant: data.montant || 0,
+            seatsGo: data.seatsGo || 1,
+            createdAt: data.createdAt,
+            date: data.date,
+            heure: data.heure,
+          } as ReservationDoc);
+        });
         setPreviousPeriodReservations(all);
       } catch (e) {
         console.error("✖ Previous period reservations:", e);

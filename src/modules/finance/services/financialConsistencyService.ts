@@ -196,7 +196,7 @@ export async function getValidatedRevenue(
     where("validatedAt", ">=", startTs),
     where("validatedAt", "<=", endTs),
     orderBy("validatedAt", "asc"),
-    limit(5000),
+    limit(200),
   ];
   if (agencyId) {
     (constraints as unknown[]).unshift(where("agencyId", "==", agencyId));
@@ -244,7 +244,7 @@ export async function detectFinancialInconsistencies(
         where("createdAt", ">=", startTs),
         where("createdAt", "<=", endTs),
         orderBy("createdAt", "asc"),
-        limit(5000)
+        limit(200)
       )
     ),
     getCashTransactionsByPaidAtRange(companyId, period.dateFrom, period.dateTo),

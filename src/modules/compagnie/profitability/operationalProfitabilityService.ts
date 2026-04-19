@@ -152,7 +152,8 @@ export async function getRouteProfitability(
         collectionGroup(db, "reservations"),
         where("companyId", "==", companyId),
         ...(range?.dateFrom ? [where("date", ">=", range.dateFrom.slice(0, 10))] : []),
-        ...(range?.dateTo ? [where("date", "<=", range.dateTo.slice(0, 10))] : [])
+        ...(range?.dateTo ? [where("date", "<=", range.dateTo.slice(0, 10))] : []),
+        limit(200)
       )
     ),
     listTripCosts(companyId, { limitCount: 5000 }),

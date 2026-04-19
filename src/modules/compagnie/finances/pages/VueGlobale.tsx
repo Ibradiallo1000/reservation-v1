@@ -2,13 +2,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   collection, 
+  collectionGroup,
   query, 
   where, 
   getDocs, 
   Timestamp,
   orderBy,
   doc,
-  getDoc
+  getDoc,
+  limit
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
@@ -152,32 +154,36 @@ const VueGlobale: React.FC = () => {
       const allReservations: ReservationData[] = [];
       
       // Pour chaque agence, charger les réservations
-      for (const agency of agenciesList) {
-        const agencyId = agency.id;
-        const reservationsRef = collection(db, `companies/${user.companyId}/agences/${agencyId}/reservations`);
-        
-        const q = query(
-          reservationsRef,
+      const agencyById = new Map(agenciesList.map((agency) => [agency.id, agency]));
+      const reservationsSnap = await getDocs(
+        query(
+          collectionGroup(db, 'reservations'),
+          where('companyId', '==', user.companyId),
           where('createdAt', '>=', Timestamp.fromDate(dateRange.start)),
           where('createdAt', '<=', Timestamp.fromDate(dateRange.end)),
-          orderBy('createdAt', 'desc')
-        );
-        
-        const snap = await getDocs(q);
-        
-        let agencyReservations = 0;
-        let agencyAmount = 0;
-        let agencyOnlineReservations = 0;
-        let agencyOnlineAmount = 0;
-        
-        snap.forEach(doc => {
-          const data = doc.data() as ReservationData;
+          orderBy('createdAt', 'desc'),
+          limit(200)
+        )
+      );
+
+      reservationsSnap.forEach(doc => {
+        const data = doc.data() as ReservationData;
+        const agencyId = String(data.agencyId ?? doc.ref.parent.parent?.id ?? '');
+        if (!agencyId) return;
+        const agency = agencyById.get(agencyId);
+        const stats = agencyStats[agencyId] ?? {
+          reservations: 0,
+          amount: 0,
+          onlineReservations: 0,
+          onlineAmount: 0,
+          lastActivity: null
+        };
           totalReservations++;
-          agencyReservations++;
+          stats.reservations++;
           
           const amount = data.montant || 0;
           totalAmount += amount;
-          agencyAmount += amount;
+          stats.amount += amount;
           
           // Vérifier le statut
           if (data.statut === 'en_attente' || data.statut === 'verification') {
@@ -188,8 +194,8 @@ const VueGlobale: React.FC = () => {
           const canal = String(data.canal || '').toLowerCase();
           if (canal === 'en_ligne') {
             totalOnlineAmount += amount;
-            agencyOnlineReservations++;
-            agencyOnlineAmount += amount;
+            stats.onlineReservations++;
+            stats.onlineAmount += amount;
           }
           
           // Vérifier le paiement
@@ -206,19 +212,12 @@ const VueGlobale: React.FC = () => {
             ...data,
             id: doc.id,
             agencyId,
-            agencyName: agency.nomAgence || agency.nom || agency.ville || 'Agence',
+            agencyName: agency?.nomAgence || agency?.nom || agency?.ville || 'Agence',
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date()
           });
-        });
-        
-        agencyStats[agencyId] = {
-          reservations: agencyReservations,
-          amount: agencyAmount,
-          onlineReservations: agencyOnlineReservations,
-          onlineAmount: agencyOnlineAmount,
-          lastActivity: snap.docs[0]?.data()?.createdAt || null
-        };
-      }
+        if (!stats.lastActivity) stats.lastActivity = data.createdAt || null;
+        agencyStats[agencyId] = stats;
+      });
       
       // 3. Préparer les données des agences
       const processedAgenciesData = agenciesList.map((agency: Agency) => {

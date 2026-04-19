@@ -24,7 +24,7 @@ export type LegacyReservationActivityRow = {
   raw: Record<string, unknown>;
 };
 
-const QUERY_LIMIT = 5000;
+const QUERY_LIMIT = 200;
 
 export async function fetchLegacyReservationRowsForActivity(
   companyId: string,

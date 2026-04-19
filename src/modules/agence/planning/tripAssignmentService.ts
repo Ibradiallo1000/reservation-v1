@@ -498,7 +498,7 @@ export async function countExpectedReservationsForTripSlot(
       where("arrivee", "==", arr),
       where("heure", "==", heureNorm),
       where("statut", "in", statuts),
-      limit(500)
+      limit(200)
     );
     addSnap(await getDocs(q1));
   }
@@ -509,7 +509,7 @@ export async function countExpectedReservationsForTripSlot(
     where("trajetId", "==", params.tripId),
     where("heure", "==", heureNorm),
     where("statut", "in", statuts),
-    limit(500)
+    limit(200)
   );
   addSnap(await getDocs(q2));
 

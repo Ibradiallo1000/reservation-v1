@@ -3,7 +3,7 @@
  * boardingStatus: pending | boarded | no_show
  */
 
-import { collectionGroup, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { collectionGroup, doc, getDoc, getDocs, limit, query, updateDoc, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { ensureProgressArrival } from "@/modules/compagnie/tripInstances/tripProgressService";
 import { getTripInstance } from "@/modules/compagnie/tripInstances/tripInstanceService";
@@ -56,7 +56,8 @@ export async function getPassengersForBoarding(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
-    where("originStopOrder", "==", stopOrder)
+    where("originStopOrder", "==", stopOrder),
+    limit(200)
   );
   const snapOrder = await getDocs(qOrder);
   let docs = snapOrder.docs;
@@ -65,7 +66,8 @@ export async function getPassengersForBoarding(
       collectionGroup(db, "reservations"),
       where("companyId", "==", companyId),
       where("tripInstanceId", "==", tripInstanceId),
-      where("originStopId", "==", originStopId)
+      where("originStopId", "==", originStopId),
+      limit(200)
     );
     const snapId = await getDocs(qId);
     docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);

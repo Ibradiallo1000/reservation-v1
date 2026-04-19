@@ -2,10 +2,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
+  collectionGroup,
   getDocs,
+  limit,
   query,
   where,
-  DocumentData,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import dayjs from "dayjs";
@@ -143,22 +146,19 @@ const ClientMesReservationsPage: React.FC = () => {
     companyData: DocumentData,
     phoneNorm: string
   ) => {
-    const agences = await getDocs(
-      collection(db, "companies", companyId, "agences")
-    );
     const out: Reservation[] = [];
     const seenIds = new Set<string>();
 
-    for (const ag of agences.docs) {
-      const colRef = collection(db, "companies", companyId, "agences", ag.id, "reservations");
-      const addDoc = (d: { id: string; data: () => any }) => {
+    const reservationsRef = collectionGroup(db, "reservations");
+    const addDoc = (d: QueryDocumentSnapshot<DocumentData>) => {
         if (seenIds.has(d.id)) return;
         seenIds.add(d.id);
         const r = d.data();
+        const agencyId = String(r.agencyId ?? d.ref?.parent?.parent?.id ?? "");
         out.push({
           id: d.id,
           companyId,
-          agencyId: ag.id,
+          agencyId,
           companySlug: companyData?.slug || undefined,
           couleurPrimaire: companyData?.couleurPrimaire,
           couleurSecondaire: companyData?.couleurSecondaire,
@@ -182,11 +182,12 @@ const ClientMesReservationsPage: React.FC = () => {
           canal: r.canal || undefined,
         });
       };
-      const snapNorm = await getDocs(query(colRef, where("telephoneNormalized", "==", phoneNorm)));
-      snapNorm.docs.forEach((d) => addDoc(d));
-      const snapLegacy = await getDocs(query(colRef, where("telephone", "==", phoneNorm)));
-      snapLegacy.docs.forEach((d) => addDoc(d));
-    }
+    const [snapNorm, snapLegacy] = await Promise.all([
+      getDocs(query(reservationsRef, where("companyId", "==", companyId), where("telephoneNormalized", "==", phoneNorm), limit(100))),
+      getDocs(query(reservationsRef, where("companyId", "==", companyId), where("telephone", "==", phoneNorm), limit(100))),
+    ]);
+    snapNorm.docs.forEach((d) => addDoc(d));
+    snapLegacy.docs.forEach((d) => addDoc(d));
     return out;
   };
 

@@ -243,13 +243,13 @@ export default function ManagerCockpitPage({
       (s) => setShifts(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))));
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
-        where("date", "==", today), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])),
+        where("date", "==", today), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"]), limit(200)),
       (s) => setReservationsToday(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))));
-    unsubs.push(onSnapshot(collection(db, `companies/${companyId}/agences/${agencyId}/boardingClosures`),
+    unsubs.push(onSnapshot(query(collection(db, `companies/${companyId}/agences/${agencyId}/boardingClosures`), limit(100)),
       (s) => setBoardingClosures(new Set(s.docs.map((d) => d.id)))));
     unsubs.push(
       onSnapshot(
-        query(shipmentsRef(db, companyId), where("originAgencyId", "==", agencyId), limit(1000)),
+        query(shipmentsRef(db, companyId), where("originAgencyId", "==", agencyId), limit(200)),
         (snap) => {
           const rows = snap.docs.map((d) => d.data() as ShipmentRow);
           const start = dayjs().tz(agencyTz).startOf("day").toDate();
@@ -351,7 +351,7 @@ export default function ManagerCockpitPage({
     }
     for (const s of list) {
       if (cur[s.id]) continue;
-      const q = query(rRef, where("sessionId", "==", s.id));
+      const q = query(rRef, where("sessionId", "==", s.id), limit(100));
       cur[s.id] = onSnapshot(q, (snap) => {
         let tickets = 0;
         let revenue = 0;
@@ -397,7 +397,7 @@ export default function ManagerCockpitPage({
   useEffect(() => {
     if (!companyId || !agencyId) return;
     const col = courierSessionsRef(db, companyId, agencyId);
-    const unsub = onSnapshot(col, (snap) => {
+    const unsub = onSnapshot(query(col, limit(200)), (snap) => {
       const all = snap.docs.map((d) => ({ ...d.data(), id: d.id } as CourierSessionWithId));
       const byTime = (s: CourierSessionWithId) =>
         (s.validatedAt as { toMillis?: () => number })?.toMillis?.() ??
@@ -433,7 +433,7 @@ export default function ManagerCockpitPage({
     }
     for (const id of wanted) {
       if (cur[id]) continue;
-      const qSh = query(shipmentsRef(db, companyId), where("sessionId", "==", id));
+      const qSh = query(shipmentsRef(db, companyId), where("sessionId", "==", id), limit(200));
       cur[id] = onSnapshot(
         qSh,
         (snap) => {

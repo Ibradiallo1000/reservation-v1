@@ -1,7 +1,16 @@
 import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { collection, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import {
+  collectionGroup,
+  getDocs,
+  limit,
+  query,
+  where,
+  Timestamp,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -113,15 +122,15 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
     setResults([]);
 
     try {
-      const agenciesSnap = await getDocs(collection(db, 'companies', company.id, 'agences'));
       const seenIds = new Set<string>();
       const out: ReservationRow[] = [];
       const sevenDaysAgo = Date.now() - SEVEN_DAYS_MS;
 
-      const pushDoc = (d: { id: string; data: () => Record<string, unknown> }, agencyId: string) => {
+      const pushDoc = (d: QueryDocumentSnapshot<DocumentData>) => {
         if (seenIds.has(d.id)) return;
         seenIds.add(d.id);
         const r = d.data();
+        const agencyId = String(r.agencyId ?? d.ref?.parent?.parent?.id ?? '');
         const createdAt = r.createdAt as ReservationRow['createdAt'];
         const createdAtMs = createdAt
           ? (createdAt instanceof Timestamp ? createdAt.toMillis() : (createdAt as { seconds: number }).seconds * 1000)
@@ -144,15 +153,13 @@ export default function FindReservationPage({ company, slug: slugProp }: FindRes
         }
       };
 
-      for (const agDoc of agenciesSnap.docs) {
-        const colRef = collection(db, 'companies', company.id, 'agences', agDoc.id, 'reservations');
-        const qNormalized = query(colRef, where('telephoneNormalized', '==', phoneNorm));
-        const snapNormalized = await getDocs(qNormalized);
-        snapNormalized.forEach((d) => pushDoc({ id: d.id, data: () => d.data() as Record<string, unknown> }, agDoc.id));
-        const qLegacy = query(colRef, where('telephone', '==', phoneNorm));
-        const snapLegacy = await getDocs(qLegacy);
-        snapLegacy.forEach((d) => pushDoc({ id: d.id, data: () => d.data() as Record<string, unknown> }, agDoc.id));
-      }
+      const reservationsRef = collectionGroup(db, 'reservations');
+      const [snapNormalized, snapLegacy] = await Promise.all([
+        getDocs(query(reservationsRef, where('companyId', '==', company.id), where('telephoneNormalized', '==', phoneNorm), limit(100))),
+        getDocs(query(reservationsRef, where('companyId', '==', company.id), where('telephone', '==', phoneNorm), limit(100))),
+      ]);
+      snapNormalized.forEach((d) => pushDoc(d));
+      snapLegacy.forEach((d) => pushDoc(d));
 
       out.sort((a, b) => getCreatedAtMs(b) - getCreatedAtMs(a));
       setResults(out);

@@ -9,7 +9,7 @@
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
-  collection, getDocs, query, where, orderBy,
+  collection, getDocs, limit, query, where, orderBy,
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -111,7 +111,7 @@ const ShiftHistoryPage: React.FC = () => {
     try {
       const ref = collection(db, `companies/${companyId}/agences/${agencyId}/shifts`);
       // On lit par startTime DESC, puis on filtre côté client par UID (compat schéma)
-      const qy = query(ref, orderBy('startTime', 'desc'));
+      const qy = query(ref, orderBy('startTime', 'desc'), limit(200));
       const snap = await getDocs(qy);
       const list: ShiftDoc[] = snap.docs.map(d => {
         const x = d.data() as any;
@@ -155,7 +155,7 @@ const ShiftHistoryPage: React.FC = () => {
     setLoadingDetails(true);
     try {
       const ref = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
-      const qy = query(ref, where('shiftId', '==', sh.id), orderBy('createdAt', 'asc'));
+      const qy = query(ref, where('shiftId', '==', sh.id), orderBy('createdAt', 'asc'), limit(200));
       const snap = await getDocs(qy);
       const list: ReservationDoc[] = snap.docs.map(d => {
         const r = d.data() as any;

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  collection, doc, getDoc, onSnapshot, query, where
+  collection, doc, getDoc, limit, onSnapshot, query, where
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { ShieldCheck, Clock4 } from 'lucide-react';
@@ -60,7 +60,7 @@ export const ShiftsControlWidget: React.FC<{
     if (!companyId || !agencyId) return;
     const ref = collection(db, `companies/${companyId}/agences/${agencyId}/shifts`);
     // on garde active / paused / closed / pending ; les 'validated' vivent dans Rapports
-    const qy = query(ref, where('status','in',['pending','active','paused','closed'] as ShiftStatus[]));
+    const qy = query(ref, where('status','in',['pending','active','paused','closed'] as ShiftStatus[]), limit(200));
     const unsub = onSnapshot(qy, async snap => {
       const list: ShiftDoc[] = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) })) as any[];
 
@@ -110,7 +110,7 @@ export const ShiftsControlWidget: React.FC<{
     // (re)brancher pour les actifs
     rows.filter(s=>s.status==='active').forEach(s => {
       if (liveUnsubsRef.current[s.id]) return;
-      const unsub = onSnapshot(query(rRef, where('sessionId','==',s.id), where('canal','==','guichet')), snap => {
+      const unsub = onSnapshot(query(rRef, where('sessionId','==',s.id), where('canal','==','guichet'), limit(100)), snap => {
         let reservations=0, tickets=0, amount=0;
         snap.forEach(d => {
           const r = d.data() as Record<string, unknown>;

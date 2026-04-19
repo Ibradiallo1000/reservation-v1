@@ -95,7 +95,8 @@ const ManagerDashboardPage: React.FC = () => {
     const qRes = query(
       collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
       where("date", "==", today),
-      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])
+      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"]),
+      limit(200)
     );
     const unsubRes = onSnapshot(qRes, (snap) =>
       setReservationsToday(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ReservationDoc, "id">) })))

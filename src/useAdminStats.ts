@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { db } from './firebaseConfig';
 
 const useAdminStats = () => {
@@ -17,7 +17,7 @@ const useAdminStats = () => {
   useEffect(() => {
     const fetchData = async () => {
       const usersSnap = await getDocs(collection(db, 'users'));
-      const reservationsSnap = await getDocs(collection(db, 'reservations'));
+      const reservationsSnap = await getDocs(query(collection(db, 'reservations'), limit(200)));
       const companiesSnap = await getDocs(collection(db, 'compagnies'));
       const tripsSnap = await getDocs(collection(db, 'trips'));
       const invoicesSnap = await getDocs(collection(db, 'invoices'));

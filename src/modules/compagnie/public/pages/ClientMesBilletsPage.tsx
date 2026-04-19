@@ -3,7 +3,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
+  collectionGroup,
   getDocs,
+  limit,
   query,
   where,
   DocumentData,
@@ -221,28 +223,40 @@ const ClientMesBilletsPage: React.FC = () => {
    * normalizePhone handles Mali 223 + 8 digits so all formats match.
    */
   const fetchForCompanyId = async (companyId: string, companyData: DocumentData, phoneNorm: string) => {
-    const agences = await getDocs(collection(db, "companies", companyId, "agences"));
     const seen = new Set<string>();
     const out: Reservation[] = [];
+    const reservationsRef = collectionGroup(db, "reservations");
 
-    for (const ag of agences.docs) {
-      const base = collection(db, "companies", companyId, "agences", ag.id, "reservations");
+    const [snapNorm, snapLegacy] = await Promise.all([
+      getDocs(
+        query(
+          reservationsRef,
+          where("companyId", "==", companyId),
+          where("telephoneNormalized", "==", phoneNorm),
+          limit(100)
+        )
+      ),
+      getDocs(
+        query(
+          reservationsRef,
+          where("companyId", "==", companyId),
+          where("telephone", "==", phoneNorm),
+          limit(100)
+        )
+      ),
+    ]);
 
-      const [snapNorm, snapLegacy] = await Promise.all([
-        getDocs(query(base, where("telephoneNormalized", "==", phoneNorm))),
-        getDocs(query(base, where("telephone", "==", phoneNorm))),
-      ]);
+    const addUnique = (d: QueryDocumentSnapshot) => {
+      const data = d.data() as any;
+      const agencyId = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
+      const key = `${companyId}_${agencyId}_${d.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(mapDoc(d, companyId, agencyId, companyData));
+    };
 
-      const addUnique = (d: QueryDocumentSnapshot) => {
-        const key = `${companyId}_${ag.id}_${d.id}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        out.push(mapDoc(d, companyId, ag.id, companyData));
-      };
-
-      snapNorm.docs.forEach((d) => addUnique(d));
-      snapLegacy.docs.forEach((d) => addUnique(d));
-    }
+    snapNorm.docs.forEach((d) => addUnique(d));
+    snapLegacy.docs.forEach((d) => addUnique(d));
 
     return out;
   };

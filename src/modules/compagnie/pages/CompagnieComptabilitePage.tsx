@@ -1,7 +1,7 @@
 // src/pages/CompagnieComptabilitePage.tsx
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { 
-  collection, getDocs, query, where, orderBy, Timestamp,
+  collection, getDocs, query, where, orderBy, Timestamp, limit,
   collectionGroup, DocumentData, QuerySnapshot 
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
@@ -262,17 +262,53 @@ const CompagnieComptabilitePage: React.FC = () => {
     
     try {
       const result: AgencyPerformance[] = [];
+      const reservationStatsByAgency = new Map<string, {
+        ventesGuichet: number;
+        ventesEnLigne: number;
+        nbReservations: number;
+        nbBillets: number;
+      }>();
+
+      const reservationsSnap = await getDocs(
+        query(
+          collectionGroup(db, 'reservations'),
+          where('companyId', '==', user.companyId),
+          where('createdAt', '>=', Timestamp.fromDate(from)),
+          where('createdAt', '<=', Timestamp.fromDate(to)),
+          limit(200)
+        )
+      );
+
+      reservationsSnap.forEach(docSnap => {
+        const data = docSnap.data();
+        const agencyId = String(data.agencyId ?? docSnap.ref.parent.parent?.id ?? '');
+        if (!agencyId) return;
+
+        const stats = reservationStatsByAgency.get(agencyId) ?? {
+          ventesGuichet: 0,
+          ventesEnLigne: 0,
+          nbReservations: 0,
+          nbBillets: 0,
+        };
+
+        const canal = String(data.canal || '').toLowerCase();
+        const montant = Number(data.montant || 0);
+        const seats = (Number(data.seatsGo) || 0) + (Number(data.seatsReturn) || 0);
+
+        stats.nbReservations += 1;
+        stats.nbBillets += seats;
+
+        if (canal === 'guichet' || canal === '') {
+          stats.ventesGuichet += montant;
+        } else if (canal === 'en_ligne') {
+          stats.ventesEnLigne += montant;
+        }
+
+        reservationStatsByAgency.set(agencyId, stats);
+      });
       
       // Pour chaque agence, calculer les performances
       for (const agency of agencies) {
-        // 1. Récupérer TOUTES les réservations de l'agence (guichet + ligne)
-        const reservationsRef = collection(db, 'companies', user.companyId, 'agences', agency.id, 'reservations');
-        const qRes = query(
-          reservationsRef,
-          where('createdAt', '>=', Timestamp.fromDate(from)),
-          where('createdAt', '<=', Timestamp.fromDate(to))
-        );
-        
         // 2. Récupérer les reçus de caisse
         const cashReceiptsRef = collection(db, 'companies', user.companyId, 'agences', agency.id, 'cashReceipts');
         const qCash = query(
@@ -289,33 +325,17 @@ const CompagnieComptabilitePage: React.FC = () => {
           where('createdAt', '<=', Timestamp.fromDate(to))
         );
         
-        const [resSnap, cashSnap, movSnap] = await Promise.all([
-          getDocs(qRes),
+        const [cashSnap, movSnap] = await Promise.all([
           getDocs(qCash),
           getDocs(qMov)
         ]);
         
         // Calculer les ventes
-        let ventesGuichet = 0;
-        let ventesEnLigne = 0;
-        let nbReservations = 0;
-        let nbBillets = 0;
-        
-        resSnap.forEach(doc => {
-          const data = doc.data();
-          const canal = String(data.canal || '').toLowerCase();
-          const montant = Number(data.montant || 0);
-          const seats = (data.seatsGo || 0) + (data.seatsReturn || 0);
-          
-          nbReservations += 1;
-          nbBillets += seats;
-          
-          if (canal === 'guichet' || canal === '') {
-            ventesGuichet += montant;
-          } else if (canal === 'en_ligne') {
-            ventesEnLigne += montant;
-          }
-        });
+        const reservationStats = reservationStatsByAgency.get(agency.id);
+        const ventesGuichet = reservationStats?.ventesGuichet ?? 0;
+        const ventesEnLigne = reservationStats?.ventesEnLigne ?? 0;
+        const nbReservations = reservationStats?.nbReservations ?? 0;
+        const nbBillets = reservationStats?.nbBillets ?? 0;
         
         // Calculer les encaissements
         let especesRecues = 0;

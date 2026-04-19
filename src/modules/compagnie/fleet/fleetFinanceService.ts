@@ -5,7 +5,7 @@
  * - vehicleProfit = vehicleRevenue - vehicleCosts
  */
 
-import { collectionGroup, getDocs, query, where } from "firebase/firestore";
+import { collectionGroup, getDocs, limit, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { listVehicles } from "./vehiclesService";
 import { listFleetCosts } from "./fleetCostsService";
@@ -46,7 +46,8 @@ async function getTripRevenueMap(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("date", ">=", dateFrom),
-    where("date", "<=", dateTo)
+    where("date", "<=", dateTo),
+    limit(200)
   );
   const snap = await getDocs(q);
   snap.docs.forEach((d) => {

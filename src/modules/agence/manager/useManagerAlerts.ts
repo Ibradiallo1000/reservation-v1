@@ -138,7 +138,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
 
     let closuresSet = new Set<string>();
     /* Listener 2: boardingClosures */
-    unsubs.push(onSnapshot(closuresRef, (s) => {
+    unsubs.push(onSnapshot(query(closuresRef, limit(100)), (s) => {
       closuresSet = new Set(s.docs.map((d) => d.id));
     }));
 
@@ -150,7 +150,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
 
     /* Listener 3: today's reservations */
     unsubs.push(onSnapshot(
-      query(resRef, where("date", "==", today), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])),
+      query(resRef, where("date", "==", today), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"]), limit(200)),
       (snap) => {
         const reservations = snap.docs.map((d) => ({ id: d.id, ...d.data() } as any));
 

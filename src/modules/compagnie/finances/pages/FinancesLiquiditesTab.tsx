@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { collection, getDoc, getDocs, doc, limit, query, where } from "firebase/firestore";
+import { collection, collectionGroup, getDoc, getDocs, doc, limit, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { SectionCard, MetricCard } from "@/ui";
@@ -50,11 +50,18 @@ export default function FinancesLiquiditesTab() {
       setLoading(true);
       try {
         const companyRef = doc(db, "companies", companyId);
-        const [bal, pmSnap, companySnap, agencesSnap] = await Promise.all([
+        const [bal, pmSnap, companySnap, reservationsSnap] = await Promise.all([
           getLedgerBalances(companyId),
           getDocs(query(collection(db, "paymentMethods"), where("companyId", "==", companyId))),
           getDoc(companyRef),
-          getDocs(collection(db, "companies", companyId, "agences")),
+          getDocs(
+            query(
+              collectionGroup(db, "reservations"),
+              where("companyId", "==", companyId),
+              where("canal", "==", "en_ligne"),
+              limit(200)
+            )
+          ),
         ]);
         if (cancelled) return;
 
@@ -67,14 +74,11 @@ export default function FinancesLiquiditesTab() {
         });
         mth.sort((a, b) => a.name.localeCompare(b.name, "fr"));
 
-        const resRows: ReservationLike[] = [];
-        for (const ag of agencesSnap.docs) {
-          const rRef = collection(db, "companies", companyId, "agences", ag.id, "reservations");
-          const rSnap = await getDocs(query(rRef, limit(4000)));
-          rSnap.docs.forEach((d) => {
-            resRows.push({ ...d.data(), companyId, agencyId: ag.id });
-          });
-        }
+        const resRows: ReservationLike[] = reservationsSnap.docs.map((d) => {
+          const data = d.data() as any;
+          const agencyId = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
+          return { ...data, companyId, agencyId };
+        });
 
         if (cancelled) return;
         setLedger({

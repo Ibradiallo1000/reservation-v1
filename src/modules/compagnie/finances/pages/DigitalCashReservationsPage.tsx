@@ -1,7 +1,7 @@
 // src/pages/chef-comptable/ReservationsEnLigne.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  collection, query, where, orderBy, limit, doc,
+  collection, collectionGroup, query, where, orderBy, limit, doc,
   deleteDoc, onSnapshot, getDoc, updateDoc, serverTimestamp, getDocs, Timestamp
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
@@ -436,130 +436,97 @@ const ReservationsEnLigne: React.FC = () => {
       return;
     }
 
-    let unsubs: Array<() => void> = [];
+    const qRef = query(
+      collectionGroup(db, 'reservations'),
+      where('companyId', '==', user.companyId),
+      where('canal', '==', 'en_ligne'),
+      where('status', '==', 'payé'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    );
 
-    (async () => {
-      try {
-        const agencesSnap = await getDocs(
-          collection(db, 'companies', user.companyId, 'agences')
-        );
-        
-        if (agencesSnap.empty) {
-          setLoading(false);
-          return;
-        }
-        
-        const agenceIds = agencesSnap.docs.map((d) => d.id);
+    const unsub = onSnapshot(qRef, (snap) => {
+      setVerificationReservations(prev => {
+        const map = new Map<string, Reservation>();
 
-        // Paiement déclaré côté client : status payé, en attente de validation opérateur
-        agenceIds.forEach((agencyId) => {
-          const qRef = query(
-            collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
-            where('status', '==', 'payé'),
-            orderBy('createdAt', 'desc'),
-            limit(50)
-          );
+        prev.forEach(r => {
+          map.set(`${r.agencyId}_${r.id}`, r);
+        });
 
-          const unsub = onSnapshot(qRef, (snap) => {
-            // CORRECTION CRITIQUE ICI : Utiliser une Map pour gérer proprement les changements
-            setVerificationReservations(prev => {
-              const map = new Map<string, Reservation>();
+        snap.docChanges().forEach(chg => {
+          const d = chg.doc.data() as any;
+          const agencyId = String(d.agencyId ?? chg.doc.ref.parent.parent?.id ?? '');
+          const keyEarly = `${agencyId}_${chg.doc.id}`;
+          if (d.ticketValidatedAt) {
+            map.delete(keyEarly);
+            if (chg.type === 'removed') resetNotification(keyEarly);
+            return;
+          }
 
-              // Garder l'existant
-              prev.forEach(r => {
-                map.set(`${r.agencyId}_${r.id}`, r);
-              });
+          const row: Reservation = {
+            ...d,
+            id: chg.doc.id,
+            companyId: d.companyId ?? user.companyId!,
+            agencyId,
+            statut: normalizeReservationRowStatus(d as Record<string, unknown>),
+            clientNom: d.nomClient ?? d.clientNom,
+            createdAt: d.createdAt ?? Timestamp.now(),
+          } as Reservation;
 
-              // Appliquer les changements
-              snap.docChanges().forEach(chg => {
-                const d = chg.doc.data() as any;
-                const keyEarly = `${d.agencyId ?? agencyId}_${chg.doc.id}`;
-                if (d.ticketValidatedAt) {
-                  map.delete(keyEarly);
-                  if (chg.type === 'removed') resetNotification(keyEarly);
-                  return;
-                }
+          const key = `${row.agencyId}_${row.id}`;
 
-                const row: Reservation = {
-                  ...d,
-                  id: chg.doc.id,
-                  companyId: d.companyId ?? user.companyId!,
-                  agencyId: d.agencyId ?? agencyId,
-                  statut: normalizeReservationRowStatus(d as Record<string, unknown>),
-                  clientNom: d.nomClient ?? d.clientNom,
-                  createdAt: d.createdAt ?? Timestamp.now(),
-                } as Reservation;
+          if (chg.type === 'removed') {
+            map.delete(key);
+            resetNotification(key);
+          } else {
+            if (chg.type === 'added' && row.statut === 'verification') {
+              if (isAudioReady) {
+                playNotification(key);
+              }
 
-                const key = `${row.agencyId}_${row.id}`;
-
-                if (chg.type === 'removed') {
-                  map.delete(key);
-                  resetNotification(key);
-                } else {
-                  // Ajout ou modification
-                  if (chg.type === 'added' && row.statut === 'verification') {
-                    // Jouer le son uniquement pour les nouvelles réservations à vérifier
-                    if (isAudioReady) {
-                      playNotification(key);
+              toast('Nouveau justificatif reçu', {
+                description: `${row.clientNom || 'Client'} a envoyé un justificatif de paiement`,
+                duration: 4000,
+                action: {
+                  label: 'Voir',
+                  onClick: () => {
+                    const element = document.getElementById(`reservation-${row.id}`);
+                    if (element) {
+                      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      element.classList.add('ring-2', 'ring-amber-500');
+                      setTimeout(() => {
+                        element.classList.remove('ring-2', 'ring-amber-500');
+                      }, 2000);
                     }
-                    
-                    toast('Nouveau justificatif reçu', {
-                      description: `${row.clientNom || 'Client'} a envoyé un justificatif de paiement`,
-                      duration: 4000,
-                      action: {
-                        label: 'Voir',
-                        onClick: () => {
-                          const element = document.getElementById(`reservation-${row.id}`);
-                          if (element) {
-                            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            element.classList.add('ring-2', 'ring-amber-500');
-                            setTimeout(() => {
-                              element.classList.remove('ring-2', 'ring-amber-500');
-                            }, 2000);
-                          }
-                        }
-                      }
-                    });
                   }
-                  
-                  map.set(key, row);
                 }
               });
+            }
 
-              // Convertir en tableau et trier par date décroissante
-              return Array.from(map.values()).sort((a, b) => {
-                const ta = a.createdAt instanceof Timestamp 
-                  ? a.createdAt.toMillis() 
-                  : new Date(a.createdAt).getTime();
-                const tb = b.createdAt instanceof Timestamp 
-                  ? b.createdAt.toMillis() 
-                  : new Date(b.createdAt).getTime();
-                return tb - ta;
-              });
-            });
-          }, (error) => {
-            console.error('Erreur Firestore (verification):', error);
-            toast.error('Erreur de connexion', {
-              description: 'Impossible de charger les réservations à vérifier',
-            });
-          });
-
-          unsubs.push(unsub);
+            map.set(key, row);
+          }
         });
 
-        setLoading(false);
-      } catch (error) {
-        console.error('Erreur initiale:', error);
-        setLoading(false);
-        toast.error('Erreur', {
-          description: 'Impossible de charger les agences',
+        return Array.from(map.values()).sort((a, b) => {
+          const ta = a.createdAt instanceof Timestamp
+            ? a.createdAt.toMillis()
+            : new Date(a.createdAt).getTime();
+          const tb = b.createdAt instanceof Timestamp
+            ? b.createdAt.toMillis()
+            : new Date(b.createdAt).getTime();
+          return tb - ta;
         });
-      }
-    })();
+      });
+      setLoading(false);
+    }, (error) => {
+      console.error('Erreur Firestore (verification):', error);
+      setLoading(false);
+      toast.error('Erreur de connexion', {
+        description: 'Impossible de charger les réservations à vérifier',
+      });
+    });
 
-    return () => {
-      unsubs.forEach((u) => u());
-    };
+    return () => unsub();
   }, [user?.companyId, isAudioReady]);
 
   /* ================= CHARGEMENT PAGINÉ DES AUTRES RÉSERVATIONS ================= */
@@ -567,26 +534,20 @@ const ReservationsEnLigne: React.FC = () => {
     if (!user?.companyId) return;
 
     try {
-      const agencesSnap = await getDocs(
-        collection(db, 'companies', user.companyId, 'agences')
-      );
-      
-      if (agencesSnap.empty) return;
-
-      const agenceIds = agencesSnap.docs.map((d) => d.id);
       const allOtherReservations: Reservation[] = [];
 
-      for (const agencyId of agenceIds) {
-        const qRef = query(
-          collection(db, 'companies', user.companyId!, 'agences', agencyId, 'reservations'),
+      const qRef = query(
+          collectionGroup(db, 'reservations'),
+          where('companyId', '==', user.companyId),
           where('status', 'in', ['payé', 'annulé']),
           orderBy('createdAt', 'desc'),
-          limit(ITEMS_PER_PAGE * page)
+          limit(Math.min(ITEMS_PER_PAGE * page, 200))
         );
 
         const snap = await getDocs(qRef);
         snap.docs.forEach(doc => {
           const d = doc.data() as any;
+          const agencyId = String(d.agencyId ?? doc.ref.parent.parent?.id ?? '');
           const normalizedStatus = normalizeReservationRowStatus(d as Record<string, unknown>);
           
           // CORRECTION : S'assurer que les réservations confirmées sont bien incluses
@@ -600,7 +561,6 @@ const ReservationsEnLigne: React.FC = () => {
             createdAt: d.createdAt ?? Timestamp.now(),
           } as Reservation);
         });
-      }
 
       // Supprimer les doublons potentiels
       const uniqueReservations = Array.from(

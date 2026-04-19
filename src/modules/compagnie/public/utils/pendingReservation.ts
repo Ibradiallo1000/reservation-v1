@@ -7,6 +7,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   query,
   where,
   Timestamp,
@@ -176,7 +177,8 @@ export async function findPendingByPhone(
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("phone", "==", phone),
-    where("status", "==", "en_attente")
+    where("status", "==", "en_attente"),
+    limit(1)
   );
   const snap = await getDocs(q);
   if (snap.empty) return null;

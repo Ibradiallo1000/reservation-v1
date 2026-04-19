@@ -110,7 +110,7 @@ async function getReservationsByCreatedAtRange(
     where("createdAt", ">=", startTs),
     where("createdAt", "<=", endTs),
     orderBy("createdAt", "asc"),
-    limit(5000)
+    limit(200)
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => {
@@ -156,7 +156,7 @@ export async function getReservationsInRange(
     where("createdAt", ">=", startTs),
     where("createdAt", "<=", endTs),
     orderBy("createdAt", "asc"),
-    limit(5000)
+    limit(200)
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => {

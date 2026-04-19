@@ -738,7 +738,7 @@ const AgenceComptabilitePage: React.FC = () => {
     }
     
     const ref = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shifts`);
-    const unsub = onSnapshot(ref, async (snap) => {
+    const unsub = onSnapshot(query(ref, limit(200)), async (snap) => {
       console.log(`[AgenceCompta] Mise à jour des postes: ${snap.docs.length} document(s)`);
       
       const all = snap.docs.map(d => normalizeShift(d.id, d.data()));
@@ -839,7 +839,7 @@ const AgenceComptabilitePage: React.FC = () => {
   useEffect(() => {
     if (!user?.companyId || !user?.agencyId) return;
     const col = courierSessionsRef(db, user.companyId, user.agencyId);
-    const unsub = onSnapshot(col, (snap) => {
+    const unsub = onSnapshot(query(col, limit(200)), (snap) => {
       const all = snap.docs.map(d => ({ ...d.data(), id: d.id } as CourierSessionDoc));
       const byTime = (s: CourierSessionDoc) =>
         (s.validatedAt as { toMillis?: () => number })?.toMillis?.() ??
@@ -886,7 +886,7 @@ const AgenceComptabilitePage: React.FC = () => {
     }
     for (const id of wanted) {
       if (cur[id]) continue;
-      const qSh = query(shipmentsRef(db, user.companyId), where('sessionId', '==', id));
+      const qSh = query(shipmentsRef(db, user.companyId), where('sessionId', '==', id), limit(200));
       cur[id] = onSnapshot(
         qSh,
         (snap) => {
@@ -1014,7 +1014,7 @@ const AgenceComptabilitePage: React.FC = () => {
       if (liveUnsubsRef.current[s.id]) continue;
       
       console.log(`[AgenceCompta] Démarrage de l'écoute pour le poste ${s.id}`);
-      const qLive = query(rRef, where('sessionId', '==', s.id));
+      const qLive = query(rRef, where('sessionId', '==', s.id), limit(100));
       const unsub = onSnapshot(qLive, (snap) => {
         let reservations = 0, tickets = 0, amount = 0;
         snap.forEach(d => {

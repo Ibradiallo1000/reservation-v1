@@ -181,13 +181,13 @@ export default function ChiefSessionDetailModal({
         reservationsRef,
         where("sessionId", "==", session.id),
         where("canal", "==", "guichet"),
-        limit(500)
+        limit(200)
       );
       const qShift = query(
         reservationsRef,
         where("shiftId", "==", session.id),
         where("canal", "==", "guichet"),
-        limit(500)
+        limit(200)
       );
 
       const unsubA = onSnapshot(
@@ -223,7 +223,7 @@ export default function ChiefSessionDetailModal({
     }
 
     const col = shipmentsRef(db, companyId);
-    const q = query(col, where("sessionId", "==", session.id), limit(400));
+    const q = query(col, where("sessionId", "==", session.id), limit(200));
     const unsub = onSnapshot(
       q,
       (snap) => {

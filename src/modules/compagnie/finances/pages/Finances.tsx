@@ -228,46 +228,48 @@ const Finances: React.FC = () => {
       }
 
       // 3. Calculer le chiffre d'affaires par canal et par agence (réservations)
-      const agencyRevenues: AgencyRevenue[] = [];
+      const revenueByAgency = new Map<string, { revenue: number; guichetRevenue: number; onlineRevenue: number }>();
       let totalRevenue = 0;
       let guichetRevenue = 0;
       let onlineRevenue = 0;
       let cashRevenue = 0;
       let mobileMoneyRevenue = 0;
       
-      for (const agency of agenciesList) {
-        const reservationsRef = collection(db, 
-          `companies/${user.companyId}/agences/${agency.id}/reservations`);
-        
-        // Récupérer les réservations de la période puis filtrer localement
-        // pour accepter les variantes métier de statut (confirmé / payé).
-        const q = query(
-          reservationsRef,
+      const reservationsSnap = await getDocs(
+        query(
+          collectionGroup(db, 'reservations'),
+          where('companyId', '==', user.companyId),
           where('createdAt', '>=', Timestamp.fromDate(dateRange.start)),
-          where('createdAt', '<=', Timestamp.fromDate(dateRange.end))
-        );
-        
-        const snap = await getDocs(q);
-        
-        let agencyGuichetRevenue = 0;
-        let agencyOnlineRevenue = 0;
-        let agencyTotalRevenue = 0;
-        
-        snap.forEach(doc => {
-          const data = doc.data();
+          where('createdAt', '<=', Timestamp.fromDate(dateRange.end)),
+          limit(200)
+        )
+      );
+
+      reservationsSnap.forEach(docSnap => {
+        const data = docSnap.data();
           const statut = String(data.statut ?? '').toLowerCase();
           const normalized = canonicalStatut(statut);
           if (normalized !== 'paye' && statut !== 'confirme') return;
+
+          const agencyId = String(data.agencyId ?? docSnap.ref.parent.parent?.id ?? '');
+          if (!agencyId) return;
+
+          const entry = revenueByAgency.get(agencyId) ?? {
+            revenue: 0,
+            guichetRevenue: 0,
+            onlineRevenue: 0
+          };
           const montant = data.montant || 0;
-          agencyTotalRevenue += montant;
+          entry.revenue += montant;
+          totalRevenue += montant;
           
           // Classification par CANAL (guichet vs en ligne)
           const canal = String(data.canal || '').toLowerCase();
           if (canal === 'en_ligne') {
-            agencyOnlineRevenue += montant;
+            entry.onlineRevenue += montant;
             onlineRevenue += montant;
           } else {
-            agencyGuichetRevenue += montant;
+            entry.guichetRevenue += montant;
             guichetRevenue += montant;
           }
           
@@ -279,18 +281,20 @@ const Finances: React.FC = () => {
                      paiement.includes('orange') || paiement.includes('wave')) {
             mobileMoneyRevenue += montant;
           }
-        });
-        
-        totalRevenue += agencyTotalRevenue;
-        
-        agencyRevenues.push({
+
+          revenueByAgency.set(agencyId, entry);
+      });
+
+      const agencyRevenues: AgencyRevenue[] = agenciesList.map((agency) => {
+        const revenue = revenueByAgency.get(agency.id);
+        return {
           id: agency.id,
           name: agency.name,
-          revenue: agencyTotalRevenue,
-          guichetRevenue: agencyGuichetRevenue,
-          onlineRevenue: agencyOnlineRevenue
-        });
-      }
+          revenue: revenue?.revenue ?? 0,
+          guichetRevenue: revenue?.guichetRevenue ?? 0,
+          onlineRevenue: revenue?.onlineRevenue ?? 0
+        };
+      });
       
       // 4. Charger les dépenses par agence
       const agencyExpenses: AgencyExpenses[] = [];

@@ -4,12 +4,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
+  collectionGroup,
   getDocs,
+  limit,
   query,
   where,
   Timestamp,
   onSnapshot,
-  Unsubscribe,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -134,60 +135,49 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
 
     setLoading((p) => ({ ...p, reservations: true }));
 
-    const unsubscribers: Unsubscribe[] = [];
-    const buckets: Record<string, Reservation[]> = {};
+    const qRange = query(
+      collectionGroup(db, "reservations"),
+      where("companyId", "==", companyId),
+      where("createdAt", ">=", Timestamp.fromDate(start)),
+      where("createdAt", "<=", Timestamp.fromDate(end)),
+      limit(200)
+    );
 
-    agences.forEach((agence) => {
-      const resRef = collection(
-        db,
-        "companies",
-        companyId,
-        "agences",
-        agence.id,
-        "reservations"
-      );
-
-      const qRange = query(
-        resRef,
-        where("createdAt", ">=", Timestamp.fromDate(start)),
-        where("createdAt", "<=", Timestamp.fromDate(end))
-      );
-
-      const unsub = onSnapshot(qRange, (snap) => {
-        const rows: Reservation[] = snap.docs.map((d) => {
-          const data = d.data() as any;
-          return {
-            id: d.id,
-            agencyId: agence.id,
-            nomClient: data.nomClient,
-            telephone: data.telephone,
-            montant: data.montant || 0,
-            canal: (data.canal || "").toLowerCase().includes("ligne")
-              ? "en ligne"
-              : "guichet",
-            statut: data.statut,
-            depart: data.depart || "",
-            arrivee: data.arrivee || "",
-            createdAt: data.createdAt?.toDate?.() || null,
-          };
+    const unsub = onSnapshot(qRange, (snap) => {
+      const buckets: Record<string, Reservation[]> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const agencyId = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
+        if (!agencyId) return;
+        const rows = buckets[agencyId] ?? [];
+        rows.push({
+          id: d.id,
+          agencyId,
+          nomClient: data.nomClient,
+          telephone: data.telephone,
+          montant: data.montant || 0,
+          canal: (data.canal || "").toLowerCase().includes("ligne")
+            ? "en ligne"
+            : "guichet",
+          statut: data.statut,
+          depart: data.depart || "",
+          arrivee: data.arrivee || "",
+          createdAt: data.createdAt?.toDate?.() || null,
         });
-
-        buckets[agence.id] = rows;
-
-        const grouped = Object.keys(buckets).map((k) => ({
-          agencyId: k,
-          reservations: buckets[k],
-        }));
-
-        setGroupedData(grouped);
-        setLoading((p) => ({ ...p, reservations: false }));
+        buckets[agencyId] = rows;
       });
 
-      unsubscribers.push(unsub);
+      const grouped = Object.keys(buckets).map((k) => ({
+        agencyId: k,
+        reservations: buckets[k],
+      }));
+
+      setGroupedData(grouped);
+      setLoading((p) => ({ ...p, reservations: false }));
     });
 
     return () => {
-      unsubscribers.forEach((u) => u());
+      unsub();
     };
   }, [companyId, agences, start, end]);
 

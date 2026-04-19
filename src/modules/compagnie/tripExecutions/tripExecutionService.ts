@@ -17,6 +17,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
   query,
   serverTimestamp,
@@ -130,7 +131,8 @@ async function countBoardedAtStop(companyId: string, tripInstanceId: string, sto
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
-    where("originStopOrder", "==", stopOrder)
+    where("originStopOrder", "==", stopOrder),
+    limit(200)
   );
   const snapOrder = await getDocs(qOrder);
   let docs = snapOrder.docs;
@@ -139,7 +141,8 @@ async function countBoardedAtStop(companyId: string, tripInstanceId: string, sto
       collectionGroup(db, "reservations"),
       where("companyId", "==", companyId),
       where("tripInstanceId", "==", tripInstanceId),
-      where("originStopId", "==", originStopId)
+      where("originStopId", "==", originStopId),
+      limit(200)
     );
     const snapId = await getDocs(qId);
     docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);
@@ -174,7 +177,8 @@ async function countDroppedAtStop(companyId: string, tripInstanceId: string, sto
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("tripInstanceId", "==", tripInstanceId),
-    where("destinationStopOrder", "==", stopOrder)
+    where("destinationStopOrder", "==", stopOrder),
+    limit(200)
   );
   const snapOrder = await getDocs(qOrder);
   let docs = snapOrder.docs;
@@ -183,7 +187,8 @@ async function countDroppedAtStop(companyId: string, tripInstanceId: string, sto
       collectionGroup(db, "reservations"),
       where("companyId", "==", companyId),
       where("tripInstanceId", "==", tripInstanceId),
-      where("destinationStopId", "==", destinationStopId)
+      where("destinationStopId", "==", destinationStopId),
+      limit(200)
     );
     const snapId = await getDocs(qId);
     docs = mergeQueryDocsUnique(snapOrder.docs, snapId.docs);
@@ -767,4 +772,3 @@ export function subscribeTripExecutionsByDestinationCityAndDate(params: {
 
   return unsub;
 }
-

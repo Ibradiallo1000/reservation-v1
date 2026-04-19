@@ -1,5 +1,5 @@
 // src/utils/seats.ts
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import type { Firestore } from 'firebase/firestore';
 
 export type TripLite = {
@@ -31,7 +31,8 @@ export function listenRemainingSeatsForDate(opts: {
     rRef,
     where('date', '==', dateISO),
     where('depart', '==', depart),
-    where('arrivee', '==', arrivee)
+    where('arrivee', '==', arrivee),
+    limit(200)
   );
 
   const unsub = onSnapshot(qy, (snap) => {

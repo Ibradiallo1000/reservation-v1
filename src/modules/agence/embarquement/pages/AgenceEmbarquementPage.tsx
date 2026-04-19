@@ -1179,7 +1179,8 @@ useEffect(() => {
       where("depart", "==", selectedTrip.departure),
       where("arrivee", "==", selectedTrip.arrival),
       where("heure", "==", selectedTrip.heure),
-      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any)
+      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any),
+      fsLimit(200)
     );
     unsubs.push(onSnapshot(qAll, (snap) => {
       snap.docs.forEach((d) => bag.set(d.id, { id: d.id, ...(d.data() as any) }));
@@ -1189,10 +1190,11 @@ useEffect(() => {
     if (selectedTrip.id) {
       const qById = query(
         base,
-        where("date", "==", selectedDate),
-        where("trajetId", "==", selectedTrip.id),
-        where("heure", "==", selectedTrip.heure),
-        where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any)
+      where("date", "==", selectedDate),
+      where("trajetId", "==", selectedTrip.id),
+      where("heure", "==", selectedTrip.heure),
+      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any),
+      fsLimit(200)
       );
       unsubs.push(onSnapshot(qById, (snap) => {
         snap.docs.forEach((d) => bag.set(d.id, { id: d.id, ...(d.data() as any) }));

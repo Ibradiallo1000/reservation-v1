@@ -170,11 +170,11 @@ export default function ManagerOperationsPage({ embedded = false }: ManagerOpera
 
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/reservations`),
-        where("date", "==", selectedDate), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"])),
+        where("date", "==", selectedDate), where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"]), limit(200)),
       (s) => setReservations(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))),
     ));
     unsubs.push(onSnapshot(
-      collection(db, `companies/${companyId}/agences/${agencyId}/boardingClosures`),
+      query(collection(db, `companies/${companyId}/agences/${agencyId}/boardingClosures`), limit(100)),
       (s) => setBoardingClosures(new Set(s.docs.map((d) => d.id))),
     ));
 
@@ -256,7 +256,7 @@ export default function ManagerOperationsPage({ embedded = false }: ManagerOpera
             query(
               collection(db, `companies/${companyId}/agences/${originAgencyId}/reservations`),
               where("date", "==", date),
-              limit(1500)
+              limit(200)
             )
           );
           reservationBucket.set(

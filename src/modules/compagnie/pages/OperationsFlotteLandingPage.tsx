@@ -3,6 +3,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   collection,
+  collectionGroup,
   query,
   where,
   getDocs,
@@ -55,20 +56,19 @@ export default function OperationsFlotteLandingPage() {
         const agencesSnap = await getDocs(collection(db, "companies", companyId, "agences"));
         const agencyIds = agencesSnap.docs.map((d) => d.id);
 
-        let bookingsCount = 0;
+        const reservationsSnap = await getDocs(
+          query(
+            collectionGroup(db, "reservations"),
+            where("companyId", "==", companyId),
+            where("createdAt", ">=", startTs),
+            where("createdAt", "<=", endTs),
+            limit(200)
+          )
+        );
+        let bookingsCount = reservationsSnap.size;
         let openSessionsCount = 0;
 
         for (const agencyId of agencyIds) {
-          const resRef = collection(db, "companies", companyId, "agences", agencyId, "reservations");
-          const qRes = query(
-            resRef,
-            where("createdAt", ">=", startTs),
-            where("createdAt", "<=", endTs),
-            limit(500)
-          );
-          const resSnap = await getDocs(qRes);
-          bookingsCount += resSnap.size;
-
           const shiftsRef = collection(db, "companies", companyId, "agences", agencyId, "shifts");
           const qShifts = query(shiftsRef, where("status", "in", ["active", "paused"]), limit(20));
           const shiftsSnap = await getDocs(qShifts);

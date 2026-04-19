@@ -12,7 +12,7 @@ export { getSegmentsForRoute } from "./tripInstanceSegments";
  * Reservations carry originStopOrder and destinationStopOrder; when absent, we resolve from depart/arrivee when route has stops.
  */
 
-import { collectionGroup, getDocs, query, where } from "firebase/firestore";
+import { collectionGroup, getDocs, limit, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { getTripInstance } from "./tripInstanceService";
 import { getRouteStops } from "@/modules/compagnie/routes/routeStopsService";
@@ -86,7 +86,9 @@ export async function computeSegmentOccupancy(
   const resSnap = await getDocs(
     query(
       collectionGroup(db, "reservations"),
-      where("tripInstanceId", "==", tripInstanceId)
+      where("companyId", "==", companyId),
+      where("tripInstanceId", "==", tripInstanceId),
+      limit(200)
     )
   );
 
@@ -136,7 +138,9 @@ export async function getReservedSeatsForTripInstance(
   const resSnap = await getDocs(
     query(
       collectionGroup(db, "reservations"),
-      where("tripInstanceId", "==", tripInstanceId)
+      where("companyId", "==", companyId),
+      where("tripInstanceId", "==", tripInstanceId),
+      limit(200)
     )
   );
   const list = resSnap.docs

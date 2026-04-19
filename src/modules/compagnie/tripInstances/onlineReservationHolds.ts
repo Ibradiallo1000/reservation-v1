@@ -3,7 +3,7 @@
  * tant que seatHoldOnly + expiresAt valide.
  */
 
-import { collectionGroup, getDocs, limit, query, where, Timestamp } from "firebase/firestore";
+import { collectionGroup, getDocs, limit, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 function normCity(s: string): string {
@@ -23,18 +23,6 @@ export function onlineHoldCompositeKey(
   return `${String(tripInstanceId).trim()}|${normCity(depart)}|${normCity(arrivee)}`;
 }
 
-function holdExpiresAtValid(expiresAt: unknown, nowMs: number): boolean {
-  if (expiresAt == null) return false;
-  if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) return expiresAt > nowMs;
-  if (expiresAt instanceof Timestamp) return expiresAt.toMillis() > nowMs;
-  if (typeof (expiresAt as { toMillis?: () => number }).toMillis === "function") {
-    return (expiresAt as Timestamp).toMillis() > nowMs;
-  }
-  const sec = (expiresAt as { seconds?: number })?.seconds;
-  if (typeof sec === "number") return sec * 1000 > nowMs;
-  return false;
-}
-
 /**
  * Somme des seatsGo des réservations en ligne en attente de paiement (hold uniquement),
  * par clé tripInstance|départ|arrivée. Ignoré si expiré ou sans seatHoldOnly.
@@ -50,7 +38,10 @@ export async function fetchPendingOnlineHoldSeatsMap(companyId: string): Promise
     collectionGroup(db, "reservations"),
     where("companyId", "==", companyId),
     where("status", "==", "en_attente"),
-    limit(500)
+    where("canal", "==", "en_ligne"),
+    where("seatHoldOnly", "==", true),
+    where("expiresAt", ">", nowMs),
+    limit(50)
   );
   let snap;
   try {
@@ -72,9 +63,6 @@ export async function fetchPendingOnlineHoldSeatsMap(companyId: string): Promise
   }
   snap.forEach((d) => {
     const data = d.data() as Record<string, unknown>;
-    if (String(data.canal ?? "").toLowerCase() !== "en_ligne") return;
-    if (data.seatHoldOnly !== true) return;
-    if (!holdExpiresAtValid(data.expiresAt, nowMs)) return;
     const tid = String(data.tripInstanceId ?? "");
     if (!tid) return;
     const dep = String(data.depart ?? "");
