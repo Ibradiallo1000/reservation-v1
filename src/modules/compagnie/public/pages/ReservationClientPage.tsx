@@ -49,6 +49,7 @@ import {
   fetchReservationFromNestedPath,
   RESERVATION_DURATION_MS,
 } from '../utils/pendingReservation';
+import { buildReservationPayload } from '@/lib/buildReservationPayload';
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -584,17 +585,30 @@ export default function ReservationClientPage() {
         : `${window.location.origin}/mon-billet?r=${encodeURIComponent(token)}`;
 
       /** Même document en une seule écriture : évite hold sans token si l’update anonyme est refusée par les règles. */
+      const baseReservationPayload = buildReservationPayload({
+        companyId: selectedTrip.companyId,
+        companyName: company.name,
+        companySlug: slug,
+        agencyId: selectedTrip.agencyId,
+        agencyName,
+        customerName: passenger.fullName.trim(),
+        customerPhone: phoneNorm || telephoneInput,
+        departure: selectedTrip.departure,
+        arrival: selectedTrip.arrival,
+        date: selectedTrip.date,
+        time: selectedTrip.time,
+        amount: selectedTrip.price * seats,
+        channel: 'en_ligne',
+        paymentMethod: 'mobile_money',
+      });
+      const { paymentStatus: _legacyPaymentStatus, ...onlineReservationPayload } = baseReservationPayload;
+
       const reservation = {
-        nomClient: passenger.fullName.trim(),
+        ...onlineReservationPayload,
         telephone: telephoneInput,
         telephoneOriginal: telephoneInput,
         telephoneNormalized: phoneNorm,
         phone: phoneNorm,
-        depart: selectedTrip.departure,
-        arrivee: selectedTrip.arrival,
-        date: selectedTrip.date,
-        heure: selectedTrip.time,
-        montant: selectedTrip.price * seats,
         seatsGo: seats,
         seatsReturn: 0,
         tripType: 'aller_simple',
@@ -602,14 +616,7 @@ export default function ReservationClientPage() {
         statut: 'en_attente',
         seatHoldOnly: true,
         seatsHeld: seats,
-        canal: 'en_ligne',
         paymentChannel: 'online',
-        companyId: selectedTrip.companyId,
-        companySlug: slug,
-        companyName: company.name,
-        agencyId: selectedTrip.agencyId,
-        agencyNom: agencyName,
-        nomAgence: agencyName,
         referenceCode,
         trajetId: selectedTrip.id,
         tripInstanceId,
@@ -622,6 +629,14 @@ export default function ReservationClientPage() {
         boardingStatus: 'pending',
         dropoffStatus: 'pending',
         journeyStatus: 'booked',
+        payment: {
+          ...baseReservationPayload.payment,
+          status: 'pending',
+        },
+        reservation: {
+          ...baseReservationPayload.reservation,
+          status: 'en_attente',
+        },
         expiresAt: expiresAtMs,
         createdAt: nowMs,
         updatedAt: serverTimestamp(),

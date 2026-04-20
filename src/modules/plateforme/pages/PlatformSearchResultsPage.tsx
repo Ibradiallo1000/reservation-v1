@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { formatCurrency } from "@/shared/utils/formatCurrency";
 import { collection, collectionGroup, getDocs, limit, query, where } from 'firebase/firestore';
 import { db } from '../../../firebaseConfig';
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import { Bus, Search, ArrowLeft, ArrowRight, Wind, Wifi, Zap, Coffee, Sofa, Tv, WifiOff, Smartphone, Utensils, Droplet } from 'lucide-react';
 import { Button } from "@/shared/ui/button";
 
@@ -189,12 +190,14 @@ const PlatformSearchResultsPage: React.FC = () => {
         const reservedMap: Record<string, number> = {};
 
         reservationsSnap.forEach((doc) => {
-          const r = doc.data() as Reservation;
+          // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+          const raw = doc.data() as Reservation;
+          const r = normalizeReservation(raw);
 
-          if (!['en_attente', 'payé', 'preuve_recue'].includes(r.statut)) return;
+          if (!['pending', 'paid', 'pending_validation'].includes(r.payment.status ?? '')) return;
 
-          const key = `${r.companyId}_${r.weeklyTripId}`;
-          reservedMap[key] = (reservedMap[key] || 0) + (r.places || 0);
+          const key = `${r.companyId ?? raw.companyId}_${raw.weeklyTripId}`;
+          reservedMap[key] = (reservedMap[key] || 0) + (raw.places || 0);
         });
 
         setReservedPlacesMap(reservedMap);

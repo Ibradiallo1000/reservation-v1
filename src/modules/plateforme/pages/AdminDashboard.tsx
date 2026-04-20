@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, collectionGroup, getDocs, limit, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import { useNavigate } from "react-router-dom";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import {
@@ -184,12 +185,14 @@ const AdminDashboard: React.FC = () => {
         });
 
         for (const docSnap of resSnap.docs) {
-        const d = docSnap.data() as Reservation;
-        const montant = toNum(d.total ?? d.montant);
-        const comm = toNum(d.commission);
-        const companyId = d.companyId || "";
+        // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+        const raw = docSnap.data() as Reservation;
+        const r = normalizeReservation(raw);
+        const montant = toNum(raw.total ?? r.payment.amount ?? 0);
+        const comm = toNum(raw.commission);
+        const companyId = r.companyId || raw.companyId || "";
         const country = companyIdToCountry[companyId] || "Non défini";
-        const createdMs = d.createdAt?.seconds ? d.createdAt.seconds * 1000 : null;
+        const createdMs = raw.createdAt?.seconds ? raw.createdAt.seconds * 1000 : null;
 
         if (!createdMs) continue;
 

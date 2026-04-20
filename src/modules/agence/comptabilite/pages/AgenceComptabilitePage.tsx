@@ -16,6 +16,7 @@ import {
   collection, doc, getDoc, getDocs, onSnapshot, orderBy, query,
   runTransaction, Timestamp, updateDoc, where, writeBatch, limit
 } from 'firebase/firestore';
+import { normalizeReservation } from '@/lib/normalizeReservation';
 import { cn } from '@/lib/utils';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -129,18 +130,18 @@ type TicketRow = {
   id: string;
   referenceCode?: string;
   date: string;
-  heure: string;
-  depart: string;
-  arrivee: string;
-  nomClient: string;
-  telephone?: string;
+  time: string;
+  departure: string;
+  arrival: string;
+  customerName: string;
+  customerPhone?: string;
   seatsGo: number;
   seatsReturn?: number;
-  montant: number;
-  paiement?: string;
+  amount: number;
+  paymentMethod?: string;
   createdAt?: any;
   guichetierCode?: string;
-  canal?: string;
+  channel?: string;
   encaissement?: 'agence' | 'compagnie'; // NOUVEAU : source d'encaissement
 };
 
@@ -1018,11 +1019,12 @@ const AgenceComptabilitePage: React.FC = () => {
       const unsub = onSnapshot(qLive, (snap) => {
         let reservations = 0, tickets = 0, amount = 0;
         snap.forEach(d => {
-          const r = d.data() as Record<string, unknown>;
-          if (!belongsToGuichetSession(r, s.id, s.userId)) return;
+          const doc = d.data() as Record<string, unknown>;
+          const r = normalizeReservation(doc);
+          if (!belongsToGuichetSession(doc, s.id, s.userId)) return;
           reservations += 1;
-          tickets += (Number(r.seatsGo) || 0) + (Number(r.seatsReturn) || 0);
-          amount += Number(r.montant) || 0;
+          tickets += (Number(doc.seatsGo) || 0) + (Number(doc.seatsReturn) || 0);
+          amount += r.payment.amount;
         });
         setLiveStats(prev => ({ ...prev, [s.id]: { reservations, tickets, amount } }));
       });
@@ -1056,19 +1058,20 @@ const AgenceComptabilitePage: React.FC = () => {
         let reservations = 0, tickets = 0, amount = 0, cashExpected = 0, mmExpected = 0;
         
         docs.forEach(d => {
-          const r = d.data() as Record<string, unknown>;
-          if (!belongsToGuichetSession(r, s.id, s.userId)) return;
+          const doc = d.data() as Record<string, unknown>;
+          const r = normalizeReservation(doc);
+          if (!belongsToGuichetSession(doc, s.id, s.userId)) return;
           reservations += 1;
-          tickets += (Number(r.seatsGo) || 0) + (Number(r.seatsReturn) || 0);
-          const montant = Number(r.montant) || 0;
-          amount += montant;
+          tickets += (Number(doc.seatsGo) || 0) + (Number(doc.seatsReturn) || 0);
+          const amountValue = r.payment.amount;
+          amount += amountValue;
           
-          const pay = String(r.paiement || '').toLowerCase();
+          const pay = String(r.payment.method || '').toLowerCase();
           if (pay.includes('esp')) {
-            cashExpected += montant;
+            cashExpected += amountValue;
           }
           if (pay.includes('mobile') || pay.includes('mm')) {
-            mmExpected += montant;
+            mmExpected += amountValue;
           }
         });
         
@@ -1305,26 +1308,27 @@ const AgenceComptabilitePage: React.FC = () => {
       });
 
       const mk = (d: any) => {
-        const r = d.data() as any;
-        const canal = 'guichet';
+        const doc = d.data() as any;
+        const r = normalizeReservation(doc);
+        const channel = r.reservation.channel;
         const encaissement = 'agence' as const;
 
         return {
           id: d.id,
-          referenceCode: r.referenceCode,
-          date: r.date,
-          heure: r.heure,
-          depart: r.depart,
-          arrivee: r.arrivee,
-          nomClient: r.nomClient,
-          telephone: r.telephone,
-          seatsGo: r.seatsGo || 1,
-          seatsReturn: r.seatsReturn || 0,
-          montant: r.montant || 0,
-          paiement: r.paiement,
-          createdAt: r.createdAt,
-          guichetierCode: r.guichetierCode || '',
-          canal,
+          referenceCode: doc.referenceCode,
+          date: r.trip.date ?? '',
+          time: r.trip.time ?? '',
+          departure: r.trip.departure ?? '',
+          arrival: r.trip.arrival ?? '',
+          customerName: r.customer.name ?? '',
+          customerPhone: r.customer.phone,
+          seatsGo: doc.seatsGo || 1,
+          seatsReturn: doc.seatsReturn || 0,
+          amount: r.payment.amount,
+          paymentMethod: r.payment.method,
+          createdAt: doc.createdAt,
+          guichetierCode: doc.guichetierCode || '',
+          channel,
           encaissement,
         } as TicketRow;
       };
@@ -1338,7 +1342,7 @@ const AgenceComptabilitePage: React.FC = () => {
       const norm = (v?: string) => String(v || '').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
       const keyOf = (t: TicketRow) =>
         (t.referenceCode && norm(t.referenceCode)) ||
-        [norm(t.date), norm(t.heure), norm(t.depart), norm(t.arrivee), norm(t.nomClient), norm(t.telephone)].join('|');
+        [norm(t.date), norm(t.time), norm(t.departure), norm(t.arrival), norm(t.customerName), norm(t.customerPhone)].join('|');
 
       const map = new Map<string, TicketRow>();
       for (const t of raw) {
@@ -1435,14 +1439,14 @@ const AgenceComptabilitePage: React.FC = () => {
     for (const t of tickets) {
       const nb = (t.seatsGo || 0) + (t.seatsReturn || 0);
       agg.billets += nb; 
-      agg.montant += t.montant || 0;
+      agg.montant += t.amount || 0;
       
-      if (t.canal === 'guichet' || t.canal === '') {
+      if (t.channel === 'guichet') {
         agg.guichet.billets += nb;
-        agg.guichet.montant += t.montant || 0;
-      } else if (t.canal === 'en_ligne') {
+        agg.guichet.montant += t.amount || 0;
+      } else if (t.channel === 'en_ligne') {
         agg.en_ligne.billets += nb;
-        agg.en_ligne.montant += t.montant || 0;
+        agg.en_ligne.montant += t.amount || 0;
       }
     }
     return agg;
@@ -2331,14 +2335,21 @@ const AgenceComptabilitePage: React.FC = () => {
                         {tickets
                           .filter(t => {
                             if (reportFilter === 'all') return true;
-                            if (reportFilter === 'guichet') return t.canal === 'guichet' || t.canal === '';
-                            if (reportFilter === 'en_ligne') return t.canal === 'en_ligne';
+                            if (reportFilter === 'guichet') return t.channel === 'guichet';
+                            if (reportFilter === 'en_ligne') return t.channel === 'en_ligne';
                             return true;
                           })
                           .map((t, index) => {
-                            const canalColor = t.canal === 'en_ligne' 
-                              ? 'bg-indigo-100 text-indigo-700' 
-                              : 'bg-emerald-100 text-emerald-700';
+                            const canalColor = t.channel === 'en_ligne'
+                              ? 'bg-indigo-100 text-indigo-700'
+                              : t.channel === 'guichet'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'bg-gray-100 text-gray-700';
+                            const canalLabel = t.channel === 'en_ligne'
+                              ? 'En ligne'
+                              : t.channel === 'guichet'
+                                ? 'Billetterie'
+                                : 'Inconnu';
                               
                             const encaissementText = t.encaissement === 'agence' ? 'Caisse agence' : 'Compte compagnie';
                             const encaissementColor = t.encaissement === 'agence' 
@@ -2349,12 +2360,12 @@ const AgenceComptabilitePage: React.FC = () => {
                               <tr key={t.id} className={`hover:bg-gray-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
                                 <Td>
                                   <div className="font-medium">{fmtD(t.date)}</div>
-                                  <div className="text-xs text-gray-500">{t.heure}</div>
+                                  <div className="text-xs text-gray-500">{t.time}</div>
                                 </Td>
                                 <Td>
                                   <div className="flex flex-col gap-1">
                                     <span className={`text-xs px-2 py-1 rounded-full ${canalColor} font-medium`}>
-                                      {t.canal === 'en_ligne' ? 'En ligne' : 'Billetterie'}
+                                      {canalLabel}
                                     </span>
                                     <span className={`text-xs px-2 py-0.5 rounded-full ${encaissementColor}`}>
                                       {encaissementText}
@@ -2362,20 +2373,20 @@ const AgenceComptabilitePage: React.FC = () => {
                                   </div>
                                 </Td>
                                 <Td>
-                                  <div className="font-medium">{t.depart} → {t.arrivee}</div>
+                                  <div className="font-medium">{t.departure} → {t.arrival}</div>
                                 </Td>
                                 <Td>
-                                  <div className="font-medium">{t.nomClient}</div>
-                                  {t.telephone && <div className="text-xs text-gray-500">{t.telephone}</div>}
+                                  <div className="font-medium">{t.customerName}</div>
+                                  {t.customerPhone && <div className="text-xs text-gray-500">{t.customerPhone}</div>}
                                 </Td>
                                 <Td align="right">
                                   <span className="font-medium">{(t.seatsGo||0)+(t.seatsReturn||0)}</span>
                                 </Td>
                                 <Td align="right">
-                                  <span className="font-bold text-gray-900">{money(t.montant)}</span>
+                                  <span className="font-bold text-gray-900">{money(t.amount)}</span>
                                 </Td>
                                 <Td align="right">
-                                  <span className="text-xs text-gray-600">{t.paiement || '—'}</span>
+                                  <span className="text-xs text-gray-600">{t.paymentMethod || '—'}</span>
                                 </Td>
                                 <Td align="right">
                                   <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">

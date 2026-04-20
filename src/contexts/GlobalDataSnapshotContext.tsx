@@ -4,8 +4,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { collection, collectionGroup, limit, onSnapshot, orderBy, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
-import { getNetworkCapacityOnly, isSoldReservation } from "@/modules/compagnie/networkStats/networkStatsService";
+import { getNetworkCapacityOnly } from "@/modules/compagnie/networkStats/networkStatsService";
 import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
 
 export type GlobalDataSnapshot = {
@@ -35,6 +36,11 @@ const DEFAULT_SNAPSHOT: GlobalDataSnapshot = {
   lastUpdatedAt: null,
 };
 
+function isPaidPaymentStatus(status: string | undefined): boolean {
+  const s = (status ?? "").toString().toLowerCase().trim();
+  return s === "paid" || s === "validated" || s === "paye" || s === "payé" || s === "confirme" || s === "confirmé";
+}
+
 export function GlobalDataSnapshotProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
@@ -47,15 +53,15 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
   const [error, setError] = React.useState<string | null>(null);
 
   // Cache for realtime computation (avoid re-fetch per page).
-  const reservationsRef = React.useRef<Array<{ statut?: string; montant?: number; seatsGo?: number }>>([]);
+  const reservationsRef = React.useRef<Array<{ paymentStatus?: string; amount?: number; seatsGo?: number }>>([]);
   const cashTxRef = React.useRef<Array<{ status?: string; amount?: number }>>([]);
   const capacityRef = React.useRef<number | null>(null);
   const scheduleRef = React.useRef<number | null>(null);
 
   const computeAndSetSnapshot = React.useCallback(() => {
-    const sold = reservationsRef.current.filter((r) => isSoldReservation(r.statut));
+    const sold = reservationsRef.current.filter((r) => isPaidPaymentStatus(r.paymentStatus));
     const tickets = sold.reduce((s, r) => s + (Number(r.seatsGo) || 1), 0);
-    const sales = sold.reduce((s, r) => s + (Number(r.montant) || 0), 0);
+    const sales = sold.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     const cash = cashTxRef.current
       .filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID)
       .reduce((s, t) => s + (Number(t.amount) || 0), 0);
@@ -133,10 +139,12 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
       qRes,
       (snap) => {
         reservationsRef.current = snap.docs.map((d) => {
-          const data = d.data() as any;
+          const raw = d.data() as Record<string, unknown>;
+          const r = normalizeReservation(raw);
+          const data = raw as any;
           return {
-            statut: (data.statut ?? data.status ?? "").toString(),
-            montant: Number(data.montant ?? data.amount ?? 0) || 0,
+            paymentStatus: r.payment.status,
+            amount: r.payment.amount ?? 0,
             seatsGo: Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1,
           };
         });

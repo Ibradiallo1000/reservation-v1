@@ -18,6 +18,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { useGlobalDataSnapshot } from "@/contexts/GlobalDataSnapshotContext";
 import { useGlobalMoneyPositions } from "@/contexts/GlobalMoneyPositionsContext";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import { StandardLayoutWrapper, PageHeader, MetricCard } from "@/ui";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -33,7 +34,6 @@ import {
 } from "lucide-react";
 import { useCapabilities } from "@/core/hooks/useCapabilities";
 import AccessDenied from "@/core/ui/AccessDenied";
-import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import { calculateChange } from "@/shared/date/periodComparisonUtils";
 import {
   getUnifiedCompanyFinance,
@@ -69,16 +69,18 @@ type ShiftDoc = {
 };
 
 type ReservationDoc = {
-  statut?: string;
   shiftId?: string;
   createdInSessionId?: string;
-  montant?: number;
-  date?: string;
   /** Date de vente (créée). Utilisé pour aligner la période (audit-proof). */
   createdAt?: unknown;
   /** Nombre de places effectivement vendues (billets = somme(seatsGo)). */
   seatsGo?: number;
 };
+
+function isPaidFinancialStatus(status: unknown): boolean {
+  const s = String(status ?? "").toLowerCase().trim();
+  return s === "paid" || s === "validated" || s === "paye" || s === "payé" || s === "confirme" || s === "confirmé";
+}
 
 function toDateKey(d: Date) {
   return format(d, "yyyy-MM-dd");
@@ -380,13 +382,14 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
 
         let liveAmount = 0;
         let liveTickets = 0;
-        reservationDocs.forEach((r) => {
-          const shiftRef = r.shiftId ?? r.createdInSessionId;
+        reservationDocs.forEach((doc) => {
+          const r = normalizeReservation(doc);
+          const shiftRef = doc.shiftId ?? doc.createdInSessionId;
           if (!shiftRef || !nonValidatedShiftIds.has(shiftRef)) return;
-          if (canonicalStatut(r.statut) !== "paye") return;
+          if (!isPaidFinancialStatus(r.payment.status)) return;
           // Alignement strict sur la date de vente (createdAt) => ventes = réservations.createdAt.
-          // Fallback: si createdAt absent, utiliser r.date (legacy) pour ne pas casser les données anciennes.
-          const createdAtAny = r.createdAt as any;
+          // Fallback: si createdAt absent, utiliser la date canonique normalisée.
+          const createdAtAny = doc.createdAt as any;
           let reservationDateKey: string | null = null;
           try {
             if (createdAtAny?.toDate) {
@@ -397,11 +400,11 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
           } catch {
             reservationDateKey = null;
           }
-          const legacyDateKey = typeof r.date === "string" ? r.date : null;
-          const effectiveDateKey = reservationDateKey ?? legacyDateKey;
+          const normalizedDateKey = r.trip.date ?? null;
+          const effectiveDateKey = reservationDateKey ?? normalizedDateKey;
           if (effectiveDateKey && effectiveDateKey !== dayKey) return;
-          liveAmount += Number(r.montant) || 0;
-          liveTickets += Number(r.seatsGo ?? 1) || 1;
+          liveAmount += r.payment.amount;
+          liveTickets += Number(doc.seatsGo ?? 1) || 1;
         });
 
         return {
@@ -427,7 +430,10 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
       });
 
       const unsubReservations = onSnapshot(query(reservationsRef, limit(200)), (snap) => {
-        reservationsByAgency.set(agency.id, snap.docs.map((d) => d.data() as ReservationDoc));
+        reservationsByAgency.set(agency.id, snap.docs.map((d) => {
+          const raw = d.data() as ReservationDoc;
+          return raw;
+        }));
         recompute();
       });
 

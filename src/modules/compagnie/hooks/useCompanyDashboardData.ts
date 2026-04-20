@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import {
   collection, collectionGroup, query, where, onSnapshot, Timestamp, getDocs, doc, getDoc, limit,
 } from "firebase/firestore";
@@ -73,7 +74,7 @@ function normStr(s?: string) {
 }
 function isPaidStatus(s?: string) {
   const c = canonicalStatut(s) || normStr(s);
-  return c === "paye" || c === "paid" || c === "payed";
+  return c === "paye" || c === "paid" || c === "payed" || c === "validated";
 }
 function getDateKey(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), da = String(d.getDate()).padStart(2, "0");
@@ -144,7 +145,9 @@ export function useCompanyDashboardData({
 
     const unsub = onSnapshot(qRes, (snap) => {
       const items = snap.docs.map(d => {
-        const data = d.data() as any;
+        const raw = d.data() as Record<string, unknown>;
+        const r = normalizeReservation(raw);
+        const data = raw as any;
         const aid = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
         return {
           id: d.id,
@@ -157,8 +160,8 @@ export function useCompanyDashboardData({
           departNormalized: data.departNormalized,
           arrivee: data.arrivee,
           date: data.date, heure: data.heure,
-          canal: data.canal, statut: data.statut,
-          montant: data.montant || 0, seatsGo: data.seatsGo || 1,
+          canal: r.reservation.channel, statut: r.payment.status,
+          montant: r.payment.amount ?? 0, seatsGo: data.seatsGo || 1,
           clientPhone: data.clientPhone, clientId: data.clientId,
           createdAt: data.createdAt,
         } as ReservationDoc;
@@ -199,7 +202,9 @@ export function useCompanyDashboardData({
         );
         const snap = await getDocs(q);
         snap.docs.forEach(d => {
-          const data = d.data() as any;
+          const raw = d.data() as Record<string, unknown>;
+          const r = normalizeReservation(raw);
+          const data = raw as any;
           const aid = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
           all.push({
             id: d.id,
@@ -207,8 +212,8 @@ export function useCompanyDashboardData({
             agenceId: aid,
             agencyNom: data.agencyNom,
             agencyVille: data.agencyVille,
-            statut: data.statut,
-            montant: data.montant || 0,
+            statut: r.payment.status,
+            montant: r.payment.amount ?? 0,
             seatsGo: data.seatsGo || 1,
             createdAt: data.createdAt,
             date: data.date,

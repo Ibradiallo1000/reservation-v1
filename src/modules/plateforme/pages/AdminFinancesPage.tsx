@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
 import { collection, collectionGroup, getDocs, limit, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 import { format } from "date-fns";
@@ -89,9 +90,12 @@ const AdminFinancesPage: React.FC = () => {
         const end = endDate ? new Date(endDate) : defaultEnd;
 
         resSnap.docs.forEach((docSnap) => {
-          const r = docSnap.data();
-          const comm = toNum(r.commission);
-          const created = r.createdAt?.toDate?.() ?? (r.createdAt?.seconds ? new Date(r.createdAt.seconds * 1000) : null);
+          // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+          const raw = docSnap.data();
+          const r = normalizeReservation(raw);
+          const comm = toNum(raw.commission);
+          const created = raw.createdAt?.toDate?.() ?? (raw.createdAt?.seconds ? new Date(raw.createdAt.seconds * 1000) : null);
+          void r;
           if (!created || created < start || created > end) return;
 
           totalCommission += comm;

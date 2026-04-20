@@ -41,11 +41,10 @@ import {
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
-import type { Reservation, ReservationStatus } from '@/types/reservation';
+import type { ReservationStatus } from '@/types/reservation';
 import InternalLayout from '@/shared/layout/InternalLayout';
+import { normalizeReservation } from '@/lib/normalizeReservation';
 
-/** Réservation avec champs preuve (Firestore peut avoir paymentReference) */
-type ReservationWithProof = Reservation & { paymentReference?: string };
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { Button } from '@/shared/ui/button';
 import { MetricCard, SectionCard, StatusBadge, type StatusVariant, StandardLayoutWrapper, PageHeader } from '@/ui';
@@ -58,15 +57,55 @@ import { validatePendingOnlinePaymentAndSyncReservation } from '@/services/onlin
 const NOTIFICATION_SOUND_URL = '/splash/son.mp3';
 
 /* ================= NORMALISATION DES STATUTS ================= */
+type NormalizedReservationResult = ReturnType<typeof normalizeReservation>;
+
+type DigitalReservationRow = {
+  id: string;
+  companyId: string;
+  agencyId: string;
+  companySlug?: string;
+  referenceCode?: string;
+  email?: string | null;
+  createdAt: string | Date | Timestamp;
+  ticketValidatedAt?: unknown;
+  seatsGo?: number;
+  seatsReturn?: number;
+  tripInstanceId?: string | null;
+  originStopOrder?: number | null;
+  destinationStopOrder?: number | null;
+  reservation: {
+    status: ReservationStatus;
+    channel: string;
+    createdAt?: Date;
+  };
+  payment: NormalizedReservationResult["payment"] & {
+    validationLevel?: string;
+    parsed?: {
+      amount?: number;
+      transactionId?: string;
+    };
+    totalAmount?: number;
+  };
+  trip: NormalizedReservationResult["trip"];
+  customer: NormalizedReservationResult["customer"];
+  proof: {
+    url?: string;
+    message?: string;
+  };
+};
+
 /** Modèle Firestore `status` : en_attente | payé | annulé (+ ticketValidatedAt pour billet validé). */
-const normalizeReservationRowStatus = (d: Record<string, unknown>): ReservationStatus => {
-  const status = String(d.status ?? "").toLowerCase();
+const normalizeReservationRowStatus = (
+  d: Record<string, unknown>,
+  normalized: NormalizedReservationResult = normalizeReservation(d)
+): ReservationStatus => {
+  const status = String(normalized.reservation.status ?? "").toLowerCase();
   if (status === "annulé" || status === "annule") return "annule";
   if (status === "en_attente") return "en_attente";
   if (status === "payé" || status === "paye") {
     return d.ticketValidatedAt ? "confirme" : "verification";
   }
-  const raw = String(d.statut ?? "");
+  const raw = String(normalized.reservation.status ?? "");
   return normalizeStatutLegacy(raw);
 };
 
@@ -84,6 +123,112 @@ const normalizeStatutLegacy = (raw?: string): ReservationStatus => {
   if (s.includes("attente")) return "en_attente";
   if (s === "pending") return "en_attente";
   return "en_attente";
+};
+
+const isRecordValue = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const asOptionalString = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const asOptionalNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const parsed = Number(value.trim().replace(/\s/g, ""));
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const asReservationCreatedAt = (value: unknown): string | Date | Timestamp => {
+  if (value instanceof Timestamp || value instanceof Date || typeof value === "string") return value;
+  return Timestamp.now();
+};
+
+const getProofUrlFromRaw = (source: Record<string, unknown>) =>
+  asOptionalString(source.preuveUrl) ??
+  asOptionalString(source.paymentProofUrl) ??
+  asOptionalString(source.paiementPreuveUrl) ??
+  asOptionalString(source.proofUrl) ??
+  asOptionalString(source.receiptUrl);
+
+type BuildReservationRowParams = {
+  id: string;
+  raw: Record<string, unknown>;
+  agencyId: string;
+  companyId: string;
+  statusOverride?: ReservationStatus;
+  companySlugFallback?: string;
+};
+
+const buildDigitalReservationRow = ({
+  id,
+  raw,
+  agencyId,
+  companyId,
+  statusOverride,
+  companySlugFallback,
+}: BuildReservationRowParams): DigitalReservationRow => {
+  // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+  const normalized = normalizeReservation(raw);
+  const rawPayment = isRecordValue(raw.payment) ? raw.payment : {};
+  const parsedPayment = isRecordValue(rawPayment.parsed) ? rawPayment.parsed : {};
+  const paymentParsedAmount = asOptionalNumber(parsedPayment.amount);
+  const paymentParsedTransactionId = asOptionalString(parsedPayment.transactionId);
+
+  return {
+    id,
+    companyId: asOptionalString(raw.companyId) ?? companyId,
+    agencyId: asOptionalString(raw.agencyId) ?? agencyId,
+    companySlug: asOptionalString(raw.companySlug) ?? companySlugFallback,
+    referenceCode: normalized.reservation.reference ?? asOptionalString(raw.referenceCode),
+    email: asOptionalString(raw.email) ?? null,
+    createdAt: asReservationCreatedAt(raw.createdAt),
+    ticketValidatedAt: raw.ticketValidatedAt,
+    seatsGo: asOptionalNumber(raw.seatsGo),
+    seatsReturn: asOptionalNumber(raw.seatsReturn),
+    tripInstanceId: asOptionalString(raw.tripInstanceId) ?? null,
+    originStopOrder: asOptionalNumber(raw.originStopOrder) ?? null,
+    destinationStopOrder: asOptionalNumber(raw.destinationStopOrder) ?? null,
+    reservation: {
+      status: statusOverride ?? normalizeReservationRowStatus(raw, normalized),
+      channel: normalized.reservation.channel,
+      createdAt: normalized.reservation.createdAt,
+    },
+    payment: {
+      amount: normalized.payment.amount,
+      status: normalized.payment.status,
+      method: normalized.payment.method,
+      wallet: normalized.payment.wallet,
+      reference: normalized.payment.reference,
+      ledgerStatus: normalized.payment.ledgerStatus,
+      validationLevel: asOptionalString(rawPayment.validationLevel),
+      parsed:
+        paymentParsedAmount !== undefined || paymentParsedTransactionId
+          ? {
+              amount: paymentParsedAmount,
+              transactionId: paymentParsedTransactionId,
+            }
+          : undefined,
+      totalAmount: asOptionalNumber(rawPayment.totalAmount),
+    },
+    trip: {
+      departure: normalized.trip.departure,
+      arrival: normalized.trip.arrival,
+      date: normalized.trip.date,
+      time: normalized.trip.time,
+      tripInstanceId: normalized.trip.tripInstanceId,
+    },
+    customer: {
+      name: normalized.customer.name ?? asOptionalString(raw.clientNom),
+      phone: normalized.customer.phone ?? asOptionalString(raw.telephoneOriginal),
+    },
+    proof: {
+      url: getProofUrlFromRaw(raw),
+      message: asOptionalString(raw.preuveMessage),
+    },
+  };
 };
 
 const ITEMS_PER_PAGE = 20;
@@ -167,13 +312,8 @@ const getStatusConfig = (status?: ReservationStatus): { label: string; statusVar
 type PaymentUiStatus = "auto_detected" | "declared_paid" | "rejected" | "validated" | "pending" | "unknown";
 type PaymentValidationLevel = "valid" | "suspicious" | "invalid" | "unknown";
 
-const getPaymentInfo = (reservation: Reservation) => {
-  const p = ((reservation as any).payment ?? {}) as {
-    status?: string;
-    validationLevel?: string;
-    parsed?: { amount?: number; transactionId?: string };
-    totalAmount?: number;
-  };
+const getPaymentInfo = (reservation: DigitalReservationRow) => {
+  const p = reservation.payment;
   const paymentStatus = String(p.status ?? "").toLowerCase();
   const validationLevel = String(p.validationLevel ?? "").toLowerCase();
   return {
@@ -202,7 +342,7 @@ const getPaymentInfo = (reservation: Reservation) => {
   };
 };
 
-const getPriorityRank = (reservation: Reservation): number => {
+const getPriorityRank = (reservation: DigitalReservationRow): number => {
   const info = getPaymentInfo(reservation);
   if (info.paymentStatus === "auto_detected" && info.validationLevel === "valid") return 1;
   if (info.paymentStatus === "auto_detected" && info.validationLevel === "suspicious") return 2;
@@ -212,7 +352,7 @@ const getPriorityRank = (reservation: Reservation): number => {
 
 /* ================= COMPOSANT PRINCIPAL ================= */
 /** Construit l'URL publique du billet pour une réservation */
-const getBilletUrl = (r: Reservation, companySlugFallback?: string) => {
+const getBilletUrl = (r: DigitalReservationRow, companySlugFallback?: string) => {
   const slug = companySlugFallback || r.companySlug || "";
   if (!slug || !r.id) return "";
 
@@ -281,14 +421,14 @@ const formatDepartureTime = (raw: unknown) => {
 
 /** Message WhatsApp professionnel (sauts de ligne EXACTS) */
 const getBilletConfirmationMessage = (
-  r: Reservation,
+  r: DigitalReservationRow,
   billetUrl: string,
   companyName: string
 ) => {
-  const departure = r.depart || "—";
-  const arrival = r.arrivee || "—";
-  const formattedDate = formatDepartureDateFr(r.date);
-  const time = formatDepartureTime((r as any).heure);
+  const departure = r.trip.departure || "—";
+  const arrival = r.trip.arrival || "—";
+  const formattedDate = formatDepartureDateFr(r.trip.date);
+  const time = formatDepartureTime(r.trip.time);
 
   const lines = [
     `🚍 ${companyName}`,
@@ -324,10 +464,10 @@ const ReservationsEnLigne: React.FC = () => {
   const { initializeAudio, playNotification, resetNotification, playSoundNow, isAudioReady } = useNotificationSound();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
 
-  const [verificationReservations, setVerificationReservations] = useState<Reservation[]>([]);
+  const [verificationReservations, setVerificationReservations] = useState<DigitalReservationRow[]>([]);
   /** Réservations venant d'être validées : on garde la carte visible avec "Billet validé" + actions */
-  const [recentlyValidatedReservations, setRecentlyValidatedReservations] = useState<Reservation[]>([]);
-  const [otherReservations, setOtherReservations] = useState<Reservation[]>([]);
+  const [recentlyValidatedReservations, setRecentlyValidatedReservations] = useState<DigitalReservationRow[]>([]);
+  const [otherReservations, setOtherReservations] = useState<DigitalReservationRow[]>([]);
   const [agencies, setAgencies] = useState<Record<string, {name: string, ville: string}>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -345,7 +485,7 @@ const ReservationsEnLigne: React.FC = () => {
   const [expandedCardKeys, setExpandedCardKeys] = useState<Record<string, boolean>>({});
   const [requestedOtherReservations, setRequestedOtherReservations] = useState(false);
   const [filterTab, setFilterTab] = useState<"today" | "pending" | "history" | "all">("pending");
-  const [recentlyRefusedReservations, setRecentlyRefusedReservations] = useState<Reservation[]>([]);
+  const [recentlyRefusedReservations, setRecentlyRefusedReservations] = useState<DigitalReservationRow[]>([]);
 
   const toggleExpandedCard = (key: string) => {
     setExpandedCardKeys((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -447,31 +587,28 @@ const ReservationsEnLigne: React.FC = () => {
 
     const unsub = onSnapshot(qRef, (snap) => {
       setVerificationReservations(prev => {
-        const map = new Map<string, Reservation>();
+        const map = new Map<string, DigitalReservationRow>();
 
         prev.forEach(r => {
           map.set(`${r.agencyId}_${r.id}`, r);
         });
 
         snap.docChanges().forEach(chg => {
-          const d = chg.doc.data() as any;
-          const agencyId = String(d.agencyId ?? chg.doc.ref.parent.parent?.id ?? '');
+          const raw = chg.doc.data() as Record<string, unknown>;
+          const agencyId = String(raw.agencyId ?? chg.doc.ref.parent.parent?.id ?? '');
           const keyEarly = `${agencyId}_${chg.doc.id}`;
-          if (d.ticketValidatedAt) {
+          if (raw.ticketValidatedAt) {
             map.delete(keyEarly);
             if (chg.type === 'removed') resetNotification(keyEarly);
             return;
           }
 
-          const row: Reservation = {
-            ...d,
+          const row = buildDigitalReservationRow({
             id: chg.doc.id,
-            companyId: d.companyId ?? user.companyId!,
             agencyId,
-            statut: normalizeReservationRowStatus(d as Record<string, unknown>),
-            clientNom: d.nomClient ?? d.clientNom,
-            createdAt: d.createdAt ?? Timestamp.now(),
-          } as Reservation;
+            companyId: user.companyId!,
+            raw,
+          });
 
           const key = `${row.agencyId}_${row.id}`;
 
@@ -479,13 +616,13 @@ const ReservationsEnLigne: React.FC = () => {
             map.delete(key);
             resetNotification(key);
           } else {
-            if (chg.type === 'added' && row.statut === 'verification') {
+            if (chg.type === 'added' && row.reservation.status === 'verification') {
               if (isAudioReady) {
                 playNotification(key);
               }
 
               toast('Nouveau justificatif reçu', {
-                description: `${row.clientNom || 'Client'} a envoyé un justificatif de paiement`,
+                description: `${row.customer.name || 'Client'} a envoyé un justificatif de paiement`,
                 duration: 4000,
                 action: {
                   label: 'Voir',
@@ -534,7 +671,7 @@ const ReservationsEnLigne: React.FC = () => {
     if (!user?.companyId) return;
 
     try {
-      const allOtherReservations: Reservation[] = [];
+      const allOtherReservations: DigitalReservationRow[] = [];
 
       const qRef = query(
           collectionGroup(db, 'reservations'),
@@ -546,20 +683,16 @@ const ReservationsEnLigne: React.FC = () => {
 
         const snap = await getDocs(qRef);
         snap.docs.forEach(doc => {
-          const d = doc.data() as any;
-          const agencyId = String(d.agencyId ?? doc.ref.parent.parent?.id ?? '');
-          const normalizedStatus = normalizeReservationRowStatus(d as Record<string, unknown>);
+          const raw = doc.data() as Record<string, unknown>;
+          const agencyId = String(raw.agencyId ?? doc.ref.parent.parent?.id ?? '');
           
           // CORRECTION : S'assurer que les réservations confirmées sont bien incluses
-          allOtherReservations.push({
-            ...d,
+          allOtherReservations.push(buildDigitalReservationRow({
             id: doc.id,
-            companyId: d.companyId ?? user.companyId!,
-            agencyId: d.agencyId ?? agencyId,
-            statut: normalizedStatus,
-            clientNom: d.nomClient ?? d.clientNom,
-            createdAt: d.createdAt ?? Timestamp.now(),
-          } as Reservation);
+            agencyId,
+            companyId: user.companyId!,
+            raw,
+          }));
         });
 
       // Supprimer les doublons potentiels
@@ -577,7 +710,7 @@ const ReservationsEnLigne: React.FC = () => {
   /* ================= CORRECTION CRITIQUE : FUSION DES RÉSERVATIONS POUR LE FILTRAGE ================= */
   const allReservations = useMemo(() => {
     // Fusionner les deux listes en évitant les doublons
-    const combinedMap = new Map<string, Reservation>();
+    const combinedMap = new Map<string, DigitalReservationRow>();
     
     // Ajouter d'abord les réservations à vérifier
     verificationReservations.forEach(r => {
@@ -589,7 +722,7 @@ const ReservationsEnLigne: React.FC = () => {
     otherReservations.forEach(r => {
       const key = `${r.agencyId}_${r.id}`;
       // Ne pas écraser une réservation qui est encore à vérifier
-      if (!combinedMap.has(key) || combinedMap.get(key)?.statut !== 'verification') {
+      if (!combinedMap.has(key) || combinedMap.get(key)?.reservation.status !== 'verification') {
         combinedMap.set(key, r);
       }
     });
@@ -606,7 +739,7 @@ const ReservationsEnLigne: React.FC = () => {
   }, [verificationReservations, otherReservations]);
 
   /* ================= FILTRAGE AVEC PÉRIODE ================= */
-  const filterReservationsByPeriod = (reservations: Reservation[], period: FilterOptions['period']) => {
+  const filterReservationsByPeriod = (reservations: DigitalReservationRow[], period: FilterOptions['period']) => {
     const { start, end } = getPeriodDates(period);
     
     return reservations.filter(reservation => {
@@ -646,7 +779,7 @@ const ReservationsEnLigne: React.FC = () => {
       result = agencyFilteredVerification;
     } else if (filterStatus) {
       // 🔧 CORRECTION CRITIQUE : Bien filtrer par statut normalisé
-      result = agencyFilteredAll.filter(r => r.statut === filterStatus);
+      result = agencyFilteredAll.filter(r => r.reservation.status === filterStatus);
     }
     
     // Enfin appliquer la recherche textuelle
@@ -655,13 +788,13 @@ const ReservationsEnLigne: React.FC = () => {
     const term = searchTerm.toLowerCase();
     return result.filter((r) => {
       const searchable = [
-        r.clientNom || '',
-        r.telephone || '',
+        r.customer.name || '',
+        r.customer.phone || '',
         r.referenceCode || '',
-        r.depart || '',
-        r.arrivee || '',
+        r.trip.departure || '',
+        r.trip.arrival || '',
         r.email || '',
-        (r as ReservationWithProof).paymentReference || r.preuveMessage || '',
+        r.payment.reference || r.payment.wallet || r.proof.message || '',
       ].join(' ').toLowerCase();
       
       return searchable.includes(term);
@@ -681,18 +814,18 @@ const ReservationsEnLigne: React.FC = () => {
       : periodFilteredVerification;
     
     return {
-      enAttente: agencyFilteredAll.filter(r => r.statut === 'en_attente').length,
+      enAttente: agencyFilteredAll.filter(r => r.reservation.status === 'en_attente').length,
       verification: agencyFilteredVerification.length,
-      confirme: agencyFilteredAll.filter(r => r.statut === 'confirme').length,
-      refuse: agencyFilteredAll.filter(r => r.statut === 'refuse').length,
-      annule: agencyFilteredAll.filter(r => r.statut === 'annule').length,
+      confirme: agencyFilteredAll.filter(r => r.reservation.status === 'confirme').length,
+      refuse: agencyFilteredAll.filter(r => r.reservation.status === 'refuse').length,
+      annule: agencyFilteredAll.filter(r => r.reservation.status === 'annule').length,
       total: agencyFilteredAll.length,
-      totalAmount: agencyFilteredAll.reduce((sum, r) => sum + (r.montant || 0), 0)
+      totalAmount: agencyFilteredAll.reduce((sum, r) => sum + r.payment.amount, 0)
     };
   }, [allReservations, verificationReservations, filterPeriod, filterAgencyId]);
 
   /* ================= ACTIONS ================= */
-  const handleValidate = async (reservation: Reservation) => {
+  const handleValidate = async (reservation: DigitalReservationRow) => {
     if (!user?.companyId || !reservation.agencyId || !reservation.id) {
       toast.error('Erreur', { description: 'Informations manquantes' });
       return;
@@ -714,17 +847,22 @@ const ReservationsEnLigne: React.FC = () => {
         toast.error('Erreur', { description: 'Réservation introuvable' });
         return;
       }
-      const data = snap.data() as any;
-      const lifecycle = String(data?.status ?? '');
-      const legacy = (data?.statut ?? '').toString().toLowerCase();
+      const raw = snap.data() as Record<string, unknown>;
+      const r = normalizeReservation(raw);
+      const data = raw as any;
+      const reservationStatus = String(r.reservation.status ?? '').toLowerCase();
+      const paymentStatus = String(r.payment.status ?? '').toLowerCase();
       const canConfirm =
-        (lifecycle === 'payé' && !data?.ticketValidatedAt) || legacy === 'preuve_recue';
+        ((paymentStatus === 'paid' || paymentStatus === 'validated' || reservationStatus === 'payé' || reservationStatus === 'paye') &&
+          !data?.ticketValidatedAt) ||
+        paymentStatus === 'pending_validation' ||
+        reservationStatus === 'preuve_recue';
       if (!canConfirm) {
         toast.error('Erreur', { description: 'Cette réservation ne peut plus être confirmée' });
         return;
       }
-      const montant = Number(data?.montant ?? reservation.montant ?? 0);
-      const paymentMethodLabel = (data?.paymentMethod ?? data?.paiement ?? '').toString();
+      const montant = r.payment.amount;
+      const paymentMethodLabel = r.payment.method ?? '';
       const ensured = await ensurePendingOnlinePaymentFromReservation({
         companyId: user.companyId,
         agencyId: reservation.agencyId,
@@ -766,35 +904,28 @@ const ReservationsEnLigne: React.FC = () => {
       }
 
       // CRM: sync customer (create or update stats by phone)
-      const phone = (data?.telephone ?? data?.telephoneOriginal ?? reservation.telephone ?? '')?.toString() || '';
-      const departureDate = (data?.date ?? reservation.date ?? '')?.toString() || '';
+      const phone = r.customer.phone ?? reservation.customer.phone ?? '';
+      const departureDate = r.trip.date ?? reservation.trip.date ?? '';
       if (phone) {
         upsertCustomerFromReservation({
           companyId: user.companyId,
-          name: (data?.nomClient ?? data?.clientNom ?? reservation.clientNom ?? '')?.toString() || '',
+          name: r.customer.name ?? reservation.customer.name ?? '',
           phone,
           email: (data?.email ?? reservation.email) ?? null,
-          montant: Number(data?.montant ?? reservation.montant ?? 0),
+          montant,
           departureDate: departureDate || new Date().toISOString().slice(0, 10),
         }).catch(() => {});
       }
       
       // Garder la carte visible avec état "Billet validé" + boutons (PDF, WhatsApp, Copier)
-      const validatedRow: Reservation = {
-        ...reservation,
-        ...data,
+      const validatedRow = buildDigitalReservationRow({
         id: reservation.id,
         agencyId: reservation.agencyId,
         companyId: reservation.companyId ?? user.companyId,
-        statut: 'confirme',
-        companySlug: reservation.companySlug || data?.companySlug || (company as { slug?: string })?.slug,
-        clientNom: data?.nomClient ?? data?.clientNom ?? reservation.clientNom,
-        telephone: data?.telephone ?? reservation.telephone,
-        depart: data?.depart ?? reservation.depart,
-        arrivee: data?.arrivee ?? reservation.arrivee,
-        date: data?.date ?? reservation.date,
-        montant: Number(data?.montant ?? reservation.montant ?? 0),
-      };
+        raw,
+        statusOverride: 'confirme',
+        companySlugFallback: reservation.companySlug || data?.companySlug || (company as { slug?: string })?.slug,
+      });
       setRecentlyValidatedReservations(prev => [validatedRow, ...prev]);
 
       // Retirer de la liste des réservations à vérifier (le snapshot le fera aussi)
@@ -811,7 +942,7 @@ const ReservationsEnLigne: React.FC = () => {
       // UI simplifiée : on ne recharge plus l'historique (seule la liste "preuve_recue" est affichée)
       
       toast.success('Réservation confirmée', {
-        description: `Le billet est maintenant disponible pour ${reservation.clientNom}`,
+        description: `Le billet est maintenant disponible pour ${reservation.customer.name || 'ce client'}`,
       });
       playSoundNow();
     } catch (error) {
@@ -824,7 +955,7 @@ const ReservationsEnLigne: React.FC = () => {
     }
   };
 
-  const handleRefuse = async (reservation: Reservation) => {
+  const handleRefuse = async (reservation: DigitalReservationRow) => {
     if (!user?.companyId || !reservation.agencyId || !reservation.id) {
       toast.error('Erreur', { description: 'Informations manquantes' });
       return;
@@ -846,11 +977,16 @@ const ReservationsEnLigne: React.FC = () => {
         toast.error('Erreur', { description: 'Réservation introuvable' });
         return;
       }
-      const data = snap.data() as any;
-      const lifecycle = String(data?.status ?? '');
-      const legacy = (data?.statut ?? '').toString().toLowerCase();
+      const raw = snap.data() as Record<string, unknown>;
+      const r = normalizeReservation(raw);
+      const data = raw as any;
+      const reservationStatus = String(r.reservation.status ?? '').toLowerCase();
+      const paymentStatus = String(r.payment.status ?? '').toLowerCase();
       const canRefuse =
-        (lifecycle === 'payé' && !data?.ticketValidatedAt) || legacy === 'preuve_recue';
+        ((paymentStatus === 'paid' || paymentStatus === 'validated' || reservationStatus === 'payé' || reservationStatus === 'paye') &&
+          !data?.ticketValidatedAt) ||
+        paymentStatus === 'pending_validation' ||
+        reservationStatus === 'preuve_recue';
       if (!canRefuse) {
         toast.error('Erreur', { description: 'Cette réservation ne peut plus être refusée' });
         return;
@@ -872,28 +1008,22 @@ const ReservationsEnLigne: React.FC = () => {
         decrementReservedSeats(user.companyId, tripInstanceId, seats, {
           originStopOrder: data?.originStopOrder as number | null | undefined,
           destinationStopOrder: data?.destinationStopOrder as number | null | undefined,
-          depart: String(data?.depart ?? ""),
-          arrivee: String(data?.arrivee ?? ""),
+          depart: r.trip.departure ?? "",
+          arrivee: r.trip.arrival ?? "",
         }).catch((err) => {
           console.error('[ReservationsEnLigne] decrementReservedSeats on refuse:', err);
         });
       }
 
       // Ajouter à l'historique UI (refus) pour éviter toute perte d'information.
-      const refusedRow: Reservation = {
-        ...reservation,
-        ...data,
+      const refusedRow = buildDigitalReservationRow({
         id: reservation.id,
         agencyId: reservation.agencyId,
         companyId: reservation.companyId ?? user.companyId,
-        statut: 'refuse',
-        clientNom: data?.nomClient ?? data?.clientNom ?? reservation.clientNom,
-        telephone: data?.telephone ?? reservation.telephone,
-        depart: data?.depart ?? reservation.depart,
-        arrivee: data?.arrivee ?? reservation.arrivee,
-        date: data?.date ?? reservation.date,
-        montant: Number(data?.montant ?? reservation.montant ?? 0),
-      };
+        raw,
+        statusOverride: 'refuse',
+        companySlugFallback: reservation.companySlug || data?.companySlug || (company as { slug?: string })?.slug,
+      });
       setRecentlyRefusedReservations((prev) => [refusedRow, ...prev]);
       
       // Retirer de la liste des réservations à vérifier
@@ -910,7 +1040,7 @@ const ReservationsEnLigne: React.FC = () => {
       // UI simplifiée : on ne recharge plus l'historique (seule la liste "preuve_recue" est affichée)
       
       toast.info('Réservation refusée', {
-        description: `La réservation de ${reservation.clientNom} a été refusée`,
+        description: `La réservation de ${reservation.customer.name || 'ce client'} a été refusée`,
       });
     } catch (error) {
       console.error('Erreur lors du refus:', error);
@@ -922,7 +1052,7 @@ const ReservationsEnLigne: React.FC = () => {
     }
   };
 
-  const handleDelete = async (reservation: Reservation) => {
+  const handleDelete = async (reservation: DigitalReservationRow) => {
     if (!user?.companyId || !reservation.agencyId || !reservation.id) {
       toast.error('Erreur', { description: 'Informations manquantes' });
       return;
@@ -947,7 +1077,7 @@ const ReservationsEnLigne: React.FC = () => {
       );
       
       // Retirer des listes locales
-      if (reservation.statut === 'verification') {
+      if (reservation.reservation.status === 'verification') {
         setVerificationReservations(prev => 
           prev.filter(r => !(r.id === reservation.id && r.agencyId === reservation.agencyId))
         );
@@ -971,7 +1101,7 @@ const ReservationsEnLigne: React.FC = () => {
     }
   };
 
-  const handleViewDetails = (reservation: Reservation) => {
+  const handleViewDetails = (reservation: DigitalReservationRow) => {
     if (!reservation.companySlug || !reservation.id) {
       toast.error('Erreur', { description: 'Impossible d\'afficher les détails' });
       return;
@@ -1007,7 +1137,7 @@ const ReservationsEnLigne: React.FC = () => {
           agencyStats[r.agencyId] = { count: 0, amount: 0 };
         }
         agencyStats[r.agencyId].count++;
-        agencyStats[r.agencyId].amount += r.montant || 0;
+        agencyStats[r.agencyId].amount += r.payment.amount;
       }
     });
     
@@ -1047,13 +1177,7 @@ const ReservationsEnLigne: React.FC = () => {
     });
   };
 
-  const getProofUrl = (reservation: Reservation) => {
-    return reservation.preuveUrl ??
-           reservation.paymentProofUrl ??
-           reservation.paiementPreuveUrl ??
-           reservation.proofUrl ??
-           reservation.receiptUrl;
-  };
+  const getProofUrl = (reservation: DigitalReservationRow) => reservation.proof.url;
 
   const isImageProofUrl = (url?: string | null) => {
     if (!url) return false;
@@ -1062,9 +1186,9 @@ const ReservationsEnLigne: React.FC = () => {
     return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/.test(s);
   };
 
-  const getCardKey = (r: Reservation) => `${r.agencyId}_${r.id ?? ""}`;
+  const getCardKey = (r: DigitalReservationRow) => `${r.agencyId}_${r.id ?? ""}`;
 
-  const handleCopyBilletLink = async (reservation: Reservation) => {
+  const handleCopyBilletLink = async (reservation: DigitalReservationRow) => {
     const billetUrl = getBilletUrl(reservation, (company as any)?.slug);
     if (!billetUrl) {
       toast.error("Billet indisponible");
@@ -1078,10 +1202,8 @@ const ReservationsEnLigne: React.FC = () => {
     }
   };
 
-  const handleOpenWhatsApp = (reservation: Reservation) => {
-    const phone = toWhatsAppPhone(
-      reservation.telephone || (reservation as any).telephoneOriginal || ""
-    );
+  const handleOpenWhatsApp = (reservation: DigitalReservationRow) => {
+    const phone = toWhatsAppPhone(reservation.customer.phone || "");
     if (!phone) {
       toast.error("Téléphone manquant", { description: "Impossible d'ouvrir WhatsApp." });
       return;
@@ -1115,14 +1237,14 @@ const ReservationsEnLigne: React.FC = () => {
   const pendingReservations = verificationReservations;
 
   const historyReservations = useMemo(() => {
-    const merged: Reservation[] = [
+    const merged: DigitalReservationRow[] = [
       ...recentlyValidatedReservations,
       ...recentlyRefusedReservations,
-      ...otherReservations.filter((r) => r.statut === "confirme" || r.statut === "refuse"),
+      ...otherReservations.filter((r) => r.reservation.status === "confirme" || r.reservation.status === "refuse"),
     ];
 
     // Dedup par clé
-    const map = new Map<string, Reservation>();
+    const map = new Map<string, DigitalReservationRow>();
     merged.forEach((r) => {
       const key = `${r.agencyId}_${r.id}`;
       map.set(key, r);
@@ -1139,7 +1261,7 @@ const ReservationsEnLigne: React.FC = () => {
   const visibleReservations = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
 
-    let list: Reservation[] = [];
+    let list: DigitalReservationRow[] = [];
     if (filterTab === "pending") {
       list = pendingReservations;
     } else if (filterTab === "history") {
@@ -1171,17 +1293,17 @@ const ReservationsEnLigne: React.FC = () => {
 
     return list.filter((r) => {
       const proofText =
-        (r as ReservationWithProof).paymentReference || r.preuveMessage || "";
+        r.payment.reference || r.payment.wallet || r.proof.message || "";
       const info = getPaymentInfo(r);
       const searchable = [
-        r.clientNom || "",
-        r.telephone || "",
+        r.customer.name || "",
+        r.customer.phone || "",
         r.referenceCode || "",
         proofText,
         String(info.parsedTransactionId ?? ""),
         String(info.parsedAmount ?? ""),
-        r.depart || "",
-        r.arrivee || "",
+        r.trip.departure || "",
+        r.trip.arrival || "",
       ]
         .join(" ")
         .toLowerCase();
@@ -1203,10 +1325,10 @@ const ReservationsEnLigne: React.FC = () => {
     if (term) {
       list = list.filter((r) => {
         const searchable = [
-          r.clientNom || "",
-          r.telephone || "",
+          r.customer.name || "",
+          r.customer.phone || "",
           r.referenceCode || "",
-          (r as ReservationWithProof).paymentReference || r.preuveMessage || "",
+          r.payment.reference || r.payment.wallet || r.proof.message || "",
         ]
           .join(" ")
           .toLowerCase();
@@ -1350,20 +1472,16 @@ const ReservationsEnLigne: React.FC = () => {
                 const isExpanded = Boolean(expandedCardKeys[cardKey]);
                 const proofUrl = getProofUrl(reservation);
                 const proofText =
-                  (reservation as ReservationWithProof).paymentReference || reservation.preuveMessage || "";
+                  reservation.payment.reference || reservation.payment.wallet || reservation.proof.message || "";
                 const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
-                const statusConfig = getStatusConfig(reservation.statut);
+                const statusConfig = getStatusConfig(reservation.reservation.status);
                 const isProcessing = processingId === reservation.id;
                 const paymentInfo = getPaymentInfo(reservation);
                 const referenceCode =
                   reservation.referenceCode ||
-                  (reservation as ReservationWithProof).paymentReference ||
+                  reservation.payment.reference ||
                   "";
-                const rawPaymentMethod =
-                  reservation.paymentMethodLabel ||
-                  (reservation as any).paymentMethod ||
-                  (reservation as any).paiement ||
-                  "";
+                const rawPaymentMethod = reservation.payment.method || "";
                 const pm = String(rawPaymentMethod || "").toLowerCase();
                 const paymentMethodLabel =
                   pm.includes("orange") || pm.includes("mobile_money")
@@ -1409,12 +1527,12 @@ const ReservationsEnLigne: React.FC = () => {
                       <div className="px-2 pb-2 space-y-1">
                         {/* Client + téléphone */}
                         <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                          {reservation.clientNom || "—"} • {reservation.telephone || "N/A"}
+                          {reservation.customer.name || "—"} • {reservation.customer.phone || "N/A"}
                         </div>
 
                         {/* Trajet */}
                         <div className="text-xs text-gray-700 dark:text-gray-200 truncate">
-                          {reservation.depart || "—"} → {reservation.arrivee || "—"}
+                          {reservation.trip.departure || "—"} → {reservation.trip.arrival || "—"}
                         </div>
 
                         {/* Voir preuve */}
@@ -1434,7 +1552,7 @@ const ReservationsEnLigne: React.FC = () => {
 
                         {/* Montant + moyen paiement */}
                         <div className="text-sm font-extrabold text-gray-900 dark:text-white truncate">
-                          {fmtMoney(reservation.montant || 0)} • {paymentMethodLabel}
+                          {fmtMoney(reservation.payment.amount)} • {paymentMethodLabel}
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
                           {paymentInfo.validationLevel === "valid" && (
@@ -1498,7 +1616,7 @@ const ReservationsEnLigne: React.FC = () => {
                       {/* Actions */}
                       <div className="px-2 py-1.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50/30 dark:bg-gray-800/30">
                         <div className="grid grid-cols-3 gap-2">
-                          {reservation.statut === "confirme" ? (
+                          {reservation.reservation.status === "confirme" ? (
                             <>
                               <Button
                                 variant="secondary"
@@ -1525,7 +1643,7 @@ const ReservationsEnLigne: React.FC = () => {
                                 Détails
                               </Button>
                             </>
-                          ) : reservation.statut === "refuse" ? (
+                          ) : reservation.reservation.status === "refuse" ? (
                             <Button
                               variant="secondary"
                               size="sm"
@@ -1767,11 +1885,12 @@ const ReservationsEnLigne: React.FC = () => {
               .filter(r =>
                 !searchTerm ||
                 [
-                  r.clientNom,
-                  r.telephone,
+                  r.customer.name,
+                  r.customer.phone,
                   r.referenceCode,
-                  (r as ReservationWithProof).paymentReference,
-                  r.preuveMessage
+                  r.payment.reference,
+                  r.payment.wallet,
+                  r.proof.message
                 ]
                   .join(' ')
                   .toLowerCase()
@@ -1787,13 +1906,13 @@ const ReservationsEnLigne: React.FC = () => {
                   billetUrl,
                   (company as any)?.name || (company as any)?.nom || "Compagnie"
                 );
-                const phoneForWhatsApp = toWhatsAppPhone(reservation.telephone || '');
+                const phoneForWhatsApp = toWhatsAppPhone(reservation.customer.phone || '');
                 const whatsAppUrl = phoneForWhatsApp
                   ? `https://wa.me/${phoneForWhatsApp}?text=${encodeURIComponent(confirmationMessage)}`
                   : '';
                 const proofUrl = getProofUrl(reservation);
                 const proofText =
-                  (reservation as ReservationWithProof).paymentReference || reservation.preuveMessage;
+                  reservation.payment.reference || reservation.payment.wallet || reservation.proof.message;
                 const cardKey = `${reservation.agencyId}_${reservation.id}`;
                 const isExpanded = Boolean(expandedCardKeys[cardKey]);
 
@@ -1826,12 +1945,12 @@ const ReservationsEnLigne: React.FC = () => {
                             <div className="min-w-0">
                               <div className="text-xs font-medium text-gray-500 dark:text-gray-300 truncate">Client</div>
                               <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                                {reservation.clientNom || 'Sans nom'}
+                                {reservation.customer.name || 'Sans nom'}
                               </div>
                               <div className="flex items-center gap-2 mt-1">
                                 <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
                                 <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
-                                  {reservation.telephone || 'Non renseigné'}
+                                  {reservation.customer.phone || 'Non renseigné'}
                                 </div>
                               </div>
                             </div>
@@ -1843,13 +1962,13 @@ const ReservationsEnLigne: React.FC = () => {
                           <div className="flex items-center justify-between">
                             <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
                             <span className="text-sm font-bold text-gray-900 dark:text-white">
-                              {fmtMoney(reservation.montant || 0)}
+                              {fmtMoney(reservation.payment.amount)}
                             </span>
                           </div>
                           <div className="flex items-center justify-between">
                             <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
                             <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
-                              {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
+                              {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
                             </span>
                           </div>
                         </div>
@@ -2001,7 +2120,7 @@ const ReservationsEnLigne: React.FC = () => {
                   );
                 }
 
-                const statusConfig = getStatusConfig(reservation.statut);
+                const statusConfig = getStatusConfig(reservation.reservation.status);
                 const isProcessing = processingId === reservation.id;
                 const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
 
@@ -2049,12 +2168,12 @@ const ReservationsEnLigne: React.FC = () => {
                               Client
                             </div>
                             <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                              {reservation.clientNom || 'Sans nom'}
+                              {reservation.customer.name || 'Sans nom'}
                             </div>
                             <div className="flex items-center gap-2 mt-1">
                               <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
                               <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
-                                {reservation.telephone || 'Non renseigné'}
+                                {reservation.customer.phone || 'Non renseigné'}
                               </div>
                             </div>
                           </div>
@@ -2066,13 +2185,13 @@ const ReservationsEnLigne: React.FC = () => {
                         <div className="flex items-center justify-between">
                           <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
                           <span className="text-sm font-bold text-gray-900 dark:text-white">
-                            {fmtMoney(reservation.montant || 0)}
+                            {fmtMoney(reservation.payment.amount)}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
                           <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
-                            {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
+                            {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
                           </span>
                         </div>
                       </div>
@@ -2202,7 +2321,7 @@ const ReservationsEnLigne: React.FC = () => {
         <SectionCard
           title={filterStatus ? `${getStatusConfig(filterStatus as ReservationStatus).label}s` : 'Toutes les réservations'}
           icon={Receipt}
-          right={<span className="text-sm text-gray-600">{filterStatus ? `${filteredReservations.filter(r => r.statut !== 'verification').length} réservation${filteredReservations.filter(r => r.statut !== 'verification').length > 1 ? 's' : ''}` : 'Historique'}</span>}
+          right={<span className="text-sm text-gray-600">{filterStatus ? `${filteredReservations.filter(r => r.reservation.status !== 'verification').length} réservation${filteredReservations.filter(r => r.reservation.status !== 'verification').length > 1 ? 's' : ''}` : 'Historique'}</span>}
         >
             <button
               onClick={() => setShowHistory(!showHistory)}
@@ -2223,7 +2342,7 @@ const ReservationsEnLigne: React.FC = () => {
           
           {showHistory && (
             <>
-              {filteredReservations.filter(r => r.statut !== 'verification').length === 0 ? (
+              {filteredReservations.filter(r => r.reservation.status !== 'verification').length === 0 ? (
                 <div className="text-center py-8 border border-gray-200 rounded-lg">
                   <div className="text-gray-500">Aucune réservation à afficher</div>
                 </div>
@@ -2231,14 +2350,14 @@ const ReservationsEnLigne: React.FC = () => {
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {filteredReservations
-                      .filter(r => r.statut !== 'verification')
+                      .filter(r => r.reservation.status !== 'verification')
                       .map((reservation) => {
-                        const statusConfig = getStatusConfig(reservation.statut);
+                        const statusConfig = getStatusConfig(reservation.reservation.status);
                         const isProcessing = processingId === reservation.id;
                         const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
                         const proofUrl = getProofUrl(reservation);
                         const proofText =
-                          (reservation as ReservationWithProof).paymentReference || reservation.preuveMessage;
+                          reservation.payment.reference || reservation.payment.wallet || reservation.proof.message;
                         
                         return (
                           <div
@@ -2275,7 +2394,7 @@ const ReservationsEnLigne: React.FC = () => {
                                   <span className="text-sm font-medium text-gray-700">Téléphone client</span>
                                 </div>
                                 <div className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight break-words">
-                                  {reservation.telephone || 'Non renseigné'}
+                                  {reservation.customer.phone || 'Non renseigné'}
                                 </div>
                               </div>
 
@@ -2305,7 +2424,7 @@ const ReservationsEnLigne: React.FC = () => {
                               <div className="flex items-center justify-between px-1">
                                 <span className="text-sm text-gray-500">Montant</span>
                                 <span className="text-base sm:text-lg font-extrabold text-gray-900">
-                                  {fmtMoney(reservation.montant || 0)}
+                                  {fmtMoney(reservation.payment.amount)}
                                 </span>
                               </div>
 
@@ -2313,7 +2432,7 @@ const ReservationsEnLigne: React.FC = () => {
                               <div className="flex items-center justify-between px-1">
                                 <span className="text-sm text-gray-500">Trajet</span>
                                 <span className="text-sm font-medium text-gray-900 text-right">
-                                  {reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}
+                                  {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
                                 </span>
                               </div>
 
@@ -2321,7 +2440,7 @@ const ReservationsEnLigne: React.FC = () => {
                               <div className="flex items-center justify-between px-1">
                                 <span className="text-sm text-gray-500">Client</span>
                                 <span className="text-sm font-medium text-gray-900 truncate max-w-[170px] text-right">
-                                  {reservation.clientNom || 'Sans nom'}
+                                  {reservation.customer.name || 'Sans nom'}
                                 </span>
                               </div>
 

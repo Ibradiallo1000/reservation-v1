@@ -20,6 +20,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
+import { normalizeReservation } from '@/lib/normalizeReservation';
 import {
   SHIFT_STATUS,
   CASH_SESSION_STATUS,
@@ -374,10 +375,11 @@ async function computeLedgerSessionTotalsFromReservations(params: {
       continue;
     mergedById.set(d.id, row);
   }
-  const reservations = [...mergedById.values()].filter((r) => {
-    const s = String(r.statut ?? '').toLowerCase().trim();
+  const reservations = [...mergedById.values()].filter((doc) => {
+    const r = normalizeReservation(doc);
+    const s = String(r.reservation.status ?? '').toLowerCase().trim();
     if (s === 'invalide' || s === 'annule' || s === 'annulation_en_attente') return false;
-    return isSoldReservationStatus(r.statut);
+    return isSoldReservationStatus(r.reservation.status);
   });
 
   const byRoute: Record<string, { billets: number; montant: number }> = {};
@@ -464,11 +466,15 @@ export async function calculateSessionTotals(params: {
   agentId: string;
 }): Promise<number> {
   const reservations = await getReservationsBySession(params);
-  const validReservations = reservations.filter((r) => {
-    const statut = String(r.statut ?? '').toLowerCase();
+  const validReservations = reservations.filter((doc) => {
+    const r = normalizeReservation(doc);
+    const statut = String(r.reservation.status ?? '').toLowerCase();
     return statut !== 'annule' && statut !== 'annulation_en_attente' && statut !== 'invalide';
   });
-  return validReservations.reduce((sum, r) => sum + Number(r.montant ?? 0), 0);
+  return validReservations.reduce((sum, doc) => {
+    const r = normalizeReservation(doc);
+    return sum + (r.payment.amount ?? 0);
+  }, 0);
 }
 
 /**
@@ -948,9 +954,10 @@ async function setValidatedAtOnShiftReservations(params: {
   );
   const sold = ['paye', 'confirme', 'payé', 'confirmé'];
   const toUpdate = mergedDocs.filter((d) => {
-    const data = d.data() as Record<string, unknown>;
-    if (!belongsToGuichetSession(data, params.shiftId, shiftAgentId)) return false;
-    const statut = String((data.statut as string | undefined) ?? '').toLowerCase();
+    const doc = d.data() as Record<string, unknown>;
+    if (!belongsToGuichetSession(doc, params.shiftId, shiftAgentId)) return false;
+    const r = normalizeReservation(doc);
+    const statut = String(r.reservation.status ?? '').toLowerCase();
     return sold.some((s) => statut === s || statut.includes(s));
   });
   await Promise.all(

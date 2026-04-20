@@ -15,6 +15,7 @@ import {
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import {
   TZ_BAMAKO,
   DEFAULT_AGENCY_TIMEZONE,
@@ -49,7 +50,8 @@ import {
 /** Billets vendus = uniquement statut confirme ou paye (après normalisation). */
 export function isSoldReservation(statut: string | undefined): boolean {
   const s = canonicalStatut(statut);
-  return s === "confirme" || s === "paye";
+  const raw = (statut ?? "").toString().toLowerCase().trim();
+  return s === "confirme" || s === "paye" || raw === "paid" || raw === "payed" || raw === "validated" || raw === "confirmed";
 }
 
 export interface NetworkStats {
@@ -114,12 +116,14 @@ async function getReservationsByCreatedAtRange(
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => {
-    const data = d.data();
-    const createdAt = data.createdAt?.toDate?.() ?? new Date(0);
+    // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+    const raw = d.data();
+    const r = normalizeReservation(raw);
+    const createdAt = raw.createdAt?.toDate?.() ?? new Date(0);
     return {
       id: d.id,
-      agencyId: (data.agencyId ?? data.agenceId ?? "").toString(),
-      statut: (data.statut ?? data.status ?? "").toString(),
+      agencyId: (r.agencyId ?? raw.agenceId ?? "").toString(),
+      statut: r.payment.status,
       createdAt,
     };
   });
@@ -160,18 +164,20 @@ export async function getReservationsInRange(
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => {
-    const data = d.data();
-    const createdAt = data.createdAt?.toDate?.() ?? new Date(0);
+    // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+    const raw = d.data();
+    const r = normalizeReservation(raw);
+    const createdAt = raw.createdAt?.toDate?.() ?? new Date(0);
     return {
       id: d.id,
-      agencyId: (data.agencyId ?? data.agenceId ?? "").toString(),
-      statut: (data.statut ?? data.status ?? "").toString(),
+      agencyId: (r.agencyId ?? raw.agenceId ?? "").toString(),
+      statut: r.payment.status,
       createdAt,
-      montant: Number(data.montant ?? data.amount ?? 0) || 0,
-      seatsGo: Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1,
-      seatsReturn: Number(data.seatsReturn ?? 0) || 0,
-      depart: String(data.depart ?? data.departure ?? "").trim() || undefined,
-      arrivee: String(data.arrivee ?? data.arrival ?? "").trim() || undefined,
+      montant: r.payment.amount ?? 0,
+      seatsGo: Number(raw.seatsGo ?? raw.seats ?? raw.nbPlaces ?? 1) || 1,
+      seatsReturn: Number(raw.seatsReturn ?? 0) || 0,
+      depart: r.trip.depart ?? (String(raw.departure ?? "").trim() || undefined),
+      arrivee: r.trip.arrivee ?? (String(raw.arrival ?? "").trim() || undefined),
     };
   });
 }

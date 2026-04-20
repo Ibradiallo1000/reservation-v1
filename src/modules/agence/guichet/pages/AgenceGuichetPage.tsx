@@ -76,6 +76,7 @@ import { refundPayment } from "@/modules/compagnie/treasury/ledgerRefundService"
 import { offlineStorageService } from "@/modules/offline/services/offlineStorageService";
 import { getPersistentDeviceId } from "@/modules/offline/services/offlineIdentityService";
 import { offlineSyncService } from "@/modules/offline/services/offlineSyncService";
+import { buildReservationPayload } from "@/lib/buildReservationPayload";
 
 // ─── Constants ───
 /** Statuts réservation : convention canonique sans accent (Phase B). */
@@ -1000,6 +1001,22 @@ const AgenceGuichetPage: React.FC = () => {
       setShowReceipt(true);
 
       const saleIdempotencyKey = crypto.randomUUID();
+      const payload = buildReservationPayload({
+        companyId: user!.companyId,
+        companyName: companyMeta.name,
+        companySlug: companyMeta.slug,
+        agencyId: user!.agencyId,
+        agencyName: agencyMeta.name,
+        customerName: normalizedName,
+        customerPhone: phoneDisp,
+        departure: selectedTrip.departure,
+        arrival: selectedTrip.arrival,
+        date: selectedTrip.date,
+        time: selectedTrip.time,
+        amount: totalPrice,
+        channel: "guichet",
+        paymentMethod: "cash",
+      });
       let attempt = 0;
       let shouldRetry = false;
       while (true) {
@@ -1011,20 +1028,22 @@ const AgenceGuichetPage: React.FC = () => {
           setOptimisticSessionSales((p) => p.map((x) => (x.id === tempId ? { ...x, statut: SALE_PENDING_UI_STATUT } : x)));
           setReceiptData((prev) => (prev && prev.id === tempId ? { ...prev, statut: SALE_PENDING_UI_STATUT } : prev));
           const newId = await createGuichetReservation({
+            ...payload,
             companyId: user!.companyId, agencyId: user!.agencyId, userId: user!.uid,
             sessionId: activeShift!.id,
             idempotencyKey: saleIdempotencyKey,
             userCode: sellerCodeCached || staffCodeForSale,
-            trajetId: trajetIdForSale, date: selectedTrip.date, heure: selectedTrip.time,
-            depart: selectedTrip.departure, arrivee: selectedTrip.arrival,
-            nomClient: normalizedName,
+            trajetId: trajetIdForSale, date: payload.date, heure: payload.heure,
+            depart: payload.depart, arrivee: payload.arrivee,
+            nomClient: payload.nomClient,
             telephone: rawPhoneMali(telephone) || null,
             telephoneOriginal: telephone.trim() || null,
             seatsGo: placesAller,
             seatsReturn: 0,
-            montant: totalPrice, companySlug: companyMeta.slug,
-            compagnieNom: companyMeta.name, agencyNom: agencyMeta.name,
+            montant: payload.montant, companySlug: payload.companySlug,
+            compagnieNom: payload.compagnieNom, agencyNom: payload.agencyNom,
             agencyTelephone: agencyMeta.phone ?? null, referenceCode, tripType: "aller_simple",
+            paymentMethod: "cash",
             tripInstanceId: tripInstanceIdForSale,
             offlineMeta: { mode: "online" },
             ...(tariffKey !== "plein" ? { tariff: tariffKey, tariffMultiplier } : {}),

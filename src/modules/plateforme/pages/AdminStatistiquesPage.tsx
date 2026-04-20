@@ -15,6 +15,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import {
   BarChart,
   Bar,
@@ -76,7 +77,16 @@ const AdminStatistiquesPage: React.FC = () => {
             limit(200)
           )
         );
-        const resData = resSnap.docs.map(d => d.data() as Reservation);
+        const resData = resSnap.docs.map(d => {
+          // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+          const raw = d.data() as Reservation;
+          const r = normalizeReservation(raw);
+          return {
+            ...raw,
+            total: raw.total ?? r.payment.amount ?? 0,
+            companyName: r.companyName ?? raw.companyName,
+          };
+        });
 
         // ✅ Toutes les compagnies
         const compSnap = await getDocs(

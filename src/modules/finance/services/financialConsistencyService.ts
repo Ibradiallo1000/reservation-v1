@@ -6,6 +6,7 @@
 
 import { collectionGroup, query, where, getDocs, orderBy, limit, Timestamp, doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import {
   DEFAULT_AGENCY_TIMEZONE,
   getStartOfDayForDate,
@@ -145,9 +146,10 @@ export async function getTotalCash(
       const r = chunk[idx];
       if (!r) return;
       if (snap.exists()) {
-        const data = snap.data();
-        const statut = (data.statut ?? data.status ?? "").toString();
-        if (isSoldReservation(statut)) existsAndSold.add(r.path);
+        // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+        const raw = snap.data();
+        const reservation = normalizeReservation(raw);
+        if (isSoldReservation(reservation.payment.status)) existsAndSold.add(r.path);
       }
     });
   }
@@ -206,9 +208,11 @@ export async function getValidatedRevenue(
   let total = 0;
   let tickets = 0; // somme des places (seatsGo)
   snap.docs.forEach((d) => {
-    const data = d.data();
-    total += Number(data.montant ?? data.amount ?? 0) || 0;
-    tickets += Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1;
+    // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+    const raw = d.data();
+    const r = normalizeReservation(raw);
+    total += r.payment.amount ?? 0;
+    tickets += Number(raw.seatsGo ?? raw.seats ?? raw.nbPlaces ?? 1) || 1;
   });
   return { total, tickets };
 }
@@ -251,8 +255,10 @@ export async function detectFinancialInconsistencies(
   ]);
 
   const soldReservations = reservationsSnap.docs.filter((d) => {
-    const data = d.data();
-    return isSoldReservation((data.statut ?? data.status ?? "").toString());
+    // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+    const raw = d.data();
+    const r = normalizeReservation(raw);
+    return isSoldReservation(r.payment.status);
   });
 
   const paidCash = cashList.filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID);
@@ -261,15 +267,18 @@ export async function detectFinancialInconsistencies(
   );
   const missingTransactions: FinancialInconsistencies["missingTransactions"] = [];
   soldReservations.forEach((d) => {
-    const data = d.data();
-    const agencyId = (data.agencyId ?? data.agenceId ?? "").toString();
+    // ⚠️ utiliser normalizeReservation pour toute lecture de réservation
+    const raw = d.data();
+    const r = normalizeReservation(raw);
+    const agencyId = (r.agencyId ?? raw.agenceId ?? "").toString();
     const reservationId = d.id;
     const key = `${agencyId}:${reservationId}`;
-    if (!reservationIdsWithCash.has(key) && (Number(data.montant ?? data.amount ?? 0) || 0) > 0) {
+    const montant = r.payment.amount ?? 0;
+    if (!reservationIdsWithCash.has(key) && montant > 0) {
       missingTransactions.push({
         reservationId,
         agencyId,
-        montant: Number(data.montant ?? data.amount ?? 0) || 0,
+        montant,
       });
     }
   });

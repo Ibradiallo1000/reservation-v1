@@ -13,6 +13,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { normalizeReservation } from "@/lib/normalizeReservation";
 import { agencyPendingCashAccountDocId, ledgerAccountDocRef } from "@/modules/compagnie/treasury/ledgerAccounts";
 import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPaths";
 import { getCourierSessionLedgerTotal } from "@/modules/logistics/services/courierSessionLedger";
@@ -167,13 +168,14 @@ async function getOpenGuichetExpectedAmount(
       )
     );
     for (const d of snap.docs) {
-      const r = d.data() as Record<string, unknown>;
-      const statut = String(r.statut ?? "").toLowerCase().trim();
+      const doc = d.data() as Record<string, unknown>;
+      const r = normalizeReservation(doc);
+      const statut = String(r.reservation.status ?? "").toLowerCase().trim();
       if (statut === "annule" || statut === "annulation_en_attente" || statut === "invalide") continue;
-      if (!isSoldReservationStatus(r.statut)) continue;
-      const canal = String(r.canal ?? "").toLowerCase();
+      if (!isSoldReservationStatus(r.reservation.status)) continue;
+      const canal = String(r.reservation.channel ?? "").toLowerCase();
       if (canal && canal !== "guichet") continue;
-      total += Number(r.montant ?? 0) || 0;
+      total += r.payment.amount ?? 0;
     }
   }
   return total;
