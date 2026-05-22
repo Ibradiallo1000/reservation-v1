@@ -93,6 +93,8 @@ export interface AgencyDepositToBankParams {
   performedByRole?: string | null;
   idempotencyKey: string;
   description?: string | null;
+  bankReference?: string | null;
+  depositSlipUrl?: string | null;
 }
 
 /** Agency deposit to company bank: debit agency_cash, credit company_bank. referenceType: agency_deposit. */
@@ -116,6 +118,8 @@ export async function agencyDepositToBank(params: AgencyDepositToBankParams): Pr
       metadata: {
         fromAccountId: params.agencyCashAccountId,
         toAccountId: params.companyBankAccountId,
+        bankReference: params.bankReference?.trim() || null,
+        depositSlipUrl: params.depositSlipUrl?.trim() || null,
       },
     });
   }
@@ -168,6 +172,8 @@ export interface MobileToBankTransferParams {
   performedByRole?: string | null;
   idempotencyKey: string;
   description?: string | null;
+  bankReference?: string | null;
+  depositSlipUrl?: string | null;
 }
 
 /** Mobile money to bank: debit company_mobile_money, credit company_bank. referenceType: mobile_to_bank. */
@@ -195,6 +201,8 @@ export async function mobileToBankTransfer(params: MobileToBankTransferParams): 
       metadata: {
         fromAccountId: params.mobileMoneyAccountId,
         toAccountId: params.companyBankAccountId,
+        bankReference: params.bankReference?.trim() || null,
+        depositSlipUrl: params.depositSlipUrl?.trim() || null,
       },
     });
   }

@@ -1,5 +1,5 @@
 /**
- * Section « Argent disponible » — liquidité ledger (total, caisse, banque) +
+ * Section « Liquidite estimee » — liquidité ledger (total, caisse, banque) +
  * encaissements en ligne par moyen (agrégation réservations payées, clé preuveVia).
  */
 import React, { useEffect, useMemo, useState } from "react";
@@ -146,7 +146,7 @@ export default function FinancesLiquiditesTab() {
 
   return (
     <section aria-labelledby="finances-argent-disponible" className="space-y-4">
-      <SectionCard title="Argent disponible" icon={Wallet}>
+      <SectionCard title="Liquidité estimée" icon={Wallet}>
         <div className="mb-3 flex items-center justify-end">
           <InfoTooltip label="Solde réel consolidé (caisse agences + banque). Répartition calculée depuis les paiements effectivement reçus." />
         </div>
@@ -156,7 +156,7 @@ export default function FinancesLiquiditesTab() {
           <>
             <div className="grid grid-cols-3 gap-2 min-w-0 sm:gap-4">
               <MetricCard
-                label="Total disponible"
+                label="Position financière"
                 value={totalDisplay === "ok" && ledger ? money(ledger.total) : "Donnée non disponible"}
                 icon={Wallet}
                 className={liquidityMetricCardBaseClassName}
@@ -180,7 +180,7 @@ export default function FinancesLiquiditesTab() {
                 iconWrapperClassName={liquidityMetricIconClassName}
               />
               <MetricCard
-                label="Banque (entreprise)"
+                label="Dépôts validés"
                 value={ledger ? money(ledger.bank) : "Donnée non disponible"}
                 icon={Landmark}
                 className={liquidityMetricCardBaseClassName}

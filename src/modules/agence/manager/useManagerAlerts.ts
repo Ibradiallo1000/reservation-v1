@@ -131,6 +131,7 @@ export function useManagerAlerts(): ManagerAlertsResult {
       query(collection(db, `companies/${companyId}/agences/${agencyId}/shifts`),
         where("status", "in", ["active", "paused", "closed", "validated_agency", "validated"]), limit(100)),
       (s) => setShifts(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      () => setShifts([]),
     ));
 
     const resRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
@@ -138,15 +139,26 @@ export function useManagerAlerts(): ManagerAlertsResult {
 
     let closuresSet = new Set<string>();
     /* Listener 2: boardingClosures */
-    unsubs.push(onSnapshot(query(closuresRef, limit(100)), (s) => {
-      closuresSet = new Set(s.docs.map((d) => d.id));
-    }));
+    unsubs.push(onSnapshot(
+      query(closuresRef, limit(100)),
+      (s) => {
+        closuresSet = new Set(s.docs.map((d) => d.id));
+      },
+      () => {
+        closuresSet = new Set<string>();
+      }
+    ));
 
     /* One-time fetch: weeklyTrips (cached in ref to avoid refetch on every reservation change) */
-    getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/weeklyTrips`)).then((ts) => {
-      tripsRef.current = ts.docs.map((d) => ({ id: d.id, ...d.data() } as any))
-        .filter((t: any) => (t.horaires?.[dayName]?.length ?? 0) > 0);
-    });
+    getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/weeklyTrips`))
+      .then((ts) => {
+        tripsRef.current = ts.docs
+          .map((d) => ({ id: d.id, ...d.data() } as any))
+          .filter((t: any) => (t.horaires?.[dayName]?.length ?? 0) > 0);
+      })
+      .catch(() => {
+        tripsRef.current = [];
+      });
 
     /* Listener 3: today's reservations */
     unsubs.push(onSnapshot(
@@ -164,6 +176,9 @@ export function useManagerAlerts(): ManagerAlertsResult {
           });
         });
         setDepartures(depList);
+      },
+      () => {
+        setDepartures([]);
       },
     ));
 

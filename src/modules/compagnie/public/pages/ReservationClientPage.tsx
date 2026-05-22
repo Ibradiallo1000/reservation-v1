@@ -11,6 +11,7 @@ import {
   query,
   where,
   doc,
+  runTransaction,
   setDoc,
   serverTimestamp,
   getDoc,
@@ -41,6 +42,15 @@ import { useOnlineStatus } from '@/shared/hooks/useOnlineStatus';
 import { getSlugFromSubdomain, getPublicPathBase } from '../utils/subdomain';
 import { toast } from 'sonner';
 import { createPayment } from '@/services/paymentService';
+import { useOperationQuotaStatus } from '@/core/hooks/useOperationQuotaStatus';
+import {
+  assertAndIncrementOperationInTransaction,
+  OPERATION_QUOTA_BLOCKED_HELP,
+  OPERATION_QUOTA_BLOCKED_MESSAGE,
+  OPERATION_QUOTA_WARNING_MESSAGE,
+  loadOperationPlanSettings,
+  operationQuotaErrorMessage,
+} from '@/core/subscription/operationQuota';
 import { isReservationAwaitingPayment } from '../utils/onlineReservationStatus';
 import { hexToRgba } from '@/utils/color';
 import {
@@ -417,6 +427,11 @@ export default function ReservationClientPage() {
   }, [validTrips, selectedDate, selectedTripId, reservationRouteId, nowDateStr, nowTimeStr]);
 
   const selectedTrip: any = validTrips.find((t: any) => t.id === selectedTripId);
+  const {
+    status: operationQuota,
+    quotaReached,
+    quotaWarning,
+  } = useOperationQuotaStatus(selectedTrip?.companyId ?? routeState.companyId ?? "");
   const topPrice = selectedTrip?.price ?? (slotsForSelectedDate[0] as any)?.price ?? (validTrips[0] as any)?.price;
 
   const seatColor = (remaining: number) => {
@@ -463,6 +478,11 @@ export default function ReservationClientPage() {
     }
     if (!selectedTrip) {
       setError('Veuillez sélectionner un horaire');
+      return;
+    }
+    if (quotaReached) {
+      setSubmitError(OPERATION_QUOTA_BLOCKED_MESSAGE);
+      setError(OPERATION_QUOTA_BLOCKED_MESSAGE);
       return;
     }
     if (creating || isSubmitting) return;
@@ -569,6 +589,7 @@ export default function ReservationClientPage() {
       const expiresAtMs = nowMs + RESERVATION_DURATION_MS;
       const telephoneInput = passenger.phone.trim();
       const phoneNorm = normalizePhone(telephoneInput);
+      const operationPlans = await loadOperationPlanSettings();
 
       const resCol = collection(
         db,
@@ -644,6 +665,12 @@ export default function ReservationClientPage() {
 
       console.log('[ReservationClientPage] reservation (avant écriture)', reservation);
 
+      console.log("🚀 START reservation creation", {
+        companyId: selectedTrip.companyId,
+        agencyId: selectedTrip.agencyId,
+        data: reservation,
+      });
+
       const holdMap = await fetchPendingOnlineHoldSeatsMap(companyId);
       const holdKey = onlineHoldCompositeKey(
         tripInstanceId,
@@ -655,7 +682,20 @@ export default function ReservationClientPage() {
       if (baseRemaining - held < seats) {
         throw new Error('Plus assez de places disponibles sur ce trajet.');
       }
-      await setDoc(newResRef, reservation);
+      try {
+        await runTransaction(db, async (transaction) => {
+          await assertAndIncrementOperationInTransaction(
+            transaction,
+            doc(db, 'companies', selectedTrip.companyId),
+            operationPlans
+          );
+          transaction.set(newResRef, reservation);
+          console.log("✅ RESERVATION CREATED");
+        });
+      } catch (e) {
+        console.error("❌ TRANSACTION ERROR", e);
+        throw e;
+      }
       const refDoc = { id: newResRef.id };
 
       // Nouveau flux Payment (pending) — en parallèle, sans supprimer le flux réservation existant
@@ -742,6 +782,12 @@ export default function ReservationClientPage() {
         },
       });
     } catch (e: any) {
+      const quotaMessage = operationQuotaErrorMessage(e);
+      if (quotaMessage) {
+        setSubmitError(quotaMessage);
+        setError(quotaMessage);
+        return;
+      }
       setSubmitError('Erreur réseau ou places indisponibles');
       setError(e?.message || 'Impossible de créer la réservation');
     } finally { 
@@ -750,7 +796,7 @@ export default function ReservationClientPage() {
       setCreating(false);
       setIsSubmitting(false);
     }
-  }, [selectedTrip, passenger, seats, creating, isSubmitting, slug, company, agencyInfo, navigate, validatePersonalInfo, pathBase]);
+  }, [selectedTrip, passenger, seats, creating, isSubmitting, slug, company, agencyInfo, navigate, validatePersonalInfo, pathBase, quotaReached]);
 
   // ---------- UI: carte trajet épurée (logo retiré, déjà présent dans le header) ----------
   const RouteCard = (titleRight?: string) => (
@@ -1092,6 +1138,29 @@ export default function ReservationClientPage() {
                   </div>
                 </div>
 
+                {(quotaWarning || quotaReached) && operationQuota && (
+                  <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900">
+                    <div className="font-bold whitespace-pre-line">
+                      {quotaReached ? OPERATION_QUOTA_BLOCKED_MESSAGE : OPERATION_QUOTA_WARNING_MESSAGE}
+                    </div>
+                    <div className="mt-1 text-orange-800">
+                      {operationQuota.currentMonthOperations.toLocaleString('fr-FR')} /{' '}
+                      {operationQuota.includedOperations.toLocaleString('fr-FR')} opérations utilisées
+                    </div>
+                    {quotaReached && (
+                      <div className="mt-1 text-xs font-medium text-orange-700">
+                        {OPERATION_QUOTA_BLOCKED_HELP}
+                      </div>
+                    )}
+                    <a
+                      href={`/compagnie/${selectedTrip.companyId}/parametres/plan`}
+                      className="mt-3 inline-flex rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-700"
+                    >
+                      Passer en Premium
+                    </a>
+                  </div>
+                )}
+
                 {isSubmitting && (
                   <div className="mt-4 p-3 rounded-xl bg-blue-50 border border-blue-100 text-blue-800 text-sm">
                     ⏳ Creation de votre reservation en cours...
@@ -1102,15 +1171,15 @@ export default function ReservationClientPage() {
                 )}
                 {submitError && (
                   <div className="mt-4 p-3 rounded-xl bg-red-50 border border-red-100 text-red-800 text-sm">
-                    ❌ Impossible de créer la réservation
-                    <div className="mt-1">🔁 Veuillez réessayer</div>
+                    <div className="font-semibold whitespace-pre-line">{submitError}</div>
+                    {quotaReached && <div className="mt-1 text-xs">{OPERATION_QUOTA_BLOCKED_HELP}</div>}
                   </div>
                 )}
 
                 <button
                   type="button"
                   onClick={createReservationDraft}
-                  disabled={creating || isSubmitting}
+                  disabled={creating || isSubmitting || quotaReached}
                   className="mt-6 w-full h-12 rounded-xl font-semibold shadow-md disabled:opacity-60 transition hover:opacity-95 active:scale-[0.99] flex items-center justify-center gap-2 text-white"
                   style={{
                     background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`,

@@ -9,6 +9,9 @@ import { StandardLayoutWrapper, PageHeader } from "@/ui";
 import { useAuth } from "@/contexts/AuthContext";
 import CEOExpensesPage from "./CEOExpensesPage";
 import CompagnieComptabilitePage from "./CompagnieComptabilitePage";
+import { useCompanyPlan } from "@/core/hooks/useCompanyPlan";
+import { hasCapability } from "@/core/subscription/capabilities";
+import PremiumGate from "@/core/ui/PremiumGate";
 
 const TAB_DEPENSES = "depenses";
 const TAB_CONTROLE = "controle";
@@ -25,6 +28,7 @@ export default function AuditControlePage() {
   const { companyId: companyIdFromUrl } = useParams<{ companyId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
+  const { company, loading: planLoading } = useCompanyPlan(companyId);
 
   const tabParam = searchParams.get("tab");
   const tabFromUrl = tabParam === TAB_CONTROLE ? TAB_CONTROLE : TAB_DEPENSES;
@@ -76,7 +80,15 @@ export default function AuditControlePage() {
         })}
       </div>
       {activeTab === TAB_DEPENSES && <CEOExpensesPage embedded />}
-      {activeTab === TAB_CONTROLE && <CompagnieComptabilitePage />}
+      {activeTab === TAB_CONTROLE && (
+        planLoading ? (
+          <p className="text-gray-500">Chargement...</p>
+        ) : hasCapability(company, "fraud_detection") ? (
+          <CompagnieComptabilitePage />
+        ) : (
+          <PremiumGate companyId={companyId} featureName="Detection des pertes, fraudes et anomalies" />
+        )
+      )}
     </StandardLayoutWrapper>
   );
 }

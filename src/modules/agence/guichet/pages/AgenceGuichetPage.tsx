@@ -64,6 +64,8 @@ import {
 } from "../components/pos";
 import { useOnlineStatus, useAgencyDarkMode } from "@/modules/agence/shared";
 import type { SaleRow, ClientSuggestion, ToastType } from "../components/pos";
+import { isFirestoreIndexError, parseIndexUrlFromError } from "@/utils/firestoreErrorHandler";
+import { FirestoreIndexLink } from "@/shared/components/FirestoreIndexLink";
 
 import {
   CalendarDays, Clock4, Receipt, History, Pencil, XCircle, Loader2,
@@ -77,6 +79,13 @@ import { offlineStorageService } from "@/modules/offline/services/offlineStorage
 import { getPersistentDeviceId } from "@/modules/offline/services/offlineIdentityService";
 import { offlineSyncService } from "@/modules/offline/services/offlineSyncService";
 import { buildReservationPayload } from "@/lib/buildReservationPayload";
+import { useOperationQuotaStatus } from "@/core/hooks/useOperationQuotaStatus";
+import {
+  OPERATION_QUOTA_BLOCKED_HELP,
+  OPERATION_QUOTA_BLOCKED_MESSAGE,
+  OPERATION_QUOTA_WARNING_MESSAGE,
+  operationQuotaErrorMessage,
+} from "@/core/subscription/operationQuota";
 
 // ─── Constants ───
 /** Statuts réservation : convention canonique sans accent (Phase B). */
@@ -157,6 +166,8 @@ function mergeServerAndOptimisticTickets(server: TicketRow[], optimistic: Ticket
 }
 
 function mapGuichetSaleError(e: unknown): string {
+  const quotaMessage = operationQuotaErrorMessage(e);
+  if (quotaMessage) return quotaMessage;
   const msg = e instanceof Error ? e.message : String(e);
   if (/places|capacit|disponibles|Plus assez/i.test(msg)) return "Places indisponibles sur ce trajet.";
   if (/failed to fetch|network|offline|unavailable|client is offline/i.test(msg)) return "Erreur réseau. Réessayez.";
@@ -335,6 +346,10 @@ const AgenceGuichetPage: React.FC = () => {
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
 
+  // ── Dev-only Firestore index link ──
+  const isDev = import.meta.env.DEV;
+  const [devIndexUrl, setDevIndexUrl] = useState<string | null>(null);
+
   // ── Seller code ──
   const [sellerCodeCached, setSellerCodeCached] = useState("GUEST");
   const staffCodeForSale = (user as any)?.staffCode || (user as any)?.codeCourt || (user as any)?.code || "GUEST";
@@ -347,6 +362,14 @@ const AgenceGuichetPage: React.FC = () => {
     !!user?.agencyId &&
     !sessionLockedByOtherDevice;
   const isCounterOpen = status === "active" || status === "paused";
+  const {
+    status: operationQuota,
+    quotaReached,
+    quotaWarning,
+  } = useOperationQuotaStatus(user?.companyId ?? "");
+  const upgradeHref = user?.companyId
+    ? `/compagnie/${user.companyId}/parametres/plan`
+    : "/compagnie/parametres/plan";
 
   // ── Session start time for timer ──
   const sessionStartedAt = useMemo(() => {
@@ -380,6 +403,20 @@ const AgenceGuichetPage: React.FC = () => {
     setToastVisible(true);
     setTimeout(() => setToastVisible(false), 3500);
   }, []);
+
+  /** Gère les erreurs de session : index Firestore → toast non-bloquant + lien dev. */
+  const handleSessionError = useCallback((e: unknown) => {
+    const url = parseIndexUrlFromError(e);
+    if (isFirestoreIndexError(e)) {
+      console.error("FIRESTORE INDEX REQUIRED:", e);
+      if (url) console.error("INDEX URL:", url);
+      showToast("Configuration requise (index Firestore). Voir console.", "error");
+      if (isDev && url) setDevIndexUrl(url);
+      return;
+    }
+    const msg = e instanceof Error ? e.message : "Erreur";
+    showToast(msg, "error");
+  }, [showToast, isDev]);
 
   /** Notification discrète si l’envoi en file d’attente échoue (pas de libellés techniques). */
   const lastCritSyncNotifyAtRef = useRef(0);
@@ -752,15 +789,17 @@ const AgenceGuichetPage: React.FC = () => {
   }, [selectedTrip, placesAller, tariffMultiplier]);
 
   const canValidateSale = useMemo(() => {
+    if (quotaReached) return false;
     if (!canSell || !selectedTrip) return false;
     if (selectedTrip.remainingSeats !== undefined && selectedTrip.remainingSeats <= 0) return false;
     if (placesAller <= 0) return false;
     if (selectedTrip.remainingSeats !== undefined && placesAller > selectedTrip.remainingSeats) return false;
     if (!nomClient.trim() || !validPhone(telephone) || totalPrice <= 0 || isProcessing) return false;
     return true;
-  }, [canSell, selectedTrip, placesAller, nomClient, telephone, totalPrice, isProcessing]);
+  }, [quotaReached, canSell, selectedTrip, placesAller, nomClient, telephone, totalPrice, isProcessing]);
 
   const validationHint = useMemo(() => {
+    if (quotaReached) return "Limite mensuelle atteinte";
     if (!selectedTrip) return "";
     if (!nomClient.trim()) return "Entrez le nom du passager";
     if (!telephone) return "Entrez un numéro de téléphone";
@@ -769,7 +808,7 @@ const AgenceGuichetPage: React.FC = () => {
     if (selectedTrip.remainingSeats !== undefined && selectedTrip.remainingSeats <= 0) return "Plus de places disponibles";
     if (selectedTrip.remainingSeats !== undefined && placesAller > selectedTrip.remainingSeats) return "Pas assez de places";
     return "Remplissez tous les champs obligatoires";
-  }, [selectedTrip, nomClient, telephone, totalPrice, placesAller]);
+  }, [quotaReached, selectedTrip, nomClient, telephone, totalPrice, placesAller]);
 
   const availableDates = [...new Set(trips.map((t) => String(t.date || "")).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const selectedTrips = trips
@@ -806,14 +845,18 @@ const AgenceGuichetPage: React.FC = () => {
     const companyData = company as Record<string, unknown> | null;
     const subStatus = (companyData?.subscriptionStatus as SubscriptionStatus) ?? "active";
     const actionCheck = canCompanyPerformAction(subStatus, "CREATE_RESERVATION");
-    if (!actionCheck.allowed) { alert(actionCheck.reason || "Action non autorisée."); return; }
+    if (!actionCheck.allowed) { showToast(actionCheck.reason || "Action non autorisée.", "error"); return; }
     if (!canSell) {
-      alert(sessionLockedByOtherDevice ? "Poste ouvert sur un autre appareil." : "Ouvrez votre comptoir.");
+      showToast(sessionLockedByOtherDevice ? "Poste ouvert sur un autre appareil." : "Ouvrez votre comptoir.", "error");
       return;
     }
-    if (!validPhone(telephone)) { alert("Téléphone invalide."); return; }
+    if (!validPhone(telephone)) { showToast("Téléphone invalide.", "error"); return; }
     if (selectedTrip.remainingSeats !== undefined && placesAller > selectedTrip.remainingSeats) {
-      alert(`Il reste ${selectedTrip.remainingSeats} places.`); return;
+      showToast(`Il reste ${selectedTrip.remainingSeats} places.`, "error"); return;
+    }
+    if (quotaReached) {
+      showToast(OPERATION_QUOTA_BLOCKED_MESSAGE, "error");
+      return;
     }
 
     const timeNormSale = normalizeTripInstanceTime(selectedTrip.time);
@@ -1027,6 +1070,11 @@ const AgenceGuichetPage: React.FC = () => {
         try {
           setOptimisticSessionSales((p) => p.map((x) => (x.id === tempId ? { ...x, statut: SALE_PENDING_UI_STATUT } : x)));
           setReceiptData((prev) => (prev && prev.id === tempId ? { ...prev, statut: SALE_PENDING_UI_STATUT } : prev));
+          console.log("🚀 START reservation creation", {
+            companyId: user!.companyId,
+            agencyId: user!.agencyId,
+            data: payload,
+          });
           const newId = await createGuichetReservation({
             ...payload,
             companyId: user!.companyId, agencyId: user!.agencyId, userId: user!.uid,
@@ -1118,17 +1166,17 @@ const AgenceGuichetPage: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [selectedTrip, nomClient, telephone, canSell, placesAller, totalPrice, user, activeShift, companyMeta, agencyMeta, sellerCodeCached, staffCodeForSale, theme, company, sessionLockedByOtherDevice, soundEnabled, money, isOnline, showToast, autoPrint, tariffKey, tariffMultiplier, additionalPassengers]);
+  }, [selectedTrip, nomClient, telephone, canSell, placesAller, totalPrice, user, activeShift, companyMeta, agencyMeta, sellerCodeCached, staffCodeForSale, theme, company, sessionLockedByOtherDevice, soundEnabled, money, isOnline, showToast, autoPrint, tariffKey, tariffMultiplier, additionalPassengers, quotaReached]);
 
   // ═══════════════ CANCEL / EDIT ═══════════════
   const cancelReservation = useCallback(async (row: TicketRow) => {
     if (!user?.companyId || !user?.agencyId) return;
     if (row.statut === SALE_PENDING_UI_STATUT || row.statut === SALE_SLOW_UI_STATUT || row.statut === SALE_ERROR_UI_STATUT) return;
-    if (row.canal && row.canal !== CANALS.GUICHET) { alert("Annulation uniquement pour les ventes guichet."); return; }
-    if (isBoarded(row)) { alert("Impossible : passager embarqué."); return; }
-    if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) { alert("Déjà annulé."); return; }
+    if (row.canal && row.canal !== CANALS.GUICHET) { showToast("Annulation uniquement pour les ventes guichet.", "error"); return; }
+    if (isBoarded(row)) { showToast("Impossible : passager embarqué.", "error"); return; }
+    if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) { showToast("Déjà annulé.", "error"); return; }
     const reason = prompt("Motif d'annulation (min. 5 caractères) :") || "";
-    if (!reason.trim() || reason.length < 5) { alert("Motif requis (min. 5 caractères)."); return; }
+    if (!reason.trim() || reason.length < 5) { showToast("Motif requis (min. 5 caractères).", "error"); return; }
     if (!window.confirm(`Annuler la réservation de ${row.nomClient} (${money(row.montant)}) ?`)) return;
     setCancelingId(row.id);
     try {
@@ -1179,19 +1227,19 @@ const AgenceGuichetPage: React.FC = () => {
           }
         })();
       }
-    } catch {
-      alert("Échec de l'annulation.");
+    } catch (e: unknown) {
+      handleSessionError(e);
     }
     finally { setCancelingId(null); }
-  }, [user?.companyId, user?.agencyId, user?.uid, user?.displayName, user?.email, sellerCodeCached, money, soundEnabled]);
+  }, [user?.companyId, user?.agencyId, user?.uid, user?.displayName, user?.email, sellerCodeCached, money, soundEnabled, handleSessionError]);
 
   const openEdit = useCallback((row: TicketRow) => {
     if (row.statut === SALE_PENDING_UI_STATUT || row.statut === SALE_SLOW_UI_STATUT || row.statut === SALE_ERROR_UI_STATUT) return;
-    if (isBoarded(row)) { alert("Modification impossible : passager embarqué."); return; }
-    if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) { alert("Déjà annulé."); return; }
+    if (isBoarded(row)) { showToast("Modification impossible : passager embarqué.", "error"); return; }
+    if (row.statutEmbarquement === EMBARKMENT_STATUS.ANNULE || row.montant === 0) { showToast("Déjà annulé.", "error"); return; }
     setEditTarget({ id: row.id, nomClient: row.nomClient, telephone: row.telephone, seatsGo: row.seatsGo ?? 1, seatsReturn: row.seatsReturn ?? 0, montant: row.montant ?? 0, expectedPrice: row.montant ?? 0 });
     setEditOpen(true);
-  }, []);
+  }, [showToast]);
 
   const saveEdit = useCallback(async (payload: { id: string; nomClient: string; telephone?: string; telephoneOriginal?: string; seatsGo: number; seatsReturn?: number; montant: number; editReason?: string }) => {
     if (!user?.companyId || !user?.agencyId) return;
@@ -1206,9 +1254,9 @@ const AgenceGuichetPage: React.FC = () => {
       }, { id: user.uid, name: user.displayName || user.email || null });
       setTickets((prev) => prev.map((t) => t.id === payload.id ? { ...t, nomClient: payload.nomClient, telephone: payload.telephone, seatsGo: Math.max(1, payload.seatsGo || 1), seatsReturn: Math.max(0, payload.seatsReturn || 0), montant: Math.max(0, payload.montant || 0) } : t));
       setEditOpen(false); setEditTarget(null);
-    } catch (e: unknown) { alert(e instanceof Error ? e.message : "Échec."); }
+    } catch (e: unknown) { showToast(e instanceof Error ? e.message : "Échec.", "error"); }
     finally { setIsSavingEdit(false); }
-  }, [user?.companyId, user?.agencyId, user?.uid, user?.displayName, user?.email]);
+  }, [user?.companyId, user?.agencyId, user?.uid, user?.displayName, user?.email, showToast]);
 
   // ═══════════════ Réservations guichet : session active uniquement (pas de listener global agence) ═══════════════
   useEffect(() => {
@@ -1375,7 +1423,7 @@ const AgenceGuichetPage: React.FC = () => {
       if (input == null) return;
       const normalized = Number(String(input).replace(",", "."));
       if (!Number.isFinite(normalized) || normalized < 0) {
-        alert("Montant reel invalide.");
+        showToast("Montant reel invalide.", "error");
         return;
       }
       const result = await closeShift(normalized);
@@ -1389,7 +1437,7 @@ const AgenceGuichetPage: React.FC = () => {
       setShowSummary(true);
       if (soundEnabled) playSound("close");
       handleTabChange("rapport");
-    } catch (e: any) { alert(e?.message || "Erreur"); }
+    } catch (e: any) { handleSessionError(e); }
   }, [closeShift, detailsToSummaryRows, soundEnabled, handleTabChange, sessionStartedAt, sessionTotals.montant]);
 
   // ═══════════════════════════════════════════════════════════════
@@ -1403,6 +1451,13 @@ const AgenceGuichetPage: React.FC = () => {
 
       {/* Toast */}
       <SuccessToast message={successMessage} visible={toastVisible} primaryColor={theme.primary} type={toastType} />
+
+      {/* Dev-only Firestore index link */}
+      {isDev && devIndexUrl && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[60] w-full max-w-lg px-4">
+          <FirestoreIndexLink indexUrl={devIndexUrl} variant="box" />
+        </div>
+      )}
 
       {/* Session top bar */}
       <PosSessionBar
@@ -1419,18 +1474,18 @@ const AgenceGuichetPage: React.FC = () => {
         secondaryColor={theme.secondary}
         sessionStartedAt={sessionStartedAt}
         isOnline={isOnline}
-        onStart={() => startShift().catch((e: any) => alert(e?.message || "Erreur"))}
+        onStart={() => startShift().catch((e: any) => handleSessionError(e))}
         onPause={() => {
           const reason = window.prompt("Motif de la pause (obligatoire) :");
           if (reason === null) return;
           const trimmed = String(reason).trim();
           if (!trimmed) {
-            alert("Le motif de pause est obligatoire.");
+            showToast("Le motif de pause est obligatoire.", "error");
             return;
           }
-          void pauseShift(trimmed).catch((e: any) => alert(e?.message || "Erreur"));
+          void pauseShift(trimmed).catch((e: any) => handleSessionError(e));
         }}
-        onContinue={() => continueShift().catch((e: any) => alert(e?.message || "Erreur"))}
+        onContinue={() => continueShift().catch((e: any) => handleSessionError(e))}
         onClose={handleSessionClose}
         onRefresh={() => refresh().catch(() => {})}
         onLogout={handleLogout}
@@ -1511,7 +1566,7 @@ const AgenceGuichetPage: React.FC = () => {
                 locked={false}
                 primaryColor={theme.primary}
                 secondaryColor={theme.secondary}
-                onStart={() => startShift().catch((e: any) => alert(e?.message || "Erreur"))}
+                onStart={() => startShift().catch((e: any) => handleSessionError(e))}
                 onRefresh={() => refresh().catch(() => {})}
                 activationByEscaleManager={agencyType === "escale"}
               />
@@ -1620,6 +1675,28 @@ const AgenceGuichetPage: React.FC = () => {
 
                   {/* RIGHT: Sale panel (2/5) — toujours visible, bouton Encaisser en bas */}
                   <div className="md:col-span-1 lg:col-span-1 xl:col-span-1 flex flex-col min-h-0 min-w-0">
+                    {(quotaWarning || quotaReached) && operationQuota && (
+                      <div className="mb-3 rounded-xl border border-orange-200 bg-orange-50 p-3 text-xs text-orange-900 shadow-sm">
+                        <p className="font-bold whitespace-pre-line">
+                          {quotaReached ? OPERATION_QUOTA_BLOCKED_MESSAGE : OPERATION_QUOTA_WARNING_MESSAGE}
+                        </p>
+                        <p className="mt-1 text-orange-800">
+                          {operationQuota.currentMonthOperations.toLocaleString("fr-FR")} /{" "}
+                          {operationQuota.includedOperations.toLocaleString("fr-FR")} opérations utilisées
+                        </p>
+                        {quotaReached && (
+                          <p className="mt-1 text-[11px] font-medium text-orange-700">
+                            {OPERATION_QUOTA_BLOCKED_HELP}
+                          </p>
+                        )}
+                        <a
+                          href={upgradeHref}
+                          className="mt-2 inline-flex rounded-lg bg-orange-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-orange-700"
+                        >
+                          Passer en Premium
+                        </a>
+                      </div>
+                    )}
                     <SalePanel
                       selectedTrip={selectedTrip}
                       canSell={canSell}

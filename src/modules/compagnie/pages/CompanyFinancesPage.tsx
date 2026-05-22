@@ -34,6 +34,9 @@ import {
 } from "lucide-react";
 import { useCapabilities } from "@/core/hooks/useCapabilities";
 import AccessDenied from "@/core/ui/AccessDenied";
+import PremiumGate from "@/core/ui/PremiumGate";
+import { useCompanyPlan } from "@/core/hooks/useCompanyPlan";
+import { hasCapability as hasProductCapability } from "@/core/subscription/capabilities";
 import { calculateChange } from "@/shared/date/periodComparisonUtils";
 import {
   getUnifiedCompanyFinance,
@@ -156,6 +159,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const { hasCapability, loading: capLoading } = useCapabilities();
+  const { company: planCompany, loading: planLoading } = useCompanyPlan(companyId);
 
   /** Données dérivées uniquement (dailyStats) : jamais pour calcul principal ventes / ledger. */
   const [derivedDailyStats, setDerivedDailyStats] = useState<DailyStatsDoc[]>([]);
@@ -666,11 +670,34 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     return <AccessDenied capability="manage_company_finances" />;
   }
 
+  const canAccessLedger = hasProductCapability(planCompany, "cash_realtime");
+  const canViewFinancialAnalytics = hasProductCapability(planCompany, "financial_advanced");
+  const canViewAdvancedReports = hasProductCapability(planCompany, "auto_reports");
+  const canManageMultiAgency = hasProductCapability(planCompany, "multi_agency_analytics");
+
   if (!companyId) {
     return wrap(
       <>
         {!embedded && <PageHeader title="Finances compagnie" />}
         <p className="text-gray-500">Compagnie introuvable.</p>
+      </>
+    );
+  }
+
+  if (planLoading) {
+    return wrap(
+      <>
+        {!embedded && <PageHeader title="Finances compagnie" />}
+        <div className="flex items-center justify-center min-h-[200px] text-gray-500">Chargement...</div>
+      </>
+    );
+  }
+
+  if (!canViewFinancialAnalytics) {
+    return wrap(
+      <>
+        {!embedded && <PageHeader title="Finances compagnie" />}
+        <PremiumGate companyId={companyId} featureName="Tableaux financiers avances" />
       </>
     );
   }
@@ -706,6 +733,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
 
       <div className="space-y-10">
         {/* 1 — Trésorerie réelle (ledger uniquement) */}
+        {canAccessLedger ? (
         <section className="rounded-2xl border-2 border-emerald-300/80 bg-emerald-50/40 p-5 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/25">
           <BlockTitle
             icon={Landmark}
@@ -760,8 +788,12 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             </div>
           )}
         </section>
+        ) : (
+          <PremiumGate companyId={companyId} featureName="Cash en temps reel" />
+        )}
 
         {/* 2 — Chiffre d'affaires / activité (pas la trésorerie) */}
+        {canViewFinancialAnalytics ? (
         <section className="rounded-2xl border-2 border-sky-300/80 bg-sky-50/40 p-5 shadow-sm dark:border-sky-800 dark:bg-sky-950/25">
           <BlockTitle
             icon={DollarSign}
@@ -773,7 +805,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             <p className="text-sm text-slate-600 dark:text-slate-400">Chargement de l'activité…</p>
           )}
           {!unifiedFinanceLoading && unifiedFinance && (
-            <div className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-5">
               <div className="rounded-lg border border-sky-200/90 bg-white/70 p-3 dark:border-sky-900/60 dark:bg-slate-900/50">
                 <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
                   Ventes période (réservations)
@@ -810,6 +842,15 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
                   {money(unifiedFinance.activity.encaissements.total)}
                 </div>
               </div>
+              <div className="rounded-lg border border-amber-200/90 bg-white/70 p-3 dark:border-amber-900/60 dark:bg-slate-900/50">
+                <div className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                  {"\u00c9cart financier"}
+                  <InfoHint text="Ventes periode - depots valides - depenses ledger confirmees sur la meme periode." />
+                </div>
+                <div className="mt-1 font-semibold text-amber-950 dark:text-amber-100">
+                  {money(unifiedFinance.activity.financialGap)}
+                </div>
+              </div>
             </div>
           )}
           {!unifiedFinanceLoading && unifiedFinance && (
@@ -820,6 +861,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             </div>
           )}
 
+          {canViewAdvancedReports ? (
           <div className="mt-8 rounded-xl border-2 border-indigo-200/90 bg-indigo-50/50 p-4 dark:border-indigo-900 dark:bg-indigo-950/30">
             <h3 className="mb-1 flex flex-wrap items-center gap-2 text-sm font-semibold text-indigo-950 dark:text-indigo-100">
               Tendance depuis les stats journalières
@@ -857,6 +899,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             <div className="mt-3 text-sm text-indigo-900/90 dark:text-indigo-200">
               Détail 30 j. : billets {money(revenueMonth.ticket)} · courrier {money(revenueMonth.courier)}
             </div>
+            {canManageMultiAgency ? (
             <div className="mt-4 overflow-auto max-h-[380px] rounded-xl border border-indigo-200/70 dark:border-indigo-900/60">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 border-b border-indigo-200/80 bg-indigo-50/95 dark:border-indigo-800 dark:bg-indigo-950/90">
@@ -879,8 +922,17 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
                 </tbody>
               </table>
             </div>
+            ) : (
+              <PremiumGate className="mt-4" companyId={companyId} featureName="Analyse multi-agences" />
+            )}
           </div>
+          ) : (
+            <PremiumGate className="mt-8" companyId={companyId} featureName="Rapports automatiques" />
+          )}
         </section>
+        ) : (
+          <PremiumGate companyId={companyId} featureName="Analyse financiere avancee" />
+        )}
 
         {/* 3 — En attente / opérationnel */}
         <section className="rounded-2xl border-2 border-amber-300/80 bg-amber-50/35 p-5 shadow-sm dark:border-amber-800 dark:bg-amber-950/25">

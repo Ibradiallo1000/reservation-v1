@@ -11,6 +11,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import FinancesLiquiditesTab from "../finances/pages/FinancesLiquiditesTab";
 import FinancesMouvementsTab from "../finances/pages/FinancesMouvementsTab";
 import FinancesCaisseTab from "../finances/pages/FinancesCaisseTab";
+import { useCompanyPlan } from "@/core/hooks/useCompanyPlan";
+import { hasCapability } from "@/core/subscription/capabilities";
+import PremiumGate from "@/core/ui/PremiumGate";
 
 export default function FinancesPage() {
   const { user } = useAuth();
@@ -18,6 +21,7 @@ export default function FinancesPage() {
   const { companyId: companyIdFromUrl } = useParams<{ companyId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
+  const { company, loading: planLoading } = useCompanyPlan(companyId);
 
   /** Compat : anciens liens ?tab=mouvements|caisse|liquidites — ignorés, page unique. */
   React.useEffect(() => {
@@ -82,11 +86,29 @@ export default function FinancesPage() {
     );
   }
 
+  if (planLoading) {
+    return (
+      <StandardLayoutWrapper maxWidthClass="w-full" className="px-4">
+        <PageHeader title="Finances" icon={DollarSign} />
+        <p className="text-gray-500">Chargement...</p>
+      </StandardLayoutWrapper>
+    );
+  }
+
+  if (!hasCapability(company, "financial_advanced")) {
+    return (
+      <StandardLayoutWrapper maxWidthClass="w-full" className="px-4">
+        <PageHeader title="Finances" icon={DollarSign} />
+        <PremiumGate companyId={companyId} featureName="Tableaux financiers avances" />
+      </StandardLayoutWrapper>
+    );
+  }
+
   return (
     <StandardLayoutWrapper maxWidthClass="w-full" className="px-4">
       <PageHeader
         title="Finances"
-        subtitle="Argent disponible, derniers flux et suivi des validations guichet."
+        subtitle="Liquidité estimée, derniers flux et suivi des validations guichet."
         icon={DollarSign}
         right={
           <TimeFilterBar

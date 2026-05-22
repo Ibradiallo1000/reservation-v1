@@ -1,337 +1,319 @@
 // src/pages/chef-comptable/VueGlobale.tsx
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  collection, 
-  collectionGroup,
-  query, 
-  where, 
-  getDocs, 
-  Timestamp,
-  orderBy,
-  doc,
-  getDoc,
-  limit
-} from 'firebase/firestore';
-import { db } from '@/firebaseConfig';
-import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
-import { useAuth } from '@/contexts/AuthContext';
-import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Globe,
-  TrendingUp,
-  Building2,
-  AlertTriangle,
-  CreditCard,
-  Calendar,
-  Filter,
-  Download,
-  RefreshCw,
-  BarChart3,
-  Wallet,
-  Smartphone,
-  Receipt
-} from 'lucide-react';
-import { MetricCard, SectionCard, StatusBadge } from '@/ui';
+  collection,
+  getDocs,
+  limit,
+  query,
+  Timestamp,
+  where,
+} from "firebase/firestore";
+import { Building2, CheckCircle2, Clock, Landmark, Receipt, RefreshCw, Wallet } from "lucide-react";
+import { db } from "@/firebaseConfig";
+import { useAuth } from "@/contexts/AuthContext";
+import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
+import { SectionCard } from "@/ui";
 
-// Type pour les agences
-interface Agency {
+type AgencyRow = {
   id: string;
-  nomAgence?: string;
-  nom?: string;
-  ville?: string;
-  city?: string;
-  [key: string]: any;
+  name: string;
+  ventesValidees: number;
+  paiementsOnlineValides: number;
+  totalEncaisse: number;
+  depots: number;
+  depenses: number;
+  ecart: number;
+  sessionsNonValidees: number;
+};
+
+type ControlTotals = {
+  ventesValidees: number;
+  paiementsOnlineValides: number;
+  totalEncaisse: number;
+  depots: number;
+  depenses: number;
+  ecart: number;
+};
+
+const EMPTY_TOTALS: ControlTotals = {
+  ventesValidees: 0,
+  paiementsOnlineValides: 0,
+  totalEncaisse: 0,
+  depots: 0,
+  depenses: 0,
+  ecart: 0,
+};
+
+const UNASSIGNED_AGENCY_ID = "__unassigned__";
+const AGENCY_DEPOSIT_REFERENCE_TYPES = new Set(["agency_deposit"]);
+const CONFIRMED_TRANSACTION_STATUSES = new Set(["confirmed", "received", "verified", "refunded"]);
+
+function todayRange() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
 }
 
-// Type pour les réservations
-interface ReservationData {
-  id: string;
-  nomClient?: string;
-  telephone?: string;
-  depart?: string;
-  arrivee?: string;
-  montant?: number;
-  statut?: string;
-  canal?: string;
-  paiement?: string;
-  createdAt?: Timestamp | Date;
-  agencyId?: string;
-  agencyName?: string;
-  [key: string]: any;
+function toMillis(value: unknown): number | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "object") {
+    const maybeTimestamp = value as { toDate?: () => Date; seconds?: number };
+    if (typeof maybeTimestamp.toDate === "function") return maybeTimestamp.toDate().getTime();
+    if (typeof maybeTimestamp.seconds === "number") return maybeTimestamp.seconds * 1000;
+  }
+  return null;
+}
+
+function isInRange(value: unknown, startMs: number, endMs: number): boolean {
+  const ms = toMillis(value);
+  return ms != null && ms >= startMs && ms <= endMs;
+}
+
+function isConfirmedFinancialTransaction(status: unknown): boolean {
+  const s = String(status ?? "confirmed").toLowerCase();
+  if (s === "pending" || s === "failed" || s === "rejected") return false;
+  return CONFIRMED_TRANSACTION_STATUSES.has(s) || s === "";
+}
+
+function createEmptyRow(id: string, name: string): AgencyRow {
+  return {
+    id,
+    name,
+    ventesValidees: 0,
+    paiementsOnlineValides: 0,
+    totalEncaisse: 0,
+    depots: 0,
+    depenses: 0,
+    ecart: 0,
+    sessionsNonValidees: 0,
+  };
+}
+
+function isClosedNotValidated(status: unknown): boolean {
+  return String(status ?? "").toLowerCase() === "closed";
 }
 
 const VueGlobale: React.FC = () => {
-  const { user, company } = useAuth() as any;
-  const theme = useCompanyTheme(company) || { primary: '#2563eb', secondary: '#3b82f6' };
+  const { user } = useAuth() as any;
   const money = useFormatCurrency();
-  
+  const companyId = user?.companyId ?? "";
+
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'all'>('week');
-  const [globalStats, setGlobalStats] = useState({
-    totalReservations: 0,
-    totalAmount: 0,
-    totalAgencies: 0,
-    activeAgencies: 0,
-    pendingValidations: 0,
-    totalOnlineAmount: 0,
-    cashAmount: 0,
-    mobileMoneyAmount: 0
-  });
-  
-  const [agenciesData, setAgenciesData] = useState<Array<{
-    id: string;
-    name: string;
-    ville: string;
-    reservations: number;
-    amount: number;
-    onlineReservations: number;
-    onlineAmount: number;
-    lastActivity: Date | null;
-  }>>([]);
-  
-  const [recentReservations, setRecentReservations] = useState<ReservationData[]>([]);
-  const [alerts, setAlerts] = useState<Array<{
-    type: 'warning' | 'info' | 'error';
-    title: string;
-    description: string;
-  }>>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [rows, setRows] = useState<AgencyRow[]>([]);
+  const [totals, setTotals] = useState<ControlTotals>(EMPTY_TOTALS);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Calcul de la période
-  const getDateRange = () => {
-    const now = new Date();
-    const start = new Date();
-    
-    switch (period) {
-      case 'today':
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'week':
-        start.setDate(now.getDate() - 7);
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'month':
-        start.setMonth(now.getMonth() - 1);
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'all':
-        start.setFullYear(2020);
-        break;
+  const loadFinancialControl = useCallback(async () => {
+    if (!companyId) {
+      setLoading(false);
+      return;
     }
-    
-    return { start, end: now };
-  };
 
-  // Chargement des données
-  useEffect(() => {
-    if (!user?.companyId) return;
-    
-    loadGlobalData();
-  }, [user?.companyId, period]);
-
-  const loadGlobalData = async () => {
     setLoading(true);
-    
+    setError(null);
+
     try {
-      const dateRange = getDateRange();
-      
-      // 1. Charger toutes les agences
-      const agenciesRef = collection(db, `companies/${user.companyId}/agences`);
-      const agenciesSnap = await getDocs(agenciesRef);
-      const agenciesList: Agency[] = agenciesSnap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      
-      // 2. Charger toutes les réservations pour la période
-      let totalReservations = 0;
-      let totalAmount = 0;
-      let pendingValidations = 0;
-      let totalOnlineAmount = 0;
-      let cashAmount = 0;
-      let mobileMoneyAmount = 0;
-      
-      const agencyStats: Record<string, any> = {};
-      const allReservations: ReservationData[] = [];
-      
-      // Pour chaque agence, charger les réservations
-      const agencyById = new Map(agenciesList.map((agency) => [agency.id, agency]));
-      const reservationsSnap = await getDocs(
-        query(
-          collectionGroup(db, 'reservations'),
-          where('companyId', '==', user.companyId),
-          where('createdAt', '>=', Timestamp.fromDate(dateRange.start)),
-          where('createdAt', '<=', Timestamp.fromDate(dateRange.end)),
-          orderBy('createdAt', 'desc'),
-          limit(200)
-        )
+      const { start, end } = todayRange();
+      const startTs = Timestamp.fromDate(start);
+      const endTs = Timestamp.fromDate(end);
+      const startMs = start.getTime();
+      const endMs = end.getTime();
+
+      const agenciesSnap = await getDocs(collection(db, "companies", companyId, "agences"));
+      const agencyRows = new Map<string, AgencyRow>();
+
+      agenciesSnap.docs.forEach((agencyDoc) => {
+        const data = agencyDoc.data() as { nomAgence?: string; nom?: string; name?: string; ville?: string };
+        agencyRows.set(
+          agencyDoc.id,
+          createEmptyRow(agencyDoc.id, data.nomAgence ?? data.nom ?? data.name ?? data.ville ?? "Agence")
+        );
+      });
+
+      const ensureRow = (agencyId: string | null | undefined) => {
+        const id = agencyId && agencyId.trim() ? agencyId : UNASSIGNED_AGENCY_ID;
+        if (!agencyRows.has(id)) {
+          agencyRows.set(id, createEmptyRow(id, id === UNASSIGNED_AGENCY_ID ? "Flux siège" : "Agence inconnue"));
+        }
+        return agencyRows.get(id)!;
+      };
+
+      const [encaissementSnaps, paymentsSnap, transactionsSnap] = await Promise.all([
+        Promise.all(
+          agenciesSnap.docs.map((agencyDoc) =>
+            getDocs(
+              query(
+                collection(db, "companies", companyId, "agences", agencyDoc.id, "comptaEncaissements"),
+                where("createdAt", ">=", startTs),
+                where("createdAt", "<=", endTs),
+                limit(1000)
+              )
+            )
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "companies", companyId, "payments"),
+            where("validatedAt", ">=", startTs),
+            where("validatedAt", "<=", endTs),
+            limit(3000)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "companies", companyId, "financialTransactions"),
+            where("performedAt", ">=", startTs),
+            where("performedAt", "<=", endTs),
+            limit(5000)
+          )
+        ),
+      ]);
+
+      encaissementSnaps.forEach((snap, index) => {
+        const agencyIdFromPath = agenciesSnap.docs[index]?.id ?? "";
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as { type?: string; montant?: number; amount?: number; agencyId?: string };
+          if (String(data.type ?? "encaissement") !== "encaissement") return;
+          const amount = Math.max(0, Number(data.montant ?? data.amount ?? 0) || 0);
+          if (amount <= 0) return;
+          ensureRow(String(data.agencyId ?? agencyIdFromPath)).ventesValidees += amount;
+        });
+      });
+
+      paymentsSnap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as {
+          amount?: number;
+          agencyId?: string;
+          channel?: string;
+          status?: string;
+          validatedAt?: unknown;
+        };
+        if (String(data.status ?? "") !== "validated") return;
+        if (String(data.channel ?? "").toLowerCase() !== "online") return;
+        if (!isInRange(data.validatedAt, startMs, endMs)) return;
+        const amount = Math.max(0, Number(data.amount ?? 0) || 0);
+        if (amount <= 0) return;
+        ensureRow(String(data.agencyId ?? "")).paiementsOnlineValides += amount;
+      });
+
+      transactionsSnap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as {
+          amount?: number;
+          agencyId?: string | null;
+          type?: string;
+          referenceType?: string;
+          status?: string;
+        };
+        if (!isConfirmedFinancialTransaction(data.status)) return;
+        const amount = Math.abs(Number(data.amount ?? 0) || 0);
+        if (amount <= 0) return;
+
+        const row = ensureRow(data.agencyId ?? null);
+        const type = String(data.type ?? "").toLowerCase();
+        const referenceType = String(data.referenceType ?? "").toLowerCase();
+
+        if (type === "expense") {
+          row.depenses += amount;
+          return;
+        }
+        if (AGENCY_DEPOSIT_REFERENCE_TYPES.has(referenceType)) {
+          row.depots += amount;
+        }
+      });
+
+      await Promise.all(
+        agenciesSnap.docs.flatMap((agencyDoc) => {
+          const agencyId = agencyDoc.id;
+          const row = ensureRow(agencyId);
+          const shiftsRef = collection(db, "companies", companyId, "agences", agencyId, "shifts");
+          const courierRef = collection(db, "companies", companyId, "agences", agencyId, "courierSessions");
+          return [
+            getDocs(query(shiftsRef, limit(250))).then((snap) => {
+              snap.docs.forEach((d) => {
+                const data = d.data() as { status?: string; closedAt?: unknown; endAt?: unknown; updatedAt?: unknown };
+                const closedAt = data.closedAt ?? data.endAt ?? data.updatedAt;
+                if (isClosedNotValidated(data.status) && isInRange(closedAt, startMs, endMs)) {
+                  row.sessionsNonValidees += 1;
+                }
+              });
+            }),
+            getDocs(query(courierRef, limit(250))).then((snap) => {
+              snap.docs.forEach((d) => {
+                const data = d.data() as { status?: string; closedAt?: unknown; updatedAt?: unknown };
+                const closedAt = data.closedAt ?? data.updatedAt;
+                if (isClosedNotValidated(data.status) && isInRange(closedAt, startMs, endMs)) {
+                  row.sessionsNonValidees += 1;
+                }
+              });
+            }),
+          ];
+        })
       );
 
-      reservationsSnap.forEach(doc => {
-        const data = doc.data() as ReservationData;
-        const agencyId = String(data.agencyId ?? doc.ref.parent.parent?.id ?? '');
-        if (!agencyId) return;
-        const agency = agencyById.get(agencyId);
-        const stats = agencyStats[agencyId] ?? {
-          reservations: 0,
-          amount: 0,
-          onlineReservations: 0,
-          onlineAmount: 0,
-          lastActivity: null
-        };
-          totalReservations++;
-          stats.reservations++;
-          
-          const amount = data.montant || 0;
-          totalAmount += amount;
-          stats.amount += amount;
-          
-          // Vérifier le statut
-          if (data.statut === 'en_attente' || data.statut === 'verification') {
-            pendingValidations++;
-          }
-          
-          // Vérifier le canal
-          const canal = String(data.canal || '').toLowerCase();
-          if (canal === 'en_ligne') {
-            totalOnlineAmount += amount;
-            stats.onlineReservations++;
-            stats.onlineAmount += amount;
-          }
-          
-          // Vérifier le paiement
-          const paiement = String(data.paiement || '').toLowerCase();
-          if (paiement.includes('esp') || paiement.includes('cash')) {
-            cashAmount += amount;
-          }
-          if (paiement.includes('mobile') || paiement.includes('mm') || paiement.includes('orange') || paiement.includes('mtn')) {
-            mobileMoneyAmount += amount;
-          }
-          
-          // Ajouter aux réservations récentes
-          allReservations.push({
-            ...data,
-            id: doc.id,
-            agencyId,
-            agencyName: agency?.nomAgence || agency?.nom || agency?.ville || 'Agence',
-            createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date()
-          });
-        if (!stats.lastActivity) stats.lastActivity = data.createdAt || null;
-        agencyStats[agencyId] = stats;
-      });
-      
-      // 3. Préparer les données des agences
-      const processedAgenciesData = agenciesList.map((agency: Agency) => {
-        const stats = agencyStats[agency.id] || { 
-          reservations: 0, 
-          amount: 0, 
-          onlineReservations: 0, 
-          onlineAmount: 0 
-        };
-        
-        // Gérer le lastActivity (peut être Timestamp, Date ou null)
-        let lastActivityDate: Date | null = null;
-        const lastActivity = stats.lastActivity;
-        if (lastActivity instanceof Timestamp) {
-          lastActivityDate = lastActivity.toDate();
-        } else if (lastActivity instanceof Date) {
-          lastActivityDate = lastActivity;
-        } else if (lastActivity && typeof lastActivity === 'object' && 'toDate' in lastActivity) {
-          lastActivityDate = (lastActivity as any).toDate();
-        }
-        
-        return {
-          id: agency.id,
-          name: agency.nomAgence || agency.nom || agency.ville || 'Agence',
-          ville: agency.ville || agency.city || '',
-          reservations: stats.reservations,
-          amount: stats.amount,
-          onlineReservations: stats.onlineReservations,
-          onlineAmount: stats.onlineAmount,
-          lastActivity: lastActivityDate
-        };
-      });
-      
-      // 4. Trier les réservations récentes
-      const sortedReservations = allReservations
-        .sort((a, b) => {
-          const dateA = a.createdAt instanceof Date ? a.createdAt : new Date();
-          const dateB = b.createdAt instanceof Date ? b.createdAt : new Date();
-          return dateB.getTime() - dateA.getTime();
+      const nextRows = Array.from(agencyRows.values())
+        .map((row) => {
+          const totalEncaisse = row.ventesValidees;
+          const ecart = totalEncaisse - row.depots - row.depenses;
+          return { ...row, totalEncaisse, ecart };
         })
-        .slice(0, 10);
-      
-      // 5. Détecter les alertes
-      const alertsList: Array<any> = [];
-      
-      // Alertes pour agences inactives
-      processedAgenciesData.forEach(agency => {
-        if (agency.lastActivity) {
-          const daysSinceActivity = Math.floor(
-            (new Date().getTime() - agency.lastActivity.getTime()) / (1000 * 60 * 60 * 24)
-          );
-          
-          if (daysSinceActivity > 7) {
-            alertsList.push({
-              type: 'warning',
-              title: `Agence ${agency.name} inactive`,
-              description: `Aucune activité depuis ${daysSinceActivity} jours`
-            });
-          }
-        }
-      });
-      
-      // Alerte pour validations en attente
-      if (pendingValidations > 5) {
-        alertsList.push({
-          type: 'info',
-          title: `${pendingValidations} validations en attente`,
-          description: 'Des réservations nécessitent votre attention'
+        .sort((a, b) => {
+          const followUpScore = Number(Math.abs(b.ecart) > 0) - Number(Math.abs(a.ecart) > 0);
+          if (followUpScore !== 0) return followUpScore;
+          return Math.abs(b.ecart) - Math.abs(a.ecart) || b.totalEncaisse - a.totalEncaisse;
         });
-      }
-      
-      // 6. Mettre à jour l'état
-      setGlobalStats({
-        totalReservations,
-        totalAmount,
-        totalAgencies: agenciesList.length,
-        activeAgencies: processedAgenciesData.filter(a => a.reservations > 0).length,
-        pendingValidations,
-        totalOnlineAmount,
-        cashAmount,
-        mobileMoneyAmount
-      });
-      
-      setAgenciesData(processedAgenciesData);
-      setRecentReservations(sortedReservations);
-      setAlerts(alertsList);
-      
-    } catch (error) {
-      console.error('[VueGlobale] Erreur chargement données:', error);
+
+      const nextTotals = nextRows.reduce<ControlTotals>(
+        (sum, row) => ({
+          ventesValidees: sum.ventesValidees + row.ventesValidees,
+          paiementsOnlineValides: sum.paiementsOnlineValides + row.paiementsOnlineValides,
+          totalEncaisse: sum.totalEncaisse + row.totalEncaisse,
+          depots: sum.depots + row.depots,
+          depenses: sum.depenses + row.depenses,
+          ecart: sum.ecart + row.ecart,
+        }),
+        EMPTY_TOTALS
+      );
+
+      setRows(nextRows);
+      setTotals(nextTotals);
+      setLastUpdated(new Date());
+    } catch (e) {
+      console.error("[VueGlobale] Controle financier:", e);
+      setError(e instanceof Error ? e.message : "Impossible de charger le contrôle financier.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [companyId]);
 
-  // Formatters
-  const fmtMoney = (n: number) => money(n);
-  const fmtDate = (d: Date) => d.toLocaleDateString('fr-FR', { 
-    day: '2-digit', 
-    month: '2-digit', 
-    year: 'numeric' 
-  });
-  const fmtDateTime = (d: Date) => d.toLocaleString('fr-FR', { 
-    day: '2-digit', 
-    month: '2-digit', 
-    hour: '2-digit', 
-    minute: '2-digit' 
-  });
+  useEffect(() => {
+    void loadFinancialControl();
+  }, [loadFinancialControl]);
+
+  const rowsWithRemainder = useMemo(() => rows.filter((row) => Math.abs(row.ecart) > 0.009), [rows]);
+  const missingDepositRows = useMemo(
+    () => rows.filter((row) => row.totalEncaisse > 0 && row.depots <= 0),
+    [rows]
+  );
+  const rowsWithUnvalidatedSessions = useMemo(
+    () => rows.filter((row) => row.sessionsNonValidees > 0),
+    [rows]
+  );
+  const followUpCount = rowsWithRemainder.length + missingDepositRows.length + rowsWithUnvalidatedSessions.length;
+  const hasRemainder = Math.abs(totals.ecart) > 0.009;
+
+  const fmtMoney = (value: number) => money(value);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
-          <div className="h-12 w-12 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin mx-auto mb-3"></div>
-          <div className="text-gray-600">Chargement des données globales...</div>
+          <div className="mx-auto mb-3 h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-amber-500" />
+          <div className="text-gray-600">Chargement du contrôle financier...</div>
         </div>
       </div>
     );
@@ -339,268 +321,190 @@ const VueGlobale: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* ================= EN-TÊTE ================= */}
       <SectionCard
-        title="Vue Globale Compagnie"
-        icon={Globe}
-        help={<span className="text-sm font-normal text-gray-500">Tableau de bord financier multi-agences</span>}
+        title="Contrôle des caisses du jour"
+        icon={Wallet}
+        description="Lecture séparée des caisses agences et des paiements en ligne déjà sécurisés."
         right={
-          <div className="flex flex-wrap items-center gap-3">
-            <select
-              value={period}
-              onChange={(e) => setPeriod(e.target.value as typeof period)}
-              className="h-9 min-w-[160px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700"
-            >
-              <option value="today">Aujourd'hui</option>
-              <option value="week">7 jours</option>
-              <option value="month">30 jours</option>
-              <option value="all">Toutes</option>
-            </select>
-            <button
-              onClick={loadGlobalData}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Actualiser
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => void loadFinancialControl()}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Actualiser
+          </button>
         }
       >
-        <div className="text-sm text-gray-600">
-          Période analysée: {fmtDate(getDateRange().start)} → {fmtDate(getDateRange().end)}
+        {error ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div
+            className={`rounded-xl border-2 p-5 ${
+              hasRemainder ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"
+            }`}
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+              {hasRemainder ? <Clock className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+              Reste à justifier
+            </div>
+            <div className={`mt-2 text-3xl font-bold ${hasRemainder ? "text-amber-700" : "text-emerald-700"}`}>
+              {fmtMoney(totals.ecart)}
+            </div>
+            <p className="mt-2 text-sm text-gray-600">
+              Montants de caisse agence non encore déposés ou utilisés.
+            </p>
+          </div>
+
+          <div
+            className={`rounded-xl border-2 p-5 ${
+              rowsWithRemainder.length > 0 ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-white"
+            }`}
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+              <Building2 className="h-4 w-4 text-gray-500" />
+              Agences à suivre
+            </div>
+            <div className={`mt-2 text-3xl font-bold ${rowsWithRemainder.length > 0 ? "text-amber-700" : "text-gray-900"}`}>
+              {rowsWithRemainder.length}
+            </div>
+            <p className="mt-2 text-sm text-gray-600">
+              {rowsWithRemainder.length > 0 ? "Agences avec des montants à suivre." : "Aucun montant non déposé à suivre."}
+            </p>
+          </div>
         </div>
       </SectionCard>
 
-      {/* ================= KPIs PRINCIPAUX ================= */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        <MetricCard
-          label="Réservations totales"
-          value={globalStats.totalReservations.toString()}
-          icon={CreditCard}
-        />
-        <MetricCard
-          label="Chiffre d'affaires"
-          value={fmtMoney(globalStats.totalAmount)}
-          icon={TrendingUp}
-          valueColorVar={theme.primary}
-        />
-        <MetricCard
-          label="Agences"
-          value={`${globalStats.totalAgencies} (${globalStats.activeAgencies} actives)`}
-          icon={Building2}
-        />
-        <MetricCard
-          label="Validations en attente"
-          value={globalStats.pendingValidations.toString()}
-          icon={AlertTriangle}
-        />
-      </div>
+      <SectionCard
+        title="Contrôle des caisses par agence"
+        icon={Building2}
+        right={<span className="text-sm text-gray-600">{rows.length} agence{rows.length > 1 ? "s" : ""}</span>}
+        noPad
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-gray-200 bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left font-semibold text-gray-700">Agence</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Encaissé agence</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Dépôts</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Dépenses</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Reste à justifier</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {rows.map((row) => {
+                const rowHasRemainder = Math.abs(row.ecart) > 0.009;
+                return (
+                  <tr key={row.id} className={rowHasRemainder ? "bg-amber-50/70" : "bg-white hover:bg-gray-50"}>
+                    <td className="px-4 py-3 font-medium text-gray-900">{row.name}</td>
+                    <td className="px-4 py-3 text-right text-gray-900">{fmtMoney(row.totalEncaisse)}</td>
+                    <td className="px-4 py-3 text-right text-gray-900">{fmtMoney(row.depots)}</td>
+                    <td className="px-4 py-3 text-right text-gray-900">{fmtMoney(row.depenses)}</td>
+                    <td className={`px-4 py-3 text-right font-bold ${rowHasRemainder ? "text-amber-700" : "text-emerald-700"}`}>
+                      {fmtMoney(row.ecart)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
 
-      {/* ================= DEUX COLONNES ================= */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
-        {/* RÉPARTITION DES PAIEMENTS */}
-        <SectionCard
-          title="Répartition des paiements"
-          right={<span className="text-sm text-gray-600">{fmtMoney(globalStats.totalAmount)}</span>}
-        >
-          <div className="space-y-4">
-            {/* Espèces */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="font-medium text-gray-700">Espèces</span>
-                <span className="text-gray-900">
-                  {fmtMoney(globalStats.cashAmount)} 
-                  ({globalStats.totalAmount > 0 ? ((globalStats.cashAmount / globalStats.totalAmount) * 100).toFixed(1) : '0'}%)
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-gray-200 overflow-hidden">
-                <div 
-                  className="h-full rounded-full bg-blue-500"
-                  style={{ 
-                    width: `${globalStats.totalAmount > 0 ? (globalStats.cashAmount / globalStats.totalAmount) * 100 : 0}%`
-                  }}
-                />
-              </div>
+      <SectionCard title="Contrôle des caisses" icon={Wallet}>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <Receipt className="h-4 w-4" />
+              Encaissement agence
             </div>
-            
-            {/* Mobile Money */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="font-medium text-gray-700">Mobile Money</span>
-                <span className="text-gray-900">
-                  {fmtMoney(globalStats.mobileMoneyAmount)} 
-                  ({globalStats.totalAmount > 0 ? ((globalStats.mobileMoneyAmount / globalStats.totalAmount) * 100).toFixed(1) : '0'}%)
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-gray-200 overflow-hidden">
-                <div 
-                  className="h-full rounded-full bg-green-500"
-                  style={{ 
-                    width: `${globalStats.totalAmount > 0 ? (globalStats.mobileMoneyAmount / globalStats.totalAmount) * 100 : 0}%`
-                  }}
-                />
-              </div>
-            </div>
-            
-            {/* En ligne */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="font-medium text-gray-700">En ligne</span>
-                <span className="text-gray-900">
-                  {fmtMoney(globalStats.totalOnlineAmount)} 
-                  ({globalStats.totalAmount > 0 ? ((globalStats.totalOnlineAmount / globalStats.totalAmount) * 100).toFixed(1) : '0'}%)
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-gray-200 overflow-hidden">
-                <div 
-                  className="h-full rounded-full bg-purple-500"
-                  style={{ 
-                    width: `${globalStats.totalAmount > 0 ? (globalStats.totalOnlineAmount / globalStats.totalAmount) * 100 : 0}%`
-                  }}
-                />
-              </div>
+            <div className="mt-2 text-2xl font-bold text-gray-900">{fmtMoney(totals.totalEncaisse)}</div>
+            <div className="mt-2 text-xs text-gray-500">
+              Caisse agence validée uniquement, hors paiements en ligne.
             </div>
           </div>
-        </SectionCard>
-        
-        {/* TOP 5 AGENCES */}
-        <SectionCard
-          title="Top 5 Agences (CA)"
-          icon={Building2}
-          right={<span className="text-sm text-gray-600">{agenciesData.filter(a => a.amount > 0).length} agences avec activité</span>}
-        >
-          {agenciesData.filter(a => a.amount > 0).length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              Aucune activité d'agence sur la période
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <Landmark className="h-4 w-4" />
+              Dépôts en banque
             </div>
-          ) : (
-            <div className="space-y-4">
-              {agenciesData
-                .filter(a => a.amount > 0)
-                .sort((a, b) => b.amount - a.amount)
-                .slice(0, 5)
-                .map((agency, index) => (
-                  <div key={agency.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200 hover:bg-gray-50/50">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-lg bg-gray-200 flex items-center justify-center">
-                        <div className="text-sm font-bold text-gray-700">#{index + 1}</div>
-                      </div>
-                      <div>
-                        <div className="font-medium text-gray-900">{agency.name}</div>
-                        <div className="text-xs text-gray-500">{agency.ville}</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-bold text-gray-900">{fmtMoney(agency.amount)}</div>
-                      <div className="text-xs text-gray-500">{agency.reservations} réservations</div>
-                    </div>
-                  </div>
-                ))}
+            <div className="mt-2 text-2xl font-bold text-gray-900">{fmtMoney(totals.depots)}</div>
+            <div className="mt-2 text-xs text-gray-500">Dépôts en banque enregistrés.</div>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <Wallet className="h-4 w-4" />
+              Dépenses enregistrées
             </div>
-          )}
-        </SectionCard>
-      </div>
+            <div className="mt-2 text-2xl font-bold text-gray-900">{fmtMoney(totals.depenses)}</div>
+            <div className="mt-2 text-xs text-gray-500">Dépenses enregistrées.</div>
+          </div>
+        </div>
+      </SectionCard>
 
-      {/* ================= ALERTES ================= */}
-      {alerts.length > 0 && (
-        <SectionCard
-          title="Alertes et notifications"
-          icon={AlertTriangle}
-          help={<span className="text-sm font-normal text-gray-500">Points nécessitant votre attention</span>}
-          right={<StatusBadge status="warning">{alerts.length} alerte{alerts.length > 1 ? 's' : ''}</StatusBadge>}
-        >
+      <SectionCard title="Paiements en ligne (déjà sécurisés)" icon={Landmark}>
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+          <div className="text-sm text-emerald-800">
+            Paiements en ligne déjà sécurisés, hors circuit caisse agence.
+          </div>
+          <div className="mt-2 text-2xl font-bold text-emerald-900">
+            {fmtMoney(totals.paiementsOnlineValides)}
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Points à vérifier"
+        icon={Clock}
+        right={
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${followUpCount > 0 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700"}`}>
+            {followUpCount} point{followUpCount > 1 ? "s" : ""}
+          </span>
+        }
+      >
+        {followUpCount === 0 ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            Aucun montant à justifier, aucun dépôt à suivre, aucune session fermée en attente de validation.
+          </div>
+        ) : (
           <div className="space-y-3">
-            {alerts.map((alert, index) => (
-              <div key={index} className="p-3 rounded-lg border border-gray-200 bg-gray-50/50">
-                <div className="flex items-center justify-between">
-                  <div className="font-medium text-gray-900">{alert.title}</div>
-                  <StatusBadge status={alert.type === 'error' ? 'danger' : alert.type === 'warning' ? 'warning' : 'info'}>
-                    {alert.type === 'error' ? 'Urgent' : alert.type === 'warning' ? 'Avertissement' : 'Information'}
-                  </StatusBadge>
+            {rowsWithRemainder.map((row) => (
+              <div key={`remainder-${row.id}`} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="font-semibold text-amber-900">Montant non encore déposé : {row.name}</div>
+                <div className="mt-1 text-sm text-amber-800">
+                  Montant non encore déposé ou utilisé : {fmtMoney(row.ecart)}
                 </div>
-                <div className="text-sm text-gray-600 mt-1">{alert.description}</div>
+              </div>
+            ))}
+
+            {missingDepositRows.map((row) => (
+              <div key={`deposit-${row.id}`} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="font-semibold text-amber-900">Dépôt non encore enregistré : {row.name}</div>
+                <div className="mt-1 text-sm text-amber-800">
+                  {fmtMoney(row.totalEncaisse)} encaissé, aucun dépôt enregistré aujourd'hui.
+                </div>
+              </div>
+            ))}
+
+            {rowsWithUnvalidatedSessions.map((row) => (
+              <div key={`session-${row.id}`} className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                <div className="font-semibold text-gray-900">Sessions non validées : {row.name}</div>
+                <div className="mt-1 text-sm text-gray-700">
+                  {row.sessionsNonValidees} session{row.sessionsNonValidees > 1 ? "s" : ""} fermée{row.sessionsNonValidees > 1 ? "s" : ""} en attente de validation.
+                </div>
               </div>
             ))}
           </div>
-        </SectionCard>
-      )}
-
-      {/* ================= RÉSERVATIONS RÉCENTES ================= */}
-      <SectionCard
-        title="Réservations récentes"
-        icon={Receipt}
-        right={<span className="text-sm text-gray-600">{recentReservations.length} plus récentes</span>}
-        noPad
-      >
-        {recentReservations.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            Aucune réservation récente
-          </div>
-        ) : (
-          <div className="overflow-hidden border border-gray-200 rounded-lg">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                      Date
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                      Agence
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                      Client
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                      Trajet
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                      Montant
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                      Statut
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {recentReservations.map((reservation, index) => {
-                    const createDate = reservation.createdAt instanceof Date 
-                      ? reservation.createdAt 
-                      : new Date();
-                    
-                    return (
-                      <tr key={reservation.id} className={`hover:bg-gray-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
-                        <td className="px-4 py-3">
-                          <div className="font-medium">{fmtDateTime(createDate)}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <StatusBadge status="info">{reservation.agencyName || 'Agence inconnue'}</StatusBadge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium">{reservation.nomClient || 'Sans nom'}</div>
-                          {reservation.telephone && (
-                            <div className="text-xs text-gray-500">{reservation.telephone}</div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium">{reservation.depart || 'N/A'} → {reservation.arrivee || 'N/A'}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="font-bold text-gray-900">{fmtMoney(reservation.montant || 0)}</span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <StatusBadge status={reservation.statut === 'confirme' ? 'success' : reservation.statut === 'en_attente' ? 'pending' : reservation.statut === 'verification' ? 'warning' : 'neutral'}>
-                            {reservation.statut === 'confirme' ? 'Réservation confirmée' : reservation.statut === 'en_attente' ? 'En attente' : reservation.statut === 'verification' ? 'En attente de validation' : reservation.statut || 'Inconnu'}
-                          </StatusBadge>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
         )}
+
+        <div className="mt-4 text-xs text-gray-500">
+          Dernière mise à jour : {lastUpdated ? lastUpdated.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "--"}
+        </div>
       </SectionCard>
     </div>
   );

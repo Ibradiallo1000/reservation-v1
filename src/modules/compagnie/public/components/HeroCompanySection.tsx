@@ -128,7 +128,7 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
           >
             <path
               d="M0,60 C150,110 350,10 500,60 L500,100 L0,100 Z"
-              fill="#f9fafb"
+              fill="#0f172a"
             />
           </svg>
         </div>

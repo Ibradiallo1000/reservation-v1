@@ -366,7 +366,7 @@ const DashboardAgencePage: React.FC = () => {
             <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
           </div>
           <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Banque</div>
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Dépôts validés</div>
             <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
               {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.bank ?? 0)}
             </div>

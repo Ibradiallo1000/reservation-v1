@@ -26,7 +26,11 @@ export type Capability =
   | "view_anomaly_engine"
   | "view_predictive_insights"
   | "use_simulation_engine"
-  | "manage_logistics";
+  | "manage_logistics"
+  | "view_advanced_reports"
+  | "access_ledger"
+  | "view_financial_analytics"
+  | "manage_multi_agency";
 
 export const ALL_CAPABILITIES: Capability[] = [
   "view_global_dashboard",
@@ -53,4 +57,8 @@ export const ALL_CAPABILITIES: Capability[] = [
   "view_predictive_insights",
   "use_simulation_engine",
   "manage_logistics",
+  "view_advanced_reports",
+  "access_ledger",
+  "view_financial_analytics",
+  "manage_multi_agency",
 ];

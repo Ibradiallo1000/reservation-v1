@@ -12,9 +12,8 @@ interface UpgradeBannerProps {
 }
 
 const PLAN_LABELS: Record<Plan, string> = {
-  starter: "Starter",
-  growth: "Growth",
-  enterprise: "Enterprise",
+  standard: "Standard",
+  premium: "Premium",
 };
 
 const UpgradeBanner: React.FC<UpgradeBannerProps> = ({

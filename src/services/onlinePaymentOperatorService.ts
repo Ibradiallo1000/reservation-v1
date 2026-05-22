@@ -37,6 +37,8 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
   const uid = user.uid ?? "";
   const role = Array.isArray(user.role) ? user.role.join(",") : String(user.role ?? "");
 
+  await confirmPayment(companyId, payment.id, uid);
+
   const reservationRef = doc(
     db,
     "companies",
@@ -121,7 +123,6 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
     }
   }
 
-  await confirmPayment(companyId, payment.id, uid);
 }
 
 /**

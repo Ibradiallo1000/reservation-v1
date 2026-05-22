@@ -1,583 +1,477 @@
-/**
- * Teliya SaaS – Admin Subscription Manager
- *
- * Full manual subscription control panel for platform admins.
- * Works entirely via Firestore direct writes — no Cloud Function dependency.
- * 100% Spark-compatible.
- */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
-  getDocs,
   doc,
-  updateDoc,
-  addDoc,
+  onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   Timestamp,
-  where,
+  writeBatch,
 } from "firebase/firestore";
+import { toast } from "sonner";
+import {
+  CheckCircle2,
+  Clock3,
+  CreditCard,
+  RefreshCcw,
+  XCircle,
+} from "lucide-react";
 import { db } from "@/firebaseConfig";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
+import { cn } from "@/lib/utils";
+import { formatCurrency } from "@/shared/utils/formatCurrency";
+import { normalizePlan, type Plan } from "@/core/subscription/plans";
 import {
-  Building2,
-  RefreshCw,
-  ChevronDown,
-  ChevronUp,
-  DollarSign,
-  AlertCircle,
-  CheckCircle2,
-  Search,
-  Link2,
-  Copy,
-  UserPlus,
-} from "lucide-react";
-import {
-  STATUS_LABELS,
-  STATUS_COLORS,
-} from "@/shared/subscription/lifecycle";
-import type { SubscriptionStatus } from "@/shared/subscription/types";
-import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
+  formatDateTime,
+  getCompanyPlanConfig,
+  isCompanyBillable,
+  mergeAdminPlansConfig,
+  normalizeCompanyRecord,
+  planLabel,
+  type AdminCompanyRecord,
+} from "./adminBusinessUtils";
+import type { SystemPlansConfig } from "./systemPlansConfig";
 
-/* ====================================================================
-   TYPES
-==================================================================== */
-interface CompanyRow {
+type RequestStatus = "pending" | "approved" | "rejected";
+
+type SubscriptionRequestRow = {
   id: string;
-  nom: string;
-  plan: string;
-  subscriptionStatus: SubscriptionStatus;
-  nextBillingDate?: Date | null;
-  lastPaymentAt?: Date | null;
-  digitalFeePercent: number;
-  totalDigitalRevenueGenerated: number;
-  totalDigitalFeesCollected: number;
-  totalPaymentsReceived: number;
-  trialEndsAt?: Date | null;
-  graceUntil?: Date | null;
+  companyId: string;
+  companyName: string;
+  currentPlan: Plan;
+  requestedPlan: Plan;
+  status: RequestStatus;
+  createdAt: Date | null;
+};
+
+function toDate(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Timestamp) return value.toDate();
+  if (value instanceof Date) return value;
+  if (typeof value === "object") {
+    const timestampLike = value as { toDate?: () => Date };
+    if (typeof timestampLike.toDate === "function") return timestampLike.toDate();
+  }
+  return null;
 }
 
-/* ====================================================================
-   CONSTANTS
-==================================================================== */
-const BILLING_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
+function requestStatusClasses(status: RequestStatus): string {
+  switch (status) {
+    case "approved":
+      return "bg-emerald-100 text-emerald-700";
+    case "rejected":
+      return "bg-red-100 text-red-700";
+    case "pending":
+    default:
+      return "bg-amber-100 text-amber-700";
+  }
+}
 
-const toDate = (v: unknown): Date | null => {
-  if (!v) return null;
-  if (v instanceof Timestamp) return v.toDate();
-  if (v instanceof Date) return v;
-  return null;
-};
+function subscriptionStatusClasses(status: string): string {
+  switch (status) {
+    case "trial":
+      return "bg-sky-100 text-sky-700";
+    case "grace":
+      return "bg-amber-100 text-amber-700";
+    case "restricted":
+      return "bg-orange-100 text-orange-700";
+    case "suspended":
+      return "bg-red-100 text-red-700";
+    case "active":
+    default:
+      return "bg-emerald-100 text-emerald-700";
+  }
+}
 
-const fmtDate = (d: Date | null | undefined): string => {
-  if (!d) return "—";
-  return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
-};
+function subscriptionStatusLabel(status: string): string {
+  switch (status) {
+    case "trial":
+      return "Essai";
+    case "grace":
+      return "Grace";
+    case "restricted":
+      return "Restreint";
+    case "suspended":
+      return "Suspendu";
+    case "active":
+    default:
+      return "Actif";
+  }
+}
 
-const ALL_STATUSES: SubscriptionStatus[] = ["trial", "active", "grace", "restricted", "suspended"];
-
-/* ====================================================================
-   COMPONENT
-==================================================================== */
 export default function AdminSubscriptionsManager() {
-  const [companies, setCompanies] = useState<CompanyRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [saving, setSaving] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-
-  // Payment form
-  const [paymentAmount, setPaymentAmount] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<"invoice" | "mobile_money">("mobile_money");
-
-  // Edit digital fee
-  const [editFeeId, setEditFeeId] = useState<string | null>(null);
-  const [editFeeValue, setEditFeeValue] = useState<number>(0);
-
-  // Pending invitations
-  const [invitations, setInvitations] = useState<Array<{
-    id: string;
-    email: string;
-    role: string;
-    fullName?: string;
-    companyId?: string;
-    token?: string;
-    status: string;
-  }>>([]);
-  const [copiedToken, setCopiedToken] = useState<string | null>(null);
-
-  /* ── Load companies ── */
-  const loadCompanies = async () => {
-    setLoading(true);
-    try {
-      const q = query(collection(db, "companies"), orderBy("nom", "asc"));
-      const snap = await getDocs(q);
-      const rows: CompanyRow[] = snap.docs.map((d) => {
-        const data = d.data();
-        return {
-          id: d.id,
-          nom: (data.nom as string) || d.id,
-          plan: (data.plan as string) || "—",
-          subscriptionStatus: (data.subscriptionStatus as SubscriptionStatus) || "active",
-          nextBillingDate: toDate(data.nextBillingDate),
-          lastPaymentAt: toDate(data.lastPaymentAt),
-          digitalFeePercent: Number(data.digitalFeePercent) || 0,
-          totalDigitalRevenueGenerated: Number(data.totalDigitalRevenueGenerated) || 0,
-          totalDigitalFeesCollected: Number(data.totalDigitalFeesCollected) || 0,
-          totalPaymentsReceived: Number(data.totalPaymentsReceived) || 0,
-          trialEndsAt: toDate(data.trialEndsAt),
-          graceUntil: toDate(data.graceUntil),
-        };
-      });
-      setCompanies(rows);
-
-      // Load pending invitations
-      const invQ = query(
-        collection(db, "invitations"),
-        where("status", "==", "pending"),
-      );
-      const invSnap = await getDocs(invQ);
-      setInvitations(
-        invSnap.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            email: (data.email as string) || "",
-            role: (data.role as string) || "",
-            fullName: data.fullName as string | undefined,
-            companyId: data.companyId as string | undefined,
-            token: data.token as string | undefined,
-            status: (data.status as string) || "pending",
-          };
-        }),
-      );
-    } catch (err) {
-      setMessage({ type: "error", text: "Erreur lors du chargement des compagnies." });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [requests, setRequests] = useState<SubscriptionRequestRow[]>([]);
+  const [companies, setCompanies] = useState<AdminCompanyRecord[]>([]);
+  const [plans, setPlans] = useState<SystemPlansConfig>(mergeAdminPlansConfig(null));
+  const [requestsReady, setRequestsReady] = useState(false);
+  const [companiesReady, setCompaniesReady] = useState(false);
+  const [plansReady, setPlansReady] = useState(false);
+  const [actionId, setActionId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadCompanies();
+    const offRequests = onSnapshot(
+      query(collection(db, "subscriptionRequests"), orderBy("createdAt", "desc")),
+      (snap) => {
+        setRequests(
+          snap.docs.map((requestDoc) => {
+            const data = requestDoc.data() as Record<string, unknown>;
+            return {
+              id: requestDoc.id,
+              companyId: String(data.companyId ?? ""),
+              companyName: String(data.companyName ?? ""),
+              currentPlan: normalizePlan(String(data.currentPlan ?? "")),
+              requestedPlan: normalizePlan(String(data.requestedPlan ?? "")),
+              status:
+                data.status === "approved" || data.status === "rejected"
+                  ? data.status
+                  : "pending",
+              createdAt: toDate(data.createdAt),
+            } satisfies SubscriptionRequestRow;
+          })
+        );
+        setRequestsReady(true);
+      },
+      (error) => {
+        console.error("[AdminSubscriptionsManager] requests snapshot failed", error);
+        toast.error("Impossible de charger les demandes.");
+        setRequests([]);
+        setRequestsReady(true);
+      }
+    );
+
+    const offCompanies = onSnapshot(
+      query(collection(db, "companies"), orderBy("nom", "asc")),
+      (snap) => {
+        setCompanies(snap.docs.map((companyDoc) => normalizeCompanyRecord(companyDoc.id, companyDoc.data())));
+        setCompaniesReady(true);
+      },
+      (error) => {
+        console.error("[AdminSubscriptionsManager] companies snapshot failed", error);
+        toast.error("Impossible de charger les abonnements.");
+        setCompanies([]);
+        setCompaniesReady(true);
+      }
+    );
+
+    const offPlans = onSnapshot(
+      doc(db, "adminSettings", "plans"),
+      (snap) => {
+        setPlans(mergeAdminPlansConfig(snap.exists() ? snap.data() : null));
+        setPlansReady(true);
+      },
+      (error) => {
+        console.error("[AdminSubscriptionsManager] plans snapshot failed", error);
+        setPlans(mergeAdminPlansConfig(null));
+        setPlansReady(true);
+      }
+    );
+
+    return () => {
+      offRequests();
+      offCompanies();
+      offPlans();
+    };
   }, []);
 
-  const filtered = companies.filter((c) =>
-    c.nom.toLowerCase().includes(search.toLowerCase()) ||
-    c.plan.toLowerCase().includes(search.toLowerCase()),
-  );
+  const loading = !requestsReady || !companiesReady || !plansReady;
 
-  /* ── Set subscription status ── */
-  const setStatus = async (companyId: string, newStatus: SubscriptionStatus) => {
-    setSaving(companyId);
-    try {
-      const now = Timestamp.now();
-      const update: Record<string, unknown> = {
-        subscriptionStatus: newStatus,
-        "subscription.status": newStatus,
-        updatedAt: serverTimestamp(),
+  const pendingRequests = useMemo(() => {
+    return requests.filter((request) => request.status === "pending");
+  }, [requests]);
+
+  const companiesById = useMemo(() => {
+    return new Map(companies.map((company) => [company.id, company]));
+  }, [companies]);
+
+  const activeSubscriptions = useMemo(() => {
+    return companies.map((company) => {
+      const planConfig = getCompanyPlanConfig(plans, company.plan);
+      return {
+        ...company,
+        monthlyPrice: planConfig.price,
       };
+    });
+  }, [companies, plans]);
 
-      if (newStatus === "grace") {
-        const graceEnd = Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
-        update.graceUntil = graceEnd;
-        update["subscription.gracePeriodEnd"] = graceEnd;
-      }
+  const metrics = useMemo(() => {
+    const mrr = activeSubscriptions
+      .filter((company) => isCompanyBillable(company))
+      .reduce((sum, company) => sum + company.monthlyPrice, 0);
 
-      if (newStatus === "active") {
-        update.status = "actif";
-      }
+    return {
+      pendingCount: pendingRequests.length,
+      premiumCount: activeSubscriptions.filter((company) => company.plan === "premium").length,
+      activeCount: activeSubscriptions.filter((company) => company.subscriptionStatus !== "suspended")
+        .length,
+      mrr,
+    };
+  }, [activeSubscriptions, pendingRequests]);
 
-      await updateDoc(doc(db, "companies", companyId), update);
-      setMessage({ type: "success", text: `Statut mis à jour : ${STATUS_LABELS[newStatus]}` });
-      await loadCompanies();
-    } catch (err) {
-      setMessage({ type: "error", text: "Erreur lors de la mise à jour du statut." });
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  /* ── Extend billing period ── */
-  const extendBilling = async (companyId: string) => {
-    setSaving(companyId);
-    try {
-      const now = new Date();
-      const newEnd = Timestamp.fromDate(new Date(now.getTime() + BILLING_PERIOD_MS));
-      await updateDoc(doc(db, "companies", companyId), {
-        nextBillingDate: newEnd,
-        "subscription.currentPeriodEnd": newEnd,
-        "subscription.nextBillingDate": newEnd,
-        updatedAt: serverTimestamp(),
-      });
-      setMessage({ type: "success", text: "Période de facturation prolongée de 30 jours." });
-      await loadCompanies();
-    } catch (err) {
-      setMessage({ type: "error", text: "Erreur lors de l'extension." });
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  /* ── Record payment ── */
-  const recordPayment = async (companyId: string) => {
-    if (paymentAmount <= 0) {
-      setMessage({ type: "error", text: "Le montant doit être positif." });
+  const approveRequest = async (request: SubscriptionRequestRow) => {
+    if (!request.companyId) {
+      toast.error("Compagnie introuvable.");
       return;
     }
-    setSaving(companyId);
+
+    setActionId(request.id);
     try {
-      const now = Timestamp.now();
-      const periodEnd = Timestamp.fromDate(new Date(Date.now() + BILLING_PERIOD_MS));
-
-      // 1. Create payment document
-      await addDoc(collection(db, "companies", companyId, "payments"), {
-        amount: paymentAmount,
-        method: paymentMethod,
-        periodCoveredStart: now,
-        periodCoveredEnd: periodEnd,
-        createdAt: serverTimestamp(),
-        status: "validated",
-        validatedBy: "admin_manual",
-        validatedAt: serverTimestamp(),
-      });
-
-      // 2. Update company
-      const companyRef = doc(db, "companies", companyId);
-      const currentCompany = companies.find((c) => c.id === companyId);
-      const newTotal = (currentCompany?.totalPaymentsReceived ?? 0) + paymentAmount;
-
-      await updateDoc(companyRef, {
+      const batch = writeBatch(db);
+      batch.update(doc(db, "companies", request.companyId), {
+        plan: request.requestedPlan,
+        planId: request.requestedPlan,
         subscriptionStatus: "active",
         "subscription.status": "active",
-        lastPaymentAt: now,
-        nextBillingDate: periodEnd,
-        "subscription.currentPeriodStart": now,
-        "subscription.currentPeriodEnd": periodEnd,
-        "subscription.lastPaymentAt": now,
-        "subscription.nextBillingDate": periodEnd,
-        totalPaymentsReceived: newTotal,
-        status: "actif",
         updatedAt: serverTimestamp(),
       });
-
-      setMessage({ type: "success", text: `Paiement de ${formatCurrency(paymentAmount)} enregistré.` });
-      setPaymentAmount(0);
-      await loadCompanies();
-    } catch (err) {
-      setMessage({ type: "error", text: "Erreur lors de l'enregistrement du paiement." });
+      batch.update(doc(db, "subscriptionRequests", request.id), {
+        status: "approved",
+      });
+      await batch.commit();
+      toast.success("Demande approuvee.");
+    } catch (error) {
+      console.error("[AdminSubscriptionsManager] approve failed", error);
+      toast.error("Impossible d'approuver la demande.");
     } finally {
-      setSaving(null);
+      setActionId(null);
     }
   };
 
-  /* ── Save digital fee ── */
-  const saveDigitalFee = async (companyId: string) => {
-    setSaving(companyId);
+  const rejectRequest = async (request: SubscriptionRequestRow) => {
+    setActionId(request.id);
     try {
-      await updateDoc(doc(db, "companies", companyId), {
-        digitalFeePercent: editFeeValue,
+      const batch = writeBatch(db);
+      batch.update(doc(db, "subscriptionRequests", request.id), {
+        status: "rejected",
         updatedAt: serverTimestamp(),
       });
-      setMessage({ type: "success", text: `Frais digital mis à jour : ${editFeeValue}%` });
-      setEditFeeId(null);
-      await loadCompanies();
-    } catch (err) {
-      setMessage({ type: "error", text: "Erreur lors de la mise à jour du frais digital." });
+      await batch.commit();
+      toast.success("Demande refusee.");
+    } catch (error) {
+      console.error("[AdminSubscriptionsManager] reject failed", error);
+      toast.error("Impossible de refuser la demande.");
     } finally {
-      setSaving(null);
+      setActionId(null);
     }
   };
 
-  /* ── Status badge ── */
-  const StatusBadge: React.FC<{ status: SubscriptionStatus }> = ({ status }) => {
-    const colors = STATUS_COLORS[status] ?? "bg-gray-100 text-gray-700";
-    return (
-      <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${colors}`}>
-        {STATUS_LABELS[status] ?? status}
-      </span>
-    );
-  };
+  if (loading) {
+    return <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">Chargement des abonnements...</div>;
+  }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Gestion des abonnements</h1>
-          <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
-            Contrôle manuel du cycle de vie des abonnements — {companies.length} compagnie{companies.length > 1 ? "s" : ""}
+          <h1 className="text-2xl font-black tracking-tight text-slate-950">Abonnements</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Demandes d'upgrade en temps reel, validation admin et suivi des plans actifs.
           </p>
         </div>
-        <Button variant="secondary" onClick={loadCompanies} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+        <Button variant="secondary" size="sm" onClick={() => window.location.reload()}>
+          <RefreshCcw className="h-4 w-4" />
           Actualiser
         </Button>
       </div>
 
-      {/* Message */}
-      {message && (
-        <div
-          className={`flex items-center gap-2 rounded-xl border p-3 text-sm ${
-            message.type === "error"
-              ? "border-red-200 bg-red-50 text-red-700"
-              : "border-green-200 bg-green-50 text-green-700"
-          }`}
-        >
-          {message.type === "error" ? <AlertCircle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
-          {message.text}
-          <button className="ml-auto text-xs underline" onClick={() => setMessage(null)}>Fermer</button>
-        </div>
-      )}
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-        <input
-          className="w-full rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-white pl-10 pr-4 py-2 text-sm focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20"
-          placeholder="Rechercher par nom ou plan..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-slate-500">Demandes en attente</div>
+            <div className="mt-2 flex items-center gap-2 text-3xl font-black text-slate-950">
+              <Clock3 className="h-6 w-6 text-amber-500" />
+              {metrics.pendingCount}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-slate-500">Abonnements actifs</div>
+            <div className="mt-2 flex items-center gap-2 text-3xl font-black text-slate-950">
+              <CreditCard className="h-6 w-6 text-sky-500" />
+              {metrics.activeCount}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-slate-500">Plans Premium</div>
+            <div className="mt-2 text-3xl font-black text-orange-700">{metrics.premiumCount}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-slate-500">MRR courant</div>
+            <div className="mt-2 text-3xl font-black text-emerald-700">
+              {formatCurrency(metrics.mrr)}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Pending invitations */}
-      {invitations.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <UserPlus className="h-5 w-5 text-orange-500" />
-              Invitations en attente ({invitations.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {invitations.map((inv) => {
-                const companyName = companies.find((c) => c.id === inv.companyId)?.nom || inv.companyId || "Plateforme";
-                const activationUrl = inv.token
-                  ? `${window.location.origin}/accept-invitation/${inv.token}`
-                  : null;
-                const isCopied = copiedToken === inv.id;
+      <Card>
+        <CardHeader>
+          <CardTitle>Demandes en attente</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {pendingRequests.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+              Aucune demande en attente.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {pendingRequests.map((request) => {
+                const company = companiesById.get(request.companyId);
+                const requestedPlanConfig = getCompanyPlanConfig(plans, request.requestedPlan);
+                const busy = actionId === request.id;
 
                 return (
                   <div
-                    key={inv.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 dark:border-slate-600 px-4 py-3 bg-gray-50 dark:bg-slate-700/50"
+                    key={request.id}
+                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-gray-900 dark:text-white text-sm truncate">{inv.email}</span>
-                        <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">
-                          {inv.role === "company_ceo" ? "CEO" : inv.role}
-                        </span>
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-base font-semibold text-slate-950">
+                            {request.companyName || company?.name || request.companyId}
+                          </span>
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold",
+                              requestStatusClasses(request.status)
+                            )}
+                          >
+                            En attente
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700">
+                            {planLabel(request.currentPlan)}
+                          </span>
+                          <span>vers</span>
+                          <span className="rounded-full bg-orange-100 px-2.5 py-1 font-medium text-orange-700">
+                            {planLabel(request.requestedPlan)}
+                          </span>
+                          <span className="text-slate-400">•</span>
+                          <span>{formatCurrency(requestedPlanConfig.price)} / mois</span>
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          Envoyee le {formatDateTime(request.createdAt)}
+                        </div>
                       </div>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {inv.fullName && <span>{inv.fullName} · </span>}
-                        {companyName}
-                      </p>
+
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button
+                          disabled={busy}
+                          onClick={() => approveRequest(request)}
+                          size="sm"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Approuver
+                        </Button>
+                        <Button
+                          disabled={busy}
+                          onClick={() => rejectRequest(request)}
+                          size="sm"
+                          variant="secondary"
+                          className="border-red-200 text-red-700 hover:bg-red-50"
+                        >
+                          <XCircle className="h-4 w-4" />
+                          Refuser
+                        </Button>
+                      </div>
                     </div>
-                    {activationUrl ? (
-                      <Button
-                        variant={isCopied ? "primary" : "secondary"}
-                        size="sm"
-                        onClick={() => {
-                          navigator.clipboard.writeText(activationUrl);
-                          setCopiedToken(inv.id);
-                          setMessage({ type: "success", text: `Lien d'activation copié pour ${inv.email}` });
-                          setTimeout(() => setCopiedToken(null), 3000);
-                        }}
-                      >
-                        {isCopied ? (
-                          <><CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Copié !</>
-                        ) : (
-                          <><Copy className="h-3.5 w-3.5 mr-1" /> Copier le lien</>
-                        )}
-                      </Button>
-                    ) : (
-                      <span className="text-xs text-amber-600 flex items-center gap-1">
-                        <AlertCircle className="h-3.5 w-3.5" /> Pas de token
-                      </span>
-                    )}
                   </div>
                 );
               })}
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
 
-      {/* Company list */}
-      <div className="space-y-3">
-        {filtered.map((c) => {
-          const isExpanded = expandedId === c.id;
-          const isSaving = saving === c.id;
+      <Card>
+        <CardHeader>
+          <CardTitle>Abonnements actifs</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {activeSubscriptions.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
+              Aucune compagnie trouvee.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <th className="pb-3 pr-4 font-semibold">Compagnie</th>
+                    <th className="pb-3 pr-4 font-semibold">Plan</th>
+                    <th className="pb-3 pr-4 font-semibold">Montant</th>
+                    <th className="pb-3 pr-4 font-semibold">Statut</th>
+                    <th className="pb-3 pr-4 font-semibold">Paiements recus</th>
+                    <th className="pb-3 font-semibold">Demande en cours</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeSubscriptions.map((company) => {
+                    const pendingRequest = pendingRequests.find(
+                      (request) => request.companyId === company.id
+                    );
 
-          return (
-            <Card key={c.id}>
-              {/* Summary row */}
-              <button
-                type="button"
-                className="w-full text-left p-4 flex items-center gap-4 hover:bg-gray-50 transition rounded-xl"
-                onClick={() => setExpandedId(isExpanded ? null : c.id)}
-              >
-                <Building2 className="h-5 w-5 text-gray-400 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-gray-900 truncate">{c.nom}</span>
-                    <StatusBadge status={c.subscriptionStatus} />
-                    <span className="text-xs text-gray-400">{c.plan}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs text-gray-500">
-                    <span>Frais digital : <strong className="text-gray-700">{c.digitalFeePercent}%</strong></span>
-                    <span>Prochaine fact. : <strong className="text-gray-700">{fmtDate(c.nextBillingDate)}</strong></span>
-                    <span>Paiements : <strong className="text-gray-700">{formatCurrency(c.totalPaymentsReceived)}</strong></span>
-                  </div>
-                </div>
-                {isExpanded ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
-              </button>
-
-              {/* Expanded details */}
-              {isExpanded && (
-                <CardContent className="border-t border-gray-100 dark:border-slate-600 space-y-5">
-                  {/* KPI Grid */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-gray-500">Revenus digitaux</p>
-                      <p className="text-lg font-bold">{formatCurrency(c.totalDigitalRevenueGenerated)}</p>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-gray-500">Frais collectés</p>
-                      <p className="text-lg font-bold text-[var(--btn-primary,#FF6600)]">{formatCurrency(c.totalDigitalFeesCollected)}</p>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-gray-500">Paiements reçus</p>
-                      <p className="text-lg font-bold text-green-600">{formatCurrency(c.totalPaymentsReceived)}</p>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-gray-500">Dernier paiement</p>
-                      <p className="text-sm font-semibold">{fmtDate(c.lastPaymentAt)}</p>
-                    </div>
-                  </div>
-
-                  {/* Status Controls */}
-                  <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">Changer le statut</p>
-                    <div className="flex flex-wrap gap-2">
-                      {ALL_STATUSES.map((s) => (
-                        <Button
-                          key={s}
-                          variant={c.subscriptionStatus === s ? "primary" : "secondary"}
-                          size="sm"
-                          disabled={isSaving || c.subscriptionStatus === s}
-                          onClick={() => setStatus(c.id, s)}
-                        >
-                          {STATUS_LABELS[s]}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Extend billing */}
-                  <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">Facturation</p>
-                    <Button variant="secondary" size="sm" disabled={isSaving} onClick={() => extendBilling(c.id)}>
-                      Prolonger +30 jours
-                    </Button>
-                    {c.trialEndsAt && (
-                      <p className="text-xs text-gray-500 mt-1">Fin d'essai : {fmtDate(c.trialEndsAt)}</p>
-                    )}
-                    {c.graceUntil && (
-                      <p className="text-xs text-amber-600 mt-1">Fin de grâce : {fmtDate(c.graceUntil)}</p>
-                    )}
-                  </div>
-
-                  {/* Edit digital fee */}
-                  <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">Frais canal digital</p>
-                    {editFeeId === c.id ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          max="100"
-                          className="w-24 rounded-lg border px-3 py-1.5 text-sm"
-                          value={editFeeValue}
-                          onChange={(e) => setEditFeeValue(Number(e.target.value))}
-                        />
-                        <span className="text-sm text-gray-500">%</span>
-                        <Button variant="primary" size="sm" disabled={isSaving} onClick={() => saveDigitalFee(c.id)}>
-                          Sauver
-                        </Button>
-                        <Button variant="secondary" size="sm" onClick={() => setEditFeeId(null)}>
-                          Annuler
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => { setEditFeeId(c.id); setEditFeeValue(c.digitalFeePercent); }}
-                      >
-                        {c.digitalFeePercent}% — Modifier
-                      </Button>
-                    )}
-                  </div>
-
-                  {/* Record payment */}
-                  <div className="rounded-lg border border-green-200 bg-green-50 p-4">
-                    <p className="text-sm font-medium text-green-800 mb-3 flex items-center gap-1">
-                      <DollarSign className="h-4 w-4" /> Enregistrer un paiement
-                    </p>
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div>
-                        <label className="text-xs text-gray-600">Montant ({getCurrencySymbol()})</label>
-                        <input
-                          type="number"
-                          min="0"
-                          className="block w-40 rounded-lg border px-3 py-1.5 text-sm mt-1"
-                          value={paymentAmount || ""}
-                          onChange={(e) => setPaymentAmount(Number(e.target.value))}
-                          placeholder="40000"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-gray-600">Méthode</label>
-                        <select
-                          className="block rounded-lg border px-3 py-1.5 text-sm mt-1"
-                          value={paymentMethod}
-                          onChange={(e) => setPaymentMethod(e.target.value as "invoice" | "mobile_money")}
-                        >
-                          <option value="mobile_money">Mobile Money</option>
-                          <option value="invoice">Facture</option>
-                        </select>
-                      </div>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        disabled={isSaving || paymentAmount <= 0}
-                        onClick={() => recordPayment(c.id)}
-                      >
-                        Enregistrer
-                      </Button>
-                    </div>
-                    <p className="text-xs text-green-700 mt-2">
-                      Cela active automatiquement l'abonnement et prolonge de 30 jours.
-                    </p>
-                  </div>
-                </CardContent>
-              )}
-            </Card>
-          );
-        })}
-
-        {filtered.length === 0 && !loading && (
-          <p className="text-sm text-gray-500 text-center py-8">Aucune compagnie trouvée.</p>
-        )}
-      </div>
+                    return (
+                      <tr key={company.id} className="border-b border-slate-100 last:border-0">
+                        <td className="py-4 pr-4">
+                          <div className="font-medium text-slate-950">{company.name}</div>
+                          <div className="text-xs text-slate-500">{company.id}</div>
+                        </td>
+                        <td className="py-4 pr-4">
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold",
+                              company.plan === "premium"
+                                ? "bg-orange-100 text-orange-700"
+                                : "bg-slate-100 text-slate-700"
+                            )}
+                          >
+                            {planLabel(company.plan)}
+                          </span>
+                        </td>
+                        <td className="py-4 pr-4 font-semibold text-slate-900">
+                          {formatCurrency(company.monthlyPrice)}
+                        </td>
+                        <td className="py-4 pr-4">
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold",
+                              subscriptionStatusClasses(company.subscriptionStatus)
+                            )}
+                          >
+                            {subscriptionStatusLabel(company.subscriptionStatus)}
+                          </span>
+                        </td>
+                        <td className="py-4 pr-4 font-medium text-emerald-700">
+                          {formatCurrency(company.totalPaymentsReceived)}
+                        </td>
+                        <td className="py-4">
+                          {pendingRequest ? (
+                            <span className="text-xs font-medium text-amber-700">
+                              {planLabel(pendingRequest.currentPlan)} vers{" "}
+                              {planLabel(pendingRequest.requestedPlan)}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-400">Aucune</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

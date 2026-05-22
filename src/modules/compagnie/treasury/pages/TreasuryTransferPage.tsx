@@ -47,6 +47,8 @@ export default function TreasuryTransferPage() {
   const [toAccountId, setToAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
+  const [bankReference, setBankReference] = useState("");
+  const [depositSlipUrl, setDepositSlipUrl] = useState("");
 
   useEffect(() => {
     if (!companyId) {
@@ -146,6 +148,8 @@ export default function TreasuryTransferPage() {
           performedBy: user.uid,
           performedByRole: user.role ?? null,
           idempotencyKey: makeIdempotencyKey(),
+          bankReference,
+          depositSlipUrl,
           description: description.trim() || "Dépôt caisse vers banque",
         });
       } else {
@@ -162,12 +166,16 @@ export default function TreasuryTransferPage() {
           performedBy: user.uid,
           performedByRole: user.role ?? null,
           idempotencyKey: makeIdempotencyKey(),
+          bankReference,
+          depositSlipUrl,
           description: description.trim() || "Transfert mobile money vers banque",
         });
       }
       toast.success("Transfert enregistré.");
       setAmount("");
       setDescription("");
+      setBankReference("");
+      setDepositSlipUrl("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Erreur lors du transfert.");
     } finally {
@@ -277,6 +285,31 @@ export default function TreasuryTransferPage() {
                 />
               </div>
             </div>
+
+            {mode !== "internal_transfer" ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Reference depot bancaire</label>
+                  <input
+                    type="text"
+                    value={bankReference}
+                    onChange={(e) => setBankReference(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Ref. bordereau / banque"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">URL bordereau</label>
+                  <input
+                    type="url"
+                    value={depositSlipUrl}
+                    onChange={(e) => setDepositSlipUrl(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="https://..."
+                  />
+                </div>
+              </div>
+            ) : null}
 
             <ActionButton onClick={handleSubmit} disabled={submitting}>
               {submitting ? "Traitement..." : "Valider le transfert"}

@@ -173,7 +173,7 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
             <div className="text-[11px] text-slate-500">Solde comptes type=mobile_money (accounts).</div>
           </div>
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
-            <div className="text-xs text-gray-700">Banque (ledger)</div>
+            <div className="text-xs text-gray-700">Dépôts validés (ledger)</div>
             <div className="text-base font-bold text-slate-900">{money(ledgerBankOrCompanyAmount)}</div>
             <div className="text-[11px] text-slate-500">Comptes type=bank (niveau compagnie).</div>
           </div>

@@ -1,1 +1,0 @@
-const e={trial:"Essai",active:"Actif",grace:"Grace",restricted:"Restreint",suspended:"Suspendu"},t={trial:"bg-amber-100 text-amber-700",active:"bg-green-100 text-green-700",grace:"bg-orange-100 text-orange-700",restricted:"bg-red-100 text-red-700",suspended:"bg-gray-100 text-gray-700"};export{e as S,t as a};

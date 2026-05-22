@@ -29,6 +29,8 @@ export type TransferRequestDoc = {
   amount: number;
   currency: string;
   description: string | null;
+  bankReference?: string | null;
+  depositSlipUrl?: string | null;
   status: TransferRequestStatus;
   initiatedBy: string;
   initiatedByRole: string | null;
@@ -90,6 +92,8 @@ export async function createTransferRequest(params: {
   amount: number;
   currency: string;
   description?: string | null;
+  bankReference?: string | null;
+  depositSlipUrl?: string | null;
   initiatedBy: string;
   /** @deprecated Préférer `initiatedByRoles` si l’utilisateur a plusieurs rôles. */
   initiatedByRole?: string | null;
@@ -120,6 +124,8 @@ export async function createTransferRequest(params: {
     amount,
     currency: params.currency,
     description: params.description?.trim() || null,
+    bankReference: params.bankReference?.trim() || null,
+    depositSlipUrl: params.depositSlipUrl?.trim() || null,
     status: "pending_manager",
     initiatedBy: params.initiatedBy,
     initiatedByRole: role ?? null,
@@ -201,6 +207,8 @@ export async function approveTransferRequest(params: {
       performedByRole: role ?? null,
       idempotencyKey: req.idempotencyKey,
       description: req.description || "Versement caisse agence vers banque compagnie",
+      bankReference: req.bankReference ?? null,
+      depositSlipUrl: req.depositSlipUrl ?? null,
     });
   } catch (err) {
     console.error("[treasuryTransfer] agencyDepositToBank a échoué — demande reste en attente chef.", {

@@ -31,6 +31,7 @@ import {
   SHIFT_REPORTS_COLLECTION,
 } from '@/modules/agence/services/sessionService';
 import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
+import { isFirestoreIndexError } from '@/utils/firestoreErrorHandler';
 import {
   OPEN_SHIFT_STATUSES,
   mapLegacyToCash,
@@ -201,6 +202,9 @@ export function useActiveShift(): Api {
         setLoading(false);
       },
       (err) => {
+        if (isFirestoreIndexError(err)) {
+          console.error('FIRESTORE INDEX REQUIRED (shifts query):', err);
+        }
         console.error('[useActiveShift] onSnapshot error:', err);
         setActiveShift(null);
         setSessionLockedByOtherDevice(false);

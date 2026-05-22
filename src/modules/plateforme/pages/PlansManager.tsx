@@ -1,499 +1,433 @@
-// src/modules/plateforme/pages/PlansManager.tsx
-// Dual-revenue plan model: monthly subscription + digital channel fee
 import React, { useEffect, useMemo, useState } from "react";
+import { doc, getDoc, setDoc } from "firebase/firestore";
+import { CheckCircle2, Loader2, Pencil, Save, Star, X } from "lucide-react";
 import { db, dbReady } from "@/firebaseConfig";
 import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDocs,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-} from "firebase/firestore";
-import { Button } from "@/shared/ui/button";
-import { CheckCircle2, Shield, Star, Zap, Crown, Building2 } from "lucide-react";
-import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
+  PLAN_KEYS,
+  SYSTEM_PLANS_DEFAULTS,
+  type SystemPlanId,
+  type SystemPlansConfig,
+  type SystemPlanValues,
+} from "./systemPlansConfig";
 
-/* ====================================================================
-   TYPES
-==================================================================== */
-type SupportLevel = "basic" | "standard" | "priority" | "premium" | "enterprise";
-
-type Plan = {
-  id?: string;
-  name: string;
-  priceMonthly: number;
-  quotaReservations: number;
-  digitalFeePercent: number;
-  feeGuichet: number;
-  minimumMonthly: number;
-  maxAgences: number;
-  supportLevel: SupportLevel;
-  isTrial?: boolean;
-  trialDurationDays?: number;
-  brandingLocked?: boolean;
-  // All plans include all features – no conditional toggles
-  features: {
-    publicPage: true;
-    onlineBooking: true;
-    guichet: true;
-  };
-  createdAt?: unknown;
-  updatedAt?: unknown;
-};
-
-const EMPTY: Plan = {
-  name: "",
-  priceMonthly: 0,
-  quotaReservations: 0,
-  digitalFeePercent: 0,
-  feeGuichet: 0,
-  minimumMonthly: 0,
-  maxAgences: 1,
-  supportLevel: "basic",
-  isTrial: false,
-  trialDurationDays: 0,
-  brandingLocked: false,
-  features: { publicPage: true, onlineBooking: true, guichet: true },
-};
-
-/* ====================================================================
-   CONSTANTS
-==================================================================== */
-const nf = new Intl.NumberFormat("fr-FR");
-
-const SUPPORT_LABELS: Record<SupportLevel, { label: string; color: string }> = {
-  basic: { label: "Basic", color: "bg-gray-100 dark:bg-slate-600 text-gray-700 dark:text-slate-200" },
-  standard: { label: "Standard", color: "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300" },
-  priority: { label: "Prioritaire", color: "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300" },
-  premium: { label: "Premium", color: "bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300" },
-  enterprise: { label: "Enterprise", color: "bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300" },
-};
-
-const SUPPORT_ICONS: Record<SupportLevel, React.ReactNode> = {
-  basic: <Shield className="h-3.5 w-3.5" />,
-  standard: <Shield className="h-3.5 w-3.5" />,
-  priority: <Star className="h-3.5 w-3.5" />,
-  premium: <Zap className="h-3.5 w-3.5" />,
-  enterprise: <Crown className="h-3.5 w-3.5" />,
-};
+const PLANS_SETTINGS_REF = doc(db, "adminSettings", "plans");
+const numberFormatter = new Intl.NumberFormat("fr-FR");
 
 const inputClass =
-  "w-full rounded-lg border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-slate-500 focus:border-[var(--btn-primary,#FF6600)] focus:outline-none focus:ring-2 focus:ring-[var(--btn-primary,#FF6600)]/20 disabled:opacity-50";
+  "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white";
 
-const selectClass = `${inputClass} appearance-none`;
+const PLAN_CONTENT: Record<
+  SystemPlanId,
+  {
+    subtitle: string;
+    features: string[];
+    painPoint?: string;
+    socialProof?: string;
+    extraLine?: string;
+    decisionTrigger?: {
+      title: string;
+      detail: string;
+    };
+  }
+> = {
+  standard: {
+    subtitle: "Gérez vos ventes et opérations au quotidien",
+    features: [
+      "Vente de billets (guichet + en ligne)",
+      "Gestion des agences",
+      "Suivi des paiements",
+      "Gestion des colis basique",
+    ],
+    painPoint: "⚠️ Pas de visibilité financière avancée",
+  },
+  premium: {
+    subtitle: "Prenez le contrôle total de vos revenus et de vos agences",
+    features: [
+      "Analyse financière avancée",
+      "Suivi du cash en temps réel",
+      "Performance multi-agences",
+      "Détection des pertes et anomalies",
+      "Rapports automatiques",
+    ],
+    socialProof: "⭐ Le plus utilisé par les compagnies en croissance",
+    extraLine: "Idéal à partir de 7 000 opérations / mois",
+    decisionTrigger: {
+      title: "💡 Vous avez plus de 7 000 opérations / mois ?",
+      detail: "→ Le plan Premium devient plus rentable pour vous.",
+    },
+  },
+};
 
-/* ====================================================================
-   COMPONENT
-==================================================================== */
-export default function PlansManager() {
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [editing, setEditing] = useState<Plan>(EMPTY);
-  const [loading, setLoading] = useState(false);
+function normalizePlanValues(
+  raw: unknown,
+  fallback: SystemPlanValues
+): SystemPlanValues {
+  const data = raw && typeof raw === "object" ? (raw as Partial<SystemPlanValues>) : {};
 
-  const load = async () => {
-    try {
-      const q = query(collection(db, "plans"), orderBy("priceMonthly", "asc"));
-      const snap = await getDocs(q);
-
-      const rows = snap.docs.map((d) => {
-        const x = d.data() as Record<string, unknown>;
-
-        return {
-          id: d.id,
-          name: (x.name as string) ?? (x.nom as string) ?? "",
-          priceMonthly: Number(x.priceMonthly) || 0,
-          quotaReservations: Number(x.quotaReservations) || 0,
-          digitalFeePercent: Number(x.digitalFeePercent) || 0,
-          feeGuichet: Number(x.feeGuichet) || 0,
-          minimumMonthly: Number(x.minimumMonthly) || 0,
-          maxAgences: Number(x.maxAgences ?? x.maxAgencies) || 1,
-          supportLevel: (x.supportLevel as SupportLevel) || "basic",
-          isTrial: Boolean(x.isTrial),
-          trialDurationDays: Number(x.trialDurationDays) || 0,
-          brandingLocked: Boolean(x.brandingLocked),
-          // All features always true in new model
-          features: {
-            publicPage: true as const,
-            onlineBooking: true as const,
-            guichet: true as const,
-          },
-        } satisfies Plan;
-      });
-
-      setPlans(rows);
-    } catch (err) {
-      console.error("Erreur lecture plans:", err);
-      alert("Impossible de charger les plans (voir console).");
-      setPlans([]);
-    }
+  return {
+    price: Number.isFinite(Number(data.price)) ? Number(data.price) : fallback.price,
+    includedOperations: Number.isFinite(Number(data.includedOperations))
+      ? Number(data.includedOperations)
+      : fallback.includedOperations,
+    overage: Number.isFinite(Number(data.overage)) ? Number(data.overage) : fallback.overage,
   };
+}
+
+function mergeWithDefaults(raw: unknown): SystemPlansConfig {
+  const data = raw && typeof raw === "object" ? (raw as Partial<SystemPlansConfig>) : {};
+
+  return {
+    standard: {
+      ...SYSTEM_PLANS_DEFAULTS.standard,
+      ...normalizePlanValues(data.standard, SYSTEM_PLANS_DEFAULTS.standard),
+    },
+    premium: {
+      ...SYSTEM_PLANS_DEFAULTS.premium,
+      ...normalizePlanValues(data.premium, SYSTEM_PLANS_DEFAULTS.premium),
+    },
+  };
+}
+
+function isCompletePlansSettings(raw: unknown): boolean {
+  const data = raw && typeof raw === "object" ? (raw as Partial<Record<SystemPlanId, Partial<SystemPlanValues>>>) : {};
+  return PLAN_KEYS.every((planId) => {
+    const plan = data[planId];
+    return (
+      plan != null &&
+      Number.isFinite(Number(plan.price)) &&
+      Number.isFinite(Number(plan.includedOperations)) &&
+      Number.isFinite(Number(plan.overage))
+    );
+  });
+}
+
+function editablePayload(plans: SystemPlansConfig) {
+  return {
+    standard: {
+      price: plans.standard.price,
+      includedOperations: plans.standard.includedOperations,
+      overage: plans.standard.overage,
+    },
+    premium: {
+      price: plans.premium.price,
+      includedOperations: plans.premium.includedOperations,
+      overage: plans.premium.overage,
+    },
+  };
+}
+
+function PlanCard({
+  planId,
+  plan,
+  highlighted,
+  saving,
+  onChange,
+  onSave,
+}: {
+  planId: SystemPlanId;
+  plan: SystemPlansConfig[SystemPlanId];
+  highlighted?: boolean;
+  saving: boolean;
+  onChange: (planId: SystemPlanId, field: keyof SystemPlanValues, value: number) => void;
+  onSave: (planId: SystemPlanId) => void;
+}) {
+  const [editMode, setEditMode] = useState(false);
+  const content = PLAN_CONTENT[planId];
+  const cardTone = highlighted
+    ? "border-2 border-orange-500 bg-white shadow-xl shadow-orange-900/15 ring-2 ring-orange-100 lg:scale-[1.04] lg:hover:scale-[1.06] dark:border-orange-500 dark:bg-slate-900 dark:ring-orange-900/40"
+    : "border-slate-200 bg-white shadow-sm hover:border-slate-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600";
+  const accentText = highlighted ? "text-orange-700 dark:text-orange-300" : "text-slate-900 dark:text-white";
+  const accentBg = highlighted
+    ? "bg-orange-600 hover:bg-orange-700"
+    : "bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600";
+
+  return (
+    <section
+      className={[
+        "relative flex flex-col rounded-xl border p-6 transition-all duration-200 hover:-translate-y-1 md:p-8",
+        cardTone,
+      ].join(" ")}
+    >
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <h2 className={["text-3xl font-black", accentText].join(" ")}>
+            {plan.name}
+          </h2>
+          <p className="mt-2 max-w-sm text-base font-medium leading-6 text-slate-600 dark:text-slate-300">
+            {content.subtitle}
+          </p>
+          {content.socialProof && (
+            <p className="mt-3 inline-flex rounded-full bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700 ring-1 ring-orange-100 dark:bg-orange-950/60 dark:text-orange-300 dark:ring-orange-900/60">
+              {content.socialProof}
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          {highlighted && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-600 px-3 py-1 text-xs font-bold text-white shadow-sm">
+              <Star className="h-3.5 w-3.5" />
+              Recommandé
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setEditMode((value) => !value)}
+            aria-label={editMode ? "Fermer l'édition" : `Modifier ${plan.name}`}
+            title={editMode ? "Fermer" : "Modifier"}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-orange-200 hover:bg-orange-50 hover:text-orange-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-orange-800 dark:hover:bg-orange-950/60 dark:hover:text-orange-300"
+          >
+            {editMode ? <X className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      <ul className="mb-7 grid gap-3">
+        {content.features.map((feature) => (
+          <li
+            key={feature}
+            className="flex items-start gap-3 text-sm font-medium text-slate-700 dark:text-slate-200"
+          >
+            <span
+              className={[
+                "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
+                highlighted ? "bg-orange-50 text-orange-600 dark:bg-orange-950" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+              ].join(" ")}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            </span>
+            <span>{feature}</span>
+          </li>
+        ))}
+      </ul>
+
+      {content.painPoint && (
+        <p className="mb-6 inline-flex items-center rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 ring-1 ring-amber-100 dark:bg-amber-950/50 dark:text-amber-300 dark:ring-amber-900/50">
+          {content.painPoint}
+        </p>
+      )}
+
+      <div className="mt-auto border-t border-slate-100 pt-6 dark:border-slate-800">
+        <div className="flex flex-col gap-1">
+          <div className="text-4xl font-black text-slate-950 dark:text-white">
+            {numberFormatter.format(plan.price)} FCFA
+          </div>
+          <div className="text-sm font-semibold text-slate-500 dark:text-slate-400">/ mois</div>
+        </div>
+
+        <div className="mt-5 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/70">
+          <p className="text-sm font-bold text-slate-900 dark:text-white">
+            {numberFormatter.format(plan.includedOperations)} opérations incluses
+          </p>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            +{numberFormatter.format(plan.overage)} FCFA / opération supplémentaire
+          </p>
+          {content.extraLine && (
+            <p className="mt-3 rounded-lg bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-700 dark:bg-orange-950/60 dark:text-orange-300">
+              {content.extraLine}
+            </p>
+          )}
+          {content.decisionTrigger && (
+            <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50/80 p-4 text-sm text-orange-900 shadow-sm dark:border-orange-800 dark:bg-orange-950/50 dark:text-orange-200">
+              <p className="font-black">{content.decisionTrigger.title}</p>
+              <p className="mt-1 font-semibold">{content.decisionTrigger.detail}</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {editMode && (
+        <div className="mt-6 grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              Prix mensuel
+            </span>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              value={plan.price}
+              onChange={(event) => onChange(planId, "price", Number(event.target.value))}
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              Opérations incluses
+            </span>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              value={plan.includedOperations}
+              onChange={(event) => onChange(planId, "includedOperations", Number(event.target.value))}
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              Coût après le quota
+            </span>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              value={plan.overage}
+              onChange={(event) => onChange(planId, "overage", Number(event.target.value))}
+            />
+          </label>
+        </div>
+      )}
+
+      {editMode && (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => onSave(planId)}
+          className={[
+            "mt-6 inline-flex min-h-[46px] items-center justify-center gap-2 rounded-lg px-5 py-3 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-60",
+            accentBg,
+          ].join(" ")}
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          Enregistrer
+        </button>
+      )}
+    </section>
+  );
+}
+
+export default function PlansManager() {
+  const [plans, setPlans] = useState<SystemPlansConfig>(SYSTEM_PLANS_DEFAULTS);
+  const [loading, setLoading] = useState(true);
+  const [savingPlan, setSavingPlan] = useState<SystemPlanId | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
-      await dbReady;
-      await load();
-    })();
+    let cancelled = false;
+
+    async function loadPlans() {
+      setLoading(true);
+      try {
+        await dbReady;
+        const snap = await getDoc(PLANS_SETTINGS_REF);
+        const nextPlans = mergeWithDefaults(snap.exists() ? snap.data() : null);
+        if (!snap.exists() || !isCompletePlansSettings(snap.data())) {
+          await setDoc(PLANS_SETTINGS_REF, editablePayload(nextPlans));
+        }
+        if (!cancelled) {
+          setPlans(nextPlans);
+          if (!snap.exists()) {
+            setStatusMessage("Configuration initialisee dans Firestore.");
+          }
+        }
+      } catch (error) {
+        console.error("[PlansManager] load plans failed", error);
+        if (!cancelled) {
+          setPlans(SYSTEM_PLANS_DEFAULTS);
+          setStatusMessage("Valeurs par défaut chargées. Firestore indisponible.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void loadPlans();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const isEdit = useMemo(() => Boolean(editing.id), [editing.id]);
+  const hasInvalidValue = useMemo(
+    () =>
+      PLAN_KEYS.some((key) => {
+        const plan = plans[key];
+        return plan.price < 0 || plan.includedOperations < 0 || plan.overage < 0;
+      }),
+    [plans]
+  );
 
-  const validate = (p: Plan) => {
-    if (!p.name.trim()) return "Le nom du plan est requis.";
-    if (p.digitalFeePercent < 0 || p.digitalFeePercent > 100) return "Le frais digital doit être entre 0 et 100%.";
-    return "";
+  const updateField = (
+    planId: SystemPlanId,
+    field: keyof SystemPlanValues,
+    value: number
+  ) => {
+    setStatusMessage(null);
+    setPlans((current) => ({
+      ...current,
+      [planId]: {
+        ...current[planId],
+        [field]: Number.isFinite(value) ? value : 0,
+      },
+    }));
   };
 
-  const onSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const payload: Record<string, unknown> = {
-        name: editing.name.trim(),
-        priceMonthly: Number(editing.priceMonthly) || 0,
-        quotaReservations: Number(editing.quotaReservations) || 0,
-        digitalFeePercent: Number(editing.digitalFeePercent) || 0,
-        feeGuichet: Number(editing.feeGuichet) || 0,
-        minimumMonthly: Number(editing.minimumMonthly) || 0,
-        maxAgences: Number(editing.maxAgences) || 0,
-        supportLevel: editing.supportLevel || "basic",
-        isTrial: Boolean(editing.isTrial),
-        trialDurationDays: editing.isTrial ? (Number(editing.trialDurationDays) || 30) : 0,
-        brandingLocked: Boolean(editing.brandingLocked),
-        // All features always true
-        features: { publicPage: true, onlineBooking: true, guichet: true },
-        updatedAt: serverTimestamp(),
-      };
-
-      const err = validate(editing);
-      if (err) {
-        alert(err);
-        return;
-      }
-
-      if (editing.id) {
-        await setDoc(doc(db, "plans", editing.id), payload, { merge: true });
-      } else {
-        await addDoc(collection(db, "plans"), {
-          ...payload,
-          createdAt: serverTimestamp(),
-        });
-      }
-      setEditing(EMPTY);
-      await load();
-    } finally {
-      setLoading(false);
+  const savePlan = async (planId: SystemPlanId) => {
+    if (hasInvalidValue) {
+      setStatusMessage("Les valeurs doivent être positives.");
+      return;
     }
-  };
 
-  const onDelete = async (id: string) => {
-    if (!confirm("Supprimer ce plan ?")) return;
-    await deleteDoc(doc(db, "plans", id));
-    await load();
+    setSavingPlan(planId);
+    setStatusMessage(null);
+    try {
+      await setDoc(PLANS_SETTINGS_REF, editablePayload(plans));
+      setStatusMessage(`${plans[planId].name} enregistré.`);
+    } catch (error) {
+      console.error("[PlansManager] save plan failed", error);
+      setStatusMessage("Enregistrement impossible. Réessayez.");
+    } finally {
+      setSavingPlan(null);
+    }
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
+      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Plans & Tarifs</h1>
-          <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
-            Modèle dual : abonnement mensuel + frais canal digital (% sur réservations en ligne)
+          <h1 className="text-2xl font-black tracking-tight text-slate-950 dark:text-white">
+            Plans & Tarifs
+          </h1>
+          <p className="mt-1 max-w-2xl text-sm text-slate-500 dark:text-slate-400">
+            Deux offres claires pour vendre, contrôler et faire grandir les compagnies de transport.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setEditing(EMPTY)}>
-          + Nouveau plan
-        </Button>
-      </div>
-
-      {/* ── Plan Cards ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {plans.map((p) => {
-          const support = SUPPORT_LABELS[p.supportLevel] ?? SUPPORT_LABELS.basic;
-          return (
-            <div
-              key={p.id}
-              className="rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm p-5 bg-white dark:bg-slate-800 flex flex-col"
-            >
-              {/* Header */}
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-lg text-gray-900 dark:text-white">{p.name}</h3>
-                    {p.isTrial && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                        Essai
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">
-                    {p.priceMonthly === 0 ? (
-                      <span className="text-green-600 dark:text-green-400">Gratuit</span>
-                    ) : (
-                      <>
-                        {formatCurrency(p.priceMonthly)}
-                        <span className="text-sm font-normal text-gray-500 dark:text-slate-400">/mois</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${support.color}`}>
-                  {SUPPORT_ICONS[p.supportLevel]}
-                  {support.label}
-                </span>
-              </div>
-
-              {/* Key metrics */}
-              <div className="space-y-2 text-sm text-gray-700 dark:text-slate-300 flex-1">
-                <div className="flex justify-between">
-                  <span>Agences max</span>
-                  <strong>{p.maxAgences === 0 ? "Illimité" : p.maxAgences}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>Quota réservations / mois</span>
-                  <strong>{p.quotaReservations === 0 ? "Illimité" : nf.format(p.quotaReservations)}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--btn-primary,#FF6600)] font-medium">Frais canal digital</span>
-                  <strong className="text-[var(--btn-primary,#FF6600)]">{p.digitalFeePercent}%</strong>
-                </div>
-                {p.feeGuichet > 0 && (
-                  <div className="flex justify-between">
-                    <span>Frais guichet</span>
-                    <strong>{formatCurrency(p.feeGuichet)}/billet</strong>
-                  </div>
-                )}
-                {p.isTrial && p.trialDurationDays && p.trialDurationDays > 0 && (
-                  <div className="flex justify-between">
-                    <span>Durée essai</span>
-                    <strong>{p.trialDurationDays} jours</strong>
-                  </div>
-                )}
-                {p.brandingLocked && (
-                  <div className="text-xs text-amber-600 dark:text-amber-400 font-medium mt-1">
-                    Branding Teliya verrouillé
-                  </div>
-                )}
-              </div>
-
-              {/* Included features */}
-              <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100 dark:border-slate-600">
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-3 w-3" /> Gestion interne
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-3 w-3" /> Page publique
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-3 w-3" /> Réservation en ligne
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-3 w-3" /> Guichet
-                </span>
-              </div>
-
-              {/* Actions */}
-              <div className="mt-4 flex gap-2">
-                <Button variant="secondary" size="sm" onClick={() => setEditing(p)}>
-                  Éditer
-                </Button>
-                <Button variant="danger" size="sm" onClick={() => p.id && onDelete(p.id)}>
-                  Supprimer
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-        {plans.length === 0 && (
-          <div className="text-sm text-gray-500 dark:text-slate-400 col-span-full">
-            Aucun plan créé pour le moment.
-          </div>
-        )}
-      </div>
-
-      {/* ── Plan Form ── */}
-      <form
-        onSubmit={onSave}
-        className="bg-white dark:bg-slate-800 dark:border-slate-700 rounded-xl border border-gray-200 shadow-sm p-6 space-y-6"
-      >
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-          <Building2 className="h-5 w-5 text-gray-600 dark:text-slate-400" />
-          {isEdit ? "Modifier le plan" : "Créer un plan"}
-        </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Name */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Nom du plan</label>
-            <input
-              className={inputClass}
-              placeholder="Trial, Starter, Growth, Pro…"
-              value={editing.name}
-              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-            />
-          </div>
-
-          {/* Price */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Prix mensuel ({getCurrencySymbol()})</label>
-            <input
-              className={inputClass}
-              type="number"
-              min="0"
-              value={editing.priceMonthly}
-              onChange={(e) => setEditing({ ...editing, priceMonthly: Number(e.target.value) })}
-            />
-          </div>
-
-          {/* Max agencies */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
-              Agences maximum <span className="text-xs text-gray-400 dark:text-slate-500">(0 = illimité)</span>
-            </label>
-            <input
-              className={inputClass}
-              type="number"
-              min="0"
-              value={editing.maxAgences}
-              onChange={(e) => setEditing({ ...editing, maxAgences: Number(e.target.value) })}
-            />
-          </div>
-
-          {/* Quota */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
-              Quota réservations / mois <span className="text-xs text-gray-400 dark:text-slate-500">(0 = illimité)</span>
-            </label>
-            <input
-              className={inputClass}
-              type="number"
-              min="0"
-              value={editing.quotaReservations}
-              onChange={(e) => setEditing({ ...editing, quotaReservations: Number(e.target.value) })}
-            />
-          </div>
-
-          {/* Digital fee */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
-              Frais canal digital (%)
-            </label>
-            <input
-              className={inputClass}
-              type="number"
-              step="0.1"
-              min="0"
-              max="100"
-              value={editing.digitalFeePercent}
-              onChange={(e) => setEditing({ ...editing, digitalFeePercent: Number(e.target.value) })}
-            />
-            <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">Pourcentage prélevé sur chaque réservation en ligne</p>
-          </div>
-
-          {/* Guichet fee */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Frais guichet ({getCurrencySymbol()} / billet)</label>
-            <input
-              className={inputClass}
-              type="number"
-              min="0"
-              value={editing.feeGuichet}
-              onChange={(e) => setEditing({ ...editing, feeGuichet: Number(e.target.value) })}
-            />
-          </div>
-
-          {/* Minimum monthly */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">
-              Minimum mensuel ({getCurrencySymbol()}) <span className="text-xs text-gray-400 dark:text-slate-500">(0 = aucun)</span>
-            </label>
-            <input
-              className={inputClass}
-              type="number"
-              min="0"
-              value={editing.minimumMonthly}
-              onChange={(e) => setEditing({ ...editing, minimumMonthly: Number(e.target.value) })}
-            />
-          </div>
-
-          {/* Support level */}
-          <div>
-            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Niveau de support</label>
-            <select
-              className={selectClass}
-              value={editing.supportLevel}
-              onChange={(e) => setEditing({ ...editing, supportLevel: e.target.value as SupportLevel })}
-            >
-              <option value="basic">Basic</option>
-              <option value="standard">Standard</option>
-              <option value="priority">Prioritaire</option>
-              <option value="premium">Premium</option>
-              <option value="enterprise">Enterprise</option>
-            </select>
-          </div>
-
-          {/* Trial toggle + duration */}
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-slate-300">
-              <input
-                type="checkbox"
-                className="rounded border-gray-300 dark:border-slate-600 dark:bg-slate-700"
-                checked={editing.isTrial ?? false}
-                onChange={(e) => setEditing({
-                  ...editing,
-                  isTrial: e.target.checked,
-                  trialDurationDays: e.target.checked ? 30 : 0,
-                })}
-              />
-              Plan d'essai (trial)
-            </label>
-            {editing.isTrial && (
-              <div>
-                <label className="text-xs text-gray-500 dark:text-slate-400">Durée (jours)</label>
-                <input
-                  className={inputClass}
-                  type="number"
-                  min="1"
-                  value={editing.trialDurationDays || 30}
-                  onChange={(e) => setEditing({ ...editing, trialDurationDays: Number(e.target.value) })}
-                />
-              </div>
-            )}
-          </div>
+        <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-800">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          STANDARD + PREMIUM uniquement
         </div>
+      </header>
 
-        {/* Branding locked */}
-        <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-slate-300">
-          <input
-            type="checkbox"
-            className="rounded border-gray-300 dark:border-slate-600 dark:bg-slate-700"
-            checked={editing.brandingLocked ?? false}
-            onChange={(e) => setEditing({ ...editing, brandingLocked: e.target.checked })}
+      {statusMessage && (
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+          {statusMessage}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+          Chargement des plans...
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.12fr)]">
+          <PlanCard
+            planId="standard"
+            plan={plans.standard}
+            saving={savingPlan === "standard"}
+            onChange={updateField}
+            onSave={savePlan}
           />
-          Branding Teliya verrouillé (le CEO ne peut pas personnaliser le thème)
-        </label>
-
-        {/* All features included notice */}
-        <div className="rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3 text-sm text-green-700 dark:text-green-300">
-          <strong>Note :</strong> Tous les plans incluent désormais : gestion interne, page publique, réservation en ligne, guichet et tableau de bord.
-          Les plans se différencient par le prix, les quotas et le frais canal digital.
+          <PlanCard
+            planId="premium"
+            plan={plans.premium}
+            highlighted
+            saving={savingPlan === "premium"}
+            onChange={updateField}
+            onSave={savePlan}
+          />
         </div>
-
-        {/* Actions */}
-        <div className="flex gap-2">
-          <Button type="submit" variant="primary" disabled={loading}>
-            {loading ? "Enregistrement…" : isEdit ? "Enregistrer" : "Créer le plan"}
-          </Button>
-          {isEdit && (
-            <Button type="button" variant="secondary" onClick={() => setEditing(EMPTY)}>
-              Annuler
-            </Button>
-          )}
-        </div>
-      </form>
+      )}
     </div>
   );
 }

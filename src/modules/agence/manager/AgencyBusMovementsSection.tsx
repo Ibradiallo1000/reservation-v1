@@ -1,5 +1,5 @@
 /**
- * Synthèse opérationnelle flotte — jour agence (tripInstances).
+ * Synthèse opérationnelle flotte par état (tripInstances).
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, limit, onSnapshot, orderBy, query, where } from "firebase/firestore";
@@ -9,7 +9,7 @@ import timezone from "dayjs/plugin/timezone";
 import "dayjs/locale/fr";
 import { db } from "@/firebaseConfig";
 import { SectionCard, MetricCard } from "@/ui";
-import { Bus, Clock } from "lucide-react";
+import { Bus, Clock, Info } from "lucide-react";
 import {
   tripInstanceArrival,
   tripInstanceDeparture,
@@ -27,6 +27,9 @@ export type AgencyBusMovementsSectionProps = {
   agencyId: string;
   todayKey: string;
   agencyTz: string;
+  mode?: "realtime" | "analysis";
+  rangeStartKey?: string;
+  rangeEndKey?: string;
 };
 
 type RawTrip = {
@@ -57,12 +60,26 @@ function routeLabel(ti: unknown): string {
   return `${dep || "—"} → ${arr || "—"} · ${tm || "—"}`;
 }
 
-/** Date du jour agence en français (pas de clé technique affichée). */
-function labelForAgencyDay(todayKey: string, agencyTz: string): string {
+function dateWindowForAgencyDay(todayKey: string, agencyTz: string): string[] {
   const anchor = dayjs.tz(`${todayKey} 12:00`, "YYYY-MM-DD HH:mm", agencyTz);
-  if (!anchor.isValid()) return todayKey;
-  const s = anchor.format("dddd D MMMM YYYY");
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  if (!anchor.isValid()) return [todayKey];
+  return [
+    anchor.subtract(1, "day").format("YYYY-MM-DD"),
+    anchor.format("YYYY-MM-DD"),
+    anchor.add(1, "day").format("YYYY-MM-DD"),
+  ];
+}
+
+function normalizeRange(startKey: string, endKey: string): { startKey: string; endKey: string } {
+  return startKey <= endKey ? { startKey, endKey } : { startKey: endKey, endKey: startKey };
+}
+
+function metricHelp(title: string): React.ReactNode {
+  return (
+    <span className="ml-1 inline-flex align-middle" title={title}>
+      <Info className="h-3.5 w-3.5 text-slate-400" aria-hidden />
+    </span>
+  );
 }
 
 export default function AgencyBusMovementsSection({
@@ -70,9 +87,19 @@ export default function AgencyBusMovementsSection({
   agencyId,
   todayKey,
   agencyTz,
+  mode = "realtime",
+  rangeStartKey,
+  rangeEndKey,
 }: AgencyBusMovementsSectionProps) {
   const [trips, setTrips] = useState<RawTrip[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const queryRange = useMemo(() => {
+    if (mode === "analysis" && rangeStartKey && rangeEndKey) {
+      return normalizeRange(rangeStartKey, rangeEndKey);
+    }
+    const keys = dateWindowForAgencyDay(todayKey, agencyTz);
+    return { startKey: keys[0] ?? todayKey, endKey: keys[keys.length - 1] ?? todayKey };
+  }, [mode, rangeStartKey, rangeEndKey, todayKey, agencyTz]);
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -83,9 +110,11 @@ export default function AgencyBusMovementsSection({
     const q = query(
       ref,
       where("agencyId", "==", agencyId),
-      where("date", "==", todayKey),
+      where("date", ">=", queryRange.startKey),
+      where("date", "<=", queryRange.endKey),
+      orderBy("date", "asc"),
       orderBy("departureTime", "asc"),
-      limit(120)
+      limit(mode === "realtime" ? 300 : 700)
     );
     const unsub = onSnapshot(
       q,
@@ -96,12 +125,13 @@ export default function AgencyBusMovementsSection({
       },
       (err) => {
         console.warn("[AgencyBusMovementsSection] snapshot failed:", err);
-        setLoadError("Impossible de charger les trajets du jour.");
+        setLoadError("Impossible de charger les mouvements des bus.");
         setTrips([]);
       }
     );
+
     return () => unsub();
-  }, [companyId, agencyId, todayKey]);
+  }, [companyId, agencyId, queryRange, mode]);
 
   const { prevus, enTransit, arrives, retards, prevusRows, enTransitRows, arrivesRows, retardsRows } =
     useMemo(() => {
@@ -120,12 +150,17 @@ export default function AgencyBusMovementsSection({
           continue;
         }
         if (st === "arrived") {
+          const depAt = departureInAgencyTz(String(ti.date ?? todayKey), tripInstanceTime(ti), agencyTz);
+          if (mode === "realtime" && nowAg.diff(depAt, "hour", true) > 18) continue;
           arrivedList.push(ti);
           continue;
         }
         if (st === "scheduled" || st === "boarding") {
-          prevusList.push(ti);
           const depAt = departureInAgencyTz(String(ti.date ?? todayKey), tripInstanceTime(ti), agencyTz);
+          const hoursLate = nowAg.diff(depAt, "hour", true);
+          const hoursAhead = depAt.diff(nowAg, "hour", true);
+          if (mode === "realtime" && (hoursLate > 18 || hoursAhead > 24)) continue;
+          prevusList.push(ti);
           if (nowAg.isAfter(depAt.add(LATE_GRACE_MINUTES, "minute"))) {
             lateList.push(ti);
           }
@@ -144,16 +179,13 @@ export default function AgencyBusMovementsSection({
         arrivesRows: take(arrivedList, 6),
         retardsRows: take(lateList, 8),
       };
-    }, [trips, agencyTz, todayKey]);
+    }, [trips, agencyTz, todayKey, mode]);
 
   if (!companyId || !agencyId) return null;
-
-  const jourLabel = labelForAgencyDay(todayKey, agencyTz);
 
   return (
     <SectionCard
       title="Mouvements des bus"
-      description={`Bus prévus, en route et arrivés pour ${jourLabel}, pour les lignes qui partent de cette agence (données du planning, mises à jour en direct).`}
       icon={Bus}
     >
       {loadError ? (
@@ -164,36 +196,36 @@ export default function AgencyBusMovementsSection({
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
-          label="Départs prévus"
+          label="En attente"
           icon={Clock}
+          help={metricHelp("Bus à l'agence ou en embarquement.")}
           value={prevus}
-          hint="Bus encore à l’agence ou en cours d’embarquement."
         />
         <MetricCard
-          label="Bus sur la route"
+          label="En route"
           icon={Bus}
+          help={metricHelp("Départ enregistré.")}
           value={enTransit}
-          hint="Le départ a été enregistré : le bus a quitté l’agence."
         />
         <MetricCard
-          label="Bus arrivés"
+          label="Arrivés"
           icon={Bus}
+          help={metricHelp("Arrivée enregistrée.")}
           value={arrives}
-          hint="Le trajet prévu pour ce jour est arrivé à destination."
         />
         <MetricCard
-          label="Retards"
+          label="Retard"
           icon={Clock}
+          help={metricHelp(`Départ dépassé de plus de ${LATE_GRACE_MINUTES} minutes.`)}
           value={retards}
-          hint={`Heure de départ dépassée de plus de ${LATE_GRACE_MINUTES} minutes alors que le bus n’a pas encore enregistré son départ.`}
         />
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 text-xs text-gray-600 dark:text-slate-400 md:grid-cols-2">
         <div>
-          <p className="mb-1.5 font-semibold text-gray-800 dark:text-slate-200">Prochains départs</p>
+          <p className="mb-1.5 font-semibold text-gray-800 dark:text-slate-200">En attente</p>
           {prevusRows.length === 0 ? (
-            <p className="text-gray-400">Aucun départ prévu à cette date.</p>
+            <p className="text-gray-400">Aucun bus en attente.</p>
           ) : (
             <ul className="space-y-1 border-l-2 border-slate-200 pl-2 dark:border-slate-600">
               {prevusRows.map((ti) => (
@@ -205,9 +237,9 @@ export default function AgencyBusMovementsSection({
           )}
         </div>
         <div>
-          <p className="mb-1.5 font-semibold text-gray-800 dark:text-slate-200">Sur la route / arrivés</p>
+          <p className="mb-1.5 font-semibold text-gray-800 dark:text-slate-200">En route / arrivés</p>
           {enTransitRows.length === 0 && arrivesRows.length === 0 ? (
-            <p className="text-gray-400">Aucun bus sur la route ni arrivé pour l’instant.</p>
+            <p className="text-gray-400">Aucun bus en mouvement.</p>
           ) : (
             <ul className="space-y-1 border-l-2 border-slate-200 pl-2 dark:border-slate-600">
               {enTransitRows.map((ti) => (
@@ -225,7 +257,7 @@ export default function AgencyBusMovementsSection({
         </div>
         {retardsRows.length > 0 ? (
           <div className="md:col-span-2">
-            <p className="mb-1.5 font-semibold text-rose-800 dark:text-rose-200">Départs en retard</p>
+            <p className="mb-1.5 font-semibold text-rose-800 dark:text-rose-200">Retards</p>
             <ul className="space-y-1 border-l-2 border-rose-200 pl-2 dark:border-rose-900">
               {retardsRows.map((ti) => (
                 <li key={ti.id} className="truncate" title={routeLabel(ti)}>

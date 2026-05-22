@@ -195,7 +195,7 @@ const CompagnieLayout: React.FC = () => {
 
   const sections: NavSection[] = React.useMemo(() => {
     const all: NavSection[] = [
-      { label: "Dashboard", icon: Gauge, path: `${basePath}/command-center` },
+      { label: "Dashboard", icon: Gauge, path: `${basePath}/ceo` },
       {
         label: "Activité réseau",
         icon: TrendingUp,

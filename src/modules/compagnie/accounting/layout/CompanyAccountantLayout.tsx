@@ -4,14 +4,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import {
-  Globe,
   CreditCard,
-  TrendingUp,
-  FileText,
-  Settings,
+  Landmark,
+  LayoutDashboard,
   Wallet,
   Receipt,
-  BookOpen,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
@@ -96,37 +93,28 @@ const CompanyAccountantLayout: React.FC = () => {
   const basePath = `/compagnie/${currentCompanyId}/accounting`;
 
   const sections: NavSection[] = [
-    { label: "Pilotage consolidé", icon: Globe, path: basePath, end: true },
+    { label: "Dashboard", icon: LayoutDashboard, path: basePath, end: true },
     {
-      label: "Réservations réseau",
+      label: "Activité",
       icon: CreditCard,
       path: `${basePath}/reservations-reseau`,
     },
-    { label: "Finances consolidées", icon: TrendingUp, path: `${basePath}/finances` },
-    { label: "Comptabilité", icon: BookOpen, path: `${basePath}/compta` },
+    {
+      label: "Contrôle des caisses",
+      icon: Wallet,
+      path: `${basePath}/cash-control`,
+    },
+    {
+      label: "Trésorerie",
+      icon: Landmark,
+      path: `${basePath}/treasury`,
+    },
     {
       label: "Dépenses",
       icon: Receipt,
       path: `${basePath}/expenses`,
       badge: pendingExpensesCount || undefined,
-      children: [
-        { label: "Validation & paiement", path: `${basePath}/expenses`, end: true },
-        { label: "Analyse des dépenses", path: `${basePath}/expenses-dashboard` },
-      ],
     },
-    {
-      label: "Trésorerie",
-      icon: Wallet,
-      path: `${basePath}/treasury`,
-      children: [
-        { label: "Nouvelle opération", path: `${basePath}/treasury/new-operation` },
-        { label: "Transfert", path: `${basePath}/treasury/transfer` },
-        { label: "Nouveau payable", path: `${basePath}/treasury/new-payable` },
-        { label: "Paiements fournisseurs", path: `${basePath}/supplier-payments` },
-      ],
-    },
-    { label: "Rapports", icon: FileText, path: `${basePath}/rapports` },
-    { label: "Paramètres", icon: Settings, path: `${basePath}/parametres` },
   ];
 
   useAgencyKeyboardShortcuts(sections);
@@ -196,7 +184,7 @@ const CompanyAccountantLayout: React.FC = () => {
             <div className="hidden sm:flex items-center gap-2 text-sm min-w-0">
               <span className="font-semibold text-gray-900 truncate">{currentCompany?.nom || "Compagnie"}</span>
               <span className="text-gray-300">/</span>
-              <span className="text-gray-600 truncate">Comptabilité centrale</span>
+              <span className="text-gray-600 truncate">Contrôle financier</span>
             </div>
           }
           mainClassName="agency-content-transition"

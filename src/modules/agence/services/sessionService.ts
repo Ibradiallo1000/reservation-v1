@@ -146,21 +146,36 @@ function yyyymmdd(d = new Date()): string {
 /**
  * Vérifie s'il existe déjà un poste ouvert pour cet utilisateur (un seul autorisé).
  */
-export async function getOpenShiftId(
+async function queryOpenShiftIdByField(
   companyId: string,
   agencyId: string,
-  userId: string
+  userId: string,
+  fieldName: string
 ): Promise<string | null> {
   const shiftsRef = collection(db, `companies/${companyId}/agences/${agencyId}/${SHIFTS_COLLECTION}`);
   const q = query(
     shiftsRef,
-    where('userId', '==', userId),
+    where(fieldName, '==', userId),
     where('status', 'in', [SHIFT_STATUS.PENDING, SHIFT_STATUS.ACTIVE, SHIFT_STATUS.PAUSED]),
     orderBy('createdAt', 'desc'),
     limit(1)
   );
   const snap = await getDocs(q);
   return snap.empty ? null : snap.docs[0].id;
+}
+
+export async function getOpenShiftId(
+  companyId: string,
+  agencyId: string,
+  userId: string
+): Promise<string | null> {
+  let openShiftId = await queryOpenShiftIdByField(companyId, agencyId, userId, 'userId');
+  if (openShiftId) return openShiftId;
+  openShiftId = await queryOpenShiftIdByField(companyId, agencyId, userId, 'guichetierId');
+  if (openShiftId) return openShiftId;
+  openShiftId = await queryOpenShiftIdByField(companyId, agencyId, userId, 'openedById');
+  if (openShiftId) return openShiftId;
+  return await queryOpenShiftIdByField(companyId, agencyId, userId, 'openedBy');
 }
 
 /**

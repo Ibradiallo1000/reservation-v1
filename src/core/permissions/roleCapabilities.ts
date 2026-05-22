@@ -27,6 +27,10 @@ const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     "view_company_stats",
     "access_enterprise_features",
     "manage_logistics",
+    "view_advanced_reports",
+    "access_ledger",
+    "view_financial_analytics",
+    "manage_multi_agency",
   ],
 
   financial_director: [
@@ -40,6 +44,10 @@ const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     "view_predictive_insights",
     "use_simulation_engine",
     "view_company_stats",
+    "view_advanced_reports",
+    "access_ledger",
+    "view_financial_analytics",
+    "manage_multi_agency",
   ],
 
   company_accountant: [
@@ -47,6 +55,8 @@ const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     "manage_treasury",
     "validate_sessions",
     "view_company_stats",
+    "access_ledger",
+    "view_financial_analytics",
   ],
 
   operator_digital: [

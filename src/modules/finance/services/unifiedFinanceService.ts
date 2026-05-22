@@ -23,6 +23,9 @@ export interface UnifiedRealMoney {
 export interface UnifiedActivity {
   sales: { reservationCount: number; tickets: number; amountHint: number };
   encaissements: { total: number };
+  deposits: { total: number };
+  expenses: { total: number };
+  financialGap: number;
   caNet: number;
   split: { paiementsEnLigne: number; paiementsGuichet: number };
 }
@@ -43,6 +46,24 @@ function isPaymentReceived(row: { type?: string }): boolean {
 
 function isRefund(row: { type?: string }): boolean {
   return normalizeTxType(row.type) === "refund";
+}
+
+function sumDeposits(rows: Array<{ type?: string; amount?: number; status?: string; referenceType?: string }>): number {
+  return rows.reduce((sum, r) => {
+    if (!isConfirmedTransactionStatus(r.status as any)) return sum;
+    if (normalizeTxType(r.type) !== "transfer") return sum;
+    const ref = String(r.referenceType ?? "");
+    if (ref !== "agency_deposit" && ref !== "mobile_to_bank" && ref !== "deposit") return sum;
+    return sum + Math.max(0, Number(r.amount) || 0);
+  }, 0);
+}
+
+function sumExpenses(rows: Array<{ type?: string; amount?: number; status?: string }>): number {
+  return rows.reduce((sum, r) => {
+    if (!isConfirmedTransactionStatus(r.status as any)) return sum;
+    if (normalizeTxType(r.type) !== "expense") return sum;
+    return sum + Math.abs(Number(r.amount) || 0);
+  }, 0);
 }
 
 function splitEncaissementsByPaymentMethod(
@@ -99,6 +120,9 @@ export async function getUnifiedAgencyFinance(
 
   const enc = splitEncaissementsByPaymentMethod(txRows as any);
   const net = sumCaNet(txRows as any);
+  const deposits = sumDeposits(txRows as any);
+  const expenses = sumExpenses(txRows as any);
+  const financialGap = sales.total - deposits - expenses;
 
   return {
     realMoney: {
@@ -114,6 +138,9 @@ export async function getUnifiedAgencyFinance(
         amountHint: sales.total,
       },
       encaissements: { total: enc.total },
+      deposits: { total: deposits },
+      expenses: { total: expenses },
+      financialGap,
       caNet: net,
       split: { paiementsEnLigne: enc.online, paiementsGuichet: enc.guichet },
     },
@@ -137,6 +164,9 @@ export async function getUnifiedCompanyFinance(
 
   const enc = splitEncaissementsByPaymentMethod(txRows as any);
   const net = sumCaNet(txRows as any);
+  const deposits = sumDeposits(txRows as any);
+  const expenses = sumExpenses(txRows as any);
+  const financialGap = sales.total - deposits - expenses;
 
   return {
     realMoney: {
@@ -152,6 +182,9 @@ export async function getUnifiedCompanyFinance(
         amountHint: sales.total,
       },
       encaissements: { total: enc.total },
+      deposits: { total: deposits },
+      expenses: { total: expenses },
+      financialGap,
       caNet: net,
       split: { paiementsEnLigne: enc.online, paiementsGuichet: enc.guichet },
     },

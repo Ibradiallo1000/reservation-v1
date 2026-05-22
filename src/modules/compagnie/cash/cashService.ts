@@ -186,6 +186,7 @@ export async function createCashTransaction(params: CreateCashTransactionParams)
       });
     } catch (err) {
       console.warn("[cashService] createFinancialTransaction failed (cash transaction):", err);
+      throw err;
     }
   }
   return docRef.id;
@@ -552,6 +553,7 @@ export async function createCashTransfer(params: CreateCashTransferParams): Prom
     });
   } catch (err) {
     console.warn("[cashService] createFinancialTransaction failed (cash transfer):", err);
+    throw err;
   }
   return docRef.id;
 }

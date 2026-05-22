@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { collection, limit, onSnapshot, query, where } from "firebase/firestore";
+import { collection, limit, onSnapshot, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { SectionCard, MetricCard, EmptyState, ActionButton, StatusBadge } from "@/ui";
 import {
   Activity,
+  AlertTriangle,
+  CheckCircle2,
   Clock,
   DollarSign,
   Info,
@@ -13,14 +15,18 @@ import {
   Ticket,
 } from "lucide-react";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
-import { getTodayForTimezone, resolveAgencyTimezone } from "@/shared/date/dateUtilsTz";
+import {
+  getEndOfDayForDate,
+  getStartOfDayForDate,
+  getTodayForTimezone,
+  resolveAgencyTimezone,
+} from "@/shared/date/dateUtilsTz";
 import { toast } from "sonner";
 import {
   closeSession,
   continueSession,
   pauseSession,
 } from "@/modules/agence/services/sessionService";
-import { closeCourierSession } from "@/modules/logistics/services/courierSessionService";
 import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPaths";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import ChiefSessionDetailModal from "@/modules/agence/manager/ChiefSessionDetailModal";
@@ -41,6 +47,9 @@ export type SessionDoc = {
   /** Titulaire du poste (même règle que comptabilité agence pour rattacher les ventes). */
   userId?: string;
   closedAt?: unknown;
+  endAt?: unknown;
+  endTime?: unknown;
+  validatedAt?: unknown;
   startAt?: unknown;
   openedAt?: unknown;
   createdAt?: unknown;
@@ -52,6 +61,7 @@ export type SessionDoc = {
   totalSales?: number;
   totalShipments?: number;
   totalRevenue?: number;
+  totalAmount?: number;
   amount?: number;
 };
 
@@ -66,16 +76,27 @@ type CourierLiveTotals = {
   amount: number;
 };
 
-function formatDateFr(dateKey: string): string {
-  const d = new Date(`${dateKey}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return dateKey;
-  return new Intl.DateTimeFormat("fr-FR", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(d);
-}
+type OnlinePaymentsSummary = {
+  reservations: number;
+  amount: number;
+};
+
+type AgencyAlert = {
+  title: string;
+  detail: string;
+  tone: "warning" | "danger";
+};
+
+type PeriodPreset = "realtime" | "today" | "yesterday" | "last7" | "month" | "custom";
+type ActivityTypeFilter = "all" | "guichet" | "colis" | "online";
+
+type PeriodRange = {
+  startKey: string;
+  endKey: string;
+  start: Date;
+  end: Date;
+  label: string;
+};
 
 function toDateOrNull(v: unknown): Date | null {
   if (!v) return null;
@@ -87,6 +108,42 @@ function toDateOrNull(v: unknown): Date | null {
   }
   if (typeof maybe.seconds === "number") return new Date(maybe.seconds * 1000);
   return null;
+}
+
+function addDaysToDateKey(dateKey: string, days: number): string {
+  const d = new Date(`${dateKey}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateKey;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function monthStartKey(dateKey: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateKey) ? `${dateKey.slice(0, 8)}01` : dateKey;
+}
+
+function normalizeRangeKeys(startKey: string, endKey: string): { startKey: string; endKey: string } {
+  if (!startKey || !endKey) return { startKey, endKey };
+  return startKey <= endKey ? { startKey, endKey } : { startKey: endKey, endKey: startKey };
+}
+
+function formatShortDateKeyFr(dateKey: string): string {
+  const d = new Date(`${dateKey}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateKey;
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "2-digit",
+    month: "short",
+  }).format(d);
+}
+
+function periodLabel(startKey: string, endKey: string, fallback: string): string {
+  if (startKey === endKey) return fallback;
+  return `${formatShortDateKeyFr(startKey)} → ${formatShortDateKeyFr(endKey)}`;
+}
+
+function dateInRange(value: unknown, range: PeriodRange): boolean {
+  const d = toDateOrNull(value);
+  if (!d) return false;
+  return d.getTime() >= range.start.getTime() && d.getTime() <= range.end.getTime();
 }
 
 function startAtOfSession(s: SessionDoc): Date | null {
@@ -101,6 +158,26 @@ function isGuichetOperational(s: SessionDoc): boolean {
 function isCourierActive(s: SessionDoc): boolean {
   const st = String(s.status ?? "").toUpperCase();
   return st === "ACTIVE" && !toDateOrNull(s.closedAt);
+}
+
+function isGuichetFinalized(s: SessionDoc): boolean {
+  const st = String(s.status ?? "").toLowerCase();
+  return st === "closed" || st === "validated_agency" || st === "validated";
+}
+
+function isCourierFinalized(s: SessionDoc): boolean {
+  const st = String(s.status ?? "").toUpperCase();
+  return st === "CLOSED" || st === "VALIDATED_AGENCY" || st === "VALIDATED";
+}
+
+function sessionFinalizedAt(s: SessionDoc): unknown {
+  return s.closedAt ?? s.endAt ?? s.endTime ?? s.validatedAt ?? s.createdAt;
+}
+
+function isOnlinePayment(data: Record<string, unknown>): boolean {
+  const raw = data.channel ?? data.paymentChannel ?? data.canal;
+  const channel = String(raw ?? "").toLowerCase();
+  return channel === "online" || channel === "en_ligne" || channel === "web";
 }
 
 function isSessionProlonged(s: SessionDoc, now: Date): boolean {
@@ -143,6 +220,14 @@ function formatClockFr(d: Date): string {
   }).format(d);
 }
 
+function helpIcon(title: string): React.ReactNode {
+  return (
+    <span className="ml-1 inline-flex align-middle" title={title}>
+      <Info className="h-3.5 w-3.5 text-slate-400" aria-hidden />
+    </span>
+  );
+}
+
 /** Même agrégation que l’affichage d’une carte session (live → champs session). */
 function guichetTicketsDisplayed(s: SessionDoc, live?: GuichetLiveTotals): number {
   return Number(live?.tickets ?? s.totalSales ?? s.totalReservations ?? 0);
@@ -157,7 +242,7 @@ function courierParcelsDisplayed(s: SessionDoc, live?: CourierLiveTotals): numbe
 }
 
 function courierAmountDisplayed(s: SessionDoc, live?: CourierLiveTotals): number {
-  return Number(live?.amount ?? s.totalRevenue ?? s.amount ?? 0);
+  return Number(live?.amount ?? s.totalAmount ?? s.totalRevenue ?? s.amount ?? 0);
 }
 
 export default function AgencyChiefDashboardLite() {
@@ -180,12 +265,90 @@ export default function AgencyChiefDashboardLite() {
     [user?.agencyTimezone]
   );
   const todayKey = useMemo(() => getTodayForTimezone(agencyTz), [agencyTz]);
-  const todayLabel = useMemo(() => formatDateFr(todayKey), [todayKey]);
 
+  const [periodPreset, setPeriodPreset] = useState<PeriodPreset>("realtime");
+  const [customStartKey, setCustomStartKey] = useState(todayKey);
+  const [customEndKey, setCustomEndKey] = useState(todayKey);
+  const [activityTypeFilter, setActivityTypeFilter] = useState<ActivityTypeFilter>("all");
+  const isRealtimeMode = periodPreset === "realtime";
+  const selectedRange = useMemo<PeriodRange>(() => {
+    let startKey = todayKey;
+    let endKey = todayKey;
+    let label = "Aujourd’hui";
+
+    if (periodPreset === "yesterday") {
+      startKey = addDaysToDateKey(todayKey, -1);
+      endKey = startKey;
+      label = "Hier";
+    } else if (periodPreset === "last7") {
+      startKey = addDaysToDateKey(todayKey, -6);
+      endKey = todayKey;
+      label = periodLabel(startKey, endKey, "7 derniers jours");
+    } else if (periodPreset === "month") {
+      startKey = monthStartKey(todayKey);
+      endKey = todayKey;
+      label = periodLabel(startKey, endKey, "Ce mois");
+    } else if (periodPreset === "custom") {
+      const normalized = normalizeRangeKeys(customStartKey || todayKey, customEndKey || todayKey);
+      startKey = normalized.startKey;
+      endKey = normalized.endKey;
+      label = periodLabel(startKey, endKey, "Période personnalisée");
+    } else if (periodPreset === "realtime") {
+      label = "En direct";
+    }
+
+    return {
+      startKey,
+      endKey,
+      start: getStartOfDayForDate(startKey, agencyTz),
+      end: getEndOfDayForDate(endKey, agencyTz),
+      label,
+    };
+  }, [periodPreset, todayKey, customStartKey, customEndKey, agencyTz]);
+
+  useEffect(() => {
+    setCustomStartKey(todayKey);
+    setCustomEndKey(todayKey);
+  }, [todayKey]);
+
+  const periodOptions: Array<{ id: PeriodPreset; label: string }> = [
+    { id: "realtime", label: "En direct" },
+    { id: "today", label: "Aujourd’hui" },
+    { id: "yesterday", label: "Hier" },
+    { id: "last7", label: "7 derniers jours" },
+    { id: "month", label: "Ce mois" },
+    { id: "custom", label: "Personnalisé" },
+  ];
+
+  const setAnalysisPreset = (preset: PeriodPreset) => {
+    setPeriodPreset(preset);
+    if (preset === "custom") {
+      setCustomStartKey((v) => v || todayKey);
+      setCustomEndKey((v) => v || todayKey);
+    }
+  };
+
+  const activityTypeOptions: Array<{ id: ActivityTypeFilter; label: string }> = [
+    { id: "all", label: "Tout" },
+    { id: "guichet", label: "Guichet" },
+    { id: "colis", label: "Colis" },
+    { id: "online", label: "En ligne" },
+  ];
+
+  const showAgencyActivity = activityTypeFilter !== "online";
+  const showOnlineActivity = activityTypeFilter === "all" || activityTypeFilter === "online";
+  const showGuichetActivity = activityTypeFilter === "all" || activityTypeFilter === "guichet";
+  const showColisActivity = activityTypeFilter === "all" || activityTypeFilter === "colis";
+  const periodBadgeLabel = isRealtimeMode ? "Vue : En direct" : "Vue : Historique";
+
+  const [allGuichetSessions, setAllGuichetSessions] = useState<SessionDoc[]>([]);
+  const [allCourierSessions, setAllCourierSessions] = useState<SessionDoc[]>([]);
   const [guichetSessions, setGuichetSessions] = useState<SessionDoc[]>([]);
   const [courierSessions, setCourierSessions] = useState<SessionDoc[]>([]);
   const [guichetLiveBySession, setGuichetLiveBySession] = useState<Record<string, GuichetLiveTotals>>({});
   const [courierLiveBySession, setCourierLiveBySession] = useState<Record<string, CourierLiveTotals>>({});
+  const [onlineSummary, setOnlineSummary] = useState<OnlinePaymentsSummary>({ reservations: 0, amount: 0 });
+  const [onlineLoadError, setOnlineLoadError] = useState(false);
   const [lastLiveAt, setLastLiveAt] = useState<Date | null>(null);
   const [tick, setTick] = useState(0);
   const [suspendingId, setSuspendingId] = useState<string | null>(null);
@@ -212,8 +375,8 @@ export default function AgencyChiefDashboardLite() {
     return g + c;
   }, [guichetSessions, courierSessions]);
 
-  const billetterieActivesCount = useMemo(
-    () => guichetSessions.filter((s) => guichetStatusNorm(s) === "active").length,
+  const activeGuichetSessions = useMemo(
+    () => guichetSessions.filter((s) => guichetStatusNorm(s) === "active"),
     [guichetSessions]
   );
 
@@ -230,11 +393,11 @@ export default function AgencyChiefDashboardLite() {
   /** KPI = somme des mêmes valeurs que les cartes « Sessions actives » (sessions + agrégations liées). */
   const kpiBilletsDepuisSessions = useMemo(
     () =>
-      guichetSessions.reduce(
+      activeGuichetSessions.reduce(
         (acc, s) => acc + guichetTicketsDisplayed(s, guichetLiveBySession[s.id]),
         0
       ),
-    [guichetSessions, guichetLiveBySession]
+    [activeGuichetSessions, guichetLiveBySession]
   );
 
   const kpiColisDepuisSessions = useMemo(
@@ -246,21 +409,95 @@ export default function AgencyChiefDashboardLite() {
     [courierSessions, courierLiveBySession]
   );
 
-  const kpiMontantIndicatifDepuisSessions = useMemo(
+  const kpiMontantGuichetDepuisSessions = useMemo(
     () =>
-      guichetSessions.reduce(
+      activeGuichetSessions.reduce(
         (acc, s) => acc + guichetAmountDisplayed(s, guichetLiveBySession[s.id]),
         0
-      ) +
+      ),
+    [activeGuichetSessions, guichetLiveBySession]
+  );
+
+  const kpiMontantColisDepuisSessions = useMemo(
+    () =>
       courierSessions.reduce(
         (acc, s) => acc + courierAmountDisplayed(s, courierLiveBySession[s.id]),
         0
       ),
-    [guichetSessions, courierSessions, guichetLiveBySession, courierLiveBySession]
+    [courierSessions, courierLiveBySession]
+  );
+
+  const kpiMontantIndicatifDepuisSessions = useMemo(
+    () => kpiMontantGuichetDepuisSessions + kpiMontantColisDepuisSessions,
+    [kpiMontantGuichetDepuisSessions, kpiMontantColisDepuisSessions]
+  );
+
+  const finalizedGuichetInRange = useMemo(
+    () =>
+      allGuichetSessions.filter(
+        (s) => isGuichetFinalized(s) && dateInRange(sessionFinalizedAt(s), selectedRange)
+      ),
+    [allGuichetSessions, selectedRange]
+  );
+
+  const finalizedCourierInRange = useMemo(
+    () =>
+      allCourierSessions.filter(
+        (s) => isCourierFinalized(s) && dateInRange(sessionFinalizedAt(s), selectedRange)
+      ),
+    [allCourierSessions, selectedRange]
+  );
+
+  const analysisBillets = useMemo(
+    () => finalizedGuichetInRange.reduce((acc, s) => acc + guichetTicketsDisplayed(s), 0),
+    [finalizedGuichetInRange]
+  );
+
+  const analysisColis = useMemo(
+    () => finalizedCourierInRange.reduce((acc, s) => acc + courierParcelsDisplayed(s), 0),
+    [finalizedCourierInRange]
+  );
+
+  const analysisMontant = useMemo(
+    () =>
+      finalizedGuichetInRange.reduce((acc, s) => acc + guichetAmountDisplayed(s), 0) +
+      finalizedCourierInRange.reduce((acc, s) => acc + courierAmountDisplayed(s), 0),
+    [finalizedGuichetInRange, finalizedCourierInRange]
+  );
+
+  const analysisMontantGuichet = useMemo(
+    () => finalizedGuichetInRange.reduce((acc, s) => acc + guichetAmountDisplayed(s), 0),
+    [finalizedGuichetInRange]
+  );
+
+  const analysisMontantColis = useMemo(
+    () => finalizedCourierInRange.reduce((acc, s) => acc + courierAmountDisplayed(s), 0),
+    [finalizedCourierInRange]
+  );
+
+  const displayedBillets = isRealtimeMode ? kpiBilletsDepuisSessions : analysisBillets;
+  const displayedColis = isRealtimeMode ? kpiColisDepuisSessions : analysisColis;
+  const displayedMontant = isRealtimeMode ? kpiMontantIndicatifDepuisSessions : analysisMontant;
+  const displayedMontantGuichet = isRealtimeMode ? kpiMontantGuichetDepuisSessions : analysisMontantGuichet;
+  const displayedMontantColis = isRealtimeMode ? kpiMontantColisDepuisSessions : analysisMontantColis;
+  const displayedSessionCount = isRealtimeMode
+    ? openSessionsCount
+    : finalizedGuichetInRange.length + finalizedCourierInRange.length;
+  const displayedGuichetSessionCount = isRealtimeMode ? activeGuichetSessions.length : finalizedGuichetInRange.length;
+  const displayedColisSessionCount = isRealtimeMode ? courierSessions.length : finalizedCourierInRange.length;
+
+  const closedGuichetPendingForView = useMemo(
+    () =>
+      allGuichetSessions.filter(
+        (s) => String(s.status ?? "").toLowerCase() === "closed" && dateInRange(sessionFinalizedAt(s), selectedRange)
+      ).length,
+    [allGuichetSessions, selectedRange]
   );
 
   useEffect(() => {
     if (!companyId || !agencyId) {
+      setAllGuichetSessions([]);
+      setAllCourierSessions([]);
       setGuichetSessions([]);
       setCourierSessions([]);
       setLoadingInitial(false);
@@ -273,19 +510,19 @@ export default function AgencyChiefDashboardLite() {
       onSnapshot(
         collection(db, "companies", companyId, "agences", agencyId, "shifts"),
         (snap) => {
-          const rows = snap.docs
-            .map((d) => ({
+          const all = snap.docs.map((d) => ({
               id: d.id,
               kind: "guichet" as const,
               type: "billetterie",
               ...(d.data() as Omit<SessionDoc, "id" | "kind" | "type">),
-            }))
-            .filter((s) => isGuichetOperational(s));
-          setGuichetSessions(rows);
+            }));
+          setAllGuichetSessions(all);
+          setGuichetSessions(all.filter((s) => isGuichetOperational(s)));
           bumpLive();
           setLoadingInitial(false);
         },
         () => {
+          setAllGuichetSessions([]);
           setGuichetSessions([]);
           setLoadingInitial(false);
         }
@@ -296,25 +533,27 @@ export default function AgencyChiefDashboardLite() {
       onSnapshot(
         courierSessionsRef(db, companyId, agencyId),
         (snap) => {
-          const rows = snap.docs
-            .map((d) => ({
-              id: d.id,
-              kind: "courrier" as const,
-              type: "courrier",
-              ...(d.data() as Omit<SessionDoc, "id" | "kind" | "type">),
-            }))
-            .filter((s) => isCourierActive(s));
-          setCourierSessions(rows);
+          const all = snap.docs.map((d) => ({
+            id: d.id,
+            kind: "courrier" as const,
+            type: "courrier",
+            ...(d.data() as Omit<SessionDoc, "id" | "kind" | "type">),
+          }));
+          setAllCourierSessions(all);
+          setCourierSessions(all.filter((s) => isCourierActive(s)));
           bumpLive();
         },
-        () => setCourierSessions([])
+        () => {
+          setAllCourierSessions([]);
+          setCourierSessions([]);
+        }
       )
     );
 
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [companyId, agencyId, bumpLive]);
+  }, [companyId, agencyId, todayKey, agencyTz, bumpLive]);
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -499,6 +738,97 @@ export default function AgencyChiefDashboardLite() {
     };
   }, [companyId, courierSessions, bumpLive]);
 
+  useEffect(() => {
+    if (!companyId || !agencyId) {
+      setOnlineSummary({ reservations: 0, amount: 0 });
+      setOnlineLoadError(false);
+      return;
+    }
+
+    const startTs = Timestamp.fromDate(selectedRange.start);
+    const endTs = Timestamp.fromDate(selectedRange.end);
+    const paymentsRef = collection(db, "companies", companyId, "payments");
+    const q = query(
+      paymentsRef,
+      where("validatedAt", ">=", startTs),
+      where("validatedAt", "<=", endTs),
+      limit(500)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        let reservations = 0;
+        let amount = 0;
+        for (const d of snap.docs) {
+          const data = d.data() as Record<string, unknown>;
+          if (String(data.agencyId ?? "") !== agencyId) continue;
+          if (String(data.status ?? "") !== "validated") continue;
+          if (!isOnlinePayment(data)) continue;
+          const paidAt = data.validatedAt ?? data.createdAt;
+          if (!dateInRange(paidAt, selectedRange)) continue;
+          reservations += 1;
+          amount += Math.max(0, Number(data.amount ?? data.montant ?? 0));
+        }
+        setOnlineSummary({ reservations, amount });
+        setOnlineLoadError(false);
+        bumpLive();
+      },
+      (err) => {
+        console.warn("[AgencyChiefDashboardLite] online payments snapshot failed:", err);
+        setOnlineSummary({ reservations: 0, amount: 0 });
+        setOnlineLoadError(true);
+      }
+    );
+    return () => unsub();
+  }, [companyId, agencyId, selectedRange, bumpLive]);
+
+  const agencyAlerts = useMemo<AgencyAlert[]>(() => {
+    const alerts: AgencyAlert[] = [];
+    const scopedSessions =
+      activityTypeFilter === "guichet"
+        ? guichetSessions
+        : activityTypeFilter === "colis"
+          ? courierSessions
+          : operationalSessions;
+    const scopedProlongedCount = scopedSessions.filter((s) => isSessionProlonged(s, now)).length;
+
+    if (isRealtimeMode && showGuichetActivity && !loadingInitial && activeGuichetSessions.length === 0) {
+      alerts.push({
+        title: "Aucun guichet ouvert",
+        detail: "Aucun poste guichet n'est actuellement en service.",
+        tone: "warning",
+      });
+    }
+    if (isRealtimeMode && scopedProlongedCount > 0) {
+      alerts.push({
+        title: "Session ouverte trop longtemps",
+        detail: `${scopedProlongedCount} session${scopedProlongedCount > 1 ? "s" : ""} dépasse${scopedProlongedCount > 1 ? "nt" : ""} ${LONG_SESSION_THRESHOLD_MS / 3600000} h.`,
+        tone: "danger",
+      });
+    }
+    if (showGuichetActivity && closedGuichetPendingForView > 0) {
+      alerts.push({
+        title: "Activité sans validation",
+        detail: `${closedGuichetPendingForView} session${closedGuichetPendingForView > 1 ? "s" : ""} clôturée${closedGuichetPendingForView > 1 ? "s" : ""} attend${closedGuichetPendingForView > 1 ? "ent" : ""} validation.`,
+        tone: "warning",
+      });
+    }
+    return alerts;
+  }, [
+    activityTypeFilter,
+    activeGuichetSessions.length,
+    closedGuichetPendingForView,
+    courierSessions,
+    guichetSessions,
+    isRealtimeMode,
+    loadingInitial,
+    now,
+    operationalSessions,
+    showGuichetActivity,
+  ]);
+
+  const agencyStateOk = agencyAlerts.length === 0;
+
   const openSessionDetails = (s: SessionDoc) => setDetailSession(s);
 
   const suspendGuichet = async (session: SessionDoc) => {
@@ -579,172 +909,308 @@ export default function AgencyChiefDashboardLite() {
     }
   };
 
-  const closeCourierChief = async (session: SessionDoc) => {
-    if (!companyId || !agencyId) return;
-    if (!window.confirm("Clôturer cette session courrier ?")) return;
-    setClosingId(session.id);
-    try {
-      await closeCourierSession({ companyId, agencyId, sessionId: session.id });
-      toast.success("Session courrier clôturée.");
-    } catch (e) {
-      console.error("[AgencyChiefDashboardLite] closeCourierSession:", e);
-      toast.error(e instanceof Error ? e.message : "Clôture impossible.");
-    } finally {
-      setClosingId(null);
-    }
-  };
-
   if (!companyId || !agencyId) {
     return <EmptyState message="Contexte agence introuvable." />;
   }
 
-  const helpMontantIndicatif = (
-    <span className="ml-1 inline-flex align-middle" title="Montant non validé en caisse">
-      <Info className="h-3.5 w-3.5 text-slate-400" aria-hidden />
-    </span>
-  );
-
   return (
     <div className="space-y-4">
-      <SectionCard
-        title="Résumé opérationnel"
-        description={`Indicateurs alignés sur les sessions affichées ci-dessous (${todayLabel}). Hors validation comptable.`}
-        icon={Activity}
-      >
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <MetricCard
-            label="Sessions ouvertes"
-            icon={Radio}
-            value={loadingInitial ? "—" : openSessionsCount}
-            hint="Postes billetterie en service et sessions courrier actives (état : actif)."
-          />
-          <MetricCard
-            label="Billets vendus"
-            icon={Ticket}
-            value={loadingInitial ? "—" : kpiBilletsDepuisSessions}
-            hint="Somme des places vendues sur toutes les sessions billetterie (service ou pause), même total que les cartes."
-          />
-          <MetricCard
-            label="Colis enregistrés"
-            icon={Package}
-            value={loadingInitial ? "—" : kpiColisDepuisSessions}
-            hint="Somme des colis sur toutes les sessions courrier actives, même total que les cartes."
-          />
-          <MetricCard
-            label="Montant des ventes (indicatif)"
-            icon={DollarSign}
-            help={helpMontantIndicatif}
-            value={loadingInitial ? "—" : money(kpiMontantIndicatifDepuisSessions)}
-            hint="Billetterie + courrier, même calcul que chaque session — indicatif, non validé en caisse."
-          />
+      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              Période : {selectedRange.label}
+            </p>
+            <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+              {periodBadgeLabel}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {periodOptions.map((option) => {
+              const active = periodPreset === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setAnalysisPreset(option.id)}
+                  className={[
+                    "rounded-lg border px-3 py-2 text-xs font-semibold transition",
+                    active
+                      ? "border-indigo-500 bg-indigo-50 text-indigo-900 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-100"
+                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800",
+                  ].join(" ")}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </SectionCard>
+        <div className="mt-3 flex flex-col gap-2 border-t border-gray-100 pt-3 dark:border-gray-800 sm:flex-row sm:items-center">
+          <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">
+            Type d’activité
+          </span>
+          <div className="flex flex-wrap gap-2">
+            {activityTypeOptions.map((option) => {
+              const active = activityTypeFilter === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setActivityTypeFilter(option.id)}
+                  className={[
+                    "rounded-lg border px-3 py-2 text-xs font-semibold transition",
+                    active
+                      ? "border-emerald-500 bg-emerald-50 text-emerald-900 dark:border-emerald-400 dark:bg-emerald-950/40 dark:text-emerald-100"
+                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800",
+                  ].join(" ")}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {periodPreset === "custom" ? (
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+            <label className="flex flex-col gap-1 text-xs font-medium text-gray-600 dark:text-gray-300">
+              Début
+              <input
+                type="date"
+                value={customStartKey}
+                onChange={(e) => setCustomStartKey(e.target.value)}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-gray-600 dark:text-gray-300">
+              Fin
+              <input
+                type="date"
+                value={customEndKey}
+                onChange={(e) => setCustomEndKey(e.target.value)}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
+              />
+            </label>
+          </div>
+        ) : null}
+      </div>
 
-      <SectionCard
-        title="Activité en direct"
-        description="Aperçu des postes ouverts : billetterie et courrier."
-        icon={Clock}
-      >
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-          <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
-            Postes billetterie en service : <strong>{billetterieActivesCount}</strong>
+      {showAgencyActivity && isRealtimeMode ? (
+        <SectionCard
+          title="État actuel de l’agence"
+          icon={agencyStateOk ? CheckCircle2 : AlertTriangle}
+          right={
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              {lastLiveAt ? formatClockFr(lastLiveAt) : "En attente"}
+            </span>
+          }
+        >
+          <div
+            className={[
+              "rounded-lg border px-4 py-3",
+              agencyStateOk
+                ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100"
+                : "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100",
+            ].join(" ")}
+          >
+            <p className="text-lg font-semibold">
+              {agencyStateOk ? "Tout fonctionne normalement" : agencyAlerts[0]?.title}
+            </p>
+            {!agencyStateOk ? (
+              <p className="mt-1 text-sm">{agencyAlerts[0]?.detail}</p>
+            ) : null}
           </div>
-          <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
-            Sessions courrier en service : <strong>{courierSessions.length}</strong>
+        </SectionCard>
+      ) : null}
+
+      {showAgencyActivity ? (
+        <SectionCard
+          title="Activité agence"
+          icon={Activity}
+          right={
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+              Caisse agence uniquement
+            </span>
+          }
+        >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <MetricCard
+              label={
+                activityTypeFilter === "guichet"
+                  ? "Sessions guichet"
+                  : activityTypeFilter === "colis"
+                    ? "Sessions colis"
+                    : "Sessions"
+              }
+              icon={Clock}
+              help={helpIcon(
+                isRealtimeMode ? "Sessions actives uniquement." : "Sessions clôturées dans la période."
+              )}
+              value={
+                loadingInitial
+                  ? "—"
+                  : activityTypeFilter === "guichet"
+                    ? displayedGuichetSessionCount
+                    : activityTypeFilter === "colis"
+                      ? displayedColisSessionCount
+                      : displayedSessionCount
+              }
+            />
+            {showGuichetActivity ? (
+              <MetricCard
+                label="Billets guichet"
+                icon={Ticket}
+                help={helpIcon("Réservations guichet rattachées aux sessions agence.")}
+                value={loadingInitial ? "—" : displayedBillets}
+              />
+            ) : null}
+            {showColisActivity ? (
+              <MetricCard
+                label="Colis enregistrés"
+                icon={Package}
+                help={helpIcon("Colis rattachés aux sessions courrier agence.")}
+                value={loadingInitial ? "—" : displayedColis}
+              />
+            ) : null}
+            <MetricCard
+              label={
+                activityTypeFilter === "guichet"
+                  ? "Caisse guichet"
+                  : activityTypeFilter === "colis"
+                    ? "Caisse colis"
+                    : "Caisse agence"
+              }
+              icon={DollarSign}
+              help={helpIcon("Argent terrain uniquement. Les ventes en ligne sont exclues.")}
+              value={
+                loadingInitial
+                  ? "—"
+                  : money(
+                      activityTypeFilter === "guichet"
+                        ? displayedMontantGuichet
+                        : activityTypeFilter === "colis"
+                          ? displayedMontantColis
+                          : displayedMontant
+                    )
+              }
+            />
           </div>
-          <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
-            Sessions prolongées (&gt; {LONG_SESSION_THRESHOLD_MS / 3600000} h) :{" "}
-            <strong>{prolongedCount}</strong>
+        </SectionCard>
+      ) : null}
+
+      {showOnlineActivity ? (
+        <SectionCard
+          title="Ventes en ligne"
+          icon={Ticket}
+          right={
+            <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800 dark:bg-blue-950/40 dark:text-blue-100">
+              Argent déjà encaissé (siège)
+            </span>
+          }
+        >
+          {onlineLoadError ? (
+            <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+              Paiements en ligne indisponibles.
+            </p>
+          ) : null}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <MetricCard
+              label="Total ventes online"
+              icon={DollarSign}
+              help={helpIcon("Hors caisse agence. Argent encaissé au niveau compagnie.")}
+              value={money(onlineSummary.amount)}
+            />
+            <MetricCard
+              label="Réservations"
+              icon={Ticket}
+              help={helpIcon("Paiements en ligne validés sur la période affichée.")}
+              value={onlineSummary.reservations}
+            />
           </div>
-          <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
-            Dernière mise à jour :{" "}
-            <strong>{lastLiveAt ? formatClockFr(lastLiveAt) : "—"}</strong>
-          </div>
-        </div>
-      </SectionCard>
+        </SectionCard>
+      ) : null}
 
       <AgencyBusMovementsSection
         companyId={companyId}
         agencyId={agencyId}
         todayKey={todayKey}
         agencyTz={agencyTz}
+        mode={isRealtimeMode ? "realtime" : "analysis"}
+        rangeStartKey={selectedRange.startKey}
+        rangeEndKey={selectedRange.endKey}
       />
 
-      <SectionCard
-        title="Sessions actives"
-        description="Billetterie (service ou pause) et courrier (en service). Synthèse issue des dossiers de session."
-        icon={Activity}
-      >
-        {operationalSessions.length === 0 ? (
-          <EmptyState message="Aucune session à afficher." />
+      <SectionCard title="Alertes" icon={AlertTriangle}>
+        {agencyAlerts.length === 0 ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100">
+            Aucune alerte.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {agencyAlerts.map((alert) => (
+              <div
+                key={alert.title}
+                className={[
+                  "rounded-lg border px-4 py-3",
+                  alert.tone === "danger"
+                    ? "border-rose-200 bg-rose-50 text-rose-950 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-100"
+                    : "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100",
+                ].join(" ")}
+              >
+                <p className="font-semibold">{alert.title}</p>
+                <p className="mt-1 text-sm">{alert.detail}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Suivi des guichets" icon={Radio}>
+        {guichetSessions.length === 0 ? (
+          <EmptyState message="Aucun guichet ouvert." />
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {operationalSessions.map((s) => {
+            {guichetSessions.map((s) => {
               const prolonged = isSessionProlonged(s, now);
               const start = startAtOfSession(s);
               const agentName = String(s.userName ?? s.agentName ?? "Agent");
               const agentCode = String(s.userCode ?? s.agentCode ?? "").trim();
-              const isCourrier = s.kind === "courrier";
               const guichetLive = guichetLiveBySession[s.id];
-              const courierLive = courierLiveBySession[s.id];
-              const opCount = isCourrier
-                ? courierParcelsDisplayed(s, courierLive)
-                : guichetTicketsDisplayed(s, guichetLive);
-              const indicatifMontant = isCourrier
-                ? courierAmountDisplayed(s, courierLive)
-                : guichetAmountDisplayed(s, guichetLive);
-
+              const opCount = guichetTicketsDisplayed(s, guichetLive);
+              const indicatifMontant = guichetAmountDisplayed(s, guichetLive);
               const guStatus = guichetStatusNorm(s);
-              const sessionStateLabel = isCourrier
-                ? "En service"
-                : guStatus === "active"
-                  ? "En service"
-                  : guStatus === "paused"
-                    ? "En pause"
-                    : String(s.status ?? "—");
-
-              const busy =
-                suspendingId === s.id || resumingId === s.id || closingId === s.id;
+              const sessionStateLabel = guStatus === "active" ? "Actif" : "Inactif";
+              const busy = suspendingId === s.id || resumingId === s.id || closingId === s.id;
 
               return (
                 <div
-                  key={`${s.kind}-${s.id}`}
+                  key={s.id}
                   className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900"
                 >
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                      {isCourrier ? "Courrier" : "Billetterie"}
+                      {agentCode ? `${agentName} (${agentCode})` : agentName}
                     </div>
                     {prolonged ? (
-                      <StatusBadge status="warning">Durée prolongée</StatusBadge>
+                      <StatusBadge status="warning">Trop longue</StatusBadge>
+                    ) : guStatus === "active" ? (
+                      <StatusBadge status="success">{sessionStateLabel}</StatusBadge>
                     ) : (
-                      <StatusBadge status="success">Durée dans la norme</StatusBadge>
+                      <StatusBadge status="warning">{sessionStateLabel}</StatusBadge>
                     )}
                   </div>
                   <div className="space-y-1 text-xs text-gray-600 dark:text-gray-300">
                     <p>
-                      Agent : <strong>{agentCode ? `${agentName} (${agentCode})` : agentName}</strong>
+                      Début : <strong>{formatDateTimeFr(s.startAt ?? s.openedAt ?? s.createdAt)}</strong>
                     </p>
                     <p>
-                      Début :{" "}
-                      <strong>{formatDateTimeFr(s.startAt ?? s.openedAt ?? s.createdAt)}</strong>
+                      Durée : <strong>{start ? formatDurationFr(start, now) : "—"}</strong>
                     </p>
                     <p>
-                      Durée :{" "}
-                      <strong>
-                        {start ? formatDurationFr(start, now) : "—"}
-                      </strong>
+                      Ventes : <strong>{opCount}</strong>
                     </p>
                     <p>
-                      {isCourrier ? "Colis enregistrés (session)" : "Billets vendus (places)"} :{" "}
-                      <strong>{opCount}</strong>
-                    </p>
-                    <p>
-                      Montant des ventes (indicatif) :{" "}
-                      <strong>{money(indicatifMontant)}</strong>
-                    </p>
-                    <p>
-                      État session : <strong>{sessionStateLabel}</strong>
+                      Montant : <strong>{money(indicatifMontant)}</strong>
                     </p>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -755,7 +1221,7 @@ export default function AgencyChiefDashboardLite() {
                     >
                       Voir détails
                     </ActionButton>
-                    {!isCourrier && guStatus === "active" ? (
+                    {guStatus === "active" ? (
                       <ActionButton
                         type="button"
                         variant="secondary"
@@ -765,7 +1231,7 @@ export default function AgencyChiefDashboardLite() {
                         {suspendingId === s.id ? "Suspension…" : "Suspendre"}
                       </ActionButton>
                     ) : null}
-                    {!isCourrier && guStatus === "paused" ? (
+                    {guStatus === "paused" ? (
                       <ActionButton
                         type="button"
                         variant="secondary"
@@ -781,13 +1247,9 @@ export default function AgencyChiefDashboardLite() {
                       disabled={
                         busy ||
                         !user?.uid ||
-                        (!isCourrier &&
-                          guStatus !== "active" &&
-                          guStatus !== "paused")
+                        (guStatus !== "active" && guStatus !== "paused")
                       }
-                      onClick={() =>
-                        void (isCourrier ? closeCourierChief(s) : closeGuichetChief(s))
-                      }
+                      onClick={() => void closeGuichetChief(s)}
                     >
                       {closingId === s.id ? "Clôture…" : "Clôturer"}
                     </ActionButton>

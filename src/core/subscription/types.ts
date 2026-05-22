@@ -1,20 +1,18 @@
 // src/core/subscription/types.ts
-// Firestore subscription document shape: companies/{companyId}/subscription/current
+// Firestore source of truth: companies/{companyId}
 
 import type { Timestamp } from "firebase/firestore";
 import type { Plan } from "./plans";
 
-export type SubscriptionStatus = "trial" | "active" | "expired";
+export type SubscriptionStatus = "trial" | "active" | "grace" | "restricted" | "suspended";
 
 export interface CompanySubscription {
   plan: Plan;
-  status: SubscriptionStatus;
-  trialEndsAt: Timestamp | null;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
+  subscriptionStatus: SubscriptionStatus;
+  updatedAt?: Timestamp | null;
 }
 
-export const DEFAULT_PLAN: Plan = "starter";
+export const DEFAULT_PLAN: Plan = "standard";
 
 export const SUBSCRIPTION_PATH = (companyId: string) =>
-  `companies/${companyId}/subscription/current` as const;
+  `companies/${companyId}` as const;

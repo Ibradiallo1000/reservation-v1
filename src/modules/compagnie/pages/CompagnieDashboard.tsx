@@ -25,6 +25,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageOfflineState } from "@/shared/ui/PageStates";
+import PlanBusinessMetricsPanel from "@/modules/compagnie/components/PlanBusinessMetricsPanel";
 import {
   getNetworkStatsChartData,
   getNetworkStats,
@@ -256,6 +257,11 @@ export default function CompagnieDashboard() {
           </span>
         </div>
       )}
+
+      <PlanBusinessMetricsPanel
+        companyId={companyId}
+        primaryColor={company?.couleurPrimaire ?? "var(--teliya-primary)"}
+      />
 
       <Card>
         <CardHeader>

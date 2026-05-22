@@ -32,6 +32,8 @@ export type AgencyTransferRequestDoc = {
   amount: number;
   currency: string;
   description: string;
+  bankReference?: string | null;
+  depositSlipUrl?: string | null;
   status: AgencyTransferRequestStatus;
   requestedBy: string;
   requestedByRole: string | null;
@@ -64,6 +66,8 @@ export async function createAgencyTransferRequest(params: {
   amount: number;
   currency: string;
   description?: string;
+  bankReference?: string | null;
+  depositSlipUrl?: string | null;
   requestedBy: string;
   requestedByRole?: string | null;
 }): Promise<string> {
@@ -77,6 +81,8 @@ export async function createAgencyTransferRequest(params: {
     amount: Number(params.amount) || 0,
     currency: params.currency,
     description: (params.description ?? "").trim(),
+    bankReference: params.bankReference?.trim() || null,
+    depositSlipUrl: params.depositSlipUrl?.trim() || null,
     status: "pending_manager",
     requestedBy: params.requestedBy,
     requestedByRole: params.requestedByRole ?? null,
@@ -146,6 +152,8 @@ export async function approveAgencyTransferRequest(params: {
       performedBy: params.approvedBy,
       performedByRole: params.approvedByRole ?? null,
       idempotencyKey: `transfer_request_${params.requestId}`,
+      bankReference: reqData.bankReference ?? null,
+      depositSlipUrl: reqData.depositSlipUrl ?? null,
       description: reqData.description || "Versement validé chef d'agence",
     });
 

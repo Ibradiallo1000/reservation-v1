@@ -518,7 +518,7 @@ export default function CEOTreasuryPage({ embedded = false }: CEOTreasuryPagePro
         />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
           <MetricCard label="Caisse (agences)" value={money(cashByType.cash)} icon={Banknote} valueColorVar="#b45309" />
-          <MetricCard label="Banque" value={bankMoney(cashByType.bank)} icon={Building2} valueColorVar="#1d4ed8" />
+          <MetricCard label="Dépôts validés" value={bankMoney(cashByType.bank)} icon={Building2} valueColorVar="#1d4ed8" />
           <MetricCard label="Mobile money" value={money(cashByType.mobile)} icon={Smartphone} valueColorVar="#15803d" />
           <MetricCard label="Réserve dépenses" value={money(cashByType.reserve)} icon={PiggyBank} />
         </div>

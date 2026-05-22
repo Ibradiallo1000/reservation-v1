@@ -41,6 +41,13 @@ import { cn } from "@/lib/utils";
 import { offlineStorageService } from "@/modules/offline/services/offlineStorageService";
 import { getPersistentDeviceId } from "@/modules/offline/services/offlineIdentityService";
 import { offlineSyncService } from "@/modules/offline/services/offlineSyncService";
+import { useOperationQuotaStatus } from "@/core/hooks/useOperationQuotaStatus";
+import {
+  OPERATION_QUOTA_BLOCKED_HELP,
+  OPERATION_QUOTA_BLOCKED_MESSAGE,
+  OPERATION_QUOTA_WARNING_MESSAGE,
+  operationQuotaErrorMessage,
+} from "@/core/subscription/operationQuota";
 import { toast } from "sonner";
 import "dayjs/locale/fr";
 
@@ -239,6 +246,12 @@ export default function CourierCreateShipmentPage() {
   } = w;
 
   const sessionActive = String(session?.status ?? "").toUpperCase() === "ACTIVE";
+  const {
+    status: operationQuota,
+    quotaReached,
+    quotaWarning,
+  } = useOperationQuotaStatus(companyId);
+  const upgradeHref = companyId ? `/compagnie/${companyId}/parametres/plan` : "/compagnie/parametres/plan";
 
   const money = useFormatCurrency();
   const currencySymbol = useCurrencySymbol();
@@ -702,7 +715,7 @@ export default function CourierCreateShipmentPage() {
           }
         })();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Erreur d'enregistrement";
+        const msg = operationQuotaErrorMessage(err) ?? (err instanceof Error ? err.message : "Erreur d'enregistrement");
         patchOptimisticShipment(localId, { uiStatus: "erreur", errorMessage: msg });
         if (activeTicketLocalId === localId) {
           setError(msg);
@@ -828,6 +841,10 @@ export default function CourierCreateShipmentPage() {
       return;
     }
 
+    if (quotaReached) {
+      setError(OPERATION_QUOTA_BLOCKED_MESSAGE);
+      return;
+    }
     if (!canSubmit) return;
     setError(null);
     setSubmitting(true);
@@ -985,7 +1002,7 @@ export default function CourierCreateShipmentPage() {
       setFlowPhase("ticket");
       void runCreateShipmentAsync(optimisticItem);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur création envoi");
+      setError(operationQuotaErrorMessage(err) ?? (err instanceof Error ? err.message : "Erreur création envoi"));
     } finally {
       setSubmitting(false);
     }
@@ -1117,6 +1134,29 @@ export default function CourierCreateShipmentPage() {
           <button type="button" onClick={() => setError(null)} className="shrink-0 underline">
             Fermer
           </button>
+        </div>
+      )}
+
+      {(quotaWarning || quotaReached) && operationQuota && !showTicketView && (
+        <div className="mb-2 rounded-xl border border-orange-200 bg-orange-50 p-3 text-xs text-orange-900 shadow-sm">
+          <p className="font-bold whitespace-pre-line">
+            {quotaReached ? OPERATION_QUOTA_BLOCKED_MESSAGE : OPERATION_QUOTA_WARNING_MESSAGE}
+          </p>
+          <p className="mt-1 text-orange-800">
+            {operationQuota.currentMonthOperations.toLocaleString("fr-FR")} /{" "}
+            {operationQuota.includedOperations.toLocaleString("fr-FR")} opérations utilisées
+          </p>
+          {quotaReached && (
+            <p className="mt-1 text-[11px] font-medium text-orange-700">
+              {OPERATION_QUOTA_BLOCKED_HELP}
+            </p>
+          )}
+          <a
+            href={upgradeHref}
+            className="mt-2 inline-flex rounded-lg bg-orange-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-orange-700"
+          >
+            Passer en Premium
+          </a>
         </div>
       )}
 
@@ -1809,7 +1849,7 @@ export default function CourierCreateShipmentPage() {
                         >
                           <button
                             type="submit"
-                            disabled={!canSubmit || submitting}
+                            disabled={!canSubmit || submitting || (!editingShipmentId && quotaReached)}
                             className="h-11 w-full rounded-lg border border-transparent text-sm font-semibold text-white disabled:opacity-50"
                             style={{ backgroundColor: themePrimary }}
                           >

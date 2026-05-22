@@ -191,7 +191,7 @@ export default function CompanyCashPage({ embedded = false, financesTabMode = fa
                   icon={Smartphone}
                 />
                 <MetricCard
-                  label="Banque"
+                  label="Dépôts validés"
                   value={ledgerLiquidity == null ? "—" : money(ledgerLiquidity.bank)}
                   icon={Building2}
                 />

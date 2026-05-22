@@ -3,13 +3,13 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Activity,
   Home,
   Building,
   DollarSign,
   Settings,
   Image as ImageIcon,
   CreditCard,
-  TrendingUp,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import InternalLayout from "@/shared/layout/InternalLayout";
@@ -20,8 +20,8 @@ const MENU: NavSection[] = [
   { label: "Tableau de bord", icon: Home, path: "dashboard", end: true },
   { label: "Compagnies", icon: Building, path: "compagnies" },
   { label: "Abonnements", icon: CreditCard, path: "subscriptions" },
-  { label: "Revenus", icon: TrendingUp, path: "revenus" },
-  { label: "Finances", icon: DollarSign, path: "finances" },
+  { label: "Activite", icon: Activity, path: "revenus" },
+  { label: "Facturation", icon: DollarSign, path: "finances" },
   { label: "Plans & tarifs", icon: DollarSign, path: "plans" },
   { label: "Médias", icon: ImageIcon, path: "media" },
   { label: "Paramètres", icon: Settings, path: "parametres-platforme" },

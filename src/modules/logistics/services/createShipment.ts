@@ -16,8 +16,11 @@ import { generateTrackingPublicId, generateTrackingToken } from "../utils/shipme
 import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 import { writeCourierActivityInTransaction } from "@/modules/compagnie/activity/activityLogsService";
-import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import { createPayment, getPaymentByReservationId, confirmPayment } from "@/services/paymentService";
+import {
+  assertAndIncrementOperationInTransaction,
+  loadOperationPlanSettings,
+} from "@/core/subscription/operationQuota";
 
 const SHIPMENT_SEQ_PAD = 5;
 
@@ -75,6 +78,7 @@ export type CreateShipmentResult = {
 export async function createShipment(params: CreateShipmentParams): Promise<CreateShipmentResult> {
   const shipmentId =
     params.shipmentId ?? doc(shipmentsRef(db, params.companyId)).id;
+  const operationPlans = await loadOperationPlanSettings();
 
   if (params.sessionId) {
     const total = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
@@ -94,7 +98,15 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     params.tripInstanceId != null && String(params.tripInstanceId).trim() !== "";
   const pickupCode = String(params.pickupCode ?? generatePickupCode()).trim();
 
-  await runTransaction(db, async (tx) => {
+  console.log("🚀 START parcel creation", {
+    companyId: params.companyId,
+    agencyId: params.originAgencyId,
+    data: params,
+  });
+
+  try {
+    await runTransaction(db, async (tx) => {
+    const companyRef = doc(db, "companies", params.companyId);
     const sRef = shipmentRef(db, params.companyId, shipmentId);
     const sSnap = await tx.get(sRef);
     if (sSnap.exists()) throw new Error("Un envoi existe déjà avec cet id.");
@@ -131,6 +143,8 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       nextSeq = last + 1;
       shipmentNumber = `${params.companyCode}-${params.agencyCode}-${params.agentCode}-${String(nextSeq).padStart(SHIPMENT_SEQ_PAD, "0")}`;
     }
+
+    await assertAndIncrementOperationInTransaction(tx, companyRef, operationPlans);
 
     if (counterRef && nextSeq != null) {
       tx.set(counterRef, { lastSeq: nextSeq, updatedAt: Timestamp.now() }, { merge: true });
@@ -170,6 +184,7 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       trackingToken,
       pickupCode,
     });
+    console.log("✅ PARCEL CREATED");
 
     const eventsCol = eventsRef(db, params.companyId);
     const eventDoc = doc(eventsCol);
@@ -196,7 +211,11 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
         });
       }
     }
-  });
+    });
+  } catch (e) {
+    console.error("❌ TRANSACTION ERROR", e);
+    throw e;
+  }
 
   logAgentHistoryEvent({
     companyId: params.companyId,
@@ -218,81 +237,61 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     });
   }
 
-  // Encaissement à l'origine : Payment + financialTransactions (best effort, non bloquant UI).
+  // Encaissement a l'origine : le paiement courrier n'est valide que si le ledger est ecrit.
   if (params.paymentStatus === "PAID_ORIGIN") {
     const amount = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
     if (amount > 0 && params.createdBy) {
-      void (async () => {
-        try {
-          let ledgerWrittenViaConfirmPayment = false;
-          const existing = await getPaymentByReservationId(params.companyId, shipmentId);
-          if (!existing) {
-            await createPayment({
-              reservationId: shipmentId,
-              companyId: params.companyId,
-              agencyId: params.originAgencyId,
-              amount,
-              currency: "XOF",
-              channel: "courrier",
-              provider: "cash",
-              status: "validated",
-              validatedBy: params.createdBy,
-            });
-          } else if (existing.status === "validated") {
-            // déjà enregistré
-          } else if (existing.status === "pending") {
-            await confirmPayment(params.companyId, existing.id, params.createdBy);
-            ledgerWrittenViaConfirmPayment = true;
-          }
+      const pm =
+        params.paymentMethod === "mobile_money"
+          ? "mobile_money"
+          : params.paymentMethod === "bank"
+            ? "card"
+            : "cash";
+      let paymentId: string | null = null;
+      const existing = await getPaymentByReservationId(params.companyId, shipmentId);
+      if (!existing) {
+        paymentId = await createPayment({
+          reservationId: shipmentId,
+          companyId: params.companyId,
+          agencyId: params.originAgencyId,
+          amount,
+          currency: "XOF",
+          channel: "courrier",
+          provider: pm === "mobile_money" ? "wave" : "cash",
+          status: "pending",
+        });
+      } else if (existing.status === "pending") {
+        paymentId = existing.id;
+      } else if (existing.status !== "validated") {
+        throw new Error("Paiement courrier existant non validable.");
+      }
 
-          if (!ledgerWrittenViaConfirmPayment) {
-            const pm =
-              params.paymentMethod === "mobile_money"
-                ? "mobile_money"
-                : params.paymentMethod === "bank"
-                  ? "card"
-                  : "cash";
-            await createFinancialTransaction({
-              companyId: params.companyId,
-              type: "payment_received",
-              source: "courrier",
-              paymentChannel: "courrier",
-              paymentMethod: pm,
-              paymentProvider: pm === "mobile_money" ? "wave" : "cash",
-              amount,
-              currency: "XOF",
-              agencyId: params.originAgencyId,
-              reservationId: shipmentId,
-              referenceType: "payment",
-              referenceId: shipmentId,
-              metadata: {
-                channel: "courrier",
-                mode: params.offlineMeta?.mode ?? "online",
-                offlineTransactionId: params.offlineMeta?.transactionId ?? null,
-                offlineDeviceId: params.offlineMeta?.deviceId ?? null,
-                ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
-              },
-            });
-            logAgentHistoryEvent({
-              companyId: params.companyId,
-              agencyId: params.originAgencyId,
-              agentId: params.createdBy,
-              role: "agentCourrier",
-              type: "PAYMENT_RECEIVED",
-              referenceId: shipmentId,
-              amount,
-              status: "VALIDE",
-              createdBy: params.createdBy,
-              metadata: {
-                paymentMethod: pm,
-                ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
-              },
-            });
-          }
-        } catch (err) {
-          console.warn("[createShipment] create Payment+ledger courrier failed:", err);
-        }
-      })();
+      if (paymentId) {
+        await confirmPayment(params.companyId, paymentId, params.createdBy, {
+          channel: "courrier",
+          paymentMethod: pm,
+          mode: params.offlineMeta?.mode ?? "online",
+          offlineTransactionId: params.offlineMeta?.transactionId ?? null,
+          offlineDeviceId: params.offlineMeta?.deviceId ?? null,
+          ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
+        });
+      }
+
+      logAgentHistoryEvent({
+        companyId: params.companyId,
+        agencyId: params.originAgencyId,
+        agentId: params.createdBy,
+        role: "agentCourrier",
+        type: "PAYMENT_RECEIVED",
+        referenceId: shipmentId,
+        amount,
+        status: "VALIDE",
+        createdBy: params.createdBy,
+        metadata: {
+          paymentMethod: pm,
+          ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
+        },
+      });
     }
   }
 

@@ -4,12 +4,14 @@
 
 import type { Capability } from "@/core/permissions/capabilities";
 
-export type Plan = "starter" | "growth" | "enterprise";
+export type Plan = "standard" | "premium";
+export type LegacyPlan = "starter" | "growth" | "enterprise";
+export type AnyPlan = Plan | LegacyPlan | string | null | undefined;
 
-const STARTER_CAPABILITIES: readonly Capability[] = [
+const STANDARD_CAPABILITIES: readonly Capability[] = [
   "view_agency_dashboard",
   "manage_agency_finances",
-  "manage_company_finances", // CEO must always access Revenus & Liquidités
+  "manage_company_finances",
   "manage_reservations",
   "manage_guichet",
   "manage_boarding",
@@ -17,14 +19,14 @@ const STARTER_CAPABILITIES: readonly Capability[] = [
   "manage_personnel",
   "manage_agency_trajets",
   "view_agency_stats",
+  "manage_logistics",
 ];
 
-const GROWTH_CAPABILITIES: readonly Capability[] = [
-  ...STARTER_CAPABILITIES,
+const PREMIUM_CAPABILITIES: readonly Capability[] = [
+  ...STANDARD_CAPABILITIES,
   "manage_treasury",
   "manage_multi_bank",
   "view_global_dashboard",
-  "manage_company_finances",
   "validate_sessions",
   "manage_global_fleet",
   "manage_roles",
@@ -32,27 +34,36 @@ const GROWTH_CAPABILITIES: readonly Capability[] = [
   "view_company_stats",
   "view_profit_analysis",
   "view_anomaly_engine",
-];
-
-const ENTERPRISE_CAPABILITIES: readonly Capability[] = [
-  ...GROWTH_CAPABILITIES,
   "view_predictive_insights",
   "use_simulation_engine",
   "access_enterprise_features",
+  "view_advanced_reports",
+  "access_ledger",
+  "view_financial_analytics",
+  "manage_multi_agency",
 ];
 
 const PLAN_CAPABILITIES: Record<Plan, readonly Capability[]> = {
-  starter: STARTER_CAPABILITIES,
-  growth: GROWTH_CAPABILITIES,
-  enterprise: ENTERPRISE_CAPABILITIES,
+  standard: STANDARD_CAPABILITIES,
+  premium: PREMIUM_CAPABILITIES,
 };
 
-export const PLAN_HIERARCHY: readonly Plan[] = ["starter", "growth", "enterprise"];
+export const PLAN_HIERARCHY: readonly Plan[] = ["standard", "premium"];
 
-export function getPlanCapabilities(plan: Plan): readonly Capability[] {
-  return PLAN_CAPABILITIES[plan] ?? [];
+export function normalizePlan(plan: AnyPlan): Plan {
+  const raw = String(plan ?? "").trim().toLowerCase();
+  if (raw === "premium" || raw === "growth" || raw === "enterprise") return "premium";
+  return "standard";
 }
 
-export function isPlanAtLeast(current: Plan, minimum: Plan): boolean {
-  return PLAN_HIERARCHY.indexOf(current) >= PLAN_HIERARCHY.indexOf(minimum);
+export function getPlanCapabilities(plan: AnyPlan): readonly Capability[] {
+  return PLAN_CAPABILITIES[normalizePlan(plan)] ?? [];
+}
+
+export function hasCapability(plan: AnyPlan, capability: Capability): boolean {
+  return getPlanCapabilities(plan).includes(capability);
+}
+
+export function isPlanAtLeast(current: AnyPlan, minimum: AnyPlan): boolean {
+  return PLAN_HIERARCHY.indexOf(normalizePlan(current)) >= PLAN_HIERARCHY.indexOf(normalizePlan(minimum));
 }

@@ -1,5 +1,6 @@
 // src/pages/chef-comptable/Rapports.tsx
 import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import {
@@ -31,6 +32,9 @@ import {
 } from 'lucide-react';
 import { SectionCard, StatusBadge as UIStatusBadge } from '@/ui';
 import type { StatusVariant } from '@/ui';
+import { useCompanyPlan } from '@/core/hooks/useCompanyPlan';
+import { hasCapability } from '@/core/subscription/capabilities';
+import PremiumGate from '@/core/ui/PremiumGate';
 
 interface GeneratedReport {
   id: string;
@@ -47,6 +51,9 @@ interface GeneratedReport {
 
 const Rapports: React.FC = () => {
   const { user, company } = useAuth() as any;
+  const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
+  const companyId = routeCompanyId ?? user?.companyId ?? "";
+  const { company: planCompany, loading: planLoading } = useCompanyPlan(companyId);
   const theme = useCompanyTheme(company) || { primary: '#2563eb', secondary: '#3b82f6' };
   
   const [reportType, setReportType] = useState<'comptable' | 'operationnel' | 'analytique'>('comptable');
@@ -58,6 +65,14 @@ const Rapports: React.FC = () => {
   const [generatingReportId, setGeneratingReportId] = useState<string | null>(null);
   const [generatedReports, setGeneratedReports] = useState<GeneratedReport[]>([]);
   const [showReportDetails, setShowReportDetails] = useState<string | null>(null);
+
+  if (planLoading) {
+    return <div className="p-6 text-gray-500">Chargement...</div>;
+  }
+
+  if (!hasCapability(planCompany, "auto_reports")) {
+    return <PremiumGate companyId={companyId} featureName="Rapports automatiques" />;
+  }
 
   // ==================== PÉRIODE PAR DÉFAUT : MOIS EN COURS ====================
   const getCurrentMonthRange = () => {

@@ -1,356 +1,394 @@
-// =============================================
-// src/modules/compagnie/components/parametres/ParametresPlan.tsx
-// VERSION MULTI-RÔLE – Dual-revenue model
-// =============================================
 import React, { useEffect, useMemo, useState } from "react";
-import { db } from "@/firebaseConfig";
-import { useCurrencySymbol } from "@/shared/currency/CurrencyContext";
-import { Button } from "@/shared/ui/button";
-import { SectionCard, StatusBadge } from "@/ui";
-import type { StatusVariant } from "@/ui";
-import { CheckCircle2, Shield, Star, Zap, Crown } from "lucide-react";
-import GenerateTripInstancesPlanningCard from "@/modules/compagnie/components/parametres/GenerateTripInstancesPlanningCard";
+import { useParams } from "react-router-dom";
 import {
+  addDoc,
   collection,
   doc,
   getCountFromServer,
   onSnapshot,
-  orderBy,
-  query,
   serverTimestamp,
-  setDoc,
 } from "firebase/firestore";
+import { toast } from "sonner";
+import { db } from "@/firebaseConfig";
+import { Button } from "@/shared/ui/button";
+import { SectionCard, StatusBadge } from "@/ui";
+import { AlertTriangle, CheckCircle2, Crown, Shield } from "lucide-react";
+import { normalizePlan, type Plan } from "@/core/subscription/plans";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  initializeOperationsCounter,
+  OPERATION_QUOTA_BLOCKED_HELP,
+  OPERATION_QUOTA_BLOCKED_MESSAGE,
+  OPERATION_QUOTA_WARNING_MESSAGE,
+} from "@/core/subscription/operationQuota";
 
-/* ====================================================================
-   TYPES
-==================================================================== */
-type SupportLevel = "basic" | "standard" | "priority" | "premium" | "enterprise";
+type PlanValues = {
+  price: number;
+  includedOperations: number;
+  overage: number;
+};
 
-type Plan = {
-  id: string;
-  name: string;
-  priceMonthly: number;
-  quotaReservations?: number;
-  digitalFeePercent: number;
-  feeGuichet: number;
-  minimumMonthly: number;
-  maxAgences: number;
-  supportLevel: SupportLevel;
-  isTrial?: boolean;
-  trialDurationDays?: number;
-  brandingLocked?: boolean;
-  features: {
-    publicPage: boolean;
-    onlineBooking: boolean;
-    guichet: boolean;
-  };
+type SystemPlan = PlanValues & {
+  id: Plan;
+  name: "STANDARD" | "PREMIUM";
+};
+
+type SystemPlans = Record<Plan, SystemPlan>;
+
+type PlanPresentation = {
+  id: Plan;
+  title: "STANDARD" | "PREMIUM";
+  value: string;
+  features: string[];
+  warning?: string;
 };
 
 interface Props {
-  companyId: string;
+  companyId?: string;
 }
 
-/* ====================================================================
-   CONSTANTS
-==================================================================== */
 const nf = new Intl.NumberFormat("fr-FR");
 
-const SUPPORT_LABELS: Record<SupportLevel, string> = {
-  basic: "Basic",
-  standard: "Standard",
-  priority: "Prioritaire",
-  premium: "Premium",
-  enterprise: "Enterprise",
-};
-
-function supportToVariant(s: SupportLevel): StatusVariant {
-  switch (s) {
-    case "standard": return "info";
-    case "priority": return "warning";
-    case "premium": return "active";
-    case "enterprise": return "completed";
-    default: return "neutral";
-  }
+function getCurrentMonthOperations(company: Record<string, unknown> | null): number {
+  if (!company) return 0;
+  return Math.max(0, Number(company.currentMonthOperations ?? 0) || 0);
 }
 
-/* ====================================================================
-   COMPONENT
-==================================================================== */
+const DEFAULT_PLANS: Record<Plan, PlanValues> = {
+  standard: {
+    price: 100000,
+    includedOperations: 3000,
+    overage: 15,
+  },
+  premium: {
+    price: 300000,
+    includedOperations: 10000,
+    overage: 10,
+  },
+};
+
+const DEFAULT_SYSTEM_PLANS: SystemPlans = {
+  standard: {
+    id: "standard",
+    name: "STANDARD",
+    ...DEFAULT_PLANS.standard,
+  },
+  premium: {
+    id: "premium",
+    name: "PREMIUM",
+    ...DEFAULT_PLANS.premium,
+  },
+};
+
+const PLAN_PRESENTATION: Record<Plan, PlanPresentation> = {
+  standard: {
+    id: "standard",
+    title: "STANDARD",
+    value: "Gerez vos ventes quotidiennes sans complexite",
+    features: [
+      "Vente de billets (guichet + en ligne)",
+      "Suivi simple des paiements",
+      "Gestion des agences",
+      "Gestion basique des colis",
+    ],
+    warning: "Pas d'analyse avancee",
+  },
+  premium: {
+    id: "premium",
+    title: "PREMIUM",
+    value: "Controlez vos revenus et developpez votre reseau",
+    features: [
+      "Analyse financiere complete",
+      "Suivi du cash en temps reel",
+      "Comparaison entre agences",
+      "Detection des pertes",
+      "Rapports automatiques",
+    ],
+  },
+};
+
+function normalizePlanValues(raw: unknown, fallback: SystemPlan): SystemPlan {
+  const data = raw && typeof raw === "object" ? (raw as Partial<PlanValues>) : {};
+  const price = Number(data.price);
+  const includedOperations = Number(data.includedOperations);
+  const overage = Number(data.overage);
+
+  return {
+    ...fallback,
+    price: Number.isFinite(price) ? price : fallback.price,
+    includedOperations: Number.isFinite(includedOperations)
+      ? includedOperations
+      : fallback.includedOperations,
+    overage: Number.isFinite(overage) ? overage : fallback.overage,
+  };
+}
+
+function mergePlans(raw: unknown): SystemPlans {
+  const data = raw && typeof raw === "object" ? (raw as Partial<Record<Plan, PlanValues>>) : {};
+
+  return {
+    standard: normalizePlanValues(data.standard, DEFAULT_SYSTEM_PLANS.standard),
+    premium: normalizePlanValues(data.premium, DEFAULT_SYSTEM_PLANS.premium),
+  };
+}
+
 const ParametresPlan: React.FC<Props> = ({ companyId }) => {
-  const currencySymbol = useCurrencySymbol();
-  const [cmp, setCmp] = useState<Record<string, unknown> | null>(null);
-  const [plans, setPlans] = useState<Plan[]>([]);
+  const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
+  const { user } = useAuth();
+  const resolvedCompanyId = companyId || routeCompanyId || user?.companyId || "";
+  const [company, setCompany] = useState<Record<string, unknown> | null>(null);
+  const [plans, setPlans] = useState<SystemPlans>(DEFAULT_SYSTEM_PLANS);
   const [counts, setCounts] = useState({ agences: 0, users: 0 });
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  /* =========================
-     LOAD DATA
-  ========================= */
   useEffect(() => {
-    if (!companyId) return;
-
-    const unsubs: Array<() => void> = [];
-
-    // Company realtime
-    const companyRef = doc(db, "companies", companyId);
-    const offCompany = onSnapshot(companyRef, (snap) => {
-      if (snap.exists()) {
-        setCmp({ id: snap.id, ...snap.data() });
-      } else {
-        setCmp(null);
-      }
+    if (!resolvedCompanyId) {
+      setCompany(null);
       setLoading(false);
-    });
-    unsubs.push(offCompany);
+      return;
+    }
 
-    // Plans realtime
-    const plansQuery = query(
-      collection(db, "plans"),
-      orderBy("priceMonthly", "asc")
+    const companyRef = doc(db, "companies", resolvedCompanyId);
+    const plansRef = doc(db, "adminSettings", "plans");
+
+    const offCompany = onSnapshot(
+      companyRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as Record<string, unknown>;
+          if (typeof data.currentMonthOperations !== "number") {
+            void initializeOperationsCounter(resolvedCompanyId).catch(() => {});
+          }
+        }
+        setCompany(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+        setLoading(false);
+      },
+      () => {
+        setCompany(null);
+        setLoading(false);
+      }
     );
 
-    const offPlans = onSnapshot(plansQuery, (snap) => {
-      setPlans(
-        snap.docs.map((d) => {
-          const data = d.data() as Record<string, unknown>;
-          return {
-            id: d.id,
-            name: (data.name as string) ?? "",
-            priceMonthly: Number(data.priceMonthly) || 0,
-            quotaReservations: Number(data.quotaReservations) || 0,
-            digitalFeePercent: Number(data.digitalFeePercent) || 0,
-            feeGuichet: Number(data.feeGuichet) || 0,
-            minimumMonthly: Number(data.minimumMonthly) || 0,
-            maxAgences: Number(data.maxAgences) || 1,
-            supportLevel: (data.supportLevel as SupportLevel) || "basic",
-            isTrial: Boolean(data.isTrial),
-            trialDurationDays: Number(data.trialDurationDays) || 0,
-            brandingLocked: Boolean(data.brandingLocked),
-            features: {
-              publicPage: true,
-              onlineBooking: true,
-              guichet: true,
-            },
-          } satisfies Plan;
-        })
-      );
-    });
-    unsubs.push(offPlans);
+    const offPlans = onSnapshot(
+      plansRef,
+      (snap) => setPlans(mergePlans(snap.exists() ? snap.data() : null)),
+      () => setPlans(DEFAULT_SYSTEM_PLANS)
+    );
 
-    // Counts
     (async () => {
       try {
-        const agencesRef = collection(db, `companies/${companyId}/agences`);
-        const staffRef = collection(db, `companies/${companyId}/personnel`);
-
-        const [ag, us] = await Promise.all([
-          getCountFromServer(agencesRef),
-          getCountFromServer(staffRef),
+        const [agencesCount, usersCount] = await Promise.all([
+          getCountFromServer(collection(db, "companies", resolvedCompanyId, "agences")),
+          getCountFromServer(collection(db, "companies", resolvedCompanyId, "personnel")),
         ]);
 
         setCounts({
-          agences: ag.data().count,
-          users: us.data().count,
+          agences: agencesCount.data().count,
+          users: usersCount.data().count,
         });
       } catch {
-        // silent
+        setCounts({ agences: 0, users: 0 });
       }
     })();
 
-    return () => unsubs.forEach((u) => u());
-  }, [companyId]);
+    return () => {
+      offCompany();
+      offPlans();
+    };
+  }, [resolvedCompanyId]);
 
-  const planById = useMemo(() => {
-    const map: Record<string, Plan> = {};
-    plans.forEach((p) => (map[p.id] = p));
-    return map;
-  }, [plans]);
+  const currentPlanId = useMemo(
+    () => normalizePlan(String(company?.plan ?? company?.planId ?? "")),
+    [company?.plan, company?.planId]
+  );
 
-  const activePlan = useMemo(() => {
-    if (!cmp) return null;
-    const planId = cmp.planId as string | undefined;
-    if (planId && planById[planId]) return planById[planId];
-    const planName = cmp.plan as string | undefined;
-    return plans.find((p) => p.name === planName) || null;
-  }, [cmp, planById, plans]);
+  const activePlan = plans[currentPlanId];
+  const usedOperations = getCurrentMonthOperations(company);
+  const usagePercent =
+    activePlan.includedOperations > 0
+      ? Math.min(100, Math.round((usedOperations / activePlan.includedOperations) * 100))
+      : 0;
+  const upgradePlan = currentPlanId === "standard" ? plans.premium : null;
+  const quotaReached =
+    activePlan.includedOperations > 0 && usedOperations >= activePlan.includedOperations;
+  const quotaWarning = !quotaReached && activePlan.includedOperations > 0 && usagePercent >= 80;
 
-  const otherPlans = useMemo(() => {
-    if (!cmp) return plans;
-    const planId = cmp.planId as string | undefined;
-    const planName = cmp.plan as string | undefined;
-    return plans.filter((p) =>
-      planId ? p.id !== planId : p.name !== planName
-    );
-  }, [plans, cmp]);
+  console.log("🖥 UI PLAN DATA", {
+    operations: company?.currentMonthOperations,
+    quota: activePlan.includedOperations,
+  });
 
-  const requestUpgrade = async (target: Plan) => {
-    if (!companyId) return;
+  const requestUpgrade = async (target: SystemPlan) => {
+    if (!resolvedCompanyId || sending) return;
 
     setSending(true);
     try {
-      const reqRef = doc(
-        collection(db, `companies/${companyId}/billingRequests`)
-      );
-
-      await setDoc(reqRef, {
-        type: "planUpgrade",
-        companyId,
-        fromPlanId: (cmp?.planId as string) || null,
-        toPlanId: target.id,
-        toPlanName: target.name,
-        createdAt: serverTimestamp(),
+      await addDoc(collection(db, "subscriptionRequests"), {
+        companyId: resolvedCompanyId,
+        companyName: String(company?.nom ?? company?.name ?? resolvedCompanyId),
+        currentPlan: currentPlanId,
+        requestedPlan: target.id,
         status: "pending",
+        createdAt: serverTimestamp(),
       });
-
-      alert("Demande envoyée avec succès.");
+      toast.success("Demande de mise a niveau envoyee.");
+    } catch (error) {
+      console.error("[ParametresPlan] subscription request failed", error);
+      toast.error("Impossible d'envoyer la demande.");
     } finally {
       setSending(false);
     }
   };
 
-  if (loading || !cmp)
-    return <div className="p-6">Chargement…</div>;
-
-  const companySupport = (cmp.supportLevel as SupportLevel) || activePlan?.supportLevel || "basic";
+  if (loading || !company) {
+    return <div className="p-6">Chargement...</div>;
+  }
 
   return (
     <div className="space-y-6">
-      <SectionCard title="Votre plan" icon={Shield}>
-        <div className="flex items-center gap-2 mb-4">
-          <StatusBadge status={supportToVariant(companySupport)}>
-            Support {SUPPORT_LABELS[companySupport]}
-          </StatusBadge>
+      <SectionCard
+        title="Plan & abonnement"
+        icon={Shield}
+        description="Choisissez l'offre qui correspond a votre volume de ventes et au niveau de controle attendu."
+      >
+        <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">
+                {nf.format(usedOperations)} / {nf.format(activePlan.includedOperations)} operations utilisees
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                {counts.agences} agence{counts.agences > 1 ? "s" : ""} · {counts.users} utilisateur
+                {counts.users > 1 ? "s" : ""}
+              </p>
+            </div>
+            <StatusBadge status={currentPlanId === "premium" ? "active" : "info"}>
+              Plan actuel : {activePlan.name}
+            </StatusBadge>
+          </div>
+          <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white">
+            <div
+              className="h-full rounded-full bg-[var(--btn-primary,#FF6600)] transition-all duration-300"
+              style={{ width: `${usagePercent}%` }}
+            />
+          </div>
+          {(quotaWarning || quotaReached) && (
+            <div className="mt-4 flex flex-col gap-3 rounded-xl border border-orange-200 bg-orange-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="whitespace-pre-line text-sm font-bold text-orange-900">
+                  {quotaReached ? OPERATION_QUOTA_BLOCKED_MESSAGE : OPERATION_QUOTA_WARNING_MESSAGE}
+                </p>
+                {quotaReached && (
+                  <p className="mt-1 text-xs font-medium text-orange-700">
+                    {OPERATION_QUOTA_BLOCKED_HELP}
+                  </p>
+                )}
+              </div>
+              {upgradePlan && (
+                <Button
+                  disabled={sending}
+                  onClick={() => requestUpgrade(upgradePlan)}
+                  variant="primary"
+                  size="sm"
+                >
+                  Passer en Premium
+                </Button>
+              )}
+            </div>
+          )}
         </div>
 
-        {activePlan ? (
-          <>
-            <div className="grid md:grid-cols-4 gap-4">
-              <div className="rounded-lg border border-gray-200 p-4">
-                <div className="flex items-center gap-2">
-                  <h3 className="font-semibold text-gray-900">{activePlan.name}</h3>
-                  {activePlan.isTrial && (
-                    <StatusBadge status="warning">Essai</StatusBadge>
-                  )}
-                </div>
-                <div className="text-2xl font-bold mt-1">
-                  {activePlan.priceMonthly === 0 ? (
-                    <span className="text-green-600">Gratuit</span>
-                  ) : (
-                    <>
-                      {nf.format(activePlan.priceMonthly)}
-                      <span className="text-sm font-normal text-gray-500"> {currencySymbol}/mois</span>
-                    </>
-                  )}
-                </div>
-              </div>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          {(["standard", "premium"] as Plan[]).map((planId) => {
+            const plan = plans[planId];
+            const content = PLAN_PRESENTATION[planId];
+            const isCurrent = currentPlanId === planId;
+            const isPremium = planId === "premium";
+            const canUpgradeToPremium = !isCurrent && isPremium;
 
-              <div className="rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-500">Agences</p>
-                <p className="text-xl font-bold">
-                  {counts.agences} /{" "}
-                  {(activePlan.maxAgences ?? 0) === 0 ? "∞" : activePlan.maxAgences}
-                </p>
-              </div>
-
-              <div className="rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-500">Frais canal digital</p>
-                <p className="text-xl font-bold text-[var(--btn-primary,#FF6600)]">
-                  {activePlan.digitalFeePercent}%
-                </p>
-                <p className="text-xs text-gray-400 mt-1">sur réservations en ligne</p>
-              </div>
-
-              <div className="rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-500">Quota réservations</p>
-                <p className="text-xl font-bold">
-                  {(activePlan.quotaReservations ?? 0) === 0
-                    ? "Illimité"
-                    : nf.format(activePlan.quotaReservations ?? 0)}
-                </p>
-                <p className="text-xs text-gray-400 mt-1">par mois</p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-gray-100">
-              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Gestion interne</StatusBadge>
-              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Page publique</StatusBadge>
-              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Réservation en ligne</StatusBadge>
-              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Guichet</StatusBadge>
-              <StatusBadge status="success"><CheckCircle2 className="h-3 w-3 inline mr-1" /> Tableau de bord</StatusBadge>
-            </div>
-          </>
-        ) : (
-          <p className="text-gray-500">Aucun plan actif.</p>
-        )}
-      </SectionCard>
-
-      {otherPlans.length > 0 && (
-        <SectionCard title="Autres plans disponibles" icon={Star}>
-          <div className="grid md:grid-cols-3 gap-4">
-            {otherPlans.map((p) => (
-                <div
-                  key={p.id}
-                  className="rounded-lg border border-gray-200 p-4 flex flex-col"
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <h4 className="font-semibold text-gray-900">{p.name}</h4>
-                      {p.isTrial && (
-                        <StatusBadge status="warning" className="mt-1">Essai</StatusBadge>
-                      )}
-                    </div>
-                    <StatusBadge status={supportToVariant(p.supportLevel)}>
-                      {SUPPORT_LABELS[p.supportLevel]}
-                    </StatusBadge>
+            return (
+              <div
+                key={planId}
+                className={[
+                  "relative flex min-h-[520px] flex-col rounded-xl border p-6 transition-all duration-200",
+                  isPremium
+                    ? "border-[var(--btn-primary,#FF6600)] bg-white shadow-xl shadow-orange-100/80 lg:scale-[1.02]"
+                    : "border-gray-200 bg-white shadow-sm hover:shadow-md",
+                ].join(" ")}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-2xl font-bold tracking-normal text-gray-950">
+                      {content.title}
+                    </h3>
+                    <p className="mt-2 text-sm font-medium leading-6 text-gray-600">
+                      {content.value}
+                    </p>
                   </div>
-
-                  <div className="text-xl font-bold">
-                    {p.priceMonthly === 0 ? (
-                      <span className="text-green-600">Gratuit</span>
-                    ) : (
-                      <>
-                        {nf.format(p.priceMonthly)}
-                        <span className="text-sm font-normal text-gray-500"> {currencySymbol}/mois</span>
-                      </>
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    {isPremium && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-[var(--btn-primary,#FF6600)] px-3 py-1 text-xs font-semibold text-white">
+                        <Crown className="h-3.5 w-3.5" />
+                        Recommande
+                      </span>
                     )}
+                    {isCurrent && <StatusBadge status="success">Plan actuel</StatusBadge>}
                   </div>
-
-                  <div className="text-sm text-gray-600 space-y-1 mt-2 flex-1">
-                    <div className="flex justify-between">
-                      <span>Max agences</span>
-                      <strong>{p.maxAgences === 0 ? "∞" : p.maxAgences}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Frais digital</span>
-                      <strong className="text-[var(--btn-primary,#FF6600)]">{p.digitalFeePercent}%</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Quota</span>
-                      <strong>
-                        {(p.quotaReservations ?? 0) === 0
-                          ? "Illimité"
-                          : nf.format(p.quotaReservations ?? 0)}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <Button
-                    className="mt-3"
-                    disabled={sending}
-                    onClick={() => requestUpgrade(p)}
-                    variant="primary"
-                    size="sm"
-                  >
-                    Demander ce plan
-                  </Button>
                 </div>
-            ))}
-          </div>
-        </SectionCard>
-      )}
 
-      <GenerateTripInstancesPlanningCard companyId={companyId} />
+                <div className="mt-6 space-y-3">
+                  {content.features.map((feature) => (
+                    <div key={feature} className="flex gap-3 text-sm text-gray-700">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                      <span>{feature}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {content.warning && (
+                  <div className="mt-5 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    {content.warning}
+                  </div>
+                )}
+
+                <div className="mt-8 rounded-xl border border-gray-100 bg-gray-50 p-4">
+                  <p className="text-3xl font-bold text-gray-950">
+                    {nf.format(plan.price)}
+                    <span className="ml-1 text-sm font-semibold text-gray-500">FCFA / mois</span>
+                  </p>
+                  <div className="mt-4 space-y-2 text-sm text-gray-700">
+                    <p>Jusqu'a {nf.format(plan.includedOperations)} operations</p>
+                    <p>Puis +{nf.format(plan.overage)} FCFA / operation</p>
+                  </div>
+                </div>
+
+                <div className="mt-auto pt-6">
+                  {isCurrent ? (
+                    <Button className="w-full" disabled variant="secondary">
+                      Plan actuel
+                    </Button>
+                  ) : canUpgradeToPremium ? (
+                    <Button
+                      className="w-full"
+                      disabled={sending}
+                      onClick={() => requestUpgrade(plan)}
+                      variant="primary"
+                    >
+                      Passer en Premium
+                    </Button>
+                  ) : (
+                    <Button className="w-full" disabled variant="secondary">
+                      Deja couvert par votre plan
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </SectionCard>
     </div>
   );
 };
