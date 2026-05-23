@@ -36,6 +36,7 @@ export default defineConfig({
     copyRedirectsPlugin(),
     VitePWA({
       registerType: 'autoUpdate',
+      filename: 'teliya-sw.js',
       /* ⛔️ important : pas de PWA en DEV */
       devOptions: { enabled: false },
       includeAssets: ['favicon.ico', 'icons/*.png', 'images/*.{png,svg,jpg}'],

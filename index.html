@@ -42,6 +42,17 @@
           window.__BOOT__ = null;
           window.__PARTNERS__ = null;
         }
+
+        // 🔴 PURGE D'URGENCE LÉGÈRE : On désinscrit l'ancien SW bloqué, 
+        // SANS utiliser caches.keys() (conformément à vos instructions).
+        // Cela permet au navigateur de charger le nouveau index.html depuis le réseau.
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            for (let registration of registrations) {
+              registration.unregister();
+            }
+          });
+        }
       })();
     </script>
   </head>

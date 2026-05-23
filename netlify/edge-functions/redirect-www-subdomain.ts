@@ -58,6 +58,7 @@ export default async (request: Request, context: Context) => {
     pathname.startsWith('/favicon') ||
     pathname.startsWith('/src') ||
     pathname.startsWith('/sw') ||
+    pathname.startsWith('/teliya-sw') ||
     pathname.startsWith('/workbox')
   ) {
     return context.next();
