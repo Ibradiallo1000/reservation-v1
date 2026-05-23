@@ -48,12 +48,26 @@ export default async (request: Request, context: Context) => {
   const host = url.hostname;
   const pathname = url.pathname;
 
-  // 1) Canonical: teliya.app/<slug> or www.teliya.app/<slug> → <slug>.teliya.app/... (one hop)
+  // 🔴 CRITIQUE : protéger les assets AVANT toute logique
+  if (
+    pathname.startsWith('/assets') ||
+    pathname.startsWith('/images') ||
+    pathname.startsWith('/icons') ||
+    pathname.startsWith('/screenshots') ||
+    pathname.startsWith('/manifest') ||
+    pathname.startsWith('/favicon') ||
+    pathname.startsWith('/src') ||
+    pathname.startsWith('/sw') ||
+    pathname.startsWith('/workbox')
+  ) {
+    return context.next();
+  }
+
+  // 🔴 ensuite seulement ton code existant
   if (host === MAIN_DOMAIN || host === `www.${MAIN_DOMAIN}`) {
     const segments = pathname.split("/").filter(Boolean);
     const slug = segments[0]?.toLowerCase();
-    
-    // Si le slug contient un point, c'est probablement un fichier à la racine (ex: sw.js, favicon.ico)
+
     if (slug && slug.includes(".")) {
       return context.next();
     }
@@ -65,7 +79,6 @@ export default async (request: Request, context: Context) => {
     }
   }
 
-  // 2) www.<slug>.teliya.app → <slug>.teliya.app (strip www from subdomains)
   if (host.startsWith("www.") && host.endsWith(".teliya.app")) {
     const newHost = host.slice(4);
     const newUrl = `https://${newHost}${pathname}${url.search}`;
