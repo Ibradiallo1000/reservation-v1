@@ -38,6 +38,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "connect-history-api-fallback": "^2.0.0",
+    "date-fns": "^4.3.0",
     "dayjs": "^1.11.10",
     "file-saver": "^2.0.5",
     "firebase": "^10.14.1",

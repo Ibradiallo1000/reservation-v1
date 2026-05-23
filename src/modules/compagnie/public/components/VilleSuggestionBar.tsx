@@ -26,14 +26,14 @@ const VilleSuggestionBar: React.FC<Props> = ({
   const secondary = company.couleurSecondaire || "#f3f4f6";
 
   return (
-    <section className="relative bg-gray-900 -mt-8 px-3 pt-2 pb-6">
+    <section className="relative bg-white dark:bg-gray-900 text-gray-900 dark:text-white -mt-8 px-3 pt-2 pb-6">
       <div className="max-w-5xl mx-auto">
 
         {/* TITRE */}
         <div className="text-center mb-6">
           <div className="flex justify-center items-center gap-2">
             <Bus size={18} style={{ color: primary }} />
-            <h2 className="text-lg sm:text-xl font-bold text-gray-100">
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">
               {t("destinationsPopular")}
             </h2>
           </div>
@@ -47,11 +47,9 @@ const VilleSuggestionBar: React.FC<Props> = ({
             ? Array.from({ length: 6 }).map((_, index) => (
                 <div
                   key={index}
-                  className="rounded-xl p-3"
+                  className="rounded-xl border border-gray-200 bg-white p-3 text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                   style={{
-                    background: "rgba(15,23,42,0.85)",
                     backdropFilter: "blur(6px)",
-                    border: "1px solid rgba(148,163,184,0.24)",
                   }}
                 >
                   <div className="h-3 w-2/3 mb-2 skeleton rounded" />
@@ -63,20 +61,18 @@ const VilleSuggestionBar: React.FC<Props> = ({
             : suggestions.slice(0, 6).map((trip, index) => (
                 <div
                   key={index}
-                  className="rounded-xl p-3 text-center transition-all duration-300 active:scale-95"
+                  className="rounded-xl border border-gray-200 bg-white p-3 text-center text-gray-900 transition-all duration-300 active:scale-95 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                   style={{
-                    background: "rgba(15,23,42,0.88)",
                     backdropFilter: "blur(6px)",
-                    border: `1px solid ${primary}20`,
                     boxShadow: `
-                      0 4px 12px rgba(0,0,0,0.24),
+                      0 4px 12px rgba(0,0,0,0.10),
                       0 2px 8px ${primary}15
                     `,
                   }}
                 >
 
                   {/* TRAJET */}
-                  <div className="text-xs font-semibold text-gray-100 leading-tight">
+                  <div className="text-xs font-semibold text-gray-900 leading-tight dark:text-white">
                     {trip.departure} →{" "}
                     <span style={{ color: primary }}>
                       {trip.arrival}
@@ -98,7 +94,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
 
                   {/* POPULARITÉ */}
                   {trip.count !== undefined && (
-                    <div className="text-[10px] text-gray-500 mt-1">
+                    <div className="text-[10px] text-gray-600 mt-1 dark:text-gray-300">
                       {trip.count} réservations
                     </div>
                   )}
@@ -122,7 +118,7 @@ const VilleSuggestionBar: React.FC<Props> = ({
 
         {/* EMPTY */}
         {!loading && suggestions.length === 0 && (
-          <div className="mt-4 text-center text-sm text-gray-400">
+          <div className="mt-4 text-center text-sm text-gray-600 dark:text-gray-300">
             {offline
               ? "Connexion indisponible."
               : "Aucune destination disponible."}
