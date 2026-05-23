@@ -31,6 +31,16 @@ const RESERVED_FIRST_SEGMENTS = new Set([
   "debug-auth",
   "mes-reservations",
   "manifest.webmanifest",
+  "manifest",
+  "assets",
+  "images",
+  "icons",
+  "screenshots",
+  "favicon.ico",
+  "src",
+  "sw",
+  "sw.js",
+  "service-worker.js"
 ]);
 
 export default async (request: Request, context: Context) => {
@@ -42,6 +52,12 @@ export default async (request: Request, context: Context) => {
   if (host === MAIN_DOMAIN || host === `www.${MAIN_DOMAIN}`) {
     const segments = pathname.split("/").filter(Boolean);
     const slug = segments[0]?.toLowerCase();
+    
+    // Si le slug contient un point, c'est probablement un fichier à la racine (ex: sw.js, favicon.ico)
+    if (slug && slug.includes(".")) {
+      return context.next();
+    }
+
     if (slug && !RESERVED_FIRST_SEGMENTS.has(slug)) {
       const restPath = segments.length > 1 ? "/" + segments.slice(1).join("/") : "/";
       const newUrl = `https://${slug}.teliya.app${restPath}${url.search}`;

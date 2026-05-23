@@ -35,8 +35,7 @@ export default defineConfig({
     }),
     copyRedirectsPlugin(),
     VitePWA({
-      /* prompt = pas de rechargement auto : bannière "Nouvelle version" puis rechargement au clic uniquement */
-      registerType: 'prompt',
+      registerType: 'autoUpdate',
       /* ⛔️ important : pas de PWA en DEV */
       devOptions: { enabled: false },
       includeAssets: ['favicon.ico', 'icons/*.png', 'images/*.{png,svg,jpg}'],
@@ -64,6 +63,9 @@ export default defineConfig({
         ],
       },
       workbox: {
+        cacheId: 'teliya-v2',
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         cleanupOutdatedCaches: true,
         // vendor chunk can exceed 2 MiB; allow precache up to 4 MiB per file (Netlify build)

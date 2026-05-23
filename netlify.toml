@@ -50,3 +50,8 @@
   targetPort = 5177       # ← doit matcher vite.config.ts maintenant
   port = 8889
   autoLaunch = true
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "no-cache"
