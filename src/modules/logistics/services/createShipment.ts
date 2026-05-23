@@ -267,14 +267,7 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       }
 
       if (paymentId) {
-        await confirmPayment(params.companyId, paymentId, params.createdBy, {
-          channel: "courrier",
-          paymentMethod: pm,
-          mode: params.offlineMeta?.mode ?? "online",
-          offlineTransactionId: params.offlineMeta?.transactionId ?? null,
-          offlineDeviceId: params.offlineMeta?.deviceId ?? null,
-          ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
-        });
+        await confirmPayment(params.companyId, paymentId, params.createdBy);
       }
 
       logAgentHistoryEvent({

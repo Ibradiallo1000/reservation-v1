@@ -1,0 +1,1 @@
+const r={garage:["assigned","maintenance"],assigned:["in_transit"],in_transit:["arrived"],arrived:["garage"],maintenance:["garage"]};function t(a,n){return r[a].includes(n)}function s(a,n,e,i){return`${a.trim()}_${n.trim()}_${e.trim()}_${i}`.replace(/\s+/g,"-")}export{s as a,t as c};

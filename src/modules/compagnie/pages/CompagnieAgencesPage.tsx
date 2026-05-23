@@ -512,7 +512,7 @@ const CompagnieAgencesPage: React.FC = () => {
   }
 
   // Subscription restriction check
-  const companyData = company as Record<string, unknown> | null;
+  const companyData = company as unknown as Record<string, unknown> | null;
   const subStatus = (companyData?.subscriptionStatus as SubscriptionStatus) ?? "active";
   const actionCheck = canCompanyPerformAction(subStatus, "CREATE_AGENCY");
   if (!actionCheck.allowed) {

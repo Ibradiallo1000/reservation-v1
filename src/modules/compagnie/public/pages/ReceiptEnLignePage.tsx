@@ -237,7 +237,7 @@ const ReceiptEnLignePage: React.FC = () => {
       try {
         const r = await loadPublicCompanyInfoSessionThenFirestore(reservation.companyId);
         if (cancelled) return;
-        if (!r.ok) {
+        if (r.ok === false) {
           setCompanyLoadError(r.message);
           return;
         }

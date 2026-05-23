@@ -1,0 +1,1 @@
+const e={standard:{id:"standard",name:"STANDARD",price:1e5,includedOperations:3e3,overage:15},premium:{id:"premium",name:"PREMIUM",price:3e5,includedOperations:1e4,overage:10}},a=["standard","premium"];export{a as P,e as S};

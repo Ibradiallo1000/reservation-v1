@@ -47,7 +47,7 @@ const GuichetRapportPanel: React.FC = () => {
       }
 
       const snap = await getDocs(qRef);
-      setRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setRows(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, any>) })));
     } catch (e) {
       console.error('Erreur chargement rapport:', e);
     } finally {

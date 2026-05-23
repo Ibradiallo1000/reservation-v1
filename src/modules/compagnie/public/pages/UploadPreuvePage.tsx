@@ -269,7 +269,7 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
 
       const companyId = resolvedDraft.companyId!;
       const loaded = await loadPublicCompanyInfoSessionThenFirestore(companyId);
-      if (!loaded.ok) {
+      if (loaded.ok === false) {
         setLoadErrorKind('other');
         throw new Error(loaded.message);
       }

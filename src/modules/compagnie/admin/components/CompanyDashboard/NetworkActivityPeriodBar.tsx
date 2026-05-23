@@ -197,7 +197,10 @@ export const NetworkActivityPeriodBar: React.FC<NetworkActivityPeriodBarProps> =
               {pickerMode === "single" ? (
                 <DatePicker
                   selected={draftSingle}
-                  onChange={(d) => setDraftSingle(d)}
+                  onChange={(d: Date | null) => {
+                    if (!d) return;
+                    setDraftSingle(d);
+                  }}
                   locale="fr"
                   maxDate={maxDate}
                   inline
@@ -211,9 +214,8 @@ export const NetworkActivityPeriodBar: React.FC<NetworkActivityPeriodBarProps> =
                   selectsRange
                   startDate={draftRange[0]}
                   endDate={draftRange[1]}
-                  onChange={(update) => {
-                    const u = update as [Date | null, Date | null];
-                    setDraftRange(u);
+                  onChange={(update: [Date | null, Date | null]) => {
+                    setDraftRange(update);
                   }}
                   locale="fr"
                   maxDate={maxDate}

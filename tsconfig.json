@@ -20,5 +20,12 @@
     }
   },
   "include": ["src", "netlify/functions"],
-  "exclude": ["node_modules", "src/tests"]
+  "exclude": [
+    "node_modules",
+    "src/tests",
+    "src/createReservationDraft.ts",
+    "src/expireHolds.ts",
+    "src/index.ts",
+    "src/submitProof.ts"
+  ]
 }

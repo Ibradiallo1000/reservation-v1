@@ -1,0 +1,1 @@
+const e="fr-FR";function r(t){return t?typeof(t==null?void 0:t.toDate)=="function"?t.toDate():t instanceof Date?t:typeof t=="number"?new Date(t):typeof t=="string"?new Date(t):null:null}function o(t){const n=r(t);return n?new Intl.DateTimeFormat(e,{weekday:"long",day:"numeric",month:"long",year:"numeric"}).format(n):"—"}export{o as f};

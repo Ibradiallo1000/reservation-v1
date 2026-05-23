@@ -159,7 +159,15 @@ export default function CompagnieDashboard() {
       .finally(() => setChartDataLoading(false));
   }, [companyId, dateFrom, dateTo]);
 
-  const agencies = (perAgency ?? []) as AgencyData[];
+  const agencies = (perAgency ?? []).map((agency) => ({
+    ...agency,
+    tauxRemplissage:
+      typeof agency.tauxRemplissage === "number"
+        ? agency.tauxRemplissage
+        : agency.tauxRemplissage
+          ? 100
+          : undefined,
+  })) as AgencyData[];
   const agencyDataWithVariation = agencies as (AgencyData & { variation?: number })[];
 
   // Santé du réseau : à risque si baisse de CA > 15 % vs période précédente OU aucun revenu sur la période

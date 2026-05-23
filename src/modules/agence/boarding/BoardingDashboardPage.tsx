@@ -150,7 +150,7 @@ const BoardingDashboardPage: React.FC = () => {
           />
           <DatePicker
             selected={selectedDateObj}
-            onChange={(d) => {
+            onChange={(d: Date | null) => {
               if (!d) return;
               setSelectedDate(toLocalISO(d));
             }}

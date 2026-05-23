@@ -305,7 +305,7 @@ const ReservationDetailsPage: React.FC = () => {
         } catch {}
         try {
           const companyRes = await loadPublicCompanyInfoSessionThenFirestore(companyId);
-          if (!companyRes.ok) {
+          if (companyRes.ok === false) {
             setCompanyLoadError(companyRes.message);
           } else {
             const i = companyRes.info;

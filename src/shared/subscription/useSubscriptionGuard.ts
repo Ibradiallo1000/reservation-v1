@@ -24,7 +24,7 @@ interface SubscriptionGuardResult {
  * Falls back to "active" if no subscription data is available.
  */
 export function useSubscriptionGuard(): SubscriptionGuardResult {
-  const { company } = useAuth() as { company: Record<string, unknown> | null };
+  const { company } = useAuth() as unknown as { company: Record<string, unknown> | null };
 
   const subscriptionStatus = useMemo<SubscriptionStatus>(() => {
     if (!company) return "active";

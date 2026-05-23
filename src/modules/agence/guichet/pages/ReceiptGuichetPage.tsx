@@ -320,7 +320,7 @@ const ReceiptGuichetPage: React.FC = () => {
         margin: 2,
         filename: `recu-${receiptNumber}.pdf`,
         image: {
-          type: 'jpeg',
+          type: 'jpeg' as const,
           quality: 0.98
         },
         html2canvas: {
@@ -329,8 +329,8 @@ const ReceiptGuichetPage: React.FC = () => {
         },
         jsPDF: {
           unit: 'mm',
-          format: [81, 200],
-          orientation: 'portrait'
+          format: [81, 200] as [number, number],
+          orientation: 'portrait' as const
         }
       };
 

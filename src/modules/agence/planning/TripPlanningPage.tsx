@@ -672,7 +672,7 @@ const TripPlanningPage: React.FC = () => {
             <span className="text-gray-600 dark:text-gray-300 font-medium">Date</span>
             <DatePicker
               selected={selectedDateObj}
-              onChange={(d) => {
+              onChange={(d: Date | null) => {
                 if (!d) return;
                 const yyyy = d.getFullYear();
                 const mm = String(d.getMonth() + 1).padStart(2, "0");
