@@ -28,6 +28,7 @@ import {
   type AgencyActivityRow,
 } from "@/modules/compagnie/networkStats/networkActivityService";
 import type { PeriodKind } from "@/shared/date/periodUtils";
+import { isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
 import {
   Activity,
   Building2,
@@ -166,6 +167,7 @@ export default function CeoPilotageDashboard({
   const [agencyYesterdayRows, setAgencyYesterdayRows] = useState<AgencyActivityRow[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [gapSheetOpen, setGapSheetOpen] = useState(false);
+  const [rangeError, setRangeError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!companyId) return;
@@ -187,6 +189,21 @@ export default function CeoPilotageDashboard({
           rangeStartDj = dayjs.tz(`${rangeStart}T12:00:00`, TZ_BAMAKO);
           rangeEndDj = dayjs.tz(`${rangeEnd}T12:00:00`, TZ_BAMAKO);
         }
+        if (isInteractiveRangeTooLarge(rangeStartDj.toDate(), rangeEndDj.toDate())) {
+          setRangeError(largeRangeMessage());
+          setLedger(null);
+          setTodayActivity(null);
+          setYesterdayActivity(null);
+          setYesterdayEnc(null);
+          setChartPoints([]);
+          setAgencyTodayRows([]);
+          setAgencyTrendRows([]);
+          setAgencyPrevRows([]);
+          setAgencyYesterdayRows([]);
+          setAlerts([]);
+          return;
+        }
+        setRangeError(null);
 
         const periodLenDays = rangeEndDj.diff(rangeStartDj, "day") + 1;
         const prevPeriodEndDj = rangeStartDj.subtract(1, "day");
@@ -480,6 +497,11 @@ export default function CeoPilotageDashboard({
 
   return (
     <div className="w-full space-y-4">
+      {rangeError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
+          {rangeError} Les details de pilotage sont desactives sur cette periode.
+        </div>
+      )}
       {/* Carte principale — trésorerie */}
       <section aria-labelledby="ceo-hero-kpi" className="w-full">
         <div

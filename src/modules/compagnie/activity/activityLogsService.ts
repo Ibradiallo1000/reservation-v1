@@ -9,13 +9,13 @@ import {
   query,
   where,
   orderBy,
-  limit,
   Timestamp,
   type Transaction,
   type QueryDocumentSnapshot,
   type DocumentData,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
 
 export const ACTIVITY_LOG_COLLECTION = "activityLogs";
 
@@ -150,14 +150,15 @@ export function writeCourierActivityInTransaction(
   tx.set(ref, payload);
 }
 
-const QUERY_LIMIT = 10000;
-
 export async function queryActivityLogsInRange(
   companyId: string,
   start: Date,
   end: Date,
   agencyId?: string
 ): Promise<QueryDocumentSnapshot<DocumentData>[]> {
+  if (isInteractiveRangeTooLarge(start, end)) {
+    throw new RangeError(largeRangeMessage());
+  }
   const startTs = Timestamp.fromDate(start);
   const endTs = Timestamp.fromDate(end);
   const col = activityLogsCol(companyId);
@@ -165,7 +166,6 @@ export async function queryActivityLogsInRange(
     where("createdAt", ">=", startTs),
     where("createdAt", "<=", endTs),
     orderBy("createdAt", "asc"),
-    limit(QUERY_LIMIT),
   ];
   if (agencyId) {
     (constraints as unknown[]).unshift(where("agencyId", "==", agencyId));

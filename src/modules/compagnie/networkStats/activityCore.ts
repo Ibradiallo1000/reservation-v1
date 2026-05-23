@@ -2,7 +2,17 @@
  * Activité commerciale : lecture depuis le journal persisté `activityLogs` uniquement.
  * Pour reprise d’historique avant journalisation, voir `activityLogsMigrationLegacy.ts`.
  */
-import type { QueryDocumentSnapshot, DocumentData, Timestamp } from "firebase/firestore";
+import {
+  collectionGroup,
+  getDocs,
+  query,
+  where,
+  type QueryConstraint,
+  type QueryDocumentSnapshot,
+  type DocumentData,
+  type Timestamp,
+} from "firebase/firestore";
+import { db } from "@/firebaseConfig";
 import {
   DEFAULT_AGENCY_TIMEZONE,
   getStartOfDayForDate,
@@ -12,6 +22,7 @@ import {
   normalizeDateToYYYYMMDD,
 } from "@/shared/date/dateUtilsTz";
 import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
+import { getInclusiveRangeDays } from "@/shared/date/periodUtils";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -20,6 +31,8 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 export type ActivityPeriod = { dateFrom: string; dateTo: string };
+
+export const ACTIVITY_LOG_DETAIL_MAX_DAYS = 7;
 
 export type ActivitySlice = {
   reservationCount: number;
@@ -36,6 +49,20 @@ export type UnifiedCommercialActivity = {
   billets: BilletsActivity;
   courier: { parcels: number; amount: number };
   totalAmount: number;
+};
+
+export type DailyStatsActivityDoc = {
+  agencyId?: string;
+  date?: string;
+  ticketRevenue?: number;
+  ticketRevenueCompany?: number;
+  courierRevenue?: number;
+  courierRevenueCompany?: number;
+  totalRevenue?: number;
+  totalPassengers?: number;
+  totalSeats?: number;
+  courierParcels?: number;
+  parcelCount?: number;
 };
 
 /** Ligne `activityLogs` comptée dans l’activité commerciale (aligné agrégats, graphique, par agence). */
@@ -59,6 +86,10 @@ export function parseCommercialActivityLog(data: Record<string, unknown>): Parse
 
 function emptySlice(): ActivitySlice {
   return { reservationCount: 0, tickets: 0, amount: 0 };
+}
+
+export function shouldUseDailyStatsForActivity(start: Date, end: Date): boolean {
+  return getInclusiveRangeDays(start, end) > ACTIVITY_LOG_DETAIL_MAX_DAYS;
 }
 
 /** @deprecated Utilisé seulement par l’outil de migration / audits locaux. */
@@ -119,6 +150,93 @@ export function aggregateActivityLogDocs(
   };
 }
 
+export async function queryDailyStatsInRange(
+  companyId: string,
+  dateFrom: string,
+  dateTo: string,
+  agencyId?: string
+): Promise<DailyStatsActivityDoc[]> {
+  const constraints: QueryConstraint[] = [
+    where("companyId", "==", companyId),
+    where("date", ">=", normalizeDateToYYYYMMDD(dateFrom)),
+    where("date", "<=", normalizeDateToYYYYMMDD(dateTo)),
+  ];
+  if (agencyId) constraints.push(where("agencyId", "==", agencyId));
+  const snap = await getDocs(query(collectionGroup(db, "dailyStats"), ...constraints));
+  return snap.docs.map((d) => d.data() as DailyStatsActivityDoc);
+}
+
+export function aggregateDailyStatsDocs(docs: DailyStatsActivityDoc[]): UnifiedCommercialActivity {
+  const guichet = emptySlice();
+  const online = emptySlice();
+  let courierParcels = 0;
+  let courierAmount = 0;
+
+  for (const data of docs) {
+    const ticketAmount = Number(data.ticketRevenue ?? data.ticketRevenueCompany ?? 0) || 0;
+    const parcelAmount = Number(data.courierRevenue ?? data.courierRevenueCompany ?? 0) || 0;
+    const totalAmount = Number(data.totalRevenue ?? 0) || 0;
+    const tickets = Number(data.totalSeats ?? data.totalPassengers ?? 0) || 0;
+    const parcels = Number(data.courierParcels ?? data.parcelCount ?? 0) || 0;
+    const fallbackTicketAmount = ticketAmount || (parcelAmount ? 0 : totalAmount);
+
+    // dailyStats ne conserve pas le split guichet/online : les KPI restent exacts au total.
+    guichet.reservationCount += tickets;
+    guichet.tickets += tickets;
+    guichet.amount += fallbackTicketAmount;
+    courierParcels += parcels;
+    courierAmount += parcelAmount;
+  }
+
+  const billets: BilletsActivity = {
+    reservationCount: guichet.reservationCount + online.reservationCount,
+    tickets: guichet.tickets + online.tickets,
+    amount: guichet.amount + online.amount,
+    guichet,
+    online,
+  };
+
+  return {
+    billets,
+    courier: { parcels: courierParcels, amount: courierAmount },
+    totalAmount: billets.amount + courierAmount,
+  };
+}
+
+export function buildActivityChartBucketsFromDailyStats(
+  docs: DailyStatsActivityDoc[],
+  dateFrom: string,
+  dateTo: string,
+  timeZone: string
+): Map<string, { revenue: number; reservations: number }> {
+  const map = new Map<string, { revenue: number; reservations: number }>();
+  const fromNorm = normalizeDateToYYYYMMDD(dateFrom);
+  const toNorm = normalizeDateToYYYYMMDD(dateTo);
+  let cur = dayjs.tz(`${fromNorm}T12:00:00`, timeZone);
+
+  for (;;) {
+    const key = cur.format("YYYY-MM-DD");
+    map.set(key, { revenue: 0, reservations: 0 });
+    if (key >= toNorm) break;
+    cur = cur.add(1, "day");
+  }
+
+  for (const data of docs) {
+    const key = normalizeDateToYYYYMMDD(data.date ?? "");
+    if (!key) continue;
+    const ticketAmount = Number(data.ticketRevenue ?? data.ticketRevenueCompany ?? 0) || 0;
+    const courierAmount = Number(data.courierRevenue ?? data.courierRevenueCompany ?? 0) || 0;
+    const totalAmount = Number(data.totalRevenue ?? ticketAmount + courierAmount) || 0;
+    const tickets = Number(data.totalSeats ?? data.totalPassengers ?? 0) || 0;
+    const curr = map.get(key) ?? { revenue: 0, reservations: 0 };
+    curr.revenue += totalAmount;
+    curr.reservations += tickets;
+    map.set(key, curr);
+  }
+
+  return map;
+}
+
 /**
  * Source unique persistée : somme des entrées `activityLogs` sur la période (fuseau `timeZone`).
  */
@@ -130,6 +248,10 @@ export async function getUnifiedCommercialActivity(
   const tz = options?.timeZone ?? DEFAULT_AGENCY_TIMEZONE;
   const start = getStartOfDayForDate(period.dateFrom, tz);
   const end = getEndOfDayForDate(period.dateTo, tz);
+  if (shouldUseDailyStatsForActivity(start, end)) {
+    const docs = await queryDailyStatsInRange(companyId, period.dateFrom, period.dateTo, options?.agencyId);
+    return aggregateDailyStatsDocs(docs);
+  }
   const docs = await queryActivityLogsInRange(companyId, start, end, options?.agencyId);
   return aggregateActivityLogDocs(docs);
 }

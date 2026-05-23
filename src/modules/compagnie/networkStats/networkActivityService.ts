@@ -3,7 +3,12 @@
  */
 import type { DocumentData, QueryDocumentSnapshot, Timestamp } from "firebase/firestore";
 import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
-import { parseCommercialActivityLog } from "@/modules/compagnie/networkStats/activityCore";
+import {
+  queryDailyStatsInRange,
+  parseCommercialActivityLog,
+  shouldUseDailyStatsForActivity,
+} from "@/modules/compagnie/networkStats/activityCore";
+import { getDateKeyInTimezone, TZ_BAMAKO } from "@/shared/date/dateUtilsTz";
 
 export type AgencyActivityRow = {
   agencyId: string;
@@ -82,6 +87,28 @@ export async function getNetworkActivityByAgency(
   end: Date,
   agencyMeta: { id: string; nom: string }[]
 ): Promise<AgencyActivityRow[]> {
+  if (shouldUseDailyStatsForActivity(start, end)) {
+    const docs = await queryDailyStatsInRange(
+      companyId,
+      getDateKeyInTimezone(start, TZ_BAMAKO),
+      getDateKeyInTimezone(end, TZ_BAMAKO)
+    );
+    const byAgency = new Map<string, ReturnType<typeof emptyAgencyTotals>>();
+    for (const a of agencyMeta) byAgency.set(a.id, emptyAgencyTotals());
+    for (const data of docs) {
+      const aid = String(data.agencyId ?? "").trim();
+      if (!aid) continue;
+      const cur = byAgency.get(aid) ?? emptyAgencyTotals();
+      const ticketAmount = Number(data.ticketRevenue ?? data.ticketRevenueCompany ?? 0) || 0;
+      const courierAmount = Number(data.courierRevenue ?? data.courierRevenueCompany ?? 0) || 0;
+      const totalAmount = Number(data.totalRevenue ?? ticketAmount + courierAmount) || 0;
+      cur.ventes += totalAmount;
+      cur.billets += Number(data.totalSeats ?? data.totalPassengers ?? 0) || 0;
+      cur.colis += Number(data.courierParcels ?? data.parcelCount ?? 0) || 0;
+      byAgency.set(aid, cur);
+    }
+    return agencyMeta.map((a) => ({ agencyId: a.id, ...(byAgency.get(a.id) ?? emptyAgencyTotals()) }));
+  }
   const docs = await queryActivityLogsInRange(companyId, start, end);
   return aggregateNetworkActivityByAgencyFromDocs(docs, agencyMeta);
 }
@@ -132,6 +159,7 @@ export async function getRouteActivityRows(
   start: Date,
   end: Date
 ): Promise<RouteActivityRow[]> {
+  if (shouldUseDailyStatsForActivity(start, end)) return [];
   const docs = await queryActivityLogsInRange(companyId, start, end);
   return aggregateRouteActivityRowsFromDocs(docs);
 }

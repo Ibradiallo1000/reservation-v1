@@ -2,12 +2,13 @@ import React from "react";
 import { useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
-import { collection, collectionGroup, limit, onSnapshot, orderBy, query, Timestamp, where } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, Timestamp, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import { normalizeReservation } from "@/lib/normalizeReservation";
 import { getStartOfDayInBamako, getEndOfDayInBamako } from "@/shared/date/dateUtilsTz";
 import { getNetworkCapacityOnly } from "@/modules/compagnie/networkStats/networkStatsService";
 import { CASH_TRANSACTION_STATUS } from "@/modules/compagnie/cash/cashTypes";
+import { getUnifiedCommercialActivity } from "@/modules/compagnie/networkStats/activityCore";
+import { isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
 
 export type GlobalDataSnapshot = {
   sales: number;
@@ -15,14 +16,13 @@ export type GlobalDataSnapshot = {
   tickets: number;
   occupancy: number | null;
   lastUpdatedAt: Date | null;
-  mode?: "realtime";
+  mode?: "realtime" | "snapshot";
 };
 
 type Ctx = {
   snapshot: GlobalDataSnapshot;
   loading: boolean;
   error: string | null;
-  /** Recompute immediately from latest snapshot data. */
   refresh: () => Promise<void>;
 };
 
@@ -36,11 +36,6 @@ const DEFAULT_SNAPSHOT: GlobalDataSnapshot = {
   lastUpdatedAt: null,
 };
 
-function isPaidPaymentStatus(status: string | undefined): boolean {
-  const s = (status ?? "").toString().toLowerCase().trim();
-  return s === "paid" || s === "validated" || s === "paye" || s === "payé" || s === "confirme" || s === "confirmé";
-}
-
 export function GlobalDataSnapshotProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
@@ -48,143 +43,72 @@ export function GlobalDataSnapshotProvider({ children }: { children: React.React
   const period = useGlobalPeriodContext();
 
   const [snapshot, setSnapshot] = React.useState<GlobalDataSnapshot>(DEFAULT_SNAPSHOT);
-  // IMPORTANT: no periodic refresh + no global loader on live updates.
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Cache for realtime computation (avoid re-fetch per page).
-  const reservationsRef = React.useRef<Array<{ paymentStatus?: string; amount?: number; seatsGo?: number }>>([]);
-  const cashTxRef = React.useRef<Array<{ status?: string; amount?: number }>>([]);
-  const capacityRef = React.useRef<number | null>(null);
-  const scheduleRef = React.useRef<number | null>(null);
-
-  const computeAndSetSnapshot = React.useCallback(() => {
-    const sold = reservationsRef.current.filter((r) => isPaidPaymentStatus(r.paymentStatus));
-    const tickets = sold.reduce((s, r) => s + (Number(r.seatsGo) || 1), 0);
-    const sales = sold.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-    const cash = cashTxRef.current
-      .filter((t) => (t.status ?? "") === CASH_TRANSACTION_STATUS.PAID)
-      .reduce((s, t) => s + (Number(t.amount) || 0), 0);
-    const capacity = capacityRef.current;
-    const occupancy =
-      capacity != null && capacity > 0 ? Math.round((tickets / capacity) * 100) : null;
-
-    setSnapshot((prev) => ({
-      ...prev,
-      sales,
-      cash,
-      tickets,
-      occupancy,
-      lastUpdatedAt: new Date(),
-      mode: "realtime",
-    }));
-  }, []);
-
-  const scheduleCompute = React.useCallback(() => {
-    if (scheduleRef.current != null) return;
-    scheduleRef.current = window.setTimeout(() => {
-      scheduleRef.current = null;
-      computeAndSetSnapshot();
-    }, 120);
-  }, [computeAndSetSnapshot]);
-
   const refresh = React.useCallback(async () => {
-    // Manual recompute (no re-fetch lists, just re-derive).
-    computeAndSetSnapshot();
-  }, [computeAndSetSnapshot]);
+    if (!companyId) {
+      setSnapshot(DEFAULT_SNAPSHOT);
+      return;
+    }
 
-  // Realtime: reservations + cashTransactions — les deux filtrés sur createdAt (ne jamais filtrer sur paidAt string).
-  React.useEffect(() => {
-    if (!companyId) return;
+    setLoading(true);
     setError(null);
 
-    setLoading(true); // only for the initial attach
-    const start = getStartOfDayInBamako(period.startDate);
-    const end = getEndOfDayInBamako(period.endDate);
-    const startTs = Timestamp.fromDate(start);
-    const endTs = Timestamp.fromDate(end);
+    try {
+      const start = getStartOfDayInBamako(period.startDate);
+      const end = getEndOfDayInBamako(period.endDate);
+      if (isInteractiveRangeTooLarge(start, end)) {
+        setError(largeRangeMessage());
+        setSnapshot(DEFAULT_SNAPSHOT);
+        return;
+      }
+      const startTs = Timestamp.fromDate(start);
+      const endTs = Timestamp.fromDate(end);
 
-    const qRes = query(
-      collectionGroup(db, "reservations"),
-      where("companyId", "==", companyId),
-      where("createdAt", ">=", startTs),
-      where("createdAt", "<=", endTs),
-      orderBy("createdAt", "asc"),
-      limit(200)
-    );
+      const cashRef = collection(db, "companies", companyId, "cashTransactions");
+      const qCash = query(
+        cashRef,
+        where("createdAt", ">=", startTs),
+        where("createdAt", "<=", endTs),
+        orderBy("createdAt", "asc")
+      );
 
-    // cashTransactions est sous companies/{companyId}/cashTransactions (pas de champ companyId dans le doc).
-    const cashRef = collection(db, "companies", companyId, "cashTransactions");
-    const qCash = query(
-      cashRef,
-      where("createdAt", ">=", startTs),
-      where("createdAt", "<=", endTs),
-      orderBy("createdAt", "asc"),
-      limit(200)
-    );
+      const [activity, cashSnap, capacity] = await Promise.all([
+        getUnifiedCommercialActivity(companyId, { dateFrom: period.startDate, dateTo: period.endDate }),
+        getDocs(qCash),
+        getNetworkCapacityOnly(companyId, period.startDate, period.endDate),
+      ]);
 
-    // Capacity isn't realtime-critical; fetch once per period.
-    capacityRef.current = null;
-    getNetworkCapacityOnly(companyId, period.startDate, period.endDate)
-      .then((cap) => {
-        capacityRef.current = cap || null;
-        scheduleCompute();
-      })
-      .catch(() => {
-        capacityRef.current = null;
-        scheduleCompute();
+      const tickets = activity.billets.tickets;
+      const sales = activity.totalAmount;
+      const cash = cashSnap.docs.reduce((sum, docSnap) => {
+        const data = docSnap.data() as { status?: string; statut?: string; amount?: number; montant?: number };
+        const status = (data.status ?? data.statut ?? "").toString();
+        if (status !== CASH_TRANSACTION_STATUS.PAID) return sum;
+        return sum + (Number(data.amount ?? data.montant ?? 0) || 0);
+      }, 0);
+      const occupancy = capacity && capacity > 0 ? Math.round((tickets / capacity) * 100) : null;
+
+      setSnapshot({
+        sales,
+        cash,
+        tickets,
+        occupancy,
+        lastUpdatedAt: new Date(),
+        mode: "snapshot",
       });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur snapshot global");
+      setSnapshot(DEFAULT_SNAPSHOT);
+    } finally {
+      setLoading(false);
+    }
+  }, [companyId, period.startDate, period.endDate]);
 
-    const unsubRes = onSnapshot(
-      qRes,
-      (snap) => {
-        reservationsRef.current = snap.docs.map((d) => {
-          const raw = d.data() as Record<string, unknown>;
-          const r = normalizeReservation(raw);
-          const data = raw as any;
-          return {
-            paymentStatus: r.payment.status,
-            amount: r.payment.amount ?? 0,
-            seatsGo: Number(data.seatsGo ?? data.seats ?? data.nbPlaces ?? 1) || 1,
-          };
-        });
-        setLoading(false);
-        scheduleCompute();
-      },
-      (err) => {
-        setError(err?.message ?? "Erreur onSnapshot reservations");
-        setLoading(false);
-      }
-    );
-
-    const unsubCash = onSnapshot(
-      qCash,
-      (snap) => {
-        cashTxRef.current = snap.docs.map((d) => {
-          const data = d.data() as any;
-          return {
-            status: (data.status ?? data.statut ?? "").toString(),
-            amount: Number(data.amount ?? data.montant ?? 0) || 0,
-          };
-        });
-        setLoading(false);
-        scheduleCompute();
-      },
-      (err) => {
-        setError(err?.message ?? "Erreur onSnapshot cashTransactions");
-        setLoading(false);
-      }
-    );
-
-    return () => {
-      unsubRes();
-      unsubCash();
-      if (scheduleRef.current != null) {
-        window.clearTimeout(scheduleRef.current);
-        scheduleRef.current = null;
-      }
-    };
-  }, [companyId, period.startDate, period.endDate, scheduleCompute]);
+  React.useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const value = React.useMemo<Ctx>(
     () => ({ snapshot, loading, error, refresh }),
@@ -203,4 +127,3 @@ export function useGlobalDataSnapshot(): Ctx {
   if (!ctx) throw new Error("useGlobalDataSnapshot must be used within GlobalDataSnapshotProvider");
   return ctx;
 }
-

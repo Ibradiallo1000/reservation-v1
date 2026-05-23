@@ -6,15 +6,20 @@ import {
   query, 
   where, 
   getDocs, 
-  Timestamp,
   doc,
   getDoc,
-  limit
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import { useAuth } from '@/contexts/AuthContext';
 import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
+import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
+import {
+  parseCommercialActivityLog,
+  queryDailyStatsInRange,
+  shouldUseDailyStatsForActivity,
+} from "@/modules/compagnie/networkStats/activityCore";
+import { isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
 import { canonicalStatut } from "@/utils/reservationStatusUtils";
 import {
   TrendingUp,
@@ -109,6 +114,7 @@ const Finances: React.FC = () => {
   const [customDateRange, setCustomDateRange] = useState<{start: Date | null, end: Date | null}>({start: null, end: null});
   const [financialData, setFinancialData] = useState<FinancialData | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // ==================== PÉRIODE PAR DÉFAUT : MOIS EN COURS ====================
   const getCurrentMonthRange = () => {
@@ -187,11 +193,15 @@ const Finances: React.FC = () => {
 
   const loadFinancialData = async () => {
     setLoading(true);
+    setLoadError(null);
     
     try {
       const dateRange = periodType === 'custom' && customDateRange.start && customDateRange.end
         ? getDateRange('custom', customDateRange.start, customDateRange.end)
         : getDateRange(periodType);
+      if (isInteractiveRangeTooLarge(dateRange.start, dateRange.end)) {
+        throw new RangeError(largeRangeMessage());
+      }
       
       // 1. Charger toutes les agences
       const agenciesRef = collection(db, `companies/${user.companyId}/agences`);
@@ -212,8 +222,7 @@ const Finances: React.FC = () => {
           collectionGroup(db, 'dailyStats'),
           where('companyId', '==', user.companyId),
           where('date', '>=', startStr),
-          where('date', '<=', endStr),
-          limit(2000)
+          where('date', '<=', endStr)
         );
         const dailySnap = await getDocs(qDaily);
         dailySnap.docs.forEach(d => {
@@ -235,18 +244,54 @@ const Finances: React.FC = () => {
       let cashRevenue = 0;
       let mobileMoneyRevenue = 0;
       
-      const reservationsSnap = await getDocs(
-        query(
-          collectionGroup(db, 'reservations'),
-          where('companyId', '==', user.companyId),
-          where('createdAt', '>=', Timestamp.fromDate(dateRange.start)),
-          where('createdAt', '<=', Timestamp.fromDate(dateRange.end)),
-          limit(200)
-        )
-      );
+      if (shouldUseDailyStatsForActivity(dateRange.start, dateRange.end)) {
+        const dailyRows = await queryDailyStatsInRange(user.companyId, startStr, endStr);
+        dailyRows.forEach(data => {
+          const agencyId = String(data.agencyId ?? "").trim();
+          if (!agencyId) return;
+          const ticket = Number(data.ticketRevenue ?? data.ticketRevenueCompany ?? 0) || 0;
+          const courier = Number(data.courierRevenue ?? data.courierRevenueCompany ?? 0) || 0;
+          const amount = Number(data.totalRevenue ?? ticket + courier) || 0;
+          const entry = revenueByAgency.get(agencyId) ?? {
+            revenue: 0,
+            guichetRevenue: 0,
+            onlineRevenue: 0
+          };
+          entry.revenue += amount;
+          entry.guichetRevenue += amount;
+          totalRevenue += amount;
+          guichetRevenue += amount;
+          cashRevenue += amount;
+          revenueByAgency.set(agencyId, entry);
+        });
+      } else {
+        const reservationsSnap = await queryActivityLogsInRange(user.companyId, dateRange.start, dateRange.end);
 
-      reservationsSnap.forEach(docSnap => {
-        const data = docSnap.data();
+        reservationsSnap.forEach(docSnap => {
+          const data = docSnap.data();
+          const parsed = parseCommercialActivityLog(data as Record<string, unknown>);
+          if (!parsed) return;
+          const parsedAgencyId = parsed.agencyId;
+          if (!parsedAgencyId) return;
+          const parsedEntry = revenueByAgency.get(parsedAgencyId) ?? {
+            revenue: 0,
+            guichetRevenue: 0,
+            onlineRevenue: 0
+          };
+          const parsedAmount = parsed.amount || 0;
+          parsedEntry.revenue += parsedAmount;
+          totalRevenue += parsedAmount;
+          if (parsed.kind === 'online_ticket') {
+            parsedEntry.onlineRevenue += parsedAmount;
+            onlineRevenue += parsedAmount;
+            mobileMoneyRevenue += parsedAmount;
+          } else {
+            parsedEntry.guichetRevenue += parsedAmount;
+            guichetRevenue += parsedAmount;
+            cashRevenue += parsedAmount;
+          }
+          revenueByAgency.set(parsedAgencyId, parsedEntry);
+          return;
           const statut = String(data.statut ?? '').toLowerCase();
           const normalized = canonicalStatut(statut);
           if (normalized !== 'paye' && statut !== 'confirme') return;
@@ -283,7 +328,8 @@ const Finances: React.FC = () => {
           }
 
           revenueByAgency.set(agencyId, entry);
-      });
+        });
+      }
 
       const agencyRevenues: AgencyRevenue[] = agenciesList.map((agency) => {
         const revenue = revenueByAgency.get(agency.id);
@@ -400,6 +446,8 @@ const Finances: React.FC = () => {
       
     } catch (error) {
       console.error('[Finances] Erreur chargement données:', error);
+      setFinancialData(null);
+      setLoadError(error instanceof Error ? error.message : 'Impossible de charger les donnees financieres');
     } finally {
       setLoading(false);
     }
@@ -461,7 +509,7 @@ const Finances: React.FC = () => {
       <div className="text-center py-20">
         <AlertTriangle className="mx-auto h-12 w-12 text-gray-400 mb-4" />
         <div className="text-lg font-medium text-gray-900 mb-2">Données non disponibles</div>
-        <div className="text-gray-600">Impossible de charger les données financières</div>
+        <div className="text-gray-600">{loadError ?? 'Impossible de charger les données financières'}</div>
       </div>
     );
   }

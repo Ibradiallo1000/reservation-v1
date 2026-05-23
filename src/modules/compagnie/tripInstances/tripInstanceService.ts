@@ -22,6 +22,7 @@ import {
   type DocumentReference,
   type DocumentSnapshot,
   type QueryDocumentSnapshot,
+  type QueryConstraint,
   type Transaction,
   type DocumentData,
 } from "firebase/firestore";
@@ -428,13 +429,13 @@ export async function listTripInstancesByDateRange(
   options?: { limitCount?: number }
 ): Promise<TripInstanceDocWithId[]> {
   if (!dateFrom || !dateTo) return [];
-  const limitCount = options?.limitCount ?? 2000;
-  const q = query(
-    tripInstancesRef(companyId),
+  const constraints: QueryConstraint[] = [
     where("date", ">=", dateFrom),
     where("date", "<=", dateTo),
-    limit(limitCount)
-  );
+    orderBy("date", "asc"),
+  ];
+  if (options?.limitCount) constraints.push(limit(options.limitCount));
+  const q = query(tripInstancesRef(companyId), ...constraints);
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TripInstanceDocWithId));
 }

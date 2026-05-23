@@ -1,7 +1,8 @@
 // src/pages/AgenceReservationsPage.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  collection, doc, getDoc, limit, onSnapshot, orderBy, query, Timestamp, where
+  collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, startAfter, Timestamp, where,
+  type DocumentData, type QueryDocumentSnapshot
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { useAuth } from '@/contexts/AuthContext';
@@ -57,6 +58,8 @@ type GroupRow = {
   montantOnline: number;
   montantTotal: number;
 };
+
+const RESERVATIONS_PAGE_SIZE = 50;
 
 /* ===================== Helpers ===================== */
 const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
@@ -248,23 +251,55 @@ const AgenceReservationsPage: React.FC = () => {
 
   /* --------- RÉSERVATIONS (période) --------- */
   const [rows, setRows] = useState<Reservation[]>([]);
+  const [reservationsPage, setReservationsPage] = useState(0);
+  const [reservationCursors, setReservationCursors] = useState<Array<QueryDocumentSnapshot<DocumentData> | null>>([null]);
+  const [lastReservationDoc, setLastReservationDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [hasNextReservationsPage, setHasNextReservationsPage] = useState(false);
+  useEffect(() => {
+    setReservationsPage(0);
+    setReservationCursors([null]);
+    setLastReservationDoc(null);
+    setHasNextReservationsPage(false);
+  }, [companyId, agencyId, range]);
   useEffect(() => {
     if (!companyId || !agencyId || !range[0] || !range[1]) return;
     const rRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
-    const qy = query(
+    const baseQuery = query(
       rRef,
       where('createdAt','>=', Timestamp.fromDate(range[0])),
       where('createdAt','<=', Timestamp.fromDate(range[1])),
       where('statut', 'in', ['paye', 'payé']),
-      orderBy('createdAt','asc'),
-      limit(200)
+      orderBy('createdAt','desc'),
+      limit(RESERVATIONS_PAGE_SIZE)
     );
-    const unsub = onSnapshot(qy, snap => {
+    const cursor = reservationCursors[reservationsPage];
+    const qy = cursor ? query(baseQuery, startAfter(cursor)) : baseQuery;
+    let cancelled = false;
+    getDocs(qy).then((snap) => {
+      if (cancelled) return;
       const list: Reservation[] = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) }));
       setRows(list);
+      setLastReservationDoc(snap.docs[snap.docs.length - 1] ?? null);
+      setHasNextReservationsPage(snap.docs.length === RESERVATIONS_PAGE_SIZE);
     });
-    return () => unsub();
-  }, [companyId, agencyId, range]);
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, agencyId, range, reservationsPage, reservationCursors]);
+
+  const goNextReservationsPage = () => {
+    if (!hasNextReservationsPage || !lastReservationDoc) return;
+    setReservationCursors((prev) => {
+      const next = [...prev];
+      next[reservationsPage + 1] = lastReservationDoc;
+      return next;
+    });
+    setReservationsPage((p) => p + 1);
+  };
+
+  const goPreviousReservationsPage = () => {
+    setReservationsPage((p) => Math.max(0, p - 1));
+  };
 
   /* --------- Agrégations --------- */
   const kpis = useMemo(() => {
@@ -509,6 +544,20 @@ const AgenceReservationsPage: React.FC = () => {
             )}
         </div>
       </SectionCard>
+
+      <div className="flex items-center justify-between rounded-lg border bg-white px-4 py-3 text-sm">
+        <span className="text-gray-600">
+          Page {reservationsPage + 1} - {RESERVATIONS_PAGE_SIZE} reservations maximum
+        </span>
+        <div className="flex items-center gap-2">
+          <ActionButton variant="secondary" size="sm" onClick={goPreviousReservationsPage} disabled={reservationsPage <= 0}>
+            Precedent
+          </ActionButton>
+          <ActionButton variant="secondary" size="sm" onClick={goNextReservationsPage} disabled={!hasNextReservationsPage}>
+            Suivant
+          </ActionButton>
+        </div>
+      </div>
 
       <SectionCard title="Rapports de poste (validés)" noPad>
           <div className="px-4 py-3 flex items-center justify-between gap-3">

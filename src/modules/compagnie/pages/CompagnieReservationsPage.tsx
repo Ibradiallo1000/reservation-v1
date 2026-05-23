@@ -7,10 +7,13 @@ import {
   collectionGroup,
   getDocs,
   limit,
+  orderBy,
   query,
+  startAfter,
   where,
   Timestamp,
-  onSnapshot,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -55,6 +58,8 @@ interface Agence {
 const cx = (...xs: (string | false | null | undefined)[]) =>
   xs.filter(Boolean).join(" ");
 
+const RESERVATIONS_PAGE_SIZE = 50;
+
 /* ------------------------------ Page ----------------------------------- */
 type CompagnieReservationsPageProps = {
   embedded?: boolean;
@@ -91,6 +96,10 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
 
   const [loading, setLoading] = useState({ agences: true, reservations: true });
   const [showFilters, setShowFilters] = useState(false);
+  const [networkPage, setNetworkPage] = useState(0);
+  const [pageCursors, setPageCursors] = useState<Array<QueryDocumentSnapshot<DocumentData> | null>>([null]);
+  const [lastVisible, setLastVisible] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [hasNextPage, setHasNextPage] = useState(false);
 
   // Filtres "détails"
   const [filterDepart, setFilterDepart] = useState("");
@@ -129,21 +138,34 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
     loadAgences();
   }, [companyId]);
 
+  useEffect(() => {
+    setNetworkPage(0);
+    setPageCursors([null]);
+    setLastVisible(null);
+    setHasNextPage(false);
+  }, [companyId, start, end]);
+
   // 2. Écoute en temps réel des réservations (pour toutes les agences)
   useEffect(() => {
     if (!companyId || agences.length === 0) return;
 
     setLoading((p) => ({ ...p, reservations: true }));
 
-    const qRange = query(
-      collectionGroup(db, "reservations"),
+    const constraints = [
       where("companyId", "==", companyId),
       where("createdAt", ">=", Timestamp.fromDate(start)),
       where("createdAt", "<=", Timestamp.fromDate(end)),
-      limit(200)
-    );
+      orderBy("createdAt", "desc"),
+      limit(RESERVATIONS_PAGE_SIZE),
+    ];
+    const cursor = pageCursors[networkPage];
+    const qRange = cursor
+      ? query(collectionGroup(db, "reservations"), ...constraints, startAfter(cursor))
+      : query(collectionGroup(db, "reservations"), ...constraints);
 
-    const unsub = onSnapshot(qRange, (snap) => {
+    let cancelled = false;
+    getDocs(qRange).then((snap) => {
+      if (cancelled) return;
       const buckets: Record<string, Reservation[]> = {};
       snap.docs.forEach((d) => {
         const data = d.data() as any;
@@ -173,13 +195,33 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
       }));
 
       setGroupedData(grouped);
+      setLastVisible(snap.docs[snap.docs.length - 1] ?? null);
+      setHasNextPage(snap.docs.length === RESERVATIONS_PAGE_SIZE);
       setLoading((p) => ({ ...p, reservations: false }));
+    }).catch(() => {
+      if (!cancelled) setLoading((p) => ({ ...p, reservations: false }));
     });
 
     return () => {
-      unsub();
+      cancelled = true;
     };
-  }, [companyId, agences, start, end]);
+  }, [companyId, agences, start, end, networkPage, pageCursors]);
+
+  const goNextNetworkPage = () => {
+    if (!hasNextPage || !lastVisible) return;
+    setPageCursors((prev) => {
+      const next = [...prev];
+      next[networkPage + 1] = lastVisible;
+      return next;
+    });
+    setNetworkPage((p) => p + 1);
+    setSelectedAgencyId(null);
+  };
+
+  const goPreviousNetworkPage = () => {
+    setNetworkPage((p) => Math.max(0, p - 1));
+    setSelectedAgencyId(null);
+  };
 
   /* ---------------------------- Derived data ---------------------------- */
   const findAgency = (id?: string | null) =>
@@ -508,6 +550,30 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
             </div>
 
             {/* Détails agence (agrégés par trajet) */}
+            <div className="mb-8 flex items-center justify-between rounded-xl border bg-white/70 px-4 py-3 text-sm dark:bg-slate-800/70">
+              <span className="text-gray-600 dark:text-slate-300">
+                Page {networkPage + 1} - {RESERVATIONS_PAGE_SIZE} reservations maximum
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={goPreviousNetworkPage}
+                  disabled={networkPage === 0}
+                  className="flex items-center px-3 py-1 border dark:border-slate-600 rounded-full bg-white dark:bg-slate-700 text-gray-900 dark:text-white disabled:opacity-50"
+                >
+                  <FaChevronLeft className="mr-1" />
+                  Precedent
+                </button>
+                <button
+                  onClick={goNextNetworkPage}
+                  disabled={!hasNextPage}
+                  className="flex items-center px-3 py-1 border dark:border-slate-600 rounded-full bg-white dark:bg-slate-700 text-gray-900 dark:text-white disabled:opacity-50"
+                >
+                  Suivant
+                  <FaChevronRight className="ml-1" />
+                </button>
+              </div>
+            </div>
+
             {selectedAgencyId && (
               <div
                 className="rounded-xl border shadow-sm overflow-hidden"

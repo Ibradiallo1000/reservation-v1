@@ -25,7 +25,11 @@ import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageOfflineState } from "@/shared/ui/PageStates";
 import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
-import { aggregateActivityLogDocs } from "@/modules/compagnie/networkStats/activityCore";
+import {
+  aggregateActivityLogDocs,
+  getUnifiedCommercialActivity,
+  shouldUseDailyStatsForActivity,
+} from "@/modules/compagnie/networkStats/activityCore";
 import {
   buildNetworkChartDataFromActivityLogDocs,
   type ChartDataPoint,
@@ -38,6 +42,7 @@ import {
 } from "@/modules/compagnie/networkStats/networkActivityService";
 import { getStartOfDayInBamako, getEndOfDayInBamako, getTodayBamako, TZ_BAMAKO } from "@/shared/date/dateUtilsTz";
 import { formatActivityPeriodLabelFr } from "@/shared/date/formatActivityPeriodFr";
+import { isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -89,6 +94,9 @@ export default function ReservationsReseauPage() {
   const endStr = globalPeriod.endDate;
   const periodStart = getStartOfDayInBamako(startStr);
   const periodEnd = getEndOfDayInBamako(endStr);
+  const isHardLargeRange = isInteractiveRangeTooLarge(periodStart, periodEnd);
+  const isAggregatedRange = shouldUseDailyStatsForActivity(periodStart, periodEnd);
+  const disableDetails = isHardLargeRange || isAggregatedRange;
 
   useEffect(() => {
     if (!companyId) return;
@@ -129,6 +137,25 @@ export default function ReservationsReseauPage() {
       return;
     }
     setActivityLoading(true);
+    if (disableDetails) {
+      getUnifiedCommercialActivity(companyId, { dateFrom: startStr, dateTo: endStr }, { timeZone: TZ_BAMAKO })
+        .then((activity) => {
+          lastActivityLogDocsRef.current = null;
+          setLogActivity(activity);
+          setChartSeries([]);
+          setAgencyActivity([]);
+          setRouteRows([]);
+        })
+        .catch(() => {
+          lastActivityLogDocsRef.current = null;
+          setLogActivity(null);
+          setChartSeries([]);
+          setAgencyActivity([]);
+          setRouteRows([]);
+        })
+        .finally(() => setActivityLoading(false));
+      return;
+    }
     queryActivityLogsInRange(companyId, periodStart, periodEnd)
       .then((docs) => {
         lastActivityLogDocsRef.current = docs;
@@ -145,7 +172,7 @@ export default function ReservationsReseauPage() {
         setRouteRows([]);
       })
       .finally(() => setActivityLoading(false));
-  }, [companyId, periodStart.getTime(), periodEnd.getTime(), startStr, endStr]);
+  }, [companyId, disableDetails, periodStart.getTime(), periodEnd.getTime(), startStr, endStr]);
 
   useEffect(() => {
     const docs = lastActivityLogDocsRef.current;
@@ -228,6 +255,12 @@ export default function ReservationsReseauPage() {
           <PageOfflineState message="Connexion instable : les données peuvent être incomplètes." />
         )}
 
+        {disableDetails && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
+            {isHardLargeRange ? largeRangeMessage() : "Période agrégée : les KPI utilisent dailyStats."} Les details par agence et par trajet sont desactives pour proteger les performances.
+          </div>
+        )}
+
         <section className="w-full rounded-xl bg-white p-6 shadow-sm dark:bg-gray-900">
           {activityLoading ? (
             <Skeleton className="h-[118px] rounded-xl" />
@@ -253,7 +286,9 @@ export default function ReservationsReseauPage() {
           description={null}
           help={<InfoTooltip label="Classement des agences par montant encaissé sur la période." />}
         >
-          {activityLoading ? (
+          {disableDetails ? (
+            <p className="text-sm text-slate-500">Details desactives sur cette periode.</p>
+          ) : activityLoading ? (
             <p className="text-sm text-gray-500 dark:text-gray-400">Chargement…</p>
           ) : (
             <ul className="w-full space-y-2">

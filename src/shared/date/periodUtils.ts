@@ -22,7 +22,23 @@ export interface DateRange {
   end: Date;
 }
 
+export const MAX_INTERACTIVE_RANGE_DAYS = 31;
+
 const weekOpts = { weekStartsOn: 1 as 0 | 1 | 2 | 3 | 4 | 5 | 6, locale: fr };
+
+export function getInclusiveRangeDays(start: Date, end: Date): number {
+  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.max(1, Math.floor((endUtc - startUtc) / 86400000) + 1);
+}
+
+export function isInteractiveRangeTooLarge(start: Date, end: Date): boolean {
+  return getInclusiveRangeDays(start, end) > MAX_INTERACTIVE_RANGE_DAYS;
+}
+
+export function largeRangeMessage(maxDays = MAX_INTERACTIVE_RANGE_DAYS): string {
+  return `Période trop large pour une lecture détaillée. Sélectionnez ${maxDays} jours maximum.`;
+}
 
 /** Calcule les bornes de la période (semaine / mois / année en cours, ou personnalisé). */
 export function getDateRangeForPeriod(

@@ -12,6 +12,7 @@ import {
   limit,
   onSnapshot,
   orderBy,
+  Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -222,8 +223,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
           collectionGroup(db, "dailyStats"),
           where("companyId", "==", companyId),
           where("date", ">=", monthStart),
-          where("date", "<=", today),
-          limit(500)
+          where("date", "<=", today)
         );
         const dailySnap = await getDocs(qDaily);
         setDerivedDailyStats(dailySnap.docs.map((d) => d.data() as DailyStatsDoc));
@@ -234,7 +234,9 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
           const q = query(
             ref,
             where("status", "==", "validated"),
-            limit(20)
+            where("validatedAt", ">=", Timestamp.fromMillis(monthStartMs)),
+            where("validatedAt", "<=", Timestamp.fromMillis(todayEndMs)),
+            orderBy("validatedAt", "desc")
           );
           try {
             const snap = await getDocs(q);
@@ -249,7 +251,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
               }
             });
           } catch {
-            const alt = query(ref, where("status", "==", "validated"), limit(20));
+            const alt = query(ref, where("status", "==", "validated"), orderBy("startAt", "desc"), limit(20));
             const snap = await getDocs(alt);
             snap.docs.forEach((d) => {
               const data = d.data() as ShiftReportDoc;
@@ -290,6 +292,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     const { dateFrom, dateTo } = globalPeriod.toFinancialPeriod();
     const fromMs = new Date(`${dateFrom}T00:00:00.000`).getTime();
     const toMs = new Date(`${dateTo}T23:59:59.999`).getTime();
+    const fromTs = Timestamp.fromMillis(fromMs);
+    const toTs = Timestamp.fromMillis(toMs);
 
     let cancelled = false;
     setExpenseDash((s) => ({ ...s, loading: true }));
@@ -299,8 +303,9 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
         const snap = await getDocs(
           query(
             collection(db, "companies", companyId, "expenses"),
-            orderBy("createdAt", "desc"),
-            limit(500)
+            where("createdAt", ">=", fromTs),
+            where("createdAt", "<=", toTs),
+            orderBy("createdAt", "desc")
           )
         );
         if (cancelled) return;
@@ -326,9 +331,7 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
             pendingCount += 1;
             pendingAmount += amt;
           }
-          if (createdMs != null && createdMs >= fromMs && createdMs <= toMs) {
-            submittedInPeriodAmount += amt;
-          }
+          submittedInPeriodAmount += amt;
           if (st === "paid" && paidMs != null && paidMs >= fromMs && paidMs <= toMs) {
             paidInPeriodAmount += amt;
           }
@@ -370,6 +373,8 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
     const reservationsByAgency = new Map<string, ReservationDoc[]>();
     // "Aujourd'hui" = borne haute de la période globale (par défaut: jour J).
     const dayKey = globalPeriod.endDate;
+    const dayStartTs = Timestamp.fromDate(new Date(`${dayKey}T00:00:00.000`));
+    const dayEndTs = Timestamp.fromDate(new Date(`${dayKey}T23:59:59.999`));
     const unsubs: Array<() => void> = [];
 
     const recompute = () => {
@@ -427,13 +432,19 @@ export default function CompanyFinancesPage({ embedded = false }: CompanyFinance
       const shiftsRef = collection(db, "companies", companyId, "agences", agency.id, "shifts");
       const reservationsRef = collection(db, "companies", companyId, "agences", agency.id, "reservations");
 
-      const unsubShifts = onSnapshot(query(shiftsRef, limit(200)), (snap) => {
+      const unsubShifts = onSnapshot(query(shiftsRef, orderBy("updatedAt", "desc"), limit(200)), (snap) => {
         const rows = snap.docs.map((d) => ({ __id: d.id, ...(d.data() as ShiftDoc) }));
         shiftsByAgency.set(agency.id, rows);
         recompute();
       });
 
-      const unsubReservations = onSnapshot(query(reservationsRef, limit(200)), (snap) => {
+      const unsubReservations = onSnapshot(query(
+        reservationsRef,
+        where("createdAt", ">=", dayStartTs),
+        where("createdAt", "<=", dayEndTs),
+        orderBy("createdAt", "desc"),
+        limit(200)
+      ), (snap) => {
         reservationsByAgency.set(agency.id, snap.docs.map((d) => {
           const raw = d.data() as ReservationDoc;
           return raw;

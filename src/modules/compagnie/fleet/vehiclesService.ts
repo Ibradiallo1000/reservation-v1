@@ -428,11 +428,12 @@ function normalizeVehicleDoc(data: Record<string, unknown>, docId?: string): Rec
 export type ListVehiclesOrderBy = "plate" | "technicalStatus" | "updatedAt";
 
 export async function listVehicles(companyId: string, max = 500): Promise<(VehicleDoc & { id: string })[]> {
-  const pageSize = Math.min(max * 3, 1500);
+  const safeMax = max > 0 ? max : 500;
+  const pageSize = Math.min(safeMax * 3, 1500);
   const mapDocs = (docs: Array<{ id: string; data: () => unknown }>) =>
     docs
       .filter((d) => (d.data() as any).isArchived !== true)
-      .slice(0, max)
+      .slice(0, safeMax)
       .map((d) => {
         const normalized = normalizeVehicleDoc(d.data() as Record<string, unknown>, d.id);
         return { id: d.id, ...normalized } as VehicleDoc & { id: string };

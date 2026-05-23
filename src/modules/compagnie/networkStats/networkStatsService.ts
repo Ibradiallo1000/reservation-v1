@@ -5,11 +5,12 @@
 
 import {
   collectionGroup,
+  doc,
+  getDoc,
   getDocs,
   query,
   where,
   orderBy,
-  limit,
   Timestamp,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -19,7 +20,6 @@ import { normalizeReservation } from "@/lib/normalizeReservation";
 import {
   TZ_BAMAKO,
   DEFAULT_AGENCY_TIMEZONE,
-  getTodayBamako,
   getStartOfDayBamako,
   getEndOfDayBamako,
   getStartOfDayInBamako,
@@ -44,7 +44,12 @@ import { OPERATIONAL_STATUS, TECHNICAL_STATUS } from "@/modules/compagnie/fleet/
 import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
 import {
   aggregateActivityLogDocs,
+  aggregateDailyStatsDocs,
+  buildActivityChartBucketsFromDailyStats,
   buildActivityChartBucketsFromLogs,
+  getUnifiedCommercialActivity,
+  queryDailyStatsInRange,
+  shouldUseDailyStatsForActivity,
 } from "@/modules/compagnie/networkStats/activityCore";
 
 /** Billets vendus = uniquement statut confirme ou paye (après normalisation). */
@@ -71,6 +76,56 @@ export interface NetworkStats {
   busesInTransit: number;
   /** Capacité réseau période : somme des (seatCapacity ?? capacitySeats) des tripInstances de la période */
   networkCapacity: number;
+}
+
+export type FleetKpiSummary = {
+  vehiclesAvailable: number;
+  vehiclesTotal: number;
+  partial: boolean;
+};
+
+function parseFleetSummary(data: Record<string, unknown> | undefined): FleetKpiSummary | null {
+  if (!data) return null;
+  const total = Number(data.vehiclesTotal ?? data.totalVehicles ?? data.total ?? data.count ?? NaN);
+  const available = Number(data.vehiclesAvailable ?? data.availableVehicles ?? data.available ?? NaN);
+  if (!Number.isFinite(total) || !Number.isFinite(available)) return null;
+  return {
+    vehiclesAvailable: Math.max(0, available),
+    vehiclesTotal: Math.max(0, total),
+    partial: false,
+  };
+}
+
+async function readFleetSummaryDoc(companyId: string): Promise<FleetKpiSummary | null> {
+  const refs = [
+    doc(db, "companies", companyId, "stats", "fleet"),
+    doc(db, "companies", companyId, "aggregates", "fleet"),
+    doc(db, "companies", companyId, "fleetStats", "summary"),
+  ];
+  for (const ref of refs) {
+    const snap = await getDoc(ref);
+    if (!snap.exists()) continue;
+    const parsed = parseFleetSummary(snap.data() as Record<string, unknown>);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+export async function getFleetKpiSummary(companyId: string): Promise<FleetKpiSummary> {
+  const aggregate = await readFleetSummaryDoc(companyId);
+  if (aggregate) return aggregate;
+
+  const vehicles = await listVehicles(companyId, 500);
+  const vehiclesAvailable = vehicles.filter(
+    (v) =>
+      (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) === OPERATIONAL_STATUS.GARAGE &&
+      (v.technicalStatus ?? TECHNICAL_STATUS.NORMAL) === TECHNICAL_STATUS.NORMAL
+  ).length;
+  return {
+    vehiclesAvailable,
+    vehiclesTotal: vehicles.length,
+    partial: true,
+  };
 }
 
 const CANCELLED_STATUTS = ["cancelled", "cancel", "annule", "annulé", "refused", "refuse"];
@@ -111,8 +166,7 @@ async function getReservationsByCreatedAtRange(
     where("companyId", "==", companyId),
     where("createdAt", ">=", startTs),
     where("createdAt", "<=", endTs),
-    orderBy("createdAt", "asc"),
-    limit(200)
+    orderBy("createdAt", "asc")
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => {
@@ -159,8 +213,7 @@ export async function getReservationsInRange(
     where("companyId", "==", companyId),
     where("createdAt", ">=", startTs),
     where("createdAt", "<=", endTs),
-    orderBy("createdAt", "asc"),
-    limit(200)
+    orderBy("createdAt", "asc")
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => {
@@ -242,15 +295,10 @@ export async function getNetworkCapacityOnly(
   dateFrom: string,
   dateTo: string
 ): Promise<number> {
-  const [tripInstances, vehicles] = await Promise.all([
-    listTripInstancesByDateRange(companyId, dateFrom, dateTo, { limitCount: 2000 }),
-    listVehicles(companyId, 500),
-  ]);
-  const vehiclesById = new Map(vehicles.map((v) => [v.id, v]));
+  const tripInstances = await listTripInstancesByDateRange(companyId, dateFrom, dateTo);
   return tripInstances.reduce((sum, ti) => {
     const tiCap = (ti as { seatCapacity?: number }).seatCapacity ?? (ti as { capacitySeats?: number }).capacitySeats;
-    const vehicleId = (ti as { vehicleId?: string | null }).vehicleId;
-    const cap = Number(tiCap) || (vehicleId ? Number(vehiclesById.get(vehicleId)?.capacity) || 0 : 0);
+    const cap = Number(tiCap) || 0;
     return sum + cap;
   }, 0);
 }
@@ -280,6 +328,22 @@ export async function getAgencyStats(
 ): Promise<AgencyStats> {
   const periodStart = getStartOfDayForDate(dateFrom, timeZone);
   const periodEnd = getEndOfDayForDate(dateTo, timeZone);
+  if (shouldUseDailyStatsForActivity(periodStart, periodEnd)) {
+    const dailyDocs = await queryDailyStatsInRange(companyId, dateFrom, dateTo, agencyId);
+    const activity = aggregateDailyStatsDocs(dailyDocs);
+    const map = buildActivityChartBucketsFromDailyStats(dailyDocs, dateFrom, dateTo, timeZone);
+    const dailyChartData: ChartDataPoint[] = Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, v]) => ({ date, revenue: v.revenue, reservations: v.reservations }));
+
+    return {
+      totalTickets: activity.billets.tickets,
+      totalRevenue: activity.totalAmount,
+      onlineTickets: 0,
+      counterTickets: activity.billets.reservationCount,
+      dailyChartData,
+    };
+  }
   const docs = await queryActivityLogsInRange(companyId, periodStart, periodEnd, agencyId);
   const activity = aggregateActivityLogDocs(docs);
   const map = buildActivityChartBucketsFromLogs(docs, dateFrom, dateTo, timeZone);
@@ -304,53 +368,55 @@ export async function getNetworkStats(
   dateFrom: string,
   dateTo: string
 ): Promise<NetworkStats> {
-  const today = getTodayBamako();
   const startOfDay = getStartOfDayBamako();
   const endOfDay = getEndOfDayBamako();
   const periodStart = getStartOfDayInBamako(dateFrom);
   const periodEnd = getEndOfDayInBamako(dateTo);
 
-  const [activityDocs, tripInstances, busesInTransit, vehicles] = await Promise.all([
-    queryActivityLogsInRange(companyId, periodStart, periodEnd),
-    listTripInstancesByDateRange(companyId, dateFrom, dateTo, { limitCount: 2000 }),
+  const useDailyStats = shouldUseDailyStatsForActivity(periodStart, periodEnd);
+  const [netActivity, dailyStatsDocs, activityDocs, tripInstances, busesInTransit, fleetSummary] = await Promise.all([
+    getUnifiedCommercialActivity(companyId, { dateFrom, dateTo }, { timeZone: TZ_BAMAKO }),
+    useDailyStats ? queryDailyStatsInRange(companyId, dateFrom, dateTo) : Promise.resolve([]),
+    useDailyStats ? Promise.resolve([] as QueryDocumentSnapshot<DocumentData>[]) : queryActivityLogsInRange(companyId, periodStart, periodEnd),
+    listTripInstancesByDateRange(companyId, dateFrom, dateTo),
     getBusesInProgressCountToday(companyId),
-    listVehicles(companyId, 500),
+    getFleetKpiSummary(companyId),
   ]);
 
-  const netActivity = aggregateActivityLogDocs(activityDocs);
   const totalRevenue = netActivity.totalAmount;
   const totalTickets = netActivity.billets.tickets;
 
   const activeAgenciesSet = new Set<string>();
-  for (const d of activityDocs) {
-    const x = d.data() as { agencyId?: string; status?: string };
-    if (String(x.status ?? "") !== "confirmed") continue;
-    const aid = String(x.agencyId ?? "").trim();
-    if (aid) activeAgenciesSet.add(aid);
+  if (useDailyStats) {
+    for (const d of dailyStatsDocs) {
+      const aid = String(d.agencyId ?? "").trim();
+      const total = Number(d.totalRevenue ?? d.ticketRevenue ?? d.courierRevenue ?? 0) || 0;
+      if (aid && total > 0) activeAgenciesSet.add(aid);
+    }
+  } else {
+    for (const d of activityDocs) {
+      const x = d.data() as { agencyId?: string; status?: string };
+      if (String(x.status ?? "") !== "confirmed") continue;
+      const aid = String(x.agencyId ?? "").trim();
+      if (aid) activeAgenciesSet.add(aid);
+    }
   }
   const activeAgencies = activeAgenciesSet.size;
 
-  const reservationsToday = activityDocs.filter((d) => {
-    const x = d.data() as { type?: string; status?: string; createdAt?: { toDate?: () => Date } };
-    if (String(x.status ?? "") !== "confirmed") return false;
-    const t = String(x.type ?? "");
-    if (t !== "ticket" && t !== "online") return false;
-    const c = x.createdAt?.toDate?.() ?? new Date(0);
-    return c >= startOfDay && c <= endOfDay;
-  }).length;
+  const reservationsToday = useDailyStats
+    ? 0
+    : activityDocs.filter((d) => {
+        const x = d.data() as { type?: string; status?: string; createdAt?: { toDate?: () => Date } };
+        if (String(x.status ?? "") !== "confirmed") return false;
+        const t = String(x.type ?? "");
+        if (t !== "ticket" && t !== "online") return false;
+        const c = x.createdAt?.toDate?.() ?? new Date(0);
+        return c >= startOfDay && c <= endOfDay;
+      }).length;
 
-  const vehiclesAvailable = vehicles.filter(
-    (v) =>
-      (v.operationalStatus ?? OPERATIONAL_STATUS.GARAGE) === OPERATIONAL_STATUS.GARAGE &&
-      (v.technicalStatus ?? TECHNICAL_STATUS.NORMAL) === TECHNICAL_STATUS.NORMAL
-  ).length;
-  const vehiclesTotal = vehicles.length;
-
-  const vehiclesById = new Map(vehicles.map((v) => [v.id, v]));
   const networkCapacity = tripInstances.reduce((sum, ti) => {
     const tiCap = (ti as { seatCapacity?: number }).seatCapacity ?? (ti as { capacitySeats?: number }).capacitySeats;
-    const vehicleId = (ti as { vehicleId?: string | null }).vehicleId;
-    const cap = Number(tiCap) || (vehicleId ? Number(vehiclesById.get(vehicleId)?.capacity) || 0 : 0);
+    const cap = Number(tiCap) || 0;
     return sum + cap;
   }, 0);
 
@@ -359,8 +425,8 @@ export async function getNetworkStats(
     totalTickets,
     activeAgencies,
     reservationsToday,
-    vehiclesAvailable,
-    vehiclesTotal,
+    vehiclesAvailable: fleetSummary.vehiclesAvailable,
+    vehiclesTotal: fleetSummary.vehiclesTotal,
     busesInTransit,
     networkCapacity,
   };
@@ -394,6 +460,13 @@ export async function getNetworkStatsChartData(
 ): Promise<ChartDataPoint[]> {
   const periodStart = getStartOfDayInBamako(dateFrom);
   const periodEnd = getEndOfDayInBamako(dateTo);
+  if (shouldUseDailyStatsForActivity(periodStart, periodEnd)) {
+    const docs = await queryDailyStatsInRange(companyId, dateFrom, dateTo);
+    const map = buildActivityChartBucketsFromDailyStats(docs, dateFrom, dateTo, TZ_BAMAKO);
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, v]) => ({ date, revenue: v.revenue, reservations: v.reservations }));
+  }
   const docs = await queryActivityLogsInRange(companyId, periodStart, periodEnd);
   return buildNetworkChartDataFromActivityLogDocs(docs, dateFrom, dateTo, TZ_BAMAKO);
 }

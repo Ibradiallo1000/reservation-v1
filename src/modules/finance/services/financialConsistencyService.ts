@@ -4,7 +4,7 @@
  * Ancien KPI réservations `validatedAt` : utilitaire d’audit uniquement ; liquidité et encaissements = ledger (`accounts` + `financialTransactions`).
  */
 
-import { collectionGroup, query, where, getDocs, orderBy, limit, Timestamp, doc, getDoc } from "firebase/firestore";
+import { collectionGroup, query, where, getDocs, orderBy, Timestamp, doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { normalizeReservation } from "@/lib/normalizeReservation";
 import {
@@ -198,7 +198,6 @@ export async function getValidatedRevenue(
     where("validatedAt", ">=", startTs),
     where("validatedAt", "<=", endTs),
     orderBy("validatedAt", "asc"),
-    limit(200),
   ];
   if (agencyId) {
     (constraints as unknown[]).unshift(where("agencyId", "==", agencyId));
@@ -247,8 +246,7 @@ export async function detectFinancialInconsistencies(
         where("companyId", "==", companyId),
         where("createdAt", ">=", startTs),
         where("createdAt", "<=", endTs),
-        orderBy("createdAt", "asc"),
-        limit(200)
+        orderBy("createdAt", "asc")
       )
     ),
     getCashTransactionsByPaidAtRange(companyId, period.dateFrom, period.dateTo),

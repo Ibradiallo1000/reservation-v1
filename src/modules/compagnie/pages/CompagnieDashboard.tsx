@@ -3,7 +3,6 @@
 // =============================================
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useCompanyDashboardData } from "@/modules/compagnie/hooks/useCompanyDashboardData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import { Link } from "react-router-dom";
 import {
@@ -27,11 +26,25 @@ import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageOfflineState } from "@/shared/ui/PageStates";
 import PlanBusinessMetricsPanel from "@/modules/compagnie/components/PlanBusinessMetricsPanel";
 import {
-  getNetworkStatsChartData,
-  getNetworkStats,
+  buildNetworkChartDataFromActivityLogDocs,
+  type ChartDataPoint,
 } from "@/modules/compagnie/networkStats/networkStatsService";
 import { getPreviousPeriod } from "@/shared/date/periodComparisonUtils";
 import type { PeriodKind } from "@/shared/date/periodComparisonUtils";
+import { db } from "@/firebaseConfig";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
+import {
+  aggregateActivityLogDocs,
+  getUnifiedCommercialActivity,
+  shouldUseDailyStatsForActivity,
+} from "@/modules/compagnie/networkStats/activityCore";
+import {
+  aggregateNetworkActivityByAgencyFromDocs,
+  type AgencyActivityRow,
+} from "@/modules/compagnie/networkStats/networkActivityService";
+import { getStartOfDayInBamako, getEndOfDayInBamako, TZ_BAMAKO } from "@/shared/date/dateUtilsTz";
+import { isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
 
 /* ---------- helpers ---------- */
 const DEFAULT_RANGE: RangeKey = "day";
@@ -49,6 +62,19 @@ interface AgencyData {
   revenus?: number;
   tauxRemplissage?: number;
 }
+
+type CompanyMeta = {
+  id: string;
+  nom?: string;
+  couleurPrimaire?: string;
+  couleurSecondaire?: string;
+};
+
+type AgencyMeta = {
+  id: string;
+  nom: string;
+  ville?: string;
+};
 
 export default function CompagnieDashboard() {
   const { user } = useAuth();
@@ -99,74 +125,125 @@ export default function CompagnieDashboard() {
     );
   }
 
-  const {
-    loading,
-    company,
-    kpis,
-    series,
-    perAgency,
-    alerts,
-  } = useCompanyDashboardData({ companyId, dateFrom, dateTo });
-
-  const [networkStats, setNetworkStats] = useState<Awaited<ReturnType<typeof getNetworkStats>> | null>(null);
-  const [networkStatsLoading, setNetworkStatsLoading] = useState(false);
-  const [prevStats, setPrevStats] = useState<Awaited<ReturnType<typeof getNetworkStats>> | null>(null);
+  const [company, setCompany] = useState<CompanyMeta | null>(null);
+  const [agencyMeta, setAgencyMeta] = useState<AgencyMeta[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activity, setActivity] = useState<Awaited<ReturnType<typeof aggregateActivityLogDocs>> | null>(null);
+  const [prevActivity, setPrevActivity] = useState<Awaited<ReturnType<typeof aggregateActivityLogDocs>> | null>(null);
+  const [agencyActivity, setAgencyActivity] = useState<AgencyActivityRow[]>([]);
+  const [chartData, setChartData] = useState<ChartDataPoint[] | null>(null);
+  const [rangeError, setRangeError] = useState<string | null>(null);
 
   const dateFromStr = getDateKey(dateFrom);
   const dateToStr = getDateKey(dateTo);
 
   useEffect(() => {
     if (!companyId) return;
-    setNetworkStatsLoading(true);
-    getNetworkStats(companyId, dateFromStr, dateToStr)
-      .then(setNetworkStats)
-      .catch(() => setNetworkStats(null))
-      .finally(() => setNetworkStatsLoading(false));
-  }, [companyId, dateFromStr, dateToStr]);
-
-  useEffect(() => {
-    if (!companyId) return;
-    const { previousStart, previousEnd } = getPreviousPeriod(dateFrom, dateTo, range as PeriodKind);
-    getNetworkStats(companyId, previousStart, previousEnd)
-      .then(setPrevStats)
-      .catch(() => setPrevStats(null));
-  }, [companyId, dateFrom, dateTo, range]);
-
-  const statsLoading = loading || networkStatsLoading;
-  const caFormatted = networkStats != null ? money(networkStats.totalRevenue) : kpis.caPeriodeFormatted;
-  const ticketsCount = networkStats != null ? networkStats.totalTickets : kpis.reservationsCount;
-  const activeAgences = networkStats != null ? networkStats.activeAgencies : kpis.agencesActives;
-  const totalAgences = kpis.totalAgences ?? 0;
-  const caDeltaPercent =
-    networkStats != null && prevStats != null && prevStats.totalRevenue > 0
-      ? Math.round(((networkStats.totalRevenue - prevStats.totalRevenue) / prevStats.totalRevenue) * 1000) / 10
-      : kpis.caDeltaPercent;
-
-  const [chartData, setChartData] = useState<Awaited<ReturnType<typeof getNetworkStatsChartData>> | null>(null);
-  const [chartDataLoading, setChartDataLoading] = useState(false);
-
-  useEffect(() => {
-    if (!companyId) return;
-    const startStr = getDateKey(dateFrom);
-    const endStr = getDateKey(dateTo);
-    setChartDataLoading(true);
-    getNetworkStatsChartData(companyId, startStr, endStr)
-      .then((data) => {
-        setChartData(data);
-        if (typeof console !== "undefined" && console.log) console.log("chartData", data);
+    Promise.all([
+      getDoc(doc(db, "companies", companyId)),
+      getDocs(collection(db, "companies", companyId, "agences")),
+    ])
+      .then(([companySnap, agenciesSnap]) => {
+        if (companySnap.exists()) {
+          setCompany({ id: companyId, ...(companySnap.data() as Omit<CompanyMeta, "id">) });
+        }
+        setAgencyMeta(
+          agenciesSnap.docs.map((d) => {
+            const x = d.data() as { nom?: string; nomAgence?: string; ville?: string };
+            return { id: d.id, nom: x.nom ?? x.nomAgence ?? d.id, ville: x.ville };
+          })
+        );
       })
-      .catch(() => setChartData(null))
-      .finally(() => setChartDataLoading(false));
-  }, [companyId, dateFrom, dateTo]);
+      .catch(() => {
+        setCompany(null);
+        setAgencyMeta([]);
+      });
+  }, [companyId]);
 
-  const agencies = (perAgency ?? []).map((agency) => ({
+  useEffect(() => {
+    if (!companyId) return;
+    setActivityLoading(true);
+    const start = getStartOfDayInBamako(dateFromStr);
+    const end = getEndOfDayInBamako(dateToStr);
+    if (isInteractiveRangeTooLarge(start, end)) {
+      setRangeError(largeRangeMessage());
+      setActivity(null);
+      setPrevActivity(null);
+      setChartData(null);
+      setAgencyActivity([]);
+      setActivityLoading(false);
+      return;
+    }
+    setRangeError(null);
+    const { previousStart, previousEnd } = getPreviousPeriod(dateFrom, dateTo, range as PeriodKind);
+    const previousStartStr = typeof previousStart === "string" ? previousStart : getDateKey(previousStart);
+    const previousEndStr = typeof previousEnd === "string" ? previousEnd : getDateKey(previousEnd);
+
+    if (shouldUseDailyStatsForActivity(start, end)) {
+      Promise.all([
+        getUnifiedCommercialActivity(companyId, { dateFrom: dateFromStr, dateTo: dateToStr }, { timeZone: TZ_BAMAKO }),
+        getUnifiedCommercialActivity(
+          companyId,
+          { dateFrom: previousStartStr, dateTo: previousEndStr },
+          { timeZone: TZ_BAMAKO }
+        ),
+      ])
+        .then(([current, previous]) => {
+          setActivity(current);
+          setPrevActivity(previous);
+          setChartData(null);
+          setAgencyActivity([]);
+          setRangeError("Période agrégée : les KPI utilisent dailyStats, les détails agences sont désactivés.");
+        })
+        .catch(() => {
+          setActivity(null);
+          setPrevActivity(null);
+          setChartData(null);
+          setAgencyActivity([]);
+        })
+        .finally(() => setActivityLoading(false));
+      return;
+    }
+
+    Promise.all([
+      queryActivityLogsInRange(companyId, start, end),
+      queryActivityLogsInRange(
+        companyId,
+        getStartOfDayInBamako(previousStart),
+        getEndOfDayInBamako(previousEnd)
+      ),
+    ])
+      .then(([docs, prevDocs]) => {
+        setActivity(aggregateActivityLogDocs(docs));
+        setPrevActivity(aggregateActivityLogDocs(prevDocs));
+        setChartData(buildNetworkChartDataFromActivityLogDocs(docs, dateFromStr, dateToStr, TZ_BAMAKO));
+        setAgencyActivity(aggregateNetworkActivityByAgencyFromDocs(docs, agencyMeta));
+      })
+      .catch(() => {
+        setActivity(null);
+        setPrevActivity(null);
+        setChartData(null);
+        setAgencyActivity([]);
+      })
+      .finally(() => setActivityLoading(false));
+  }, [companyId, dateFromStr, dateToStr, dateFrom, dateTo, range, agencyMeta]);
+
+  const statsLoading = activityLoading;
+  const caFormatted = money(activity?.totalAmount ?? 0);
+  const ticketsCount = activity?.billets.tickets ?? 0;
+  const activeAgences = agencyActivity.filter((a) => a.ventes > 0 || a.colis > 0).length;
+  const totalAgences = agencyMeta.length;
+  const caDeltaPercent =
+    activity != null && prevActivity != null && prevActivity.totalAmount > 0
+      ? Math.round(((activity.totalAmount - prevActivity.totalAmount) / prevActivity.totalAmount) * 1000) / 10
+      : null;
+
+  const agencies = agencyActivity.map((agency) => ({
+    id: agency.agencyId,
+    nom: agencyMeta.find((a) => a.id === agency.agencyId)?.nom ?? agency.agencyId,
     ...agency,
-    tauxRemplissage:
-      typeof agency.tauxRemplissage === "number"
-        ? agency.tauxRemplissage
-        : agency.tauxRemplissage
-          ? 100
-          : undefined,
+    revenus: agency.ventes,
+    tauxRemplissage: undefined,
   })) as AgencyData[];
   const agencyDataWithVariation = agencies as (AgencyData & { variation?: number })[];
 
@@ -188,12 +265,14 @@ export default function CompagnieDashboard() {
   }, [caDeltaPercent]);
 
   const criticalAlerts: CriticalAlert[] =
-    alerts?.map((alert: any, i: number) => ({
-      id: alert.id ?? `alert-${i}`,
-      title: alert.title ?? "Alerte",
-      description: alert.description,
-      level: alert.level ?? "medium",
-    })) ?? [];
+    agencyDataWithVariation
+      .filter((a) => (a.revenus ?? 0) === 0)
+      .map((a) => ({
+        id: `no-activity-${a.id}`,
+        title: "Agence sans activité",
+        description: a.nom ?? "Agence inconnue",
+        level: "medium",
+      }));
 
   const rankingByCa = useMemo(() => {
     const withCa = agencies.map((a) => ({ ...a, ca: a.revenus ?? 0 }));
@@ -266,6 +345,12 @@ export default function CompagnieDashboard() {
         </div>
       )}
 
+      {rangeError && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
+          {rangeError}
+        </div>
+      )}
+
       <PlanBusinessMetricsPanel
         companyId={companyId}
         primaryColor={company?.couleurPrimaire ?? "var(--teliya-primary)"}
@@ -297,12 +382,12 @@ export default function CompagnieDashboard() {
                       }
                       return empty;
                     })()
-                  : series.daily
+                  : []
             }
-            loading={chartDataLoading || statsLoading}
+            loading={statsLoading}
             primaryColor={company?.couleurPrimaire}
             secondaryColor={company?.couleurSecondaire}
-            range={range === "day" ? "day" : (chartData?.length ?? series.daily?.length ?? 0) <= 7 ? "week" : "month"}
+            range={range === "day" ? "day" : (chartData?.length ?? 0) <= 7 ? "week" : "month"}
           />
         </CardContent>
       </Card>
