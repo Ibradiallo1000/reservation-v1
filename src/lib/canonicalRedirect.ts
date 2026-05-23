@@ -26,6 +26,16 @@ const RESERVED_FIRST_SEGMENTS = new Set([
   "debug-auth",
   "mes-reservations",
   "manifest.webmanifest",
+  "manifest",
+  "assets",
+  "images",
+  "icons",
+  "screenshots",
+  "favicon.ico",
+  "src",
+  "sw",
+  "sw.js",
+  "service-worker.js"
 ]);
 
 /**
