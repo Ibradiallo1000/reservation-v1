@@ -115,5 +115,10 @@
     "vite": "^5.4.19",
     "vite-plugin-imagemin": "^0.6.1",
     "vitest": "^2.1.9"
+  },
+  "overrides": {
+    "path-scurry@2.0.2": {
+      "lru-cache": "11.2.2"
+    }
   }
 }
