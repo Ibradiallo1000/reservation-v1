@@ -53,6 +53,7 @@ export default async (request: Request, context: Context) => {
     pathname.startsWith('/assets') ||
     pathname.startsWith('/images') ||
     pathname.startsWith('/icons') ||
+    pathname.startsWith('/splash') ||
     pathname.startsWith('/screenshots') ||
     pathname.startsWith('/manifest') ||
     pathname.startsWith('/favicon') ||

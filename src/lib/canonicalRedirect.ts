@@ -30,6 +30,7 @@ const RESERVED_FIRST_SEGMENTS = new Set([
   "assets",
   "images",
   "icons",
+  "splash",
   "screenshots",
   "favicon.ico",
   "src",

@@ -998,7 +998,11 @@ service cloud.firestore {
           /* get : compagnie + admin_platforme ; ou public pour résa en_ligne (upload preuve, reçu, mon-billet). list : jamais en public. */
           allow get: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
             || (request.auth == null && resource.data.get('canal', '') == 'en_ligne');
-          allow list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow list: if isAuth() && (
+            request.auth.token.role == 'admin_platforme' ||
+            request.auth.token.companyId != null ||
+            request.auth.token.compagnieId != null
+          );
 
           /* =============================
              UPDATE 1 — APRÈS CRÉATION
@@ -1850,19 +1854,29 @@ service cloud.firestore {
 
     /* Collection group reservations : lecture pour admin, même compagnie (companyId/compagnieId), ou même agence (guichetier, chefAgence, etc.). */
     match /{path=**}/reservations/{reservationId} {
-      allow get, list: if isAuth() && (
+      allow get: if isAuth() && (
         getUserRole() == 'admin_platforme'
         || resource.data.get('companyId', '') == userCompanyId()
         || resource.data.get('compagnieId', '') == userCompanyId()
         || (getUserAgencyId() != '' && resource.data.get('agencyId', '') == getUserAgencyId())
       );
+      allow list: if request.auth != null && (
+        request.auth.token.companyId != null ||
+        request.auth.token.compagnieId != null ||
+        request.auth.token.role == 'admin_platforme'
+      );
     }
 
     /* Collection group dailyStats (e.g. CompanyFinancesPage). CEO / platform: same-tenant by document companyId. */
     match /{path=**}/dailyStats/{dateId} {
-      allow get, list: if isAuth() && (
+      allow get: if isAuth() && (
         getUserRole() == 'admin_platforme' ||
         resource.data.get('companyId', '') == userCompanyId()
+      );
+      allow list: if request.auth != null && (
+        request.auth.token.role == 'admin_platforme' ||
+        request.auth.token.companyId != null ||
+        request.auth.token.compagnieId != null
       );
     }
 
