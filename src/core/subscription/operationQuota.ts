@@ -75,7 +75,15 @@ export function normalizeOperationPlanConfig(
   };
 }
 
-function getCurrentUsage(company: OperationQuotaCompany): number {
+function getStoredOperationsMonth(company: OperationQuotaCompany): string {
+  const currentMonth = typeof company.currentMonth === "string" ? company.currentMonth : "";
+  if (currentMonth) return currentMonth;
+  return typeof company.currentOperationsMonth === "string" ? company.currentOperationsMonth : "";
+}
+
+function getCurrentUsage(company: OperationQuotaCompany, month = currentBillingMonth()): number {
+  const storedMonth = getStoredOperationsMonth(company);
+  if (storedMonth && storedMonth !== month) return 0;
   return Math.max(0, Math.trunc(Number(company.currentMonthOperations ?? 0) || 0));
 }
 
