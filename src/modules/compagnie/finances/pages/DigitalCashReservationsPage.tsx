@@ -863,13 +863,19 @@ const ReservationsEnLigne: React.FC = () => {
       }
       const montant = r.payment.amount;
       const paymentMethodLabel = r.payment.method ?? '';
-      const ensured = await ensurePendingOnlinePaymentFromReservation({
-        companyId: user.companyId,
-        agencyId: reservation.agencyId,
-        reservationId: reservation.id,
-        montant,
-        paymentMethodLabel,
-      });
+      let ensured;
+      try {
+        ensured = await ensurePendingOnlinePaymentFromReservation({
+          companyId: user.companyId,
+          agencyId: reservation.agencyId,
+          reservationId: reservation.id,
+          montant,
+          paymentMethodLabel,
+        });
+      } catch (e) {
+        console.error('handleValidate: ensurePendingOnlinePaymentFromReservation failed', e);
+        throw e;
+      }
       if (!ensured.ok) {
         toast.error('Erreur', {
           description: ensured.error ?? 'Impossible de préparer le paiement en ligne pour cette réservation.',
@@ -877,7 +883,13 @@ const ReservationsEnLigne: React.FC = () => {
         return;
       }
 
-      const payment = await getPaymentByReservationId(user.companyId, reservation.id);
+      let payment;
+      try {
+        payment = await getPaymentByReservationId(user.companyId, reservation.id);
+      } catch (e) {
+        console.error('handleValidate: getPaymentByReservationId failed', e);
+        throw e;
+      }
       if (!payment) {
         toast.error('Erreur', {
           description: 'Aucun paiement en attente pour cette réservation. Vérifiez la configuration ou contactez le support.',
@@ -885,16 +897,26 @@ const ReservationsEnLigne: React.FC = () => {
         return;
       }
       if (payment.status === 'pending') {
-        await validatePendingOnlinePaymentAndSyncReservation(payment, user.companyId, {
-          uid: user.uid ?? '',
-          role: (user as { role?: string | string[] }).role,
-        });
-        await updateDoc(reservationRef, {
-          "payment.status": "validated",
-          "payment.validatedAt": serverTimestamp(),
-          "payment.validatedBy": user.uid ?? "",
-          updatedAt: serverTimestamp(),
-        });
+        try {
+          await validatePendingOnlinePaymentAndSyncReservation(payment, user.companyId, {
+            uid: user.uid ?? '',
+            role: (user as { role?: string | string[] }).role,
+          });
+        } catch (e) {
+          console.error('handleValidate: validatePendingOnlinePaymentAndSyncReservation failed', e);
+          throw e;
+        }
+        try {
+          await updateDoc(reservationRef, {
+            "payment.status": "validated",
+            "payment.validatedAt": serverTimestamp(),
+            "payment.validatedBy": user.uid ?? "",
+            updatedAt: serverTimestamp(),
+          });
+        } catch (e) {
+          console.error('handleValidate: updateDoc(reservationRef) failed', e);
+          throw e;
+        }
       } else {
         toast.error('Erreur', {
           description:

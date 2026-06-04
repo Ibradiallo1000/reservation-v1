@@ -37,7 +37,17 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
   const uid = user.uid ?? "";
   const role = Array.isArray(user.role) ? user.role.join(",") : String(user.role ?? "");
 
-  await confirmPayment(companyId, payment.id, uid);
+  try {
+    await confirmPayment(companyId, payment.id, uid);
+  } catch (err) {
+    console.error("[onlinePaymentOperatorService] confirmPayment failed", {
+      companyId,
+      paymentId: payment.id,
+      uid,
+      error: err,
+    });
+    throw err;
+  }
 
   const reservationRef = doc(
     db,
@@ -49,57 +59,82 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
     payment.reservationId
   );
   const reservationSnap = await getDoc(reservationRef);
-  if (reservationSnap.exists()) {
-    const reservationData = reservationSnap.data() as Record<string, unknown>;
-    const lifecycle = String(reservationData?.status ?? "");
-    const legacyStatut = String(reservationData?.statut ?? "").toLowerCase();
-    const isConfirmable =
-      (lifecycle === "payé" && reservationData?.ticketValidatedAt == null) ||
-      legacyStatut === "preuve_recue" ||
-      legacyStatut === "verification" ||
-      legacyStatut === "en_attente_paiement";
-    if (!isConfirmable) {
-      throw new Error("Cette réservation ne peut plus être confirmée.");
-    }
+  if (!reservationSnap.exists()) {
+    return;
+  }
 
+  const reservationData = reservationSnap.data() as Record<string, unknown>;
+  const lifecycle = String(reservationData?.status ?? "");
+  const legacyStatut = String(reservationData?.statut ?? "").toLowerCase();
+  const isConfirmable =
+    (lifecycle === "payé" && reservationData?.ticketValidatedAt == null) ||
+    legacyStatut === "preuve_recue" ||
+    legacyStatut === "verification" ||
+    legacyStatut === "en_attente_paiement";
+  if (!isConfirmable) {
+    throw new Error("Cette réservation ne peut plus être confirmée.");
+  }
+
+  try {
     await transitionToConfirmedOrPaidWithDailyStats(
       reservationRef,
       "confirme",
       { userId: uid, userRole: role },
       { validatedBy: uid }
     );
+  } catch (err) {
+    console.error("[onlinePaymentOperatorService] transitionToConfirmedOrPaidWithDailyStats failed", {
+      companyId,
+      reservationId: payment.reservationId,
+      uid,
+      error: err,
+    });
+    throw err;
+  }
 
-    const tripInstanceIdConfirm = String(reservationData?.tripInstanceId ?? "").trim();
-    const departConfirm = String(reservationData?.depart ?? "").trim();
-    const arriveeConfirm = String(reservationData?.arrivee ?? "").trim();
-    const missingOriginId =
-      reservationData?.originStopId == null || String(reservationData.originStopId).trim() === "";
-    const missingDestId =
-      reservationData?.destinationStopId == null || String(reservationData.destinationStopId).trim() === "";
-    if (tripInstanceIdConfirm && departConfirm && arriveeConfirm && (missingOriginId || missingDestId)) {
-      const ti = await getTripInstance(companyId, tripInstanceIdConfirm);
-      const routeIdConfirm = String((ti as { routeId?: unknown })?.routeId ?? "").trim();
-      if (routeIdConfirm) {
-        const journey = await resolveJourneyStopIdsFromCities(
-          companyId,
-          routeIdConfirm,
-          departConfirm,
-          arriveeConfirm
-        );
-        if (journey) {
+  const tripInstanceIdConfirm = String(reservationData?.tripInstanceId ?? "").trim();
+  const departConfirm = String(reservationData?.depart ?? "").trim();
+  const arriveeConfirm = String(reservationData?.arrivee ?? "").trim();
+  const missingOriginId =
+    reservationData?.originStopId == null || String(reservationData.originStopId).trim() === "";
+  const missingDestId =
+    reservationData?.destinationStopId == null || String(reservationData.destinationStopId).trim() === "";
+  if (tripInstanceIdConfirm && departConfirm && arriveeConfirm && (missingOriginId || missingDestId)) {
+    const ti = await getTripInstance(companyId, tripInstanceIdConfirm);
+    const routeIdConfirm = String((ti as { routeId?: unknown })?.routeId ?? "").trim();
+    if (routeIdConfirm) {
+      const journey = await resolveJourneyStopIdsFromCities(
+        companyId,
+        routeIdConfirm,
+        departConfirm,
+        arriveeConfirm
+      );
+      if (journey) {
+        try {
           await updateDoc(reservationRef, {
             ...(missingOriginId && { originStopId: journey.originStopId }),
             ...(missingDestId && { destinationStopId: journey.destinationStopId }),
             updatedAt: serverTimestamp(),
           });
+        } catch (err) {
+          console.error("[onlinePaymentOperatorService] reservation origin/destination update failed", {
+            companyId,
+            reservationId: payment.reservationId,
+            uid,
+            error: err,
+          });
+          throw err;
         }
       }
     }
+  }
 
-    const montant = Number(reservationData?.montant ?? payment.amount ?? 0);
-    const paymentMethod = paymentMethodFromProvider(payment.provider) as string;
-    if (montant > 0) {
-      const cashTxId = await createCashTransaction({
+  const montant = Number(reservationData?.montant ?? payment.amount ?? 0);
+  const paymentMethod = paymentMethodFromProvider(payment.provider) as string;
+  if (montant > 0) {
+    let cashTxId: string;
+    try {
+      cashTxId = await createCashTransaction({
         companyId,
         reservationId: payment.reservationId,
         sessionId: null,
@@ -113,16 +148,34 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
         routeId: (reservationData?.routeId as string | undefined) ?? undefined,
         createdBy: uid,
       });
+    } catch (err) {
+      console.error("[onlinePaymentOperatorService] createCashTransaction failed", {
+        companyId,
+        reservationId: payment.reservationId,
+        uid,
+        error: err,
+      });
+      throw err;
+    }
 
+    try {
       await updateDoc(reservationRef, {
         cashTransactionId: cashTxId,
         paymentStatus: "paid",
         paymentMethod,
         updatedAt: serverTimestamp(),
       });
+    } catch (err) {
+      console.error("[onlinePaymentOperatorService] reservation final update failed", {
+        companyId,
+        reservationId: payment.reservationId,
+        cashTransactionId: cashTxId,
+        uid,
+        error: err,
+      });
+      throw err;
     }
   }
-
 }
 
 /**

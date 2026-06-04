@@ -312,11 +312,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         ])
       );
 
+      const resolvedCompanyId =
+        data.companyId || (data.compagnieId ? data.compagnieId : "") || "";
+
       const customUser: CustomUser = {
         uid: firebaseUser.uid,
         email: firebaseUser.email || data.email || "",
         displayName: firebaseUser.displayName || data.nom || "",
-        companyId: data.companyId || "",
+        companyId: resolvedCompanyId,
         role,
         nom: data.nom || "",
         ville: data.ville || "",
@@ -327,7 +330,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         companyLogo: data.companyLogo,
         companyColor: data.companyColor,
         agencyTelephone: data.agencyTelephone,
-        agencyNom: data.agencyNom,
+        agencyNom: data.agenceNom,
         agencyLogoUrl: data.agencyLogoUrl,
       };
 

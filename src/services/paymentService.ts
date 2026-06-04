@@ -127,11 +127,21 @@ export async function confirmPayment(
   }
 
   const now = Timestamp.now();
-  await updateDoc(ref, {
-    status: "validated",
-    validatedAt: now,
-    validatedBy: userId,
-  });
+  try {
+    await updateDoc(ref, {
+      status: "validated",
+      validatedAt: now,
+      validatedBy: userId,
+    });
+  } catch (err) {
+    console.error("[paymentService] confirmPayment updateDoc failed", {
+      companyId,
+      paymentId,
+      userId,
+      error: err,
+    });
+    throw err;
+  }
 
   const updated: Payment = {
     id: snap.id,
