@@ -43,14 +43,25 @@
           window.__BOOT__ = null;
           window.__PARTNERS__ = null;
         }
+
+        // 🔴 PURGE D'URGENCE LÉGÈRE : On désinscrit l'ancien SW bloqué, 
+        // SANS utiliser caches.keys() (conformément à vos instructions).
+        // Cela permet au navigateur de charger le nouveau index.html depuis le réseau.
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            for (let registration of registrations) {
+              registration.unregister();
+            }
+          });
+        }
       })();
     </script>
-    <script type="module" crossorigin src="/assets/index-5R1X6Kx_.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/js/vendor-BKcL7oFN.js">
+    <script type="module" crossorigin src="/assets/index-ceHKwM-y.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-DHCmXFzB.js">
     <link rel="stylesheet" crossorigin href="/assets/css/vendor-CVqnNCcs.css">
     <link rel="stylesheet" crossorigin href="/assets/css/index-BrRnNqZb.css">
   <link rel="manifest" href="/manifest.webmanifest"></head>
   <body>
-    <div id="root"></div>
+    <div id="root"></div>
   </body>
 </html>
