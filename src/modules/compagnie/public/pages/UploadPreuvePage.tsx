@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { db } from '@/firebaseConfig';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { commitProofReceivedWithSeatBooking } from '@/modules/compagnie/tripInstances/onlineReservationProofCommit';
+
 import {
   clearPendingReservation,
   fetchReservationFromNestedPath,
@@ -352,8 +352,9 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       const level: Exclude<SmsValidationLevel, null> = validation === "valid" ? "valid" : validation === "suspicious" ? "suspicious" : "invalid";
       const paymentStatus = validation === "valid" ? "auto_detected" : "declared_paid";
       const parsedForSave = parsed ?? parsePaymentSMS(trimmed);
-      await commitProofReceivedWithSeatBooking(db, reservationRef, {
-        status: 'payé',
+      await updateDoc(reservationRef, {
+        statut: 'preuve_recue',
+        status: 'preuve_recue',
         preuveMessage: trimmed,
         paymentReference: parsedForSave.transactionId || trimmed,
         transactionReference: parsedForSave.transactionId || trimmed,
@@ -363,16 +364,19 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
           parsed: parsedForSave,
           validationLevel: level,
           status: paymentStatus,
-          totalAmount: (data.payment as { totalAmount?: number } | undefined)?.totalAmount ?? reservationDraft.montant,
+          totalAmount:
+            (data.payment as { totalAmount?: number } | undefined)?.totalAmount ??
+            reservationDraft.montant,
         },
         proofSubmittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
 
       const afterSnap = await getDoc(reservationRef);
       const pubTok = (afterSnap.data() as Record<string, unknown> | undefined)?.publicToken;
       if (typeof pubTok === 'string' && pubTok) {
         await updateDoc(doc(db, 'publicReservations', pubTok), {
-          status: 'payé',
+          status: 'preuve_recue',
           paymentReference: parsedForSave.transactionId || trimmed,
           updatedAt: serverTimestamp(),
         });
@@ -398,8 +402,26 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       } catch {
         /* ignore */
       }
+      // Logger état après écriture pour diagnostiquer quand l’opérateur digital ne voit pas la preuve.
+      try {
+        const afterProofSnap2 = await getDoc(reservationRef);
+        const after2 = afterProofSnap2.data() as Record<string, unknown> | undefined;
+        log.info('After proof update (diagnostic)', {
+          status: after2?.status,
+          statut: after2?.statut,
+          proofSubmittedAt: after2?.proofSubmittedAt,
+          transactionReference: after2?.transactionReference,
+          paymentReference: after2?.paymentReference,
+          preuveMessage: after2?.preuveMessage,
+          preuveVia: after2?.preuveVia,
+        });
+      } catch (diagErr) {
+        log.warn('After proof diagnostic read failed', diagErr);
+      }
+
       clearPendingReservation();
       log.info('Proof submitted → redirect to receipt');
+
       const pathBase = getPublicPathBase(reservationDraft.companySlug || getSlugFromSubdomain() || slug || '');
       navigate(pathBase ? `/${pathBase}/receipt/${reservationDraft.id}` : `/receipt/${reservationDraft.id}`, {
         replace: true,

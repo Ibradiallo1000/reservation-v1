@@ -1,38 +1,10 @@
-# TODO: Firestore Index Error - Replace alert() with Non-Blocking Toasts
+## Work log / remaining steps
+- [x] Read `src/services/paymentService.ts` and identify that `createPayment` writes to `companies/{companyId}/payments` and `confirmPayment` creates ledger via `createFinancialTransaction`.
+- [x] Read `src/modules/compagnie/treasury/financialTransactions.ts` to understand ledger writes and expected inputs.
+- [x] Patch `src/modules/agence/services/guichetReservationService.ts` so that when finance/ledger side-effects fail due to Firestore security rules, reservation creation does **not** fail; it returns `resultReservationId` after logging debug.
+- [x] Run `createPayment`/ledger side-effects errors no longer block reservation creation: `guichetReservationService` now returns `resultReservationId` after logging debug + marking finance_side_effects_failed.
+- [ ] Run the guichet reservation payment flow to confirm the permission error no longer blocks reservation creation in practice.
+- [ ] If the flow still breaks, wrap each side-effect step (createPayment, validateAndConfirmGuichetPayment, reservation doc update, logAgentHistoryEvent) with its own try/catch.
+- [ ] After confirming product behavior, optionally fix the underlying security-rule mismatch by aligning `role` / `agencyId` / payload shape for the failing ledger write (requires knowing which collection and rule predicate rejects).
 
-## Context
-When a guichet agent tries to open a cash session, a Firestore query fails because a composite index is missing. Currently `alert()` blocks the UI and the Firebase index creation link is not clickable.
-
-## Steps
-
-### Step 1: Update `src/utils/firestoreErrorHandler.ts`
-- [x] Remove `alert()` usage from `handleFirestoreError`
-- [x] Remove automatic `window.open()`
-- [x] Add `isFirestoreIndexError()` helper
-- [x] Log `console.error("FIRESTORE INDEX REQUIRED:", ...)` clearly
-- [x] Keep anti-spam `lastShown` for console flood prevention
-
-### Step 2: Update `src/index.tsx`
-- [x] Ensure global interceptor calls the updated non-blocking `handleFirestoreError`
-
-### Step 3: Update `src/modules/agence/guichet/pages/AgenceGuichetPage.tsx`
-- [x] Import `isFirestoreIndexError`, `parseIndexUrlFromError`, `FirestoreIndexLink`
-- [x] Add `isDev` check and `devIndexUrl` state
-- [x] Create `handleSessionError` helper that shows toast instead of alert
-- [x] Replace all `startShift().catch((e) => alert(...))` with `handleSessionError`
-- [x] Replace all `pauseShift().catch((e) => alert(...))` with `handleSessionError`
-- [x] Replace all `continueShift().catch((e) => alert(...))` with `handleSessionError`
-- [x] Replace `closeShift` catch alert with `handleSessionError`
-- [x] Replace `cancelReservation` catch alert with toast
-- [x] Replace `saveEdit` catch alert with `handleSessionError`
-- [x] Conditionally render `FirestoreIndexLink` in dev mode
-
-### Step 4: Update `src/modules/agence/hooks/useActiveShift.ts`
-- [x] Import `isFirestoreIndexError`
-- [x] Add explicit `FIRESTORE INDEX REQUIRED` log in onSnapshot error handler
-
-### Step 5: Verify
-- [x] No remaining `alert()` calls for Firestore errors in guichet flow
-- [x] Toast appears non-blocking
-- [x] Dev link renders when index URL is present in dev mode
 

@@ -197,6 +197,64 @@ service cloud.firestore {
         );
     }
     /** Écriture trésorerie / paiements guichet : même agence que le payload. */
+    function publicOnlineReservationCreate(companyId, agencyId) {
+      let canal = request.resource.data.get('canal', '');
+      let status = request.resource.data.get('status', '');
+      let statut = request.resource.data.get('statut', '');
+      return request.resource.data.get('paymentChannel', '') == 'online'
+        && canal is string
+        && canal.toLowerCase().replace(' ', '_') == 'en_ligne'
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('compagnieId', companyId) == companyId
+        && request.resource.data.get('agencyId', '') == agencyId
+        && status is string
+        && status.toLowerCase().replace(' ', '_') == 'en_attente'
+        && statut is string
+        && statut.toLowerCase().replace(' ', '_') == 'en_attente'
+        && request.resource.data.get('publicToken', '').size() > 0
+        && request.resource.data.get('publicUrl', '').size() > 0
+        && request.resource.data.get('seatHoldOnly', false) == true
+        && request.resource.data.get('seatsHeld', 0) > 0;
+    }
+    function publicOnlineProofSubmitOk(companyId, agencyId) {
+      let canal = resource.data.get('canal', '');
+      let paymentChannel = resource.data.get('paymentChannel', '');
+      let nextStatus = request.resource.data.get('status', '');
+
+      return (
+        paymentChannel == 'online'
+        || paymentChannel == 'en_ligne'
+        || (
+          canal is string
+          && (
+            canal.toLowerCase().replace(' ', '_') == 'en_ligne'
+            || canal.toLowerCase().replace(' ', '_') == 'online'
+          )
+        )
+      )
+      && reservationAwaitingOnlinePaymentProof()
+      && request.resource.data.get('companyId', '') == companyId
+      && request.resource.data.get('compagnieId', companyId) == companyId
+      && request.resource.data.get('agencyId', '') == agencyId
+      && nextStatus is string
+      && (nextStatus == 'preuve_recue' || nextStatus == 'verification')
+      && request.resource.data.get('updatedAt') is timestamp
+      && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'statut',
+        'canal',
+        'paymentChannel',
+        'preuveMessage',
+        'paymentReference',
+        'transactionReference',
+        'preuveVia',
+        'payment',
+        'proofSubmittedAt',
+        'seatHoldOnly',
+        'seatsHeld',
+        'updatedAt'
+      ]);
+    }
     function canWriteAgencyScopedFinance(companyId) {
       return userAgencyBelongsToCompany(companyId) && (
         isGuichetier() ||
@@ -597,8 +655,7 @@ service cloud.firestore {
         /* Public : réservation de sièges (création résa guichet + commit preuve en ligne avec segments). */
         /* Guichet / escale authentifiés : même delta que le flux public si companyId utilisateur absent du JWT mais agence valide. */
         allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
-          || (request.auth == null
-            && request.resource.data.diff(resource.data).affectedKeys()
+          || (request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['reservedSeats', 'remainingSeats', 'passengerCount', 'updatedAt', 'segments'])
             && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0)
             && request.resource.data.get('passengerCount', 0) >= resource.data.get('passengerCount', 0)
@@ -998,6 +1055,7 @@ service cloud.firestore {
           /* 🔓 Création publique. Lecture réservée aux utilisateurs compagnie ; accès billet public = via publicReservations (doc id = publicToken) uniquement. */
           allow create: if (
             request.auth == null
+            || publicOnlineReservationCreate(companyId, agencyId)
             || userCompanyId() == companyId
             || getUserRole() == 'admin_platforme'
             || (
@@ -1041,6 +1099,9 @@ service cloud.firestore {
              UPDATE 2 — SOUMISSION PREUVE (public ou utilisateur connecté)
              Passage en_attente_paiement → preuve_recue. UploadPreuvePage.
           ============================= */
+          allow update: if (
+            publicOnlineProofSubmitOk(companyId, agencyId)
+          );
           allow update: if (
             (resource.data.get('canal', '') == '' || (resource.data.get('canal', '') is string && resource.data.get('canal', '').toLowerCase().replace(' ', '_') == "en_ligne")) &&
             reservationAwaitingOnlinePaymentProof() &&

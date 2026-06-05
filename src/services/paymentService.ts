@@ -88,14 +88,25 @@ export async function createPayment(data: CreatePaymentData): Promise<string> {
     const pref = doc(ref, data.paymentDocumentId);
     await setDoc(pref, payload);
     const pid = data.paymentDocumentId;
+
     if (status === "validated") {
-      await logPaymentAction({
-        companyId: data.companyId,
-        paymentId: pid,
-        action: "confirm",
-        userId: data.validatedBy ?? "system",
-      });
+      try {
+        await logPaymentAction({
+          companyId: data.companyId,
+          paymentId: pid,
+          action: "confirm",
+          userId: data.validatedBy ?? "system",
+        });
+      } catch (err) {
+        // paymentLogs is not critical for the reservation success (permission may be missing).
+        console.warn("[paymentService] logPaymentAction(confirm) failed, swallowing:", {
+          companyId: data.companyId,
+          paymentId: pid,
+          error: err,
+        });
+      }
     }
+
     return pid;
   }
   const docRef = await addDoc(ref, payload);

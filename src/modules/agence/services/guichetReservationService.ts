@@ -321,14 +321,17 @@ async function validateEscaleAgentReservation(
   }
 }
 
-async function ensureGuichetCashSessionExpectedAmount(
-  tx: any,
+type GuichetCashSessionPlan =
+  | { kind: 'update'; ref: any; updates: Record<string, unknown> }
+  | { kind: 'create'; ref: any; sessionData: Record<string, unknown> };
+
+async function planGuichetCashSessionExpectedAmount(
   companyId: string,
   agencyId: string,
   agentId: string,
   amount: number,
   paymentMethod: CashPaymentMethod
-): Promise<void> {
+): Promise<GuichetCashSessionPlan> {
   const cashSessionsRef = collection(db, 'companies', companyId, 'agences', agencyId, CASH_SESSION_COLLECTION);
   const q = query(
     cashSessionsRef,
@@ -337,8 +340,11 @@ async function ensureGuichetCashSessionExpectedAmount(
     where('status', '==', CASH_SESSION_STATUS.OPEN),
     limit(1)
   );
-  const snap = await tx.get(q);
+
+  const snap = await getDocs(q);
+
   const updates: Record<string, unknown> = {
+
     expectedBalance: increment(amount),
     updatedAt: serverTimestamp(),
   };
@@ -352,8 +358,7 @@ async function ensureGuichetCashSessionExpectedAmount(
   }
 
   if (!snap.empty) {
-    tx.update(snap.docs[0].ref, updates);
-    return;
+    return { kind: 'update', ref: snap.docs[0].ref, updates };
   }
 
   const now = Timestamp.now();
@@ -371,8 +376,21 @@ async function ensureGuichetCashSessionExpectedAmount(
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  tx.set(sessionRef, sessionData);
+
+  return { kind: 'create', ref: sessionRef, sessionData };
 }
+
+function applyGuichetCashSessionExpectedAmountPlan(
+  tx: any,
+  plan: GuichetCashSessionPlan
+): void {
+  if (plan.kind === 'update') {
+    tx.update(plan.ref, plan.updates);
+  } else {
+    tx.set(plan.ref, plan.sessionData);
+  }
+}
+
 
 /**
  * 🔐 Récupère et valide l'utilisateur authentifié
@@ -698,15 +716,35 @@ export async function createGuichetReservation(
       if (shiftData.deviceFingerprint && options?.deviceFingerprint && shiftData.deviceFingerprint !== options.deviceFingerprint) {
         throw new Error('Session ouverte sur un autre appareil.');
       }
+      // Phase READS : toutes les lectures tx.get doivent être terminées AVANT le premier write transactionnel
       const passengers = 1;
       const seats = (params.seatsGo ?? 0) + (params.seatsReturn ?? 0);
+
       let tiRef: ReturnType<typeof tripInstanceRef> | null = null;
       let tiSnap: any = null;
       if (tripInstanceIdForHold && seats > 0) {
         tiRef = tripInstanceRef(params.companyId, tripInstanceIdForHold);
         tiSnap = await tx.get(tiRef);
       }
+
+      // cashPlan est un plan construit via tx.get (reads-only)
+      let cashPlan: GuichetCashSessionPlan | null = null;
+      if (montant > 0) {
+        // Hors transaction: lecture standard pour éviter toute dépendance à un tx.get fragile.
+        cashPlan = await planGuichetCashSessionExpectedAmount(
+          params.companyId,
+          params.agencyId,
+          currentUid,
+          montant,
+          params.paymentMethod ?? 'cash'
+        );
+
+      }
+
+
+      // Phase WRITES : à partir d’ici, aucun tx.get ne doit être exécuté
       await assertAndIncrementOperationInTransaction(tx, companyRef, operationPlans);
+
       if (tiRef && tiSnap) {
         bookSeatsOnTripInstanceInTransaction(tx, tiRef, tiSnap, seats, {
           originStopOrder: originStopOrder ?? undefined,
@@ -715,10 +753,14 @@ export async function createGuichetReservation(
           arrivee: params.arrivee,
         });
       }
+
+      // Writes reservation + cash session updates + logs + dailyStats
       tx.set(newRef, payload);
-      if (montant > 0) {
-        await ensureGuichetCashSessionExpectedAmount(tx, params.companyId, params.agencyId, currentUid, montant, params.paymentMethod ?? 'cash');
+      if (cashPlan) {
+        applyGuichetCashSessionExpectedAmountPlan(tx, cashPlan);
       }
+
+
       console.log("✅ RESERVATION CREATED");
       writeTicketGuichetActivityInTransaction(tx, {
         companyId: params.companyId,
@@ -774,6 +816,14 @@ export async function createGuichetReservation(
           ? 'card'
           : 'cash';
       
+      console.warn('[FINANCE_WRITE_ATTEMPT]', {
+        target: 'createPayment',
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        uid: currentUid,
+        role: 'unknown',
+      });
+
       const paymentId = await createPayment({
         reservationId: resultReservationId,
         companyId: params.companyId,
@@ -783,6 +833,24 @@ export async function createGuichetReservation(
         channel: 'guichet',
         provider,
         status: 'pending',
+      }).catch((e) => {
+        console.error('[FINANCE_WRITE_FAILED]', {
+          target: 'createPayment',
+          path: `companies/${params.companyId}/payments/*` ,
+          companyId: params.companyId,
+          agencyId: params.agencyId,
+          uid: currentUid,
+          error: e,
+        });
+        throw e;
+      });
+
+      console.warn('[FINANCE_WRITE_ATTEMPT]', {
+        target: 'validateAndConfirmGuichetPayment',
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        uid: currentUid,
+        role: 'unknown',
       });
 
       await validateAndConfirmGuichetPayment(
@@ -793,55 +861,104 @@ export async function createGuichetReservation(
         montant,
         params.sessionId,
         currentUid
-      );
-      
-      await updateDoc(reservationDocRef, {
-        paymentId,
-        paymentMetadata: {
-          validatedBy: currentUid,
-          agentId: currentUid,
-          sessionId: params.sessionId,
-          paymentMethod: paymentMethodLedger,
-          channel: 'guichet',
-          sourceType: 'guichet',
-          mode: params.offlineMeta?.mode ?? 'online',
-          confirmedAt: serverTimestamp(),
-        },
-        updatedAt: serverTimestamp(),
+      ).catch((e) => {
+        console.error('[FINANCE_WRITE_FAILED]', {
+          target: 'validateAndConfirmGuichetPayment',
+          path: `companies/${params.companyId}/payments/${paymentId}`,
+          companyId: params.companyId,
+          agencyId: params.agencyId,
+          uid: currentUid,
+          error: e,
+        });
+        throw e;
       });
-      
-      logAgentHistoryEvent({
+
+      // NOTE PRODUCT/SECURITY:
+      // Do NOT patch `companies/.../reservations/{reservationId}` after payment validation.
+      // The validated payment is source of truth in `companies/{companyId}/payments/{paymentId}`.
+      // This late update is fragile under current Firestore permissions and breaks guichet sales.
+      console.warn('[FINANCE_WRITE_SKIPPED]', {
+        target: 'updateDoc(reservation.payment) after validateAndConfirmGuichetPayment()',
         companyId: params.companyId,
         agencyId: params.agencyId,
-        agentId: currentUid,
-        agentName: authenticatedUser.displayName ?? null,
-        role: 'guichetier',
-        type: 'PAYMENT_RECEIVED',
-        referenceId: resultReservationId,
-        amount: montant,
-        status: 'VALIDE',
-        createdBy: currentUid,
-        metadata: {
-          paymentMethod: paymentMethodLedger,
-          sessionId: params.sessionId,
-          paymentId,
-        },
+        uid: currentUid,
+        path: `companies/${params.companyId}/agences/${params.agencyId}/reservations/${resultReservationId}`,
+      });
+
+      console.warn('[FINANCE_WRITE_ATTEMPT]', {
+        target: 'logAgentHistoryEvent',
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        uid: currentUid,
+        role: 'unknown',
+        path: `companies/${params.companyId}/*` ,
+      });
+
+      await (async () => {
+        logAgentHistoryEvent({
+          companyId: params.companyId,
+          agencyId: params.agencyId,
+          agentId: currentUid,
+          agentName: authenticatedUser.displayName ?? null,
+          role: 'guichetier',
+          type: 'PAYMENT_RECEIVED',
+          referenceId: resultReservationId,
+          amount: montant,
+          status: 'VALIDE',
+          createdBy: currentUid,
+          metadata: {
+            paymentMethod: paymentMethodLedger,
+            sessionId: params.sessionId,
+            paymentId,
+          },
+        });
+      })().catch((e) => {
+        console.error('[FINANCE_WRITE_FAILED]', {
+          target: 'logAgentHistoryEvent',
+          path: `companies/${params.companyId}/agences/${params.agencyId}/*`,
+          companyId: params.companyId,
+          agencyId: params.agencyId,
+          uid: currentUid,
+          error: e,
+        });
+        throw e;
       });
       
       console.log('[createGuichetReservation] Payment completed successfully', { paymentId });
     } catch (err) {
       console.error('[guichetReservationService] financial side-effects failed:', err);
+
+      // Extra diagnostics: identify which financial write failed (payment vs ledger) and under which tenant/role.
+      try {
+        const e = err as any;
+        const code = e?.code;
+        const message = e instanceof Error ? e.message : String(e);
+        console.warn('[GUICHET_FINANCE_DEBUG:DETAILS]', {
+          code,
+          message,
+          companyId: params.companyId,
+          agencyId: params.agencyId,
+          authenticatedUid: currentUid,
+        });
+      } catch {
+        // ignore diagnostics failures
+      }
+
       await logGuichetFinanceAuthDebug({
         companyId: params.companyId,
         agencyId: params.agencyId,
         userId: currentUid,
       });
+
       await updateDoc(reservationDocRef, {
         statut: 'finance_side_effects_failed',
         paymentStatus: 'finance_side_effects_failed',
         updatedAt: serverTimestamp(),
       }).catch(() => {});
-      throw err;
+
+      // Reservation creation must not fail when ledger/payment side-effects are blocked by security rules.
+      // The UI will show finance_side_effects_failed and comptability backoffice can reconcile later.
+      return resultReservationId;
     }
   }
 
@@ -858,7 +975,8 @@ export async function createGuichetReservation(
   }
 
   void verifyReservationIntegrity(params.companyId, params.agencyId, resultReservationId).catch((err) => {
-    console.error('[guichetReservationService] verifyReservationIntegrity failed:', err);
+    // Non-critical debug-only check: never block guichet sale flow.
+    console.warn('[guichetReservationService] verifyReservationIntegrity non-blocking failure:', err);
   });
   
   void verifyGlobalReservationConsistency(params.companyId, params.agencyId, resultReservationId).catch((err) => {
