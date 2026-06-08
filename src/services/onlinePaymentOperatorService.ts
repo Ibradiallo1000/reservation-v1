@@ -3,16 +3,13 @@
  * La page Digital Cash ne lit pas directement la collection `reservations` : toute la logique est ici.
  */
 
-import { doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { arrayUnion, doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { createCashTransaction } from "@/modules/compagnie/cash/cashService";
 import { LOCATION_TYPE } from "@/modules/compagnie/cash/cashTypes";
-import { decrementReservedSeats, getTripInstance } from "@/modules/compagnie/tripInstances/tripInstanceService";
-import { resolveJourneyStopIdsFromCities } from "@/modules/compagnie/routes/stopResolution";
-import {
-  transitionToConfirmedOrPaidWithDailyStats,
-  updateReservationStatut,
-} from "@/modules/agence/services/reservationStatutService";
+import { decrementReservedSeats } from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { commitOperatorValidatedOnlineReservation } from "@/modules/compagnie/tripInstances/onlineReservationOperatorCommit";
+import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
 import type { Payment } from "@/types/payment";
 import { confirmPayment, rejectPayment } from "./paymentService";
 
@@ -64,69 +61,33 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
   }
 
   const reservationData = reservationSnap.data() as Record<string, unknown>;
-  const lifecycle = String(reservationData?.status ?? "");
+  const lifecycle = String(reservationData?.status ?? "").toLowerCase();
   const legacyStatut = String(reservationData?.statut ?? "").toLowerCase();
   const isConfirmable =
-    (lifecycle === "payé" && reservationData?.ticketValidatedAt == null) ||
+    lifecycle === "preuve_recue" ||
+    lifecycle === "verification" ||
     legacyStatut === "preuve_recue" ||
-    legacyStatut === "verification" ||
-    legacyStatut === "en_attente_paiement";
+    legacyStatut === "verification";
   if (!isConfirmable) {
     throw new Error("Cette réservation ne peut plus être confirmée.");
   }
 
   try {
-    await transitionToConfirmedOrPaidWithDailyStats(
+    await commitOperatorValidatedOnlineReservation({
       reservationRef,
-      "confirme",
-      { userId: uid, userRole: role },
-      { validatedBy: uid }
-    );
+      companyId,
+      paymentId: payment.id,
+      uid,
+      userRole: role,
+    });
   } catch (err) {
-    console.error("[onlinePaymentOperatorService] transitionToConfirmedOrPaidWithDailyStats failed", {
+    console.error("[onlinePaymentOperatorService] commitOperatorValidatedOnlineReservation failed", {
       companyId,
       reservationId: payment.reservationId,
       uid,
       error: err,
     });
     throw err;
-  }
-
-  const tripInstanceIdConfirm = String(reservationData?.tripInstanceId ?? "").trim();
-  const departConfirm = String(reservationData?.depart ?? "").trim();
-  const arriveeConfirm = String(reservationData?.arrivee ?? "").trim();
-  const missingOriginId =
-    reservationData?.originStopId == null || String(reservationData.originStopId).trim() === "";
-  const missingDestId =
-    reservationData?.destinationStopId == null || String(reservationData.destinationStopId).trim() === "";
-  if (tripInstanceIdConfirm && departConfirm && arriveeConfirm && (missingOriginId || missingDestId)) {
-    const ti = await getTripInstance(companyId, tripInstanceIdConfirm);
-    const routeIdConfirm = String((ti as { routeId?: unknown })?.routeId ?? "").trim();
-    if (routeIdConfirm) {
-      const journey = await resolveJourneyStopIdsFromCities(
-        companyId,
-        routeIdConfirm,
-        departConfirm,
-        arriveeConfirm
-      );
-      if (journey) {
-        try {
-          await updateDoc(reservationRef, {
-            ...(missingOriginId && { originStopId: journey.originStopId }),
-            ...(missingDestId && { destinationStopId: journey.destinationStopId }),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          console.error("[onlinePaymentOperatorService] reservation origin/destination update failed", {
-            companyId,
-            reservationId: payment.reservationId,
-            uid,
-            error: err,
-          });
-          throw err;
-        }
-      }
-    }
   }
 
   const montant = Number(reservationData?.montant ?? payment.amount ?? 0);
@@ -158,15 +119,27 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
       throw err;
     }
 
+    const finalizationPayload = {
+      cashTransactionId: cashTxId,
+      paymentStatus: "paid",
+      paymentMethod,
+      updatedAt: serverTimestamp(),
+    };
+    console.warn("[ONLINE_PAYMENT_RESERVATION_FINALIZATION_ATTEMPT]", {
+      path: reservationRef.path,
+      payload: finalizationPayload,
+      payloadKeys: Object.keys(finalizationPayload),
+      companyId,
+      agencyId: payment.agencyId,
+      reservationId: payment.reservationId,
+      uid,
+    });
     try {
-      await updateDoc(reservationRef, {
-        cashTransactionId: cashTxId,
-        paymentStatus: "paid",
-        paymentMethod,
-        updatedAt: serverTimestamp(),
-      });
+      await updateDoc(reservationRef, finalizationPayload);
     } catch (err) {
       console.error("[onlinePaymentOperatorService] reservation final update failed", {
+        path: reservationRef.path,
+        payloadKeys: Object.keys(finalizationPayload),
         companyId,
         reservationId: payment.reservationId,
         cashTransactionId: cashTxId,
@@ -205,32 +178,31 @@ export async function rejectPendingOnlinePaymentAndSyncReservation(
   if (!reservationSnap.exists()) return;
 
   const reservationData = reservationSnap.data() as Record<string, unknown>;
-  const lifecycle = String(reservationData?.status ?? "");
-  if (lifecycle === "payé" || lifecycle === "en_attente") {
-    await updateDoc(reservationRef, {
-      status: "annulé",
-      refusalReason: reason ?? "Raison non spécifiée",
-      refusedBy: uid,
-      refusedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } else {
-    await updateReservationStatut(
-      reservationRef,
-      "refuse",
-      { userId: uid, userRole: role },
-      {
-        refusalReason: reason ?? "Raison non spécifiée",
-        refusedBy: uid,
-        refusedAt: serverTimestamp(),
-      }
-    );
-  }
+  const lifecycle = String(reservationData?.status ?? "").toLowerCase();
+  const legacyStatut = String(reservationData?.statut ?? "").toLowerCase();
+  const oldStatus = ["preuve_recue", "verification"].includes(legacyStatut)
+    ? legacyStatut
+    : lifecycle;
+  const rejectionPayload = {
+    status: "refuse",
+    statut: "refuse",
+    refusalReason: reason ?? "Raison non spécifiée",
+    refusedBy: uid,
+    refusedAt: serverTimestamp(),
+    auditLog: arrayUnion(buildStatutTransitionPayload(oldStatus, "refuse", {
+      userId: uid,
+      userRole: role,
+    })),
+    updatedAt: serverTimestamp(),
+  };
+  await updateDoc(reservationRef, rejectionPayload);
 
   const tripInstanceId = (reservationData?.tripInstanceId as string | null) ?? null;
   const seats =
     Number(reservationData?.seatsGo ?? 0) + Number(reservationData?.seatsReturn ?? 0);
-  if (tripInstanceId && seats > 0) {
+  const seatsWereCommitted =
+    reservationData?.seatsCommittedAt != null || reservationData?.seatHoldOnly === false;
+  if (seatsWereCommitted && tripInstanceId && seats > 0) {
     await decrementReservedSeats(companyId, tripInstanceId, seats, {
       originStopOrder: reservationData?.originStopOrder as number | null | undefined,
       destinationStopOrder: reservationData?.destinationStopOrder as number | null | undefined,

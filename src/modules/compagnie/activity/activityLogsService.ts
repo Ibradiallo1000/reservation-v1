@@ -99,7 +99,8 @@ export function writeOnlineTicketActivityInTransaction(
     seats: number;
     depart?: string;
     arrivee?: string;
-  }
+  },
+  onWriteAttempt?: (ref: ReturnType<typeof activityLogRef>, payload: ActivityLogDoc) => void
 ): void {
   const ref = activityLogRef(params.companyId, activityLogDocIdOnline(params.reservationId));
   const payload: ActivityLogDoc = {
@@ -115,6 +116,7 @@ export function writeOnlineTicketActivityInTransaction(
     depart: params.depart?.trim() || undefined,
     arrivee: params.arrivee?.trim() || undefined,
   };
+  onWriteAttempt?.(ref, payload);
   tx.set(ref, payload);
 }
 

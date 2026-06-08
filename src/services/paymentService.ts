@@ -20,7 +20,7 @@ import {
   serverTimestamp,
   Timestamp,
 } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+import { auth, db } from "@/firebaseConfig";
 import type { Payment, CreatePaymentData, PaymentProvider, PaymentStatus } from "@/types/payment";
 import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import type { FinancialPaymentMethod } from "@/modules/compagnie/treasury/types";
@@ -137,18 +137,60 @@ export async function confirmPayment(
     return { id: snap.id, ...data } as Payment;
   }
 
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid) {
+    throw new Error("Utilisateur Firebase non authentifié.");
+  }
+  if (userId && userId !== currentUid) {
+    throw new Error("L'utilisateur de validation ne correspond pas à la session Firebase.");
+  }
+
   const now = Timestamp.now();
+  const payload = {
+    status: "validated" as const,
+    validatedBy: userId,
+    validatedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  const paymentPath = ref.path;
+  console.warn("[CONFIRM_PAYMENT_UPDATE_PAYLOAD]", {
+    paymentId,
+    paymentPath,
+    uid: userId,
+    payload,
+    payloadKeys: Object.keys(payload),
+  });
   try {
-    await updateDoc(ref, {
-      status: "validated",
-      validatedAt: now,
-      validatedBy: userId,
+    const [userDoc, token] = await Promise.all([
+      getDoc(doc(db, "users", userId)),
+      auth.currentUser.getIdTokenResult(false),
+    ]);
+    console.warn("[CONFIRM_PAYMENT_OPERATOR_IDENTITY]", {
+      uid: userId,
+      userDocRole: userDoc.exists() ? userDoc.get("role") : null,
+      customClaimRole: token.claims.role ?? null,
     });
+  } catch (identityError) {
+    console.warn("[CONFIRM_PAYMENT_OPERATOR_IDENTITY] verification failed", identityError);
+  }
+
+  console.log("[PAYMENT_BEFORE_UPDATE]", data);
+  console.log("[PAYMENT_UPDATE_PAYLOAD]", payload);
+  console.log("[PAYMENT_UPDATE_KEYS]", Object.keys(payload));
+
+  try {
+    await updateDoc(ref, payload);
   } catch (err) {
     console.error("[paymentService] confirmPayment updateDoc failed", {
       companyId,
       paymentId,
       userId,
+      paymentState: {
+        companyId: data.companyId,
+        reservationId: data.reservationId,
+        channel: data.channel,
+        status: data.status,
+      },
       error: err,
     });
     throw err;

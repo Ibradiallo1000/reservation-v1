@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   collection, collectionGroup, query, where, orderBy, limit, doc,
-  deleteDoc, onSnapshot, getDoc, updateDoc, serverTimestamp, getDocs, Timestamp
+  deleteDoc, onSnapshot, getDoc, updateDoc, serverTimestamp, getDocs, Timestamp, and, or
 } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { getStartOfDayBamako, getEndOfDayBamako } from '@/shared/date/dateUtilsTz';
@@ -578,9 +578,14 @@ const ReservationsEnLigne: React.FC = () => {
 
     const qRef = query(
       collectionGroup(db, 'reservations'),
-      where('companyId', '==', user.companyId),
-      where('canal', '==', 'en_ligne'),
-      where('status', '==', 'payé'),
+      and(
+        where('companyId', '==', user.companyId),
+        where('canal', '==', 'en_ligne'),
+        or(
+          where('status', 'in', ['preuve_recue', 'verification']),
+          where('statut', 'in', ['preuve_recue', 'verification'])
+        )
+      ),
       orderBy('createdAt', 'desc'),
       limit(50)
     );
@@ -676,7 +681,7 @@ const ReservationsEnLigne: React.FC = () => {
       const qRef = query(
           collectionGroup(db, 'reservations'),
           where('companyId', '==', user.companyId),
-          where('status', 'in', ['payé', 'annulé']),
+          where('status', 'in', ['confirme', 'annulé']),
           orderBy('createdAt', 'desc'),
           limit(Math.min(ITEMS_PER_PAGE * page, 200))
         );
@@ -904,17 +909,6 @@ const ReservationsEnLigne: React.FC = () => {
           });
         } catch (e) {
           console.error('handleValidate: validatePendingOnlinePaymentAndSyncReservation failed', e);
-          throw e;
-        }
-        try {
-          await updateDoc(reservationRef, {
-            "payment.status": "validated",
-            "payment.validatedAt": serverTimestamp(),
-            "payment.validatedBy": user.uid ?? "",
-            updatedAt: serverTimestamp(),
-          });
-        } catch (e) {
-          console.error('handleValidate: updateDoc(reservationRef) failed', e);
           throw e;
         }
       } else {

@@ -120,6 +120,126 @@ service cloud.firestore {
         ) && newS == 'embarque')
         || ((hasUserRole('admin_compagnie') || hasUserRole('company_accountant') || isAgencyManager() || isComptable() || hasUserRole('operator_digital')) && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
     }
+    function operatorDigitalCanCommitOnlineReservation(companyId, agencyId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let online = resource.data.get('canal', '') in ['en_ligne', 'online']
+        || resource.data.get('paymentChannel', '') in ['en_ligne', 'online'];
+      let pending = resource.data.get('status', '') in ['preuve_recue', 'verification']
+        || resource.data.get('statut', '') in ['preuve_recue', 'verification'];
+      return isAuth()
+        && hasUserRole('operator_digital')
+        && resource.data.get('companyId', '') == companyId
+        && resource.data.get('agencyId', '') == agencyId
+        && online
+        && pending
+        && request.resource.data.get('status', '') == 'confirme'
+        && request.resource.data.get('statut', '') == 'confirme'
+        && request.resource.data.get('validatedBy', '') == request.auth.uid
+        && request.resource.data.get('paymentStatus', '') == 'paid'
+        && request.resource.data.get('payment', {}).get('status', '') == 'validated'
+        && request.resource.data.get('ticketValidatedAt', null) == request.time
+        && request.resource.data.get('seatHoldOnly', true) == false
+        && request.resource.data.get('seatsHeld', -1) == 0
+        && (
+          request.resource.data.get('seatsCommittedAt', null) == request.time
+          || (
+            resource.data.get('seatsCommittedAt', null) != null
+            && request.resource.data.get('seatsCommittedAt', null) == resource.data.get('seatsCommittedAt', null)
+          )
+        )
+        && request.resource.data.get('updatedAt', null) == request.time
+        && changed.hasAll([
+          'status',
+          'statut',
+          'paymentStatus',
+          'payment',
+          'ticketValidatedAt',
+          'validatedBy',
+          'auditLog',
+          'updatedAt'
+        ])
+        && changed.hasOnly([
+          'status',
+          'statut',
+          'paymentStatus',
+          'payment',
+          'ticketValidatedAt',
+          'validatedBy',
+          'auditLog',
+          'seatHoldOnly',
+          'seatsHeld',
+          'seatsCommittedAt',
+          'updatedAt'
+        ]);
+    }
+    function operatorDigitalCanRejectOnlineReservation(companyId, agencyId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let online = resource.data.get('canal', '') in ['en_ligne', 'online']
+        || resource.data.get('paymentChannel', '') in ['en_ligne', 'online'];
+      let pending = resource.data.get('status', '') in ['preuve_recue', 'verification']
+        || resource.data.get('statut', '') in ['preuve_recue', 'verification'];
+      return isAuth()
+        && hasUserRole('operator_digital')
+        && resource.data.get('companyId', '') == companyId
+        && resource.data.get('agencyId', '') == agencyId
+        && online
+        && pending
+        && request.resource.data.get('status', '') == 'refuse'
+        && request.resource.data.get('statut', '') == 'refuse'
+        && request.resource.data.get('refusedBy', '') == request.auth.uid
+        && request.resource.data.get('refusedAt', null) == request.time
+        && request.resource.data.get('updatedAt', null) == request.time
+        && changed.hasAll([
+          'status',
+          'statut',
+          'refusalReason',
+          'refusedBy',
+          'refusedAt',
+          'auditLog',
+          'updatedAt'
+        ])
+        && changed.hasOnly([
+          'status',
+          'statut',
+          'refusalReason',
+          'refusedBy',
+          'refusedAt',
+          'auditLog',
+          'updatedAt'
+        ]);
+    }
+    function operatorDigitalCanFinalizeOnlineReservation(companyId, agencyId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let online = resource.data.get('canal', '') in ['en_ligne', 'online']
+        || resource.data.get('paymentChannel', '') in ['en_ligne', 'online'];
+      return isAuth()
+        && hasUserRole('operator_digital')
+        && resource.data.get('companyId', '') == companyId
+        && resource.data.get('agencyId', '') == agencyId
+        && online
+        && resource.data.get('status', '') == 'confirme'
+        && resource.data.get('statut', '') == 'confirme'
+        && resource.data.get('paymentStatus', '') == 'paid'
+        && resource.data.get('validatedBy', '') == request.auth.uid
+        && request.resource.data.get('cashTransactionId', '') is string
+        && request.resource.data.get('cashTransactionId', '').size() > 0
+        && request.resource.data.get('paymentStatus', '') == 'paid'
+        && request.resource.data.get('paymentMethod', '') in [
+          'cash',
+          'mobile_money',
+          'card',
+          'bank_transfer',
+          'transfer',
+          'online'
+        ]
+        && request.resource.data.get('updatedAt', null) == request.time
+        && changed.hasOnly([
+          'cashTransactionId',
+          'paymentStatus',
+          'paymentMethod',
+          'updatedAt'
+        ]);
+    }
     /* Phase B — contrôleur embarquement : ne peut modifier que statut, statutEmbarquement, controleurId, checkInTime, auditLog, updatedAt */
     function boardingOfficerAllowedKeysOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -652,27 +772,33 @@ service cloud.firestore {
           && request.resource.data.get('departureTime', '') != ''
           && request.resource.data.get('departureCity', '') != ''
           && request.resource.data.get('arrivalCity', '') != '';
-        /* Public : réservation de sièges (création résa guichet + commit preuve en ligne avec segments). */
-        /* Guichet / escale authentifiés : même delta que le flux public si companyId utilisateur absent du JWT mais agence valide. */
-        allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
-          || (request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['reservedSeats', 'remainingSeats', 'passengerCount', 'updatedAt', 'segments'])
-            && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0)
-            && request.resource.data.get('passengerCount', 0) >= resource.data.get('passengerCount', 0)
-            && request.resource.data.get('remainingSeats', 999999) <= resource.data.get('remainingSeats', 999999))
-          || (
+        /* Réservation définitive de sièges : utilisateurs internes authentifiés uniquement. */
+        allow update: if (
             isAuth()
-            && userAgencyBelongsToCompany(companyId)
+            && (
+              userCompanyId() == companyId
+              || userAgencyBelongsToCompany(companyId)
+              || getUserRole() == 'admin_platforme'
+              || getUserRole() == 'operator_digital'
+            )
             && (
               isGuichetier()
               || getUserRole() == 'escale_agent'
               || getUserRole() == 'escale_manager'
+              || getUserRole() == 'operator_digital'
+              || getUserRole() == 'admin_compagnie'
+              || getUserRole() == 'admin_platforme'
             )
             && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['reservedSeats', 'remainingSeats', 'passengerCount', 'updatedAt', 'segments'])
-            && request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0)
-            && request.resource.data.get('passengerCount', 0) >= resource.data.get('passengerCount', 0)
-            && request.resource.data.get('remainingSeats', 999999) <= resource.data.get('remainingSeats', 999999)
+            && (
+              getUserRole() == 'operator_digital'
+              || (
+                request.resource.data.get('reservedSeats', 0) >= resource.data.get('reservedSeats', 0)
+                && request.resource.data.get('passengerCount', 0) >= resource.data.get('passengerCount', 0)
+                && request.resource.data.get('remainingSeats', 999999) <= resource.data.get('remainingSeats', 999999)
+              )
+            )
           );
         allow delete: if false;
         /* Progression bus par escale (arrivée/départ). Lecture: public. Écriture: embarquement (départ origine), chef agence, escales, admin. */
@@ -742,13 +868,61 @@ service cloud.firestore {
 
       /* Caisse (cashTransactions, cashClosures, cashRefunds, cashTransfers). Read/write: same company, platform admin, or escale user whose agency is in this company. */
       match /cashTransactions/{txId} {
+        function operatorDigitalCanCreateOnlineCashTransaction() {
+          let agencyId = request.resource.data.get('locationId', '');
+          let reservationId = request.resource.data.get('reservationId', '');
+          let reservationPath = /databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/reservations/$(reservationId);
+          return isAuth()
+            && hasUserRole('operator_digital')
+            && request.resource.data.get('sourceType', '') == 'online'
+            && request.resource.data.get('createdBy', '') == request.auth.uid
+            && request.resource.data.get('status', '') == 'paid'
+            && agencyId is string
+            && agencyId != ''
+            && reservationId is string
+            && reservationId != ''
+            && request.resource.data.get('amount', 0) > 0
+            && exists(reservationPath)
+            && get(reservationPath).data.get('status', '') == 'confirme'
+            && get(reservationPath).data.get('statut', '') == 'confirme'
+            && get(reservationPath).data.get('validatedBy', '') == request.auth.uid
+            && request.resource.data.keys().hasOnly([
+              'reservationId',
+              'sessionId',
+              'sourceType',
+              'sourceSessionId',
+              'tripInstanceId',
+              'amount',
+              'currency',
+              'paymentMethod',
+              'locationType',
+              'locationId',
+              'routeId',
+              'createdBy',
+              'date',
+              'paidAt',
+              'status',
+              'seats',
+              'routeLabel',
+              'accountId',
+              'createdAt',
+              'paidAtAt'
+            ]);
+        }
         allow get, list: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
           escaleUserCanReadCompany(companyId) ||
           canWriteAgencyScopedFinance(companyId)
         );
-        allow create, update: if isAuth() && (
+        allow create: if operatorDigitalCanCreateOnlineCashTransaction() || (isAuth() && (
+          userCompanyId() == companyId ||
+          getUserRole() == 'admin_platforme' ||
+          escaleUserCanReadCompany(companyId) ||
+          canWriteAgencyScopedFinance(companyId) ||
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId))
+        ));
+        allow update: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
           escaleUserCanReadCompany(companyId) ||
@@ -762,8 +936,39 @@ service cloud.firestore {
          Created/updated idempotently by cashService.ensureVirtualSession(). */
       match /virtualSessions/{sessionId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-        allow create, update: if isAuth() && (
-          userCompanyId() == companyId || getUserRole() == 'admin_platforme'
+        allow create: if isAuth() && (
+          userCompanyId() == companyId
+          || getUserRole() == 'admin_platforme'
+          || (
+            hasUserRole('operator_digital')
+            && sessionId.matches('^virtual_online_.*')
+            && request.resource.data.get('companyId', '') == companyId
+            && request.resource.data.get('agencyId', '') != ''
+            && request.resource.data.get('sourceType', '') == 'online'
+            && request.resource.data.keys().hasOnly([
+              'companyId',
+              'agencyId',
+              'paidAt',
+              'sourceType',
+              'updatedAt'
+            ])
+          )
+        );
+        allow update: if isAuth() && (
+          userCompanyId() == companyId
+          || getUserRole() == 'admin_platforme'
+          || (
+            hasUserRole('operator_digital')
+            && sessionId.matches('^virtual_online_.*')
+            && resource.data.get('companyId', '') == companyId
+            && request.resource.data.get('companyId', '') == companyId
+            && request.resource.data.get('agencyId', '') == resource.data.get('agencyId', '')
+            && request.resource.data.get('sourceType', '') == 'online'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'paidAt',
+              'updatedAt'
+            ])
+          )
         );
         allow delete: if false;
       }
@@ -1071,6 +1276,14 @@ service cloud.firestore {
               || userAgencyBelongsToCompany(companyId)
               || (getUserRole() == 'operator_digital' && userCompanyId() == companyId)
             ))
+            || (isAuth()
+              && hasUserRole('operator_digital')
+              && resource.data.get('companyId', '') == companyId
+              && resource.data.get('agencyId', '') == agencyId
+              && (
+                resource.data.get('canal', '') in ['en_ligne', 'online']
+                || resource.data.get('paymentChannel', '') in ['en_ligne', 'online']
+              ))
             || (request.auth == null && resource.data.get('canal', '') == 'en_ligne');
           allow list: if isAuth() && (
             getUserRole() == 'admin_platforme'
@@ -1111,6 +1324,9 @@ service cloud.firestore {
             reservationAwaitingOnlinePaymentProof() &&
             request.resource.data.get('statut', '') == "preuve_recue"
           );
+          allow update: if operatorDigitalCanCommitOnlineReservation(companyId, agencyId);
+          allow update: if operatorDigitalCanRejectOnlineReservation(companyId, agencyId);
+          allow update: if operatorDigitalCanFinalizeOnlineReservation(companyId, agencyId);
 
           /* ✅ Embarquement mobile: autoriser update ciblé même si shift validé.
              Nécessaire pour scan terrain (boardingStatus/journeyStatus + audit). */
@@ -1860,6 +2076,26 @@ match /shiftReports/{reportId} {
 
       /* Audit trail confirm/reject/refund (createPayment → logPaymentAction). */
       match /paymentLogs/{logId} {
+        function operatorDigitalCanCreateOnlinePaymentLog() {
+          let paymentId = request.resource.data.get('paymentId', '');
+          let paymentPath = /databases/$(database)/documents/companies/$(companyId)/payments/$(paymentId);
+          return isAuth()
+            && hasUserRole('operator_digital')
+            && paymentId is string
+            && paymentId != ''
+            && request.resource.data.get('userId', '') == request.auth.uid
+            && request.resource.data.get('action', '') in ['confirm', 'reject']
+            && request.resource.data.keys().hasOnly([
+              'paymentId',
+              'action',
+              'userId',
+              'timestamp'
+            ])
+            && exists(paymentPath)
+            && get(paymentPath).data.get('companyId', '') == companyId
+            && get(paymentPath).data.get('channel', '') == 'online'
+            && get(paymentPath).data.get('status', '') in ['validated', 'rejected'];
+        }
         allow get, list: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
@@ -1870,7 +2106,8 @@ match /shiftReports/{reportId} {
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
           (canWriteAgencyScopedFinance(companyId) && request.resource.data.get('userId', '') == request.auth.uid) ||
-          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId) && request.resource.data.get('userId', '') == request.auth.uid)
+          (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId) && request.resource.data.get('userId', '') == request.auth.uid) ||
+          operatorDigitalCanCreateOnlinePaymentLog()
         );
         allow update, delete: if false;
       }
@@ -1930,7 +2167,8 @@ match /shiftReports/{reportId} {
               && resource.data.get('status', '') == 'pending'
               && request.resource.data.get('status', '') == 'validated'
               && request.resource.data.get('validatedBy', '') == request.auth.uid
-              && request.resource.data.get('validatedAt') is timestamp
+              && request.resource.data.get('validatedAt', null) == request.time
+              && request.resource.data.get('updatedAt', null) == request.time
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'validatedAt', 'validatedBy', 'updatedAt'])
             )
           ))
@@ -1990,7 +2228,7 @@ match /shiftReports/{reportId} {
       allow get, list: if true;
     }
 
-    /* Collection group reservations : lecture pour admin, même compagnie (companyId/compagnieId), ou même agence (guichetier, chefAgence, etc.). */
+      /* Collection group reservations : lecture pour admin, même compagnie (companyId/compagnieId), ou même agence (guichetier, chefAgence, etc.). */
     match /{path=**}/reservations/{reservationId} {
       allow get: if isAuth() && (
         getUserRole() == 'admin_platforme'
@@ -1999,10 +2237,11 @@ match /shiftReports/{reportId} {
         || (getUserAgencyId() != '' && resource.data.get('agencyId', '') == getUserAgencyId())
       );
       allow list: if request.auth != null && (
-        request.auth.token.companyId != null ||
-        request.auth.token.compagnieId != null ||
-        request.auth.token.role == 'admin_platforme' ||
-        userCompanyId() != ''
+        request.auth.token.role == 'admin_platforme'
+        || request.auth.token.companyId != null
+        || request.auth.token.compagnieId != null
+        || userCompanyId() != ''
+        || hasUserRole('operator_digital')
       );
     }
 

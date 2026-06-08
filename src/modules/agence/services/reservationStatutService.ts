@@ -80,7 +80,30 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
     throw new Error("transitionToConfirmedOrPaidWithDailyStats only supports confirme or paye");
   }
 
-  await runTransaction(db, async (tx) => {
+  const plannedWrites: Array<{ target: string; path: string; payloadKeys: string[] }> = [];
+  const logWriteAttempt = (
+    target: string,
+    path: string,
+    payload: Record<string, unknown>,
+    companyId: string,
+    agencyId: string
+  ) => {
+    const payloadKeys = Object.keys(payload);
+    plannedWrites.push({ target, path, payloadKeys });
+    console.warn("[ONLINE_PAYMENT_TRANSITION_WRITE_ATTEMPT]", {
+      target,
+      path,
+      payloadKeys,
+      payload,
+      companyId,
+      agencyId,
+      reservationId: ref.id,
+      uid: meta.userId,
+    });
+  };
+
+  try {
+    await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error("Réservation introuvable.");
     const data = snap.data() as Record<string, unknown>;
@@ -117,6 +140,7 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
     const montant = Number(data?.montant ?? 0);
 
     const shouldAddToDailyStats =
+      meta.userRole !== "operator_digital" &&
       !alreadyCounted &&
       canal !== "guichet" &&
       montant > 0 &&
@@ -126,7 +150,10 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
     const isGuichetSale =
       canal === "guichet" || String(data?.paymentChannel ?? "").toLowerCase() === "guichet";
     /* Toutes les lectures avant toute écriture (Firestore : reads puis writes uniquement). */
-    const onlineLogRef = companyId ? activityLogRef(companyId, activityLogDocIdOnline(ref.id)) : null;
+    const onlineLogRef =
+      companyId && meta.userRole !== "operator_digital"
+        ? activityLogRef(companyId, activityLogDocIdOnline(ref.id))
+        : null;
     const onlineLogSnap =
       onlineLogRef && !isGuichetSale && montant > 0 ? await tx.get(onlineLogRef) : null;
 
@@ -136,7 +163,25 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
           ? (data.date as string).slice(0, 10)
           : null) ?? formatDateForDailyStats(data?.createdAt, agencyTz);
       if (dateStr) {
-        addTicketRevenueToDailyStats(tx, companyId, agencyId, dateStr, montant, agencyTz);
+        try {
+          addTicketRevenueToDailyStats(
+            tx,
+            companyId,
+            agencyId,
+            dateStr,
+            montant,
+            agencyTz,
+            (dailyStatsRef, payload) =>
+              logWriteAttempt("dailyStats", dailyStatsRef.path, payload, companyId, agencyId)
+          );
+        } catch (error) {
+          console.error("[ONLINE_PAYMENT_TRANSITION_WRITE_FAILED]", {
+            target: "dailyStats",
+            path: `companies/${companyId}/agences/${agencyId}/dailyStats/${dateStr}`,
+            error,
+          });
+          throw error;
+        }
       }
     }
 
@@ -157,19 +202,54 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
 
     if (onlineLogSnap != null && !onlineLogSnap.exists()) {
       const seats = Number(data?.seatsGo ?? 0) + Number(data?.seatsReturn ?? 0);
-      writeOnlineTicketActivityInTransaction(tx, {
-        companyId,
-        agencyId,
-        reservationId: ref.id,
-        amount: montant,
-        seats: Math.max(1, seats || 1),
-        depart: String(data?.depart ?? "").trim() || undefined,
-        arrivee: String(data?.arrivee ?? "").trim() || undefined,
-      });
+      try {
+        writeOnlineTicketActivityInTransaction(
+          tx,
+          {
+            companyId,
+            agencyId,
+            reservationId: ref.id,
+            amount: montant,
+            seats: Math.max(1, seats || 1),
+            depart: String(data?.depart ?? "").trim() || undefined,
+            arrivee: String(data?.arrivee ?? "").trim() || undefined,
+          },
+          (activityRef, payload) =>
+            logWriteAttempt("activityLogs", activityRef.path, payload, companyId, agencyId)
+        );
+      } catch (error) {
+        console.error("[ONLINE_PAYMENT_TRANSITION_WRITE_FAILED]", {
+          target: "activityLogs",
+          path: onlineLogRef?.path,
+          error,
+        });
+        throw error;
+      }
     }
 
-    tx.update(ref, updatePayload);
-  });
+    try {
+      logWriteAttempt("reservation", ref.path, updatePayload, companyId, agencyId);
+      tx.update(ref, updatePayload);
+    } catch (error) {
+      console.error("[ONLINE_PAYMENT_TRANSITION_WRITE_FAILED]", {
+        target: "reservation",
+        path: ref.path,
+        payloadKeys: Object.keys(updatePayload),
+        error,
+      });
+      throw error;
+    }
+    });
+  } catch (error) {
+    console.error("[ONLINE_PAYMENT_TRANSITION_WRITE_FAILED]", {
+      target: "transaction_commit_or_read",
+      path: ref.path,
+      payloadKeys: plannedWrites.flatMap((write) => write.payloadKeys),
+      plannedWrites,
+      error,
+    });
+    throw error;
+  }
 }
 
 /**

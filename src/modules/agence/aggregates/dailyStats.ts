@@ -199,18 +199,21 @@ export function addTicketRevenueToDailyStats(
   agencyId: string,
   date: string,
   amount: number,
-  ianaTimezone?: string
+  ianaTimezone?: string,
+  onWriteAttempt?: (ref: ReturnType<typeof dailyStatsRef>, payload: Record<string, unknown>) => void
 ): void {
   if (amount <= 0) return;
   const ref = dailyStatsRef(companyId, agencyId, date);
-  tx.set(ref, {
+  const payload = {
     ...dailyStatsIdentity(companyId, agencyId, date, ianaTimezone),
     ...baseIncrements(),
     ticketRevenue: increment(amount),
     totalRevenue: increment(amount),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  }, { merge: true });
+  };
+  onWriteAttempt?.(ref, payload);
+  tx.set(ref, payload, { merge: true });
 }
 
 /**

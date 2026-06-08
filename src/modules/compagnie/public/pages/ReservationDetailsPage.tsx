@@ -30,7 +30,6 @@ import { useTranslation } from 'react-i18next';
 import { getPublicPathBase } from '../utils/subdomain';
 import { ensurePendingOnlinePaymentFromReservation } from '@/services/paymentService';
 import { loadPublicCompanyInfoSessionThenFirestore } from '../utils/loadPublicCompanyInfo';
-import { commitProofReceivedWithSeatBooking } from '@/modules/compagnie/tripInstances/onlineReservationProofCommit';
 import {
   clearPendingReservation,
   readPendingReservationPointer,
@@ -432,15 +431,17 @@ const ReservationDetailsPage: React.FC = () => {
     setProofError(null);
     try {
       const inputReference = (proofMessage || '').trim();
-      await commitProofReceivedWithSeatBooking(db, ref, {
-        status: 'payé',
+      await updateDoc(ref, {
+        status: 'preuve_recue',
+        statut: 'preuve_recue',
         paymentReference: inputReference,
         proofSubmittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
       const tok = publicTokenRef.current;
       if (tok) {
         await updateDoc(doc(db, 'publicReservations', tok), {
-          status: 'payé',
+          status: 'preuve_recue',
           paymentReference: inputReference,
           updatedAt: serverTimestamp(),
         });
