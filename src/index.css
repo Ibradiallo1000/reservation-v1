@@ -737,3 +737,197 @@ html.dark .public-booking .public-hero-titles h2 {
     print-color-adjust: exact;
   }
 }
+/* Online ticket: compact thermal identity shared with guichet receipts. */
+.online-thermal-ticket-shell {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 96px;
+  background: transparent;
+}
+
+.online-thermal-ticket {
+  width: min(100%, 80mm);
+  overflow: hidden;
+  color: #111;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.online-thermal-ticket__content {
+  padding: 12px 14px 14px;
+}
+
+.online-thermal-ticket__header,
+.online-thermal-ticket__reference-block,
+.online-thermal-ticket__route,
+.online-thermal-ticket__payment,
+.online-thermal-ticket__qr-section,
+.online-thermal-ticket__mentions,
+.online-thermal-ticket__thanks {
+  text-align: center;
+}
+
+.online-thermal-ticket__logo {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 5px;
+  object-fit: contain;
+  border: 1px solid #111;
+  border-radius: 50%;
+}
+
+.online-thermal-ticket__company {
+  max-width: 100%;
+  margin: 0 auto;
+  overflow: hidden;
+  color: #111;
+  font-size: clamp(12px, 4vw, 15px);
+  font-weight: 800;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.online-thermal-ticket__agency,
+.online-thermal-ticket__emission {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: #374151;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.online-thermal-ticket__rule {
+  margin: 8px 0;
+  border-top: 1px dashed #6b7280;
+}
+
+.online-thermal-ticket__reference-block,
+.online-thermal-ticket__route,
+.online-thermal-ticket__payment,
+.online-thermal-ticket__qr-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.online-thermal-ticket__reference-label,
+.online-thermal-ticket__section-title {
+  color: #4b5563;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.online-thermal-ticket__reference {
+  max-width: 100%;
+  overflow: hidden;
+  color: #111;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.online-thermal-ticket__reference--footer {
+  padding: 3px 7px;
+  border: 1px solid #111;
+  font-size: 12px;
+}
+
+.online-thermal-ticket__rows {
+  display: grid;
+  gap: 3px;
+}
+
+.online-thermal-ticket__row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.online-thermal-ticket__row > :first-child {
+  color: #374151;
+}
+
+.online-thermal-ticket__row > :last-child {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.online-thermal-ticket__route-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 5px;
+  align-items: center;
+  width: 100%;
+  margin: 2px 0;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.online-thermal-ticket__route-line span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.online-thermal-ticket__route-line span:first-child {
+  text-align: right;
+}
+
+.online-thermal-ticket__route-line span:last-child {
+  text-align: left;
+}
+
+.online-thermal-ticket__amount {
+  font-size: 17px;
+}
+
+.online-thermal-ticket__qr {
+  margin: 4px 0;
+  padding: 5px;
+  background: #fff;
+  border: 1px solid #111;
+}
+
+.online-thermal-ticket__mentions {
+  color: #374151;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.online-thermal-ticket__mentions p {
+  margin: 0;
+}
+
+.online-thermal-ticket__thanks {
+  overflow: hidden;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media print {
+  .online-thermal-ticket-shell {
+    padding: 0;
+  }
+
+  .online-thermal-ticket {
+    border: 0;
+    box-shadow: none;
+  }
+}

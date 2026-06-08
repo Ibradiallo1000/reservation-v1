@@ -1,13 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import QRCode from "react-qr-code";
-import {
-  ArrowRight,
-  User,
-  Phone,
-  Download,
-  MapPin
-} from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
@@ -61,12 +55,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   const { t } = useTranslation();
   const money = useFormatCurrency();
   const [pdfLoading, setPdfLoading] = useState(false);
-
-  const isConfirmed = statut === "confirme";
   const isValidQR = isTicketValidForQR(statut);
-
-  /** Gris foncé pour libellés et icônes sur fond blanc (lisibilité jour/nuit) */
-  const labelColor = "#374151";
 
   const getStatusLabel = () => {
     const s = (statut || "").toLowerCase();
@@ -99,208 +88,85 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
     );
   };
 
+  void secondaryColor;
+  void pdfLoading;
+  void handleDownloadPDF;
+  void handleItineraire;
+
   return (
-    <div className="flex justify-center p-6 bg-[#f4f5f7]">
-      <div
-        id="ticket-content"
-        className="w-full max-w-md bg-white rounded-2xl shadow-md overflow-hidden"
-      >
-        {/* Ligne branding */}
-        <div
-          style={{
-            height: 5,
-            background: `linear-gradient(90deg, ${primaryColor}, ${secondaryColor || primaryColor})`
-          }}
-        />
+    <div className="online-thermal-ticket-shell">
+      <article id="ticket-content" className="online-thermal-ticket ticket-force-light">
+        <div className="online-thermal-ticket__content">
+          <header className="online-thermal-ticket__header">
+            {logoUrl && <img src={logoUrl} alt="" className="online-thermal-ticket__logo" />}
+            <h1 className="online-thermal-ticket__company" title={companyName}>{companyName}</h1>
+            {agencyName && <p className="online-thermal-ticket__agency">{agencyName}</p>}
+          </header>
 
-        <div className="p-5 space-y-4">
+          <div className="online-thermal-ticket__rule" />
 
-          {/* HEADER */}
-          <div className="flex justify-between items-start">
-            <div className="flex items-center gap-3">
-              {logoUrl && (
-                <img
-                  src={logoUrl}
-                  className="h-8 w-8 object-contain"
-                />
-              )}
-              <div>
-                <h1 className="text-sm font-bold uppercase tracking-wide">
-                  {companyName}
-                </h1>
-                {agencyName && (
-                  <p
-                    className="text-xs font-medium"
-                    style={{ color: labelColor }}
-                  >
-                    {agencyName}
-                  </p>
-                )}
-              </div>
-            </div>
+          <section className="online-thermal-ticket__reference-block">
+            <span className="online-thermal-ticket__reference-label">N° BILLET</span>
+            <strong className="online-thermal-ticket__reference">{receiptNumber}</strong>
+            <span className="online-thermal-ticket__emission">
+              Date d&apos;émission : {emissionDate ?? "—"}
+            </span>
+          </section>
 
-            <div className="text-right">
-              <p
-                className="text-[10px] uppercase font-semibold"
-                style={{ color: labelColor }}
-              >
-                REF
-              </p>
-              <p className="font-mono text-xs font-semibold text-gray-800">
-                {receiptNumber}
-              </p>
-            </div>
-          </div>
+          <div className="online-thermal-ticket__rule" />
 
-          {/* PASSAGER */}
-          <div
-            className="flex justify-between text-sm border-b pb-3"
-            style={{ borderColor: secondaryColor + "40" }}
-          >
-            <div className="flex items-center gap-2">
-              <User size={15} style={{ color: labelColor }} />
-              <span className="text-gray-800">{nomClient}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Phone size={15} style={{ color: labelColor }} />
-              <span className="text-gray-800">{telephone}</span>
-            </div>
-          </div>
+          <section className="online-thermal-ticket__rows">
+            <div className="online-thermal-ticket__row"><span>Passager</span><strong>{nomClient}</strong></div>
+            <div className="online-thermal-ticket__row"><span>Téléphone</span><span>{telephone}</span></div>
+          </section>
 
-          {/* TRAJET */}
-          <div className="text-center">
-            <div className="text-lg font-semibold uppercase">
-              {depart}
-              <ArrowRight
-                className="inline mx-2"
-                size={14}
-                style={{ color: secondaryColor }}
-              />
-              {arrivee}
-            </div>
+          <div className="online-thermal-ticket__rule" />
 
-            <div className="mt-3 text-xs grid grid-cols-3 text-center">
-              <div>
-                <p className="font-medium" style={{ color: labelColor }}>Date départ</p>
-                <p className="font-semibold text-gray-800">{date}</p>
-              </div>
-              <div>
-                <p className="font-medium" style={{ color: labelColor }}>Heure départ</p>
-                <p className="font-semibold text-gray-800">{heure}</p>
-              </div>
-              <div>
-                <p className="font-medium" style={{ color: labelColor }}>Passager</p>
-                <p className="font-semibold text-gray-800">{seats}</p>
-              </div>
-            </div>
-          </div>
+          <section className="online-thermal-ticket__route">
+            <span className="online-thermal-ticket__section-title">TRAJET</span>
+            <strong className="online-thermal-ticket__route-line">
+              <span>{depart}</span><ArrowRight size={14} aria-hidden="true" /><span>{arrivee}</span>
+            </strong>
+            <span>{date} • {heure}</span>
+            <span>{seats} place(s)</span>
+          </section>
 
-          {/* PRIX + STATUT */}
-          <div
-            className="flex justify-between items-center border-t pt-4"
-            style={{ borderColor: secondaryColor + "40" }}
-          >
-            <div
-              className="text-xl font-bold"
-              style={{ color: primaryColor }}
-            >
-              {money(montant)}
-            </div>
+          <div className="online-thermal-ticket__rule" />
 
-            <div
-              className="px-3 py-1 rounded-md text-xs font-semibold"
-              style={{
-                backgroundColor:
-                  statut === "confirme"
-                    ? primaryColor + "15"
-                    : secondaryColor + "15",
-                color:
-                  statut === "confirme"
-                    ? primaryColor
-                    : secondaryColor,
-                border: `1px solid ${
-                  statut === "confirme"
-                    ? primaryColor + "40"
-                    : secondaryColor + "40"
-                }`
-              }}
-            >
-              {getStatusLabel()}
-            </div>
-          </div>
+          <section className="online-thermal-ticket__payment">
+            <strong className="online-thermal-ticket__amount">{money(montant)}</strong>
+            <span>Paiement : {getStatusLabel()}</span>
+          </section>
 
-          {/* QR */}
-          <div className="text-center pt-2">
-            <p
-              className="text-[10px] uppercase font-semibold mb-2"
-              style={{ color: labelColor }}
-            >
-              Code d'embarquement
-            </p>
+          <div className="online-thermal-ticket__rule" />
 
-            <div
-              className="inline-block p-3 rounded-lg"
-              style={{
-                border: `1px solid ${secondaryColor}30`
-              }}
-            >
+          <section className="online-thermal-ticket__qr-section">
+            <span className="online-thermal-ticket__section-title">QR CODE</span>
+            <div className="online-thermal-ticket__qr">
               <div className={!isValidQR ? "opacity-40 blur-sm" : ""}>
-                <QRCode value={qrValue} size={110} />
+                <QRCode value={qrValue} size={126} />
               </div>
             </div>
-
-            <p className="font-mono text-xs mt-2 text-gray-700">
+            <span className="online-thermal-ticket__reference-label">RÉFÉRENCE</span>
+            <strong className="online-thermal-ticket__reference online-thermal-ticket__reference--footer">
               {receiptNumber}
-            </p>
-          </div>
+            </strong>
+          </section>
 
-          {/* DATE EMISSION */}
-          <div
-            className="text-xs text-center font-medium"
-            style={{ color: labelColor }}
-          >
-            Date d’émission :           {emissionDate ?? '—'}
-            </div>
+          <div className="online-thermal-ticket__rule" />
 
-          {/* ACTIONS */}
-          <div className="flex justify-between text-sm pt-3">
-            {isConfirmed && (
-              <button
-                onClick={handleDownloadPDF}
-                className="flex items-center gap-2 font-medium hover:opacity-80 transition"
-                style={{ color: labelColor }}
-              >
-                <Download size={15} />
-                PDF
-              </button>
-            )}
-
-            {agencyLatitude && agencyLongitude && (
-              <button
-                onClick={handleItineraire}
-                className="flex items-center gap-2 font-medium hover:opacity-80 transition"
-                style={{ color: labelColor }}
-              >
-                <MapPin size={15} />
-                Itinéraire
-              </button>
-            )}
-          </div>
-
-          {/* FOOTER */}
-          <div className="text-center text-xs pt-3" style={{ color: labelColor }}>
+          <section className="online-thermal-ticket__mentions">
             <p>Présentez ce code au contrôle.</p>
-            <p>Valide : 1 mois à compter de la date d’émission.</p>
-            <p
-              className="font-semibold mt-2"
-              style={{ color: primaryColor }}
-            >
-              Merci d’avoir choisi {companyName}
-            </p>
-          </div>
+            <p>Valide : 1 mois à compter de la date d&apos;émission.</p>
+          </section>
 
+          <div className="online-thermal-ticket__rule" />
+
+          <footer className="online-thermal-ticket__thanks" style={{ color: primaryColor }}>
+            Merci d&apos;avoir choisi {companyName}
+          </footer>
         </div>
-      </div>
+      </article>
     </div>
   );
 };
