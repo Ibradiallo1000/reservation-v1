@@ -36,6 +36,7 @@ import {
   pendingReservationIdMatches,
 } from '../utils/pendingReservation';
 import { toast } from 'sonner';
+import { resolveAgencyDisplayName } from '../utils/agencyDisplayName';
 
 type PaymentMethod = 'mobile_money' | 'carte_bancaire' | 'espèces' | 'autre' | 'en_ligne' | 'guichet' | string;
 
@@ -73,7 +74,9 @@ interface Reservation {
   companyName?: string;
   updatedAt?: string;
   agencyId?: string;
+  agencyName?: string;
   agencyNom?: string;
+  nomAgence?: string;
   agenceNom?: string;
   publicToken?: string;
 }
@@ -210,7 +213,12 @@ const ReservationDetailsPage: React.FC = () => {
       companySlug: (data.companySlug as string) ?? '',
       companyName: (data.companyName as string) ?? '',
       agencyId: (data.agencyId as string) ?? '',
+      agencyName: (data.agencyName as string | undefined) ??
+        ((data.agency as { name?: string } | undefined)?.name) ??
+        '',
       agencyNom: (data.agencyNom as string) ?? '',
+      nomAgence: (data.nomAgence as string) ?? '',
+      agenceNom: (data.agenceNom as string) ?? '',
       updatedAt: (data.updatedAt as any)?.toDate?.()?.toISOString?.() ?? new Date().toISOString(),
     };
   }, []);
@@ -296,7 +304,16 @@ const ReservationDetailsPage: React.FC = () => {
         try {
           const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
           const ag = agSnap.exists() ? (agSnap.data() as any) : {};
-          setAgencyName(ag?.nom || ag?.name || (snapshot?.agencyNom as string) || '');
+          setAgencyName(resolveAgencyDisplayName(
+            snapshot?.agencyNom,
+            snapshot?.nomAgence,
+            snapshot?.agenceNom,
+            snapshot?.agencyName,
+            (snapshot?.agency as { name?: string } | undefined)?.name,
+            ag?.nomAgence,
+            ag?.nom,
+            ag?.name,
+          ));
           const lat = ag?.latitude != null ? Number(ag.latitude) : null;
           const lng = ag?.longitude != null ? Number(ag.longitude) : null;
           setAgencyLatitude(Number.isFinite(lat) ? lat : null);
@@ -372,6 +389,21 @@ const ReservationDetailsPage: React.FC = () => {
 
     return () => { unsub?.(); };
   }, [id, token, slug, location.state, mapPublicSnapshotToReservation]);
+
+  useEffect(() => {
+    const inlineAgencyName = resolveAgencyDisplayName(
+      reservation?.agencyNom,
+      reservation?.nomAgence,
+      reservation?.agenceNom,
+      reservation?.agencyName,
+    );
+    if (inlineAgencyName) setAgencyName(String(inlineAgencyName).trim());
+  }, [
+    reservation?.agencyNom,
+    reservation?.nomAgence,
+    reservation?.agenceNom,
+    reservation?.agencyName,
+  ]);
 
   // 🎉 Confetti pour paiement confirmé
   useEffect(() => {

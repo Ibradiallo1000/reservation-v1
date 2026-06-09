@@ -23,6 +23,7 @@ import {
 import { Download, Printer, Home } from 'lucide-react';
 import ReservationStepHeader from '@/modules/compagnie/public/components/ReservationStepHeader';
 import html2pdf from 'html2pdf.js';
+import html2canvas from 'html2canvas';
 import { safeTextColor } from '@/utils/color';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -36,6 +37,7 @@ import type { ReservationStatus } from '@/types/reservation';
 import { getSlugFromSubdomain } from '@/modules/compagnie/public/utils/subdomain';
 import { ensurePendingOnlinePaymentFromReservation } from '@/services/paymentService';
 import { loadPublicCompanyInfoSessionThenFirestore } from '@/modules/compagnie/public/utils/loadPublicCompanyInfo';
+import { resolveAgencyDisplayName } from '@/modules/compagnie/public/utils/agencyDisplayName';
 
 interface Reservation {
   id: string;
@@ -50,6 +52,7 @@ interface Reservation {
   companyId: string;
   companySlug: string;
   agencyId?: string;
+  agencyName?: string;
   nomAgence?: string;
   agencyNom?: string;
   agenceNom?: string;
@@ -90,7 +93,7 @@ const ReceiptEnLignePage: React.FC = () => {
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [companyLoadError, setCompanyLoadError] = useState<string>('');
-  const [agencyName, setAgencyName] = useState<string>('Agence');
+  const [agencyName, setAgencyName] = useState<string>('');
   const [agencyLatitude, setAgencyLatitude] = useState<number | null>(null);
   const [agencyLongitude, setAgencyLongitude] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -171,6 +174,8 @@ const ReceiptEnLignePage: React.FC = () => {
             canal: (data.canal as string) ?? 'en_ligne',
             seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
             createdAt: data.createdAt,
+            agencyName: (data.agencyName as string | undefined) ??
+              ((data.agency as { name?: string } | undefined)?.name),
             nomAgence: data.nomAgence as string | undefined,
             agencyNom: data.agencyNom as string | undefined,
             agenceNom: data.agenceNom as string | undefined,
@@ -267,10 +272,12 @@ const ReceiptEnLignePage: React.FC = () => {
 
   /* AGENCY name + coords (for itinéraire) */
   useEffect(() => {
-    const inline =
-      reservation?.nomAgence ||
-      reservation?.agencyNom ||
-      reservation?.agenceNom;
+    const inline = resolveAgencyDisplayName(
+      reservation?.agencyNom,
+      reservation?.nomAgence,
+      reservation?.agenceNom,
+      reservation?.agencyName,
+    );
     if (inline) setAgencyName(inline.toString().trim());
   }, [reservation]);
 
@@ -284,16 +291,33 @@ const ReceiptEnLignePage: React.FC = () => {
         const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
         if (cancelled) return;
         const ag = agSnap.exists() ? (agSnap.data() as any) : {};
+        const resolvedAgencyName = resolveAgencyDisplayName(
+          reservation?.agencyNom,
+          reservation?.nomAgence,
+          reservation?.agenceNom,
+          reservation?.agencyName,
+          ag?.nomAgence,
+          ag?.nom,
+          ag?.name,
+        );
         const lat = ag?.latitude != null ? Number(ag.latitude) : null;
         const lng = ag?.longitude != null ? Number(ag.longitude) : null;
         if (!cancelled) {
+          setAgencyName(resolvedAgencyName ? String(resolvedAgencyName).trim() : '');
           setAgencyLatitude(Number.isFinite(lat) ? lat : null);
           setAgencyLongitude(Number.isFinite(lng) ? lng : null);
         }
       } catch {}
     })();
     return () => { cancelled = true; };
-  }, [reservation?.companyId, reservation?.agencyId]);
+  }, [
+    reservation?.companyId,
+    reservation?.agencyId,
+    reservation?.agencyNom,
+    reservation?.nomAgence,
+    reservation?.agenceNom,
+    reservation?.agencyName,
+  ]);
 
   const receiptNumber = reservation?.referenceCode ?? reservation?.id ?? 'BIL-INCONNU';
   const qrValue = useMemo(() => {
@@ -340,6 +364,41 @@ const ReceiptEnLignePage: React.FC = () => {
     };
     // @ts-ignore
     html2pdf().set(opt).from(receiptRef.current).save();
+  }, [receiptNumber]);
+
+  const handleDownloadPNG = useCallback(async () => {
+    if (!receiptRef.current) return;
+
+    await document.fonts?.ready;
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+
+    const ticketElement =
+      receiptRef.current.querySelector<HTMLElement>('.online-thermal-ticket') ??
+      receiptRef.current;
+    const ticketRect = ticketElement.getBoundingClientRect();
+
+    const canvas = await html2canvas(ticketElement, {
+      scale: 2,
+      width: Math.ceil(ticketRect.width),
+      height: Math.ceil(ticketRect.height),
+      windowWidth: document.documentElement.clientWidth,
+      windowHeight: document.documentElement.clientHeight,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+    });
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const imageUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = imageUrl;
+      link.download = `billet-${receiptNumber}.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(imageUrl), 1000);
+    }, 'image/png');
   }, [receiptNumber]);
 
   if (loading) {
@@ -460,7 +519,7 @@ const ReceiptEnLignePage: React.FC = () => {
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t py-3 px-4 grid grid-cols-3 gap-2">
         <button
-          onClick={handlePDF}
+          onClick={handleDownloadPNG}
           className="py-2 rounded-lg font-medium flex items-center justify-center gap-1"
           style={{ backgroundColor: primaryColor, color: textColor }}
         >
@@ -468,7 +527,7 @@ const ReceiptEnLignePage: React.FC = () => {
           Télécharger
         </button>
         <button
-          onClick={() => window.print()}
+          onClick={handlePDF}
           className="py-2 rounded-lg font-medium flex items-center justify-center gap-1"
           style={{ backgroundColor: secondaryColor, color: safeTextColor(secondaryColor) }}
         >

@@ -60,6 +60,7 @@ import {
   RESERVATION_DURATION_MS,
 } from '../utils/pendingReservation';
 import { buildReservationPayload } from '@/lib/buildReservationPayload';
+import { resolveAgencyDisplayName } from '../utils/agencyDisplayName';
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -534,7 +535,24 @@ export default function ReservationClientPage() {
         throw new Error('Trajet introuvable ou plus disponible.');
       }
 
-      const agencyName = agencyInfo.nom || 'Agence';
+      const agencySnap = await getDoc(doc(
+        db,
+        'companies',
+        selectedTrip.companyId,
+        'agences',
+        selectedTrip.agencyId
+      ));
+      const agencyData = agencySnap.exists() ? (agencySnap.data() as any) : {};
+      const agencyName = resolveAgencyDisplayName(
+        agencyInfo.nom,
+        selectedTrip.agencyNom,
+        selectedTrip.nomAgence,
+        selectedTrip.agencyName,
+        selectedTrip.agency?.name,
+        agencyData.nomAgence,
+        agencyData.nom,
+        agencyData.name,
+      ) || 'Agence';
       const agencyCode = agencyInfo.code;
 
       const compSnap = await getDoc(doc(db, 'companies', selectedTrip.companyId));
