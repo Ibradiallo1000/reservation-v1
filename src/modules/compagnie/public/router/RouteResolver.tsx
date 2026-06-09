@@ -31,7 +31,6 @@ const ReceiptEnLignePage = lazy(() => import("../pages/ReceiptEnLignePage"));
 const UploadPreuvePage = lazy(() => import("../pages/UploadPreuvePage"));
 const PaymentMethodPage = lazy(() => import("../pages/PaymentMethodPage"));
 const ReservationDetailsPage = lazy(() => import("../pages/ReservationDetailsPage"));
-const FindReservationPage = lazy(() => import("../pages/FindReservationPage"));
 const AidePage = lazy(() => import("../pages/AidePage"));
 const CompanyAboutPage = lazy(() => import("../pages/CompanyAboutPage"));
 
@@ -333,7 +332,7 @@ export default function RouteResolver() {
       content = <ClientMesReservationsPage />;
       break;
     case "retrouver-reservation":
-      content = <FindReservationPage company={company} slug={slug ?? undefined} />;
+      content = <ClientMesBilletsPage />;
       break;
     case "mes-billets":
       content = <ClientMesBilletsPage />;

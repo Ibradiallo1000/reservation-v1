@@ -8,6 +8,7 @@ import {
 import type { Unsubscribe } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { resolveReservationByToken } from '../utils/resolveReservation';
+import { saveLocalTicketPointer } from '../utils/localTicketWallet';
 import { SectionCard, StatusBadge } from '@/ui';
 import {
   ChevronLeft, MapPin, Clock, Calendar, CheckCircle, XCircle, Loader2,
@@ -301,6 +302,15 @@ const ReservationDetailsPage: React.FC = () => {
 
         const companyId = ref.path.split('/')[1];
         const agencyId = ref.path.split('/')[3];
+        if (publicToken) {
+          saveLocalTicketPointer({
+            token: publicToken,
+            reservationId: hardId,
+            companyId,
+            agencyId,
+            companySlug: slug,
+          });
+        }
         try {
           const agSnap = await getDoc(doc(db, 'companies', companyId, 'agences', agencyId));
           const ag = agSnap.exists() ? (agSnap.data() as any) : {};

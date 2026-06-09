@@ -286,6 +286,10 @@ function SubdomainOnlyRouteResolver() {
   return <RouteResolver />;
 }
 
+function SubdomainAwareMesBillets() {
+  return isPublicSubdomain() ? <RouteResolver /> : <ClientMesBilletsPage />;
+}
+
 const AppRoutes = () => {
   const { loading } = useAuth();
   const { pathname } = useLocation();
@@ -736,7 +740,7 @@ const AppRoutes = () => {
         <Route path="/:slug/mon-billet" element={<ReservationDetailsPage />} />
         {/* /:slug/upload-preuve/:id is handled by RouteResolver (recovery + upload flow) */}
         <Route path="/mes-reservations" element={<ClientMesReservationsPage />} />
-        <Route path="/mes-billets" element={<ClientMesBilletsPage />} />
+        <Route path="/mes-billets" element={<SubdomainAwareMesBillets />} />
         {/* /:slug/mes-reservations et /:slug/mes-billets passent par RouteResolver (bottom nav) */}
         <Route path="/:slug/*" element={<Suspense fallback={null}><RouteResolver /></Suspense>} />
 

@@ -1,65 +1,35 @@
-// ✅ ClientMesBilletsPage.tsx — Portefeuille transport (Mon portefeuille)
-// 3 sections : À venir | Voyages effectués | Annulés. Un seul badge principal + canal.
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  collection,
-  collectionGroup,
-  getDocs,
-  limit,
-  query,
-  where,
-  DocumentData,
-  type QueryDocumentSnapshot,
-} from "firebase/firestore";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 import { useNavigate, useParams } from "react-router-dom";
 import { SectionCard } from "@/ui";
-import {
-  Search,
-  Phone,
-  Wallet,
-  ArrowRight,
-  ChevronRight,
-  ChevronDown,
-} from "lucide-react";
+import { ArrowRight, ChevronRight, KeyRound, Search, Wallet } from "lucide-react";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import {
-  shouldShowInWallet,
-  getWalletDisplayState,
   getEffectiveStatut,
+  getWalletDisplayState,
+  shouldShowInWallet,
   type WalletSectionId,
 } from "@/utils/reservationStatusUtils";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageLoadingState } from "@/shared/ui/PageStates";
-import { normalizePhone, getDisplayPhone } from "@/utils/phoneUtils";
+import { getDisplayPhone } from "@/utils/phoneUtils";
 import { getPublicPathBase } from "../utils/subdomain";
 import ReservationStepHeader from "../components/ReservationStepHeader";
+import {
+  extractPublicTicketToken,
+  readLocalTicketPointers,
+  saveLocalTicketPointer,
+  type LocalTicketPointer,
+} from "../utils/localTicketWallet";
 
 dayjs.locale("fr");
 
-/* ---------- Pays Afrique de l'Ouest (sélecteur téléphone) ---------- */
-const WEST_AFRICA_COUNTRIES = [
-  { code: "ML", name: "Mali", dialCode: "+223" },
-  { code: "SN", name: "Sénégal", dialCode: "+221" },
-  { code: "CI", name: "Côte d'Ivoire", dialCode: "+225" },
-  { code: "BF", name: "Burkina Faso", dialCode: "+226" },
-  { code: "GN", name: "Guinée", dialCode: "+224" },
-  { code: "NE", name: "Niger", dialCode: "+227" },
-  { code: "TG", name: "Togo", dialCode: "+228" },
-  { code: "BJ", name: "Bénin", dialCode: "+229" },
-  { code: "GH", name: "Ghana", dialCode: "+233" },
-] as const;
-
-const DEFAULT_COUNTRY_CODE = "ML";
-
-const STORAGE_KEY_PHONE = "mesBillets_lastPhone";
-const STORAGE_KEY_COUNTRY = "mesBillets_lastCountry";
-
-/* ---------- Types ---------- */
-export type Reservation = {
+type Reservation = {
   id: string;
+  publicToken: string;
   companyId: string;
   agencyId: string;
   companySlug?: string;
@@ -75,36 +45,9 @@ export type Reservation = {
   montant_total?: number;
   montant?: number;
   statut?: string;
-  lieu_depart?: string;
-  couleurPrimaire?: string;
-  couleurSecondaire?: string;
-  canal?: "guichet" | "en_ligne" | string;
+  canal?: string;
 };
 
-/* ---------- Helpers ---------- */
-const toDayjs = (d: Reservation["date"]) => {
-  if (!d) return null;
-  if (typeof d === "string") return dayjs(d);
-  if (typeof d === "object" && "seconds" in d) return dayjs(d.seconds * 1000);
-  return null;
-};
-
-/** Formate les chiffres du numéro avec espaces : 78950000 → "78 95 00 00" */
-function formatPhoneDisplay(digits: string): string {
-  const d = digits.replace(/\D/g, "").slice(0, 10);
-  const parts: string[] = [];
-  for (let i = 0; i < d.length; i += 2) parts.push(d.slice(i, i + 2));
-  return parts.join(" ");
-}
-
-/** Depuis digits nationaux + dialCode, retourne E.164 (ex: +22378950000) */
-function toE164(dialCode: string, nationalDigits: string): string {
-  const digits = nationalDigits.replace(/\D/g, "");
-  const code = dialCode.replace(/\D/g, "");
-  return `+${code}${digits}`;
-}
-
-/** Sections portefeuille : 4 blocs pour éviter surcharge (Annulés / Remboursés regroupés) */
 const WALLET_SECTION_TITLES: Record<WalletSectionId, string> = {
   a_venir: "À venir",
   voyages_effectues: "Voyages effectués",
@@ -112,514 +55,284 @@ const WALLET_SECTION_TITLES: Record<WalletSectionId, string> = {
   annules: "Annulés / Remboursés",
 };
 
-/* ---------- Composant ---------- */
+const toDayjs = (date: Reservation["date"]) => {
+  if (!date) return null;
+  if (typeof date === "string") return dayjs(date);
+  return dayjs(date.seconds * 1000);
+};
+
+function mapReservation(
+  data: Record<string, any>,
+  pointer: LocalTicketPointer,
+  companyId: string,
+  agencyId: string,
+  reservationId: string
+): Reservation {
+  return {
+    id: reservationId,
+    publicToken: pointer.token,
+    companyId,
+    agencyId,
+    companySlug: String(data.companySlug || data.slug || pointer.companySlug || "") || undefined,
+    nomClient: data.nomClient || data.clientNom,
+    telephone: getDisplayPhone(data),
+    depart: data.depart || data.departure,
+    arrivee: data.arrivee || data.arrival,
+    arrival: data.arrival,
+    date: data.date,
+    heure: data.heure,
+    nombre_places: data.nombre_places ?? data.seatsGo ?? data.seats,
+    seatsGo: data.seatsGo,
+    montant_total: data.montant_total ?? data.montant,
+    montant: data.montant,
+    statut: data.statut ?? data.status,
+    canal: data.canal,
+  };
+}
+
+async function loadTicket(pointer: LocalTicketPointer): Promise<Reservation | null> {
+  const publicSnap = await getDoc(doc(db, "publicReservations", pointer.token));
+  if (!publicSnap.exists()) return null;
+
+  const publicData = publicSnap.data() as Record<string, any>;
+  const companyId = String(publicData.companyId || pointer.companyId || "");
+  const agencyId = String(publicData.agencyId || pointer.agencyId || "");
+  const reservationId = String(publicData.reservationId || pointer.reservationId || "");
+  if (!companyId || !agencyId || !reservationId) return null;
+
+  const nestedSnap = await getDoc(
+    doc(db, "companies", companyId, "agences", agencyId, "reservations", reservationId)
+  );
+  const currentData = nestedSnap.exists()
+    ? { ...publicData, ...(nestedSnap.data() as Record<string, any>) }
+    : publicData;
+
+  saveLocalTicketPointer({
+    token: pointer.token,
+    companyId,
+    agencyId,
+    reservationId,
+    companySlug: String(currentData.companySlug || currentData.slug || pointer.companySlug || "") || undefined,
+  });
+  return mapReservation(currentData, pointer, companyId, agencyId, reservationId);
+}
+
 const ClientMesBilletsPage: React.FC = () => {
   const { slug } = useParams<{ slug?: string }>();
   const navigate = useNavigate();
   const money = useFormatCurrency();
-
-  const [theme, setTheme] = useState({
-    primary: "#ea580c",
-    secondary: "#f97316",
-  });
-  const [companyCountryCode, setCompanyCountryCode] = useState<string | null>(null);
-
-  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(DEFAULT_COUNTRY_CODE);
-  const [phoneDigits, setPhoneDigits] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState<Reservation[]>([]);
-  const [error, setError] = useState<string>("");
-  const [hasSearched, setHasSearched] = useState(false);
-  const [countryOpen, setCountryOpen] = useState(false);
   const isOnline = useOnlineStatus();
-
-  const title = useMemo(() => (slug ? "Mon portefeuille" : "Retrouver mes billets"), [slug]);
   const pathBase = getPublicPathBase(slug || "");
 
-  const selectedCountry = useMemo(
-    () => WEST_AFRICA_COUNTRIES.find((c) => c.code === selectedCountryCode) ?? WEST_AFRICA_COUNTRIES[0],
-    [selectedCountryCode]
-  );
+  const [theme, setTheme] = useState({ primary: "#ea580c", secondary: "#f97316" });
+  const [rows, setRows] = useState<Reservation[]>([]);
+  const [manualValue, setManualValue] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    (async () => {
-      if (!slug) return;
+    if (!slug) return;
+    void (async () => {
       try {
-        const c = await getDocs(query(collection(db, "companies"), where("slug", "==", slug)));
-        if (!c.empty) {
-          const d = c.docs[0].data() as any;
-          setTheme((t) => ({
-            ...t,
-            primary: d?.couleurPrimaire || t.primary,
-            secondary: d?.couleurSecondaire || t.secondary,
-          }));
-          const cc = (d?.countryCode || d?.pays || "").toString().toUpperCase();
-          if (cc) {
-            const match = WEST_AFRICA_COUNTRIES.find(
-              (x) => x.code === cc || x.name.toUpperCase().startsWith(cc)
-            );
-            setCompanyCountryCode(match ? match.code : null);
-            if (match) setSelectedCountryCode(match.code);
-          }
+        const companies = await getDocs(query(collection(db, "companies"), where("slug", "==", slug)));
+        if (!companies.empty) {
+          const data = companies.docs[0].data();
+          setTheme({
+            primary: String(data.couleurPrimaire || "#ea580c"),
+            secondary: String(data.couleurSecondaire || "#f97316"),
+          });
         }
       } catch {
-        /* ignore */
+        // The wallet remains usable with the default theme.
       }
     })();
   }, [slug]);
 
-  useEffect(() => {
-    if (companyCountryCode && WEST_AFRICA_COUNTRIES.some((c) => c.code === companyCountryCode)) {
-      setSelectedCountryCode(companyCountryCode);
-    }
-  }, [companyCountryCode]);
-
-  /** Pré-remplissage wallet : dernier numéro (et pays si pas de slug) en localStorage */
-  useEffect(() => {
-    try {
-      const p = localStorage.getItem(STORAGE_KEY_PHONE);
-      const c = localStorage.getItem(STORAGE_KEY_COUNTRY);
-      if (p) setPhoneDigits(p);
-      if (!slug && c && WEST_AFRICA_COUNTRIES.some((x) => x.code === c)) setSelectedCountryCode(c);
-    } catch {
-      /* ignore */
-    }
-  }, [slug]);
-
-  /** Construit un doc résa normalisé (dédupliqué par id) */
-  const mapDoc = (
-    d: QueryDocumentSnapshot,
-    companyId: string,
-    agencyId: string,
-    companyData: DocumentData
-  ): Reservation => {
-    const r = d.data() as any;
-    return {
-      id: d.id,
-      companyId,
-      agencyId,
-      companySlug: companyData?.slug || undefined,
-      couleurPrimaire: companyData?.couleurPrimaire,
-      couleurSecondaire: companyData?.couleurSecondaire,
-      nomClient: r.nomClient || r.clientNom,
-      telephone: getDisplayPhone(r),
-      depart: r.depart || r.departure,
-      arrivee: r.arrivee || r.arrival,
-      arrival: r.arrival,
-      date: r.date,
-      heure: r.heure,
-      nombre_places: r.nombre_places ?? r.seatsGo ?? r.seats ?? undefined,
-      seatsGo: r.seatsGo,
-      montant_total: r.montant_total ?? r.montant ?? undefined,
-      montant: r.montant,
-      statut: r.statut,
-      lieu_depart: r.lieu_depart,
-      canal: r.canal || undefined,
-    };
-  };
-
-  /**
-   * Query by telephoneNormalized (primary) and telephone (backward compat).
-   * normalizePhone handles Mali 223 + 8 digits so all formats match.
-   */
-  const fetchForCompanyId = async (companyId: string, companyData: DocumentData, phoneNorm: string) => {
-    const seen = new Set<string>();
-    const out: Reservation[] = [];
-    const reservationsRef = collectionGroup(db, "reservations");
-
-    const [snapNorm, snapLegacy] = await Promise.all([
-      getDocs(
-        query(
-          reservationsRef,
-          where("companyId", "==", companyId),
-          where("telephoneNormalized", "==", phoneNorm),
-          limit(100)
-        )
-      ),
-      getDocs(
-        query(
-          reservationsRef,
-          where("companyId", "==", companyId),
-          where("telephone", "==", phoneNorm),
-          limit(100)
-        )
-      ),
-    ]);
-
-    const addUnique = (d: QueryDocumentSnapshot) => {
-      const data = d.data() as any;
-      const agencyId = String(data.agencyId ?? d.ref.parent.parent?.id ?? "");
-      const key = `${companyId}_${agencyId}_${d.id}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(mapDoc(d, companyId, agencyId, companyData));
-    };
-
-    snapNorm.docs.forEach((d) => addUnique(d));
-    snapLegacy.docs.forEach((d) => addUnique(d));
-
-    return out;
-  };
-
-  const search = async () => {
-    const digits = phoneDigits.replace(/\D/g, "");
-    if (digits.length < 8) {
-      setError("Entrez un numéro valide (au moins 8 chiffres).");
-      return;
-    }
-    const phoneNorm = normalizePhone(phoneDigits);
-    if (!phoneNorm) {
-      setError("Entrez un numéro valide.");
-      return;
-    }
-    setError("");
+  const refreshWallet = useCallback(async () => {
     setLoading(true);
-    setHasSearched(true);
-    setRows([]);
-
+    setError("");
     try {
-      let results: Reservation[] = [];
-
-      if (slug) {
-        const companies = await getDocs(query(collection(db, "companies"), where("slug", "==", slug)));
-        if (companies.empty) {
-          setError("Compagnie introuvable.");
-        } else {
-          const cdoc = companies.docs[0];
-          const d = cdoc.data() as any;
-          setTheme((t) => ({
-            ...t,
-            primary: d?.couleurPrimaire || t.primary,
-            secondary: d?.couleurSecondaire || t.secondary,
-          }));
-          results = results.concat(await fetchForCompanyId(cdoc.id, d, phoneNorm));
-        }
-      } else {
-        const companies = await getDocs(collection(db, "companies"));
-        for (const c of companies.docs) {
-          results = results.concat(await fetchForCompanyId(c.id, c.data(), phoneNorm));
-        }
-      }
-
-      results = results.filter((r) => shouldShowInWallet(r.statut));
-
-      if (!results.length) setError("Aucun billet trouvé pour ce numéro.");
-      setRows(results);
-      try {
-        localStorage.setItem(STORAGE_KEY_PHONE, phoneDigits);
-        localStorage.setItem(STORAGE_KEY_COUNTRY, selectedCountryCode);
-      } catch {
-        /* ignore */
-      }
-    } catch (e) {
-      console.error(e);
-      setError(
-        !isOnline
-          ? "Connexion indisponible. Impossible de rechercher vos billets."
-          : "Erreur lors de la recherche. Réessayez."
-      );
+      const results = await Promise.allSettled(readLocalTicketPointers().map(loadTicket));
+      const tickets = results
+        .filter((result): result is PromiseFulfilledResult<Reservation | null> => result.status === "fulfilled")
+        .map((result) => result.value)
+        .filter((ticket): ticket is Reservation => !!ticket && shouldShowInWallet(ticket.statut));
+      setRows(tickets);
+    } catch (loadError) {
+      console.error("[LOCAL_TICKET_WALLET_LOAD_FAILED]", loadError);
+      setError(isOnline ? "Impossible de charger vos billets." : "Connexion indisponible.");
     } finally {
       setLoading(false);
     }
+  }, [isOnline]);
+
+  useEffect(() => {
+    void refreshWallet();
+  }, [refreshWallet]);
+
+  const addTicket = async () => {
+    const token = extractPublicTicketToken(manualValue);
+    if (!token) {
+      setError("Saisissez le code privé ou le lien reçu après la réservation.");
+      return;
+    }
+    setAdding(true);
+    setError("");
+    try {
+      const ticket = await loadTicket({ token, savedAt: Date.now() });
+      if (!ticket) {
+        setError("Billet introuvable. Vérifiez le code ou le lien.");
+        return;
+      }
+      setManualValue("");
+      await refreshWallet();
+    } catch (addError) {
+      console.error("[LOCAL_TICKET_WALLET_ADD_FAILED]", addError);
+      setError(isOnline ? "Billet introuvable. Vérifiez le code ou le lien." : "Connexion indisponible.");
+    } finally {
+      setAdding(false);
+    }
   };
 
-  /** Regroupement par section d'affichage (À venir, Voyages effectués, En vérification, Annulés) */
   const sections = useMemo(() => {
-    const aVenir: Reservation[] = [];
-    const voyagesEffectues: Reservation[] = [];
-    const enVerification: Reservation[] = [];
-    const annules: Reservation[] = [];
-
-    const sortKey = (r: Reservation) =>
-      (toDayjs(r.date)?.valueOf() || 0) + (r.heure ? dayjs(`1970-01-01T${r.heure}`).valueOf() % 86400000 : 0);
-
-    rows.forEach((r) => {
-      const effective = getEffectiveStatut(r);
-      const state = getWalletDisplayState(effective);
-      if (!state) return;
-      if (state.section === "a_venir") aVenir.push(r);
-      else if (state.section === "voyages_effectues") voyagesEffectues.push(r);
-      else if (state.section === "en_verification") enVerification.push(r);
-      else annules.push(r);
+    const grouped: Record<WalletSectionId, Reservation[]> = {
+      a_venir: [],
+      voyages_effectues: [],
+      en_verification: [],
+      annules: [],
+    };
+    rows.forEach((reservation) => {
+      const state = getWalletDisplayState(getEffectiveStatut(reservation));
+      if (state) grouped[state.section].push(reservation);
     });
-
-    aVenir.sort((a, b) => sortKey(a) - sortKey(b));
-    voyagesEffectues.sort((a, b) => sortKey(b) - sortKey(a));
-    enVerification.sort((a, b) => sortKey(a) - sortKey(b));
-    annules.sort((a, b) => sortKey(b) - sortKey(a));
-
-    return [
-      { id: "a_venir" as const, items: aVenir },
-      { id: "voyages_effectues" as const, items: voyagesEffectues },
-      { id: "en_verification" as const, items: enVerification },
-      { id: "annules" as const, items: annules },
-    ];
+    const sortKey = (reservation: Reservation) => toDayjs(reservation.date)?.valueOf() || 0;
+    grouped.a_venir.sort((a, b) => sortKey(a) - sortKey(b));
+    grouped.en_verification.sort((a, b) => sortKey(a) - sortKey(b));
+    grouped.voyages_effectues.sort((a, b) => sortKey(b) - sortKey(a));
+    grouped.annules.sort((a, b) => sortKey(b) - sortKey(a));
+    return (Object.keys(grouped) as WalletSectionId[]).map((id) => ({ id, items: grouped[id] }));
   }, [rows]);
 
-  const goToReceipt = (r: Reservation) => {
-    const slugToUse = r.companySlug || slug || "";
-    const pathBase = getPublicPathBase(slugToUse);
-    const receiptPath = pathBase ? `/${pathBase}/receipt/${r.id}` : `/receipt/${r.id}`;
-    navigate(receiptPath, {
-      state: { companyId: r.companyId, agencyId: r.agencyId },
+  const goToReceipt = (reservation: Reservation) => {
+    const base = getPublicPathBase(reservation.companySlug || slug || "");
+    navigate(base ? `/${base}/receipt/${reservation.id}` : `/receipt/${reservation.id}`, {
+      state: { companyId: reservation.companyId, agencyId: reservation.agencyId },
     });
-  };
-
-  const handlePhoneInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value.replace(/\D/g, "").slice(0, 10);
-    setPhoneDigits(v);
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header avec le même design que FindReservationPage */}
       <ReservationStepHeader
         onBack={() => navigate(pathBase ? `/${pathBase}` : "/")}
         primaryColor={theme.primary}
         secondaryColor={theme.secondary}
-        title={title}
+        title="Mes billets"
       />
 
       <main className="max-w-3xl mx-auto p-4 space-y-5 -mt-2">
-        <SectionCard title="Recherche par téléphone" icon={Phone} className="shadow-md rounded-2xl">
-          <label className="block text-sm font-medium text-gray-800">Numéro de téléphone</label>
-          <p className="mt-1 text-xs text-gray-500">
-            Saisissez le numéro utilisé pour vos billets (format international).
+        <SectionCard title="Ajouter un billet" icon={KeyRound} className="shadow-md rounded-2xl">
+          <p className="text-xs text-gray-500">
+            Collez le lien privé reçu après votre réservation, ou saisissez son code privé.
           </p>
           <div className="mt-3 flex gap-2">
-            <div className="flex flex-1 rounded-xl border bg-gray-50/80 overflow-hidden">
-              <div className="flex items-center">
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setCountryOpen((o) => !o)}
-                    className="flex items-center gap-1.5 pl-3 pr-2 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
-                  >
-                    <Phone className="w-4 h-4 text-gray-500" />
-                    <span className="tabular-nums">{selectedCountry.dialCode}</span>
-                    <ChevronDown className="w-4 h-4 text-gray-400" />
-                  </button>
-                  {countryOpen && (
-                    <>
-                      <div className="fixed inset-0 z-10" aria-hidden onClick={() => setCountryOpen(false)} />
-                      <div
-                        className="absolute left-0 top-full mt-1 z-20 w-56 max-h-64 overflow-auto rounded-xl border bg-white shadow-lg py-1"
-                        style={{ borderColor: `${theme.primary}25` }}
-                      >
-                        {WEST_AFRICA_COUNTRIES.map((c) => (
-                          <button
-                            key={c.code}
-                            type="button"
-                            onClick={() => {
-                              setSelectedCountryCode(c.code);
-                              setCountryOpen(false);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50"
-                            style={{
-                              backgroundColor: c.code === selectedCountryCode ? `${theme.primary}10` : undefined,
-                            }}
-                          >
-                            <span className="tabular-nums text-gray-600 w-12">{c.dialCode}</span>
-                            <span className="text-gray-900">{c.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-                <div className="w-px h-8" style={{ backgroundColor: `${theme.primary}20` }} />
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  placeholder="78 95 00 00"
-                  value={formatPhoneDisplay(phoneDigits)}
-                  onChange={handlePhoneInputChange}
-                  onKeyDown={(e) => e.key === "Enter" && search()}
-                  className="flex-1 min-w-0 py-2.5 px-3 bg-transparent text-gray-900 placeholder-gray-400 text-sm outline-none"
-                />
-              </div>
-            </div>
+            <input
+              value={manualValue}
+              onChange={(event) => setManualValue(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && void addTicket()}
+              placeholder="Lien ou code privé"
+              className="flex-1 min-w-0 rounded-xl border bg-gray-50 px-3 py-2.5 text-sm outline-none"
+            />
             <button
               type="button"
-              onClick={search}
-              disabled={loading}
-              className="shrink-0 h-11 px-4 rounded-xl font-medium text-white shadow-sm disabled:opacity-60 inline-flex items-center gap-2 transition-opacity"
-              style={{
-                background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
-                boxShadow: `0 8px 20px ${theme.secondary}55`,
-              }}
+              onClick={() => void addTicket()}
+              disabled={adding}
+              className="shrink-0 h-11 px-4 rounded-xl font-medium text-white disabled:opacity-60 inline-flex items-center gap-2"
+              style={{ background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})` }}
             >
               <Search className="w-4 h-4" />
-              Rechercher
+              Ajouter
             </button>
           </div>
-          {error && (
-            <p className="mt-2 text-sm text-red-600" role="alert">
-              {error}
-            </p>
-          )}
+          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
         </SectionCard>
 
         <SectionCard
           title="Mon portefeuille"
           icon={Wallet}
-          right={
-            rows.length > 0 ? (
-              <span className="text-xs text-gray-500">
-                {rows.length} billet{rows.length !== 1 ? "s" : ""}
-              </span>
-            ) : undefined
-          }
+          right={<span className="text-xs text-gray-500">{rows.length} billet{rows.length !== 1 ? "s" : ""}</span>}
           className="shadow-md rounded-2xl"
           noPad
         >
           {loading ? (
             <PageLoadingState blocks={3} />
-          ) : !hasSearched ? (
+          ) : sections.every((section) => section.items.length === 0) ? (
             <div className="p-8 text-center">
-              <p className="text-sm text-gray-600">
-                Entrez le numéro utilisé pour vos billets pour les afficher ici.
-              </p>
+              <p className="text-sm text-gray-600">Aucun billet enregistré sur cet appareil.</p>
               <p className="text-xs text-gray-500 mt-2">
-                Une confirmation vous a été envoyée par SMS ou email après chaque réservation.
+                Vos prochains billets seront ajoutés automatiquement. Vous pouvez aussi utiliser leur lien privé.
               </p>
-            </div>
-          ) : sections.every((s) => s.items.length === 0) ? (
-            <div className="p-8 text-center">
-              <p className="text-sm text-gray-600">
-                {isOnline ? "Aucun billet trouvé pour ce numéro." : "Hors ligne: impossible de charger les billets pour le moment."}
-              </p>
-              <p className="text-xs text-gray-500 mt-2">
-                Vérifiez le numéro ou consultez vos réservations depuis la page d'accueil.
-              </p>
-              <div className="mt-4">
-                <button
-                  type="button"
-                  onClick={search}
-                  className="text-sm px-4 py-2 rounded-lg border hover:bg-gray-50 font-medium"
-                  style={{ borderColor: `${theme.primary}40` }}
-                >
-                  Réessayer
-                </button>
-              </div>
             </div>
           ) : (
             <div className="p-3 space-y-6">
-              {sections.map(
-                (sec) =>
-                  sec.items.length > 0 && (
-                    <div key={sec.id}>
-                      <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2 px-0.5">
-                        {WALLET_SECTION_TITLES[sec.id]}
-                      </h2>
-                      <ul className="space-y-2">
-                        {sec.items.map((r) => {
-                          const depart = (r.depart ?? "").trim() || "—";
-                          const arrivee = (r.arrivee ?? r.arrival ?? "").trim() || "—";
-                          const tripDate = toDayjs(r.date);
-                          const dateHeure = tripDate
-                            ? tripDate.format("ddd D MMM") + (r.heure ? ` • ${r.heure}` : "")
-                            : "—";
-                          const places = r.nombre_places ?? r.seatsGo ?? undefined;
-                          const amount = r.montant_total ?? r.montant ?? undefined;
-                          const walletState = getWalletDisplayState(getEffectiveStatut(r));
-
-                          return (
-                            <li key={`${r.companyId}_${r.agencyId}_${r.id}`} className="list-none">
-                              <div
-                                className="rounded-2xl border bg-white p-3 shadow-sm transition-shadow active:shadow-md min-h-0"
-                                style={{
-                                  borderColor: `${theme.primary}18`,
-                                  borderRadius: "16px",
-                                }}
-                              >
-                                {/* Ligne 1 : Depart → Arrivee + Prix */}
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="min-w-0 flex-1 text-sm font-semibold text-gray-900 truncate">
-                                    <span>{depart}</span>
-                                    <ArrowRight
-                                      className="inline-block h-3.5 w-3.5 mx-1 shrink-0 align-middle"
-                                      style={{ color: theme.primary }}
-                                      aria-hidden
-                                    />
-                                    <span>{arrivee}</span>
-                                  </p>
-                                  {typeof amount === "number" && (
-                                    <span className="shrink-0 text-sm font-bold tabular-nums" style={{ color: theme.primary }}>
-                                      {money(amount)}
+              {sections.map((section) =>
+                section.items.length ? (
+                  <div key={section.id}>
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2 px-0.5">
+                      {WALLET_SECTION_TITLES[section.id]}
+                    </h2>
+                    <ul className="space-y-2">
+                      {section.items.map((reservation) => {
+                        const depart = reservation.depart?.trim() || "—";
+                        const arrivee = (reservation.arrivee || reservation.arrival)?.trim() || "—";
+                        const tripDate = toDayjs(reservation.date);
+                        const dateTime = tripDate
+                          ? `${tripDate.format("ddd D MMM")}${reservation.heure ? ` • ${reservation.heure}` : ""}`
+                          : "—";
+                        const places = reservation.nombre_places ?? reservation.seatsGo;
+                        const amount = reservation.montant_total ?? reservation.montant;
+                        const walletState = getWalletDisplayState(getEffectiveStatut(reservation));
+                        return (
+                          <li key={reservation.publicToken}>
+                            <div className="rounded-2xl border bg-white p-3 shadow-sm" style={{ borderColor: `${theme.primary}18` }}>
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="min-w-0 flex-1 text-sm font-semibold text-gray-900 truncate">
+                                  {depart}
+                                  <ArrowRight className="inline-block h-3.5 w-3.5 mx-1 align-middle" style={{ color: theme.primary }} />
+                                  {arrivee}
+                                </p>
+                                {typeof amount === "number" && (
+                                  <span className="shrink-0 text-sm font-bold tabular-nums" style={{ color: theme.primary }}>
+                                    {money(amount)}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-xs text-gray-500">{dateTime}</p>
+                              {typeof places === "number" && <p className="mt-0.5 text-xs text-gray-500">{places} place{places > 1 ? "s" : ""}</p>}
+                              <div className="mt-2.5 flex items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {walletState && (
+                                    <span className="rounded-full px-2 py-0.5 text-xs font-medium border bg-gray-50">
+                                      {walletState.label}
+                                    </span>
+                                  )}
+                                  {reservation.canal && (
+                                    <span className="rounded-full border px-2 py-0.5 text-xs font-medium" style={{ color: theme.primary, borderColor: `${theme.primary}25` }}>
+                                      {reservation.canal === "guichet" ? "Guichet" : "En ligne"}
                                     </span>
                                   )}
                                 </div>
-                                {/* Ligne 2 : Sam 21 fév • 05:00 */}
-                                <p className="mt-1 text-xs text-gray-500">{dateHeure}</p>
-                                {/* Ligne 3 : X places */}
-                                {typeof places === "number" && (
-                                  <p className="mt-0.5 text-xs text-gray-500">
-                                    {places} place{places > 1 ? "s" : ""}
-                                  </p>
-                                )}
-                                {/* Ligne 4 : Badge principal + Canal + bouton Voir */}
-                                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    {walletState && (
-                                      <span
-                                        className="rounded-full px-2 py-0.5 text-xs font-medium border"
-                                        style={
-                                          sec.id === "annules"
-                                            ? {
-                                                backgroundColor: "rgb(254 226 226)",
-                                                borderColor: "rgb(252 165 165)",
-                                                color: "rgb(153 27 27)",
-                                              }
-                                            : sec.id === "en_verification"
-                                              ? {
-                                                  backgroundColor: "rgb(254 243 199)",
-                                                  borderColor: "rgb(253 224 71)",
-                                                  color: "rgb(113 63 18)",
-                                                }
-                                              : {
-                                                  backgroundColor: "rgb(209 250 229)",
-                                                  borderColor: "rgb(134 239 172)",
-                                                  color: "rgb(4 120 87)",
-                                                }
-                                        }
-                                      >
-                                        {walletState.label}
-                                      </span>
-                                    )}
-                                    {r.canal && (
-                                      <span
-                                        className="rounded-full border px-2 py-0.5 text-xs font-medium"
-                                        style={{
-                                          backgroundColor: `${theme.primary}10`,
-                                          borderColor: `${theme.primary}25`,
-                                          color: theme.primary,
-                                        }}
-                                      >
-                                        {r.canal === "guichet" ? "Guichet" : "En ligne"}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => goToReceipt(r)}
-                                    className="shrink-0 inline-flex items-center gap-0.5 rounded-lg py-1 px-2 text-xs font-medium transition-opacity active:opacity-90"
-                                    style={{
-                                      color: theme.primary,
-                                      backgroundColor: `${theme.primary}12`,
-                                    }}
-                                  >
-                                    Voir
-                                    <ChevronRight className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
+                                <button type="button" onClick={() => goToReceipt(reservation)} className="inline-flex items-center gap-0.5 rounded-lg py-1 px-2 text-xs font-medium" style={{ color: theme.primary, backgroundColor: `${theme.primary}12` }}>
+                                  Voir <ChevronRight className="h-3.5 w-3.5" />
+                                </button>
                               </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  )
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ) : null
               )}
             </div>
           )}

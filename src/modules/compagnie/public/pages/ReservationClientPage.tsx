@@ -61,6 +61,7 @@ import {
 } from '../utils/pendingReservation';
 import { buildReservationPayload } from '@/lib/buildReservationPayload';
 import { resolveAgencyDisplayName } from '../utils/agencyDisplayName';
+import { saveLocalTicketPointer } from '../utils/localTicketWallet';
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -788,6 +789,13 @@ export default function ReservationClientPage() {
         id: refDoc.id,
         companyId: selectedTrip.companyId,
         agencyId: selectedTrip.agencyId,
+      });
+      saveLocalTicketPointer({
+        token,
+        reservationId: refDoc.id,
+        companyId: selectedTrip.companyId,
+        agencyId: selectedTrip.agencyId,
+        companySlug: slug!,
       });
 
       setIsSubmitting(false);
