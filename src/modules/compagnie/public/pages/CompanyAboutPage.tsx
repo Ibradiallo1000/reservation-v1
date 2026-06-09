@@ -16,15 +16,17 @@ export default function CompanyAboutPage({ company }: CompanyAboutPageProps) {
   const isEn = i18n.language?.startsWith("en") ?? false;
 
   const about = company?.about;
-  const aboutDescription = isEn && about?.descriptionEn?.trim()
-    ? about.descriptionEn.trim()
+  const localizedDescription = isEn
+    ? about?.descriptionEn?.trim()
     : about?.description?.trim();
+  const aboutDescription = localizedDescription || t("defaultAbout");
   const primaryColor = company?.couleurPrimaire ?? "#3B82F6";
   const secondaryColor = company?.couleurSecondaire ?? "#10B981";
 
   const hasContent =
     about &&
     (about.description?.trim() ||
+      about.descriptionEn?.trim() ||
       (about.yearsExperience != null && about.yearsExperience > 0) ||
       (about.destinationsCount != null && about.destinationsCount > 0) ||
       (about.satisfactionRate != null && about.satisfactionRate >= 0) ||

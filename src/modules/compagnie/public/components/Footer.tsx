@@ -77,7 +77,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
             </div>
             <p className="text-sm text-gray-300 leading-relaxed">
               {(() => {
-                const raw = (isEn && about?.descriptionEn?.trim() ? about.descriptionEn.trim() : about?.description?.trim()) ?? '';
+                const raw = (isEn ? about?.descriptionEn?.trim() : about?.description?.trim()) || t('defaultAbout');
                 if (!raw) return t('defaultAbout');
                 if (raw.length <= 150) return raw;
                 return `${raw.slice(0, 150).trim()}…`;
