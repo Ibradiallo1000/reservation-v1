@@ -5,7 +5,6 @@ import QRCode from 'react-qr-code';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import html2pdf from 'html2pdf.js';
-import { DEFAULT_TICKET_MESSAGES } from '@/constants/ticketMessages';
 import { SALE_PENDING_UI_STATUT, SALE_SLOW_UI_STATUT, SALE_ERROR_UI_STATUT } from '@/modules/agence/guichet/components/pos/RecentSales';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 
@@ -238,7 +237,7 @@ const ReceiptModal: React.FC<Props> = ({
             </div>
 
             <div style={{ fontSize: '11px' }}>
-              {reservation.seatsGo} place(s) • guichet
+              {reservation.seatsGo} billet • guichet
             </div>
           </div>
 
@@ -305,24 +304,8 @@ const ReceiptModal: React.FC<Props> = ({
             marginTop: '8px'
           }}>
 
-            <div style={{ fontWeight: 'bold' }}>
-              {DEFAULT_TICKET_MESSAGES.control}
-            </div>
-
-            <div>
-              {DEFAULT_TICKET_MESSAGES.validity}
-            </div>
-
             <div>
               Merci d'avoir choisi {company.nom}
-            </div>
-
-            <div style={{ fontStyle: 'italic' }}>
-              {DEFAULT_TICKET_MESSAGES.arrival}
-            </div>
-
-            <div>
-              {DEFAULT_TICKET_MESSAGES.keep}
             </div>
          </div>
         </div>

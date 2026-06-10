@@ -176,6 +176,7 @@ async function loadAgencyFinancialTransactions(
     const snap = await getDocs(
       query(
         financialTransactionsRef(companyId),
+        where("companyId", "==", companyId),
         where("agencyId", "==", agencyId),
         orderBy("performedAt", "desc"),
         limit(PAGE_SIZE),
@@ -278,19 +279,43 @@ export async function getAgencyCashLedgerPeriodSummary(
   rangeToExclusive: Date
 ): Promise<AgencyCashPosition & { capped: boolean }> {
   const endInclusive = new Date(rangeToExclusive.getTime() - 1);
-  const [compta, rows, ledgerNow] = await Promise.all([
-    sumComptaEncaissementsInRange(companyId, agencyId, rangeFrom, rangeToExclusive),
-    listFinancialTransactionsByPeriod(
-      companyId,
-      Timestamp.fromDate(rangeFrom),
-      Timestamp.fromDate(endInclusive),
-      agencyId
+  const cashDocId = agencyCashAccountDocId(agencyId);
+  const readWithContext = async <T>(source: string, read: () => Promise<T>): Promise<T> => {
+    try {
+      return await read();
+    } catch (error) {
+      console.error(`[AgenceCompta][caisse][periode] Lecture refusée: ${source}`, {
+        companyId,
+        agencyId,
+        error,
+      });
+      throw error;
+    }
+  };
+  const [compta, rows, cashLedgerSnap] = await Promise.all([
+    readWithContext("comptaEncaissements", () =>
+      sumComptaEncaissementsInRange(companyId, agencyId, rangeFrom, rangeToExclusive)
     ),
-    getLedgerBalances(companyId, agencyId),
+    readWithContext("financialTransactions", () =>
+      listFinancialTransactionsByPeriod(
+        companyId,
+        Timestamp.fromDate(rangeFrom),
+        Timestamp.fromDate(endInclusive),
+        agencyId
+      )
+    ),
+    readWithContext(`accounts/${cashDocId}`, () =>
+      getDoc(ledgerAccountDocRef(companyId, cashDocId))
+    ),
   ]);
   const totalCashIn = compta.total;
   const totalCashOut = aggregateLedgerCashOutflowsOnly(rows, agencyId);
-  const soldeCash = Number(ledgerNow.cash ?? 0);
+  const ledgerRaw = cashLedgerSnap.exists()
+    ? (cashLedgerSnap.data() as Record<string, unknown>)
+    : null;
+  const soldeCash = ledgerRaw != null
+    ? Number(ledgerRaw.balance ?? ledgerRaw.currentBalance ?? 0)
+    : 0;
   const capped = rows.length >= 5000 || compta.capped;
   const indicatifPeriode = totalCashIn - totalCashOut;
   console.log("[AgenceCompta][caisse][periode]", {

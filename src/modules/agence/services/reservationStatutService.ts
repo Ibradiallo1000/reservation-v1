@@ -13,6 +13,7 @@ import {
   Timestamp,
   runTransaction,
   type DocumentReference,
+  type Transaction,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { isValidTransition } from "@/utils/reservationStatusUtils";
@@ -62,6 +63,52 @@ export function buildStatutTransitionPayload(
     role: meta.userRole,
     date: Timestamp.now(),
   };
+}
+
+export function recordOnlineReservationCommercialActivityInTransaction(params: {
+  tx: Transaction;
+  reservationRef: DocumentReference;
+  data: Record<string, unknown>;
+  agencyTimezone: string;
+  activityLogExists: boolean;
+}): { ticketRevenueCountedInDailyStats?: true } {
+  const { tx, reservationRef, data, agencyTimezone, activityLogExists } = params;
+  const companyId = String(data.companyId ?? "").trim();
+  const agencyId = String(data.agencyId ?? "").trim();
+  const canal = String(data.canal ?? "").trim().toLowerCase();
+  const paymentChannel = String(data.paymentChannel ?? "").trim().toLowerCase();
+  const isOnline =
+    canal === "en_ligne" ||
+    canal === "online" ||
+    paymentChannel === "en_ligne" ||
+    paymentChannel === "online";
+  const amount = Number(data.montant ?? 0);
+
+  if (!isOnline || !companyId || !agencyId || amount <= 0) return {};
+
+  const updatePayload: { ticketRevenueCountedInDailyStats?: true } = {};
+  if (!Boolean(data.ticketRevenueCountedInDailyStats)) {
+    const dateStr =
+      (typeof data.date === "string" && data.date.length >= 10 ? data.date.slice(0, 10) : null) ??
+      formatDateForDailyStats(data.createdAt, agencyTimezone);
+    addTicketRevenueToDailyStats(tx, companyId, agencyId, dateStr, amount, agencyTimezone);
+    updatePayload.ticketRevenueCountedInDailyStats = true;
+  }
+
+  if (!activityLogExists) {
+    const seats = Number(data.seatsGo ?? 0) + Number(data.seatsReturn ?? 0);
+    writeOnlineTicketActivityInTransaction(tx, {
+      companyId,
+      agencyId,
+      reservationId: reservationRef.id,
+      amount,
+      seats: Math.max(1, seats || 1),
+      depart: String(data.depart ?? "").trim() || undefined,
+      arrivee: String(data.arrivee ?? "").trim() || undefined,
+    });
+  }
+
+  return updatePayload;
 }
 
 /**
@@ -135,55 +182,22 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
     const auditEntry = buildStatutTransitionPayload(auditOld, newStatut, meta);
     const companyId = companyIdEarly;
     const agencyId = agencyIdEarly;
-    const canal = ((data?.canal ?? "") as string).toLowerCase();
-    const alreadyCounted = Boolean(data?.ticketRevenueCountedInDailyStats);
     const montant = Number(data?.montant ?? 0);
 
-    const shouldAddToDailyStats =
-      meta.userRole !== "operator_digital" &&
-      !alreadyCounted &&
-      canal !== "guichet" &&
-      montant > 0 &&
-      companyId &&
-      agencyId;
-
     const isGuichetSale =
-      canal === "guichet" || String(data?.paymentChannel ?? "").toLowerCase() === "guichet";
+      String(data?.canal ?? "").toLowerCase() === "guichet" ||
+      String(data?.paymentChannel ?? "").toLowerCase() === "guichet";
     /* Toutes les lectures avant toute écriture (Firestore : reads puis writes uniquement). */
-    const onlineLogRef =
-      companyId && meta.userRole !== "operator_digital"
-        ? activityLogRef(companyId, activityLogDocIdOnline(ref.id))
-        : null;
+    const onlineLogRef = companyId ? activityLogRef(companyId, activityLogDocIdOnline(ref.id)) : null;
     const onlineLogSnap =
       onlineLogRef && !isGuichetSale && montant > 0 ? await tx.get(onlineLogRef) : null;
-
-    if (shouldAddToDailyStats) {
-      const dateStr =
-        (typeof data?.date === "string" && data.date.length >= 10
-          ? (data.date as string).slice(0, 10)
-          : null) ?? formatDateForDailyStats(data?.createdAt, agencyTz);
-      if (dateStr) {
-        try {
-          addTicketRevenueToDailyStats(
-            tx,
-            companyId,
-            agencyId,
-            dateStr,
-            montant,
-            agencyTz,
-            (dailyStatsRef, payload) =>
-              logWriteAttempt("dailyStats", dailyStatsRef.path, payload, companyId, agencyId)
-          );
-        } catch (error) {
-          console.error("[ONLINE_PAYMENT_TRANSITION_WRITE_FAILED]", {
-            target: "dailyStats",
-            path: `companies/${companyId}/agences/${agencyId}/dailyStats/${dateStr}`,
-            error,
-          });
-          throw error;
-        }
-      }
-    }
+    const commercialActivityPatch = recordOnlineReservationCommercialActivityInTransaction({
+      tx,
+      reservationRef: ref,
+      data,
+      agencyTimezone: agencyTz,
+      activityLogExists: onlineLogSnap?.exists() ?? false,
+    });
 
     const updatePayload: Record<string, unknown> = {
       ...(isLifecycleModel
@@ -195,37 +209,8 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
       auditLog: arrayUnion(auditEntry),
       updatedAt: serverTimestamp(),
       ...extra,
+      ...commercialActivityPatch,
     };
-    if (shouldAddToDailyStats) {
-      updatePayload.ticketRevenueCountedInDailyStats = true;
-    }
-
-    if (onlineLogSnap != null && !onlineLogSnap.exists()) {
-      const seats = Number(data?.seatsGo ?? 0) + Number(data?.seatsReturn ?? 0);
-      try {
-        writeOnlineTicketActivityInTransaction(
-          tx,
-          {
-            companyId,
-            agencyId,
-            reservationId: ref.id,
-            amount: montant,
-            seats: Math.max(1, seats || 1),
-            depart: String(data?.depart ?? "").trim() || undefined,
-            arrivee: String(data?.arrivee ?? "").trim() || undefined,
-          },
-          (activityRef, payload) =>
-            logWriteAttempt("activityLogs", activityRef.path, payload, companyId, agencyId)
-        );
-      } catch (error) {
-        console.error("[ONLINE_PAYMENT_TRANSITION_WRITE_FAILED]", {
-          target: "activityLogs",
-          path: onlineLogRef?.path,
-          error,
-        });
-        throw error;
-      }
-    }
 
     try {
       logWriteAttempt("reservation", ref.path, updatePayload, companyId, agencyId);

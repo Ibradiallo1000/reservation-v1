@@ -386,7 +386,10 @@ export default function ReservationClientPage() {
   }, [company?.couleurPrimaire]);
 
   const calendarDates = useMemo(
-    () => getPublicScheduleDatesLocal(PUBLIC_RESERVATION_SCHEDULE_DAYS),
+    () =>
+      getPublicScheduleDatesLocal(PUBLIC_RESERVATION_SCHEDULE_DAYS).filter((date) =>
+        validTrips.some((trip: any) => String(trip.date) === date)
+      ),
     [validTrips]
   );
 
@@ -833,7 +836,7 @@ export default function ReservationClientPage() {
         border: `1px solid ${theme.routeBorder}`,
       }}
     >
-      <div className="flex items-center justify-between gap-4 px-4 sm:px-5 py-4">
+      <div className="flex items-center justify-between gap-4 px-4 sm:px-5 py-2.5 sm:py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-gray-900">
             <span className="font-semibold text-sm sm:text-base truncate">
@@ -844,9 +847,6 @@ export default function ReservationClientPage() {
               {existing?.arrivee ? formatCity(existing.arrivee) : formatCity(arrivalQ)}
             </span>
           </div>
-          <p className="text-xs text-gray-600 mt-1">
-            {existing?.date ? `${existing.date} · ${existing.heure || ''}` : 'Choisissez la date et l\'heure ci-dessous'}
-          </p>
         </div>
         <div className="text-right flex-shrink-0">
           {titleRight ? (
@@ -938,7 +938,7 @@ export default function ReservationClientPage() {
         </div>
       ) : (
         /* Step 1 only: reservation form → then redirect to payment page */
-        <main className="max-w-[1100px] mx-auto px-2.5 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
+        <main className="max-w-[1100px] mx-auto px-2.5 sm:px-4 py-3 sm:py-5 space-y-3 sm:space-y-4">
           {RouteCard()}
 
           {agencyInfo?.nom && (
@@ -956,35 +956,35 @@ export default function ReservationClientPage() {
           )}
 
           <SectionCard
-            title="Trajets disponibles"
+            title="Dates et heures de départ disponibles"
             icon={Calendar}
-            className="rounded-xl border-2 shadow-sm !bg-transparent hover:shadow-md dark:!bg-transparent"
+            description="Choisissez la date et l'heure ci-dessous."
+            className="rounded-xl border-2 shadow-sm !bg-transparent hover:shadow-md dark:!bg-transparent [&>div:first-child]:px-3 [&>div:first-child]:py-2.5 sm:[&>div:first-child]:px-4 [&>div:last-child]:p-3 sm:[&>div:last-child]:p-4"
             style={{
               backgroundColor: theme.cardTrajetsBg,
               borderColor: theme.cardTrajetsBorder,
             }}
           >
-            <div className="space-y-4">
+            <div className="space-y-2.5">
               {validTrips.length === 0 ? (
                 <p className="text-sm text-gray-500">
                   Aucun départ en ligne sur les sept prochains jours pour ce trajet.
                 </p>
               ) : null}
               <div
-                className="rounded-lg border px-3 py-3"
+                className="rounded-lg border px-2.5 py-2"
                 style={{
                   backgroundColor: theme.wellDatesBg,
                   borderColor: theme.wellDatesBorder,
                 }}
               >
-                <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-800">
+                <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-gray-800">
                   <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" style={{ color: theme.primary }} aria-hidden />
                   Dates
                 </h4>
-                <div className="flex gap-1.5 overflow-x-auto pb-1">
+                <div className="flex gap-1.5 overflow-x-auto">
                   {calendarDates.map((d) => {
                     const active = d === selectedDate;
-                    const hasSlots = validTrips.some((t: any) => String(t.date) === d);
                     return (
                       <button
                         key={d}
@@ -995,11 +995,11 @@ export default function ReservationClientPage() {
                           const first = validTrips.find((t: any) => String(t.date) === d);
                           setSelectedTripId(first ? String((first as any).id) : '');
                         }}
-                        className="flex-shrink-0 rounded-lg border px-2 py-1 text-xs font-medium transition"
+                        className="flex-shrink-0 rounded-lg border px-2 py-0.5 text-xs font-medium transition"
                         style={{
                           borderColor: active ? theme.primary : '#e5e7eb',
                           backgroundColor: active ? theme.lightPrimary : '#fff',
-                          color: active ? theme.primary : hasSlots ? '#374151' : '#9ca3af',
+                          color: active ? theme.primary : '#374151',
                         }}
                       >
                         {formatDateShortFR(d)}
@@ -1011,19 +1011,19 @@ export default function ReservationClientPage() {
 
               {selectedDate ? (
                 <div
-                  className="rounded-lg border px-3 py-3"
+                  className="rounded-lg border px-2.5 py-2"
                   style={{
                     backgroundColor: theme.wellHorairesBg,
                     borderColor: theme.wellHorairesBorder,
                   }}
                 >
-                  <h4 className="mb-2 text-xs font-semibold text-gray-800" style={{ color: theme.secondary }}>
+                  <h4 className="mb-1.5 text-xs font-semibold text-gray-800" style={{ color: theme.secondary }}>
                     Horaires
                   </h4>
                   {slotsForSelectedDate.length === 0 ? (
                     <p className="text-sm text-gray-500">Aucun départ pour cette date.</p>
                   ) : (
-                    <div className="flex gap-2 overflow-x-auto pb-1">
+                    <div className="flex gap-1.5 overflow-x-auto">
                       {(slotsForSelectedDate as any[]).map((t) => {
                         const active = t.id === selectedTripId;
                         return (
@@ -1032,19 +1032,19 @@ export default function ReservationClientPage() {
                             type="button"
                             disabled={isSubmitting}
                             onClick={() => setSelectedTripId(t.id)}
-                            className="inline-flex w-fit max-w-full flex-shrink-0 flex-col items-start rounded-xl border px-3 py-2 text-left transition-all duration-200"
+                            className="inline-flex w-fit max-w-full flex-shrink-0 flex-col items-start rounded-lg border px-2.5 py-1.5 text-left transition-all duration-200"
                             style={{
                               borderColor: active ? theme.primary : '#e5e7eb',
                               backgroundColor: active ? theme.lightPrimary : '#fafafa',
                             }}
                           >
                             <p
-                              className="text-lg font-bold leading-none"
+                              className="text-base font-bold leading-none"
                               style={{ color: active ? theme.primary : '#111827' }}
                             >
                               {String(t.time || '').slice(0, 5)}
                             </p>
-                            <p className="mt-1.5 text-xs" style={{ color: seatColor(t.remainingSeats) }}>
+                            <p className="mt-1 text-xs" style={{ color: seatColor(t.remainingSeats) }}>
                               {t.remainingSeats} places
                             </p>
                           </button>
@@ -1061,25 +1061,29 @@ export default function ReservationClientPage() {
           {selectedTrip && (
             <>
               <SectionCard
-                title="Vos informations"
+                title="Saisissez vos informations"
                 icon={User}
-                className="rounded-xl border-2 shadow-sm !bg-transparent hover:shadow-md dark:!bg-transparent"
+                className="rounded-xl border-2 shadow-md hover:shadow-lg [&>div:first-child]:px-3 [&>div:first-child]:py-2.5 sm:[&>div:first-child]:px-4 [&>div:first-child_svg]:text-[var(--client-primary)] [&>div:first-child_svg]:opacity-100 [&>div:last-child]:p-3 sm:[&>div:last-child]:p-4"
                 style={{
+                  '--client-primary': theme.primary,
+                  '--client-focus-ring': theme.lightPrimary,
+                  '--client-input-bg': theme.veryLightPrimary,
+                  '--client-input-border': theme.routeBorder,
                   backgroundColor: theme.cardInfosBg,
-                  borderColor: theme.cardInfosBorder,
-                }}
+                  borderColor: theme.primary,
+                } as React.CSSProperties}
               >
-                <div className="grid sm:grid-cols-2 gap-4">
+                <div className="grid sm:grid-cols-2 gap-3">
                   {/* Nom */}
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none" style={{ color: theme.primary }}>
                       <User className="h-5 w-5" />
                     </div>
                     <input
                       ref={nameInputRef}
                       disabled={isSubmitting}
-                      className={`h-12 pl-11 pr-4 w-full border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none bg-gray-50/80 text-gray-900 placeholder-gray-400 transition ${
-                        fieldErrors.fullName ? 'border-red-300 focus:border-red-400' : 'border-gray-200 focus:border-gray-300'
+                      className={`h-12 pl-11 pr-4 w-full border-2 rounded-xl bg-[var(--client-input-bg)] text-gray-900 placeholder-gray-500 shadow-sm focus:border-[var(--client-primary)] focus:ring-2 focus:ring-[var(--client-focus-ring)] focus:ring-offset-0 focus:shadow-md focus:scale-[1.01] focus:outline-none transition-all duration-200 ${
+                        fieldErrors.fullName ? 'border-red-300 focus:border-red-400' : 'border-[var(--client-input-border)]'
                       }`}
                       placeholder="Nom complet"
                       value={passenger.fullName}
@@ -1097,7 +1101,7 @@ export default function ReservationClientPage() {
 
                   {/* Téléphone */}
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none" style={{ color: theme.primary }}>
                       <Phone className="h-5 w-5" />
                     </div>
                     <input
@@ -1106,8 +1110,8 @@ export default function ReservationClientPage() {
                       inputMode="numeric"
                       autoComplete="tel"
                       maxLength={11}
-                      className={`h-12 pl-11 pr-4 w-full border rounded-xl focus:ring-2 focus:ring-offset-0 focus:outline-none bg-gray-50/80 text-gray-900 placeholder-gray-400 transition ${
-                        fieldErrors.phone ? 'border-red-300 focus:border-red-400' : 'border-gray-200 focus:border-gray-300'
+                      className={`h-12 pl-11 pr-4 w-full border-2 rounded-xl bg-[var(--client-input-bg)] text-gray-900 placeholder-gray-500 shadow-sm focus:border-[var(--client-primary)] focus:ring-2 focus:ring-[var(--client-focus-ring)] focus:ring-offset-0 focus:shadow-md focus:scale-[1.01] focus:outline-none transition-all duration-200 ${
+                        fieldErrors.phone ? 'border-red-300 focus:border-red-400' : 'border-[var(--client-input-border)]'
                       }`}
                       placeholder="Téléphone (ex: 22 22 22 22)"
                       value={passenger.phone}
@@ -1125,13 +1129,13 @@ export default function ReservationClientPage() {
 
                   {/* Places */}
                   <div
-                    className="sm:col-span-2 flex flex-wrap items-center gap-3 rounded-lg border px-3 py-3"
+                    className="sm:col-span-2 flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2"
                     style={{
                       backgroundColor: theme.wellPlacesBg,
                       borderColor: theme.wellPlacesBorder,
                     }}
                   >
-                    <span className="text-sm font-medium text-gray-700">Nombre de places</span>
+                    <span className="text-sm font-medium text-gray-700">Nombre de billets</span>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
@@ -1158,9 +1162,6 @@ export default function ReservationClientPage() {
                         <Plus className="w-4 h-4" />
                       </button>
                     </div>
-                    <span className="text-xs text-gray-500" style={{ color: seatColor(selectedTrip.remainingSeats) }}>
-                      {selectedTrip.remainingSeats} places disponibles
-                    </span>
                   </div>
                 </div>
 
@@ -1206,7 +1207,7 @@ export default function ReservationClientPage() {
                   type="button"
                   onClick={createReservationDraft}
                   disabled={creating || isSubmitting || quotaReached}
-                  className="mt-6 w-full h-12 rounded-xl font-semibold shadow-md disabled:opacity-60 transition hover:opacity-95 active:scale-[0.99] flex items-center justify-center gap-2 text-white"
+                  className="mt-4 w-full h-12 rounded-xl font-semibold shadow-md disabled:opacity-60 transition hover:opacity-95 active:scale-[0.99] flex items-center justify-center gap-2 text-white"
                   style={{
                     background: `linear-gradient(135deg, ${theme.secondary}, ${theme.primary})`,
                   }}

@@ -839,7 +839,12 @@ export async function listFinancialTransactionsByPeriod(
     orderBy("performedAt", "asc"),
     limit(5000),
   ];
-  if (agencyId) constraints.unshift(where("agencyId", "==", agencyId));
+  if (agencyId) {
+    constraints.unshift(
+      where("companyId", "==", companyId),
+      where("agencyId", "==", agencyId)
+    );
+  }
   try {
     const snap = await getDocs(query(financialTransactionsRef(companyId), ...constraints));
     const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as FinancialTransactionDoc) }));
@@ -850,32 +855,38 @@ export async function listFinancialTransactionsByPeriod(
     const fallbackSnap = await getDocs(
       query(
         financialTransactionsRef(companyId),
+        where("companyId", "==", companyId),
+        where("agencyId", "==", agencyId),
         where("createdAt", ">=", start),
         where("createdAt", "<=", end),
         orderBy("createdAt", "asc"),
         limit(5000)
       )
     );
-    return fallbackSnap.docs
-      .map((d) => ({ id: d.id, ...(d.data() as FinancialTransactionDoc) }))
-      .filter((row) => String(row.agencyId ?? "") === agencyId);
+    return fallbackSnap.docs.map((d) => ({ id: d.id, ...(d.data() as FinancialTransactionDoc) }));
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     if (code !== "failed-precondition") {
       throw error;
     }
     // Missing index fallback: query by createdAt then filter agency in memory.
+    const fallbackConstraints: any[] = [
+      where("createdAt", ">=", start),
+      where("createdAt", "<=", end),
+      orderBy("createdAt", "asc"),
+      limit(5000),
+    ];
+    if (agencyId) {
+      fallbackConstraints.unshift(
+        where("companyId", "==", companyId),
+        where("agencyId", "==", agencyId)
+      );
+    }
     const fallbackSnap = await getDocs(
-      query(
-        financialTransactionsRef(companyId),
-        where("createdAt", ">=", start),
-        where("createdAt", "<=", end),
-        orderBy("createdAt", "asc"),
-        limit(5000)
-      )
+      query(financialTransactionsRef(companyId), ...fallbackConstraints)
     );
     const rows = fallbackSnap.docs.map((d) => ({ id: d.id, ...(d.data() as FinancialTransactionDoc) }));
-    return agencyId ? rows.filter((row) => String(row.agencyId ?? "") === agencyId) : rows;
+    return rows;
   }
 }
 

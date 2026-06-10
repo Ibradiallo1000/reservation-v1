@@ -169,6 +169,7 @@ service cloud.firestore {
           'seatHoldOnly',
           'seatsHeld',
           'seatsCommittedAt',
+          'ticketRevenueCountedInDailyStats',
           'updatedAt'
         ]);
     }
@@ -692,7 +693,14 @@ service cloud.firestore {
 
       /* Journal d’activité commercial (CA terrain) : append-only, hors ledger. */
       match /activityLogs/{logId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+        allow get, list: if isAuth() && (
+          userCompanyId() == companyId
+          || getUserRole() == 'admin_platforme'
+          || (
+            userAgencyBelongsToCompany(companyId)
+            && resource.data.get('agencyId', '') == getUserAgencyId()
+          )
+        );
         /* Même logique que guichetSaleLocks / dailyStats : companyId doc OU agence rattachée à la compagnie (évite 403 si companyId token désynchronisé). */
         allow create: if isAuth()
           && request.resource.data.companyId == companyId
@@ -1633,7 +1641,14 @@ match /shiftReports/{reportId} {
 
         /* Écritures comptables encaissement (une par validation de session guichet / courrier). */
         match /comptaEncaissements/{entryId} {
-          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow get, list: if isAuth() && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || (
+              userAgencyBelongsToCompany(companyId)
+              && getUserAgencyId() == agencyId
+            )
+          );
           allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow update: if false;
           /* Suppression réservée au renvoi courrier chef → comptable (doc `courier_*` uniquement). */
@@ -1835,6 +1850,15 @@ match /shiftReports/{reportId} {
 
       match /accounts/{accountId} {
         allow get, list: if canAccessSensitiveCompanyFinance(companyId);
+        allow get: if (
+          userAgencyBelongsToCompany(companyId)
+          && (hasUserRole('agency_accountant') || hasUserRole('comptable'))
+          && accountId == 'agency_' + getUserAgencyId() + '_cash'
+        ) || (
+          canWriteAgencyScopedFinance(companyId)
+          && resource.data.get('companyId', '') == companyId
+          && resource.data.get('agencyId', '') == getUserAgencyId()
+        );
         allow create: if canAccessSensitiveCompanyFinance(companyId);
         allow update: if canAccessSensitiveCompanyFinance(companyId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([

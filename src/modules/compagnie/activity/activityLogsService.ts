@@ -173,10 +173,6 @@ export async function queryActivityLogsInRange(
     (constraints as unknown[]).unshift(where("agencyId", "==", agencyId));
   }
   const q = query(col, ...constraints);
-  try {
-    const snap = await getDocs(q);
-    return snap.docs;
-  } catch {
-    return [];
-  }
+  const snap = await getDocs(q);
+  return snap.docs;
 }

@@ -994,16 +994,35 @@ const AgenceComptabilitePage: React.FC = () => {
      Description : Calcul des stats live pour les postes actifs/en pause
      ============================================================================ */
   
+  const liveWatchKey = useMemo(
+    () =>
+      [...new Set([...activeShifts, ...pausedShifts].map((s) => s.id))]
+        .sort()
+        .join(','),
+    [activeShifts, pausedShifts]
+  );
+
+  const liveWatchKeyRef = useRef<string>('');
+
   useEffect(() => {
+    // Évite les relances inutiles si React rejoue l’effet (StrictMode/dev) sans changement réel de la clé.
+    if (liveWatchKeyRef.current === liveWatchKey) {
+      return;
+    }
+    liveWatchKeyRef.current = liveWatchKey;
+
     console.log('[AgenceCompta] Mise à jour des statistiques live');
-    
+
     if (!user?.companyId || !user?.agencyId) return;
+    if (!liveWatchKey) return;
+
     const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
+    const wantedIds = new Set(liveWatchKey.split(',').filter(Boolean));
+
 
     // Nettoyage des écouteurs inutiles
     for (const id of Object.keys(liveUnsubsRef.current)) {
-      const stillNeeded = !![...activeShifts, ...pausedShifts].find(s => s.id === id);
-      if (!stillNeeded) {
+      if (!wantedIds.has(id)) {
         console.log(`[AgenceCompta] Arrêt de l'écoute pour le poste ${id}`);
         liveUnsubsRef.current[id]?.();
         delete liveUnsubsRef.current[id];
@@ -1012,8 +1031,9 @@ const AgenceComptabilitePage: React.FC = () => {
 
     // Ajout des écouteurs pour les postes actifs/en pause
     for (const s of [...activeShifts, ...pausedShifts]) {
+      if (!wantedIds.has(s.id)) continue;
       if (liveUnsubsRef.current[s.id]) continue;
-      
+
       console.log(`[AgenceCompta] Démarrage de l'écoute pour le poste ${s.id}`);
       const qLive = query(rRef, where('sessionId', '==', s.id), limit(100));
       const unsub = onSnapshot(qLive, (snap) => {
@@ -1031,12 +1051,10 @@ const AgenceComptabilitePage: React.FC = () => {
       liveUnsubsRef.current[s.id] = unsub;
     }
 
-    return () => {
-      console.log('[AgenceCompta] Nettoyage des écouteurs live');
-      for (const k of Object.keys(liveUnsubsRef.current)) liveUnsubsRef.current[k]?.();
-      liveUnsubsRef.current = {};
-    };
-  }, [activeShifts, pausedShifts, user?.companyId, user?.agencyId]);
+    // Important: on ne cleanup pas tout au moindre changement de shifts.
+    // Les écouteurs sont gérés par diff (wantedIds) pour éviter les rafales.
+  }, [liveWatchKey, user?.companyId, user?.agencyId]);
+
 
   /* ============================================================================
      SECTION : AGRÉGATS POUR RÉCEPTIONS (GUICHET UNIQUEMENT)
@@ -1538,6 +1556,7 @@ const AgenceComptabilitePage: React.FC = () => {
       try {
         const qTx = query(
           txRef,
+          where("companyId", "==", user.companyId),
           where("agencyId", "==", user.agencyId),
           where("createdAt", ">=", Timestamp.fromDate(currentRange.from)),
           where("createdAt", "<", Timestamp.fromDate(currentRange.to)),
@@ -1551,6 +1570,7 @@ const AgenceComptabilitePage: React.FC = () => {
         console.warn("[AgenceCompta] reloadCash range query failed, fallback agency-only:", rangeErr);
         const qFallback = query(
           txRef,
+          where("companyId", "==", user.companyId),
           where("agencyId", "==", user.agencyId),
           orderBy("createdAt", "desc"),
           limit(200)

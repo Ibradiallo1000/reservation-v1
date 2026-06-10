@@ -6,7 +6,15 @@ import {
   type DocumentReference,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
+import {
+  buildStatutTransitionPayload,
+  recordOnlineReservationCommercialActivityInTransaction,
+} from "@/modules/agence/services/reservationStatutService";
+import {
+  activityLogDocIdOnline,
+  activityLogRef,
+} from "@/modules/compagnie/activity/activityLogsService";
+import { dailyStatsTimezoneFromAgencyData } from "@/modules/agence/aggregates/dailyStats";
 import {
   bookSeatsOnTripInstanceInTransaction,
   tripInstanceRef,
@@ -42,12 +50,16 @@ export async function commitOperatorValidatedOnlineReservation({
     const reservation = reservationSnap.data() as Record<string, unknown>;
     const payment = paymentSnap.data() as Record<string, unknown>;
     const reservationCompanyId = String(reservation.companyId ?? "");
+    const agencyId = String(reservation.agencyId ?? "").trim();
     const channel = String(reservation.paymentChannel ?? reservation.canal ?? "").toLowerCase();
     const status = String(reservation.status ?? "").toLowerCase();
     const statut = String(reservation.statut ?? "").toLowerCase();
 
     if (reservationCompanyId !== companyId) {
       throw new Error("La réservation ne correspond pas à la compagnie du paiement.");
+    }
+    if (!agencyId) {
+      throw new Error("La reservation online n'est rattachee a aucune agence.");
     }
     if (channel !== "online" && channel !== "en_ligne") {
       throw new Error("La réservation n'est pas une réservation online.");
@@ -65,6 +77,10 @@ export async function commitOperatorValidatedOnlineReservation({
 
     const seatHoldOnly = reservation.seatHoldOnly === true;
     const seatsAlreadyCommitted = reservation.seatsCommittedAt != null;
+    const agencySnap = await tx.get(doc(db, "companies", companyId, "agences", agencyId));
+    const onlineLogSnap = await tx.get(
+      activityLogRef(companyId, activityLogDocIdOnline(reservationRef.id))
+    );
     if (seatHoldOnly && !seatsAlreadyCommitted) {
       const tripInstanceId = String(reservation.tripInstanceId ?? "").trim();
       const heldSeats = Number(reservation.seatsHeld ?? 0) || 0;
@@ -99,6 +115,15 @@ export async function commitOperatorValidatedOnlineReservation({
       "confirme",
       { userId: uid, userRole }
     );
+    const commercialActivityPatch = recordOnlineReservationCommercialActivityInTransaction({
+      tx,
+      reservationRef,
+      data: reservation,
+      agencyTimezone: dailyStatsTimezoneFromAgencyData(
+        agencySnap.data() as { timezone?: string | null } | undefined
+      ),
+      activityLogExists: onlineLogSnap.exists(),
+    });
 
     tx.update(reservationRef, {
       status: "confirme",
@@ -114,6 +139,7 @@ export async function commitOperatorValidatedOnlineReservation({
       seatHoldOnly: false,
       seatsHeld: 0,
       ...(!seatsAlreadyCommitted && { seatsCommittedAt: serverTimestamp() }),
+      ...commercialActivityPatch,
       updatedAt: serverTimestamp(),
     });
   });

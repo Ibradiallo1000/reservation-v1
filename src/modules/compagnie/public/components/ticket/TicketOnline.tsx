@@ -128,7 +128,7 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
               <span>{depart}</span><ArrowRight size={14} aria-hidden="true" /><span>{arrivee}</span>
             </strong>
             <span>{date} • {heure}</span>
-            <span>{seats} place(s)</span>
+            <span>{seats} billet</span>
           </section>
 
           <div className="online-thermal-ticket__rule" />
@@ -141,16 +141,11 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
           <div className="online-thermal-ticket__rule" />
 
           <section className="online-thermal-ticket__qr-section">
-            <span className="online-thermal-ticket__section-title">QR CODE</span>
             <div className="online-thermal-ticket__qr">
               <div className={!isValidQR ? "opacity-40 blur-sm" : ""}>
                 <QRCode value={qrValue} size={126} />
               </div>
             </div>
-            <span className="online-thermal-ticket__reference-label">RÉFÉRENCE</span>
-            <strong className="online-thermal-ticket__reference online-thermal-ticket__reference--footer">
-              {receiptNumber}
-            </strong>
           </section>
 
           <div className="online-thermal-ticket__rule" />
