@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { User } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Company } from '@/types/companyTypes';
+import { getPublicPathBase } from '../utils/subdomain';
 
 interface HeaderProps {
   company: Company;
@@ -19,6 +20,7 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({
   company,
+  slug,
   colors,
   navigate,
   t,
@@ -36,6 +38,8 @@ const Header: React.FC<HeaderProps> = ({
 
   const primary = colors.primary;
   const secondary = colors.secondary || colors.primary;
+  const pathBase = getPublicPathBase(slug);
+  const loginPath = pathBase ? `/${pathBase}/login` : '/login';
 
   const name =
     company?.nom || t('ourCompany', { defaultValue: 'Notre compagnie' });
@@ -117,7 +121,7 @@ const Header: React.FC<HeaderProps> = ({
           </button>
 
           <button
-            onClick={() => navigate('/login')}
+            onClick={() => navigate(loginPath)}
             className="flex h-10 w-10 items-center justify-center rounded-full border transition"
             style={{
               backgroundColor: scrolled

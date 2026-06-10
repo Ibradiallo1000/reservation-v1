@@ -39,7 +39,6 @@ export default function AidePage({ company }: AidePageProps) {
   const pathBase = getPublicPathBase(slug ?? company?.slug ?? "");
   const homePath = pathBase ? `/${pathBase}` : "/";
   const ticketsPath = pathBase ? `/${pathBase}/mes-billets` : "/mes-billets";
-  const bookingPath = pathBase ? `/${pathBase}/booking` : "/booking";
   const whatsapp = whatsappHref(company?.socialMedia?.whatsapp);
   const support24h = company?.about?.support24h === true;
   const hasContact = !!(company?.telephone || company?.email || whatsapp || company?.adresse || company?.horaires);
@@ -55,7 +54,7 @@ export default function AidePage({ company }: AidePageProps) {
       label: "Faire une réservation",
       description: "Consultez les départs disponibles.",
       icon: Bus,
-      onClick: () => navigate(bookingPath),
+      onClick: () => navigate(homePath),
     },
   ];
 
@@ -120,14 +119,16 @@ export default function AidePage({ company }: AidePageProps) {
               onClick={onClick}
               className="text-left rounded-2xl bg-white border border-gray-200 p-4 shadow-sm hover:shadow-md transition"
             >
-              <div className="flex items-center justify-between gap-3">
-                <div className="p-2 rounded-xl" style={{ backgroundColor: `${primaryColor}12` }}>
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl shrink-0" style={{ backgroundColor: `${primaryColor}12` }}>
                   <Icon className="w-5 h-5" style={{ color: primaryColor }} />
                 </div>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-gray-900">{label}</h3>
+                  <p className="mt-1 text-xs text-gray-500">{description}</p>
+                </div>
+                <ChevronRight className="w-4 h-4 shrink-0 text-gray-400" />
               </div>
-              <h3 className="mt-3 text-sm font-semibold text-gray-900">{label}</h3>
-              <p className="mt-1 text-xs text-gray-500">{description}</p>
             </button>
           ))}
         </section>

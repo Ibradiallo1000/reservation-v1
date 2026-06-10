@@ -33,6 +33,7 @@ const PaymentMethodPage = lazy(() => import("../pages/PaymentMethodPage"));
 const ReservationDetailsPage = lazy(() => import("../pages/ReservationDetailsPage"));
 const AidePage = lazy(() => import("../pages/AidePage"));
 const CompanyAboutPage = lazy(() => import("../pages/CompanyAboutPage"));
+const LoginPage = lazy(() => import("@/modules/auth/pages/LoginPage"));
 
 import PublicBottomNav from "../components/PublicBottomNav";
 
@@ -360,6 +361,9 @@ export default function RouteResolver() {
     case "a-propos":
       content = <CompanyAboutPage company={company} />;
       break;
+    case "login":
+      content = <LoginPage company={company} />;
+      break;
     case null:
       content = <PublicCompanyPage {...common} isMobile={isMobile} />;
       break;
@@ -372,7 +376,7 @@ export default function RouteResolver() {
 
   /** Masquer la barre de navigation du bas pendant le parcours réservation (page plus propre et professionnelle). */
   const isReservationFlow = [
-    "booking", "payment", "upload-preuve", "receipt", "confirmation", "details", "reservation",
+    "booking", "payment", "upload-preuve", "receipt", "confirmation", "details", "reservation", "login",
   ].includes(subPath ?? "");
 
   return (

@@ -290,6 +290,10 @@ function SubdomainAwareMesBillets() {
   return isPublicSubdomain() ? <RouteResolver /> : <ClientMesBilletsPage />;
 }
 
+function SubdomainAwareLogin() {
+  return isPublicSubdomain() ? <RouteResolver /> : <LoginPage />;
+}
+
 const AppRoutes = () => {
   const { loading } = useAuth();
   const { pathname } = useLocation();
@@ -313,7 +317,7 @@ const AppRoutes = () => {
         <Route path="/role-landing" element={<RoleLanding />} />
 
         {/* PUBLIC */}
-        <Route path="/login" element={<LoginPage />} />
+        <Route path="/login" element={<SubdomainAwareLogin />} />
         <Route path="/register" element={<Register />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
         <Route path="/villes" element={<ListeVillesPage />} />
