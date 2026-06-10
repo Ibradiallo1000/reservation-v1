@@ -89,6 +89,8 @@ export interface TripSuggestion {
   departure: string;
   arrival: string;
   price?: number;
+  /** La même paire de villes existe dans les deux sens. */
+  bidirectional?: boolean;
   count?: number;
   days?: string[];
   imageUrl?: string;

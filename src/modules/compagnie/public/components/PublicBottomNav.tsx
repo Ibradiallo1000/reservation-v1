@@ -30,7 +30,7 @@ export interface PublicBottomNavProps {
   primaryColor?: string;
 }
 
-export default function PublicBottomNav({ slug, primaryColor = "#ea580c" }: PublicBottomNavProps) {
+export default function PublicBottomNav({ slug, primaryColor = "var(--public-primary)" }: PublicBottomNavProps) {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
@@ -59,16 +59,19 @@ export default function PublicBottomNav({ slug, primaryColor = "#ea580c" }: Publ
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-50 md:hidden"
+      className="fixed bottom-0 left-0 right-0 z-50 px-2 pb-2 md:hidden"
       style={{
-        height: NAV_HEIGHT,
+        height: NAV_HEIGHT + 10,
         paddingBottom: "env(safe-area-inset-bottom, 0)",
-        backgroundColor: "#ffffff",
-        borderTop: "1px solid #e5e7eb",
-        boxShadow: "0 -2px 10px rgba(0,0,0,0.06)",
       }}
     >
-      <div className="h-full max-w-lg mx-auto flex items-stretch justify-around">
+      <div
+        className="mx-auto flex h-full max-w-lg items-stretch justify-around overflow-hidden rounded-t-3xl border bg-white/95 backdrop-blur-xl"
+        style={{
+          borderColor: `color-mix(in srgb, ${primaryColor} 12%, transparent)`,
+          boxShadow: `0 -12px 36px color-mix(in srgb, ${primaryColor} 14%, transparent)`,
+        }}
+      >
         {TABS.map((tab) => {
           const active = isActive(tab);
           return (
@@ -76,19 +79,25 @@ export default function PublicBottomNav({ slug, primaryColor = "#ea580c" }: Publ
               key={tab.id}
               type="button"
               onClick={() => handlePress(tab)}
-              className="flex-1 flex flex-col items-center justify-center gap-0.5 min-w-0 px-1 py-2 transition-colors touch-manipulation"
+              className="relative flex min-w-0 flex-1 touch-manipulation flex-col items-center justify-center gap-1 px-1 py-2 transition-colors"
               style={{
-                color: active ? primaryColor : "#6b7280",
+                color: active ? primaryColor : "var(--public-muted)",
               }}
               aria-current={active ? "page" : undefined}
               aria-label={t(tab.labelKey)}
             >
-              <span className={active ? "opacity-100" : "opacity-70"}>
+              {active && (
+                <span
+                  className="absolute top-0 h-1 w-10 rounded-b-full"
+                  style={{ backgroundColor: primaryColor }}
+                />
+              )}
+              <span className={active ? "opacity-100" : "opacity-60"}>
                 {tab.icon}
               </span>
               <span
-                className="text-[10px] font-medium truncate w-full text-center"
-                style={{ color: active ? primaryColor : "#6b7280" }}
+                className="w-full truncate text-center text-[10px] font-bold"
+                style={{ color: active ? primaryColor : "var(--public-muted)" }}
               >
                 {t(tab.labelKey)}
               </span>

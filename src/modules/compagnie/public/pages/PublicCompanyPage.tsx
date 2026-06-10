@@ -20,6 +20,7 @@ import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { Company, Agence, TripSuggestion } from "@/types/companyTypes";
 import NotFoundScreen from "@/shared/ui/NotFoundScreen";
 import { getCompanyFromCache } from "@/utils/companyCache";
+import "@/modules/compagnie/public/public-company-premium.css";
 
 interface PublicCompanyPageProps {
   company?: Company;
@@ -30,7 +31,7 @@ interface PublicCompanyPageProps {
   isMobile?: boolean;
 }
 
-const SUGGESTIONS_CACHE_PREFIX = "public-company-suggestions:";
+const SUGGESTIONS_CACHE_PREFIX = "public-company-suggestions:v2:";
 const suggestionsMemoryCache = new Map<string, TripSuggestion[]>();
 
 function readSuggestionsCache(companyId: string): TripSuggestion[] | null {
@@ -42,14 +43,14 @@ function readSuggestionsCache(companyId: string): TripSuggestion[] | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;
-    return parsed.slice(0, 6) as TripSuggestion[];
+    return parsed.slice(0, 4) as TripSuggestion[];
   } catch {
     return null;
   }
 }
 
 function writeSuggestionsCache(companyId: string, trips: TripSuggestion[]) {
-  const safeTrips = trips.slice(0, 6);
+  const safeTrips = trips.slice(0, 4);
   suggestionsMemoryCache.set(companyId, safeTrips);
   try {
     sessionStorage.setItem(
@@ -180,22 +181,33 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         for (const weekly of weeklySnapshots) {
           for (const d of weekly.docs) {
             const trip: any = d.data();
-            const departure = trip.depart || trip.departure;
-            const arrival = trip.arrivee || trip.arrival;
+            const departure = String(trip.depart || trip.departure || "").trim();
+            const arrival = String(trip.arrivee || trip.arrival || "").trim();
             const price = trip.price ?? trip.prix ?? 0;
 
             if (!departure || !arrival) continue;
 
-            const key = `${departure}_${arrival}`;
-            if (!uniqueMap.has(key)) {
-              uniqueMap.set(key, { departure, arrival, price });
-              if (uniqueMap.size >= 6) break;
+            const normalizedDeparture = departure.toLocaleLowerCase("fr");
+            const normalizedArrival = arrival.toLocaleLowerCase("fr");
+            const key = [normalizedDeparture, normalizedArrival].sort().join("_");
+            const existing = uniqueMap.get(key);
+
+            if (!existing) {
+              uniqueMap.set(key, { departure, arrival, price, bidirectional: false });
+            } else {
+              const reverseDirection =
+                existing.departure.toLocaleLowerCase("fr") === normalizedArrival &&
+                existing.arrival.toLocaleLowerCase("fr") === normalizedDeparture;
+              const existingPrice = existing.price ?? Number.POSITIVE_INFINITY;
+              uniqueMap.set(key, {
+                ...(price < existingPrice ? { departure, arrival, price } : existing),
+                bidirectional: existing.bidirectional || reverseDirection,
+              });
             }
           }
-          if (uniqueMap.size >= 6) break;
         }
 
-        const trips = Array.from(uniqueMap.values());
+        const trips = Array.from(uniqueMap.values()).slice(0, 4);
         setSuggestedTrips(trips);
         writeSuggestionsCache(companyId, trips);
       } catch (e) {
@@ -234,9 +246,10 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
 
   return (
     <div
-      className={`min-h-screen flex flex-col w-full min-w-0 overflow-x-hidden ${config.typography}`}
+      className={`public-premium min-h-screen flex flex-col w-full min-w-0 overflow-x-hidden ${config.typography}`}
       style={{
-        backgroundColor: colors.background || "#ffffff",
+        ["--public-primary" as string]: colors.primary,
+        ["--public-secondary" as string]: colors.secondary,
         color: colors.text,
       }}
     >
@@ -298,12 +311,16 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           secondaryColor={colors.secondary}
         />
 
-        {/* AVIS CLIENTS */}
-        <AvisListePublic
-          companyId={company.id}
-          primaryColor={colors.primary}
-          secondaryColor={colors.secondary}
-        />
+        <div className="public-premium-dark">
+          {/* AVIS CLIENTS */}
+          <AvisListePublic
+            companyId={company.id}
+            primaryColor={colors.primary}
+            secondaryColor={colors.secondary}
+          />
+
+          <Footer company={company} />
+        </div>
 
         <AnimatePresence>
           {showAgences && (
@@ -321,7 +338,6 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
 
       </main>
 
-      <Footer company={company} />
       </div>
     </div>
   );

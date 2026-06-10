@@ -34,8 +34,8 @@ const Header: React.FC<HeaderProps> = ({
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const primary = colors?.primary || '#3b82f6';
-  const secondary = colors?.secondary || '#6366f1';
+  const primary = colors.primary;
+  const secondary = colors.secondary || colors.primary;
 
   const name =
     company?.nom || t('ourCompany', { defaultValue: 'Notre compagnie' });
@@ -47,92 +47,89 @@ const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50">
-
-      {/* BACKGROUND */}
+    <header className="fixed left-0 right-0 top-0 z-50 px-3 pt-3 sm:px-6 sm:pt-4">
       <div
-        className="absolute inset-0 transition-all duration-300 backdrop-blur-md"
+        className="absolute inset-x-3 top-3 h-16 rounded-2xl border transition-all duration-300 backdrop-blur-xl sm:inset-x-6 sm:top-4"
         style={{
           background: scrolled
-            ? 'rgba(255,255,255,0.95)'
-            : 'linear-gradient(to bottom, rgba(0,0,0,0.6), transparent)',
-          borderBottom: scrolled ? '1px solid rgba(0,0,0,0.08)' : 'none',
+            ? 'color-mix(in srgb, white 92%, transparent)'
+            : 'color-mix(in srgb, black 20%, transparent)',
+          borderColor: scrolled
+            ? `color-mix(in srgb, ${primary} 12%, transparent)`
+            : 'color-mix(in srgb, white 22%, transparent)',
+          boxShadow: scrolled
+            ? `0 14px 40px color-mix(in srgb, ${primary} 14%, transparent)`
+            : '0 14px 40px color-mix(in srgb, black 16%, transparent)',
         }}
       />
 
-      <div className="relative z-10 flex items-center justify-between h-16 px-4 sm:px-6 max-w-6xl mx-auto">
-
-        {/* LEFT */}
+      <div className="relative z-10 mx-auto flex h-16 max-w-6xl items-center justify-between px-3 sm:px-5">
         <button
           onClick={() => navigate('/')}
-          className="flex items-center gap-3 min-w-0"
+          className="flex min-w-0 items-center gap-2.5 sm:gap-3"
         >
           {company?.logoUrl ? (
             <img
               src={company.logoUrl}
-              className="h-11 w-11 rounded-full object-cover shadow-md ring-2 ring-white/50"
+              className="h-10 w-10 rounded-full object-cover shadow-md ring-2 ring-white/50 sm:h-11 sm:w-11"
+              alt={name}
             />
           ) : (
-            <div className="h-11 w-11 rounded-full bg-white/20 flex items-center justify-center text-sm font-bold text-white">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-sm font-bold text-white sm:h-11 sm:w-11">
               {name.charAt(0)}
             </div>
           )}
 
           <span
-            className="font-bold text-lg truncate max-w-[180px]"
+            className="max-w-[145px] truncate text-sm font-extrabold uppercase tracking-tight sm:max-w-[280px] sm:text-lg"
             style={{
-              color: scrolled ? '#111827' : '#ffffff',
+              color: scrolled ? 'var(--public-ink)' : 'white',
             }}
           >
             {name}
           </span>
         </button>
 
-        {/* RIGHT */}
-        <div className="flex items-center gap-3">
-
-          {/* SWITCH LANGUE PRO */}
-          <div
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button
+            type="button"
             onClick={toggleLang}
-            className="relative w-[64px] h-[32px] rounded-full cursor-pointer"
+            className="relative h-10 w-[70px] cursor-pointer rounded-full border text-xs font-bold shadow-sm"
             style={{
-              backgroundColor: scrolled ? '#f3f4f6' : 'rgba(255,255,255,0.2)',
+              color: scrolled ? 'var(--public-ink)' : 'white',
+              backgroundColor: scrolled
+                ? 'color-mix(in srgb, white 88%, var(--public-primary))'
+                : 'color-mix(in srgb, white 12%, transparent)',
+              borderColor: scrolled ? 'var(--public-line)' : 'color-mix(in srgb, white 24%, transparent)',
             }}
           >
-            {/* SLIDER */}
             <div
-              className="absolute top-[3px] w-[26px] h-[26px] rounded-full shadow-md transition-all duration-300"
+              className="absolute left-1 top-1 h-8 w-8 rounded-full shadow-md transition-all duration-300"
               style={{
                 background: `linear-gradient(135deg, ${primary}, ${secondary})`,
-                transform: isFr
-                  ? 'translateX(4px)'
-                  : 'translateX(34px)',
+                transform: isFr ? 'translateX(0)' : 'translateX(30px)',
               }}
             />
-
-            {/* LABELS */}
-            <div className="absolute inset-0 flex items-center justify-between px-2 text-[10px] font-semibold">
-              <span className={isFr ? 'text-white' : 'text-gray-500'}>
-                FR
-              </span>
-              <span className={!isFr ? 'text-white' : 'text-gray-500'}>
-                EN
-              </span>
+            <div className="absolute inset-0 flex items-center justify-between px-2.5">
+              <span className={isFr ? 'text-white' : 'opacity-60'}>FR</span>
+              <span className={!isFr ? 'text-white' : 'opacity-60'}>EN</span>
             </div>
-          </div>
+          </button>
 
-          {/* LOGIN */}
           <button
             onClick={() => navigate('/login')}
-            className="p-2 rounded-lg transition"
+            className="flex h-10 w-10 items-center justify-center rounded-full border transition"
             style={{
-              backgroundColor: scrolled ? '#f3f4f6' : 'rgba(255,255,255,0.2)',
-              color: scrolled ? primary : '#ffffff',
+              backgroundColor: scrolled
+                ? 'color-mix(in srgb, white 88%, var(--public-primary))'
+                : 'color-mix(in srgb, white 12%, transparent)',
+              borderColor: scrolled ? 'var(--public-line)' : 'color-mix(in srgb, white 24%, transparent)',
+              color: scrolled ? primary : 'white',
             }}
+            aria-label={t('account', { defaultValue: 'Compte' })}
           >
             <User className="h-5 w-5" />
           </button>
-
         </div>
       </div>
     </header>

@@ -1,14 +1,5 @@
 import React from "react";
-import {
-  Wifi,
-  Wind,
-  Zap,
-  Coffee,
-  Sofa,
-  Tv,
-  Snowflake,
-  Bus,
-} from "lucide-react";
+import { Wifi, Wind, Zap, Coffee, Sofa, Tv, Snowflake, Bus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 interface CompanyServicesProps {
@@ -17,20 +8,14 @@ interface CompanyServicesProps {
   secondaryColor: string;
 }
 
-const SERVICES_MAP: Record<
-  string,
-  {
-    labelKey: string;
-    icon: React.ElementType;
-  }
-> = {
-  wifi: { labelKey: "serviceWifi", icon: Wifi },
-  climatisation: { labelKey: "serviceClimatisation", icon: Wind },
-  usb: { labelKey: "serviceUsb", icon: Zap },
-  boisson: { labelKey: "serviceBoisson", icon: Coffee },
-  sieges_confort: { labelKey: "serviceSiegesConfort", icon: Sofa },
-  tv: { labelKey: "serviceTv", icon: Tv },
-  eau_fraiche: { labelKey: "serviceEauFraiche", icon: Snowflake },
+const SERVICES_MAP: Record<string, { labelKey: string; descriptionKey: string; icon: React.ElementType }> = {
+  wifi: { labelKey: "serviceWifi", descriptionKey: "serviceWifiPremiumDesc", icon: Wifi },
+  climatisation: { labelKey: "serviceClimatisation", descriptionKey: "serviceClimatisationPremiumDesc", icon: Wind },
+  usb: { labelKey: "serviceUsb", descriptionKey: "serviceUsbPremiumDesc", icon: Zap },
+  boisson: { labelKey: "serviceBoisson", descriptionKey: "serviceBoissonPremiumDesc", icon: Coffee },
+  sieges_confort: { labelKey: "serviceSiegesConfort", descriptionKey: "serviceSiegesConfortPremiumDesc", icon: Sofa },
+  tv: { labelKey: "serviceTv", descriptionKey: "serviceTvPremiumDesc", icon: Tv },
+  eau_fraiche: { labelKey: "serviceEauFraiche", descriptionKey: "serviceEauFraichePremiumDesc", icon: Snowflake },
 };
 
 const CompanyServices: React.FC<CompanyServicesProps> = ({
@@ -41,76 +26,48 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
   const { t } = useTranslation();
   if (!services?.length) return null;
 
-  const validServices = services.filter((k) => SERVICES_MAP[k]);
+  const validServices = services.filter((key) => SERVICES_MAP[key]);
   if (!validServices.length) return null;
 
   return (
-    <section
-      className="py-6 px-4 bg-[color:var(--section-bg)]"
-      style={
-        {
-          ["--section-bg" as string]: `${secondaryColor}08`,
-        } as React.CSSProperties
-      }
-    >
-      <div className="max-w-5xl mx-auto">
-
-        {/* Titre */}
-        <div className="text-center mb-4">
-          <div className="flex justify-center items-center gap-2">
-            <Bus size={20} style={{ color: primaryColor }} />
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">
-              {t("onBoardServices")}
-            </h2>
+    <section className="public-premium-section">
+      <div className="public-premium-container">
+        <div className="mb-3 flex items-center gap-3 sm:mb-7">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--public-secondary-soft)] sm:h-11 sm:w-11 sm:rounded-2xl">
+            <Bus size={21} style={{ color: secondaryColor }} />
           </div>
+          <h2 className="public-premium-heading text-lg sm:text-2xl">
+            {t("onBoardServices")}
+          </h2>
         </div>
 
-        {/* Carte harmonisée */}
-        <div
-          className="rounded-2xl overflow-hidden bg-white border border-gray-200"
-          style={{
-            boxShadow: `0 6px 18px ${primaryColor}12`,
-          }}
-        >
-          <div
-            className="grid grid-cols-2 sm:grid-cols-3"
-            style={{
-              borderTop: `1px solid ${primaryColor}10`,
-              borderLeft: `1px solid ${primaryColor}10`,
-            }}
-          >
-            {validServices.map((key) => {
-              const { icon: Icon, labelKey } = SERVICES_MAP[key];
-
-              return (
+        <div className="grid auto-rows-fr grid-cols-2 gap-3 lg:grid-cols-4">
+          {validServices.map((key) => {
+            const { icon: Icon, labelKey, descriptionKey } = SERVICES_MAP[key];
+            return (
+              <div
+                key={key}
+                className="public-premium-card flex h-full min-h-32 flex-col items-center justify-center px-2 py-3 text-center transition-transform duration-300 hover:-translate-y-1 sm:min-h-44 sm:px-5 sm:py-5"
+              >
                 <div
-                  key={key}
-                  className="p-4 flex items-center gap-3"
+                  className="mb-2 flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:mb-3 sm:h-14 sm:w-14"
                   style={{
-                    borderRight: `1px solid ${primaryColor}10`,
-                    borderBottom: `1px solid ${primaryColor}10`,
+                    color: primaryColor,
+                    background: `linear-gradient(135deg, color-mix(in srgb, ${primaryColor} 14%, white), color-mix(in srgb, ${secondaryColor} 12%, white))`,
                   }}
                 >
-                  {/* Icône — secondaryColor, pas de text-blue-* */}
-                  <div
-                    className="w-9 h-9 rounded-full flex items-center justify-center"
-                    style={{
-                      backgroundColor: `${secondaryColor}15`,
-                    }}
-                  >
-                    <Icon size={16} style={{ color: secondaryColor }} />
-                  </div>
-
-                  {/* Texte (traduit selon la langue) */}
-                  <span className="text-sm font-medium text-gray-800">
-                    {t(labelKey)}
-                  </span>
+                  <Icon size={23} />
                 </div>
-              );
-            })}
-          </div>
+                <h3 className="text-sm font-extrabold text-[var(--public-ink)] sm:text-base">
+                  {t(labelKey)}
+                </h3>
+                <p className="mt-1 max-w-[15rem] text-xs leading-snug text-[var(--public-muted)] sm:mt-1.5 sm:text-sm sm:leading-relaxed">
+                  {t(descriptionKey)}
+                </p>
+              </div>
+            );
+          })}
         </div>
-
       </div>
     </section>
   );

@@ -1,5 +1,5 @@
 import React from "react";
-import { Bus } from "lucide-react";
+import { ArrowRight, Bus, ChevronDown } from "lucide-react";
 import { Company, TripSuggestion } from "@/types/companyTypes";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { useTranslation } from "react-i18next";
@@ -21,107 +21,83 @@ const VilleSuggestionBar: React.FC<Props> = ({
 }) => {
   const money = useFormatCurrency();
   const { t } = useTranslation();
+  const primary = company.couleurPrimaire || "var(--public-primary)";
 
-  const primary = company.couleurPrimaire || "#2563eb";
-  const secondary = company.couleurSecondaire || "#f3f4f6";
+  const renderTrip = (trip: TripSuggestion) => (
+    <article
+      className="public-premium-card grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 p-4 sm:gap-5 sm:p-5"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5 text-xl font-black tracking-tight text-[var(--public-ink)] sm:gap-2 sm:text-3xl">
+          <span>{trip.departure}</span>
+          <ArrowRight className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" style={{ color: primary }} />
+          <span>{trip.arrival}</span>
+        </div>
+        {trip.price !== undefined && (
+          <div className="mt-1.5 sm:mt-2">
+            <p className="text-xs font-semibold text-[var(--public-muted)] sm:text-sm">{t("fromPrice")}</p>
+            <p className="text-2xl font-black tracking-tight sm:text-3xl" style={{ color: primary }}>
+              {money(trip.price)}
+            </p>
+          </div>
+        )}
+      </div>
+      <button
+        onClick={() => onSelect(trip.departure, trip.arrival)}
+        className="public-premium-gradient flex min-h-10 w-auto shrink-0 items-center justify-center gap-1.5 rounded-xl px-3.5 text-xs font-extrabold text-white shadow-md transition-transform active:scale-95 sm:min-h-12 sm:px-5 sm:text-sm"
+      >
+        {t("bookNow")}
+        <ArrowRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+      </button>
+    </article>
+  );
 
   return (
-    <section className="relative bg-white dark:bg-gray-900 text-gray-900 dark:text-white -mt-8 px-3 pt-2 pb-6">
-      <div className="max-w-5xl mx-auto">
-
-        {/* TITRE */}
-        <div className="text-center mb-6">
-          <div className="flex justify-center items-center gap-2">
-            <Bus size={18} style={{ color: primary }} />
-            <h2 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">
+    <section className="public-premium-section pt-2 sm:pt-5">
+      <div className="public-premium-container">
+        <input id="public-destinations-toggle" type="checkbox" className="peer sr-only" />
+        <div className="mb-3 flex items-center justify-between gap-2 sm:mb-5 sm:gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--public-primary-soft)] sm:h-11 sm:w-11 sm:rounded-2xl">
+              <Bus size={21} style={{ color: primary }} />
+            </div>
+            <h2 className="public-premium-heading text-lg sm:text-2xl">
               {t("destinationsPopular")}
             </h2>
           </div>
+          {suggestions.length > 1 && (
+            <label
+              htmlFor="public-destinations-toggle"
+              className="flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-[var(--public-line)] bg-white px-3 py-2 text-xs font-bold text-[var(--public-ink)] shadow-sm sm:gap-1.5 sm:px-4 sm:py-2.5 sm:text-sm"
+            >
+              {t("seeMore")}
+              <ChevronDown className="h-4 w-4 transition-transform peer-checked:rotate-180" style={{ color: primary }} />
+            </label>
+          )}
         </div>
 
-        {/* GRID */}
-        <div className="grid grid-cols-3 gap-3">
-
-          {/* LOADING */}
-          {loading
-            ? Array.from({ length: 6 }).map((_, index) => (
-                <div
-                  key={index}
-                  className="rounded-xl border border-gray-200 bg-white p-3 text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                  style={{
-                    backdropFilter: "blur(6px)",
-                  }}
-                >
-                  <div className="h-3 w-2/3 mb-2 skeleton rounded" />
-                  <div className="h-4 w-1/2 mb-2 skeleton rounded-full" />
-                  <div className="h-8 w-full skeleton rounded-lg" />
+        {loading ? (
+          <div className="public-premium-card min-h-44 p-6">
+            <div className="skeleton mb-4 h-5 w-2/3 rounded" />
+            <div className="skeleton mb-6 h-8 w-1/2 rounded-full" />
+            <div className="skeleton h-11 w-32 rounded-xl" />
+          </div>
+        ) : suggestions.length > 0 ? (
+          <>
+            {renderTrip(suggestions[0])}
+            {suggestions.length > 1 && (
+                <div id="more-destinations" className="mt-4 hidden gap-3 peer-checked:grid">
+                  {suggestions.slice(1).map((trip, index) => (
+                    <React.Fragment key={`${trip.departure}-${trip.arrival}-${index}`}>
+                      {renderTrip(trip)}
+                    </React.Fragment>
+                  ))}
                 </div>
-              ))
-
-            : suggestions.slice(0, 6).map((trip, index) => (
-                <div
-                  key={index}
-                  className="rounded-xl border border-gray-200 bg-white p-3 text-center text-gray-900 transition-all duration-300 active:scale-95 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                  style={{
-                    backdropFilter: "blur(6px)",
-                    boxShadow: `
-                      0 4px 12px rgba(0,0,0,0.10),
-                      0 2px 8px ${primary}15
-                    `,
-                  }}
-                >
-
-                  {/* TRAJET */}
-                  <div className="text-xs font-semibold text-gray-900 leading-tight dark:text-white">
-                    {trip.departure} →{" "}
-                    <span style={{ color: primary }}>
-                      {trip.arrival}
-                    </span>
-                  </div>
-
-                  {/* PRIX */}
-                  {trip.price !== undefined && (
-                    <div
-                      className="mt-2 text-[11px] font-bold px-2 py-1 rounded-full inline-block"
-                      style={{
-                        background: `linear-gradient(90deg, ${primary}15, ${secondary}40)`,
-                        color: primary,
-                      }}
-                    >
-                      {money(trip.price)}
-                    </div>
-                  )}
-
-                  {/* POPULARITÉ */}
-                  {trip.count !== undefined && (
-                    <div className="text-[10px] text-gray-600 mt-1 dark:text-gray-300">
-                      {trip.count} réservations
-                    </div>
-                  )}
-
-                  {/* CTA */}
-                  <button
-                    onClick={() =>
-                      onSelect(trip.departure, trip.arrival)
-                    }
-                    className="mt-2 w-full h-8 rounded-lg text-[11px] font-semibold text-white transition-all"
-                    style={{
-                      background: `linear-gradient(90deg, ${primary}, ${secondary})`,
-                      boxShadow: `0 2px 8px ${primary}40`,
-                    }}
-                  >
-                    {t("reserve")}
-                  </button>
-                </div>
-              ))}
-        </div>
-
-        {/* EMPTY */}
-        {!loading && suggestions.length === 0 && (
-          <div className="mt-4 text-center text-sm text-gray-600 dark:text-gray-300">
-            {offline
-              ? "Connexion indisponible."
-              : "Aucune destination disponible."}
+            )}
+          </>
+        ) : (
+          <div className="public-premium-card p-6 text-center text-sm text-[var(--public-muted)]">
+            {offline ? "Connexion indisponible." : "Aucune destination disponible."}
           </div>
         )}
       </div>
