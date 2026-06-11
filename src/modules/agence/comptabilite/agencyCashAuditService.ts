@@ -221,13 +221,11 @@ export async function getAgencyCashPosition(
   agencyId: string
 ): Promise<AgencyCashPosition> {
   const cashDocId = agencyCashAccountDocId(agencyId);
-  const mirrorRef = financialAccountRef(companyId, agencyCashAccountId(agencyId));
 
-  const [{ rows, capped: txCapped }, comptaSum, cashLedgerSnap, mirrorSnap] = await Promise.all([
+  const [{ rows, capped: txCapped }, comptaSum, cashLedgerSnap] = await Promise.all([
     loadAgencyFinancialTransactions(companyId, agencyId),
     sumComptaEncaissementsAllTime(companyId, agencyId),
     getDoc(ledgerAccountDocRef(companyId, cashDocId)),
-    getDoc(mirrorRef),
   ]);
 
   const totalCashIn = comptaSum.total;
@@ -237,19 +235,6 @@ export async function getAgencyCashPosition(
   const ledgerRaw = cashLedgerSnap.exists() ? (cashLedgerSnap.data() as Record<string, unknown>) : null;
   const ledgerBal = ledgerRaw != null ? Number(ledgerRaw.balance ?? ledgerRaw.currentBalance ?? 0) : 0;
   const soldeCash = ledgerBal;
-
-  const mirrorBal = mirrorSnap.exists()
-    ? Number((mirrorSnap.data() as Record<string, unknown>).currentBalance ?? 0)
-    : null;
-  if (mirrorBal != null && Math.abs(mirrorBal - soldeCash) > MIRROR_LEDGER_EPSILON) {
-    console.error("[caisse] getAgencyCashPosition : ledger ≠ miroir financialAccounts.", {
-      companyId,
-      agencyId,
-      soldeLedger: soldeCash,
-      mirror: mirrorBal,
-      comptaMoinsSortiesIndicatif: caisseDisponibleAgregat,
-    });
-  }
 
   console.log("[AgenceCompta][caisse]", {
     totalEncaissementsCompta: totalCashIn,

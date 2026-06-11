@@ -41,10 +41,7 @@ import {
   dailyStatsTimezoneFromAgencyData,
 } from '../aggregates/dailyStats';
 import { updateAgencyLiveStateOnSessionOpened, updateAgencyLiveStateOnSessionClosed, updateAgencyLiveStateOnSessionValidated } from '../aggregates/agencyLiveState';
-import {
-  applyRemittancePendingToAgencyCashInTransaction,
-  isConfirmedTransactionStatus,
-} from '@/modules/compagnie/treasury/financialTransactions';
+import { isConfirmedTransactionStatus } from '@/modules/compagnie/treasury/financialTransactions';
 import {
   PENDING_CASH_LEDGER_SYSTEM_VERSION,
   type PendingCashRemittanceStatus,
@@ -75,7 +72,6 @@ type SessionHeadValidationHistoryLog = {
 const SHIFTS_COLLECTION = 'shifts';
 const RESERVATIONS_COLLECTION = 'reservations';
 const FINANCIAL_TRANSACTIONS_COLLECTION = 'financialTransactions';
-const RESERVATION_LIMIT = 1000;
 
 export type CashSession = {
   id: string;
@@ -115,11 +111,14 @@ type ReservationSessionRow = {
   seatsReturn?: number;
   montant?: number;
   statut?: string;
+  paiement?: string;
+  paymentMethod?: string;
 };
 
-type SessionReservationAmountRow = {
-  montant?: number;
-  statut?: string;
+type CloseSessionAmountAudit = CloseSessionTotals & {
+  computedReservationAmount: number;
+  computedFinancialTransactionAmount: number;
+  routeBreakdown: { route: string; tickets: number; amount: number }[];
 };
 
 function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
@@ -368,7 +367,7 @@ export function isCurrentDeviceClaimed(shiftDoc: { deviceFingerprint?: string | 
 
 function isSoldReservationStatus(statut: unknown): boolean {
   const s = String(statut ?? '').toLowerCase().trim();
-  return s === 'paye' || s === 'payé' || s === 'confirme' || s === 'confirmé';
+  return ['paye', 'payé', 'confirme', 'confirmé', 'valide', 'validé', 'paid'].includes(s);
 }
 
 function closeSessionAudit(step: string, details: Record<string, unknown>): void {
@@ -382,12 +381,12 @@ function closeSessionAuditFailure(step: string, error: unknown, details: Record<
   });
 }
 
-async function computeLedgerSessionTotalsFromReservations(params: {
+async function computeCloseSessionAmounts(params: {
   companyId: string;
   agencyId: string;
   shiftId: string;
   shiftAgentId: string;
-}): Promise<CloseSessionTotals> {
+}): Promise<CloseSessionAmountAudit> {
   const reservationsPath = `companies/${params.companyId}/agences/${params.agencyId}/reservations`;
   closeSessionAudit('ledger reservation queries', {
     path: reservationsPath,
@@ -418,23 +417,37 @@ async function computeLedgerSessionTotalsFromReservations(params: {
   const reservations = [...mergedById.values()].filter((doc) => {
     const r = normalizeReservation(doc);
     const s = String(r.reservation.status ?? '').toLowerCase().trim();
-    if (s === 'invalide' || s === 'annule' || s === 'annulation_en_attente') return false;
+    const paymentStatus = String(r.payment.status ?? '').toLowerCase().trim();
+    if (
+      ['invalide', 'annule', 'annulé', 'annulation_en_attente', 'rembourse', 'remboursé',
+        'refunded', 'cancelled', 'canceled'].includes(s)
+    ) return false;
+    if (['rembourse', 'remboursé', 'refunded', 'cancelled', 'canceled'].includes(paymentStatus)) {
+      return false;
+    }
     return isSoldReservationStatus(r.reservation.status);
   });
 
   const byRoute: Record<string, { billets: number; montant: number }> = {};
   let tickets = 0;
+  let computedReservationAmount = 0;
+  let totalCash = 0;
+  let totalDigital = 0;
   for (const r of reservations) {
     const seats = Number(r.seatsGo ?? 0) + Number(r.seatsReturn ?? 0);
+    const amount = Number(r.montant ?? 0);
     tickets += seats;
+    computedReservationAmount += amount;
     const key = [r.depart, r.arrivee].filter(Boolean).join('→') || 'Sans trajet';
     if (!byRoute[key]) byRoute[key] = { billets: 0, montant: 0 };
     byRoute[key].billets += seats;
+    byRoute[key].montant += amount;
+    const paymentMethod = String(r.paymentMethod ?? r.paiement ?? '').toLowerCase();
+    if (paymentMethod.includes('mobile') || paymentMethod.includes('mm')) totalDigital += amount;
+    else totalCash += amount;
   }
 
-  let totalRevenue = 0;
-  let totalCash = 0;
-  let totalDigital = 0;
+  let computedFinancialTransactionAmount = 0;
   for (const r of reservations) {
     const ledgerPath = `companies/${params.companyId}/${FINANCIAL_TRANSACTIONS_COLLECTION}`;
     const ledgerFilters = {
@@ -468,20 +481,13 @@ async function computeLedgerSessionTotalsFromReservations(params: {
       });
       throw error;
     }
-    let reservationLedger = 0;
     for (const d of txSnap.docs) {
       const row = d.data() as FinancialTransactionDoc;
       if (!isConfirmedTransactionStatus(row.status)) continue;
       const amt = Number(row.amount ?? 0);
       if (amt <= 0) continue;
-      totalRevenue += amt;
-      reservationLedger += amt;
-      const pm = String(row.paymentMethod ?? '').toLowerCase();
-      if (pm === 'cash') totalCash += amt;
-      else totalDigital += amt;
+      computedFinancialTransactionAmount += amt;
     }
-    const key = [r.depart, r.arrivee].filter(Boolean).join('→') || 'Sans trajet';
-    if (byRoute[key]) byRoute[key].montant += reservationLedger;
   }
 
   const details = Object.entries(byRoute).map(([trajet, v]) => ({
@@ -490,74 +496,28 @@ async function computeLedgerSessionTotalsFromReservations(params: {
     montant: v.montant,
     heures: [] as string[],
   }));
+  const routeBreakdown = Object.entries(byRoute).map(([route, v]) => ({
+    route,
+    tickets: v.billets,
+    amount: v.montant,
+  }));
 
   return {
-    totalRevenue,
+    totalRevenue: computedReservationAmount,
     totalReservations: reservations.length,
     totalCash,
     totalDigital,
     tickets,
     details,
+    computedReservationAmount,
+    computedFinancialTransactionAmount,
+    routeBreakdown,
   };
 }
 
-async function getReservationsBySession(params: {
-  companyId: string;
-  agencyId: string;
-  sessionId: string;
-  agentId: string;
-}): Promise<Array<SessionReservationAmountRow & { id: string }>> {
-  const mergedDocs = await fetchReservationDocsForShiftSlot(
-    params.companyId,
-    params.agencyId,
-    params.sessionId,
-    { perQueryLimit: RESERVATION_LIMIT, auditLabel: 'expected amount' }
-  );
-  const byId = new Map<string, SessionReservationAmountRow & { id: string }>();
-  for (const d of mergedDocs) {
-    const row = { id: d.id, ...(d.data() as SessionReservationAmountRow) };
-    if (!belongsToGuichetSession(row as Record<string, unknown>, params.sessionId, params.agentId))
-      continue;
-    byId.set(d.id, row);
-  }
-  return [...byId.values()];
-}
-
-export async function calculateSessionTotals(params: {
-  companyId: string;
-  agencyId: string;
-  sessionId: string;
-  agentId: string;
-}): Promise<number> {
-  const reservationsPath = `companies/${params.companyId}/agences/${params.agencyId}/reservations`;
-  closeSessionAudit('expected amount reservation queries', {
-    path: reservationsPath,
-    operations: [
-      { type: 'getDocs', where: { sessionId: params.sessionId }, limit: RESERVATION_LIMIT },
-      { type: 'getDocs', where: { shiftId: params.sessionId }, limit: RESERVATION_LIMIT },
-    ],
-  });
-  let reservations;
-  try {
-    reservations = await getReservationsBySession(params);
-  } catch (error) {
-    closeSessionAuditFailure('expected amount reservation queries', error, { path: reservationsPath });
-    throw error;
-  }
-  const validReservations = reservations.filter((doc) => {
-    const r = normalizeReservation(doc);
-    const statut = String(r.reservation.status ?? '').toLowerCase();
-    return statut !== 'annule' && statut !== 'annulation_en_attente' && statut !== 'invalide';
-  });
-  return validReservations.reduce((sum, doc) => {
-    const r = normalizeReservation(doc);
-    return sum + (r.payment.amount ?? 0);
-  }, 0);
-}
-
 /**
- * Calcule les totaux session depuis le ledger financialTransactions (source de vérité).
- * 1 vente = 1 encaissement → totaux session = somme(payment_received par reservationId de la session).
+ * Clôture une session depuis les réservations vendues liées au poste.
+ * Le ledger financialTransactions reste lu uniquement pour l'audit de cohérence.
  */
 export async function closeSession(params: {
   companyId: string;
@@ -601,22 +561,24 @@ export async function closeSession(params: {
   if (!shiftAgentId) {
     throw new Error('Poste sans vendeur associé : impossible de calculer les totaux guichet.');
   }
-  const ledgerTotals = await computeLedgerSessionTotalsFromReservations({
+  const closingAmounts = await computeCloseSessionAmounts({
     companyId: params.companyId,
     agencyId: params.agencyId,
     shiftId: params.shiftId,
     shiftAgentId,
   });
-  const expectedAmount = await calculateSessionTotals({
-    companyId: params.companyId,
-    agencyId: params.agencyId,
-    sessionId: params.shiftId,
-    agentId: shiftAgentId,
+  const expectedAmount = closingAmounts.computedReservationAmount;
+  console.error('[closeSession amount audit]', {
+    reservationsCount: closingAmounts.totalReservations,
+    ticketsCount: closingAmounts.tickets,
+    computedReservationAmount: closingAmounts.computedReservationAmount,
+    computedFinancialTransactionAmount: closingAmounts.computedFinancialTransactionAmount,
+    finalExpectedAmount: expectedAmount,
   });
   const actualAmount = Number(params.actualAmount ?? expectedAmount);
   const ecart = actualAmount - expectedAmount;
   const hasDiscrepancy = Math.abs(ecart) > 0;
-  let resultTotals: CloseSessionTotals = ledgerTotals;
+  let resultTotals: CloseSessionTotals = closingAmounts;
 
   const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
   let shiftAgentName: string | null = null;
@@ -682,7 +644,7 @@ export async function closeSession(params: {
       type: 'transaction.set merge',
       identityFields: { shiftId: params.shiftId, companyId: params.companyId, agencyId: params.agencyId },
     });
-    tx.set(reportRef, stripUndefined({
+    const shiftReportFields = stripUndefined({
       shiftId: params.shiftId,
       companyId: params.companyId,
       agencyId: params.agencyId,
@@ -692,19 +654,25 @@ export async function closeSession(params: {
       startAt,
       endAt: now,
       closedAt: now,
-      billets: ledgerTotals.tickets,
-      montant: ledgerTotals.totalRevenue,
-      totalRevenue: ledgerTotals.totalRevenue,
-      totalReservations: ledgerTotals.totalReservations,
-      totalCash: ledgerTotals.totalCash,
-      totalDigital: ledgerTotals.totalDigital,
+      billets: closingAmounts.tickets,
+      ticketsCount: closingAmounts.tickets,
+      montant: expectedAmount,
+      totalRevenue: expectedAmount,
+      grossSalesAmount: expectedAmount,
+      totalSalesAmount: expectedAmount,
+      totalSales: expectedAmount,
+      totalReservations: closingAmounts.totalReservations,
+      reservationsCount: closingAmounts.totalReservations,
+      totalCash: closingAmounts.totalCash,
+      totalDigital: closingAmounts.totalDigital,
       expectedAmount,
       actualAmount,
       ecart,
       hasDiscrepancy,
       discrepancyFlagged: hasDiscrepancy,
       discrepancyFlaggedAt: hasDiscrepancy ? serverTimestamp() : null,
-      details: ledgerTotals.details,
+      details: closingAmounts.details,
+      routeBreakdown: closingAmounts.routeBreakdown,
       accountantValidated: false,
       managerValidated: false,
       accountantValidatedAt: null,
@@ -712,7 +680,9 @@ export async function closeSession(params: {
       status: 'pending_validation',
       createdAt: shiftData.createdAt,
       updatedAt: serverTimestamp(),
-    }), { merge: true });
+    });
+    console.error('[closeSession amount audit] written shiftReport fields', shiftReportFields);
+    tx.set(reportRef, shiftReportFields, { merge: true });
 
     const nextLegacyStatus = SHIFT_STATUS.CLOSED;
     closeSessionAudit('transaction shift close update', {
@@ -726,12 +696,13 @@ export async function closeSession(params: {
       endAt: now,
       endTime: now,
       closedAt: now,
-      tickets: ledgerTotals.tickets,
-      amount: ledgerTotals.totalRevenue,
-      totalRevenue: ledgerTotals.totalRevenue,
-      totalReservations: ledgerTotals.totalReservations,
-      totalCash: ledgerTotals.totalCash,
-      totalDigital: ledgerTotals.totalDigital,
+      tickets: closingAmounts.tickets,
+      amount: expectedAmount,
+      totalAmount: expectedAmount,
+      totalRevenue: expectedAmount,
+      totalReservations: closingAmounts.totalReservations,
+      totalCash: closingAmounts.totalCash,
+      totalDigital: closingAmounts.totalDigital,
       expectedAmount,
       actualAmount,
       ecart,
@@ -758,12 +729,12 @@ export async function closeSession(params: {
     updateAgencyLiveStateOnSessionClosed(tx, params.companyId, params.agencyId);
 
     resultTotals = {
-      totalRevenue: ledgerTotals.totalRevenue,
-      totalReservations: ledgerTotals.totalReservations,
-      totalCash: ledgerTotals.totalCash,
-      totalDigital: ledgerTotals.totalDigital,
-      tickets: ledgerTotals.tickets,
-      details: ledgerTotals.details,
+      totalRevenue: expectedAmount,
+      totalReservations: closingAmounts.totalReservations,
+      totalCash: closingAmounts.totalCash,
+      totalDigital: closingAmounts.totalDigital,
+      tickets: closingAmounts.tickets,
+      details: closingAmounts.details,
     };
   });
   } catch (error) {
@@ -888,21 +859,6 @@ export async function validateSessionByAccountant(params: {
       accountantDeviceFingerprint: params.accountantDeviceFingerprint,
     };
 
-    /**
-     * Ledger remise : avant tout update shift/rapport — Firestore exige tous les get avant tous les set/update.
-     * (applyRemittancePendingToAgencyCashInTransaction fait des lectures sur idempotency + comptes + miroir.)
-     */
-    const agencyCurrency = String((agencySnap.data() as { currency?: string })?.currency ?? 'XOF');
-    await applyRemittancePendingToAgencyCashInTransaction(
-      tx,
-      params.companyId,
-      params.agencyId,
-      params.receivedCashAmount,
-      agencyCurrency,
-      { referenceType: "shift", referenceId: params.shiftId },
-      `shift ${params.shiftId} validated by agency accountant`
-    );
-
     const nextLegacyStatus = SHIFT_STATUS.VALIDATED_AGENCY;
     tx.update(shiftRef, stripUndefined({
       status: nextLegacyStatus,
@@ -953,7 +909,8 @@ export async function validateSessionByAccountant(params: {
     const statsDate = timestampToDailyStatsDateKey(closedAt, agencyTz);
     updateDailyStatsOnSessionValidatedByAgency(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
     updateAgencyLiveStateOnSessionValidated(tx, params.companyId, params.agencyId);
-    // Pas de mouvement trésorerie ici : réservé à la validation finale chef d'agence (validateSessionByHeadAccountant).
+    // Aucun mouvement ledger client ici : les règles Firestore réservent les comptes compagnie
+    // aux rôles finance siège. La réception reste tracée par cashReceipts + comptaEncaissements.
 
     return {
       computedDifference,

@@ -195,12 +195,100 @@ function formatDateShortFR(dateStr: string): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
+type ShiftReportRoute = {
+  trajet?: string;
+  route?: string;
+  tickets?: number;
+  billets?: number;
+  amount?: number;
+  totalAmount?: number;
+  montant?: number;
+  salesAmount?: number;
+  heures?: string[];
+};
+
 type ShiftReport = {
   shiftId: string; userId: string; userName?: string; userCode?: string;
-  startAt: Timestamp; endAt: Timestamp; billets: number; montant: number;
-  details: { trajet: string; billets: number; montant: number; heures: string[] }[];
+  startAt: Timestamp; endAt: Timestamp;
+  ticketsCount?: number; totalTickets?: number; billets?: number;
+  expectedAmount?: number; totalSalesAmount?: number; totalSales?: number; grossSalesAmount?: number; montant?: number;
+  routeBreakdown: ShiftReportRoute[];
+  details: ShiftReportRoute[];
   accountantValidated: boolean; managerValidated: boolean;
 };
+
+function finiteNumberOrUndefined(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function firstFiniteNumber(...values: unknown[]): number {
+  for (const value of values) {
+    const numberValue = finiteNumberOrUndefined(value);
+    if (numberValue !== undefined) return numberValue;
+  }
+  return 0;
+}
+
+function getShiftReportExpectedAmount(report: ShiftReport): number {
+  return firstFiniteNumber(
+    report.expectedAmount,
+    report.totalSalesAmount,
+    report.totalSales,
+    report.grossSalesAmount,
+    report.montant,
+    0
+  );
+}
+
+function getShiftReportRouteAmount(route: ShiftReportRoute): number {
+  return firstFiniteNumber(route.amount, route.totalAmount, route.montant, route.salesAmount, 0);
+}
+
+function getShiftReportRouteTickets(route: ShiftReportRoute): number {
+  return firstFiniteNumber(route.tickets, route.billets, 0);
+}
+
+function getShiftReportRoutes(report: ShiftReport): ShiftReportRoute[] {
+  const routes = report.routeBreakdown.length > 0 ? report.routeBreakdown : report.details;
+  if (routes.length !== 1 || getShiftReportRouteAmount(routes[0]) > 0) return routes;
+  const expectedAmount = getShiftReportExpectedAmount(report);
+  if (expectedAmount <= 0) return routes;
+  return [{ ...routes[0], amount: expectedAmount }];
+}
+
+function getShiftReportTicketsCount(report: ShiftReport): number {
+  const ticketsCount = finiteNumberOrUndefined(report.ticketsCount);
+  if (ticketsCount !== undefined) return ticketsCount;
+  const totalTickets = finiteNumberOrUndefined(report.totalTickets);
+  if (totalTickets !== undefined) return totalTickets;
+  const routes = getShiftReportRoutes(report);
+  return routes.reduce((sum, route) => sum + getShiftReportRouteTickets(route), 0);
+}
+
+function normalizeShiftReport(id: string, raw: any): ShiftReport {
+  return {
+    shiftId: id,
+    userId: raw.userId,
+    userName: raw.userName,
+    userCode: raw.userCode,
+    startAt: raw.startAt,
+    endAt: raw.endAt,
+    ticketsCount: raw.ticketsCount,
+    totalTickets: raw.totalTickets,
+    billets: raw.billets,
+    expectedAmount: raw.expectedAmount,
+    totalSalesAmount: raw.totalSalesAmount,
+    totalSales: raw.totalSales,
+    grossSalesAmount: raw.grossSalesAmount,
+    montant: raw.montant,
+    routeBreakdown: Array.isArray(raw.routeBreakdown) ? raw.routeBreakdown : [],
+    details: Array.isArray(raw.details) ? raw.details : [],
+    accountantValidated: !!raw.accountantValidated,
+    managerValidated: !!raw.managerValidated,
+  };
+}
 
 // ─── Helpers : code guichetier depuis users root, sinon depuis Équipe (agence/users) ───
 async function getSellerCode(
@@ -1342,8 +1430,7 @@ const AgenceGuichetPage: React.FC = () => {
         getDocs(query(repRef, where("userId", "==", user.uid), where("accountantValidated", "==", true), where("managerValidated", "==", false))),
       ]);
       const rows: ShiftReport[] = [...s1.docs, ...s2.docs].map((d) => {
-        const r = d.data() as any;
-        return { shiftId: d.id, userId: r.userId, userName: r.userName, userCode: r.userCode, startAt: r.startAt, endAt: r.endAt, billets: r.billets || 0, montant: r.montant || 0, details: Array.isArray(r.details) ? r.details : [], accountantValidated: !!r.accountantValidated, managerValidated: !!r.managerValidated };
+        return normalizeShiftReport(d.id, d.data());
       }).sort((a, b) => (b.endAt?.toMillis?.() ?? 0) - (a.endAt?.toMillis?.() ?? 0));
       setPendingReports(rows);
     } catch (e) { console.error(e); }
@@ -1357,8 +1444,7 @@ const AgenceGuichetPage: React.FC = () => {
       const repRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/shiftReports`);
       const snap = await getDocs(query(repRef, where("userId", "==", user.uid), where("accountantValidated", "==", true), where("managerValidated", "==", true), orderBy("endAt", "desc"), limit(50)));
       setHistoryReports(snap.docs.map((d) => {
-        const r = d.data() as any;
-        return { shiftId: d.id, userId: r.userId, userName: r.userName, userCode: r.userCode, startAt: r.startAt, endAt: r.endAt, billets: r.billets || 0, montant: r.montant || 0, details: Array.isArray(r.details) ? r.details : [], accountantValidated: true, managerValidated: true };
+        return normalizeShiftReport(d.id, d.data());
       }));
     } catch (e) { console.error(e); }
     finally { setLoadingHistory(false); }
@@ -1381,6 +1467,15 @@ const AgenceGuichetPage: React.FC = () => {
     }
     return { billets, montant };
   }, [mergedSessionTickets]);
+
+  const displayedReportTotals = useMemo(() => {
+    if (isCounterOpen || pendingReports.length === 0) return sessionTotals;
+    const latestReport = pendingReports[0];
+    return {
+      billets: getShiftReportTicketsCount(latestReport),
+      montant: getShiftReportExpectedAmount(latestReport),
+    };
+  }, [isCounterOpen, pendingReports, sessionTotals]);
 
   const reportDateLabel = useMemo(() => {
     const start = activeShift?.startAt?.toDate?.() || activeShift?.startTime?.toDate?.();
@@ -1532,7 +1627,11 @@ const AgenceGuichetPage: React.FC = () => {
             {/* Sound toggle */}
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
-              className={`px-2 py-1 rounded-md transition text-xs ${soundEnabled ? "bg-gray-100 text-gray-600" : "text-gray-400"}`}
+              className={`px-2 py-1 rounded-md border transition text-xs shadow-sm ${
+                darkMode
+                  ? "border-gray-600 bg-gray-700 text-gray-100 hover:bg-gray-600"
+                  : "border-gray-300 bg-white/90 text-gray-800 hover:bg-white"
+              }`}
               title={soundEnabled ? "Son activé" : "Son désactivé"}
             >
               {soundEnabled ? "🔊" : "🔇"}
@@ -1548,7 +1647,13 @@ const AgenceGuichetPage: React.FC = () => {
             </button>
 
             {/* Keyboard shortcut hint */}
-            <span className="hidden xl:block text-[10px] text-gray-300 ml-2">
+            <span
+              className={`hidden xl:block ml-2 rounded-md border px-2 py-1 text-[10px] font-medium ${
+                darkMode
+                  ? "border-gray-600 bg-gray-700/80 text-gray-300"
+                  : "border-gray-200 bg-white/80 text-gray-600 shadow-sm"
+              }`}
+            >
               F2:onglet · Esc:fermer · +/-:places · Ctrl+P:imprimer
             </span>
           </div>
@@ -1737,11 +1842,11 @@ const AgenceGuichetPage: React.FC = () => {
                 right={
                   <div className="flex items-center gap-3">
                     <div className="text-right">
-                      <p className={typography.valueLarge} style={{ color: theme.primary }}>{sessionTotals.billets} <span className={typography.muted}>billets</span></p>
+                      <p className={typography.valueLarge} style={{ color: theme.primary }}>{displayedReportTotals.billets} <span className={typography.muted}>billets</span></p>
                     </div>
                     <div className="h-8 w-px bg-gray-200" />
                     <div className="text-right">
-                      <p className={typography.valueLarge} style={{ color: theme.primary }}>{money(sessionTotals.montant)}</p>
+                      <p className={typography.valueLarge} style={{ color: theme.primary }}>{money(displayedReportTotals.montant)}</p>
                     </div>
                   </div>
                 }
@@ -1852,12 +1957,16 @@ const AgenceGuichetPage: React.FC = () => {
                     {pendingReports.map((rep) => {
                       const start = rep.startAt?.toDate?.() ?? new Date();
                       const end = rep.endAt?.toDate?.() ?? new Date();
+                      const routes = getShiftReportRoutes(rep);
                       return (
                         <div key={rep.shiftId} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
                           <div className="flex items-center justify-between mb-2">
                             <div>
                               <p className="font-semibold text-gray-900">Session billetterie</p>
                               <p className="text-xs text-gray-500">{start.toLocaleString("fr-FR")} — {end.toLocaleString("fr-FR")}</p>
+                              <p className="mt-1 text-sm font-medium text-gray-700">
+                                {getShiftReportTicketsCount(rep)} billets • {money(getShiftReportExpectedAmount(rep))}
+                              </p>
                             </div>
                             <div className="flex items-center gap-2">
                               <StatusBadge status={rep.accountantValidated ? "success" : "warning"}>
@@ -1868,7 +1977,7 @@ const AgenceGuichetPage: React.FC = () => {
                               </StatusBadge>
                             </div>
                           </div>
-                          {rep.details.length > 0 && (
+                          {routes.length > 0 && (
                             <table className="w-full text-sm mt-2 overflow-hidden rounded-xl border border-gray-100">
                               <thead className="bg-gray-50/70">
                                 <tr>
@@ -1878,11 +1987,11 @@ const AgenceGuichetPage: React.FC = () => {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100">
-                                {rep.details.map((d, i) => (
+                                {routes.map((d, i) => (
                                   <tr key={i}>
-                                    <td className="px-3 py-2 text-gray-700">{d.trajet}</td>
-                                    <td className="px-3 py-2 text-right text-gray-700">{d.billets}</td>
-                                    <td className="px-3 py-2 text-right text-gray-700">{money(d.montant)}</td>
+                                    <td className="px-3 py-2 text-gray-700">{d.route ?? d.trajet ?? "Sans trajet"}</td>
+                                    <td className="px-3 py-2 text-right text-gray-700">{getShiftReportRouteTickets(d)}</td>
+                                    <td className="px-3 py-2 text-right text-gray-700">{money(getShiftReportRouteAmount(d))}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1913,11 +2022,12 @@ const AgenceGuichetPage: React.FC = () => {
                     {historyReports.map((rep) => {
                       const start = rep.startAt?.toDate?.() ?? new Date();
                       const end = rep.endAt?.toDate?.() ?? new Date();
+                      const routes = getShiftReportRoutes(rep);
                       return (
                         <div key={rep.shiftId} className="rounded-2xl border border-emerald-200 bg-emerald-50/30 p-5 shadow-sm">
                           <div className="flex items-center justify-between mb-2">
                             <div>
-                              <p className="font-semibold text-gray-900">Session validée — {rep.billets} billets • {money(rep.montant)}</p>
+                              <p className="font-semibold text-gray-900">Session validée — {getShiftReportTicketsCount(rep)} billets • {money(getShiftReportExpectedAmount(rep))}</p>
                               <p className="text-xs text-gray-500">{start.toLocaleString("fr-FR")} → {end.toLocaleString("fr-FR")}</p>
                             </div>
                             <div className="flex gap-1.5">
@@ -1925,7 +2035,7 @@ const AgenceGuichetPage: React.FC = () => {
                               <StatusBadge status="success">Chef ✓</StatusBadge>
                             </div>
                           </div>
-                          {rep.details.length > 0 && (
+                          {routes.length > 0 && (
                             <table className="w-full text-sm mt-2 overflow-hidden rounded-xl border border-gray-100">
                               <thead className="bg-gray-50/70">
                                 <tr>
@@ -1935,11 +2045,11 @@ const AgenceGuichetPage: React.FC = () => {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100">
-                                {rep.details.map((d, i) => (
+                                {routes.map((d, i) => (
                                   <tr key={i}>
-                                    <td className="px-3 py-2 text-gray-700">{d.trajet}</td>
-                                    <td className="px-3 py-2 text-right text-gray-700">{d.billets}</td>
-                                    <td className="px-3 py-2 text-right text-gray-700">{money(d.montant)}</td>
+                                    <td className="px-3 py-2 text-gray-700">{d.route ?? d.trajet ?? "Sans trajet"}</td>
+                                    <td className="px-3 py-2 text-right text-gray-700">{getShiftReportRouteTickets(d)}</td>
+                                    <td className="px-3 py-2 text-right text-gray-700">{money(getShiftReportRouteAmount(d))}</td>
                                   </tr>
                                 ))}
                               </tbody>

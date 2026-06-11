@@ -114,6 +114,7 @@ type ShiftDoc = {
   totalRevenue?: number;
   totalCash?: number;
   totalDigital?: number;
+  expectedAmount?: number;
   payBy?: Record<string, number>;
   accountantId?: string;
   accountantCode?: string;
@@ -712,6 +713,7 @@ const AgenceComptabilitePage: React.FC = () => {
     totalAmount: r.totalAmount ?? r.amount,
     totalRevenue: r.totalRevenue ?? r.amount,
     totalCash: r.totalCash ?? r.amount,
+    expectedAmount: r.expectedAmount ?? r.totalSalesAmount ?? r.grossSalesAmount ?? r.totalAmount ?? r.amount,
     payBy: r.payBy,
     accountantId: r.accountantId,
     accountantCode: r.accountantCode,
@@ -1068,10 +1070,11 @@ const AgenceComptabilitePage: React.FC = () => {
       if (!user?.companyId || !user?.agencyId) return;
       const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
       const map: Record<string, ShiftAgg> = {};
+      const shiftsToAggregate = [...closedShifts, ...validatedAgencyShifts];
       
-      console.log(`[AgenceCompta] ${closedShifts.length} poste(s) clôturé(s) à analyser`);
+      console.log(`[AgenceCompta] ${shiftsToAggregate.length} poste(s) clôturé(s) ou validé(s) comptable à analyser`);
       
-      for (const s of closedShifts) {
+      for (const s of shiftsToAggregate) {
         const docs = await fetchReservationDocsForShiftSlot(user.companyId, user.agencyId, s.id);
         let reservations = 0, tickets = 0, amount = 0, cashExpected = 0, mmExpected = 0;
         
@@ -1105,7 +1108,7 @@ const AgenceComptabilitePage: React.FC = () => {
       setAggByShift(map);
       console.log('[AgenceCompta] Agrégats calculés:', Object.keys(map).length);
     })().catch((e) => console.error('[AgenceCompta] Erreur agrégats réceptions:', e));
-  }, [closedShifts, user?.companyId, user?.agencyId]);
+  }, [closedShifts, validatedAgencyShifts, user?.companyId, user?.agencyId]);
 
   /** Préremplit « Montant reçu » avec l’attendu espèces pour éviter une validation à 0 (champ vide → Number('') === 0). */
   useEffect(() => {
@@ -1119,7 +1122,7 @@ const AgenceComptabilitePage: React.FC = () => {
         const payBy = s.payBy || {};
         const agg = aggByShift[s.id];
         const expected = Number(
-          s.totalCash ?? agg?.cashExpected ?? payBy['espèces'] ?? s.cashExpected ?? 0
+          s.expectedAmount ?? s.totalCash ?? agg?.cashExpected ?? payBy['espèces'] ?? s.cashExpected ?? 0
         );
         if (expected > 0) {
           next[s.id] = { cashReceived: String(Math.round(expected)) };
@@ -2750,7 +2753,7 @@ const AgenceComptabilitePage: React.FC = () => {
                     const reservationsAgg = agg?.reservations ?? s.totalReservations ?? 0;
                     const ticketsAgg = agg?.tickets ?? s.totalTickets ?? 0;
                     const amountAgg = agg?.amount ?? s.totalAmount ?? 0;
-                    const expectedCash = s.totalCash ?? agg?.cashExpected ?? (payBy['espèces'] ?? s.cashExpected ?? 0);
+                    const expectedCash = s.expectedAmount ?? s.totalCash ?? agg?.cashExpected ?? (payBy['espèces'] ?? s.cashExpected ?? 0);
                     const cashExpectedAgg = expectedCash;
 
                     const rawCashIn = String(inputs.cashReceived ?? '').trim();
@@ -2957,13 +2960,14 @@ const AgenceComptabilitePage: React.FC = () => {
                     const ui = usersCache[s.userId] || {};
                     const name = ui.name || s.userName || s.userEmail || s.userId;
                     const code = ui.code || s.userCode || 'GUEST';
+                    const amount = aggByShift[s.id]?.amount ?? s.expectedAmount ?? s.totalAmount ?? s.totalRevenue ?? 0;
                     return (
                       <div key={s.id} className="rounded-xl border border-teal-200 bg-teal-50/30 p-4">
                         <div className="font-semibold text-gray-900">{name} <span className="text-gray-500 text-sm">({code})</span></div>
                         <div className="text-sm text-gray-600 mt-1">
                           {s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleString('fr-FR') : '—'} → {s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleString('fr-FR') : '—'}
                         </div>
-                        <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(s.totalAmount ?? s.totalRevenue ?? 0)}</div>
+                        <div className="mt-2 text-lg font-bold" style={{ color: theme?.primary }}>{money(amount)}</div>
                         <div className="mt-2 text-xs text-teal-700">Billetterie · Validé comptable · En attente chef d&apos;agence</div>
                       </div>
                     );

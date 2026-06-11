@@ -922,8 +922,8 @@ export function useAgencyActionCockpit() {
     }
 
     let cancelled = false;
-    const loadExpenses = () => {
-      setLoadingExpenses(true);
+    const loadExpenses = (showLoading = false) => {
+      if (showLoading) setLoadingExpenses(true);
       void listExpenses(companyId, {
         agencyId,
         statusIn: ["pending", "pending_manager"],
@@ -941,7 +941,7 @@ export function useAgencyActionCockpit() {
         });
     };
 
-    loadExpenses();
+    loadExpenses(true);
     const intervalId = window.setInterval(loadExpenses, 30000);
     return () => {
       cancelled = true;

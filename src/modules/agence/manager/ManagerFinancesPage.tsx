@@ -3,7 +3,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import {
-  collection, query, where, onSnapshot, limit, orderBy,
+  collection, query, where, onSnapshot, limit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -59,6 +59,35 @@ type ShiftReportDoc = {
   montant?: number;
   details?: Array<{ trajet?: string; billets?: number; montant?: number }>;
 };
+
+function getShiftReportExpectedAmount(report: Record<string, unknown>): number {
+  return Number(
+    report.expectedAmount ??
+      report.totalSalesAmount ??
+      report.totalSales ??
+      report.grossSalesAmount ??
+      report.montant ??
+      0
+  );
+}
+
+function normalizeShiftReportDetails(report: Record<string, unknown>) {
+  const source = Array.isArray(report.routeBreakdown)
+    ? report.routeBreakdown
+    : Array.isArray(report.details)
+      ? report.details
+      : [];
+  const reportAmount = getShiftReportExpectedAmount(report);
+
+  return (source as Array<Record<string, unknown>>).map((route) => ({
+    trajet: String(route.trajet ?? route.routeLabel ?? route.route ?? route.label ?? "—"),
+    billets: Number(route.tickets ?? route.billets ?? route.ticketsCount ?? 0),
+    montant: Number(route.amount ?? route.totalAmount ?? route.montant ?? route.salesAmount ?? 0),
+  })).map((route, _index, routes) => ({
+    ...route,
+    montant: route.montant === 0 && routes.length === 1 ? reportAmount : route.montant,
+  }));
+}
 type CourierSessionLite = {
   id: string;
   status?: string;
@@ -189,37 +218,26 @@ export default function ManagerFinancesPage({
       }
     });
 
-    unsubs.push(onSnapshot(
-      query(
-        collection(db, `companies/${companyId}/financialTransactions`),
-        where("agencyId", "==", agencyId),
-        orderBy("performedAt", "desc"),
-        limit(20)
-      ),
-      (s) =>
-        setLedgerRows(
-          s.docs.map((d) => {
-            const x = d.data() as Record<string, unknown>;
-            return {
-              id: d.id,
-              amount: Number(x.amount ?? 0),
-              type: x.type != null ? String(x.type) : undefined,
-              referenceType: x.referenceType != null ? String(x.referenceType) : undefined,
-              performedAt: x.performedAt,
-              paymentMethod: x.paymentMethod != null ? String(x.paymentMethod) : undefined,
-              status: x.status != null ? String(x.status) : undefined,
-            };
-          })
-        )
-    ));
+    // Le journal ledger est une donnée sensible non lisible par tous les profils chef d'agence.
+    // Ne pas ouvrir de listener ici : les KPI et validations utilisent leurs sources dédiées.
+    setLedgerRows([]);
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/shifts`),
         where("status", "in", ["closed", "validated_agency", "validated"]), limit(100)),
-      (s) => setShifts(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))));
+      (s) => setShifts(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))),
+      (error) => {
+        console.warn("[ManagerFinances] Listener shifts refusé:", error);
+        setShifts([]);
+      }
+    ));
     unsubs.push(onSnapshot(
       query(collection(db, courierSessionsRef(db, companyId, agencyId).path),
         where("status", "in", ["CLOSED", "VALIDATED_AGENCY", "VALIDATED"]), limit(100)),
-      (s) => setCourierSessions(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })))
+      (s) => setCourierSessions(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))),
+      (error) => {
+        console.warn("[ManagerFinances] Listener courierSessions refusé:", error);
+        setCourierSessions([]);
+      }
     ));
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/shiftReports`), limit(200)),
@@ -227,14 +245,24 @@ export default function ManagerFinancesPage({
         const next: Record<string, ShiftReportDoc> = {};
         snap.docs.forEach((d) => {
           const x = d.data() as Record<string, unknown>;
+          const details = normalizeShiftReportDetails(x);
           next[d.id] = {
             id: d.id,
-            billets: Number(x.billets ?? 0),
-            montant: Number(x.montant ?? 0),
-            details: Array.isArray(x.details) ? (x.details as ShiftReportDoc["details"]) : [],
+            billets: Number(
+              x.ticketsCount ??
+                x.totalTickets ??
+                x.billets ??
+                details.reduce((sum, route) => sum + Number(route.billets ?? 0), 0)
+            ),
+            montant: getShiftReportExpectedAmount(x),
+            details,
           };
         });
         setShiftReportsById(next);
+      },
+      (error) => {
+        console.warn("[ManagerFinances] Listener shiftReports refusé:", error);
+        setShiftReportsById({});
       }
     ));
 
