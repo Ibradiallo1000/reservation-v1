@@ -1018,7 +1018,10 @@ export default function ReservationClientPage() {
                   }}
                 >
                   <h4 className="mb-1.5 text-xs font-semibold text-gray-800" style={{ color: theme.secondary }}>
-                    Horaires
+                    <span className="flex items-center gap-1">
+                      <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      Horaires et places disponibles
+                    </span>
                   </h4>
                   {slotsForSelectedDate.length === 0 ? (
                     <p className="text-sm text-gray-500">Aucun départ pour cette date.</p>

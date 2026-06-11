@@ -52,14 +52,14 @@ const VilleSuggestionBar: React.FC<Props> = ({
   );
 
   return (
-    <section className="public-premium-section pt-2 sm:pt-5">
+    <section className="public-premium-section">
       <div className="public-premium-container">
-        <div className="mb-4 flex items-end justify-between gap-3 sm:mb-5">
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--public-primary-soft)] sm:h-11 sm:w-11 sm:rounded-2xl">
               <Bus size={21} style={{ color: primary }} />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="public-premium-heading text-xl sm:text-2xl">
                 {t("destinationsPopular")}
               </h2>

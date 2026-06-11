@@ -82,7 +82,12 @@ export default function AidePage({ company }: AidePageProps) {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24 md:pb-0">
+    <div
+      className="min-h-screen pb-24 md:pb-0"
+      style={{
+        background: `linear-gradient(180deg, color-mix(in srgb, ${primaryColor} 6%, white) 0%, color-mix(in srgb, ${primaryColor} 2%, white) 22rem)`,
+      }}
+    >
       <ReservationStepHeader
         onBack={() => navigate(homePath)}
         primaryColor={primaryColor}
@@ -91,118 +96,165 @@ export default function AidePage({ company }: AidePageProps) {
         logoUrl={company?.logoUrl}
       />
 
-      <main className="max-w-3xl mx-auto p-4 space-y-5 -mt-2">
-        <section className="flex items-start gap-3 p-4 rounded-2xl bg-white border border-gray-200 shadow-sm">
-          <div className="p-2 rounded-full shrink-0" style={{ backgroundColor: `${primaryColor}18` }}>
-            <HelpCircle className="w-6 h-6" style={{ color: primaryColor }} />
-          </div>
-          <div>
-            <h2 className="font-semibold text-gray-900">
-              Besoin d’aide avec {company?.nom || "votre voyage"} ?
-            </h2>
-            <p className="text-sm text-gray-600 mt-1">
-              Retrouvez votre billet, vérifiez les étapes de validation ou contactez directement la compagnie.
-            </p>
-            {support24h && (
-              <p className="text-xs font-medium mt-2" style={{ color: primaryColor }}>
-                Support indiqué comme disponible 24h/24
+      <main className="mx-auto max-w-3xl space-y-4 p-3 sm:space-y-5 sm:p-5">
+        <section
+          className="overflow-hidden rounded-3xl border bg-white p-5 shadow-[0_14px_35px_rgba(15,23,42,0.08)] sm:p-6"
+          style={{ borderColor: `color-mix(in srgb, ${primaryColor} 18%, transparent)` }}
+        >
+          <div className="flex items-start gap-4">
+            <div
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"
+              style={{
+                color: primaryColor,
+                background: `linear-gradient(135deg, color-mix(in srgb, ${primaryColor} 16%, white), color-mix(in srgb, ${secondaryColor} 14%, white))`,
+              }}
+            >
+              <HelpCircle className="h-6 w-6" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-[0.16em]" style={{ color: primaryColor }}>
+                Centre d’aide
               </p>
-            )}
+              <h1 className="mt-1 text-xl font-extrabold tracking-tight text-slate-900 sm:text-2xl">
+                Besoin d’aide avec {company?.nom || "votre voyage"} ?
+              </h1>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Retrouvez votre billet, vérifiez les étapes de validation ou contactez directement la compagnie.
+              </p>
+              {support24h && (
+                <p
+                  className="mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold"
+                  style={{ color: primaryColor, backgroundColor: `${primaryColor}12` }}
+                >
+                  Support indiqué comme disponible 24h/24
+                </p>
+              )}
+            </div>
           </div>
         </section>
 
-        <section className="grid sm:grid-cols-2 gap-3">
+        <section className="grid grid-cols-2 gap-3">
           {quickActions.map(({ label, description, icon: Icon, onClick }) => (
             <button
               key={label}
               type="button"
               onClick={onClick}
-              className="text-left rounded-2xl bg-white border border-gray-200 p-4 shadow-sm hover:shadow-md transition"
+              className="group min-w-0 rounded-2xl border bg-white p-3 text-left shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md sm:p-4"
+              style={{ borderColor: `${primaryColor}20` }}
             >
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl shrink-0" style={{ backgroundColor: `${primaryColor}12` }}>
-                  <Icon className="w-5 h-5" style={{ color: primaryColor }} />
+              <div className="flex h-full flex-col">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${primaryColor}12` }}>
+                    <Icon className="h-[18px] w-[18px]" style={{ color: primaryColor }} />
+                  </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5" />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-sm font-semibold text-gray-900">{label}</h3>
-                  <p className="mt-1 text-xs text-gray-500">{description}</p>
-                </div>
-                <ChevronRight className="w-4 h-4 shrink-0 text-gray-400" />
+                <h2 className="mt-3 text-sm font-bold leading-tight text-slate-900">{label}</h2>
+                <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
               </div>
             </button>
           ))}
         </section>
 
-        <section className="rounded-2xl bg-white border border-gray-200 overflow-hidden shadow-sm">
-          <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-            <KeyRound className="w-4 h-4" style={{ color: primaryColor }} />
-            <h3 className="text-sm font-semibold text-gray-900">Comment retrouver mon billet ?</h3>
+        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ backgroundColor: `${primaryColor}12` }}>
+              <KeyRound className="h-[18px] w-[18px]" style={{ color: primaryColor }} />
+            </span>
+            <div>
+              <p className="text-xs font-semibold text-slate-500">Guide rapide</p>
+              <h2 className="text-sm font-bold text-slate-900">Comment retrouver mon billet ?</h2>
+            </div>
           </div>
-          <ol className="p-4 space-y-3 text-sm text-gray-600">
-            <li><strong className="text-gray-900">1.</strong> Ouvrez la page « Mes billets ».</li>
-            <li><strong className="text-gray-900">2.</strong> Collez le lien privé reçu après votre réservation, ou saisissez son code privé.</li>
-            <li><strong className="text-gray-900">3.</strong> Le billet sera ensuite conservé dans le portefeuille de cet appareil.</li>
+          <ol className="space-y-3 p-4 text-sm text-slate-600 sm:p-5">
+            {[
+              "Ouvrez la page « Mes billets ».",
+              "Collez le lien privé reçu après votre réservation, ou saisissez son code privé.",
+              "Le billet sera ensuite conservé dans le portefeuille de cet appareil.",
+            ].map((step, index) => (
+              <li key={step} className="flex items-start gap-3">
+                <span
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-extrabold"
+                  style={{ color: primaryColor, backgroundColor: `${primaryColor}12` }}
+                >
+                  {index + 1}
+                </span>
+                <span className="leading-6">{step}</span>
+              </li>
+            ))}
           </ol>
         </section>
 
-        <section className="rounded-2xl bg-white border border-gray-200 overflow-hidden shadow-sm">
-          <h3 className="px-4 py-3 text-sm font-semibold text-gray-900 border-b border-gray-100">
-            Problèmes fréquents
-          </h3>
-          <div className="divide-y divide-gray-100">
+        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ backgroundColor: `${secondaryColor}18` }}>
+              <MessageCircle className="h-[18px] w-[18px]" style={{ color: secondaryColor }} />
+            </span>
+            <div>
+              <p className="text-xs font-semibold text-slate-500">Questions fréquentes</p>
+              <h2 className="text-sm font-bold text-slate-900">Problèmes fréquents</h2>
+            </div>
+          </div>
+          <div className="divide-y divide-slate-100">
             {commonProblems.map((problem) => (
-              <details key={problem.title} className="group px-4 py-3">
-                <summary className="cursor-pointer list-none flex items-center justify-between gap-3 text-sm font-medium text-gray-900">
+              <details key={problem.title} className="group px-4 py-3.5 sm:px-5">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-slate-900">
                   {problem.title}
-                  <ChevronRight className="w-4 h-4 text-gray-400 transition-transform group-open:rotate-90" />
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-90" />
                 </summary>
-                <p className="pt-2 pr-6 text-sm text-gray-600">{problem.text}</p>
+                <p className="pt-2 pr-6 text-sm leading-6 text-slate-600">{problem.text}</p>
               </details>
             ))}
           </div>
         </section>
 
-        <section className="rounded-2xl bg-white border border-gray-200 overflow-hidden shadow-sm">
-          <h3 className="px-4 py-3 text-sm font-semibold text-gray-900 border-b border-gray-100">
-            Contacter {company?.nom || "la compagnie"}
-          </h3>
-          <div className="divide-y divide-gray-100">
+        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl" style={{ backgroundColor: `${primaryColor}12` }}>
+              <Phone className="h-[18px] w-[18px]" style={{ color: primaryColor }} />
+            </span>
+            <div>
+              <p className="text-xs font-semibold text-slate-500">Assistance directe</p>
+              <h2 className="text-sm font-bold text-slate-900">Contacter {company?.nom || "la compagnie"}</h2>
+            </div>
+          </div>
+          <div className="divide-y divide-slate-100">
             {company?.telephone && (
-              <a href={`tel:${company.telephone}`} className="flex items-center gap-3 px-4 py-3 text-sm text-gray-900 hover:bg-gray-50">
-                <Phone className="w-5 h-5 text-gray-400" />
+              <a href={`tel:${company.telephone}`} className="flex min-h-14 items-center gap-3 px-4 py-3 text-sm text-slate-900 transition hover:bg-slate-50 sm:px-5">
+                <Phone className="h-5 w-5 shrink-0" style={{ color: primaryColor }} />
                 <span className="flex-1">{company.telephone}</span>
                 <span className="text-xs font-medium" style={{ color: primaryColor }}>Appeler</span>
               </a>
             )}
             {whatsapp && (
-              <a href={whatsapp} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-3 text-sm text-gray-900 hover:bg-gray-50">
-                <MessageCircle className="w-5 h-5 text-green-600" />
+              <a href={whatsapp} target="_blank" rel="noopener noreferrer" className="flex min-h-14 items-center gap-3 px-4 py-3 text-sm text-slate-900 transition hover:bg-slate-50 sm:px-5">
+                <MessageCircle className="h-5 w-5 shrink-0" style={{ color: primaryColor }} />
                 <span className="flex-1">WhatsApp</span>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
+                <ChevronRight className="h-4 w-4 text-slate-400" />
               </a>
             )}
             {company?.email && (
-              <a href={`mailto:${company.email}`} className="flex items-center gap-3 px-4 py-3 text-sm text-gray-900 hover:bg-gray-50">
-                <Mail className="w-5 h-5 text-gray-400" />
+              <a href={`mailto:${company.email}`} className="flex min-h-14 items-center gap-3 px-4 py-3 text-sm text-slate-900 transition hover:bg-slate-50 sm:px-5">
+                <Mail className="h-5 w-5 shrink-0" style={{ color: primaryColor }} />
                 <span className="flex-1 break-all">{company.email}</span>
                 <span className="text-xs font-medium" style={{ color: primaryColor }}>Écrire</span>
               </a>
             )}
             {company?.adresse && (
-              <div className="flex items-start gap-3 px-4 py-3 text-sm text-gray-700">
-                <MapPin className="w-5 h-5 text-gray-400 shrink-0" />
+              <div className="flex min-h-14 items-start gap-3 px-4 py-3 text-sm text-slate-700 sm:px-5">
+                <MapPin className="h-5 w-5 shrink-0" style={{ color: primaryColor }} />
                 <span>{company.adresse}</span>
               </div>
             )}
             {company?.horaires && (
-              <div className="flex items-start gap-3 px-4 py-3 text-sm text-gray-700">
-                <Clock className="w-5 h-5 text-gray-400 shrink-0" />
+              <div className="flex min-h-14 items-start gap-3 px-4 py-3 text-sm text-slate-700 sm:px-5">
+                <Clock className="h-5 w-5 shrink-0" style={{ color: primaryColor }} />
                 <span>{company.horaires}</span>
               </div>
             )}
             {!hasContact && (
-              <div className="px-4 py-4 flex items-center gap-3 text-gray-500">
-                <MessageCircle className="w-5 h-5" />
+              <div className="flex items-center gap-3 px-4 py-4 text-slate-500 sm:px-5">
+                <MessageCircle className="h-5 w-5" />
                 <span className="text-sm">Les coordonnées de contact n’ont pas encore été configurées.</span>
               </div>
             )}

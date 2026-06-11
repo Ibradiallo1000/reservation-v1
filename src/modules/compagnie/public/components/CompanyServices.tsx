@@ -32,14 +32,14 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
   if (!validServices.length) return null;
 
   return (
-    <section className="public-premium-section -mt-16 sm:-mt-20">
+    <section className="public-premium-section">
       <div className="public-premium-container">
         <div className="public-premium-card p-4 sm:p-5">
-          <div className="mb-4 flex min-w-0 items-center gap-3 sm:mb-5">
+          <div className="mb-4 flex min-w-0 items-start gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--public-secondary-soft)] sm:h-11 sm:w-11 sm:rounded-2xl">
               <Bus size={21} style={{ color: secondaryColor }} />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="public-premium-heading text-xl sm:text-2xl">
                 {t("onBoardServices")}
               </h2>
@@ -55,16 +55,16 @@ const CompanyServices: React.FC<CompanyServicesProps> = ({
               return (
                 <div
                   key={key}
-                  className="flex min-w-0 items-center gap-2.5 rounded-xl border border-[var(--public-line)] bg-[var(--public-surface)] px-3 py-3 transition-transform duration-300 hover:-translate-y-0.5 sm:gap-3 sm:rounded-2xl sm:px-4"
+                  className="flex min-w-0 items-center gap-2.5 rounded-xl border border-[var(--public-line)] bg-[var(--public-surface)] px-3 py-2.5 transition-transform duration-300 hover:-translate-y-0.5 sm:gap-3 sm:rounded-2xl sm:px-4 sm:py-3"
                 >
                   <div
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-10 sm:w-10"
                     style={{
                       color: primaryColor,
                       background: `linear-gradient(135deg, color-mix(in srgb, ${primaryColor} 14%, white), color-mix(in srgb, ${secondaryColor} 12%, white))`,
                     }}
                   >
-                    <Icon size={23} />
+                    <Icon size={20} />
                   </div>
                   <h3 className="text-sm font-extrabold leading-tight text-[var(--public-ink)]">
                     {t(labelKey)}

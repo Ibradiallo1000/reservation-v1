@@ -24,6 +24,7 @@ import {
   saveLocalTicketPointer,
   type LocalTicketPointer,
 } from "../utils/localTicketWallet";
+import type { Company } from "@/types/companyTypes";
 
 dayjs.locale("fr");
 
@@ -117,21 +118,35 @@ async function loadTicket(pointer: LocalTicketPointer): Promise<Reservation | nu
   return mapReservation(currentData, pointer, companyId, agencyId, reservationId);
 }
 
-const ClientMesBilletsPage: React.FC = () => {
+interface ClientMesBilletsPageProps {
+  company?: Company;
+}
+
+const getCompanyTheme = (company?: Company) => ({
+  primary: String(company?.couleurPrimaire || "#ea580c"),
+  secondary: String(company?.couleurSecondaire || "#f97316"),
+});
+
+const ClientMesBilletsPage: React.FC<ClientMesBilletsPageProps> = ({ company }) => {
   const { slug } = useParams<{ slug?: string }>();
   const navigate = useNavigate();
   const money = useFormatCurrency();
   const isOnline = useOnlineStatus();
   const pathBase = getPublicPathBase(slug || "");
 
-  const [theme, setTheme] = useState({ primary: "#ea580c", secondary: "#f97316" });
+  const [theme, setTheme] = useState(() => getCompanyTheme(company));
   const [rows, setRows] = useState<Reservation[]>([]);
   const [manualValue, setManualValue] = useState("");
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
+  const [showAllTickets, setShowAllTickets] = useState(false);
 
   useEffect(() => {
+    if (company) {
+      setTheme(getCompanyTheme(company));
+      return;
+    }
     if (!slug) return;
     void (async () => {
       try {
@@ -147,7 +162,7 @@ const ClientMesBilletsPage: React.FC = () => {
         // The wallet remains usable with the default theme.
       }
     })();
-  }, [slug]);
+  }, [company, slug]);
 
   const refreshWallet = useCallback(async () => {
     setLoading(true);
@@ -196,13 +211,14 @@ const ClientMesBilletsPage: React.FC = () => {
   };
 
   const sections = useMemo(() => {
+    const visibleRows = showAllTickets ? rows : rows.slice(0, 4);
     const grouped: Record<WalletSectionId, Reservation[]> = {
       a_venir: [],
       voyages_effectues: [],
       en_verification: [],
       annules: [],
     };
-    rows.forEach((reservation) => {
+    visibleRows.forEach((reservation) => {
       const state = getWalletDisplayState(getEffectiveStatut(reservation));
       if (state) grouped[state.section].push(reservation);
     });
@@ -212,7 +228,7 @@ const ClientMesBilletsPage: React.FC = () => {
     grouped.voyages_effectues.sort((a, b) => sortKey(b) - sortKey(a));
     grouped.annules.sort((a, b) => sortKey(b) - sortKey(a));
     return (Object.keys(grouped) as WalletSectionId[]).map((id) => ({ id, items: grouped[id] }));
-  }, [rows]);
+  }, [rows, showAllTickets]);
 
   const goToReceipt = (reservation: Reservation) => {
     const base = getPublicPathBase(reservation.companySlug || slug || "");
@@ -333,6 +349,16 @@ const ClientMesBilletsPage: React.FC = () => {
                     </ul>
                   </div>
                 ) : null
+              )}
+              {!showAllTickets && rows.length > 4 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllTickets(true)}
+                  className="mx-auto flex min-h-10 items-center justify-center rounded-xl px-5 text-sm font-semibold"
+                  style={{ color: theme.primary, backgroundColor: `${theme.primary}12` }}
+                >
+                  Voir plus
+                </button>
               )}
             </div>
           )}

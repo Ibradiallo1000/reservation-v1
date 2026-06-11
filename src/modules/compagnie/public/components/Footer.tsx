@@ -23,6 +23,7 @@ import {
 import { Company } from "@/types/companyTypes";
 import AvisClientForm from "@/shared/ui/AvisClientForm";
 import { useTranslation } from "react-i18next";
+import { getPublicPathBase } from "../utils/subdomain";
 
 interface FooterProps {
   company: Company;
@@ -57,6 +58,8 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
     showLegalLinks = true,
     customLinks = [],
   } = footerConfig;
+  const pathBase = getPublicPathBase(slug || "");
+  const aboutPath = pathBase ? `/${pathBase}/a-propos` : "/a-propos";
 
   const aboutText = (() => {
     const raw = isEn ? about?.descriptionEn?.trim() : about?.description?.trim();
@@ -96,7 +99,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
                 {aboutText}
               </p>
               <Link
-                to={`/${slug}/a-propos`}
+                to={aboutPath}
                 className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--public-line)] bg-[var(--public-primary-soft)] px-4 py-2 text-xs font-bold transition hover:-translate-y-0.5"
                 style={{ color: couleurPrimaire }}
               >

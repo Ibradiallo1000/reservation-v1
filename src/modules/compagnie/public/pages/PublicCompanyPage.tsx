@@ -266,19 +266,21 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
       <main className="flex-grow w-full min-w-0">
 
         {allowOnline && (
-          <>
-            <HeroCompanySection
-              companyName={company?.nom ?? ""}
-              primaryColor={colors.primary}
-              secondaryColor={colors.secondary}
-              heroImageUrl={company?.banniereUrl ?? company?.imagesSlider?.[0]}
-              onSearch={(departure, arrival) => {
-                const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
-                const path = pathBase ? `/${pathBase}/booking?${q}` : `/booking?${q}`;
-                navigate(path, { state: { companyFromSearch: company } });
-              }}
-            />
+          <HeroCompanySection
+            companyName={company?.nom ?? ""}
+            primaryColor={colors.primary}
+            secondaryColor={colors.secondary}
+            heroImageUrl={company?.banniereUrl ?? company?.imagesSlider?.[0]}
+            onSearch={(departure, arrival) => {
+              const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
+              const path = pathBase ? `/${pathBase}/booking?${q}` : `/booking?${q}`;
+              navigate(path, { state: { companyFromSearch: company } });
+            }}
+          />
+        )}
 
+        <div className="public-premium-content-stack">
+          {allowOnline && (
             <VilleSuggestionBar
               suggestions={suggestedTrips}
               loading={suggestionsLoading}
@@ -290,37 +292,35 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
                 navigate(path, { state: { companyFromSearch: company } });
               }}
             />
-          </>
-        )}
-
-        {/* SERVICES */}
-        {Array.isArray(company.services) &&
-          company.services.length > 0 && (
-            <CompanyServices
-              services={company.services}
-              primaryColor={colors.primary}
-              secondaryColor={colors.secondary}
-            />
           )}
 
-        {/* POURQUOI CHOISIR (MÉTRIQUES DE CONFIANCE) */}
-        <CompanyAboutSection
-          about={company.about}
-          companyName={company.nom}
+          {/* SERVICES */}
+          {Array.isArray(company.services) &&
+            company.services.length > 0 && (
+              <CompanyServices
+                services={company.services}
+                primaryColor={colors.primary}
+                secondaryColor={colors.secondary}
+              />
+            )}
+
+          {/* POURQUOI CHOISIR (MÉTRIQUES DE CONFIANCE) */}
+          <CompanyAboutSection
+            about={company.about}
+            companyName={company.nom}
+            primaryColor={colors.primary}
+            secondaryColor={colors.secondary}
+          />
+        </div>
+
+        {/* AVIS CLIENTS */}
+        <AvisListePublic
+          companyId={company.id}
           primaryColor={colors.primary}
           secondaryColor={colors.secondary}
         />
 
-        <div className="public-premium-dark">
-          {/* AVIS CLIENTS */}
-          <AvisListePublic
-            companyId={company.id}
-            primaryColor={colors.primary}
-            secondaryColor={colors.secondary}
-          />
-
-          <Footer company={company} />
-        </div>
+        <Footer company={company} />
 
         <AnimatePresence>
           {showAgences && (

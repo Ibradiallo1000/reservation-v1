@@ -7,7 +7,7 @@
   --public-surface: color-mix(in srgb, var(--public-primary) 2%, white);
   --public-dark: color-mix(in srgb, var(--public-primary) 16%, black);
   --public-dark-deep: color-mix(in srgb, var(--public-secondary) 8%, black);
-  --public-shadow: 0 22px 60px color-mix(in srgb, var(--public-primary) 15%, transparent);
+  --public-shadow: 0 12px 32px color-mix(in srgb, var(--public-primary) 10%, transparent);
   background: var(--public-surface);
   color: var(--public-ink);
 }
@@ -39,6 +39,16 @@
 
 .public-premium-section {
   padding: 2rem 0.75rem;
+}
+
+.public-premium-content-stack {
+  display: grid;
+  gap: 1rem;
+  padding-block: 1rem 1.75rem;
+}
+
+.public-premium-content-stack > .public-premium-section {
+  padding-block: 0;
 }
 
 .public-premium-container {
@@ -83,7 +93,7 @@
 .public-premium-dark {
   position: relative;
   overflow: hidden;
-  margin-top: 2rem;
+  margin-top: 0.5rem;
   padding-top: 1rem;
   border-radius: 2.75rem 2.75rem 0 0;
   color: white;
@@ -119,12 +129,21 @@
     padding: 3.25rem 1.5rem;
   }
 
+  .public-premium-content-stack {
+    gap: 1.5rem;
+    padding-block: 1.5rem 3rem;
+  }
+
+  .public-premium-content-stack > .public-premium-section {
+    padding-block: 0;
+  }
+
   .public-premium-card {
     border-radius: 1.75rem;
   }
 
   .public-premium-dark {
-    margin-top: 4rem;
+    margin-top: 1rem;
     padding-top: 2rem;
   }
 }

@@ -60,8 +60,9 @@ const AvisListePublic: React.FC<Props> = ({ companyId, primaryColor, secondaryCo
   const featuredReview = avis[0];
 
   return (
-    <section className="public-premium-section relative z-10 pb-4 pt-12 sm:pt-16">
-      <div className="public-premium-container">
+    <div className="public-premium-dark">
+      <section className="public-premium-section relative z-10 pb-4 pt-10 sm:pt-12">
+        <div className="public-premium-container">
         <div className="mb-5 flex items-center gap-3 text-white">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10">
             <MessageCircle size={20} style={{ color: secondaryColor }} />
@@ -111,8 +112,9 @@ const AvisListePublic: React.FC<Props> = ({ companyId, primaryColor, secondaryCo
             />
           ))}
         </div>
-      </div>
-    </section>
+        </div>
+      </section>
+    </div>
   );
 };
 

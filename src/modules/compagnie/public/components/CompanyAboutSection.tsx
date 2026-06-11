@@ -37,16 +37,21 @@ const CompanyAboutSection: React.FC<CompanyAboutSectionProps> = ({
   ];
 
   return (
-    <section className="public-premium-section -mt-12 pb-5 sm:-mt-16 sm:pb-10">
+    <section className="public-premium-section">
       <div className="public-premium-container">
         <div className="public-premium-card p-4 sm:p-5">
-          <div className="mb-4 sm:mb-5">
-            <h2 className="public-premium-heading text-xl sm:text-2xl">
-              {t("whyChooseUs")}
-            </h2>
-            <p className="mt-1 text-xs text-[var(--public-muted)] sm:text-sm">
-              {t("whyChooseUsSubtitle")}
-            </p>
+          <div className="mb-4 flex items-start gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--public-primary-soft)] sm:h-11 sm:w-11 sm:rounded-2xl">
+              <ShieldCheck className="h-5 w-5 sm:h-6 sm:w-6" style={{ color: primaryColor }} aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <h2 className="public-premium-heading text-xl sm:text-2xl">
+                {t("whyChooseUs")}
+              </h2>
+              <p className="mt-1 text-xs text-[var(--public-muted)] sm:text-sm">
+                {t("whyChooseUsSubtitle")}
+              </p>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
@@ -55,7 +60,7 @@ const CompanyAboutSection: React.FC<CompanyAboutSectionProps> = ({
                 return (
                   <div
                     key={advantage.title}
-                    className="flex min-w-0 items-center gap-2 rounded-xl border border-[var(--public-line)] bg-[var(--public-surface)] px-2.5 py-2.5 sm:gap-3 sm:rounded-2xl sm:px-4"
+                    className="flex min-w-0 items-center gap-2.5 rounded-xl border border-[var(--public-line)] bg-[var(--public-surface)] px-3 py-2.5 sm:gap-3 sm:rounded-2xl sm:px-4 sm:py-3"
                   >
                     <span
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full sm:h-9 sm:w-9"

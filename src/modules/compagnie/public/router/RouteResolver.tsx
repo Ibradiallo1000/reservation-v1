@@ -333,10 +333,10 @@ export default function RouteResolver() {
       content = <ClientMesReservationsPage />;
       break;
     case "retrouver-reservation":
-      content = <ClientMesBilletsPage />;
+      content = <ClientMesBilletsPage company={company} />;
       break;
     case "mes-billets":
-      content = <ClientMesBilletsPage />;
+      content = <ClientMesBilletsPage company={company} />;
       break;
     case "mentions":
       content = <MentionsPage />;
