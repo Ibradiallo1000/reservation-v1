@@ -261,7 +261,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         t={t}
       />
 
-      {/* Hero full-bleed from top; header is fixed transparent */}
+      {/* Header navigation distinct, puis Hero et contenu public */}
       <div className="pt-0 flex flex-col flex-grow min-h-0 w-full min-w-0">
       <main className="flex-grow w-full min-w-0">
 

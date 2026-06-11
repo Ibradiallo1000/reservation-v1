@@ -52,13 +52,36 @@ export async function fetchReservationDocsForShiftSlot(
   companyId: string,
   agencyId: string,
   shiftId: string,
-  opts?: { perQueryLimit?: number }
+  opts?: { perQueryLimit?: number; auditLabel?: string }
 ): Promise<QueryDocumentSnapshot<DocumentData>[]> {
   const lim = opts?.perQueryLimit ?? 500;
   const rRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
+  const readForAudit = async (field: 'sessionId' | 'shiftId') => {
+    if (opts?.auditLabel) {
+      console.error(`[closeSession audit] BEFORE ${opts.auditLabel} reservations.${field} query`, {
+        path: `companies/${companyId}/agences/${agencyId}/reservations`,
+        type: 'getDocs',
+        where: { [field]: shiftId },
+        limit: lim,
+      });
+    }
+    try {
+      return await getDocs(query(rRef, where(field, '==', shiftId), limit(lim)));
+    } catch (error) {
+      if (opts?.auditLabel) {
+        console.error(`[closeSession audit] FAILED ${opts.auditLabel} reservations.${field} query`, {
+          path: `companies/${companyId}/agences/${agencyId}/reservations`,
+          where: { [field]: shiftId },
+          limit: lim,
+          error,
+        });
+      }
+      throw error;
+    }
+  };
   const [a, b] = await Promise.all([
-    getDocs(query(rRef, where('sessionId', '==', shiftId), limit(lim))),
-    getDocs(query(rRef, where('shiftId', '==', shiftId), limit(lim))),
+    readForAudit('sessionId'),
+    readForAudit('shiftId'),
   ]);
   const byId = new Map<string, QueryDocumentSnapshot<DocumentData>>();
   for (const d of [...a.docs, ...b.docs]) {

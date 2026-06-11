@@ -18,7 +18,7 @@
 
 .public-premium-card {
   border: 1px solid var(--public-line);
-  border-radius: 1.75rem;
+  border-radius: 1.4rem;
   background: color-mix(in srgb, white 96%, var(--public-primary));
   box-shadow: var(--public-shadow);
 }
@@ -38,7 +38,7 @@
 }
 
 .public-premium-section {
-  padding: 1rem 0.75rem;
+  padding: 2rem 0.75rem;
 }
 
 .public-premium-container {
@@ -50,6 +50,34 @@
   color: var(--public-ink);
   font-weight: 800;
   letter-spacing: -0.035em;
+}
+
+.public-premium-scroll-row {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 0.2rem 0.15rem 0.9rem;
+  scroll-snap-type: inline proximity;
+  scrollbar-width: thin;
+  scrollbar-color: var(--public-primary-soft) transparent;
+}
+
+.public-premium-scroll-row > * {
+  scroll-snap-align: start;
+}
+
+.public-premium-scroll-row::-webkit-scrollbar {
+  height: 0.35rem;
+}
+
+.public-premium-scroll-row::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--public-primary-soft);
+}
+
+.public-premium-scroll-row::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .public-premium-dark {
@@ -88,7 +116,11 @@
 
 @media (min-width: 640px) {
   .public-premium-section {
-    padding: 3rem 1.5rem;
+    padding: 3.25rem 1.5rem;
+  }
+
+  .public-premium-card {
+    border-radius: 1.75rem;
   }
 
   .public-premium-dark {

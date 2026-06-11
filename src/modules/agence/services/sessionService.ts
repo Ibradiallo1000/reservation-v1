@@ -371,18 +371,43 @@ function isSoldReservationStatus(statut: unknown): boolean {
   return s === 'paye' || s === 'payé' || s === 'confirme' || s === 'confirmé';
 }
 
+function closeSessionAudit(step: string, details: Record<string, unknown>): void {
+  console.error(`[closeSession audit] BEFORE ${step}`, details);
+}
+
+function closeSessionAuditFailure(step: string, error: unknown, details: Record<string, unknown>): void {
+  console.error(`[closeSession audit] FAILED ${step}`, {
+    ...details,
+    error,
+  });
+}
+
 async function computeLedgerSessionTotalsFromReservations(params: {
   companyId: string;
   agencyId: string;
   shiftId: string;
   shiftAgentId: string;
 }): Promise<CloseSessionTotals> {
-  const mergedDocs = await fetchReservationDocsForShiftSlot(
-    params.companyId,
-    params.agencyId,
-    params.shiftId,
-    { perQueryLimit: 500 }
-  );
+  const reservationsPath = `companies/${params.companyId}/agences/${params.agencyId}/reservations`;
+  closeSessionAudit('ledger reservation queries', {
+    path: reservationsPath,
+    operations: [
+      { type: 'getDocs', where: { sessionId: params.shiftId }, limit: 500 },
+      { type: 'getDocs', where: { shiftId: params.shiftId }, limit: 500 },
+    ],
+  });
+  let mergedDocs;
+  try {
+    mergedDocs = await fetchReservationDocsForShiftSlot(
+      params.companyId,
+      params.agencyId,
+      params.shiftId,
+      { perQueryLimit: 500, auditLabel: 'ledger totals' }
+    );
+  } catch (error) {
+    closeSessionAuditFailure('ledger reservation queries', error, { path: reservationsPath });
+    throw error;
+  }
   const mergedById = new Map<string, { id: string } & Omit<ReservationSessionRow, 'id'>>();
   for (const d of mergedDocs) {
     const row = { id: d.id, ...(d.data() as Omit<ReservationSessionRow, 'id'>) };
@@ -411,14 +436,38 @@ async function computeLedgerSessionTotalsFromReservations(params: {
   let totalCash = 0;
   let totalDigital = 0;
   for (const r of reservations) {
-    const txSnap = await getDocs(
-      query(
-        collection(db, `companies/${params.companyId}/${FINANCIAL_TRANSACTIONS_COLLECTION}`),
-        where('type', '==', 'payment_received'),
-        where('reservationId', '==', r.id),
-        limit(25)
-      )
-    );
+    const ledgerPath = `companies/${params.companyId}/${FINANCIAL_TRANSACTIONS_COLLECTION}`;
+    const ledgerFilters = {
+      type: 'payment_received',
+      reservationId: r.id,
+      agencyId: params.agencyId,
+      companyId: params.companyId,
+      limit: 25,
+    };
+    closeSessionAudit('financialTransactions query', {
+      path: ledgerPath,
+      type: 'getDocs',
+      where: ledgerFilters,
+    });
+    let txSnap;
+    try {
+      txSnap = await getDocs(
+        query(
+          collection(db, ledgerPath),
+          where('type', '==', 'payment_received'),
+          where('reservationId', '==', r.id),
+          where('agencyId', '==', params.agencyId),
+          where('companyId', '==', params.companyId),
+          limit(25)
+        )
+      );
+    } catch (error) {
+      closeSessionAuditFailure('financialTransactions query', error, {
+        path: ledgerPath,
+        where: ledgerFilters,
+      });
+      throw error;
+    }
     let reservationLedger = 0;
     for (const d of txSnap.docs) {
       const row = d.data() as FinancialTransactionDoc;
@@ -462,7 +511,7 @@ async function getReservationsBySession(params: {
     params.companyId,
     params.agencyId,
     params.sessionId,
-    { perQueryLimit: RESERVATION_LIMIT }
+    { perQueryLimit: RESERVATION_LIMIT, auditLabel: 'expected amount' }
   );
   const byId = new Map<string, SessionReservationAmountRow & { id: string }>();
   for (const d of mergedDocs) {
@@ -480,7 +529,21 @@ export async function calculateSessionTotals(params: {
   sessionId: string;
   agentId: string;
 }): Promise<number> {
-  const reservations = await getReservationsBySession(params);
+  const reservationsPath = `companies/${params.companyId}/agences/${params.agencyId}/reservations`;
+  closeSessionAudit('expected amount reservation queries', {
+    path: reservationsPath,
+    operations: [
+      { type: 'getDocs', where: { sessionId: params.sessionId }, limit: RESERVATION_LIMIT },
+      { type: 'getDocs', where: { shiftId: params.sessionId }, limit: RESERVATION_LIMIT },
+    ],
+  });
+  let reservations;
+  try {
+    reservations = await getReservationsBySession(params);
+  } catch (error) {
+    closeSessionAuditFailure('expected amount reservation queries', error, { path: reservationsPath });
+    throw error;
+  }
   const validReservations = reservations.filter((doc) => {
     const r = normalizeReservation(doc);
     const statut = String(r.reservation.status ?? '').toLowerCase();
@@ -513,8 +576,27 @@ export async function closeSession(params: {
   const shiftsRef = collection(db, `${base}/${SHIFTS_COLLECTION}`);
   const shiftRef = doc(shiftsRef, params.shiftId);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
-  const shiftPreSnap = await getDoc(shiftRef);
+  closeSessionAudit('shift pre-read', {
+    path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+    type: 'getDoc',
+  });
+  let shiftPreSnap;
+  try {
+    shiftPreSnap = await getDoc(shiftRef);
+  } catch (error) {
+    closeSessionAuditFailure('shift pre-read', error, {
+      path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+    });
+    throw error;
+  }
   if (!shiftPreSnap.exists()) throw new Error('Poste introuvable.');
+  closeSessionAudit('shift pre-read identity check', {
+    path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+    documentCompanyId: shiftPreSnap.data().companyId ?? null,
+    documentAgencyId: shiftPreSnap.data().agencyId ?? null,
+    expectedCompanyId: params.companyId,
+    expectedAgencyId: params.agencyId,
+  });
   const shiftAgentId = String((shiftPreSnap.data() as { userId?: string }).userId ?? '');
   if (!shiftAgentId) {
     throw new Error('Poste sans vendeur associé : impossible de calculer les totaux guichet.');
@@ -539,10 +621,46 @@ export async function closeSession(params: {
   const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
   let shiftAgentName: string | null = null;
 
-  await runTransaction(db, async (tx) => {
+  closeSessionAudit('close transaction', {
+    type: 'runTransaction',
+    reads: [
+      `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+      `companies/${params.companyId}/agences/${params.agencyId}`,
+    ],
+    writes: [
+      `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`,
+      `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+      `${base}/dailyStats/{agency-local-date}`,
+      `${base}/agencyLiveState/current`,
+    ],
+  });
+  try {
+    await runTransaction(db, async (tx) => {
+    closeSessionAudit('transaction reads', {
+      type: 'transaction.get',
+      paths: [
+        `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+        `companies/${params.companyId}/agences/${params.agencyId}`,
+      ],
+    });
     const [shiftSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(agencyRef)]);
     if (!shiftSnap.exists()) throw new Error('Poste introuvable.');
     const shiftData = shiftSnap.data() as Record<string, unknown>;
+    closeSessionAudit('transaction identity check', {
+      shift: {
+        companyId: shiftData.companyId ?? null,
+        agencyId: shiftData.agencyId ?? null,
+        userId: shiftData.userId ?? null,
+      },
+      agency: {
+        exists: agencySnap.exists(),
+        companyId: agencySnap.data()?.companyId ?? agencySnap.data()?.compagnieId ?? null,
+        agencyId: agencySnap.data()?.agencyId ?? agencySnap.id,
+      },
+      expectedCompanyId: params.companyId,
+      expectedAgencyId: params.agencyId,
+      authenticatedUserId: params.userId,
+    });
     shiftAgentName = (shiftData.userName ?? null) as string | null;
     const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
     const status = shiftData.status as string;
@@ -559,6 +677,11 @@ export async function closeSession(params: {
     const now = Timestamp.now();
     const startAt = (shiftData.startAt ?? shiftData.startTime ?? now) as Timestamp;
 
+    closeSessionAudit('transaction shiftReport merge', {
+      path: `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`,
+      type: 'transaction.set merge',
+      identityFields: { shiftId: params.shiftId, companyId: params.companyId, agencyId: params.agencyId },
+    });
     tx.set(reportRef, stripUndefined({
       shiftId: params.shiftId,
       companyId: params.companyId,
@@ -592,6 +715,12 @@ export async function closeSession(params: {
     }), { merge: true });
 
     const nextLegacyStatus = SHIFT_STATUS.CLOSED;
+    closeSessionAudit('transaction shift close update', {
+      path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+      type: 'transaction.update',
+      identityFieldsPreserved: { companyId: shiftData.companyId ?? null, agencyId: shiftData.agencyId ?? null },
+      statusTransition: { from: shiftData.status ?? null, to: nextLegacyStatus },
+    });
     tx.update(shiftRef, stripUndefined({
       status: nextLegacyStatus,
       endAt: now,
@@ -615,7 +744,17 @@ export async function closeSession(params: {
     }));
 
     const statsDate = timestampToDailyStatsDateKey(now, agencyTz);
+    closeSessionAudit('transaction dailyStats merge', {
+      path: `${base}/dailyStats/${statsDate}`,
+      type: 'transaction.set merge',
+      identityFields: { companyId: params.companyId, agencyId: params.agencyId, date: statsDate },
+    });
     updateDailyStatsOnSessionClosed(tx, params.companyId, params.agencyId, statsDate, agencyTz);
+    closeSessionAudit('transaction agencyLiveState merge', {
+      path: `${base}/agencyLiveState/current`,
+      type: 'transaction.set merge',
+      identityFields: { companyId: params.companyId, agencyId: params.agencyId },
+    });
     updateAgencyLiveStateOnSessionClosed(tx, params.companyId, params.agencyId);
 
     resultTotals = {
@@ -627,7 +766,27 @@ export async function closeSession(params: {
       details: ledgerTotals.details,
     };
   });
+  } catch (error) {
+    closeSessionAuditFailure('close transaction commit', error, {
+      reads: [
+        `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+        `companies/${params.companyId}/agences/${params.agencyId}`,
+      ],
+      writes: [
+        `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`,
+        `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
+        `${base}/dailyStats/{agency-local-date}`,
+        `${base}/agencyLiveState/current`,
+      ],
+    });
+    throw error;
+  }
 
+  closeSessionAudit('agentHistory create (non-blocking)', {
+    path: `${base}/agentHistory/{autoId}`,
+    type: 'addDoc',
+    identityFields: { companyId: params.companyId, agencyId: params.agencyId },
+  });
   logAgentHistoryEvent({
     companyId: params.companyId,
     agencyId: params.agencyId,

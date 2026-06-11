@@ -14,7 +14,9 @@ import {
   MapPin,
   MessageCircle,
   Phone,
+  Scale,
   Send,
+  Share2,
   Twitter,
   Youtube,
 } from "lucide-react";
@@ -57,9 +59,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
   } = footerConfig;
 
   const aboutText = (() => {
-    const raw =
-      (isEn ? about?.descriptionEn?.trim() : about?.description?.trim()) ||
-      t("defaultAbout");
+    const raw = isEn ? about?.descriptionEn?.trim() : about?.description?.trim();
     if (!raw || raw.length <= 190) return raw;
     return `${raw.slice(0, 190).trim()}…`;
   })();
@@ -76,28 +76,29 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
   ].filter(Boolean) as { label: string; href?: string; icon: React.ElementType }[];
 
   return (
-    <footer className="relative z-10 w-full text-white">
-      <div className="public-premium-container px-4 pb-10 pt-8 sm:px-6 sm:pb-14 sm:pt-12">
-        <div className="grid gap-5 lg:grid-cols-2">
-          {showAbout && (
+    <footer className="relative z-10 w-full rounded-t-[2rem] border-t border-[var(--public-line)] bg-[var(--public-surface)] text-[var(--public-ink)] shadow-[0_-18px_50px_color-mix(in_srgb,var(--public-primary)_10%,transparent)] sm:rounded-t-[2.75rem]">
+      <div className="public-premium-container px-3 pb-8 pt-6 sm:px-6 sm:pb-10 sm:pt-9">
+        <div className="grid gap-4 lg:grid-cols-2">
+          {showAbout && aboutText && (
             <motion.section
               initial={{ opacity: 0, y: 18 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
-              className="public-premium-glass-dark rounded-[1.75rem] p-7 sm:p-10"
+              className="public-premium-card p-5 sm:p-6"
             >
-              <div className="mb-5 flex items-center gap-3">
-                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10">
+              <div className="mb-3 flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--public-primary-soft)]">
                   <Info className="h-5 w-5" style={{ color: couleurSecondaire }} />
                 </span>
-                <h3 className="text-2xl font-extrabold tracking-tight">{t("about")}</h3>
+                <h3 className="text-lg font-extrabold tracking-tight sm:text-xl">{t("about")}</h3>
               </div>
-              <p className="line-clamp-4 text-sm leading-7 text-white/75 sm:text-base sm:leading-8">
+              <p className="line-clamp-4 text-sm leading-6 text-[var(--public-muted)]">
                 {aboutText}
               </p>
               <Link
                 to={`/${slug}/a-propos`}
-                className="mt-7 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/15"
+                className="mt-4 inline-flex items-center gap-2 rounded-full border border-[var(--public-line)] bg-[var(--public-primary-soft)] px-4 py-2 text-xs font-bold transition hover:-translate-y-0.5"
+                style={{ color: couleurPrimaire }}
               >
                 {t("learnMore")}
                 <ChevronRight className="h-4 w-4" />
@@ -110,26 +111,28 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
               initial={{ opacity: 0, y: 18 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
-              className="public-premium-glass-dark rounded-[1.75rem] p-6 sm:p-8"
+              className="public-premium-card p-5 sm:p-6"
             >
-              <div className="mb-4 flex items-center gap-3">
-                <Phone className="h-5 w-5" style={{ color: couleurSecondaire }} />
-                <h3 className="text-xl font-extrabold">{t("contact")}</h3>
+              <div className="mb-3 flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--public-secondary-soft)]">
+                  <Phone className="h-5 w-5" style={{ color: couleurSecondaire }} />
+                </span>
+                <h3 className="text-lg font-extrabold sm:text-xl">{t("contact")}</h3>
               </div>
-              <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]">
+              <div className="overflow-hidden rounded-2xl border border-[var(--public-line)] bg-[var(--public-surface)]">
                 {contactRows.map(({ label, href, icon: Icon }, index) => {
                   const content = (
                     <>
                       <Icon className="h-5 w-5 shrink-0" style={{ color: couleurSecondaire }} />
                       <span className="min-w-0 flex-1 truncate text-sm font-semibold">{label}</span>
                       {href && (
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--public-secondary-soft)]">
                           <Send className="h-4 w-4" style={{ color: couleurSecondaire }} />
                         </span>
                       )}
                     </>
                   );
-                  const className = `flex min-h-16 items-center gap-3 px-4 ${index > 0 ? "border-t border-white/10" : ""}`;
+                  const className = `flex min-h-14 items-center gap-3 px-4 ${index > 0 ? "border-t border-[var(--public-line)]" : ""}`;
                   return href ? (
                     <a key={label} href={href} className={className} target={href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">
                       {content}
@@ -148,11 +151,11 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
             initial={{ opacity: 0, y: 18 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            className="mt-5"
+            className="public-premium-card mt-4 p-4 sm:p-5"
           >
             <motion.button
               onClick={() => setShowAvisForm(!showAvisForm)}
-              className="public-premium-gradient flex min-h-16 w-full items-center gap-3 rounded-2xl px-5 text-left text-base font-extrabold text-white shadow-2xl sm:px-7 sm:text-lg"
+              className="public-premium-gradient flex min-h-12 w-full items-center gap-3 rounded-xl px-4 text-left text-sm font-extrabold text-white shadow-md sm:px-5 sm:text-base"
               whileHover={{ y: -2 }}
               whileTap={{ scale: 0.99 }}
             >
@@ -161,7 +164,7 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
               {showAvisForm ? <ChevronUp /> : <ChevronDown />}
             </motion.button>
             {showAvisForm && (
-              <div className="public-premium-glass-dark mt-4 rounded-[1.75rem] p-5">
+              <div className="mt-4 rounded-2xl border border-[var(--public-line)] bg-[var(--public-surface)] p-4">
                 <AvisClientForm companyId={companyId} primaryColor={couleurPrimaire} />
               </div>
             )}
@@ -169,32 +172,47 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
         )}
 
         {showSocial && Object.values(socialMedia).some(Boolean) && (
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
-            {[
-              [socialMedia.facebook, Facebook],
-              [socialMedia.instagram, Instagram],
-              [socialMedia.twitter, Twitter],
-              [socialMedia.linkedin, Linkedin],
-              [socialMedia.youtube, Youtube],
-            ].map(([url, Icon], index) =>
-              url ? (
-                <a
-                  key={index}
-                  href={String(url)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/15"
-                >
-                  <Icon className="h-5 w-5" />
-                </a>
-              ) : null
-            )}
+          <div className="public-premium-card mt-4 p-4 sm:p-5">
+            <div className="mb-3 flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--public-primary-soft)]">
+                <Share2 className="h-5 w-5" style={{ color: couleurPrimaire }} />
+              </span>
+              <h3 className="text-lg font-extrabold">{t("followUs")}</h3>
+            </div>
+            <div className="flex flex-wrap gap-2.5">
+              {[
+                [socialMedia.facebook, Facebook],
+                [socialMedia.instagram, Instagram],
+                [socialMedia.twitter, Twitter],
+                [socialMedia.linkedin, Linkedin],
+                [socialMedia.youtube, Youtube],
+              ].map(([url, Icon], index) =>
+                url ? (
+                  <a
+                    key={index}
+                    href={String(url)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--public-line)] bg-[var(--public-surface)] transition hover:-translate-y-0.5"
+                    style={{ color: couleurPrimaire }}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </a>
+                ) : null
+              )}
+            </div>
           </div>
         )}
 
         {(showLegalLinks || customLinks.length > 0) && (
-          <div className="mt-10 border-t border-white/10 pt-7 text-center text-xs text-white/45 sm:text-sm">
-            <div className="flex flex-wrap justify-center gap-x-6 gap-y-3">
+          <div className="public-premium-card mt-4 p-4 sm:p-5">
+            <div className="mb-3 flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--public-secondary-soft)]">
+                <Scale className="h-5 w-5" style={{ color: couleurSecondaire }} />
+              </span>
+              <h3 className="text-lg font-extrabold">{t("legalLinks")}</h3>
+            </div>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs font-semibold text-[var(--public-muted)] sm:text-sm">
               {showLegalLinks && (
                 <>
                   <a href={`/${slug}/mentions-legales`}>{t("legalNotice")}</a>
@@ -209,9 +227,13 @@ const Footer: React.FC<FooterProps> = ({ company }) => {
                 </a>
               ))}
             </div>
-            <p className="mt-5">© {currentYear} {nom || t("ourCompany")} — {t("allRightsReserved")}</p>
           </div>
         )}
+
+        <div className="mt-6 border-t border-[var(--public-line)] pt-5 text-center text-xs text-[var(--public-muted)]">
+          <p>© {currentYear} {nom || t("ourCompany")} — {t("allRightsReserved")}</p>
+          <p className="mt-1 text-[11px] opacity-75">{t("poweredByTeliya")}</p>
+        </div>
       </div>
     </footer>
   );
