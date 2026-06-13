@@ -24,8 +24,10 @@ const MENU: NavSection[] = [
   { label: "Facturation", icon: DollarSign, path: "finances" },
   { label: "Plans & tarifs", icon: DollarSign, path: "plans" },
   { label: "Médias", icon: ImageIcon, path: "media" },
+  { label: "Moyens de paiement", icon: CreditCard, path: "payment-methods" },
   { label: "Paramètres", icon: Settings, path: "parametres-platforme" },
 ];
+
 
 const AdminSidebarLayout: React.FC = () => {
   const { user, logout } = useAuth() as any;

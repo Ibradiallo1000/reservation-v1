@@ -652,11 +652,16 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
   const companyId = params.companyId;
   const currency = params.currency ?? "XOF";
 
-  const idemSnap = await tx.get(idempotencyRef(companyId, uniqueReferenceKey));
+  const idemRef = idempotencyRef(companyId, uniqueReferenceKey);
+  console.log('[FINANCIAL_TX_IDEMPOTENCY]', uniqueReferenceKey);
+  console.log('[FINANCIAL_TX_READ]', idemRef.path);
+  const idemSnap = await tx.get(idemRef);
+
   if (idemSnap.exists()) {
     const existingId = String((idemSnap.data() as { transactionId?: string }).transactionId ?? "");
     return { transactionId: existingId, skippedDuplicate: true };
   }
+
 
   let debitId: string;
   let creditId: string;
@@ -688,7 +693,17 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
 
   const debitRef = ledgerAccountDocRef(companyId, debitId);
   const creditRef = ledgerAccountDocRef(companyId, creditId);
-  const [debitSnap, creditSnap] = await Promise.all([tx.get(debitRef), tx.get(creditRef)]);
+
+  console.log('[FINANCIAL_TX_DEBIT_ID]', debitId);
+  console.log('[FINANCIAL_TX_CREDIT_ID]', creditId);
+  console.log('[FINANCIAL_TX_READ]', debitRef.path);
+  console.log('[FINANCIAL_TX_READ]', creditRef.path);
+
+  const [debitSnap, creditSnap] = await Promise.all([
+    tx.get(debitRef),
+    tx.get(creditRef),
+  ]);
+
 
   assertExistingLedgerAccountMatchesSpec(debitSnap, debitId, s0.type);
   assertExistingLedgerAccountMatchesSpec(creditSnap, creditId, s1.type);

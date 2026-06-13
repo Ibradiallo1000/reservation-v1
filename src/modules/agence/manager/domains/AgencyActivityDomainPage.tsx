@@ -7,13 +7,9 @@ import {
   Clock3,
   Eye,
   Lock,
-  Package,
   Radio,
   Receipt,
-  Smartphone,
-  Ticket,
   TrendingDown,
-  Wallet,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -26,7 +22,6 @@ import {
   type AgencyActionPanel,
   type AgencyActivePostItem,
   type AgencyAlertItem,
-  type AgencyLiveActivityMetric,
   type AgencyLiveTripItem,
   type AgencyPendingExpenseItem,
   type AgencyProblemItem,
@@ -56,14 +51,6 @@ function postStartedAt(post: AgencyActivePostItem): Date | null {
     toDateOrNull(post.openedAt) ??
     toDateOrNull(post.createdAt)
   );
-}
-
-function formatDurationLabel(durationMs: number): string {
-  const safeMs = Math.max(0, durationMs);
-  const hours = Math.floor(safeMs / 3600000);
-  const minutes = Math.floor((safeMs % 3600000) / 60000);
-  if (hours > 0) return `${hours}h${String(minutes).padStart(2, "0")}`;
-  return `${minutes} min`;
 }
 
 function sectionTitle(title: string, subtitle: string) {
@@ -114,62 +101,19 @@ function tripToneClasses(tone: AgencyLiveTripItem["tone"]) {
   };
 }
 
-function LiveMetricCard({
-  title,
-  metric,
-  accent,
-  icon: Icon,
-  countLabel,
-  insight,
-  money,
-}: {
-  title: string;
-  metric: AgencyLiveActivityMetric;
-  accent: string;
-  icon: typeof Ticket;
-  countLabel: string;
-  insight?: React.ReactNode;
-  money: (value: number) => string;
-}) {
-  const effectiveCountLabel =
-    title === "En ligne"
-      ? "billets payés"
-      : title === "Total"
-        ? "activité vendue"
-        : countLabel;
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-slate-600 dark:text-slate-400">{title}</p>
-          <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">{metric.count}</p>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{effectiveCountLabel}</p>
-        </div>
-        <div className={`rounded-xl p-3 ${accent}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-      <div className="mt-5">
-        <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Montant en cours</p>
-        <p className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{money(metric.amount)}</p>
-        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{metric.extraLabel}</p>
-      </div>
-      {insight ? <div className="mt-4">{insight}</div> : null}
-    </div>
-  );
-}
-
 function LiveTripCard({
   trip,
   money,
+  onOpen,
 }: {
   trip: AgencyLiveTripItem;
   money: (value: number) => string;
+  onOpen: () => void;
 }) {
   const tone = tripToneClasses(trip.tone);
   const fillPercent = Math.round(trip.fillRate * 100);
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-slate-900 dark:text-white">{trip.routeLabel}</p>
@@ -210,6 +154,13 @@ function LiveTripCard({
           </span>
         ) : null}
       </div>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="mt-4 inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 sm:w-auto"
+      >
+        Voir le départ
+      </button>
     </div>
   );
 }
@@ -222,7 +173,7 @@ function TodoActionCard({
   onOpen: (panel: AgencyActionPanel) => void;
 }) {
   return (
-    <div className={`rounded-2xl border p-5 ${todoToneClasses(item.tone)}`}>
+    <div className={`rounded-2xl border p-4 ${todoToneClasses(item.tone)}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-slate-900 dark:text-white">{item.title}</p>
@@ -238,11 +189,71 @@ function TodoActionCard({
           )}
         </div>
       </div>
-      <p className="mt-3 text-sm text-slate-600 dark:text-slate-400">{item.detail}</p>
       <div className="mt-4">
-        <ActionButton variant={item.tone === "critical" ? "primary" : "secondary"} onClick={() => onOpen(item.id)}>
+        <ActionButton className="w-full sm:w-auto" variant={item.tone === "critical" ? "primary" : "secondary"} onClick={() => onOpen(item.id)}>
           {item.actionLabel}
         </ActionButton>
+      </div>
+    </div>
+  );
+}
+
+function LateDeparturesActionCard({
+  count,
+  onOpen,
+}: {
+  count: number;
+  onOpen: () => void;
+}) {
+  return (
+    <div className={`rounded-2xl border p-4 ${count > 0 ? todoToneClasses("critical") : todoToneClasses("neutral")}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-white">Départs en retard</p>
+          <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">{count}</p>
+        </div>
+        <div className="rounded-xl bg-white/80 p-2 text-red-700 dark:bg-slate-900/70 dark:text-red-200">
+          <AlertTriangle className="h-5 w-5" />
+        </div>
+      </div>
+      <div className="mt-4">
+        <ActionButton className="w-full sm:w-auto" variant={count > 0 ? "primary" : "secondary"} onClick={onOpen}>
+          Traiter maintenant
+        </ActionButton>
+      </div>
+    </div>
+  );
+}
+
+function DayPerformanceCard({
+  totalSales,
+  ticketsSold,
+  guichetSales,
+  onlineSales,
+  money,
+}: {
+  totalSales: number;
+  ticketsSold: number;
+  guichetSales: number;
+  onlineSales: number;
+  money: (value: number) => string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-600 to-emerald-700 text-white shadow-sm dark:border-emerald-900">
+      <div className="p-5 sm:p-7">
+        <p className="text-sm font-semibold text-emerald-50">Ventes du jour</p>
+        <p className="mt-3 break-words text-3xl font-bold tracking-tight sm:text-5xl">{money(totalSales)}</p>
+        <p className="mt-3 text-sm font-medium text-emerald-50">{ticketsSold} billets vendus</p>
+      </div>
+      <div className="grid grid-cols-1 gap-px bg-white/20 sm:grid-cols-2">
+        <div className="bg-emerald-800/35 px-5 py-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-emerald-100">Guichet</p>
+          <p className="mt-1 text-lg font-semibold">{money(guichetSales)}</p>
+        </div>
+        <div className="bg-emerald-800/35 px-5 py-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-emerald-100">En ligne</p>
+          <p className="mt-1 text-lg font-semibold">{money(onlineSales)}</p>
+        </div>
       </div>
     </div>
   );
@@ -280,30 +291,6 @@ function AlertCard({
           ) : null}
         </div>
       </div>
-    </div>
-  );
-}
-
-function SummaryCard({
-  title,
-  value,
-  icon: Icon,
-  accent,
-}: {
-  title: string;
-  value: string;
-  icon: typeof Wallet;
-  accent: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-medium text-slate-600 dark:text-slate-400">{title}</p>
-        <div className={`rounded-xl p-3 ${accent}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-      <p className="mt-4 text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">{value}</p>
     </div>
   );
 }
@@ -379,36 +366,31 @@ function ActivityFeedCard({
   }>;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
       <div className="flex items-center gap-2">
         <Clock3 className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-        <p className="text-sm font-semibold text-slate-900 dark:text-white">Derniers événements</p>
+        <p className="text-sm font-semibold text-slate-900 dark:text-white">Activité récente</p>
       </div>
       {items.length === 0 ? (
         <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">Aucun mouvement récent à afficher.</p>
       ) : (
-        <div className="mt-4 space-y-3">
+        <div className="relative mt-4 space-y-0 before:absolute before:bottom-3 before:left-[2.15rem] before:top-3 before:w-px before:bg-slate-200 dark:before:bg-slate-700">
           {items.map((item) => (
-            <div key={item.id} className="rounded-xl bg-slate-50 px-4 py-3 dark:bg-slate-800/70">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-slate-900 dark:text-white">{item.title}</p>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{item.detail}</p>
-                </div>
-                <span
-                  className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
-                    item.tone === "warning"
-                      ? "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-200"
-                      : "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200"
-                  }`}
-                >
-                  {item.occurredAt
-                    ? new Intl.DateTimeFormat("fr-FR", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      }).format(item.occurredAt)
-                    : "Live"}
-                </span>
+            <div key={item.id} className="relative flex gap-4 py-3">
+              <span className="w-12 shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                {item.occurredAt
+                  ? new Intl.DateTimeFormat("fr-FR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    }).format(item.occurredAt)
+                  : "Live"}
+              </span>
+              <span className={`relative z-10 mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                item.tone === "warning" ? "bg-amber-500" : "bg-emerald-500"
+              }`} />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-900 dark:text-white">{item.title}</p>
+                <p className="mt-0.5 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">{item.detail}</p>
               </div>
             </div>
           ))}
@@ -534,19 +516,6 @@ export default function AgencyActivityDomainPage() {
       return postDate.getTime() < currentDate.getTime() ? post : current;
     }, null);
   }, [guichetPosts]);
-  const averageGuichetDurationLabel = useMemo(() => {
-    if (guichetPosts.length === 0) return "—";
-    const now = Date.now();
-    const durations = guichetPosts
-      .map((post) => {
-        const startedAt = postStartedAt(post);
-        return startedAt ? Math.max(0, now - startedAt.getTime()) : null;
-      })
-      .filter((duration): duration is number => duration != null);
-    if (durations.length === 0) return "—";
-    const average = durations.reduce((sum, duration) => sum + duration, 0) / durations.length;
-    return formatDurationLabel(average);
-  }, [guichetPosts]);
   const hasNoSalesDespiteOpenPost = guichetPosts.length > 0 && liveActivity.guichet.count === 0;
   const longRunningPost = useMemo(() => {
     const now = Date.now();
@@ -557,6 +526,12 @@ export default function AgencyActivityDomainPage() {
   }, [guichetPosts]);
   const tensionPost = longRunningPost ?? oldestGuichetPost;
   const shouldShowTensionSignal = Boolean(tensionPost) && (hasNoSalesDespiteOpenPost || Boolean(longRunningPost));
+  const lateTrips = useMemo(() => liveTrips.filter((trip) => trip.isLate), [liveTrips]);
+  const departuresToHandle = useMemo(() => {
+    const byId = new Map<string, AgencyLiveTripItem>();
+    for (const trip of [...departuresToValidate, ...lateTrips]) byId.set(trip.id, trip);
+    return [...byId.values()];
+  }, [departuresToValidate, lateTrips]);
 
   const handleValidateDeparture = async (tripId: string) => {
     try {
@@ -586,21 +561,6 @@ export default function AgencyActivityDomainPage() {
       toast.error(error instanceof Error ? error.message : "Refus impossible.");
     }
   };
-
-  const guichetInsight = guichetPosts.length > 0 ? (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/70">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-        Contrôle terrain
-      </p>
-      <div className="mt-2 space-y-1 text-sm text-slate-700 dark:text-slate-200">
-        <p>Postes actifs : {guichetPosts.length}</p>
-        <p>Durée moyenne : {averageGuichetDurationLabel}</p>
-        {liveActivity.guichet.count === 0 ? (
-          <p className="font-medium text-amber-700 dark:text-amber-200">⚠️ aucune vente enregistrée</p>
-        ) : null}
-      </div>
-    </div>
-  ) : undefined;
 
   const alertMeta = (alert: AgencyAlertItem) => {
     if (alert.id.startsWith("long-session-")) {
@@ -680,41 +640,20 @@ export default function AgencyActivityDomainPage() {
           ))}
         </div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-10">
           <section>
             {sectionTitle(
-              "Activité en direct",
-              "Voyez ce qui se vend maintenant, sans attendre la clôture des postes."
+              "Actions requises",
+              "Commencez par les décisions qui bloquent l’activité de l’agence."
             )}
-            <div className="grid gap-4 lg:grid-cols-3">
-              <LiveMetricCard
-                title="Guichet"
-                metric={liveActivity.guichet}
-                accent="bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
-                icon={Ticket}
-                countLabel="billets en cours"
-                insight={guichetInsight}
-                money={money}
-              />
-              <LiveMetricCard
-                title="En ligne"
-                metric={liveActivity.online}
-                accent="bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-200"
-                icon={Smartphone}
-                countLabel="réservations confirmées"
-                money={money}
-              />
-              <LiveMetricCard
-                title="Total"
-                metric={liveActivity.total}
-                accent="bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200"
-                icon={Wallet}
-                countLabel="envois créés"
-                money={money}
-              />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {todoItems.map((item) => (
+                <TodoActionCard key={item.id} item={item} onOpen={setOpenPanel} />
+              ))}
+              <LateDeparturesActionCard count={lateTrips.length} onOpen={() => setOpenPanel("departures")} />
             </div>
             {shouldShowTensionSignal && tensionPost ? (
-              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-5 dark:border-red-900/50 dark:bg-red-950/20">
+              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/20 sm:p-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-red-900 dark:text-red-100">
@@ -734,7 +673,7 @@ export default function AgencyActivityDomainPage() {
                       </span>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
                     <ActionButton variant="primary" onClick={() => setDetailSession(tensionPost)}>
                       Voir le poste
                     </ActionButton>
@@ -745,29 +684,59 @@ export default function AgencyActivityDomainPage() {
                 </div>
               </div>
             ) : null}
+            {alerts.length > 0 ? (
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {alerts.slice(0, 2).map((alert) => {
+                  const meta = alertMeta(alert);
+                  return (
+                    <AlertCard
+                      key={alert.id}
+                      alert={alertCopy(alert)}
+                      risk={meta.risk}
+                      actionLabel={meta.actionLabel}
+                      onAction={meta.onAction}
+                    />
+                  );
+                })}
+              </div>
+            ) : null}
           </section>
 
           <section>
             {sectionTitle(
-              "Trajets du jour",
-              "Contrôlez immédiatement le remplissage et les départs qui demandent une décision."
+              "Performance du jour",
+              "Le niveau de ventes actuel, avec la répartition guichet et en ligne."
+            )}
+            <DayPerformanceCard
+              totalSales={summary.totalSales}
+              ticketsSold={liveActivity.total.count}
+              guichetSales={summary.guichetSales}
+              onlineSales={summary.onlineSales}
+              money={money}
+            />
+          </section>
+
+          <section>
+            {sectionTitle(
+              "Départs du jour",
+              "Repérez rapidement le remplissage, les retards et les départs à valider."
             )}
             {liveTrips.length === 0 ? (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/50 dark:bg-amber-950/20">
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/50 dark:bg-amber-950/20 sm:p-5">
                 <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Aucun trajet aujourd'hui</p>
                 <p className="mt-2 text-sm text-amber-800/90 dark:text-amber-100/85">
                   Problème potentiel : planning non défini ou agence inactive sur la journée.
                 </p>
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-4 grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
                   <Link
                     to="/agence/planification"
-                    className="inline-flex h-10 items-center justify-center rounded-xl bg-amber-600 px-4 text-sm font-medium text-white transition-colors hover:bg-amber-700"
+                    className="inline-flex min-h-10 items-center justify-center rounded-xl bg-amber-600 px-4 text-sm font-medium text-white transition-colors hover:bg-amber-700"
                   >
                     Créer un trajet
                   </Link>
                   <Link
                     to="/agence/planification"
-                    className="inline-flex h-10 items-center justify-center rounded-xl border border-amber-300 bg-white px-4 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-900/40"
+                    className="inline-flex min-h-10 items-center justify-center rounded-xl border border-amber-300 bg-white px-4 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-900/40"
                   >
                     Voir planning
                   </Link>
@@ -776,7 +745,7 @@ export default function AgencyActivityDomainPage() {
             ) : (
               <div className="grid gap-4 lg:grid-cols-2">
                 {liveTrips.map((trip) => (
-                  <LiveTripCard key={trip.id} trip={trip} money={money} />
+                  <LiveTripCard key={trip.id} trip={trip} money={money} onOpen={() => setOpenPanel("departures")} />
                 ))}
               </div>
             )}
@@ -784,86 +753,19 @@ export default function AgencyActivityDomainPage() {
 
           <section>
             {sectionTitle(
-              "À faire",
-              "Traitez en premier ce qui bloque vos départs, vos validations et vos postes actifs."
+              "Activité récente",
+              "Les derniers mouvements utiles pour comprendre ce qui vient de se passer."
             )}
-            <div className="grid gap-4 lg:grid-cols-3">
-              {todoItems.map((item) => (
-                <TodoActionCard key={item.id} item={item} onOpen={setOpenPanel} />
-              ))}
-            </div>
+            <ActivityFeedCard items={activityFeed} />
           </section>
 
           <section>
             {sectionTitle(
-              "Alertes",
-              "Les signaux qui demandent une action maintenant, plus les derniers mouvements du terrain."
-            )}
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-4">
-                {alerts.length === 0 ? (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-100">
-                    Aucune alerte critique pour le moment.
-                  </div>
-                ) : (
-                  alerts.map((alert) => {
-                    const meta = alertMeta(alert);
-                    return (
-                      <AlertCard
-                        key={alert.id}
-                        alert={alertCopy(alert)}
-                        risk={meta.risk}
-                        actionLabel={meta.actionLabel}
-                        onAction={meta.onAction}
-                      />
-                    );
-                  })
-                )}
-              </div>
-              <ActivityFeedCard items={activityFeed} />
-            </div>
-          </section>
-
-          <section>
-            {sectionTitle(
-              "Résumé du jour",
-              "Gardez la main sur les ventes du jour et le cash attendu."
-            )}
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <SummaryCard
-                title="Ventes guichet"
-                value={money(summary.guichetSales)}
-                icon={Wallet}
-                accent="bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
-              />
-              <SummaryCard
-                title="Ventes online"
-                value={money(summary.onlineSales)}
-                icon={Smartphone}
-                accent="bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-200"
-              />
-              <SummaryCard
-                title="Total"
-                value={money(summary.totalSales)}
-                icon={Receipt}
-                accent="bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200"
-              />
-              <SummaryCard
-                title="Cash attendu"
-                value={money(summary.expectedCash)}
-                icon={Activity}
-                accent="bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-200"
-              />
-            </div>
-          </section>
-
-          <section>
-            {sectionTitle(
-              "Problèmes",
-              "Repérez les trajets qui consomment votre revenu sans volume suffisant."
+              "Analyse et problèmes",
+              "Les risques de remplissage et signaux opérationnels à surveiller après les actions urgentes."
             )}
             {weakTrips.length === 0 ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-100">
                 Aucun trajet sous-rempli à corriger dans la fenêtre de décision actuelle.
               </div>
             ) : (
@@ -878,7 +780,7 @@ export default function AgencyActivityDomainPage() {
           <section>
             {sectionTitle(
               "Premium",
-              "Transformez vos problèmes terrain en décisions d’optimisation."
+              "Optimisez les décisions après avoir traité les opérations du jour."
             )}
             {!isPremium ? (
               <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 dark:border-indigo-900/60 dark:bg-indigo-950/30">
@@ -924,16 +826,16 @@ export default function AgencyActivityDomainPage() {
       <OverlayPanel
         open={openPanel === "departures"}
         onClose={() => setOpenPanel(null)}
-        title="Départs à valider"
-        subtitle="Validez ici les départs du jour sans quitter le cockpit."
+        title="Départs à traiter"
+        subtitle="Validez les départs requis et traitez les départs en retard sans quitter le cockpit."
       >
         <div className="space-y-4">
-          {departuresToValidate.length === 0 ? (
+          {departuresToHandle.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-              Aucun départ en attente de validation.
+              Aucun départ à traiter.
             </div>
           ) : (
-            departuresToValidate.map((trip) => (
+            departuresToHandle.map((trip) => (
               <div key={trip.id} className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -941,12 +843,19 @@ export default function AgencyActivityDomainPage() {
                     <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                       Départ {trip.departureTime} • {trip.reservedSeats} / {trip.capacity} places
                     </p>
+                    <p className={`mt-2 text-xs font-semibold ${trip.isLate ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300"}`}>
+                      {trip.isLate ? "Départ en retard" : "Validation agence requise"}
+                    </p>
                   </div>
                   <ActionButton
                     disabled={validatingTripId === trip.tripInstanceId}
                     onClick={() => void handleValidateDeparture(trip.tripInstanceId)}
                   >
-                    {validatingTripId === trip.tripInstanceId ? "Validation..." : "Valider maintenant"}
+                    {validatingTripId === trip.tripInstanceId
+                      ? "Validation..."
+                      : trip.isLate
+                        ? "Confirmer le départ"
+                        : "Valider maintenant"}
                   </ActionButton>
                 </div>
               </div>
@@ -978,7 +887,10 @@ export default function AgencyActivityDomainPage() {
                       </span>
                     </div>
                     <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                      {post.count} opération(s) • {money(post.amount)} • {post.durationLabel}
+                      {post.kind === "guichet"
+                        ? `${post.tickets} billet${post.tickets !== 1 ? "s" : ""}`
+                        : `${post.count} opération${post.count !== 1 ? "s" : ""}`}{" "}
+                      • {money(post.amount)} • {post.durationLabel}
                     </p>
                   </div>
                   <ActionButton variant="secondary" onClick={() => setDetailSession(post)}>

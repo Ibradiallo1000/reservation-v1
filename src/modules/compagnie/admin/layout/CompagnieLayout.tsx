@@ -195,7 +195,8 @@ const CompagnieLayout: React.FC = () => {
 
   const sections: NavSection[] = React.useMemo(() => {
     const all: NavSection[] = [
-      { label: "Dashboard", icon: Gauge, path: `${basePath}/ceo` },
+      // Route existante côté AppRoutes: /compagnie/:companyId/command-center
+      { label: "Dashboard", icon: Gauge, path: `${basePath}/command-center` },
       {
         label: "Activité réseau",
         icon: TrendingUp,
@@ -288,6 +289,7 @@ const CompagnieLayout: React.FC = () => {
     </>
   );
 
+  // Valeurs par défaut alignées : orange / blanc
   const primary = (theme?.colors?.primary ?? "#FF6600").trim();
   const secondary = (theme?.colors?.secondary ?? "#FFFFFF").trim();
   const cssVars = React.useMemo(() => {

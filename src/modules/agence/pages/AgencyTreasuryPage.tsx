@@ -91,34 +91,39 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     }
     const currency = (company as { devise?: string })?.devise ?? "XOF";
     setError(null);
-    const runEnsure = () =>
-      ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as { nom?: string })?.nom)
-        .then(async () => {
-          const [acc, primary] = await Promise.all([
-            listAccounts(companyId, { agencyId }),
-            getAgencyTreasuryLedgerCashDisplay(companyId, agencyId).catch(() => null),
-          ]);
-          setAccounts(acc);
-          if (primary) {
-            setOperationalCash({
-              accountingCash: primary.ledgerCash,
-              adjustmentTotal: 0,
-              availableCash: primary.ledgerCash,
-            });
-            setMirrorCashSecondary(primary.mirrorCash);
-          } else {
-            setOperationalCash(null);
-            setMirrorCashSecondary(null);
-          }
-        });
-    runEnsure()
+    const loadTreasury = async () => {
+      if (!embedded) {
+        await ensureDefaultAgencyAccounts(companyId, agencyId, currency, (company as { nom?: string })?.nom);
+      }
+      const [acc, primary] = await Promise.all([
+        embedded ? Promise.resolve([]) : listAccounts(companyId, { agencyId }),
+        getAgencyTreasuryLedgerCashDisplay(companyId, agencyId).catch((err) => {
+          console.info("[AgencyTreasury] Compte caisse agence indisponible, solde affiché à 0.", {
+            path: `companies/${companyId}/accounts/agency_${agencyId}_cash`,
+            role: user?.role ?? null,
+            companyId,
+            agencyId,
+            error: err,
+          });
+          return { ledgerCash: 0, mirrorCash: null, currency };
+        }),
+      ]);
+      setAccounts(acc);
+      setOperationalCash({
+        accountingCash: primary.ledgerCash,
+        adjustmentTotal: 0,
+        availableCash: primary.ledgerCash,
+      });
+      setMirrorCashSecondary(primary.mirrorCash);
+    };
+    loadTreasury()
       .catch((err: any) => {
         const isPerm = err?.code === "permission-denied" || err?.message?.includes("permission");
-        if (isPerm) setTimeout(() => runEnsure().catch(() => setError("Erreur lors du chargement de la trésorerie.")), 1500);
+        if (isPerm) setTimeout(() => loadTreasury().catch(() => setError("Erreur lors du chargement de la trésorerie.")), 1500);
         else setError(!isOnline ? "Connexion indisponible. Impossible de charger la trésorerie." : "Erreur lors du chargement de la trésorerie.");
       })
       .finally(() => setLoading(false));
-  }, [companyId, agencyId, company, isOnline, reloadKey]);
+  }, [companyId, agencyId, company, embedded, isOnline, reloadKey, user?.role]);
 
   useEffect(() => {
     const onRefresh = () => setReloadKey((k) => k + 1);
@@ -346,7 +351,11 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
             Référence compte miroir (non prioritaire) : {formatCurrency(mirrorCashSecondary, caisseDevise)}
           </p>
         ) : null}
-        {agencyCashAccounts.length === 0 ? (
+        {embedded ? (
+          <p className="mt-3 text-sm text-gray-600">
+            Compte ledger agence : <span className="font-medium">{formatCurrency(ledgerCashDisplay, caisseDevise)}</span>
+          </p>
+        ) : agencyCashAccounts.length === 0 ? (
           <p className="mt-3 text-sm text-gray-500">Aucun compte caisse agence n&apos;est encore disponible.</p>
         ) : (
           <p className="mt-3 text-sm text-gray-600">

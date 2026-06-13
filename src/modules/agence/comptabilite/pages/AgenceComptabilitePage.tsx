@@ -496,7 +496,16 @@ const AgenceComptabilitePage: React.FC = () => {
   const [savingCourierSessionIds, setSavingCourierSessionIds] = useState<Record<string, boolean>>({});
   const [courierLedgerBySessionId, setCourierLedgerBySessionId] = useState<Record<string, number>>({});
   /** Colis rattachés à la session (temps réel), pour aligner l’UI sur le poste billetterie. */
-  const [courierSessionStats, setCourierSessionStats] = useState<Record<string, { total: number; paid: number }>>({});
+  const [courierSessionStats, setCourierSessionStats] = useState<
+    Record<
+      string,
+      {
+        total: number;
+        paid: number;
+        paidAmount: number;
+      }
+    >
+  >({});
   const courierStatsUnsubsRef = useRef<Record<string, () => void>>({});
 
   /* ============================================================================
@@ -894,11 +903,22 @@ const AgenceComptabilitePage: React.FC = () => {
         qSh,
         (snap) => {
           let paid = 0;
+          let paidAmount = 0;
           for (const d of snap.docs) {
-            const ps = (d.data() as { paymentStatus?: string }).paymentStatus;
-            if (ps && ps !== 'UNPAID') paid += 1;
+            const data = d.data() as any;
+            const ps = data?.paymentStatus as string | undefined;
+            const isPaid = ps && ps !== 'UNPAID';
+            if (isPaid) {
+              paid += 1;
+              paidAmount += coerceCourierShipmentAmount(data);
+            }
           }
-          setCourierSessionStats((p) => ({ ...p, [id]: { total: snap.docs.length, paid } }));
+          setCourierSessionStats((p) => ({
+            ...p,
+            [id]: { total: snap.docs.length, paid, paidAmount },
+          }));
+
+          // Alignement UI : le résumé de carte “Total encaissé” affiche le montant attendu (paidAmount)
         },
         () => {}
       );
@@ -952,35 +972,70 @@ const AgenceComptabilitePage: React.FC = () => {
   }, [user?.companyId, user?.agencyId, courierAgentWatchKey]);
 
   useEffect(() => {
+    // Ledger “attendu” pour la validation chef/compta.
+    // Ne pas l’utiliser pour l’affichage “Postes actifs” (indicateur opérationnel depuis shipments).
+    // On ne calcule le ledger que pour les sessions réellement nécessaires :
+    // - closed (à valider)
+    // - validated_agency / validated (en attente chef)
     if (!user?.companyId) return;
+
     let cancelled = false;
+
     const ids = [
       ...new Set([
-        ...pendingCourierSessions.map(s => s.id),
-        ...closedCourierSessions.map(s => s.id),
-        ...validatedCourierSessions.map(s => s.id),
-        ...activeCourierSessions.map(s => s.id),
+        ...closedCourierSessions.map((s) => s.id),
+        ...validatedCourierSessions.map((s) => s.id),
+        ...courierValidatedAgencySessions.map((s) => s.id),
       ]),
     ];
+
     if (ids.length === 0) {
       setCourierLedgerBySessionId({});
       return;
     }
+
     void (async () => {
       const next: Record<string, number> = {};
       for (const id of ids) {
         try {
           next[id] = await getCourierSessionLedgerTotal(user.companyId!, id);
         } catch {
+          // fallback non bloquant : pas d’impact sur “Postes actifs”
           next[id] = 0;
         }
       }
       if (!cancelled) setCourierLedgerBySessionId(next);
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [user?.companyId, closedCourierSessions, validatedCourierSessions, activeCourierSessions]);
+  }, [
+    user?.companyId,
+    closedCourierSessions,
+    validatedCourierSessions,
+    courierValidatedAgencySessions,
+  ]);
+
+  function coerceCourierShipmentAmount(d: any): number {
+    const candidates = [
+      d?.paidAmount,
+      d?.amount,
+      d?.totalAmount,
+      d?.price,
+      d?.transportFee,
+      d?.deliveryFee,
+      d?.shippingFee,
+      d?.fee,
+    ];
+    for (const c of candidates) {
+      const n = Number(c ?? 0);
+      if (Number.isFinite(n) && n > 0) return n;
+      // allow 0 amounts explicitly but only if everything else failed
+    }
+    const last = Number(candidates[candidates.length - 1] ?? 0);
+    return Number.isFinite(last) ? last : 0;
+  }
 
   // Toast "Nouvelle demande d'activation Courrier" quand PENDING passe de 0 à > 0 (comptable uniquement)
   useEffect(() => {
@@ -2444,13 +2499,13 @@ const AgenceComptabilitePage: React.FC = () => {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {activeCourierSessions.map((s) => (
-                    <CourierComptaSessionCard
+                      <CourierComptaSessionCard
                       key={s.id}
                       session={s}
                       theme={theme}
                       usersCache={usersCache}
-                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0 }}
-                      ledgerAmount={courierLedgerBySessionId[s.id]}
+                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0, paidAmount: 0 }}
+                      ledgerAmount={courierSessionStats[s.id]?.paidAmount}
                       statusLabel="En service"
                       startField={s.openedAt ?? s.createdAt}
                       endField={null}
@@ -2473,13 +2528,13 @@ const AgenceComptabilitePage: React.FC = () => {
               >
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {pendingCourierSessions.map((s) => (
-                    <CourierComptaSessionCard
+                      <CourierComptaSessionCard
                       key={s.id}
                       session={s}
                       theme={theme}
                       usersCache={usersCache}
-                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0 }}
-                      ledgerAmount={courierLedgerBySessionId[s.id] ?? 0}
+                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0, paidAmount: 0 }}
+                      ledgerAmount={courierSessionStats[s.id]?.paidAmount}
                       statusLabel="En attente"
                       startField={s.createdAt}
                       endField={null}
@@ -2548,7 +2603,8 @@ const AgenceComptabilitePage: React.FC = () => {
                       const cs = findCourierSession(selectedCourierSessionForReport);
                       const o = cs ? auditValidatedAtToDate(cs.openedAt ?? cs.createdAt) : null;
                       const c = cs ? auditValidatedAtToDate(cs.closedAt) : null;
-                      const ledgerVal = courierLedgerBySessionId[selectedCourierSessionForReport];
+                    const ledgerVal = courierLedgerBySessionId[selectedCourierSessionForReport];
+                    const paidAmount = courierSessionStats[selectedCourierSessionForReport]?.paidAmount;
                       return (
                         <div className="text-sm text-gray-600 space-y-1">
                           <div>

@@ -60,6 +60,7 @@ const AdminFinancesPage = lazy(() => import("./modules/plateforme/pages/AdminFin
 const AdminCompagnieAjouterPage = lazy(() => import("./modules/plateforme/pages/AdminCompagnieAjouterPage"));
 const AdminSubscriptionsManager = lazy(() => import("./modules/plateforme/pages/AdminSubscriptionsManager"));
 const AdminRevenueDashboard = lazy(() => import("./modules/plateforme/pages/AdminRevenueDashboard"));
+const AdminPaymentMethodsPage = lazy(() => import("./modules/plateforme/pages/AdminPaymentMethodsPage"));
 
 const CompagnieLayout = lazy(() => import("@/modules/compagnie/admin/layout/CompagnieLayout"));
 const GarageLayout = lazy(() => import("@/modules/compagnie/layout/GarageLayout"));
@@ -371,6 +372,7 @@ const AppRoutes = () => {
           <Route path="plans" element={<PlansManager />} />
           <Route path="subscriptions" element={<AdminSubscriptionsManager />} />
           <Route path="revenus" element={<AdminRevenueDashboard />} />
+          <Route path="payment-methods" element={<AdminPaymentMethodsPage />} />
           <Route path="reservations" element={<AdminReservationsPage />} />
           <Route path="finances" element={<AdminFinancesPage />} />
           <Route path="statistiques" element={<AdminStatistiquesPage />} />

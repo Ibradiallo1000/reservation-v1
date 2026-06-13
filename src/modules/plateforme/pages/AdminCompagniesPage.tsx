@@ -2,11 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
   doc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   updateDoc,
+  where,
 } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -84,6 +86,50 @@ export default function AdminCompagniesPage() {
   }, [companies, plans]);
 
   const loading = !companiesReady || !plansReady;
+
+  const [pendingInvitationByCompanyId, setPendingInvitationByCompanyId] = useState<Record<string, { invitationId: string; token: string }>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const companiesIds = companies.map((c) => c.id);
+        if (!companiesIds.length) return;
+
+        const pendingMap: Record<string, { invitationId: string; token: string }> = {};
+
+        await Promise.all(
+          companiesIds.map(async (companyId) => {
+            const q = query(
+              collection(db, "invitations"),
+              where("companyId", "==", companyId),
+              where("status", "==", "pending"),
+              // limit(1) if available in your firestore rules set; keep simple without it
+            );
+            const snap = await getDocs(q);
+            const docSnap = snap.docs[0];
+            if (!docSnap) return;
+            const data = docSnap.data() as any;
+            if (cancelled) return;
+            pendingMap[companyId] = { invitationId: docSnap.id, token: String(data?.token || "") };
+          })
+        );
+
+        if (!cancelled) setPendingInvitationByCompanyId(pendingMap);
+      } catch (e) {
+        console.warn("[AdminCompagniesPage] invitations load failed", e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [companies]);
+
+  const buildAcceptInvitationUrl = (invitationIdOrToken: string) => {
+    const base = window.location.origin;
+    return `${base}/accept-invitation/${invitationIdOrToken}`;
+  };
 
   const handlePlanChange = async (companyId: string, nextPlan: Plan) => {
     setSavingCompanyId(companyId);
@@ -268,6 +314,46 @@ export default function AdminCompagniesPage() {
                           Voir le site public
                         </a>
                       ) : null}
+
+                      {pendingInvitationByCompanyId[company.id]?.invitationId ? (
+                        <div className="pt-2">
+                          <Button
+                            variant="secondary"
+                            className="w-full justify-start"
+                            onClick={async () => {
+                              const inv = pendingInvitationByCompanyId[company.id];
+                              if (!inv) return;
+                              const url = buildAcceptInvitationUrl(inv.invitationId);
+                              try {
+                                await navigator.clipboard.writeText(url);
+                                toast.success("Lien d'invitation copié.");
+                              } catch {
+                                // Fallback old browsers
+                                try {
+                                  const ta = document.createElement("textarea");
+                                  ta.value = url;
+                                  document.body.appendChild(ta);
+                                  ta.select();
+                                  document.execCommand("copy");
+                                  document.body.removeChild(ta);
+                                  toast.success("Lien d'invitation copié.");
+                                } catch {
+                                  toast.error("Impossible de copier le lien.");
+                                }
+                              }
+                            }}
+                          >
+                            Copier le lien d'invitation
+                          </Button>
+                          <div className="mt-2 text-[11px] text-slate-500">
+                            Invitation en attente — envoyez le lien au CEO.
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="pt-2 text-[11px] text-slate-500">
+                          Aucune invitation en attente
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

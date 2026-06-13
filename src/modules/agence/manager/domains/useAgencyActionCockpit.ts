@@ -183,6 +183,7 @@ type RawLiveSources = {
   activeGuichetSessions: SessionDoc[];
   activeCourierSessions: SessionDoc[];
   reservationRows: ReservationRow[];
+  activeGuichetReservationRows: ReservationRow[];
   shipmentsToday: Array<ShipmentRow & { amount: number; createdDate: Date | null }>;
   now: Date;
 };
@@ -230,6 +231,43 @@ function isReservationCancelled(normalizedStatus: string): boolean {
 
 function isReservationConfirmedStatus(normalizedStatus: string): boolean {
   return ["confirme", "confirmé", "paye", "payé", "valide", "validé", "paid"].includes(normalizedStatus);
+}
+
+function toReservationRow(raw: Record<string, unknown>): ReservationRow {
+  const normalized = normalizeReservation(raw);
+  const reservationStatus = normalizeText(normalized.reservation.status);
+  const cancelled = isReservationCancelled(reservationStatus);
+  const isConfirmedStatus = ["confirme", "confirmé"].includes(reservationStatus);
+  const online = isOnlinePaymentChannel(raw);
+  const onlineConfirmed = online && isConfirmedStatus;
+  const isPaidStatus = ["paye", "payé", "paid"].includes(reservationStatus);
+  const onlineValid = online && (onlineConfirmed || isPaidStatus);
+  const guichetSold = !online;
+  const sold = cancelled ? false : online ? onlineValid : guichetSold;
+
+  return {
+    id: String(raw.id ?? ""),
+    raw,
+    normalized,
+    amount: Math.max(0, Number(normalized.payment.amount ?? 0)),
+    seats: Math.max(
+      1,
+      Number(raw.seatsGo ?? 0) + Number(raw.seatsReturn ?? 0) ||
+      Number(raw.seats ?? 0) ||
+      1
+    ),
+    createdAt: normalized.reservation.createdAt ?? toDateOrNull(raw.createdAt),
+    confirmed: sold,
+    cancelled,
+    online,
+    onlinePaid: onlineValid,
+    sold,
+    tripInstanceId: String(
+      normalized.trip.tripInstanceId ??
+      raw.tripInstanceId ??
+      ""
+    ).trim(),
+  };
 }
 
 function isSessionOpen(status: string): boolean {
@@ -281,13 +319,14 @@ function getLiveActivity(sources: RawLiveSources): {
   let guichetTickets = 0;
   let guichetAmount = 0;
 
-  // ✅ APPROCHE ROBUSTE: Guichet = toutes les ventes non-online
-  const guichetRows = sources.reservationRows.filter((reservation) => !reservation.online);
-  
   for (const session of sources.activeGuichetSessions) {
-    // Utilisation de guichetRows comme base
-    const relatedRows = guichetRows;
-    
+    const relatedRows = sources.activeGuichetReservationRows.filter(
+      (reservation) =>
+        reservation.sold &&
+        !reservation.cancelled &&
+        belongsToGuichetSession(reservation.raw, session.id, String(session.userId ?? "").trim())
+    );
+
     const reservationsCount = relatedRows.length;
     const ticketsCount = relatedRows.reduce((sum, reservation) => sum + reservation.seats, 0);
     const sessionAmount = relatedRows.reduce((sum, reservation) => sum + reservation.amount, 0);
@@ -733,6 +772,7 @@ export function useAgencyActionCockpit() {
   const [activeShifts, setActiveShifts] = useState<SessionDoc[]>([]);
   const [activeCourierSessions, setActiveCourierSessions] = useState<SessionDoc[]>([]);
   const [rawReservations, setRawReservations] = useState<Array<Record<string, unknown>>>([]);
+  const [rawActiveGuichetReservations, setRawActiveGuichetReservations] = useState<Array<Record<string, unknown>>>([]);
   const [rawShipments, setRawShipments] = useState<ShipmentRow[]>([]);
   const [originTrips, setOriginTrips] = useState<TripInstanceDocWithId[]>([]);
   const [destinationTrips, setDestinationTrips] = useState<TripInstanceDocWithId[]>([]);
@@ -846,6 +886,52 @@ export function useAgencyActionCockpit() {
   }, [companyId, agencyId, todayKey]);
 
   useEffect(() => {
+    if (!companyId || !agencyId || activeShifts.length === 0) {
+      setRawActiveGuichetReservations([]);
+      return;
+    }
+
+    const queryRows = new Map<string, Map<string, Record<string, unknown>>>();
+    const publishMerged = () => {
+      const byId = new Map<string, Record<string, unknown>>();
+      for (const rows of queryRows.values()) {
+        for (const [id, row] of rows) byId.set(id, row);
+      }
+      setRawActiveGuichetReservations([...byId.values()]);
+    };
+    const reservationsRef = collection(db, "companies", companyId, "agences", agencyId, "reservations");
+    const unsubscribers = activeShifts.flatMap((shift) =>
+      (["sessionId", "shiftId"] as const).map((field) => {
+        const key = `${shift.id}:${field}`;
+        return onSnapshot(
+          query(
+            reservationsRef,
+            where(field, "==", shift.id),
+            where("canal", "==", "guichet"),
+            limit(200)
+          ),
+          (snapshot) => {
+            queryRows.set(
+              key,
+              new Map(snapshot.docs.map((docSnap) => [
+                docSnap.id,
+                { id: docSnap.id, ...(docSnap.data() as Record<string, unknown>) },
+              ]))
+            );
+            publishMerged();
+          },
+          () => {
+            queryRows.set(key, new Map());
+            publishMerged();
+          }
+        );
+      })
+    );
+
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  }, [companyId, agencyId, activeShifts]);
+
+  useEffect(() => {
     if (!companyId || !agencyId) {
       setRawShipments([]);
       setLoadingShipments(false);
@@ -949,53 +1035,14 @@ export function useAgencyActionCockpit() {
     };
   }, [companyId, agencyId]);
 
-  // ✅ APPROCHE ROBUSTE: Logique métier avec fallbacks
   const reservationRows = useMemo<ReservationRow[]>(() => {
-    return rawReservations.map((raw) => {
-      const normalized = normalizeReservation(raw);
-      const reservationStatus = normalizeText(normalized.reservation.status);
-      
-      const cancelled = isReservationCancelled(reservationStatus);
-      const isConfirmedStatus = ["confirme", "confirmé"].includes(reservationStatus);
-      const online = isOnlinePaymentChannel(raw);
-      
-      // ✅ ONLINE = validée manuellement (confirme/confirmé)
-      const onlineConfirmed = online && isConfirmedStatus;
-      
-      // ✅ FALLBACK: Si le statut est "paye" ou "paid", on considère aussi comme valide
-      const isPaidStatus = ["paye", "payé", "paid"].includes(reservationStatus);
-      const onlineValid = online && (onlineConfirmed || isPaidStatus);
-      
-      // ✅ GUICHET = toujours vendu (pas de validation intermédiaire)
-      const guichetSold = !online;
-      
-      const sold = cancelled ? false : online ? onlineValid : guichetSold;
-
-      return {
-        id: String(raw.id ?? ""),
-        raw,
-        normalized,
-        amount: Math.max(0, Number(normalized.payment.amount ?? 0)),
-        seats: Math.max(
-          1,
-          Number(raw.seatsGo ?? 0) + Number(raw.seatsReturn ?? 0) ||
-          Number(raw.seats ?? 0) ||
-          1
-        ),
-        createdAt: normalized.reservation.createdAt ?? toDateOrNull(raw.createdAt),
-        confirmed: sold,
-        cancelled,
-        online,
-        onlinePaid: onlineValid,
-        sold,
-        tripInstanceId: String(
-          normalized.trip.tripInstanceId ??
-          raw.tripInstanceId ??
-          ""
-        ).trim(),
-      };
-    });
+    return rawReservations.map(toReservationRow);
   }, [rawReservations]);
+
+  const activeGuichetReservationRows = useMemo<ReservationRow[]>(
+    () => rawActiveGuichetReservations.map(toReservationRow),
+    [rawActiveGuichetReservations]
+  );
 
   const shipmentsToday = useMemo<Array<ShipmentRow & { amount: number; createdDate: Date | null }>>(() => {
     return rawShipments
@@ -1041,11 +1088,12 @@ export function useAgencyActionCockpit() {
       getSessionDrivenLiveActivity({
         activeGuichetSessions: activeShifts,
         activeCourierSessions,
-        reservationRows: reservationRows, // ⚠️ TOUTES les réservations
+        reservationRows,
+        activeGuichetReservationRows,
         shipmentsToday,
         now,
       }),
-    [activeShifts, activeCourierSessions, reservationRows, shipmentsToday, now]
+    [activeShifts, activeCourierSessions, reservationRows, activeGuichetReservationRows, shipmentsToday, now]
   );
 
   // ✅ On garde le filtre sold pour les agrégats de trajets (cohérence métier)

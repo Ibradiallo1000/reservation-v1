@@ -20,10 +20,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { FinancialTransactionDoc } from "@/modules/compagnie/treasury/types";
-import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
-import { financialAccountRef } from "@/modules/compagnie/treasury/financialAccounts";
 import {
-  getLedgerBalances,
   isConfirmedTransactionStatus,
   listFinancialTransactionsByPeriod,
 } from "@/modules/compagnie/treasury/financialTransactions";
@@ -39,45 +36,29 @@ const PAGE_SIZE = 500;
 const MAX_PAGES = 40;
 const CLOSED_SESSION_STATUSES = ["closed", "CLOSED", "validated", "VALIDATED", "validated_agency"] as const;
 
-const MIRROR_LEDGER_EPSILON = 0.02;
-
 /**
  * Caisse espèces agence pour la trésorerie : **uniquement** le solde ledger (`accounts`).
- * Charge le miroir `financialAccounts` pour affichage secondaire et journalise les écarts.
+ * Lit directement le compte caisse de l'agence, sans lister la collection `accounts`.
  */
 export async function getAgencyTreasuryLedgerCashDisplay(
   companyId: string,
   agencyId: string
 ): Promise<{ ledgerCash: number; mirrorCash: number | null; currency: string }> {
-  const ledger = await getLedgerBalances(companyId, agencyId);
-  const ledgerCash = Number(ledger.cash ?? 0);
-  let mirrorCash: number | null = null;
-  let currency = "XOF";
-  try {
-    const mirrorRef = financialAccountRef(companyId, agencyCashAccountId(agencyId));
-    const mirrorSnap = await getDoc(mirrorRef);
-    if (mirrorSnap.exists()) {
-      const d = mirrorSnap.data() as Record<string, unknown>;
-      mirrorCash = Number(d.currentBalance ?? 0);
-      const c = d.currency;
-      if (typeof c === "string" && c.trim()) currency = c.trim();
-    }
-  } catch (e) {
-    console.error("[caisse] Lecture miroir financialAccounts (secondaire) impossible.", {
+  const cashRef = ledgerAccountDocRef(companyId, agencyCashAccountDocId(agencyId));
+  const cashSnap = await getDoc(cashRef);
+  if (!cashSnap.exists()) {
+    console.info("[caisse] Compte caisse agence absent, solde affiché à 0.", {
       companyId,
       agencyId,
-      err: e,
+      path: cashRef.path,
     });
+    return { ledgerCash: 0, mirrorCash: null, currency: "XOF" };
   }
-  if (mirrorCash != null && Math.abs(mirrorCash - ledgerCash) > MIRROR_LEDGER_EPSILON) {
-    console.error("[caisse] Incohérence : ledger (source) ≠ financialAccounts.currentBalance (secondaire).", {
-      companyId,
-      agencyId,
-      ledgerCash,
-      mirrorCash,
-    });
-  }
-  return { ledgerCash, mirrorCash, currency };
+  const raw = cashSnap.data() as Record<string, unknown>;
+  const ledgerCash = Number(raw.balance ?? 0) || 0;
+  const currency =
+    typeof raw.currency === "string" && raw.currency.trim() ? raw.currency.trim() : "XOF";
+  return { ledgerCash, mirrorCash: null, currency };
 }
 
 export type AgencyCashPosition = {

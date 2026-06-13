@@ -16,6 +16,7 @@ import {
   where,
   orderBy,
   limit,
+  increment,
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore';
@@ -779,7 +780,8 @@ export async function closeSession(params: {
 }
 
 /**
- * Validation niveau agence : CLOSED → VALIDATED_AGENCY. Pas de mouvement trésorerie (chef comptable le fait).
+ * Validation niveau agence : CLOSED → VALIDATED_AGENCY.
+ * Le crédit caisse idempotent est posté dans la même transaction.
  */
 export type ValidationAudit = {
   validatedBy: { id: string; name?: string | null };
@@ -808,6 +810,8 @@ export async function validateSessionByAccountant(params: {
   const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
   const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
+  const cashAccountRef = doc(db, `companies/${params.companyId}/accounts/agency_${params.agencyId}_cash`);
+  const cashLedgerRef = doc(cashAccountRef, 'ledger', `session_${params.shiftId}_accountant_validation`);
 
   type AccountantTxOutcome = {
     computedDifference: number;
@@ -815,7 +819,13 @@ export async function validateSessionByAccountant(params: {
   };
 
   const { computedDifference, accountantSessionLog } = await runTransaction(db, async (tx): Promise<AccountantTxOutcome> => {
-    const [sSnap, rSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(reportRef), tx.get(agencyRef)]);
+    const [sSnap, rSnap, agencySnap, cashAccountSnap, cashLedgerSnap] = await Promise.all([
+      tx.get(shiftRef),
+      tx.get(reportRef),
+      tx.get(agencyRef),
+      tx.get(cashAccountRef),
+      tx.get(cashLedgerRef),
+    ]);
     if (!sSnap.exists()) throw new Error('Poste introuvable.');
     if (!rSnap.exists()) throw new Error('Rapport introuvable.');
     const s = sSnap.data() as Record<string, unknown>;
@@ -901,6 +911,42 @@ export async function validateSessionByAccountant(params: {
         montant: params.receivedCashAmount,
         source: 'guichet',
       });
+      if (!cashLedgerSnap.exists()) {
+        if (cashAccountSnap.exists()) {
+          tx.update(cashAccountRef, {
+            balance: increment(params.receivedCashAmount),
+            lastAccountantValidationShiftId: params.shiftId,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          tx.set(cashAccountRef, {
+            id: cashAccountRef.id,
+            companyId: params.companyId,
+            agencyId: params.agencyId,
+            type: 'cash',
+            label: 'Caisse physique agence',
+            balance: params.receivedCashAmount,
+            currency: 'XOF',
+            includeInLiquidity: true,
+            lastAccountantValidationShiftId: params.shiftId,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        tx.set(cashLedgerRef, {
+          companyId: params.companyId,
+          agencyId: params.agencyId,
+          shiftId: params.shiftId,
+          type: 'cash_in',
+          source: 'shift_accountant_validation',
+          amount: params.receivedCashAmount,
+          expectedAmount: expectedCash,
+          differenceAmount: computedDifference,
+          createdAt: serverTimestamp(),
+          createdBy: params.validatedBy.id,
+          status: 'posted',
+        });
+      }
     }
 
     const totalRevenue = Number(s.totalRevenue ?? s.amount ?? 0);
@@ -909,8 +955,7 @@ export async function validateSessionByAccountant(params: {
     const statsDate = timestampToDailyStatsDateKey(closedAt, agencyTz);
     updateDailyStatsOnSessionValidatedByAgency(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
     updateAgencyLiveStateOnSessionValidated(tx, params.companyId, params.agencyId);
-    // Aucun mouvement ledger client ici : les règles Firestore réservent les comptes compagnie
-    // aux rôles finance siège. La réception reste tracée par cashReceipts + comptaEncaissements.
+    // cashReceipts, comptaEncaissements et le crédit caisse restent atomiques avec la validation.
 
     return {
       computedDifference,
