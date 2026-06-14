@@ -176,29 +176,51 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         });
       }
 
-      const pmSnap = await getDocs(
-        query(collection(db, 'paymentMethods'), where('companyId', '==', cid))
+      // 1) Récupération des configs actives de la compagnie
+      const cfgSnap = await getDocs(
+        query(
+          collection(db, 'companies', cid, 'paymentConfigs')
+        )
       );
+
+      const activeConfigs = cfgSnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .filter((c) => Boolean(c.isEnabled ?? c.active ?? false));
+
+      // 2) Pour chaque config, charger la méthode globale paymentMethods/{methodId}
       const pms: Record<string, PaymentMethodInfo> = {};
-      pmSnap.forEach((d) => {
-        const data = d.data() as Record<string, unknown>;
-        const name = data.name as string;
-        if (name) {
+
+      await Promise.all(
+        activeConfigs.map(async (cfg) => {
+          const methodId = String(cfg.methodId ?? cfg.id ?? '');
+          if (!methodId) return;
+
+          const mSnap = await getDoc(doc(db, 'paymentMethods', methodId));
+          if (!mSnap.exists()) return;
+
+          const m = mSnap.data() as Record<string, any>;
+          const name = String(m.name ?? methodId);
+
           pms[name] = {
-            url: data.defaultPaymentUrl as string | undefined,
-            logoUrl: data.logoUrl as string | undefined,
-            ussdPattern: data.ussdPattern as string | undefined,
-            merchantNumber: data.merchantNumber as string | undefined,
+            url: m.defaultPaymentUrl as string | undefined,
+            logoUrl: m.logoUrl as string | undefined,
+            ussdPattern: m.ussdPattern as string | undefined,
+            merchantNumber: String(cfg.merchantCode ?? m.merchantNumber ?? ''),
           };
-        }
-      });
+
+          // injecter aussi phoneNumber dans les instructions/url si besoin plus tard
+        })
+      );
+
       setPaymentMethods(pms);
+
       console.log('[PaymentMethodPage] reservation', {
         id: reservationId,
         statut: toStr(snap.statut),
         montant: Number(snap.montant ?? 0),
       });
       console.log('[PaymentMethodPage] company', compSnap.exists() ? { id: compSnap.id } : null);
+      console.log('[PaymentMethodPage] activeConfigs', activeConfigs.map((c) => c.methodId ?? c.id));
       console.log('[PaymentMethodPage] paymentMethods keys', Object.keys(pms));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erreur de chargement.');
@@ -220,11 +242,26 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const primaryColor = company?.couleurPrimaire ?? '#2563eb';
   const secondaryColor = company?.couleurSecondaire ?? '#93c5fd';
 
-  const handleSelectMethod = (key: string) => {
+  const handleSelectMethod = async (key: string) => {
     if (!reservation || !company || !slug) return;
     const method = paymentMethods[key];
     if (!method) return;
 
+    // Temporary: final USSD code + logs
+    const finalUssdCode = method.ussdPattern
+      ? method.ussdPattern
+          .replace('MERCHANT', method.merchantNumber || '')
+          .replace('AMOUNT', String(reservation.montant))
+      : '';
+
+    console.log('[PaymentMethodPage] selected method', method);
+    console.log('[PaymentMethodPage] final ussd code', finalUssdCode);
+
+    const uploadPreuvePath = pathBase
+      ? `/${pathBase}/upload-preuve/${reservation.id}`
+      : `/upload-preuve/${reservation.id}`;
+
+    // Draft/companyInfo must be passed to UploadPreuvePage only AFTER payment confirmation
     const draft = {
       id: reservation.id,
       agencyId: reservation.agencyId,
@@ -255,30 +292,50 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       slug: company.slug,
     };
 
-    const ussd = method.ussdPattern
-      ?.replace('MERCHANT', method.merchantNumber || '')
-      .replace('AMOUNT', String(reservation.montant));
+    // Determine method type based on global data (we only stored ussdPattern + merchantNumber + url)
+    const isUssd = Boolean(method.ussdPattern);
+    const isPaymentLink = Boolean(method.url) && !isUssd;
 
-    const uploadPreuvePath = pathBase ? `/${pathBase}/upload-preuve/${reservation.id}` : `/upload-preuve/${reservation.id}`;
+    // We can't reliably detect wallet_number with current PaymentMethodInfo shape.
+    // Heuristic: if url absent but merchantNumber exists and no ussdPattern => wallet number.
+    const isWalletNumber = !isUssd && !isPaymentLink && Boolean(method.merchantNumber);
 
-    if (ussd) {
+    // 1) USSD: call tel: first, then show continue CTA (no immediate redirect)
+    if (isUssd) {
       try {
-        sessionStorage.setItem('lastUssdCode', ussd);
-      } catch { /* ignore */ }
-      navigate(uploadPreuvePath, {
-        replace: false,
-        state: {
-          draft,
-          companyInfo,
-          paymentMethodKey: key,
-          companyId: reservation.companyId,
-          agencyId: reservation.agencyId,
-        },
-      });
-      window.location.href = `tel:${encodeURIComponent(ussd)}`;
+        if (finalUssdCode) sessionStorage.setItem('lastUssdCode', finalUssdCode);
+      } catch {
+        /* ignore */
+      }
+      window.location.href = `tel:${encodeURIComponent(finalUssdCode)}`;
+
+      // Mark selected method locally; UI will render continue button
+      setSelectedMethodKey(key);
       return;
     }
 
+    // 2) wallet_number: show modal with number + instructions + 'J’ai effectué le paiement'
+    if (isWalletNumber) {
+      setSelectedMethodKey(key);
+      setShowInstructionsModal(true);
+      return;
+    }
+
+    // 3) payment_link: open link then show continue CTA
+    if (isPaymentLink) {
+      if (method.url) {
+        try {
+          new URL(method.url);
+          window.open(method.url, '_blank', 'noopener,noreferrer');
+        } catch {
+          // ignore
+        }
+      }
+      setSelectedMethodKey(key);
+      return;
+    }
+
+    // Fallback: redirect to upload-preuve
     navigate(uploadPreuvePath, {
       replace: false,
       state: {
@@ -289,15 +346,6 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         agencyId: reservation.agencyId,
       },
     });
-
-    if (method.url) {
-      try {
-        new URL(method.url);
-        window.open(method.url, '_blank', 'noopener,noreferrer');
-      } catch {
-        // ignore
-      }
-    }
   };
 
   if (loading) {
@@ -332,6 +380,42 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           secondaryColor={secondaryColor}
           onClose={() => setShowInstructionsModal(false)}
         />
+      )}
+      {/* USSD / Wallet confirmations (temp): continue CTA */}
+      {selectedMethodKey && (
+        <div className="max-w-[1100px] mx-auto px-3 sm:px-4">
+          {paymentMethods[selectedMethodKey]?.ussdPattern ? null : (
+            <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="text-sm font-semibold text-gray-900">Paiement effectué ?</div>
+              <div className="mt-2 text-sm text-gray-600">
+                Une fois le paiement réalisé, continuez vers l’envoi de la preuve.
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!reservation || !selectedMethodKey) return;
+                  const uploadPreuvePath = pathBase
+                    ? `/${pathBase}/upload-preuve/${reservation.id}`
+                    : `/upload-preuve/${reservation.id}`;
+
+                  navigate(uploadPreuvePath, {
+                    replace: false,
+                    state: {
+                      // minimal state: on laisse UploadPreuvePage redéduire si nécessaire
+                      paymentMethodKey: selectedMethodKey,
+                      companyId: reservation.companyId,
+                      agencyId: reservation.agencyId,
+                    },
+                  });
+                }}
+                className="mt-3 w-full flex justify-center py-3 px-4 rounded-lg text-sm font-semibold text-white"
+                style={{ backgroundColor: primaryColor }}
+              >
+                Continuer vers l’envoi de preuve
+              </button>
+            </div>
+          )}
+        </div>
       )}
       <ReservationStepHeader
         onBack={() => navigate(-1)}
@@ -418,11 +502,12 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
                     <span className="text-lg font-semibold text-gray-900 capitalize">
                       {key.replace(/_/g, ' ')}
                     </span>
-                    {method.merchantNumber && (
-                      <span className="text-sm text-gray-500">
-                        ({t('paymentMerchantCode')}: <span className="font-mono">{method.merchantNumber}</span>)
-                      </span>
-                    )}
+                    {method.ussdPattern ? (
+                      <span className="text-sm text-gray-500">Paiement USSD</span>
+                    ) : null}
+                    {!method.ussdPattern && method.merchantNumber ? (
+                      <span className="text-sm text-gray-500">Mobile Money</span>
+                    ) : null}
                   </div>
                   <div
                     className="flex items-center justify-center w-8 h-8 rounded-full text-white shadow-lg flex-shrink-0"
@@ -431,25 +516,8 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
                     <Check className="w-4 h-4" />
                   </div>
                 </button>
-                {ussdCode && (
-                  <a
-                    href={`tel:${encodeURIComponent(ussdCode)}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleSelectMethod(key);
-                    }}
-                    className="flex items-center justify-center gap-2 mt-4 px-5 py-4 rounded-full text-white font-semibold shadow-[0_10px_25px_rgba(0,0,0,0.2)] active:scale-95 transition w-full"
-                    style={{
-                      background: `linear-gradient(to right, ${secondaryColor}, ${primaryColor})`,
-                      boxShadow: `0 10px 25px ${secondaryColor}73`,
-                    }}
-                  >
-                    <Phone className="w-5 h-5 flex-shrink-0" />
-                    <span className="font-mono text-sm sm:text-base truncate max-w-[240px]">
-                      {ussdCode}
-                    </span>
-                  </a>
-                )}
+                {/* USSD: on déclenche le tel: dans handleSelectMethod (pas de redirection upload-preuve immédiate). */}
+                {ussdCode && null}
               </div>
             );
           })}
