@@ -116,12 +116,16 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         agencyId: string | null;
         code: string | null;
         message: string | null;
-        uid: string;
+        uid: string | null;
+        email: string | null;
+        authenticated: boolean;
       }
   >(null);
   const [debugStep, setDebugStep] = useState<string>('');
 
   const load = useCallback(async () => {
+    const auth = (globalThis as any)?.auth;
+
     console.log("[PaymentMethodPage] BUILD_VERSION", "payment-methods-v2");
     console.log(
       "[PaymentMethodPage] sw controller",
@@ -305,14 +309,17 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       console.log('[PaymentMethodPage] activeConfigs', activeConfigs.map((c) => c.methodId ?? c.id));
       console.log('[PaymentMethodPage] paymentMethods keys', Object.keys(pms));
   } catch (e) {
+    const firebaseError = e as any;
     setDebugError({
       step: debugStep,
       reservationId: reservationId ?? null,
       companyId: companyId ?? null,
       agencyId: agencyId ?? null,
-      code: slug ?? null,
-      message: e instanceof Error ? e.message : 'Erreur inconnue',
-      uid: (globalThis as any)?.auth?.currentUser?.uid ?? null,
+      code: firebaseError?.code || 'unknown',
+      message: firebaseError?.message || String(e),
+      uid: auth?.currentUser?.uid || null,
+      email: auth?.currentUser?.email || null,
+      authenticated: Boolean(auth?.currentUser),
     });
       console.error(
         '[PaymentMethodPage] FIRESTORE ERROR',
@@ -525,13 +532,15 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           <div style={{ fontWeight: 800, marginBottom: 6 }}>
             Erreur Firestore (debug UI)
           </div>
-          <div>step: {debugError.step}</div>
-          <div>message: {debugError.message ?? '—'}</div>
-          <div>reservationId: {debugError.reservationId ?? '—'}</div>
-          <div>companyId: {debugError.companyId ?? '—'}</div>
-          <div>agencyId: {debugError.agencyId ?? '—'}</div>
-          <div>code: {debugError.code ?? '—'}</div>
-          <div>uid: {debugError.uid ?? '—'}</div>
+          <div>Step: {debugError.step ?? '—'}</div>
+          <div>Code: {debugError.code ?? 'unknown'}</div>
+          <div>Message: {debugError.message ?? '—'}</div>
+          <div>ReservationId: {debugError.reservationId ?? '—'}</div>
+          <div>CompanyId: {debugError.companyId ?? '—'}</div>
+          <div>AgencyId: {debugError.agencyId ?? '—'}</div>
+          <div>UID: {debugError.uid ?? '—'}</div>
+          <div>Email: {debugError.email ?? '—'}</div>
+          <div>Authenticated: {String(debugError.authenticated ?? false)}</div>
         </div>
       ) : null}
 

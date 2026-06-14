@@ -620,12 +620,14 @@ service cloud.firestore {
     }
 
     match /paymentMethods/{id} {
-      // Global methods catalog (no company-sensitive data): companies filter by countryCode + active.
-      allow get, list: if isAuth() && (isPlatformAdmin() || userCompanyId() != '');
+      // Catalogue public.
+      // Note: pour préserver les anciennes règles, on garde get/list publics.
+      allow get, list: if true;
 
       // CRUD : plateforme uniquement.
       allow create, update, delete: if isPlatformAdmin();
     }
+
 
 
 
@@ -725,7 +727,8 @@ service cloud.firestore {
 
       // Payment method configurations per company (used by CompanyPaymentSettingsPage)
       match /paymentConfigs/{configId} {
-        allow get, list, create, update, delete: if isAuth() && (userCompanyId() == companyId || isPlatformAdmin());
+        allow get, list: if isAuth() && (userCompanyId() == companyId || isPlatformAdmin()) && resource.data.get('isEnabled', false) == true;
+        allow create, update, delete: if false;
       }
 
 
