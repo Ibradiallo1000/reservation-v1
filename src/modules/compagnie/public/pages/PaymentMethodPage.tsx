@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, collection, query, where } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
-import { Check, Phone } from 'lucide-react';
+import { Check, Phone, Wallet } from 'lucide-react';
+import { toast } from 'sonner';
 import { format, parseISO } from 'date-fns';
 import ReservationStepHeader from '../components/ReservationStepHeader';
 import PaymentInstructionsModal, { getPaymentInstructionsSeen } from '../components/PaymentInstructionsModal';
@@ -104,6 +105,8 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const [error, setError] = useState<string | null>(null);
   const [selectedMethodKey, setSelectedMethodKey] = useState<string | null>(null);
   const [showInstructionsModal, setShowInstructionsModal] = useState(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [walletModalKey, setWalletModalKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!slug || !reservationId) {
@@ -199,6 +202,41 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           if (!mSnap.exists()) return;
 
           const m = mSnap.data() as Record<string, any>;
+
+          const methodDocData = m;
+          const configData = cfg;
+
+          // Merge complète : on conserve les champs PaymentMethodInfo nécessaires au modal Wave.
+          const mergedMethod: any = {
+            id: methodId,
+            name: methodDocData?.name ?? methodId,
+            logoUrl: methodDocData?.logoUrl,
+            type: methodDocData?.type,
+            providerCode: methodDocData?.providerCode,
+            ussdTemplate: methodDocData?.ussdTemplate ?? '',
+            ussdPattern:
+              methodDocData?.ussdTemplate ??
+              methodDocData?.ussdPattern ??
+              '',
+            merchantCode: configData?.merchantCode ?? '',
+            merchantNumber: configData?.merchantCode ?? configData?.merchantNumber ?? '',
+            phoneNumber: configData?.phoneNumber ?? '',
+            instructions: methodDocData?.instructions ?? '',
+            active: configData?.active === true && configData?.isEnabled === true,
+            url: methodDocData?.defaultPaymentUrl,
+            ussdPatternLegacy: methodDocData?.ussdTemplate ?? methodDocData?.ussdPattern,
+          };
+
+          console.log('[PaymentMethodPage] payment method doc', methodDocData);
+          console.log('[PaymentMethodPage] payment config doc', configData);
+          console.log('[PaymentMethodPage] merged method', mergedMethod);
+          // debug: merged method card state
+
+          console.log(
+            '[PaymentMethodPage] paymentMethods state',
+            pms
+          );
+
           console.log('[PaymentMethodPage] methodDoc', {
             methodId,
             raw: m,
@@ -210,11 +248,18 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           const legacyPhoneNumber = (cfg.phoneNumber ?? m.phoneNumber ?? cfg.merchantCode ?? '') as string | undefined;
 
           pms[name] = {
-            url: m.defaultPaymentUrl as string | undefined,
-            logoUrl: m.logoUrl as string | undefined,
-            ussdPattern: legacyUssdTemplate,
-            merchantNumber: legacyMerchantNumber,
-          };
+            url: mergedMethod.url as string | undefined,
+            logoUrl: mergedMethod.logoUrl as string | undefined,
+            ussdPattern: mergedMethod.ussdPattern as string,
+            merchantNumber: mergedMethod.merchantNumber as string,
+            merchantCode: mergedMethod.merchantCode as string,
+            phoneNumber: mergedMethod.phoneNumber as string,
+            name: mergedMethod.name,
+            type: mergedMethod.type,
+            providerCode: mergedMethod.providerCode,
+            instructions: mergedMethod.instructions,
+            active: mergedMethod.active,
+          } as any;
 
           // NOTE: phoneNumber existe pour le futur modal Wave, mais n’est pas utilisé ici.
           void legacyPhoneNumber;
@@ -255,11 +300,12 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const secondaryColor = company?.couleurSecondaire ?? '#93c5fd';
 
   const handleSelectMethod = async (key: string) => {
-    console.log('[PaymentMethodPage] available payment methods', paymentMethods);
+    console.log('[PaymentMethodPage] handleSelectMethod received', paymentMethods[key]);
     if (!reservation || !company || !slug) return;
     const method = paymentMethods[key];
-    console.log('[PaymentMethodPage] selected payment method', method);
     if (!method) return;
+    setErrorBanner(null);
+    setWalletModalKey(null);
 
     // Temporary: final USSD code + logs
     const finalUssdCode = (method.ussdPattern || '')
@@ -306,36 +352,53 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       slug: company.slug,
     };
 
-    // Determine method type based on global data (we only stored ussdPattern + merchantNumber + url)
+    // Determine method type based on global data (legacy fields)
     const isUssd = Boolean(method.ussdPattern);
     const isPaymentLink = Boolean(method.url) && !isUssd;
 
-    // We can't reliably detect wallet_number with current PaymentMethodInfo shape.
-    // Heuristic: if url absent but merchantNumber exists and no ussdPattern => wallet number.
-    const isWalletNumber = !isUssd && !isPaymentLink && Boolean(method.merchantNumber);
+    // Wave uses legacy merchantNumber; the real phoneNumber is not currently wired into PaymentMethodInfo.
+    // For now, we treat non-USSD/non-link as wallet_number.
+    const isWalletNumber = !isUssd && !isPaymentLink;
 
-    // 1) USSD: call tel: first, then show continue CTA (no immediate redirect)
+    // 1) USSD: call tel: and then navigate to UploadPreuvePage with computed code
     if (isUssd) {
+      if (!finalUssdCode) {
+        setErrorBanner('USSD indisponible : impossible de recomposer le code.');
+        return;
+      }
+
       try {
-        if (finalUssdCode) sessionStorage.setItem('lastUssdCode', finalUssdCode);
+        sessionStorage.setItem('lastUssdCode', finalUssdCode);
       } catch {
         /* ignore */
       }
+
       window.location.href = `tel:${encodeURIComponent(finalUssdCode)}`;
 
-      // Mark selected method locally; UI will render continue button
-      setSelectedMethodKey(key);
+      const uploadPreuvePathFinal = uploadPreuvePath;
+      navigate(uploadPreuvePathFinal, {
+        replace: false,
+        state: {
+          paymentMethodName: key,
+          paymentType: 'ussd',
+          finalUssdCode,
+          reservationId: reservation.id,
+          companyId: reservation.companyId,
+          agencyId: reservation.agencyId,
+          paymentMethodKey: key,
+        },
+      });
       return;
     }
 
-    // 2) wallet_number: show modal with number + instructions + 'J’ai effectué le paiement'
+    // 2) wallet_number: open modal/panel (no tel:, no direct navigate)
     if (isWalletNumber) {
+      setWalletModalKey(key);
       setSelectedMethodKey(key);
-      setShowInstructionsModal(true);
       return;
     }
 
-    // 3) payment_link: open link then show continue CTA
+    // 3) payment_link: open link then navigate to proof
     if (isPaymentLink) {
       if (method.url) {
         try {
@@ -345,7 +408,18 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           // ignore
         }
       }
-      setSelectedMethodKey(key);
+
+      navigate(uploadPreuvePath, {
+        replace: false,
+        state: {
+          paymentMethodName: key,
+          paymentType: 'payment_link',
+          reservationId: reservation.id,
+          companyId: reservation.companyId,
+          agencyId: reservation.agencyId,
+          paymentMethodKey: key,
+        },
+      });
       return;
     }
 
@@ -395,42 +469,146 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           onClose={() => setShowInstructionsModal(false)}
         />
       )}
-      {/* USSD / Wallet confirmations (temp): continue CTA */}
-      {selectedMethodKey && (
-        <div className="max-w-[1100px] mx-auto px-3 sm:px-4">
-          {paymentMethods[selectedMethodKey]?.ussdPattern ? null : (
-            <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="text-sm font-semibold text-gray-900">Paiement effectué ?</div>
-              <div className="mt-2 text-sm text-gray-600">
-                Une fois le paiement réalisé, continuez vers l’envoi de la preuve.
+      {/* USSD / Wallet confirmations (wallet_number modal real JSX) */}
+      {errorBanner && (
+        <div className="max-w-[1100px] mx-auto px-3 sm:px-4 mt-3">
+          <div className="rounded-xl border border-red-200 bg-red-50 text-red-800 px-4 py-3 text-sm font-medium">
+            {errorBanner}
+          </div>
+        </div>
+      )}
+
+      {walletModalKey && reservation && company && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl border" style={{ borderColor: `${secondaryColor}4D` }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="h-12 w-12 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center overflow-hidden">
+                  {paymentMethods[walletModalKey]?.logoUrl ? (
+                    <LazyLoadImage
+                      src={paymentMethods[walletModalKey]!.logoUrl!}
+                      alt={walletModalKey}
+                      className="h-10 w-10 object-contain"
+                      effect="opacity"
+                    />
+                  ) : (
+                    <span className="font-bold" style={{ color: secondaryColor }}>
+                      {walletModalKey.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500">Méthode</div>
+                  <div className="text-lg font-semibold text-gray-900">{walletModalKey.replace(/_/g, ' ')}</div>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  if (!reservation || !selectedMethodKey) return;
-                  const uploadPreuvePath = pathBase
-                    ? `/${pathBase}/upload-preuve/${reservation.id}`
-                    : `/upload-preuve/${reservation.id}`;
-
-                  navigate(uploadPreuvePath, {
-                    replace: false,
-                    state: {
-                      // minimal state: on laisse UploadPreuvePage redéduire si nécessaire
-                      paymentMethodKey: selectedMethodKey,
-                      companyId: reservation.companyId,
-                      agencyId: reservation.agencyId,
-                    },
-                  });
+                  setWalletModalKey(null);
+                  setSelectedMethodKey(null);
                 }}
-                className="mt-3 w-full flex justify-center py-3 px-4 rounded-lg text-sm font-semibold text-white"
-                style={{ backgroundColor: primaryColor }}
+                className="text-gray-500 hover:text-gray-700 font-bold text-lg"
+                aria-label="Close"
               >
-                Continuer vers l’envoi de preuve
+                ×
               </button>
             </div>
-          )}
+
+              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+              {(() => {
+                const method = paymentMethods[walletModalKey!];
+                const walletPhoneNumber = (method as any)?.phoneNumber || (method as any)?.merchantNumber || '';
+                if (!walletPhoneNumber) {
+                  return (
+                    <div className="text-sm font-semibold text-red-700">
+                      Numéro de réception non configuré
+                    </div>
+                  );
+                }
+
+                const copyToClipboard = async (value: string) => {
+                  if (!value) return;
+
+                  try {
+                    if (navigator.clipboard?.writeText) {
+                      await navigator.clipboard.writeText(value);
+                    } else {
+                      const textarea = document.createElement('textarea');
+                      textarea.value = value;
+                      textarea.style.position = 'fixed';
+                      textarea.style.opacity = '0';
+                      document.body.appendChild(textarea);
+                      textarea.focus();
+                      textarea.select();
+                      document.execCommand('copy');
+                      document.body.removeChild(textarea);
+                    }
+
+                    toast.success('Numéro copié');
+                    setTimeout(() => {}, 2000);
+                  } catch (error) {
+                    console.error('[PaymentMethodPage] copy failed', error);
+                  }
+                };
+
+                return (
+                  <>
+                    <div className="text-xs font-medium text-gray-500 uppercase">Numéro de réception</div>
+                    <div className="mt-1 text-base font-semibold text-gray-900">{walletPhoneNumber}</div>
+
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(walletPhoneNumber)}
+                        className="flex-1 rounded-lg border border-gray-300 bg-white py-2 text-sm font-semibold"
+                      >
+                        Copier le numéro
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const uploadPreuvePath = pathBase
+                            ? `/${pathBase}/upload-preuve/${reservation.id}`
+                            : `/upload-preuve/${reservation.id}`;
+
+                          navigate(uploadPreuvePath, {
+                            replace: false,
+                            state: {
+                              paymentMethodName: walletModalKey,
+                              paymentType: 'wallet_number',
+                              phoneNumber: walletPhoneNumber,
+                              reservationId: reservation.id,
+                              paymentMethodKey: walletModalKey,
+                              companyId: reservation.companyId,
+                              agencyId: reservation.agencyId,
+                            },
+                          });
+                        }}
+                        className="flex-1 rounded-lg bg-white py-2 text-sm font-semibold"
+                        style={{ borderColor: `${secondaryColor}4D`, color: secondaryColor }}
+                      >
+                        J’ai effectué le paiement
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="mt-4 text-sm text-gray-600">
+              Une fois le paiement effectué, revenez dans l’application pour envoyer votre preuve.
+            </div>
+          </div>
         </div>
       )}
+
+      {/* Ancien continue CTA : désactivé pour éviter redirections prématurées */}
+      {selectedMethodKey && !walletModalKey && (
+        <div className="max-w-[1100px] mx-auto px-3 sm:px-4" />
+      )}
+
       <ReservationStepHeader
         onBack={() => navigate(-1)}
         primaryColor={primaryColor}
@@ -463,76 +641,52 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           </div>
         </div>
 
-        <p className="text-gray-700 font-medium">{t('paymentChooseMethod')}</p>
+        <div className="flex items-center gap-2">
+          <Wallet className="h-5 w-5 text-orange-500" />
+          <p className="text-lg font-semibold text-slate-900">{t('paymentChooseMethod')}</p>
+        </div>
 
-        {/* Payment cards: single row [Logo] Name (Code marchand: xxx) [✓] + USSD code button */}
-        <div className="space-y-4">
+        {/* Payment cards compact buttons (visual-only) */}
+        <div className="flex flex-wrap justify-center gap-2 sm:gap-3">
           {Object.entries(paymentMethods).map(([key, method]) => {
-            const ussdCode = method.ussdPattern
-              ? method.ussdPattern
-                  .replace('MERCHANT', method.merchantNumber || '')
-                  .replace('AMOUNT', String(reservation.montant))
-              : '';
             const isSelected = selectedMethodKey === key;
             return (
-              <div
+              <button
                 key={key}
-                className="relative rounded-2xl bg-white shadow-xl border p-4 transition hover:shadow-2xl"
+                type="button"
+                onClick={() => {
+                  console.log('[PaymentMethodPage] card click payload', method);
+                  setSelectedMethodKey(key);
+                  handleSelectMethod(key);
+                }}
+                className={[
+                  "inline-flex items-center justify-center gap-2",
+                  "h-12 px-3 min-w-[92px] max-w-[140px]",
+                  "rounded-xl border bg-white shadow-sm",
+                  "transition active:scale-[0.98]",
+                ].join(" ")}
                 style={{
-                  borderColor: `${secondaryColor}4D`,
-                  boxShadow: '0 12px 25px rgba(0,0,0,0.15)',
-                  ...(isSelected
-                    ? {
-                        boxShadow: `0 0 25px ${secondaryColor}59, 0 12px 25px rgba(0,0,0,0.15)`,
-                        outline: `2px solid ${secondaryColor}`,
-                        outlineOffset: 2,
-                      }
-                    : {}),
+                  borderColor: isSelected ? primaryColor : `${secondaryColor}4D`,
+                  boxShadow: isSelected
+                    ? `0 8px 20px rgba(0,0,0,0.08), 0 0 0 1px ${primaryColor}`
+                    : '0 6px 14px rgba(0,0,0,0.06)',
+                  backgroundColor: isSelected ? `${secondaryColor}12` : 'white',
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedMethodKey(key);
-                    handleSelectMethod(key);
-                  }}
-                  className="w-full flex items-center gap-3 text-left focus:outline-none"
-                >
-                  <div className="flex-shrink-0 w-12 h-12 flex items-center justify-center rounded-xl bg-gray-50 overflow-hidden">
-                    {method.logoUrl ? (
-                      <LazyLoadImage
-                        src={method.logoUrl}
-                        alt={key}
-                        className="h-10 w-10 object-contain"
-                        effect="opacity"
-                      />
-                    ) : (
-                      <span className="font-bold text-lg" style={{ color: secondaryColor }}>
-                        {key.charAt(0).toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0 flex items-center flex-wrap gap-x-2 gap-y-0">
-                    <span className="text-lg font-semibold text-gray-900 capitalize">
-                      {key.replace(/_/g, ' ')}
-                    </span>
-                    {method.ussdPattern ? (
-                      <span className="text-sm text-gray-500">Paiement USSD</span>
-                    ) : null}
-                    {!method.ussdPattern && method.merchantNumber ? (
-                      <span className="text-sm text-gray-500">Mobile Money</span>
-                    ) : null}
-                  </div>
-                  <div
-                    className="flex items-center justify-center w-8 h-8 rounded-full text-white shadow-lg flex-shrink-0"
-                    style={{ backgroundColor: secondaryColor }}
-                  >
-                    <Check className="w-4 h-4" />
-                  </div>
-                </button>
-                {/* USSD: on déclenche le tel: dans handleSelectMethod (pas de redirection upload-preuve immédiate). */}
-                {ussdCode && null}
-              </div>
+                {method.logoUrl ? (
+                  <LazyLoadImage
+                    src={method.logoUrl}
+                    alt={key}
+                    className="h-7 w-7 object-contain shrink-0"
+                    effect="opacity"
+                  />
+                ) : (
+                  <span className="font-bold text-base" style={{ color: secondaryColor }}>
+                    {key.charAt(0).toUpperCase()}
+                  </span>
+                )}
+                <span className="text-xs font-semibold truncate">{key.replace(/_/g, ' ')}</span>
+              </button>
             );
           })}
         </div>
