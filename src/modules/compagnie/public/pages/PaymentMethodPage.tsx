@@ -199,21 +199,33 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           if (!mSnap.exists()) return;
 
           const m = mSnap.data() as Record<string, any>;
+          console.log('[PaymentMethodPage] methodDoc', {
+            methodId,
+            raw: m,
+          });
           const name = String(m.name ?? methodId);
+
+          const legacyUssdTemplate = (m.ussdTemplate ?? m.ussdPattern ?? '') as string | undefined;
+          const legacyMerchantNumber = String(cfg.merchantCode ?? m.merchantNumber ?? '');
+          const legacyPhoneNumber = (cfg.phoneNumber ?? m.phoneNumber ?? cfg.merchantCode ?? '') as string | undefined;
 
           pms[name] = {
             url: m.defaultPaymentUrl as string | undefined,
             logoUrl: m.logoUrl as string | undefined,
-            ussdPattern: m.ussdPattern as string | undefined,
-            merchantNumber: String(cfg.merchantCode ?? m.merchantNumber ?? ''),
+            ussdPattern: legacyUssdTemplate,
+            merchantNumber: legacyMerchantNumber,
           };
+
+          // NOTE: phoneNumber existe pour le futur modal Wave, mais n’est pas utilisé ici.
+          void legacyPhoneNumber;
 
           // injecter aussi phoneNumber dans les instructions/url si besoin plus tard
         })
       );
 
       setPaymentMethods(pms);
-
+      console.log('[PaymentMethodPage] available payment methods', pms);
+      
       console.log('[PaymentMethodPage] reservation', {
         id: reservationId,
         statut: toStr(snap.statut),
@@ -243,13 +255,15 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const secondaryColor = company?.couleurSecondaire ?? '#93c5fd';
 
   const handleSelectMethod = async (key: string) => {
+    console.log('[PaymentMethodPage] available payment methods', paymentMethods);
     if (!reservation || !company || !slug) return;
     const method = paymentMethods[key];
+    console.log('[PaymentMethodPage] selected payment method', method);
     if (!method) return;
 
     // Temporary: final USSD code + logs
-    const finalUssdCode = method.ussdPattern
-      ? method.ussdPattern
+    const finalUssdCode = (method.ussdPattern || '')
+      ? (method.ussdPattern || '')
           .replace('MERCHANT', method.merchantNumber || '')
           .replace('AMOUNT', String(reservation.montant))
       : '';
