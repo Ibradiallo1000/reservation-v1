@@ -108,7 +108,13 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [walletModalKey, setWalletModalKey] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+const load = useCallback(async () => {
+    console.log("[PaymentMethodPage] BUILD_VERSION", "payment-methods-v2");
+    console.log(
+      "[PaymentMethodPage] sw controller",
+      (navigator as any).serviceWorker?.controller ? "present" : "absent"
+    );
+
     if (!slug || !reservationId) {
       setError('Données de réservation manquantes.');
       setLoading(false);
