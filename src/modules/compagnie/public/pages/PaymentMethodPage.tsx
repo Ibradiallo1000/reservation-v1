@@ -107,8 +107,21 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const [showInstructionsModal, setShowInstructionsModal] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [walletModalKey, setWalletModalKey] = useState<string | null>(null);
+  const [debugError, setDebugError] = useState<
+    | null
+    | {
+        step: string;
+        reservationId: string | null;
+        companyId: string | null;
+        agencyId: string | null;
+        code: string | null;
+        message: string | null;
+        uid: string;
+      }
+  >(null);
+  const [debugStep, setDebugStep] = useState<string>('');
 
-const load = useCallback(async () => {
+  const load = useCallback(async () => {
     console.log("[PaymentMethodPage] BUILD_VERSION", "payment-methods-v2");
     console.log(
       "[PaymentMethodPage] sw controller",
@@ -123,6 +136,7 @@ const load = useCallback(async () => {
 
     setLoading(true);
     setError(null);
+    console.log('[PaymentMethodPage] FIRESTORE AUDIT start', { reservationId, companyId, agencyId });
     try {
       let cid = companyId ?? '';
       let aid = agencyId ?? '';
@@ -140,6 +154,8 @@ const load = useCallback(async () => {
         return;
       }
 
+      setDebugStep('reading reservation');
+      console.log('[PaymentMethodPage] reading reservation', reservationId);
       const snap = await fetchReservationFromNestedPath(db, cid, aid, reservationId);
       if (!snap) {
         setError('Réservation introuvable. Utilisez le lien reçu par email ou le lien de votre billet.');
@@ -172,6 +188,7 @@ const load = useCallback(async () => {
         statut: toStr(snap.status),
       });
 
+      setDebugStep('reading company');
       const compSnap = await getDoc(doc(db, 'companies', cid));
       if (compSnap.exists()) {
         const c = compSnap.data() as Record<string, unknown>;
@@ -186,6 +203,7 @@ const load = useCallback(async () => {
       }
 
       // 1) Récupération des configs actives de la compagnie
+      setDebugStep('reading paymentConfigs');
       const cfgSnap = await getDocs(
         query(
           collection(db, 'companies', cid, 'paymentConfigs')
@@ -204,6 +222,7 @@ const load = useCallback(async () => {
           const methodId = String(cfg.methodId ?? cfg.id ?? '');
           if (!methodId) return;
 
+          setDebugStep('reading paymentMethods');
           const mSnap = await getDoc(doc(db, 'paymentMethods', methodId));
           if (!mSnap.exists()) return;
 
@@ -285,7 +304,26 @@ const load = useCallback(async () => {
       console.log('[PaymentMethodPage] company', compSnap.exists() ? { id: compSnap.id } : null);
       console.log('[PaymentMethodPage] activeConfigs', activeConfigs.map((c) => c.methodId ?? c.id));
       console.log('[PaymentMethodPage] paymentMethods keys', Object.keys(pms));
-    } catch (e) {
+  } catch (e) {
+    setDebugError({
+      step: debugStep,
+      reservationId: reservationId ?? null,
+      companyId: companyId ?? null,
+      agencyId: agencyId ?? null,
+      code: slug ?? null,
+      message: e instanceof Error ? e.message : 'Erreur inconnue',
+      uid: (globalThis as any)?.auth?.currentUser?.uid ?? null,
+    });
+      console.error(
+        '[PaymentMethodPage] FIRESTORE ERROR',
+        e,
+        {
+          reservationId,
+          companyId,
+          agencyId,
+          currentUser: (globalThis as any)?.auth?.currentUser?.uid ?? null,
+        }
+      );
       setError(e instanceof Error ? e.message : 'Erreur de chargement.');
     } finally {
       setLoading(false);
@@ -468,6 +506,35 @@ const load = useCallback(async () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {debugError ? (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            background: '#fee2e2',
+            color: '#991b1b',
+            padding: '12px 14px',
+            borderBottom: '1px solid #fecaca',
+            fontSize: 12,
+            lineHeight: 1.35,
+          }}
+        >
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>
+            Erreur Firestore (debug UI)
+          </div>
+          <div>step: {debugError.step}</div>
+          <div>message: {debugError.message ?? '—'}</div>
+          <div>reservationId: {debugError.reservationId ?? '—'}</div>
+          <div>companyId: {debugError.companyId ?? '—'}</div>
+          <div>agencyId: {debugError.agencyId ?? '—'}</div>
+          <div>code: {debugError.code ?? '—'}</div>
+          <div>uid: {debugError.uid ?? '—'}</div>
+        </div>
+      ) : null}
+
       {showInstructionsModal && (
         <PaymentInstructionsModal
           primaryColor={primaryColor}
