@@ -69,9 +69,9 @@ export default defineConfig({
         clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         cleanupOutdatedCaches: true,
-        // vendor chunk can exceed 2 MiB; allow precache up to 4 MiB per file (Netlify build)
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
+
     }),
   ],
   resolve: {
