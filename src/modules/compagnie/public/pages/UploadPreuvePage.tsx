@@ -326,8 +326,11 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
     setUploading(true);
     setError(null);
     log.group('handleSubmitProof');
+    let currentStep = "start";
 
     try {
+      currentStep = "reading reservation";
+      console.log("[UPLOAD STEP]", currentStep);
       const reservationRef = doc(
         db,
         'companies',
@@ -352,6 +355,8 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       const level: Exclude<SmsValidationLevel, null> = validation === "valid" ? "valid" : validation === "suspicious" ? "suspicious" : "invalid";
       const paymentStatus = validation === "valid" ? "auto_detected" : "declared_paid";
       const parsedForSave = parsed ?? parsePaymentSMS(trimmed);
+      currentStep = "updating reservation proof";
+      console.log("[UPLOAD STEP]", currentStep);
       await updateDoc(reservationRef, {
         statut: 'preuve_recue',
         status: 'preuve_recue',
@@ -372,6 +377,8 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         updatedAt: serverTimestamp(),
       });
 
+      currentStep = "updating publicReservation";
+      console.log("[UPLOAD STEP]", currentStep);
       const afterSnap = await getDoc(reservationRef);
       const pubTok = (afterSnap.data() as Record<string, unknown> | undefined)?.publicToken;
       if (typeof pubTok === 'string' && pubTok) {
@@ -382,6 +389,8 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         });
       }
 
+      currentStep = "ensuring pending online payment";
+      console.log("[UPLOAD STEP]", currentStep);
       const ensure = await ensurePendingOnlinePaymentFromReservation({
         companyId: reservationDraft.companyId!,
         agencyId: reservationDraft.agencyId,
@@ -398,12 +407,16 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
       }
 
       try {
+        currentStep = "removing lastUssdCode";
+        console.log("[UPLOAD STEP]", currentStep);
         sessionStorage.removeItem('lastUssdCode');
       } catch {
         /* ignore */
       }
       // Logger état après écriture pour diagnostiquer quand l’opérateur digital ne voit pas la preuve.
       try {
+        currentStep = "diagnostic read after proof";
+        console.log("[UPLOAD STEP]", currentStep);
         const afterProofSnap2 = await getDoc(reservationRef);
         const after2 = afterProofSnap2.data() as Record<string, unknown> | undefined;
         log.info('After proof update (diagnostic)', {
@@ -419,10 +432,14 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         log.warn('After proof diagnostic read failed', diagErr);
       }
 
+      currentStep = "clearing pending reservation";
+      console.log("[UPLOAD STEP]", currentStep);
       clearPendingReservation();
       log.info('Proof submitted → redirect to receipt');
 
       const pathBase = getPublicPathBase(reservationDraft.companySlug || getSlugFromSubdomain() || slug || '');
+      currentStep = "navigating receipt";
+      console.log("[UPLOAD STEP]", currentStep);
       navigate(pathBase ? `/${pathBase}/receipt/${reservationDraft.id}` : `/receipt/${reservationDraft.id}`, {
         replace: true,
         state: {
@@ -431,6 +448,13 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         },
       });
     } catch (err) {
+      console.error("[UPLOAD FAILED STEP]", currentStep);
+      console.error("[UPLOAD FAILED ERROR]", {
+        code: (err as any)?.code,
+        message: (err as any)?.message,
+        stack: (err as any)?.stack,
+        err
+      });
       log.error('handleSubmitProof error', err);
       setError('Une erreur est survenue lors de l\'envoi.');
     } finally {
