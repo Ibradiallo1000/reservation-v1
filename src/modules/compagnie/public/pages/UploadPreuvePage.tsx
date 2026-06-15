@@ -377,11 +377,25 @@ const UploadPreuvePage: React.FC<UploadPreuvePageProps> = ({ reservationIdFromPa
         updatedAt: serverTimestamp(),
       });
 
-      currentStep = "updating publicReservation";
-      console.log("[UPLOAD STEP]", currentStep);
-      const afterSnap = await getDoc(reservationRef);
-      const pubTok = (afterSnap.data() as Record<string, unknown> | undefined)?.publicToken;
+      let pubTok = typeof data.publicToken === 'string' ? data.publicToken : '';
+      if (!pubTok) {
+        try {
+          currentStep = "reading reservation after proof";
+          console.log("[UPLOAD STEP]", currentStep);
+          const afterSnap = await getDoc(reservationRef);
+          const publicTokenAfterProof = (afterSnap.data() as Record<string, unknown> | undefined)?.publicToken;
+          pubTok = typeof publicTokenAfterProof === 'string' ? publicTokenAfterProof : '';
+        } catch (err) {
+          console.warn("[UPLOAD WARN] unable to reread reservation after proof update", {
+            code: (err as any)?.code,
+            message: (err as any)?.message,
+            err
+          });
+        }
+      }
       if (typeof pubTok === 'string' && pubTok) {
+        currentStep = "updating publicReservation";
+        console.log("[UPLOAD STEP]", currentStep);
         await updateDoc(doc(db, 'publicReservations', pubTok), {
           status: 'preuve_recue',
           paymentReference: parsedForSave.transactionId || trimmed,
