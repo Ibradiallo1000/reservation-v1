@@ -101,12 +101,22 @@ async function loadTicket(pointer: LocalTicketPointer): Promise<Reservation | nu
   const reservationId = String(publicData.reservationId || pointer.reservationId || "");
   if (!companyId || !agencyId || !reservationId) return null;
 
-  const nestedSnap = await getDoc(
-    doc(db, "companies", companyId, "agences", agencyId, "reservations", reservationId)
-  );
-  const currentData = nestedSnap.exists()
-    ? { ...publicData, ...(nestedSnap.data() as Record<string, any>) }
-    : publicData;
+  let currentData = publicData;
+  try {
+    const nestedSnap = await getDoc(
+      doc(db, "companies", companyId, "agences", agencyId, "reservations", reservationId)
+    );
+    if (nestedSnap.exists()) {
+      currentData = { ...publicData, ...(nestedSnap.data() as Record<string, any>) };
+    }
+  } catch (nestedError) {
+    console.warn("[LOCAL_TICKET_WALLET_NESTED_ENRICHMENT_FAILED]", {
+      code: (nestedError as any)?.code,
+      message: (nestedError as any)?.message,
+      reservationId,
+      nestedError,
+    });
+  }
 
   saveLocalTicketPointer({
     token: pointer.token,
