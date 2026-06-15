@@ -191,10 +191,28 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       }
 
       if (!isReservationAwaitingPayment(snap.status)) {
+        // AUDIT ONLY (no logic change): identify which field blocks the awaiting-payment check.
+        try {
+          console.log('[PAYMENT CHECK]', {
+            reservationId,
+            status: (snap as any)?.status,
+            statut: (snap as any)?.statut,
+
+            canal: (reservation as any)?.canal,
+            paymentStatus: (reservation as any)?.payment?.status,
+            paymentChannel: (reservation as any)?.paymentChannel,
+            paymentMethod: (reservation as any)?.paymentMethod,
+            payment: (reservation as any)?.payment,
+            reservation,
+          });
+        } catch {
+          // ignore
+        }
         setError('Cette réservation n’est plus en attente de paiement.');
         setLoading(false);
         return;
       }
+
 
       const toStr = (v: unknown): string => (typeof v === 'string' ? v : '');
       const normDate = (v: unknown): string => {
