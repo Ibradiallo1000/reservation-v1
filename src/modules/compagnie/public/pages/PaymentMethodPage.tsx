@@ -3,6 +3,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, collection, query, where } from 'firebase/firestore';
+
 import { db } from '@/firebaseConfig';
 import { Check, Phone, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
@@ -160,23 +161,48 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
 
       setDebugStep('reading reservation');
       console.log('[PaymentMethodPage] reading reservation', reservationId);
-      const snap = await fetchReservationFromNestedPath(db, cid, aid, reservationId);
+
+      // 1) First try publicReservations/{reservationId} so this page works when auth is null.
+      //    rules: match /publicReservations/{docId} allow get: true;
+      let snap: any = null;
+      try {
+        const prSnap = await getDoc(doc(db, 'publicReservations', reservationId));
+        if (prSnap.exists()) {
+          snap = prSnap.data();
+          // Normalize: public doc might use fields like status/statut/companyId/agencyId.
+          const status = String(snap?.status ?? snap?.statut ?? '');
+          if (status) {
+            snap.status = status;
+          }
+        }
+      } catch {
+        // ignore and fallback to nested
+      }
+
+      // 2) Fallback: tenant nested reservation
+      if (!snap) {
+        snap = await fetchReservationFromNestedPath(db, cid, aid, reservationId);
+      }
+
       if (!snap) {
         setError('Réservation introuvable. Utilisez le lien reçu par email ou le lien de votre billet.');
         setLoading(false);
         return;
       }
+
       if (!isReservationAwaitingPayment(snap.status)) {
         setError('Cette réservation n’est plus en attente de paiement.');
         setLoading(false);
         return;
       }
+
       const toStr = (v: unknown): string => (typeof v === 'string' ? v : '');
       const normDate = (v: unknown): string => {
         if (typeof v === 'string') return v;
         if (v && typeof v === 'object' && 'seconds' in v) return new Date((v as { seconds: number }).seconds * 1000).toISOString().slice(0, 10);
         return '';
       };
+
       setReservation({
         id: reservationId,
         companyId: cid,
@@ -191,6 +217,7 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         seatsGo: Number(snap.seatsGo ?? 1),
         statut: toStr(snap.status),
       });
+
 
       setDebugStep('reading company');
       const compSnap = await getDoc(doc(db, 'companies', cid));

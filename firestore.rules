@@ -727,9 +727,15 @@ service cloud.firestore {
 
       // Payment method configurations per company (used by CompanyPaymentSettingsPage)
       match /paymentConfigs/{configId} {
-        allow get, list: if isAuth() && (userCompanyId() == companyId || isPlatformAdmin()) && resource.data.get('isEnabled', false) == true;
-        allow create, update, delete: if false;
+        allow get, list: if resource.data.get('active', false) == true
+          && resource.data.get('isEnabled', false) == true;
+
+        allow create, update, delete: if isAuth()
+          && (userCompanyId() == companyId || isPlatformAdmin());
       }
+
+
+
 
 
       /* Avis clients (vitrine publique) : lecture publique sans auth pour page compagnie */
@@ -1339,7 +1345,20 @@ service cloud.firestore {
                 resource.data.get('canal', '') in ['en_ligne', 'online']
                 || resource.data.get('paymentChannel', '') in ['en_ligne', 'online']
               ))
-            || (request.auth == null && resource.data.get('canal', '') == 'en_ligne');
+            || (
+              request.auth == null
+              && resource.data.get('companyId', '') == companyId
+              && resource.data.get('agencyId', '') == agencyId
+              && (
+                resource.data.get('canal', '') in ['en_ligne', 'online']
+                || resource.data.get('paymentChannel', '') in ['en_ligne', 'online']
+              )
+              && (
+                resource.data.get('status', '') in ['en_attente', 'en_attente_paiement']
+                || resource.data.get('statut', '') in ['en_attente', 'en_attente_paiement']
+                || resource.data.get('payment', {}).get('status', '') == 'pending'
+              )
+            );
           allow list: if isAuth() && (
             getUserRole() == 'admin_platforme'
             || userCompanyId() == companyId
@@ -2362,12 +2381,27 @@ match /shiftReports/{reportId} {
 
       /* Collection group reservations : lecture pour admin, même compagnie (companyId/compagnieId), ou même agence (guichetier, chefAgence, etc.). */
     match /{path=**}/reservations/{reservationId} {
-      allow get: if isAuth() && (
-        getUserRole() == 'admin_platforme'
-        || resource.data.get('companyId', '') == userCompanyId()
-        || resource.data.get('compagnieId', '') == userCompanyId()
-        || (getUserAgencyId() != '' && resource.data.get('agencyId', '') == getUserAgencyId())
+      allow get: if (
+        isAuth() && (
+          getUserRole() == 'admin_platforme'
+          || resource.data.get('companyId', '') == userCompanyId()
+          || resource.data.get('compagnieId', '') == userCompanyId()
+          || (getUserAgencyId() != '' && resource.data.get('agencyId', '') == getUserAgencyId())
+        )
+      )
+      || (
+        request.auth == null
+        && (
+          resource.data.get('canal', '') in ['en_ligne', 'online']
+          || resource.data.get('paymentChannel', '') in ['en_ligne', 'online']
+        )
+        && (
+          resource.data.get('status', '') in ['en_attente', 'en_attente_paiement']
+          || resource.data.get('statut', '') in ['en_attente', 'en_attente_paiement']
+          || resource.data.get('payment', {}).get('status', '') == 'pending'
+        )
       );
+
       allow list: if request.auth != null && (
         request.auth.token.role == 'admin_platforme'
         || request.auth.token.companyId != null
