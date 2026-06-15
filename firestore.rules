@@ -727,12 +727,14 @@ service cloud.firestore {
 
       // Payment method configurations per company (used by CompanyPaymentSettingsPage)
       match /paymentConfigs/{configId} {
-        allow get, list: if resource.data.get('active', false) == true
-          && resource.data.get('isEnabled', false) == true;
+        allow get, list: if (resource.data.get('active', false) == true)
+          && (resource.data.get('isEnabled', false) == true);
 
         allow create, update, delete: if isAuth()
           && (userCompanyId() == companyId || isPlatformAdmin());
       }
+
+
 
 
 

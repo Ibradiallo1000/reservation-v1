@@ -125,7 +125,9 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
   const [debugStep, setDebugStep] = useState<string>('');
 
   const load = useCallback(async () => {
+    let currentStep = "init";
     const auth = (globalThis as any)?.auth;
+
 
     console.log("[PaymentMethodPage] BUILD_VERSION", "payment-methods-v2");
     console.log(
@@ -160,7 +162,9 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       }
 
       setDebugStep('reading reservation');
+      console.log('[STEP BEFORE] load()', { reservationId, companyId, agencyId });
       console.log('[PaymentMethodPage] reading reservation', reservationId);
+
 
       // 1) First try publicReservations/{reservationId} so this page works when auth is null.
       //    rules: match /publicReservations/{docId} allow get: true;
@@ -180,11 +184,29 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       }
 
       // 2) Fallback: tenant nested reservation
-      if (!snap) {
+      // IMPORTANT: publicReservations doc does NOT contain status/statut/payment/canal.
+      // It only contains token + ids. So if we didn't get nested doc, or if lifecycle fields are missing, fetch nested.
+      if (!snap || !(snap as any).status && !(snap as any).statut && !(snap as any).canal && !(snap as any).payment) {
         snap = await fetchReservationFromNestedPath(db, cid, aid, reservationId);
       }
 
+      console.log("[PAYMENT RAW SNAP]", snap);
+
+
+      if (snap && typeof snap === "object") {
+        console.log("[PAYMENT SNAP KEYS]", Object.keys(snap));
+      }
+
+      if (snap?.reservation) {
+        console.log("[PAYMENT RESERVATION KEYS]", Object.keys(snap.reservation));
+      }
+
+      if (snap?.payment) {
+        console.log("[PAYMENT PAYMENT KEYS]", Object.keys(snap.payment));
+      }
+
       if (!snap) {
+
         setError('Réservation introuvable. Utilisez le lien reçu par email ou le lien de votre billet.');
         setLoading(false);
         return;
@@ -248,7 +270,9 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
 
 
       setDebugStep('reading company');
+      console.log('[STEP] reading company', cid);
       const compSnap = await getDoc(doc(db, 'companies', cid));
+
       if (compSnap.exists()) {
         const c = compSnap.data() as Record<string, unknown>;
         setCompany({
@@ -262,16 +286,21 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       }
 
       // 1) Récupération des configs actives de la compagnie
+      console.log('[STEP] reading paymentConfigs', cid);
       setDebugStep('reading paymentConfigs');
+
       const cfgSnap = await getDocs(
         query(
-          collection(db, 'companies', cid, 'paymentConfigs')
+          collection(db, 'companies', cid, 'paymentConfigs'),
+          where('active', '==', true),
+          where('isEnabled', '==', true)
         )
       );
 
       const activeConfigs = cfgSnap.docs
         .map((d) => ({ id: d.id, ...(d.data() as any) }))
         .filter((c) => Boolean(c.isEnabled ?? c.active ?? false));
+
 
       // 2) Pour chaque config, charger la méthode globale paymentMethods/{methodId}
       const pms: Record<string, PaymentMethodInfo> = {};
@@ -281,8 +310,10 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
           const methodId = String(cfg.methodId ?? cfg.id ?? '');
           if (!methodId) return;
 
+          console.log('[STEP] reading paymentMethods', methodId);
           setDebugStep('reading paymentMethods');
           const mSnap = await getDoc(doc(db, 'paymentMethods', methodId));
+
           if (!mSnap.exists()) return;
 
           const m = mSnap.data() as Record<string, any>;
@@ -363,8 +394,11 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
       console.log('[PaymentMethodPage] company', compSnap.exists() ? { id: compSnap.id } : null);
       console.log('[PaymentMethodPage] activeConfigs', activeConfigs.map((c) => c.methodId ?? c.id));
       console.log('[PaymentMethodPage] paymentMethods keys', Object.keys(pms));
-  } catch (e) {
-    const firebaseError = e as any;
+    } catch (e) {
+      console.error('[FAILED STEP]', debugStep);
+      console.error(e);
+      const firebaseError = e as any;
+
     setDebugError({
       step: debugStep,
       reservationId: reservationId ?? null,
