@@ -83,15 +83,19 @@ function mapPublicReceiptReservation(
 ): Reservation {
   const rawStatus = String(data.status ?? data.statut ?? '').toLowerCase();
   const statut: ReservationStatus =
-    rawStatus === 'preuve_recue'
-      ? 'preuve_recue'
+    rawStatus === 'confirme'
+      ? 'confirme'
       : rawStatus === 'payé' || rawStatus === 'paye'
-        ? data.ticketValidatedAt ? 'confirme' : 'verification'
-        : rawStatus === 'annulé' || rawStatus === 'annule'
-          ? 'annule'
-          : rawStatus === 'refuse' || rawStatus === 'refusé'
-            ? 'refuse'
-            : 'en_attente_paiement';
+        ? 'paye'
+        : rawStatus === 'preuve_recue'
+          ? 'preuve_recue'
+          : rawStatus === 'verification'
+            ? 'verification'
+            : rawStatus === 'annulé' || rawStatus === 'annule'
+              ? 'annule'
+              : rawStatus === 'refuse' || rawStatus === 'refusé'
+                ? 'refuse'
+                : 'en_attente_paiement';
 
   return {
     id: String(data.reservationId ?? fallbackId),
@@ -163,7 +167,8 @@ const ReceiptEnLignePage: React.FC = () => {
       return;
     }
 
-    let unsub: (() => void) | undefined;
+    let unsubPublic: (() => void) | undefined;
+    let unsubNested: (() => void) | undefined;
     (async () => {
       setLoading(true);
       setNotFound(false);
@@ -199,6 +204,27 @@ const ReceiptEnLignePage: React.FC = () => {
             setReservation(publicReservation);
             setLoading(false);
           }
+
+          const publicDocumentId = publicToken || id;
+          console.log('[RECEIPT STEP]', 'subscribing publicReservation', publicDocumentId);
+          unsubPublic = onSnapshot(
+            doc(db, 'publicReservations', publicDocumentId),
+            (snap) => {
+              if (!snap.exists()) return;
+              publicData = {
+                ...publicData,
+                ...(snap.data() as Record<string, unknown>),
+              };
+              const mapped = mapPublicReceiptReservation(publicData, id, companyId, agencyId);
+              publicReservation = mapped;
+              setReservation((current) => current ? { ...current, ...mapped } : mapped);
+              setLoading(false);
+            },
+            (err) => {
+              console.error('[ReceiptEnLignePage] publicReservation onSnapshot error:', err);
+              setLoading(false);
+            },
+          );
         }
 
         if (!companyId || !agencyId) {
@@ -217,7 +243,7 @@ const ReceiptEnLignePage: React.FC = () => {
 
         const resRef = reservationNestedRef(db, companyId, agencyId, publicReservation?.id ?? id);
         console.log('[RECEIPT STEP]', 'subscribing nested reservation', resRef.path);
-        unsub = onSnapshot(resRef, (snap) => {
+        unsubNested = onSnapshot(resRef, (snap) => {
           if (!snap.exists()) {
             if (publicReservation) return;
             setNotFound(true);
@@ -288,7 +314,8 @@ const ReceiptEnLignePage: React.FC = () => {
       }
     })();
     return () => {
-      if (unsub) unsub();
+      if (unsubPublic) unsubPublic();
+      if (unsubNested) unsubNested();
     };
   }, [id, slug, isOnline, reloadKey, receiptState.companyId, receiptState.agencyId]);
 
