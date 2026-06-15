@@ -142,5 +142,17 @@ export async function commitOperatorValidatedOnlineReservation({
       ...commercialActivityPatch,
       updatedAt: serverTimestamp(),
     });
+
+    const publicToken = String(reservation.publicToken ?? "").trim();
+    if (publicToken) {
+      tx.set(
+        doc(db, "publicReservations", publicToken),
+        {
+          status: "confirme",
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
   });
 }
