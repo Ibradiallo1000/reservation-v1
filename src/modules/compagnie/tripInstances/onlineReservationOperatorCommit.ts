@@ -54,6 +54,12 @@ export async function commitOperatorValidatedOnlineReservation({
     const channel = String(reservation.paymentChannel ?? reservation.canal ?? "").toLowerCase();
     const status = String(reservation.status ?? "").toLowerCase();
     const statut = String(reservation.statut ?? "").toLowerCase();
+    let publicToken = String(reservation.publicToken ?? payment.publicToken ?? "").trim();
+    if (!publicToken) {
+      const publicPointerSnap = await tx.get(doc(db, "publicReservations", reservationRef.id));
+      const publicPointer = publicPointerSnap.data() as Record<string, unknown> | undefined;
+      publicToken = String(publicPointer?.token ?? publicPointer?.publicToken ?? "").trim();
+    }
 
     if (reservationCompanyId !== companyId) {
       throw new Error("La réservation ne correspond pas à la compagnie du paiement.");
@@ -143,12 +149,19 @@ export async function commitOperatorValidatedOnlineReservation({
       updatedAt: serverTimestamp(),
     });
 
-    const publicToken = String(reservation.publicToken ?? "").trim();
+    console.log("[PUBLIC SYNC TOKEN]", publicToken);
     if (publicToken) {
+      console.log("[PUBLIC SYNC PATH]", `publicReservations/${publicToken}`);
       tx.set(
         doc(db, "publicReservations", publicToken),
         {
           status: "confirme",
+          statut: "confirme",
+          paymentStatus: "paid",
+          payment: {
+            status: "validated",
+          },
+          ticketValidatedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
         { merge: true }
