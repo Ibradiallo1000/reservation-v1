@@ -3,5 +3,8 @@
  * ("en_attente" | "payé" | "annulé").
  */
 export function isReservationAwaitingPayment(status: unknown): boolean {
-  return status === "en_attente";
+  if (typeof status !== 'string') return false;
+  const s = status.trim().toLowerCase().replace(' ', '_');
+  return s === 'en_attente' || s === 'en_attente_paiement' || s === 'pending';
 }
+

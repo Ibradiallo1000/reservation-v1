@@ -190,7 +190,17 @@ export default function PaymentMethodPage({ slug: slugProp }: PaymentMethodPageP
         return;
       }
 
-      if (!isReservationAwaitingPayment(snap.status)) {
+      // Normalize lifecycle status for cases where the doc uses `statut` or other legacy fields.
+      const lifecycleStatus =
+        snap.status ??
+        snap.statut ??
+        (snap as any).reservation?.status ??
+        (snap as any).reservation?.statut ??
+        (snap as any).payment?.status ??
+        '';
+
+      if (!isReservationAwaitingPayment(lifecycleStatus)) {
+
         // AUDIT ONLY (no logic change): identify which field blocks the awaiting-payment check.
         try {
           console.log('[PAYMENT CHECK]', {
