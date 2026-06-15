@@ -1540,7 +1540,7 @@ const AgenceGuichetPage: React.FC = () => {
   // ═══════════════════════════════════════════════════════════════
   return (
     <div
-      className={`h-screen flex flex-col overflow-hidden ${darkMode ? "agency-dark" : ""}`}
+      className={`h-screen h-[100dvh] w-full min-w-0 flex flex-col overflow-x-hidden ${darkMode ? "agency-dark" : ""}`}
       style={rootChromeStyle}
     >
 
@@ -1588,36 +1588,39 @@ const AgenceGuichetPage: React.FC = () => {
 
       {/* Tab navigation */}
       <div
-        className="border-b border-gray-200/60 px-4 lg:px-6"
+        className="border-b border-gray-200/60 px-1.5 sm:px-4 lg:px-6"
         style={{ backgroundImage: "var(--agency-gradient-subheader)" }}
       >
-        <div className="max-w-[1600px] mx-auto flex items-center gap-1">
+        <div className="max-w-[1600px] mx-auto flex min-w-0 items-center gap-0.5 sm:gap-1">
+          <div className="scrollbar-none flex min-w-0 flex-1 overflow-x-auto sm:grid sm:grid-cols-3 sm:overflow-visible">
           {([
-            { key: "vente" as const, label: "Guichet", icon: Receipt },
-            { key: "rapport" as const, label: "Rapport", icon: CalendarDays },
-            { key: "historique" as const, label: "Historique", icon: History },
-          ]).map(({ key, label, icon: Icon }) => (
+            { key: "vente" as const, label: "Guichet", mobileLabel: "Guichet", icon: Receipt },
+            { key: "rapport" as const, label: "Rapport", mobileLabel: "Rapport", icon: CalendarDays },
+            { key: "historique" as const, label: "Historique", mobileLabel: "Histor.", icon: History },
+          ]).map(({ key, label, mobileLabel, icon: Icon }) => (
             <button
               key={key}
               onClick={() => handleTabChange(key)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              className={`flex min-w-[4.75rem] flex-1 items-center justify-center gap-1 px-1.5 py-2.5 text-xs font-medium border-b-2 transition-colors sm:min-w-0 sm:gap-2 sm:px-4 sm:py-3 sm:text-sm ${
                 tab === key
                   ? "border-current text-current"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
               style={tab === key ? { color: theme.primary } : undefined}
             >
-              <Icon className="w-4 h-4" />
-              {label}
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="truncate sm:hidden">{mobileLabel}</span>
+              <span className="hidden sm:inline">{label}</span>
             </button>
           ))}
+          </div>
 
           {/* Right side controls */}
-          <div className="ml-auto flex items-center gap-1.5">
+          <div className="ml-0.5 flex shrink-0 items-center gap-0.5 border-l border-gray-200 pl-0.5 sm:ml-auto sm:gap-1.5 sm:border-0 sm:pl-0">
             {/* Auto-print toggle */}
             <button
               onClick={() => setAutoPrint(!autoPrint)}
-              className={`px-2 py-1 rounded-md transition text-xs ${autoPrint ? "text-white" : "text-gray-400 hover:bg-gray-100"}`}
+              className={`grid h-9 w-9 place-items-center rounded-md transition text-xs sm:h-auto sm:w-auto sm:px-2 sm:py-1 ${autoPrint ? "text-white" : "text-gray-400 hover:bg-gray-100"}`}
               style={autoPrint ? { backgroundColor: theme.primary } : undefined}
               title={autoPrint ? "Impression auto activée" : "Impression auto désactivée"}
             >
@@ -1627,7 +1630,7 @@ const AgenceGuichetPage: React.FC = () => {
             {/* Sound toggle */}
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
-              className={`px-2 py-1 rounded-md border transition text-xs shadow-sm ${
+              className={`grid h-9 w-9 place-items-center rounded-md border transition text-xs shadow-sm sm:h-auto sm:w-auto sm:px-2 sm:py-1 ${
                 darkMode
                   ? "border-gray-600 bg-gray-700 text-gray-100 hover:bg-gray-600"
                   : "border-gray-300 bg-white/90 text-gray-800 hover:bg-white"
@@ -1640,29 +1643,19 @@ const AgenceGuichetPage: React.FC = () => {
             {/* Dark mode toggle (partagé avec les autres espaces agence) */}
             <button
               onClick={toggleDarkMode}
-              className={`px-2 py-1 rounded-md transition text-xs ${darkMode ? "bg-gray-700 text-yellow-300" : "text-gray-400 hover:bg-gray-100"}`}
+              className={`grid h-9 w-9 place-items-center rounded-md transition text-xs sm:h-auto sm:w-auto sm:px-2 sm:py-1 ${darkMode ? "bg-gray-700 text-yellow-300" : "text-gray-400 hover:bg-gray-100"}`}
               title={darkMode ? "Mode jour" : "Mode nuit"}
             >
               {darkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
             </button>
 
-            {/* Keyboard shortcut hint */}
-            <span
-              className={`hidden xl:block ml-2 rounded-md border px-2 py-1 text-[10px] font-medium ${
-                darkMode
-                  ? "border-gray-600 bg-gray-700/80 text-gray-300"
-                  : "border-gray-200 bg-white/80 text-gray-600 shadow-sm"
-              }`}
-            >
-              F2:onglet · Esc:fermer · +/-:places · Ctrl+P:imprimer
-            </span>
           </div>
         </div>
       </div>
 
       {/* Main content with tab animation */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div key={tabKey} className={`agency-content-transition ${tab === "vente" ? "h-full" : ""}`}>
+      <div className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto">
+        <div key={tabKey} className={`agency-content-transition min-w-0 ${tab === "vente" ? "md:h-full" : ""}`}>
           {/* ═══════ VENTE TAB ═══════ */}
           {tab === "vente" && (
             !isCounterOpen && !sessionLockedByOtherDevice ? (
@@ -1686,12 +1679,12 @@ const AgenceGuichetPage: React.FC = () => {
                 activationByEscaleManager={agencyType === "escale"}
               />
             ) : (
-              <div className="max-w-[1600px] mx-auto p-3 md:p-4 lg:p-6 h-full flex flex-col min-h-0">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-4 lg:gap-5 flex-1 min-h-0 w-full overflow-x-hidden">
+              <div className="max-w-[1600px] mx-auto w-full min-w-0 p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:p-3 md:h-full md:p-4 lg:p-6 flex flex-col md:min-h-0">
+                <div className="grid w-full min-w-0 grid-cols-1 gap-3 overflow-x-hidden md:min-h-0 md:flex-1 md:grid-cols-2 md:gap-4 lg:grid-cols-3 lg:gap-5 xl:grid-cols-4">
                   {/* LEFT: Journey selection (3/5) — scroll si besoin */}
                   <div className="md:col-span-1 lg:col-span-2 xl:col-span-3 space-y-3 md:space-y-4 lg:space-y-4 overflow-visible md:overflow-y-auto min-h-0 min-w-0">
                     {/* Destination (départ = agence ou escale fixe) */}
-                    <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+                    <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-3 sm:p-4 lg:p-5">
                       {isEscaleMode && (
                         <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-3 py-1.5 mb-3 inline-block">
                           Vente depuis l&apos;escale — Départ fixe, destinations limitées aux arrêts suivants.

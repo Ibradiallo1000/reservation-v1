@@ -110,7 +110,7 @@ const ReceiptModal: React.FC<Props> = ({
       .set({
         margin: 2,
         filename: `ticket-${receiptNumber}.pdf`,
-        html2canvas: { scale: 2 },
+        html2canvas: { scale: 2, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format: [80, 200] }
       })
       .from(ref.current)
@@ -118,20 +118,29 @@ const ReceiptModal: React.FC<Props> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-x-hidden overflow-y-auto bg-black/40 p-2 sm:p-4">
 
       <style>{`
         @media print {
           body * { visibility: hidden !important; }
           #thermal-ticket, #thermal-ticket * { visibility: visible !important; }
-          #thermal-ticket { position: absolute; left: 0; top: 0; width: 100%; }
+          #thermal-ticket {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 80mm !important;
+            max-width: 80mm !important;
+            background: #fff !important;
+            color: #111 !important;
+            box-shadow: none !important;
+          }
           .no-print { display: none !important; }
         }
       `}</style>
 
       <div
         id="thermal-ticket"
-        className="ticket-force-light bg-white rounded-xl shadow-xl overflow-hidden"
+        className="ticket-force-light my-auto max-h-[calc(100dvh-1rem)] max-w-full shrink-0 overflow-x-hidden overflow-y-auto rounded-xl bg-white text-black shadow-xl sm:max-h-[calc(100dvh-2rem)]"
         style={{
           width: '80mm',
           fontFamily: 'monospace',
@@ -141,13 +150,14 @@ const ReceiptModal: React.FC<Props> = ({
       >
 
         {/* HEADER ACTIONS */}
-        <div className="no-print flex justify-between items-center px-4 py-3 border-b">
-          <div className="font-semibold">{company.nom}</div>
-          <div className="flex gap-2">
-            <button type="button" onClick={handlePDF} disabled={blockFinalTicket} title={blockFinalTicket ? "Disponible après validation" : undefined}>
+        <div className="no-print sticky top-0 z-10 flex flex-col items-center gap-2 border-b bg-white px-3 py-3">
+          <div className="w-full min-w-0 truncate text-center font-semibold">{company.nom}</div>
+          <div className="grid w-full grid-cols-3 gap-1.5 text-xs">
+            <button className="flex min-h-10 items-center justify-center rounded-lg border border-gray-200 px-1.5" type="button" onClick={handlePDF} disabled={blockFinalTicket} title={blockFinalTicket ? "Disponible après validation" : undefined}>
               PDF
             </button>
             <button
+              className="flex min-h-10 items-center justify-center rounded-lg border border-gray-200 px-1.5"
               type="button"
               onClick={() => window.print()}
               disabled={blockFinalTicket}
@@ -155,12 +165,12 @@ const ReceiptModal: React.FC<Props> = ({
             >
               Imprimer
             </button>
-            <button type="button" onClick={onClose}>Fermer</button>
+            <button className="flex min-h-10 items-center justify-center rounded-lg border border-gray-200 px-1.5" type="button" onClick={onClose}>Fermer</button>
           </div>
         </div>
 
         {/* CONTENU */}
-        <div ref={ref} className="p-4 text-black">
+        <div ref={ref} className="bg-white p-4 text-black">
 
           {/* LOGO + NOM */}
           <div className="text-center mb-3">

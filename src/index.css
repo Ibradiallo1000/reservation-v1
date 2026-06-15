@@ -441,6 +441,12 @@ html.dark .public-booking .public-hero-titles h2 {
   background-color: #ffffff !important;
   color: #111827 !important;
 }
+.ticket-force-light *,
+.dark .ticket-force-light *,
+.agency-dark .ticket-force-light * {
+  color-scheme: light !important;
+  color: #111827 !important;
+}
 .ticket-force-light .bg-white,
 .dark .ticket-force-light .bg-white,
 .agency-dark .ticket-force-light .bg-white {
@@ -722,8 +728,12 @@ html.dark .public-booking .public-hero-titles h2 {
   /* Ticket / reçu : fond clair */
   .ticket-force-light,
   .ticket-force-light * {
-    background: transparent !important;
     color: #111827 !important;
+  }
+  .ticket-force-light {
+    background: #ffffff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   /**
    * Document officiel embarquement (#print-area.boarding-official-print) :

@@ -128,7 +128,7 @@ export const SalePanel: React.FC<Props> = ({
     : formatMoney(totalPrice);
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col h-full">
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex min-w-0 flex-col md:h-full">
       {/* Header */}
       <div className="px-4 py-3 border-b border-gray-100 shrink-0" style={{ background: `${primaryColor}08` }}>
         <div className="flex items-center gap-1.5">
@@ -139,7 +139,7 @@ export const SalePanel: React.FC<Props> = ({
       </div>
 
       {/* Zone formulaire scrollable + Total + Bouton fixe en bas */}
-      <div className="flex-1 flex flex-col p-3 sm:p-4 min-w-0" onKeyDown={handleKeyDown}>
+      <div className="flex-1 flex flex-col p-3 sm:p-4 min-w-0 md:min-h-0" onKeyDown={handleKeyDown}>
         <div className="space-y-3">
         {/* Activation warning */}
         {!canSell && (
@@ -213,7 +213,7 @@ export const SalePanel: React.FC<Props> = ({
                 if (capped !== nomClient) onNomChange(capped);
               }}
               placeholder="Nom complet"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition"
+              className="w-full border border-gray-300 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:border-transparent transition sm:py-2 sm:text-sm"
               style={{ ["--tw-ring-color" as string]: `${primaryColor}40` }}
               autoComplete="off"
             />
@@ -246,7 +246,7 @@ export const SalePanel: React.FC<Props> = ({
               type="tel"
               inputMode="numeric"
               maxLength={11}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:border-transparent transition"
+              className="w-full border border-gray-300 rounded-lg px-3 py-3 text-base focus:outline-none focus:ring-2 focus:border-transparent transition sm:py-2 sm:text-sm"
               style={{ ["--tw-ring-color" as string]: `${primaryColor}40` }}
               autoComplete="off"
             />
@@ -306,17 +306,17 @@ export const SalePanel: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => onPlacesAllerChange(Math.max(1, placesAller - 1))}
-              className="w-7 h-7 rounded-l-lg border border-gray-300 bg-white hover:bg-gray-50 transition flex items-center justify-center shrink-0"
+              className="w-11 h-11 rounded-l-lg border border-gray-300 bg-white hover:bg-gray-50 transition flex items-center justify-center shrink-0 sm:h-7 sm:w-7"
             >
               <Minus className="w-3 h-3 text-gray-600" />
             </button>
-            <div className="flex-1 min-w-[2rem] h-7 border-y border-gray-300 bg-gray-50 flex items-center justify-center">
+            <div className="flex-1 min-w-[2rem] h-11 border-y border-gray-300 bg-gray-50 flex items-center justify-center sm:h-7">
               <span className="text-sm font-bold text-gray-900">{placesAller}</span>
             </div>
             <button
               type="button"
               onClick={() => onPlacesAllerChange(placesAller + 1)}
-              className="w-7 h-7 rounded-r-lg border border-gray-300 bg-white hover:bg-gray-50 transition flex items-center justify-center shrink-0"
+              className="w-11 h-11 rounded-r-lg border border-gray-300 bg-white hover:bg-gray-50 transition flex items-center justify-center shrink-0 sm:h-7 sm:w-7"
             >
               <Plus className="w-3 h-3 text-gray-600" />
             </button>
@@ -325,7 +325,7 @@ export const SalePanel: React.FC<Props> = ({
         </div>
 
         {/* Total + CTA toujours visibles en bas */}
-        <div className="shrink-0 space-y-1.5 mt-3 pt-3 border-t border-gray-100 min-w-0">
+        <div className="sticky bottom-0 z-10 -mx-3 mt-3 min-w-0 shrink-0 space-y-1.5 border-t border-gray-100 bg-white px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:-mx-4 sm:px-4 md:static md:mx-0 md:bg-transparent md:px-0 md:pb-0">
           <div className="rounded-lg p-3" style={{ background: `${primaryColor}08` }}>
             <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
@@ -349,7 +349,7 @@ export const SalePanel: React.FC<Props> = ({
           <button
             onClick={onValidate}
             disabled={!canValidate || isProcessing}
-            className="w-full py-3 rounded-lg text-white font-semibold text-sm transition shadow-md disabled:shadow-none disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg active:scale-[0.99]"
+            className="w-full min-h-12 py-3 rounded-lg text-white font-semibold text-base transition shadow-md disabled:shadow-none disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg active:scale-[0.99] sm:text-sm"
             style={{ background: canValidate ? gradient : "#9CA3AF" }}
           >
             {isProcessing ? (

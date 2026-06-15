@@ -76,8 +76,114 @@ export const PosSessionBar: React.FC<Props> = ({
       className="sticky top-0 z-20 border-b border-gray-200/60 shadow-sm"
       style={{ backgroundImage: "var(--agency-gradient-header)" }}
     >
-      <div className="max-w-[1600px] mx-auto px-4 lg:px-6">
-        <div className="h-16 flex items-center gap-4">
+      <div className="max-w-[1600px] mx-auto min-w-0 px-2 sm:px-4 lg:px-6">
+        {/* Mobile : identité + état + métriques, puis actions + poste. */}
+        <div className="min-w-0 space-y-2 py-2 md:hidden">
+          <div className="flex min-w-0 items-center gap-2">
+            {companyLogo ? (
+              <img src={companyLogo} alt="" className="h-10 w-10 shrink-0 rounded-lg border bg-white object-contain p-0.5" />
+            ) : (
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-gray-100">
+                <User2 className="h-4 w-4 text-gray-400" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold leading-tight" style={{ color: primaryColor }}>{companyName}</p>
+              <p className="truncate text-[11px] leading-tight" style={{ color: secondaryColor }}>{agencyName}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <div className={`flex items-center gap-1.5 rounded-full px-2 py-1.5 text-[11px] font-semibold ${s.bg} ${s.text}`}>
+                <span className={`h-2 w-2 shrink-0 rounded-full ${s.dot} ${status === "active" ? "animate-pulse" : ""}`} />
+                <span>{locked ? "Verrouillé" : s.label}</span>
+              </div>
+              {!isOnline && (
+                <div className="grid h-8 w-8 place-items-center rounded-full bg-red-50 text-red-700" title="Hors-ligne">
+                  <WifiOff className="h-3.5 w-3.5" />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid min-w-0 grid-cols-3 gap-1.5">
+            <div className="flex min-w-0 items-center gap-1 rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 shadow-sm">
+              <Timer className="h-3.5 w-3.5 shrink-0 text-slate-300" />
+              <div className="min-w-0">
+                <p className="text-[9px] uppercase leading-none text-slate-300">Temps</p>
+                <p className="truncate font-mono text-[11px] font-bold tabular-nums text-white">{elapsed || "—"}</p>
+              </div>
+            </div>
+            <div className="min-w-0 rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 shadow-sm">
+              <p className="text-[9px] uppercase leading-none text-slate-300">Billets</p>
+              <p className="truncate text-xs font-bold text-white">{sessionTickets}</p>
+            </div>
+            <div className="min-w-0 rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 shadow-sm">
+              <p className="text-[9px] uppercase leading-none text-slate-300">Recette</p>
+              <p className="truncate text-xs font-bold text-white" title={sessionRevenue}>{sessionRevenue}</p>
+            </div>
+          </div>
+
+          <div className="flex min-w-0 items-center gap-1.5">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              {status === "active" && !locked && (
+                <>
+                  <button onClick={onPause}
+                    className="inline-flex h-10 min-w-10 flex-1 items-center justify-center gap-1 rounded-lg border border-gray-300 bg-white px-2 text-xs font-medium text-gray-700 transition hover:bg-gray-50">
+                    <Pause className="h-3.5 w-3.5" /> <span className="hidden min-[390px]:inline">Pause</span>
+                  </button>
+                  <button onClick={() => { if (window.confirm("Clôturer le comptoir ? Vous ne pourrez plus vendre.")) onClose(); }}
+                    className="inline-flex h-10 min-w-10 flex-1 items-center justify-center gap-1 rounded-lg px-2 text-xs font-medium text-white transition hover:opacity-90"
+                    style={{ background: gradient }}>
+                    <XCircle className="h-3.5 w-3.5" /> <span className="hidden min-[390px]:inline">Clôturer</span>
+                  </button>
+                </>
+              )}
+              {status === "paused" && !locked && (
+                <>
+                  <button onClick={onContinue}
+                    className="inline-flex h-10 min-w-10 flex-1 items-center justify-center gap-1 rounded-lg px-2 text-xs font-medium text-white transition hover:opacity-90"
+                    style={{ background: gradient }}>
+                    <Play className="h-3.5 w-3.5" /> <span className="hidden min-[390px]:inline">Reprendre</span>
+                  </button>
+                  <button onClick={() => { if (window.confirm("Clôturer le comptoir ?")) onClose(); }}
+                    className="inline-flex h-10 min-w-10 flex-1 items-center justify-center gap-1 rounded-lg border border-gray-300 bg-white px-2 text-xs font-medium text-gray-700 transition hover:bg-gray-50">
+                    <XCircle className="h-3.5 w-3.5" /> <span className="hidden min-[390px]:inline">Clôturer</span>
+                  </button>
+                </>
+              )}
+              {status === "pending" && (
+                <button onClick={onRefresh}
+                  className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2 text-xs font-medium text-gray-700 transition hover:bg-gray-50">
+                  <RefreshCw className="h-3.5 w-3.5" /> Actualiser
+                </button>
+              )}
+              {(status === "none" || status === "closed") && !locked && (
+                <button onClick={onStart}
+                  className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-bold text-white shadow-md transition hover:opacity-90"
+                  style={{ background: gradient }}>
+                  <Power className="h-4 w-4" /> Ouvrir le comptoir
+                </button>
+              )}
+            </div>
+
+            <div className="flex max-w-[7.5rem] min-w-0 items-center gap-1.5 rounded-lg border bg-gray-50 px-1.5 py-1.5" title={`${userName} — ${userCode || "GUEST"}`}>
+              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gray-200 text-xs font-bold text-gray-600">
+                {userName.charAt(0).toUpperCase()}
+              </div>
+              <div className="hidden min-w-0 min-[390px]:block">
+                <p className="truncate text-[10px] font-medium text-gray-900">{userName}</p>
+                <p className="truncate font-mono text-[9px] text-gray-500">{userCode || "GUEST"}</p>
+              </div>
+            </div>
+            <button onClick={onLogout}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-gray-200 bg-white transition hover:bg-gray-50"
+              title="Se déconnecter">
+              <LogOut className="h-4 w-4 text-gray-500" />
+            </button>
+          </div>
+        </div>
+
+        {/* Tablette / desktop */}
+        <div className="hidden min-h-16 min-w-0 items-center gap-4 md:flex">
           {/* Brand */}
           <div className="flex items-center gap-3 min-w-0 shrink-0">
             {companyLogo ? (
@@ -87,24 +193,24 @@ export const PosSessionBar: React.FC<Props> = ({
                 <User2 className="w-4 h-4 text-gray-400" />
               </div>
             )}
-            <div className="min-w-0 hidden sm:block">
+            <div className="min-w-0">
               <p className="text-sm font-bold truncate" style={{ color: primaryColor }}>{companyName}</p>
               <p className="text-[11px] truncate" style={{ color: secondaryColor }}>{agencyName}</p>
             </div>
           </div>
 
-          <div className="h-8 w-px bg-gray-200 hidden sm:block" />
+          <div className="h-8 w-px bg-gray-200" />
 
           {/* Counter state + network */}
-          <div className="flex items-center gap-2">
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${s.bg} ${s.text}`}>
-              <span className={`w-2 h-2 rounded-full ${s.dot} ${status === "active" ? "animate-pulse" : ""}`} />
-              {locked ? "Verrouillé (autre appareil)" : s.label}
+          <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+            <div className={`flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1.5 text-[11px] font-semibold sm:gap-2 sm:px-3 sm:text-xs ${s.bg} ${s.text}`}>
+              <span className={`h-2 w-2 shrink-0 rounded-full ${s.dot} ${status === "active" ? "animate-pulse" : ""}`} />
+              <span className="truncate">{locked ? "Verrouillé" : s.label}</span>
             </div>
             {!isOnline && (
-              <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-50 text-red-700 text-[10px] font-semibold">
+              <div className="flex items-center gap-1 rounded-full bg-red-50 p-1.5 text-red-700 text-[10px] font-semibold sm:px-2 sm:py-1">
                 <WifiOff className="w-3 h-3" />
-                Hors-ligne
+                <span className="hidden sm:inline">Hors-ligne</span>
               </div>
             )}
           </div>
@@ -134,15 +240,15 @@ export const PosSessionBar: React.FC<Props> = ({
           <div className="flex-1" />
 
           {/* Session actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             {status === "active" && !locked && (
               <>
                 <button onClick={onPause}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition">
+                  className="inline-flex h-10 w-10 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 transition hover:bg-gray-50 sm:h-auto sm:w-auto sm:px-3 sm:py-2">
                   <Pause className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Pause</span>
                 </button>
                 <button onClick={() => { if (window.confirm("Clôturer le comptoir ? Vous ne pourrez plus vendre.")) onClose(); }}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-white transition hover:opacity-90"
+                  className="inline-flex h-10 w-10 items-center justify-center gap-1.5 rounded-lg text-sm font-medium text-white transition hover:opacity-90 sm:h-auto sm:w-auto sm:px-3 sm:py-2"
                   style={{ background: gradient }}>
                   <XCircle className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Clôturer</span>
                 </button>
@@ -151,34 +257,34 @@ export const PosSessionBar: React.FC<Props> = ({
             {status === "paused" && !locked && (
               <>
                 <button onClick={onContinue}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-white transition hover:opacity-90"
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium text-white transition hover:opacity-90 sm:h-auto sm:px-3 sm:py-2"
                   style={{ background: gradient }}>
                   <Play className="w-3.5 h-3.5" /> Reprendre
                 </button>
                 <button onClick={() => { if (window.confirm("Clôturer le comptoir ?")) onClose(); }}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition">
-                  <XCircle className="w-3.5 h-3.5" /> Clôturer
+                  className="inline-flex h-10 w-10 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 transition hover:bg-gray-50 sm:h-auto sm:w-auto sm:px-3 sm:py-2">
+                  <XCircle className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Clôturer</span>
                 </button>
               </>
             )}
             {status === "pending" && (
               <button onClick={onRefresh}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition">
-                <RefreshCw className="w-3.5 h-3.5" /> Actualiser
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 sm:h-auto sm:px-3 sm:py-2">
+                <RefreshCw className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Actualiser</span>
               </button>
             )}
             {(status === "none" || status === "closed") && !locked && (
               <button onClick={onStart}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-sm font-bold text-white transition hover:opacity-90 shadow-md"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-2.5 text-sm font-bold text-white shadow-md transition hover:opacity-90 sm:h-auto sm:px-4 sm:py-2.5"
                 style={{ background: gradient }}>
-                <Power className="w-4 h-4" /> Ouvrir le comptoir
+                <Power className="w-4 h-4" /> <span className="hidden min-[390px]:inline sm:hidden">Ouvrir</span><span className="hidden sm:inline">Ouvrir le comptoir</span>
               </button>
             )}
 
-            <div className="h-8 w-px bg-gray-200 ml-1" />
+            <div className="ml-1 h-8 w-px bg-gray-200" />
 
             {/* User : nom + code guichetier (toujours visible, code affiché même si GUEST) */}
-            <div className="flex items-center gap-2 bg-gray-50 border rounded-lg px-2.5 py-1.5">
+            <div className="flex min-w-0 items-center gap-1.5 rounded-lg border bg-gray-50 px-1.5 py-1.5 sm:gap-2 sm:px-2.5">
               <div className="w-7 h-7 rounded-full bg-gray-200 grid place-items-center text-xs font-bold text-gray-600 shrink-0">
                 {userName.charAt(0).toUpperCase()}
               </div>
@@ -186,12 +292,12 @@ export const PosSessionBar: React.FC<Props> = ({
                 <p className="text-xs font-medium text-gray-900 truncate max-w-[120px]">{userName}</p>
                 <p className="text-[10px] text-gray-500 font-mono">{userCode || "GUEST"}</p>
               </div>
-              <span className="sm:hidden text-xs font-mono text-gray-600 font-medium" title={`Code guichetier: ${userCode || "GUEST"}`}>
+              <span className="hidden max-w-14 truncate text-[10px] font-mono font-medium text-gray-600 min-[390px]:inline sm:hidden" title={`Code guichetier: ${userCode || "GUEST"}`}>
                 {userCode || "GUEST"}
               </span>
             </div>
             <button onClick={onLogout}
-              className="p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 transition"
+              className="grid h-10 w-10 place-items-center rounded-lg border border-gray-200 bg-white transition hover:bg-gray-50"
               title="Se déconnecter">
               <LogOut className="w-4 h-4 text-gray-500" />
             </button>
