@@ -15,7 +15,7 @@ import {
 } from 'react-router-dom';
 
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '@/firebaseConfig';
+import { auth, db } from '@/firebaseConfig';
 import {
   readPendingReservationPointer,
   reservationNestedRef,
@@ -75,6 +75,51 @@ interface CompanyInfo {
   telephone?: string;
 }
 
+function mapPublicReceiptReservation(
+  data: Record<string, unknown>,
+  fallbackId: string,
+  fallbackCompanyId?: string,
+  fallbackAgencyId?: string,
+): Reservation {
+  const rawStatus = String(data.status ?? data.statut ?? '').toLowerCase();
+  const statut: ReservationStatus =
+    rawStatus === 'preuve_recue'
+      ? 'preuve_recue'
+      : rawStatus === 'payé' || rawStatus === 'paye'
+        ? data.ticketValidatedAt ? 'confirme' : 'verification'
+        : rawStatus === 'annulé' || rawStatus === 'annule'
+          ? 'annule'
+          : rawStatus === 'refuse' || rawStatus === 'refusé'
+            ? 'refuse'
+            : 'en_attente_paiement';
+
+  return {
+    id: String(data.reservationId ?? fallbackId),
+    companyId: String(data.companyId ?? fallbackCompanyId ?? ''),
+    agencyId: String(data.agencyId ?? fallbackAgencyId ?? ''),
+    companySlug: String(data.companySlug ?? data.slug ?? ''),
+    nomClient: String(data.nomClient ?? data.clientNom ?? ''),
+    telephone: getDisplayPhone(data),
+    depart: String(data.depart ?? data.departure ?? ''),
+    arrivee: String(data.arrivee ?? data.arrival ?? ''),
+    date: String(data.date ?? ''),
+    heure: String(data.heure ?? ''),
+    montant: Number(data.montant ?? data.montant_total ?? 0),
+    referenceCode: data.referenceCode as string | undefined,
+    statut,
+    canal: String(data.canal ?? 'en_ligne'),
+    seatsGo: Number(data.seatsGo ?? data.nombre_places ?? data.seats ?? 1),
+    createdAt: data.createdAt,
+    agencyName: data.agencyName as string | undefined,
+    nomAgence: data.nomAgence as string | undefined,
+    agencyNom: data.agencyNom as string | undefined,
+    agenceNom: data.agenceNom as string | undefined,
+    modePaiement: data.modePaiement as string | undefined,
+    preuveVia: data.preuveVia as string | undefined,
+    remboursement: data.remboursement as { mode?: string } | undefined,
+  };
+}
+
 const ReceiptEnLignePage: React.FC = () => {
   const params = useParams<{ slug?: string; id?: string }>();
   const location = useLocation();
@@ -123,26 +168,58 @@ const ReceiptEnLignePage: React.FC = () => {
       setLoading(true);
       setNotFound(false);
       setLoadError('');
+      let publicReservation: Reservation | null = null;
       try {
         let companyId = receiptState.companyId ?? readPendingReservationPointer()?.companyId;
         let agencyId = receiptState.agencyId ?? readPendingReservationPointer()?.agencyId;
-        if (!companyId || !agencyId) {
-          const prSnap = await getDoc(doc(db, 'publicReservations', id));
-          if (prSnap.exists()) {
-            const p = prSnap.data() as Record<string, unknown>;
-            companyId = String(p.companyId ?? companyId ?? '');
-            agencyId = String(p.agencyId ?? agencyId ?? '');
+
+        console.log('[RECEIPT STEP]', 'reading publicReservation', id);
+        const publicIdSnap = await getDoc(doc(db, 'publicReservations', id));
+        if (publicIdSnap.exists()) {
+          let publicData = publicIdSnap.data() as Record<string, unknown>;
+          const publicToken =
+            typeof publicData.token === 'string'
+              ? publicData.token
+              : typeof publicData.publicToken === 'string'
+                ? publicData.publicToken
+                : '';
+
+          if (publicToken && publicToken !== id) {
+            console.log('[RECEIPT STEP]', 'reading publicReservation token', publicToken);
+            const publicTokenSnap = await getDoc(doc(db, 'publicReservations', publicToken));
+            if (publicTokenSnap.exists()) {
+              publicData = publicTokenSnap.data() as Record<string, unknown>;
+            }
+          }
+
+          companyId = String(publicData.companyId ?? companyId ?? '');
+          agencyId = String(publicData.agencyId ?? agencyId ?? '');
+          if (publicData.nomClient || publicData.depart || publicData.referenceCode) {
+            publicReservation = mapPublicReceiptReservation(publicData, id, companyId, agencyId);
+            setReservation(publicReservation);
+            setLoading(false);
           }
         }
+
         if (!companyId || !agencyId) {
           setLoadError('Impossible d’afficher le reçu. Retournez à l’accueil ou ouvrez le lien billet complet.');
           setNotFound(true);
           setLoading(false);
           return;
         }
-        const resRef = reservationNestedRef(db, companyId, agencyId, id);
+
+        const publicStatus = String(publicReservation?.statut ?? '');
+        const publicNestedReadMayStillBeAllowed =
+          publicStatus === 'en_attente' || publicStatus === 'en_attente_paiement';
+        if (!auth.currentUser && publicReservation && !publicNestedReadMayStillBeAllowed) {
+          return;
+        }
+
+        const resRef = reservationNestedRef(db, companyId, agencyId, publicReservation?.id ?? id);
+        console.log('[RECEIPT STEP]', 'subscribing nested reservation', resRef.path);
         unsub = onSnapshot(resRef, (snap) => {
           if (!snap.exists()) {
+            if (publicReservation) return;
             setNotFound(true);
             setReservation(null);
             setLoading(false);
@@ -186,11 +263,21 @@ const ReceiptEnLignePage: React.FC = () => {
           setLoading(false);
         }, (err) => {
           console.error('ReceiptEnLignePage onSnapshot error:', err);
+          if (publicReservation) {
+            console.warn('[ReceiptEnLignePage] keeping public receipt after nested subscription failure');
+            setLoading(false);
+            return;
+          }
           setLoadError(!isOnline ? 'Connexion indisponible.' : 'Erreur de chargement du reçu.');
           setNotFound(true);
           setLoading(false);
         });
       } catch (err) {
+        if (publicReservation) {
+          console.warn('[ReceiptEnLignePage] keeping public receipt after load failure', err);
+          setLoading(false);
+          return;
+        }
         setLoadError(
           !isOnline
             ? 'Connexion indisponible. Impossible de charger le reçu.'
