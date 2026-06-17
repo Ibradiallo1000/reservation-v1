@@ -22,9 +22,8 @@ import { CourierPrintCombined } from "../components/CourierPrintCombined";
 import { readCourierPrintPaper, writeCourierPrintMode, type CourierPrintPaper } from "../utils/courierPrintPreferences";
 import { printCourierRootInIframe, printCourierRootInNewWindow } from "../utils/courierDomPrint";
 import type { TripInstanceDocWithId } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
-import { tripInstanceRemainingFromDoc } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
+import { tripInstanceRemainingFromDoc, tripInstanceTime } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
 import { agencyNomFromDoc, cityLabelFromAgencyDoc } from "@/modules/agence/lib/agencyDocCity";
-import { listTripInstancesForAgencyRoute } from "@/modules/agence/lib/agencyRouteTrips";
 import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import {
   getPhoneRuleFromCountry,
@@ -42,6 +41,11 @@ import { offlineStorageService } from "@/modules/offline/services/offlineStorage
 import { getPersistentDeviceId } from "@/modules/offline/services/offlineIdentityService";
 import { offlineSyncService } from "@/modules/offline/services/offlineSyncService";
 import { useOperationQuotaStatus } from "@/core/hooks/useOperationQuotaStatus";
+import {
+  buildTripInstanceId,
+  listTripInstancesByRouteAndDateRange,
+} from "@/modules/compagnie/tripInstances/tripInstanceService";
+import { normalizeTripInstanceTime } from "@/modules/compagnie/tripInstances/generateTripInstancesFromWeeklyTrips";
 import {
   OPERATION_QUOTA_BLOCKED_HELP,
   OPERATION_QUOTA_BLOCKED_MESSAGE,
@@ -77,7 +81,7 @@ function sanitizeNatureColisInput(raw: string): string {
   return String(raw ?? "").replace(/[^A-Za-zÀ-ÿ\s-]/g, "");
 }
 
-/** Champs prénom / nom distincts (guichet) — recomposition pour l’API. */
+/** Compat ancienne donnée : découpe uniquement au chargement des envois existants. */
 function splitPersonName(full: string): { prenom: string; nom: string } {
   const t = String(full ?? "").trim();
   if (!t) return { prenom: "", nom: "" };
@@ -86,31 +90,22 @@ function splitPersonName(full: string): { prenom: string; nom: string } {
   return { prenom: parts[0]!, nom: parts.slice(1).join(" ") };
 }
 
-function applyNameFromSuggestion(
-  setPrenom: (v: string) => void,
-  setNom: (v: string) => void,
-  name: string,
-  fallbackPrenom: string,
-  fallbackNom: string
-) {
+function applyFullNameFromSuggestion(setFullName: (v: string) => void, name: string, fallbackName: string) {
   const raw = String(name ?? "").trim();
   if (!raw) {
-    setPrenom(fallbackPrenom);
-    setNom(fallbackNom);
+    setFullName(fallbackName);
     return;
   }
-  const sp = splitPersonName(raw);
-  setPrenom(sp.prenom);
-  setNom(sp.nom);
+  setFullName(toNameCase(raw));
 }
 
 const inpGuichet =
-  "h-9 w-full rounded-lg border border-gray-300 bg-white px-2.5 text-sm text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 ring-offset-0 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100";
+  "min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-base text-gray-900 focus:border-transparent focus:outline-none focus:ring-2 ring-offset-0 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100 sm:min-h-10 sm:text-sm";
 
-const personRowGrid = "grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:items-end";
+const personRowGrid = "grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(11rem,0.45fr)] sm:items-end";
 const lblGuichet = "mb-1 block text-xs font-medium leading-tight text-gray-600 dark:text-gray-400";
 const formSection =
-  "min-w-0 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900";
+  "min-w-0 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900";
 
 function tsMs(value: unknown): number {
   if (value == null) return 0;
@@ -182,7 +177,7 @@ function formatDateChipFr(dateYmd: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
-const chipScrollRow = "flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:thin]";
+const chipScrollRow = "flex flex-wrap gap-2 pb-1";
 const chipBase =
   "shrink-0 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1";
 
@@ -193,6 +188,140 @@ function toNameCase(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
+}
+
+type CourierWeeklyTripDoc = {
+  active?: boolean;
+  agencyId?: string | null;
+  departure?: string;
+  arrival?: string;
+  departureCity?: string;
+  arrivalCity?: string;
+  price?: number;
+  places?: number;
+  seats?: number;
+  horaires?: Record<string, string[]>;
+  routeId?: string | null;
+};
+
+function weeklyTripHoursForDay(horaires: CourierWeeklyTripDoc["horaires"], dayName: string): string[] {
+  if (!horaires) return [];
+  const direct = horaires[dayName];
+  if (Array.isArray(direct)) return direct;
+  const dayKey = normalizeCityKey(dayName);
+  const found = Object.entries(horaires).find(([key]) => normalizeCityKey(key) === dayKey);
+  return Array.isArray(found?.[1]) ? found[1] : [];
+}
+
+function agencyMatchesRouteCity(agency: { ville: string; nom: string }, routeCity: string): boolean {
+  const routeKey = normalizeCityKey(routeCity);
+  if (!routeKey) return false;
+  const cityKey = normalizeCityKey(agency.ville);
+  const nameKey = normalizeCityKey(agency.nom);
+  if (cityKey === routeKey || nameKey === routeKey) return true;
+  return (!!cityKey && (cityKey.includes(routeKey) || routeKey.includes(cityKey))) ||
+    (!!nameKey && (nameKey.includes(routeKey) || routeKey.includes(nameKey)));
+}
+
+async function listCourierTripsFromGuichetSource(params: {
+  companyId: string;
+  agencyId: string;
+  departureCity: string;
+  arrivalCity: string;
+  dates: string[];
+}): Promise<TripInstanceDocWithId[]> {
+  const { companyId, agencyId, departureCity, arrivalCity, dates } = params;
+  const dep = departureCity.trim();
+  const arr = arrivalCity.trim();
+  if (!companyId || !agencyId || !dep || !arr || dates.length === 0) return [];
+
+  const wtSnap = await getDocs(collection(db, "companies", companyId, "agences", agencyId, "weeklyTrips"));
+  const weeklyRows = wtSnap.docs
+    .map((d) => ({ id: d.id, data: d.data() as CourierWeeklyTripDoc }))
+    .filter(({ data }) => data.active !== false)
+    .filter(({ data }) => {
+      const d0 = String(data.departureCity ?? data.departure ?? "").trim();
+      const a0 = String(data.arrivalCity ?? data.arrival ?? "").trim();
+      return normalizeCityKey(d0) === normalizeCityKey(dep) && normalizeCityKey(a0) === normalizeCityKey(arr);
+    });
+
+  const slots: TripInstanceDocWithId[] = [];
+  for (const date of dates) {
+    const dayName = dayjs.tz(`${date}T12:00:00`, BAMAKO_TZ).locale("fr").format("dddd").toLowerCase();
+    for (const { id: weeklyTripId, data } of weeklyRows) {
+      const hours = weeklyTripHoursForDay(data.horaires, dayName);
+      const wdep = String(data.departureCity ?? data.departure ?? dep).trim() || dep;
+      const warr = String(data.arrivalCity ?? data.arrival ?? arr).trim() || arr;
+      const cap = Math.max(1, Number(data.places ?? data.seats ?? 30) || 30);
+      for (const rawTime of hours) {
+        const time = normalizeTripInstanceTime(String(rawTime));
+        if (!time || isPastDepartureTime(date, time)) continue;
+        const id = buildTripInstanceId(weeklyTripId, date, time);
+        slots.push({
+          id,
+          companyId,
+          agencyId,
+          destinationAgencyId: null,
+          agenciesInvolved: [agencyId],
+          departure: wdep,
+          arrival: warr,
+          departureCity: wdep,
+          arrivalCity: warr,
+          routeDeparture: wdep,
+          routeArrival: warr,
+          weeklyTripId,
+          vehicleId: null,
+          date,
+          time,
+          departureTime: time,
+          status: "scheduled",
+          passengerCount: 0,
+          reservedSeats: 0,
+          parcelCount: 0,
+          capacity: cap,
+          capacitySeats: cap,
+          seatCapacity: cap,
+          remainingSeats: cap,
+          price: Number(data.price ?? 0) || 0,
+          routeId: data.routeId ?? null,
+        });
+      }
+    }
+  }
+
+  const instances = await listTripInstancesByRouteAndDateRange(
+    companyId,
+    dep,
+    arr,
+    dates[0]!,
+    dates[dates.length - 1]!,
+    { limitCount: 400 }
+  );
+  const instancesFromAgency = instances;
+  const byId = new Map(instancesFromAgency.map((ti) => [ti.id, ti]));
+  const byWeeklyDateTime = new Map<string, TripInstanceDocWithId>();
+  for (const ti of instancesFromAgency) {
+    const wid = String((ti as { weeklyTripId?: string | null }).weeklyTripId ?? "").trim();
+    if (!wid) continue;
+    byWeeklyDateTime.set(`${wid}|${ti.date}|${normalizeTripInstanceTime(tripInstanceTime(ti))}`, ti);
+  }
+
+  const merged = new Map<string, TripInstanceDocWithId>();
+  for (const slot of slots) {
+    const concrete =
+      byId.get(slot.id) ??
+      byWeeklyDateTime.get(`${slot.weeklyTripId ?? ""}|${slot.date}|${normalizeTripInstanceTime(tripInstanceTime(slot))}`);
+    const row = concrete ?? slot;
+    if (String(row.status ?? "").toLowerCase() === "cancelled") continue;
+    merged.set(row.id, row);
+  }
+  for (const ti of instancesFromAgency) {
+    if (String(ti.status ?? "").toLowerCase() !== "cancelled") merged.set(ti.id, ti);
+  }
+
+  return Array.from(merged.values()).sort(
+    (a, b) => a.date.localeCompare(b.date, "en-CA") || departureSlotLabel(a).localeCompare(departureSlotLabel(b), "fr", { numeric: true })
+  );
 }
 
 function localDigitsFromFull(phoneFull: string, callingCode: string): string {
@@ -275,15 +404,15 @@ export default function CourierCreateShipmentPage() {
       : true;
   });
   const [destinationAgencyId, setDestinationAgencyId] = useState("");
+  const [selectedArrivalCity, setSelectedArrivalCity] = useState("");
   /** Jour choisi (YYYY-MM-DD) — jamais affiché en brut à l'écran. */
-  const [courierTripDate, setCourierTripDate] = useState("");
+  const [courierTripDate, setCourierTripDate] = useState(() => getTodayBamako());
   const [originAgencyCity, setOriginAgencyCity] = useState("");
   const [companyAgencies, setCompanyAgencies] = useState<{ id: string; ville: string; nom: string }[]>([]);
-  const [senderPrenom, setSenderPrenom] = useState("");
-  const [senderNom, setSenderNom] = useState("");
+  const [routeArrivalCities, setRouteArrivalCities] = useState<string[]>([]);
+  const [senderFullNameInput, setSenderFullNameInput] = useState("");
   const [senderPhone, setSenderPhone] = useState("");
-  const [receiverPrenom, setReceiverPrenom] = useState("");
-  const [receiverNom, setReceiverNom] = useState("");
+  const [receiverFullNameInput, setReceiverFullNameInput] = useState("");
   const [receiverPhone, setReceiverPhone] = useState("");
   const [nature, setNature] = useState("");
   const [declaredValue, setDeclaredValue] = useState("");
@@ -376,6 +505,9 @@ export default function CourierCreateShipmentPage() {
     );
   }, []);
 
+  const dateFromStrip = availableDates[0] ?? "";
+  const dateToStrip = availableDates[availableDates.length - 1] ?? "";
+
   useEffect(() => {
     if (!companyId || !agencyId) return;
     let cancelled = false;
@@ -410,6 +542,75 @@ export default function CourierCreateShipmentPage() {
   }, [companyId, agencyId]);
 
   useEffect(() => {
+    if (!companyId || !agencyId || !originAgencyCity.trim() || !dateFromStrip || !dateToStrip) {
+      setRouteArrivalCities([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const dep = originAgencyCity.trim();
+      const arrivalSet = new Set<string>();
+      let tripsForArrivals: Array<Record<string, unknown>> = [];
+      try {
+        const qArrivals = query(
+          collection(db, "companies", companyId, "tripInstances"),
+          where("departureCity", "==", dep),
+          where("date", ">=", dateFromStrip),
+          where("date", "<=", dateToStrip),
+          orderBy("date", "asc"),
+          orderBy("departureTime", "asc"),
+          limit(100)
+        );
+        const snap = await getDocs(qArrivals);
+        tripsForArrivals = snap.docs.map((d) => d.data() as Record<string, unknown>);
+      } catch {
+        /* source complémentaire seulement */
+      }
+      if (tripsForArrivals.length === 0) {
+        try {
+          const qByAgency = query(
+            collection(db, "companies", companyId, "tripInstances"),
+            where("agencyId", "==", agencyId),
+            limit(200)
+          );
+          const snap = await getDocs(qByAgency);
+          tripsForArrivals = snap.docs
+            .map((d) => d.data() as Record<string, unknown>)
+            .filter((ti) => {
+              const date = String(ti.date ?? "");
+              return date >= dateFromStrip && date <= dateToStrip;
+            });
+        } catch {
+          /* source complémentaire seulement */
+        }
+      }
+      for (const ti of tripsForArrivals) {
+        const arr = String(ti.arrivalCity ?? ti.routeArrival ?? ti.arrival ?? "").trim();
+        if (arr && normalizeCityKey(arr) !== normalizeCityKey(dep)) arrivalSet.add(arr);
+      }
+      try {
+        const wtSnap = await getDocs(collection(db, "companies", companyId, "agences", agencyId, "weeklyTrips"));
+        for (const d of wtSnap.docs) {
+          const wt = d.data() as Record<string, unknown>;
+          if (wt.active === false) continue;
+          const d0 = String(wt.departureCity ?? wt.departure ?? "").trim();
+          const a0 = String(wt.arrivalCity ?? wt.arrival ?? "").trim();
+          if (!a0 || normalizeCityKey(d0) !== normalizeCityKey(dep)) continue;
+          if (normalizeCityKey(a0) !== normalizeCityKey(dep)) arrivalSet.add(a0);
+        }
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled) {
+        setRouteArrivalCities(Array.from(arrivalSet).sort((a, b) => a.localeCompare(b, "fr")));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, agencyId, originAgencyCity, dateFromStrip, dateToStrip]);
+
+  useEffect(() => {
     if (!companyId || !agencyId) return;
     const q = query(shipmentsRef(db, companyId), where("originAgencyId", "==", agencyId));
     const unsub = onSnapshot(q, (snap) => {
@@ -420,43 +621,56 @@ export default function CourierCreateShipmentPage() {
     return () => unsub();
   }, [companyId, agencyId]);
 
-  const destinationOptions = useMemo(() => {
+  const arrivalCityOptions = useMemo(
+    () => routeArrivalCities.filter((city) => city.trim()).sort((a, b) => a.localeCompare(b, "fr")),
+    [routeArrivalCities]
+  );
+
+  const resolvedDestinationAgency = useMemo(() => {
+    const selected = selectedArrivalCity.trim();
+    if (!selected) return null;
     const originKey = normalizeCityKey(originAgencyCity);
-    return companyAgencies
-      .filter((a) => {
-        if (a.id === destinationAgencyId) return true;
-        if (!a.ville) return false;
-        if (a.id === agencyId) return false;
-        if (originKey && normalizeCityKey(a.ville) === originKey) return false;
-        return true;
-      })
-      .sort(
-        (a, b) => a.ville.localeCompare(b.ville, "fr") || (a.nom || a.id).localeCompare(b.nom || b.id, "fr")
-      );
-  }, [companyAgencies, agencyId, originAgencyCity, destinationAgencyId]);
+    return companyAgencies.find((a) => {
+      if (a.id === agencyId) return false;
+      if (originKey && a.ville && normalizeCityKey(a.ville) === originKey) return false;
+      return agencyMatchesRouteCity(a, selected);
+    }) ?? null;
+  }, [agencyId, companyAgencies, originAgencyCity, selectedArrivalCity]);
 
-  const destinationButtonLabels = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const a of destinationOptions) {
-      const k = normalizeCityKey(a.ville || a.nom);
-      counts.set(k, (counts.get(k) ?? 0) + 1);
+  useEffect(() => {
+    setDestinationAgencyId(resolvedDestinationAgency?.id ?? "");
+  }, [resolvedDestinationAgency]);
+
+  useEffect(() => {
+    if (!selectedArrivalCity) return;
+    if (arrivalCityOptions.some((city) => normalizeCityKey(city) === normalizeCityKey(selectedArrivalCity))) return;
+    setSelectedArrivalCity("");
+    setDestinationAgencyId("");
+    setSelectedTripInstanceId(null);
+  }, [arrivalCityOptions, selectedArrivalCity]);
+
+  useEffect(() => {
+    if (selectedArrivalCity || !destinationAgencyId) return;
+    const row = companyAgencies.find((a) => a.id === destinationAgencyId);
+    const city = (row?.ville || row?.nom || "").trim();
+    if (city) setSelectedArrivalCity(city);
+  }, [companyAgencies, destinationAgencyId, selectedArrivalCity]);
+
+  const destinationConfigMissing = selectedArrivalCity.trim() !== "" && !resolvedDestinationAgency;
+
+  const tripLookupDates = useMemo(() => {
+    const dates = new Set(availableDates);
+    if (courierTripDate) dates.add(courierTripDate);
+    return Array.from(dates).sort((a, b) => a.localeCompare(b, "en-CA"));
+  }, [availableDates, courierTripDate]);
+
+  const arrivalCityForTrips = selectedArrivalCity.trim();
+
+  useEffect(() => {
+    if (!courierTripDate) {
+      setCourierTripDate(getTodayBamako());
     }
-    return destinationOptions.map((a) => {
-      const k = normalizeCityKey(a.ville || a.nom);
-      const dup = (counts.get(k) ?? 0) > 1;
-      const city = (a.ville || a.nom || "").trim();
-      const label = dup && a.nom ? `${city} (${a.nom})` : city;
-      return { id: a.id, label: label || a.id };
-    });
-  }, [destinationOptions]);
-
-  const arrivalCityForTrips = useMemo(() => {
-    const row = companyAgencies.find((x) => x.id === destinationAgencyId);
-    return (row?.ville ?? "").trim();
-  }, [companyAgencies, destinationAgencyId]);
-
-  const dateFromStrip = availableDates[0] ?? "";
-  const dateToStrip = availableDates[availableDates.length - 1] ?? "";
+  }, [courierTripDate]);
 
   useEffect(() => {
     if (
@@ -464,7 +678,6 @@ export default function CourierCreateShipmentPage() {
       !agencyId ||
       !originAgencyCity.trim() ||
       !arrivalCityForTrips ||
-      !destinationAgencyId.trim() ||
       !dateFromStrip ||
       !dateToStrip
     ) {
@@ -475,15 +688,13 @@ export default function CourierCreateShipmentPage() {
     setTripsLoading(true);
     void (async () => {
       try {
-        const all = await listTripInstancesForAgencyRoute(
+        const all = await listCourierTripsFromGuichetSource({
           companyId,
           agencyId,
-          originAgencyCity.trim(),
-          arrivalCityForTrips,
-          dateFromStrip,
-          dateToStrip,
-          { limitCount: 80 }
-        );
+          departureCity: originAgencyCity.trim(),
+          arrivalCity: arrivalCityForTrips,
+          dates: tripLookupDates,
+        });
         if (cancelled) return;
         const filtered = all.filter((ti) => tripAcceptsOneMoreParcel(ti));
         setTripsInWindow(filtered);
@@ -501,9 +712,7 @@ export default function CourierCreateShipmentPage() {
     agencyId,
     originAgencyCity,
     arrivalCityForTrips,
-    destinationAgencyId,
-    dateFromStrip,
-    dateToStrip,
+    tripLookupDates,
   ]);
 
   const candidateTrips = useMemo(
@@ -527,13 +736,13 @@ export default function CourierCreateShipmentPage() {
       .sort((a, b) => departureSlotLabel(a).localeCompare(departureSlotLabel(b), "fr", { numeric: true }));
   }, [candidateTrips, courierTripDate]);
 
-  /** Après choix de la date : premier horaire du jour par défaut (modifiable). */
+  /** Horaire facultatif : conserver seulement un choix encore compatible avec la date. */
   useEffect(() => {
     if (!courierTripDate) return;
     const dayTrips = candidateTrips.filter((ti) => ti.date === courierTripDate);
     setSelectedTripInstanceId((prev) => {
       if (prev && dayTrips.some((t) => t.id === prev)) return prev;
-      return dayTrips[0]?.id ?? null;
+      return null;
     });
   }, [candidateTrips, courierTripDate]);
 
@@ -547,21 +756,22 @@ export default function CourierCreateShipmentPage() {
   const loadShipmentIntoForm = useCallback(
     (s: Shipment) => {
       const sn = splitPersonName(s.sender?.name ?? "");
-      setSenderPrenom(sn.prenom);
-      setSenderNom(sn.nom);
+      setSenderFullNameInput(toNameCase(`${sn.prenom} ${sn.nom}`.trim()));
       setSenderPhone(localDigitsFromFull(s.sender?.phone ?? "", phoneRule.callingCode));
       const rn = splitPersonName(s.receiver?.name ?? "");
-      setReceiverPrenom(rn.prenom);
-      setReceiverNom(rn.nom);
+      setReceiverFullNameInput(toNameCase(`${rn.prenom} ${rn.nom}`.trim()));
       setReceiverPhone(localDigitsFromFull(s.receiver?.phone ?? "", phoneRule.callingCode));
       setNature(sanitizeNatureColisInput(s.nature ?? ""));
       setDeclaredValue(String(s.declaredValue ?? 0));
       setTransportFee(String(s.transportFee ?? 0));
       setDestinationAgencyId(s.destinationAgencyId ?? "");
+      const destinationRow = companyAgencies.find((a) => a.id === s.destinationAgencyId);
+      setSelectedArrivalCity((destinationRow?.ville || destinationRow?.nom || "").trim());
       const tid = s.tripInstanceId?.trim() || null;
       setSelectedTripInstanceId(tid);
+      if (!tid) setCourierTripDate(getTodayBamako());
     },
-    [phoneRule.callingCode]
+    [companyAgencies, phoneRule.callingCode]
   );
 
   useEffect(() => {
@@ -622,34 +832,50 @@ export default function CourierCreateShipmentPage() {
     return Number.isNaN(fee) || fee < 0 ? 0 : fee;
   }, [transportFee]);
 
-  const senderFullName = `${senderPrenom} ${senderNom}`.trim();
-  const receiverFullName = `${receiverPrenom} ${receiverNom}`.trim();
+  const senderFullName = senderFullNameInput.trim();
+  const receiverFullName = receiverFullNameInput.trim();
   const senderNameOk = senderFullName.length >= 2;
   const receiverNameOk = receiverFullName.length >= 2;
 
+  const selectedTripFromCandidates = useMemo(
+    () => candidateTrips.find((t) => t.id === selectedTripInstanceId) ?? null,
+    [candidateTrips, selectedTripInstanceId]
+  );
+
+  // Diagnostic du bouton: uniquement les champs visibles et obligatoires doivent bloquer la création.
+  // L'agence destination et le tripInstanceId restent techniques et optionnels côté UX courrier.
+  const submitBlockers = useMemo(() => {
+    const blockers: string[] = [];
+    if (!selectedArrivalCity.trim()) blockers.push("destination");
+    if (!courierTripDate) blockers.push("date d'expédition");
+    if (!senderNameOk) blockers.push("nom expéditeur");
+    if (!senderPhone.trim() || !isValidLocalPhone(senderPhone, phoneRule)) blockers.push("téléphone expéditeur");
+    if (!receiverNameOk) blockers.push("nom destinataire");
+    if (!receiverPhone.trim() || !isValidLocalPhone(receiverPhone, phoneRule)) blockers.push("téléphone destinataire");
+    if (!nature.trim()) blockers.push("nature colis");
+    if (!declaredValue.trim() || Number.isNaN(Number(declaredValue)) || Number(declaredValue) < 0) blockers.push("valeur déclarée");
+    if (!transportFee.trim() || Number.isNaN(Number(transportFee)) || Number(transportFee) <= 0) blockers.push("frais");
+    return blockers;
+  }, [
+    courierTripDate,
+    declaredValue,
+    nature,
+    phoneRule,
+    receiverNameOk,
+    receiverPhone,
+    selectedArrivalCity,
+    senderNameOk,
+    senderPhone,
+    transportFee,
+  ]);
+
   const tripSelectionOk =
-    destinationAgencyId.trim() !== "" &&
-    !!courierTripDate &&
-    !!selectedTripInstanceId &&
-    candidateTrips.some((t) => t.id === selectedTripInstanceId);
+    selectedArrivalCity.trim() !== "" &&
+    !!courierTripDate;
 
   const canSubmit =
-    sessionActive &&
-    sessionId &&
     tripSelectionOk &&
-    senderNameOk &&
-    senderPhone.trim() !== "" &&
-    receiverNameOk &&
-    receiverPhone.trim() !== "" &&
-    nature.trim() !== "" &&
-    declaredValue.trim() !== "" &&
-    !Number.isNaN(Number(declaredValue)) &&
-    Number(declaredValue) >= 0 &&
-    transportFee.trim() !== "" &&
-    !Number.isNaN(Number(transportFee)) &&
-    Number(transportFee) > 0 &&
-    isValidLocalPhone(senderPhone, phoneRule) &&
-    isValidLocalPhone(receiverPhone, phoneRule);
+    submitBlockers.length === 0;
 
   const destinationAgencyName = useCallback(
     (id: string) => {
@@ -663,17 +889,16 @@ export default function CourierCreateShipmentPage() {
   const displayRef = lastCreatedShipment?.shipmentNumber ?? lastCreatedShipment?.shipmentId ?? "";
 
   const clearForm = useCallback(() => {
-    setSenderPrenom("");
-    setSenderNom("");
+    setSenderFullNameInput("");
     setSenderPhone("");
-    setReceiverPrenom("");
-    setReceiverNom("");
+    setReceiverFullNameInput("");
     setReceiverPhone("");
     setNature("");
     setDeclaredValue("");
     setTransportFee("");
     setDestinationAgencyId("");
-    setCourierTripDate("");
+    setSelectedArrivalCity("");
+    setCourierTripDate(getTodayBamako());
     setSelectedTripInstanceId(null);
     setEditingShipmentId(null);
     loadedEditRef.current = null;
@@ -777,9 +1002,15 @@ export default function CourierCreateShipmentPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sessionId) return;
+    if (!sessionId || !sessionActive) {
+      setError("Session courrier inactive ou absente. Ouvrez une session courrier pour enregistrer l'envoi.");
+      return;
+    }
+    if (!canSubmit) {
+      setError(`Champs à compléter: ${submitBlockers.join(", ")}`);
+      return;
+    }
     if (editingShipmentId) {
-      if (!canSubmit) return;
       setError(null);
       setSubmitting(true);
       try {
@@ -792,10 +1023,10 @@ export default function CourierCreateShipmentPage() {
           const tSnap = await getDoc(
             doc(db, "companies", companyId, "tripInstances", selectedTripInstanceId)
           );
-          if (
-            !tSnap.exists() ||
-            !tripAcceptsOneMoreParcelFromDoc(tSnap.data() as Record<string, unknown>)
-          ) {
+          const tripOk = tSnap.exists()
+            ? tripAcceptsOneMoreParcelFromDoc(tSnap.data() as Record<string, unknown>)
+            : !!selectedTripFromCandidates && tripAcceptsOneMoreParcel(selectedTripFromCandidates);
+          if (!tripOk) {
             setError(COURIER_TRIP_UNAVAILABLE);
             setSubmitting(false);
             return;
@@ -845,7 +1076,6 @@ export default function CourierCreateShipmentPage() {
       setError(OPERATION_QUOTA_BLOCKED_MESSAGE);
       return;
     }
-    if (!canSubmit) return;
     setError(null);
     setSubmitting(true);
     try {
@@ -858,10 +1088,10 @@ export default function CourierCreateShipmentPage() {
         const tSnap = await getDoc(
           doc(db, "companies", companyId, "tripInstances", selectedTripInstanceId)
         );
-        if (
-          !tSnap.exists() ||
-          !tripAcceptsOneMoreParcelFromDoc(tSnap.data() as Record<string, unknown>)
-        ) {
+        const tripOk = tSnap.exists()
+          ? tripAcceptsOneMoreParcelFromDoc(tSnap.data() as Record<string, unknown>)
+          : !!selectedTripFromCandidates && tripAcceptsOneMoreParcel(selectedTripFromCandidates);
+        if (!tripOk) {
           setError(COURIER_TRIP_UNAVAILABLE);
           setSubmitting(false);
           return;
@@ -1035,8 +1265,37 @@ export default function CourierCreateShipmentPage() {
     activeTicketLocalId != null ? optimisticShipments.find((x) => x.localId === activeTicketLocalId) ?? null : null;
   const activeTicketUiStatus: ShipmentUiCreateStatus =
     activeTicketOptimistic?.uiStatus ?? (showTicketView ? "enregistré" : "enregistrement_en_cours");
+  const activeTicketErrorMessage = activeTicketOptimistic?.errorMessage ?? "";
+  const activeTicketPaymentPermissionError =
+    activeTicketUiStatus === "erreur" &&
+    /permission|insufficient|confirmPayment|paiement/i.test(activeTicketErrorMessage);
   const ticketShipmentId = lastCreatedShipment?.shipmentId ?? "";
   const ticketTrackingPublicId = lastCreatedShipment?.trackingPublicId?.trim() ?? "";
+
+  useEffect(() => {
+    if (!showTicketView) return;
+    console.log("FINAL_SCREEN_STATE", {
+      shipmentCreated: Boolean(lastCreatedShipment?.shipmentId),
+      paymentConfirmed: activeTicketUiStatus === "enregistré",
+      financialTransactionCreated: activeTicketUiStatus === "enregistré",
+      error,
+      activeTicketLocalId,
+      activeTicketUiStatus,
+      activeTicketErrorMessage,
+      activeTicketPaymentPermissionError,
+      shipmentId: lastCreatedShipment?.shipmentId ?? null,
+      trackingPublicId: lastCreatedShipment?.trackingPublicId ?? null,
+    });
+  }, [
+    showTicketView,
+    lastCreatedShipment?.shipmentId,
+    lastCreatedShipment?.trackingPublicId,
+    activeTicketLocalId,
+    activeTicketUiStatus,
+    activeTicketErrorMessage,
+    activeTicketPaymentPermissionError,
+    error,
+  ]);
 
   useEffect(() => {
     if (!showTicketView || !ticketShipmentId || !companyId || ticketTrackingPublicId) return;
@@ -1168,7 +1427,9 @@ export default function CourierCreateShipmentPage() {
                 {activeTicketUiStatus === "enregistrement_en_cours"
                   ? "Enregistrement en cours"
                   : activeTicketUiStatus === "erreur"
-                    ? "Erreur d'enregistrement"
+                    ? activeTicketPaymentPermissionError
+                      ? "Paiement à confirmer"
+                      : "Erreur d'enregistrement"
                     : "Envoi enregistré"}
               </p>
               <p className="mt-0.5 font-mono text-base font-bold text-gray-900 dark:text-gray-100">{displayRef}</p>
@@ -1176,7 +1437,9 @@ export default function CourierCreateShipmentPage() {
                 {activeTicketUiStatus === "enregistrement_en_cours"
                   ? "Connexion serveur en cours. Le colis apparaît immédiatement."
                   : activeTicketUiStatus === "erreur"
-                    ? "L'enregistrement a échoué. Relancez la création."
+                    ? activeTicketPaymentPermissionError
+                      ? "Le reçu est généré, mais la validation du paiement a échoué côté Firestore."
+                      : "L'enregistrement a échoué. Relancez la création."
                     : "Vérifiez le reçu et l'étiquette, puis lancez l'impression."}
               </p>
               {lastCreatedShipment?.pickupCode && (
@@ -1195,7 +1458,9 @@ export default function CourierCreateShipmentPage() {
                 }`}
               >
                 {activeTicketUiStatus === "erreur"
-                  ? activeTicketOptimistic?.errorMessage || "Erreur d'enregistrement"
+                  ? activeTicketPaymentPermissionError
+                    ? `Paiement non confirmé : ${activeTicketOptimistic?.errorMessage || "permission Firestore insuffisante"}`
+                    : activeTicketOptimistic?.errorMessage || "Erreur d'enregistrement"
                   : "enregistrement_en_cours"}
               </div>
             )}
@@ -1281,7 +1546,9 @@ export default function CourierCreateShipmentPage() {
                   {activeTicketUiStatus === "enregistrement_en_cours"
                     ? "Enregistrement en cours"
                     : activeTicketUiStatus === "erreur"
-                      ? "Erreur d'enregistrement"
+                      ? activeTicketPaymentPermissionError
+                        ? "Paiement à confirmer"
+                        : "Erreur d'enregistrement"
                       : "Envoi enregistré"}
                 </p>
                 <p className="mt-0.5 font-mono text-base font-bold text-gray-900">{displayRef}</p>
@@ -1290,6 +1557,13 @@ export default function CourierCreateShipmentPage() {
                     Code retrait: <span className="font-semibold">{lastCreatedShipment.pickupCode}</span>
                   </p>
                 )}
+                {activeTicketUiStatus === "erreur" ? (
+                  <p className="mx-auto mt-2 max-w-sm rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    {activeTicketPaymentPermissionError
+                      ? `Paiement non confirmé : ${activeTicketOptimistic?.errorMessage || "permission Firestore insuffisante"}`
+                      : activeTicketOptimistic?.errorMessage || "Erreur d'enregistrement"}
+                  </p>
+                ) : null}
               </div>
 
               <div className="flex min-h-0 flex-1 overflow-hidden px-2">
@@ -1478,30 +1752,19 @@ export default function CourierCreateShipmentPage() {
                       <div className={personRowGrid}>
                         <div className="min-w-0">
                           <label className={lblGuichet}>
-                            Prénom <span className="text-red-500">*</span>
+                            Nom complet <span className="text-red-500">*</span>
                           </label>
                           <input
                             ref={firstFieldRef}
-                            value={senderPrenom}
-                            onChange={(e) => setSenderPrenom(e.target.value)}
-                            onBlur={(e) => setSenderPrenom(toNameCase(e.target.value))}
+                            value={senderFullNameInput}
+                            onChange={(e) => setSenderFullNameInput(e.target.value)}
+                            onBlur={(e) => setSenderFullNameInput(toNameCase(e.target.value))}
                             className={inpGuichet}
-                            autoComplete="given-name"
+                            autoComplete="name"
+                            placeholder="Nom complet"
                           />
                         </div>
-                        <div className="min-w-0">
-                          <label className={lblGuichet}>
-                            Nom <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            value={senderNom}
-                            onChange={(e) => setSenderNom(e.target.value)}
-                            onBlur={(e) => setSenderNom(toNameCase(e.target.value))}
-                            className={inpGuichet}
-                            autoComplete="family-name"
-                          />
-                        </div>
-                        <div className="relative min-w-0 sm:max-w-[148px]">
+                        <div className="relative min-w-0">
                           <label className={lblGuichet}>
                             Téléphone <span className="text-red-500">*</span>
                           </label>
@@ -1529,7 +1792,7 @@ export default function CourierCreateShipmentPage() {
                                     onMouseDown={(e) => {
                                       e.preventDefault();
                                       setSenderPhone(localDigitsFromFull(phone, phoneRule.callingCode));
-                                      applyNameFromSuggestion(setSenderPrenom, setSenderNom, name, senderPrenom, senderNom);
+                                      applyFullNameFromSuggestion(setSenderFullNameInput, name, senderFullNameInput);
                                     }}
                                   >
                                     {name || phone} - {phone}
@@ -1561,29 +1824,18 @@ export default function CourierCreateShipmentPage() {
                       <div className={personRowGrid}>
                         <div className="min-w-0">
                           <label className={lblGuichet}>
-                            Prénom <span className="text-red-500">*</span>
+                            Nom complet <span className="text-red-500">*</span>
                           </label>
                           <input
-                            value={receiverPrenom}
-                            onChange={(e) => setReceiverPrenom(e.target.value)}
-                            onBlur={(e) => setReceiverPrenom(toNameCase(e.target.value))}
+                            value={receiverFullNameInput}
+                            onChange={(e) => setReceiverFullNameInput(e.target.value)}
+                            onBlur={(e) => setReceiverFullNameInput(toNameCase(e.target.value))}
                             className={inpGuichet}
-                            autoComplete="given-name"
+                            autoComplete="name"
+                            placeholder="Nom complet"
                           />
                         </div>
-                        <div className="min-w-0">
-                          <label className={lblGuichet}>
-                            Nom <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            value={receiverNom}
-                            onChange={(e) => setReceiverNom(e.target.value)}
-                            onBlur={(e) => setReceiverNom(toNameCase(e.target.value))}
-                            className={inpGuichet}
-                            autoComplete="family-name"
-                          />
-                        </div>
-                        <div className="relative min-w-0 sm:max-w-[148px]">
+                        <div className="relative min-w-0">
                           <label className={lblGuichet}>
                             Téléphone <span className="text-red-500">*</span>
                           </label>
@@ -1611,7 +1863,7 @@ export default function CourierCreateShipmentPage() {
                                     onMouseDown={(e) => {
                                       e.preventDefault();
                                       setReceiverPhone(localDigitsFromFull(phone, phoneRule.callingCode));
-                                      applyNameFromSuggestion(setReceiverPrenom, setReceiverNom, name, receiverPrenom, receiverNom);
+                                      applyFullNameFromSuggestion(setReceiverFullNameInput, name, receiverFullNameInput);
                                     }}
                                   >
                                     {name || phone} - {phone}
@@ -1635,12 +1887,46 @@ export default function CourierCreateShipmentPage() {
                         Trajet
                       </h3>
                       <div className="space-y-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(11rem,0.45fr)]">
+                          <div className="min-w-0">
+                            <label className={lblGuichet}>Départ</label>
+                            <div className="flex min-h-11 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-900 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100">
+                              {originAgencyCity || "Agence courante"}
+                            </div>
+                          </div>
+                          <div className="min-w-0">
+                            <label className={lblGuichet}>
+                              Date d'expédition <span className="text-red-500">*</span>
+                            </label>
+                            <input
+                              required
+                              type="date"
+                              value={courierTripDate}
+                              onChange={(e) => {
+                                setCourierTripDate(e.target.value);
+                                setSelectedTripInstanceId(null);
+                              }}
+                              className={inpGuichet}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className={lblGuichet}>
+                            Destination <span className="text-red-500">*</span>
+                          </label>
+                          {arrivalCityOptions.length === 0 ? (
+                            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-100">
+                              Aucune destination configurée pour {originAgencyCity || "cette agence"}.
+                            </p>
+                          ) : null}
+
                         <div className={chipScrollRow}>
-                          {destinationButtonLabels.map(({ id, label }) => {
-                            const sel = destinationAgencyId === id;
+                          {arrivalCityOptions.map((city) => {
+                            const sel = normalizeCityKey(selectedArrivalCity) === normalizeCityKey(city);
                             return (
                               <button
-                                key={id}
+                                key={city}
                                 type="button"
                                 className={cn(
                                   chipBase,
@@ -1657,57 +1943,43 @@ export default function CourierCreateShipmentPage() {
                                     : undefined
                                 }
                                 onClick={() => {
-                                  setDestinationAgencyId(id);
-                                  setCourierTripDate("");
+                                  setSelectedArrivalCity(city);
                                   setSelectedTripInstanceId(null);
                                 }}
                               >
-                                {label}
+                                {city}
                               </button>
                             );
                           })}
                         </div>
+                        </div>
 
-                        {destinationAgencyId.trim() && tripsLoading ? (
+                        {selectedArrivalCity.trim() && tripsLoading ? (
                           <div className="h-9 max-w-[200px] animate-pulse rounded-full bg-gray-200 dark:bg-gray-700" />
                         ) : null}
 
-                        {destinationAgencyId.trim() && !tripsLoading && candidateDateKeys.length > 0 ? (
+                        {selectedArrivalCity.trim() && courierTripDate && tripsOnCourierDate.length > 0 ? (
                           <div className={chipScrollRow}>
-                            {candidateDateKeys.map((dk) => {
-                              const sel = courierTripDate === dk;
-                              return (
-                                <button
-                                  key={dk}
-                                  type="button"
-                                  className={cn(
-                                    chipBase,
-                                    sel
-                                      ? "border-transparent text-white"
-                                      : "border-gray-300 bg-white text-gray-800 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-800"
-                                  )}
-                                  style={
-                                    sel
-                                      ? {
-                                          backgroundColor: themePrimary,
-                                          borderColor: themePrimary,
-                                        }
-                                      : undefined
-                                  }
-                                  onClick={() => {
-                                    setCourierTripDate(dk);
-                                    setSelectedTripInstanceId(null);
-                                  }}
-                                >
-                                  {formatDateChipFr(dk)}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-
-                        {courierTripDate && tripsOnCourierDate.length > 0 ? (
-                          <div className={chipScrollRow}>
+                            <button
+                              type="button"
+                              className={cn(
+                                chipBase,
+                                selectedTripInstanceId == null
+                                  ? "border-transparent text-white"
+                                  : "border-gray-300 bg-white text-gray-800 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-800"
+                              )}
+                              style={
+                                selectedTripInstanceId == null
+                                  ? {
+                                      backgroundColor: themePrimary,
+                                      borderColor: themePrimary,
+                                    }
+                                  : undefined
+                              }
+                              onClick={() => setSelectedTripInstanceId(null)}
+                            >
+                              Sans horaire précis
+                            </button>
                             {tripsOnCourierDate.map((ti) => {
                               const sel = selectedTripInstanceId === ti.id;
                               const time = departureSlotLabel(ti);
@@ -1849,7 +2121,7 @@ export default function CourierCreateShipmentPage() {
                         >
                           <button
                             type="submit"
-                            disabled={!canSubmit || submitting || (!editingShipmentId && quotaReached)}
+                            disabled={!canSubmit || submitting}
                             className="h-11 w-full rounded-lg border border-transparent text-sm font-semibold text-white disabled:opacity-50"
                             style={{ backgroundColor: themePrimary }}
                           >

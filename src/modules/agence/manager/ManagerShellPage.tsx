@@ -28,6 +28,12 @@ import {
   useAgencyKeyboardShortcuts,
   AgencyHeaderExtras,
 } from "@/modules/agence/shared";
+import {
+  ENABLE_COURIER,
+  ENABLE_FLEET,
+  ENABLE_LOGISTICS,
+  ENABLE_PHASE1_ONLY,
+} from "@/config/featureFlags";
 
 const courierChildren = (includeCourier: boolean): NavSectionChild[] =>
   includeCourier
@@ -43,26 +49,34 @@ const courierChildren = (includeCourier: boolean): NavSectionChild[] =>
 function buildFullOpsChildren(includeCourier: boolean): NavSectionChild[] {
   return [
     { label: "Embarquement", path: "/agence/boarding", end: true },
-    { label: "Flotte — tableau de bord", path: "/agence/fleet", end: true },
-    { label: "Flotte — exploitation", path: "/agence/fleet/operations", end: true },
-    { label: "Flotte — affectation", path: "/agence/fleet/assignment" },
-    { label: "Flotte — véhicules", path: "/agence/fleet/vehicles" },
-    { label: "Flotte — équipage", path: "/agence/fleet/crew" },
-    { label: "Flotte — mouvements", path: "/agence/fleet/movements" },
-    ...courierChildren(includeCourier),
+    ...(!ENABLE_PHASE1_ONLY || ENABLE_FLEET
+      ? [
+          { label: "Flotte — tableau de bord", path: "/agence/fleet", end: true },
+          { label: "Flotte — exploitation", path: "/agence/fleet/operations", end: true },
+          { label: "Flotte — affectation", path: "/agence/fleet/assignment" },
+          { label: "Flotte — véhicules", path: "/agence/fleet/vehicles" },
+          { label: "Flotte — équipage", path: "/agence/fleet/crew" },
+          { label: "Flotte — mouvements", path: "/agence/fleet/movements" },
+        ]
+      : []),
+    ...courierChildren(includeCourier && ENABLE_COURIER),
   ];
 }
 
 /** Contrôleur flotte : menus flotte (la planification est une entrée principale du shell). */
 function buildFleetOpsChildren(includeCourier: boolean): NavSectionChild[] {
   return [
-    { label: "Flotte — tableau de bord", path: "/agence/fleet", end: true },
-    { label: "Flotte — exploitation", path: "/agence/fleet/operations", end: true },
-    { label: "Flotte — affectation", path: "/agence/fleet/assignment" },
-    { label: "Flotte — véhicules", path: "/agence/fleet/vehicles" },
-    { label: "Flotte — équipage", path: "/agence/fleet/crew" },
-    { label: "Flotte — mouvements", path: "/agence/fleet/movements" },
-    ...courierChildren(includeCourier),
+    ...(!ENABLE_PHASE1_ONLY || ENABLE_FLEET
+      ? [
+          { label: "Flotte — tableau de bord", path: "/agence/fleet", end: true },
+          { label: "Flotte — exploitation", path: "/agence/fleet/operations", end: true },
+          { label: "Flotte — affectation", path: "/agence/fleet/assignment" },
+          { label: "Flotte — véhicules", path: "/agence/fleet/vehicles" },
+          { label: "Flotte — équipage", path: "/agence/fleet/crew" },
+          { label: "Flotte — mouvements", path: "/agence/fleet/movements" },
+        ]
+      : []),
+    ...courierChildren(includeCourier && ENABLE_COURIER),
   ];
 }
 
@@ -176,6 +190,9 @@ const ManagerShellInner: React.FC = () => {
     }
     const isCourierOnly = has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie");
     const canValidateAgencyExpenses = has("chefAgence") || has("superviseur") || has("admin_compagnie");
+    const visibleBaseSections = ENABLE_PHASE1_ONLY
+      ? BASE_SECTIONS.filter((s) => !["planning", "arrivals"].includes(s.moduleKey))
+      : BASE_SECTIONS;
     const list: NavSection[] = isCourierOnly
       ? [
           { label: "Courrier", icon: Boxes, path: "/agence/courrier/session", end: true },
@@ -183,7 +200,7 @@ const ManagerShellInner: React.FC = () => {
           { label: "Arrivages", icon: Boxes, path: "/agence/courrier/arrivages", end: true },
           { label: "Remise", icon: Boxes, path: "/agence/courrier/remise", end: true },
         ]
-      : BASE_SECTIONS.map((s) => {
+      : visibleBaseSections.map((s) => {
           if (s.label === "Validation départs" && !has("chefAgence") && !has("chefagence")) {
             return null;
           }
@@ -215,7 +232,7 @@ const ManagerShellInner: React.FC = () => {
       !isCourierOnly &&
       (has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agency_fleet_controller"))
     ) {
-      const includeCourier = has("agentCourrier");
+      const includeCourier = ENABLE_COURIER && (has("agentCourrier") || has("chefAgence") || has("chefagence") || has("admin_compagnie"));
       if (has("admin_compagnie")) {
         list.push({
           label: "Exploitation",
@@ -234,7 +251,7 @@ const ManagerShellInner: React.FC = () => {
             children: courierChildren(true),
           });
         }
-      } else if (has("agency_fleet_controller")) {
+      } else if ((!ENABLE_PHASE1_ONLY || ENABLE_FLEET || ENABLE_LOGISTICS) && has("agency_fleet_controller")) {
         list.push({
           label: "Exploitation",
           icon: Boxes,

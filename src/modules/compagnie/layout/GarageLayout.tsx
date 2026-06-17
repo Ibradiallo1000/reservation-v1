@@ -8,6 +8,11 @@ import { doc, getDoc, updateDoc, collection, query, where, onSnapshot, getDocs }
 import { db } from "@/firebaseConfig";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
+import {
+  ENABLE_FLEET,
+  ENABLE_LOGISTICS,
+  ENABLE_PHASE1_ONLY,
+} from "@/config/featureFlags";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import type { Company } from "@/types/companyTypes";
@@ -160,7 +165,7 @@ const GarageLayout: React.FC = () => {
     : "/compagnie/garage";
 
   const globalLogisticsBadge = pendingPlanningCount + pendingLogisticsActionsCount;
-  const sections: NavSection[] = [
+  const allSections: NavSection[] = [
     { label: "Tableau de bord", icon: LayoutDashboard, path: `${basePath}/dashboard`, end: true },
     { label: "Routes réseau", icon: Route, path: `${basePath}/routes`, end: true },
     { label: "Logistique", icon: Package, path: `${basePath}/logistics`, end: true, badge: globalLogisticsBadge || undefined },
@@ -172,6 +177,13 @@ const GarageLayout: React.FC = () => {
     { label: "Conformité bus", icon: ShieldAlert, path: `${basePath}/logistics/compliance`, end: true },
     { label: "Urgence trajet", icon: AlertTriangle, path: `${basePath}/logistics/emergency`, end: true },
   ];
+  const sections: NavSection[] = ENABLE_PHASE1_ONLY
+    ? allSections.filter((s) => {
+        if (!ENABLE_FLEET && ["Liste flotte", "Maintenance", "Transit", "Incidents"].includes(s.label)) return false;
+        if (!ENABLE_LOGISTICS && ["Logistique", "Équipage", "Conformité bus", "Urgence trajet"].includes(s.label)) return false;
+        return s.label === "Routes réseau" && ENABLE_FLEET;
+      })
+    : allSections;
 
   const headerRight = (
     <button

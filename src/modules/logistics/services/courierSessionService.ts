@@ -164,7 +164,10 @@ export async function closeCourierSession(params: {
   agencyId: string;
   sessionId: string;
 }): Promise<{ ledgerSessionTotal: number }> {
-  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
+  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId, {
+    agencyId: params.agencyId,
+    paymentChannel: "courrier",
+  });
   const sessionRef = courierSessionRef(db, params.companyId, params.agencyId, params.sessionId);
   let courierAgentId = "";
 
@@ -215,7 +218,10 @@ export async function validateCourierSession(params: {
   const snap = await getDoc(sessionRef);
   if (!snap.exists()) throw new Error("Session courrier introuvable.");
   const data = snap.data() as CourierSession;
-  const ledgerSessionTotalEarly = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
+  const ledgerSessionTotalEarly = await getCourierSessionLedgerTotal(params.companyId, params.sessionId, {
+    agencyId: params.agencyId,
+    paymentChannel: "courrier",
+  });
   if (data.status === "VALIDATED" || data.status === "VALIDATED_AGENCY") {
     return {
       difference: Number(data.difference ?? 0),
@@ -361,7 +367,10 @@ export async function validateCourierSessionByHeadAccountant(params: {
       "Seules les sessions courrier validées par le comptable agence peuvent être approuvées par le chef d'agence."
     );
   }
-  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
+  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId, {
+    agencyId: params.agencyId,
+    paymentChannel: "courrier",
+  });
   const agencySnapForTz = await getDoc(doc(db, "companies", params.companyId, "agences", params.agencyId));
   const agencyData = agencySnapForTz.data() as { timezone?: string } | undefined;
   const agencyTz = dailyStatsTimezoneFromAgencyData(agencyData);
@@ -448,7 +457,10 @@ export async function returnCourierSessionToAgencyAccountant(params: {
     );
   }
 
-  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId);
+  const ledgerSessionTotal = await getCourierSessionLedgerTotal(params.companyId, params.sessionId, {
+    agencyId: params.agencyId,
+    paymentChannel: "courrier",
+  });
   const agencySnapForTz = await getDoc(doc(db, "companies", params.companyId, "agences", params.agencyId));
   const agencyData = agencySnapForTz.data() as { timezone?: string; currency?: string } | undefined;
   const agencyTz = dailyStatsTimezoneFromAgencyData(agencyData);

@@ -264,7 +264,10 @@ export async function reconcilePendingCashAgency(
       if (created > 0 && created < PENDING_CASH_LEGACY_CUTOFF_MS) {
         return { legacy: true as const, total: 0 };
       }
-      const total = await getCourierSessionLedgerTotal(companyId, d.id);
+      const total = await getCourierSessionLedgerTotal(companyId, d.id, {
+        agencyId,
+        paymentChannel: "courrier",
+      });
       return { legacy: false as const, total };
     })
   );

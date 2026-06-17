@@ -16,9 +16,14 @@ service cloud.firestore {
     function hasUserRole(role) {
       let path = /databases/$(database)/documents/users/$(request.auth.uid);
       let raw = exists(path) ? get(path).data.get('role', '') : '';
+      let rawRoles = exists(path) ? get(path).data.get('roles', []) : [];
       let tokenRole = request.auth != null ? request.auth.token.get('role', '') : '';
+      let tokenRoles = request.auth != null ? request.auth.token.get('roles', []) : [];
       let roleValue = raw != '' ? raw : tokenRole;
-      return (roleValue is string && roleValue == role) || (roleValue is list && roleValue.hasAny([role]));
+      return (roleValue is string && roleValue == role)
+        || (roleValue is list && roleValue.hasAny([role]))
+        || (rawRoles is list && rawRoles.hasAny([role]))
+        || (tokenRoles is list && tokenRoles.hasAny([role]));
     }
     function isPlatformAdmin() {
       return isAuth() && hasUserRole('admin_platforme');
@@ -64,10 +69,24 @@ service cloud.firestore {
         );
     }
     function isComptable() {
-      return isAuth() && (hasUserRole('agency_accountant') || hasUserRole('admin_compagnie'));
+      return isAuth() && (
+        hasUserRole('agency_accountant') ||
+        hasUserRole('comptable') ||
+        hasUserRole('Comptable') ||
+        hasUserRole('admin_compagnie')
+      );
     }
     function isGuichetier() {
       return isAuth() && hasUserRole('guichetier');
+    }
+    function isCourierAgent() {
+      return isAuth() && (
+        hasUserRole('agentCourrier') ||
+        hasUserRole('agentcourrier') ||
+        hasUserRole('agent_courrier') ||
+        hasUserRole('agentCourier') ||
+        hasUserRole('courier_agent')
+      );
     }
     function isBoardingOfficer() {
       return isAuth() && (
@@ -379,26 +398,38 @@ service cloud.firestore {
     function canWriteAgencyScopedFinance(companyId) {
       return userAgencyBelongsToCompany(companyId) && (
         isGuichetier() ||
-        getUserRole() == 'escale_agent' ||
-        getUserRole() == 'escale_manager' ||
-        (getUserRole() == 'chefAgence' && getUserAgencyId() != '') ||
-        getUserRole() == 'agency_accountant'
+        hasUserRole('escale_agent') ||
+        hasUserRole('escale_manager') ||
+        (hasUserRole('chefAgence') && getUserAgencyId() != '') ||
+        isComptable()
       );
     }
-    function canValidateGuichetPayment(companyId) {
-      return canWriteAgencyScopedFinance(companyId)
-        && resource.data.get('status', '') == 'pending'
+    function validPendingPaymentValidationPayload(companyId) {
+      return resource.data.get('status', '') == 'pending'
         && request.resource.data.get('status', '') == 'validated'
-        && resource.data.get('channel', '') == 'guichet'
         && request.resource.data.get('companyId', '') == companyId
         && request.resource.data.get('agencyId', '') == resource.data.get('agencyId', '')
         && request.resource.data.get('reservationId', '') == resource.data.get('reservationId', '')
         && request.resource.data.get('amount', 0) == resource.data.get('amount', 0)
         && request.resource.data.get('currency', 'XOF') == resource.data.get('currency', 'XOF')
         && request.resource.data.get('validatedBy', '') == request.auth.uid
+        && request.resource.data.get('validatedAt', null) == request.time
+        && request.resource.data.get('updatedAt', null) == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'validatedBy', 'validatedAt', 'updatedAt'
         ]);
+    }
+    function canValidateGuichetPayment(companyId) {
+      return canWriteAgencyScopedFinance(companyId)
+        && resource.data.get('channel', '') == 'guichet'
+        && validPendingPaymentValidationPayload(companyId);
+    }
+    function canValidateCourierPayment(companyId) {
+      return isCourierAgent()
+        && userAgencyBelongsToCompany(companyId)
+        && resource.data.get('agencyId', '') == getUserAgencyId()
+        && resource.data.get('channel', '') == 'courrier'
+        && validPendingPaymentValidationPayload(companyId);
     }
     function isHeadOfficeFinanceRole() {
       return hasUserRole('admin_compagnie') ||
@@ -417,7 +448,7 @@ service cloud.firestore {
      * nécessaire pour lister la banque dans « versement caisse → banque ». Pas d’écriture ledger arbitraire.
      */
     function agencyAccountantCanCreateCompanyBankMirror(companyId, accountId) {
-      return getUserRole() == 'agency_accountant'
+      return isComptable()
         && userCompanyId() == companyId
         && userAgencyBelongsToCompany(companyId)
         && accountId.matches('company_bank_.+')
@@ -438,7 +469,7 @@ service cloud.firestore {
       let nextBalance = request.resource.data.get('balance', 0);
       let amount = nextBalance - previousBalance;
       return isAuth()
-        && getUserRole() == 'agency_accountant'
+        && isComptable()
         && userAgencyBelongsToCompany(companyId)
         && accountId == 'agency_' + getUserAgencyId() + '_cash'
         && request.resource.data.get('companyId', '') == companyId
@@ -455,6 +486,68 @@ service cloud.firestore {
         && getAfter(ledgerPath).data.get('source', '') == 'shift_accountant_validation'
         && getAfter(ledgerPath).data.get('createdBy', '') == request.auth.uid
         && getAfter(ledgerPath).data.get('status', '') == 'posted';
+    }
+    function canReadOwnAgencyCashAccount(companyId, accountId) {
+      return isAuth()
+        && userAgencyBelongsToCompany(companyId)
+        && (
+          hasUserRole('agency_accountant')
+          || hasUserRole('comptable')
+          || hasUserRole('Comptable')
+          || hasUserRole('chefAgence')
+          || hasUserRole('chefagence')
+          || hasUserRole('superviseur')
+        )
+        && accountId == 'agency_' + getUserAgencyId() + '_cash'
+        && resource.data.get('companyId', companyId) == companyId
+        && resource.data.get('agencyId', getUserAgencyId()) == getUserAgencyId();
+    }
+    function isAgencyAccountantDirectForCompany(companyId) {
+      return isAuth()
+        && (
+          getUserRole() == 'agency_accountant'
+          || getUserRole() == 'comptable'
+          || getUserRole() == 'Comptable'
+        )
+        && userAgencyBelongsToCompany(companyId);
+    }
+    function isOwnAgencyLiquidityAccountId(accountId) {
+      return accountId == 'agency_' + getUserAgencyId() + '_cash'
+        || accountId == 'agency_' + getUserAgencyId() + '_mobile_money';
+    }
+    function canAgencyAccountantReadOwnLiquidityAccount(companyId, accountId) {
+      return isAgencyAccountantDirectForCompany(companyId)
+        && isOwnAgencyLiquidityAccountId(accountId);
+    }
+    function canAgencyAccountantReadOwnShipment(companyId) {
+      return isAgencyAccountantDirectForCompany(companyId)
+        && (
+          resource.data.get('originAgencyId', '') == getUserAgencyId()
+          || resource.data.get('destinationAgencyId', '') == getUserAgencyId()
+          || resource.data.get('currentAgencyId', '') == getUserAgencyId()
+          || resource.data.get('currentLocationAgencyId', '') == getUserAgencyId()
+          || resource.data.get('agencyId', '') == getUserAgencyId()
+        );
+    }
+    function agencyAccountantCanListCompanyScopedAccounting(companyId) {
+      return isAuth()
+        && isComptable()
+        && getUserAgencyId() != ''
+        && userAgencyBelongsToCompany(companyId);
+    }
+    function canReadOwnAgencyAccountingData(companyId, agencyId) {
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && agencyId == getUserAgencyId();
+    }
+    function canReadOwnAgencyLedgerAccount(companyId) {
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && resource.data.get('companyId', companyId) == companyId
+        && resource.data.get('agencyId', '') == getUserAgencyId()
+        && resource.data.get('type', '') in ['cash', 'mobile_money', 'virtual_clearing'];
     }
     function guichetValidatedPaymentCreate(companyId) {
       return request.resource.data.get('status', '') == 'validated'
@@ -475,6 +568,256 @@ service cloud.firestore {
           (t == 'refund' && amt < 0 && amt > -100000000)
           || (amt > 0 && amt < 100000000)
         );
+    }
+    function comptaEncaissementCreateOk(companyId, agencyId) {
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && getUserAgencyId() == agencyId
+        && request.resource.data.keys().hasOnly([
+          'type',
+          'montant',
+          'source',
+          'sessionId',
+          'agencyId',
+          'companyId',
+          'createdAt'
+        ])
+        && request.resource.data.get('type', '') == 'encaissement'
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == agencyId
+        && request.resource.data.get('source', '') in ['guichet', 'courrier']
+        && request.resource.data.get('sessionId', '').size() > 0
+        && request.resource.data.get('montant', 0) > 0
+        && request.resource.data.get('montant', 0) < 100000000
+        && request.resource.data.get('createdAt', null) == request.time;
+    }
+    function courierSessionAccountantValidationOk(companyId, agencyId) {
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && getUserAgencyId() == agencyId
+        && resource.data.get('status', '') == 'CLOSED'
+        && request.resource.data.get('status', '') == 'VALIDATED_AGENCY'
+        && request.resource.data.get('validatedAmount', -1) >= 0
+        && request.resource.data.get('validatedAmount', -1) < 100000000
+        && request.resource.data.get('validatedBy', {}).get('id', '') == request.auth.uid
+        && request.resource.data.get('validatedAt', null) == request.time
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'validatedAt',
+          'validatedAmount',
+          'difference',
+          'remittanceStatus',
+          'remittanceDiscrepancyAmount',
+          'pendingCashLedgerVersion',
+          'validatedBy',
+          'updatedAt'
+        ]);
+    }
+    function agencyAccountantRemittanceLedgerAccountUpdateOk(companyId, accountId) {
+      let previousBalance = resource.data.get('balance', 0);
+      let nextBalance = request.resource.data.get('balance', 0);
+      let delta = nextBalance - previousBalance;
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && getUserAgencyId() != ''
+        && request.resource.data.get('id', '') == resource.data.get('id', '')
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('companyId', '') == resource.data.get('companyId', '')
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('agencyId', '') == resource.data.get('agencyId', '')
+        && request.resource.data.get('type', '') == resource.data.get('type', '')
+        && request.resource.data.get('currency', 'XOF') == resource.data.get('currency', 'XOF')
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.get('balance', 0) is number
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt'])
+        && (
+          (
+            accountId == 'agency_' + getUserAgencyId() + '_cash'
+            && resource.data.get('type', '') == 'cash'
+            && delta > 0
+            && delta < 100000000
+          )
+          || (
+            accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+            && resource.data.get('type', '') == 'virtual_clearing'
+            && delta < 0
+            && delta > -100000000
+          )
+        );
+    }
+    function agencyAccountantCashMirrorUpdateOk(companyId, accountId) {
+      let previousBalance = resource.data.get('currentBalance', 0);
+      let nextBalance = request.resource.data.get('currentBalance', 0);
+      let delta = nextBalance - previousBalance;
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && accountId == getUserAgencyId() + '_agency_cash'
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentBalance', 'updatedAt'])
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.get('currentBalance', 0) is number
+        && delta > 0
+        && delta < 100000000;
+    }
+    function agencyAccountantCashMirrorReadOk(companyId, accountId) {
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && accountId == getUserAgencyId() + '_agency_cash';
+    }
+    function courierCashPaymentCreateOk(companyId) {
+      return isCourierAgent()
+        && userAgencyBelongsToCompany(companyId)
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('channel', '') == 'courrier'
+        && request.resource.data.get('provider', '') == 'cash'
+        && request.resource.data.get('status', '') == 'validated'
+        && request.resource.data.get('validatedBy', '') == request.auth.uid
+        && request.resource.data.get('createdAt', null) == request.time
+        && request.resource.data.get('validatedAt', null) == request.time
+        && request.resource.data.get('amount', 0) > 0
+        && request.resource.data.get('amount', 0) < 100000000
+        && request.resource.data.get('currency', 'XOF') == 'XOF'
+        && request.resource.data.get('reservationId', '').size() > 0
+        && request.resource.data.keys().hasOnly([
+          'reservationId',
+          'companyId',
+          'agencyId',
+          'amount',
+          'currency',
+          'channel',
+          'provider',
+          'status',
+          'createdAt',
+          'validatedAt',
+          'validatedBy',
+          'rejectionReason'
+        ]);
+    }
+    function courierCashFinancialTxCreateOk(companyId) {
+      let amt = request.resource.data.get('amount', 0);
+      return isCourierAgent()
+        && userAgencyBelongsToCompany(companyId)
+        && request.resource.data.keys().hasOnly([
+          'type',
+          'source',
+          'amount',
+          'currency',
+          'companyId',
+          'agencyId',
+          'reservationId',
+          'debitAccountId',
+          'creditAccountId',
+          'debitAccountType',
+          'creditAccountType',
+          'balanceAfter',
+          'status',
+          'performedAt',
+          'createdAt',
+          'metadata',
+          'referenceType',
+          'referenceId',
+          'uniqueReferenceKey',
+          'paymentChannel',
+          'paymentMethod',
+          'paymentProvider'
+        ])
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('type', '') == 'payment_received'
+        && request.resource.data.get('source', '') == 'cash'
+        && request.resource.data.get('paymentChannel', '') == 'courrier'
+        && request.resource.data.get('paymentMethod', '') == 'cash'
+        && request.resource.data.get('paymentProvider', '') == 'cash'
+        && request.resource.data.get('status', '') == 'confirmed'
+        && request.resource.data.get('referenceType', '') == 'payment'
+        && request.resource.data.get('referenceId', '').size() > 0
+        && request.resource.data.get('reservationId', '').size() > 0
+        && amt > 0
+        && amt < 100000000
+        && request.resource.data.get('balanceAfter', 0) is number
+        && request.resource.data.get('performedAt', null) is timestamp
+        && request.resource.data.get('createdAt', null) is timestamp
+        && request.resource.data.get('uniqueReferenceKey', '').size() > 0
+        && request.resource.data.get('currency', 'XOF') == 'XOF'
+        && request.resource.data.get('creditAccountId', '') == 'agency_' + getUserAgencyId() + '_pending_cash'
+        && request.resource.data.get('debitAccountId', '') == 'company_clearing';
+    }
+    function courierCashFinancialTxReadOk(companyId) {
+      return isCourierAgent()
+        && userAgencyBelongsToCompany(companyId)
+        && resource.data.get('companyId', '') == companyId
+        && resource.data.get('agencyId', '') == getUserAgencyId()
+        && resource.data.get('type', '') == 'payment_received'
+        && resource.data.get('paymentChannel', '') == 'courrier'
+        && resource.data.get('status', '') == 'confirmed';
+    }
+    function courierCashFinancialIdempotencyOk(companyId) {
+      return isCourierAgent()
+        && userAgencyBelongsToCompany(companyId)
+        && request.resource.data.keys().hasOnly(['transactionId', 'createdAt'])
+        && request.resource.data.get('transactionId', '').size() > 0
+        && request.resource.data.get('createdAt', null) is timestamp;
+    }
+    function courierCashLedgerAccountIdOk(accountId) {
+      return accountId == 'company_clearing'
+        || accountId == 'agency_' + getUserAgencyId() + '_pending_cash';
+    }
+    function courierCashLedgerAccountCreateOk(companyId, accountId) {
+      return isCourierAgent()
+        && userAgencyBelongsToCompany(companyId)
+        && courierCashLedgerAccountIdOk(accountId)
+        && request.resource.data.keys().hasOnly([
+          'id',
+          'companyId',
+          'agencyId',
+          'type',
+          'label',
+          'balance',
+          'currency',
+          'includeInLiquidity',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.get('id', '') == accountId
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('type', '') == 'virtual_clearing'
+        && request.resource.data.get('balance', 0) is number
+        && request.resource.data.get('includeInLiquidity', true) == false
+        && request.resource.data.get('currency', 'XOF') == 'XOF'
+        && request.resource.data.get('createdAt', null) == request.time
+        && request.resource.data.get('updatedAt', null) == request.time
+        && (
+          (
+            accountId == 'company_clearing'
+            && request.resource.data.get('agencyId', null) == null
+          )
+          || (
+            accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+            && request.resource.data.get('agencyId', '') == getUserAgencyId()
+          )
+        );
+    }
+    function courierCashLedgerAccountUpdateOk(companyId, accountId) {
+      return isCourierAgent()
+        && userAgencyBelongsToCompany(companyId)
+        && courierCashLedgerAccountIdOk(accountId)
+        && request.resource.data.get('id', '') == resource.data.get('id', '')
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('companyId', '') == resource.data.get('companyId', '')
+        && request.resource.data.get('agencyId', null) == resource.data.get('agencyId', null)
+        && request.resource.data.get('type', '') == resource.data.get('type', '')
+        && request.resource.data.get('currency', 'XOF') == resource.data.get('currency', 'XOF')
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.get('balance', 0) is number
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt']);
     }
 
     function canWriteTripCosts(isCreate) {
@@ -1469,7 +1812,7 @@ service cloud.firestore {
 
         match /shifts/{shiftId} {
           allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'
-            || getUserRole() == 'agency_accountant'
+            || isComptable()
             || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()));
           allow create: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId) || getUserRole() == 'admin_platforme'
             || ((getUserRole() == 'escale_agent' || getUserRole() == 'escale_manager') && agencyId == getUserAgencyId()))
@@ -1505,7 +1848,7 @@ match /shiftReports/{reportId} {
       && (
         isGuichetier()
         || getUserRole() == 'agentCourrier'
-        || getUserRole() == 'agency_accountant'
+        || isComptable()
         || getUserRole() == 'escale_agent'
         || getUserRole() == 'escale_manager'
       )
@@ -1521,7 +1864,7 @@ match /shiftReports/{reportId} {
       && (
         isGuichetier()
         || getUserRole() == 'agentCourrier'
-        || getUserRole() == 'agency_accountant'
+        || isComptable()
         || getUserRole() == 'escale_agent'
         || getUserRole() == 'escale_manager'
       )
@@ -1553,9 +1896,10 @@ match /shiftReports/{reportId} {
 
         /* Courier sessions (agency-scoped, Ticket-like lifecycle) */
         match /courierSessions/{sessionId} {
-          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || getUserRole() == 'agency_accountant');
+          allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme' || isComptable());
           allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow update: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+            || courierSessionAccountantValidationOk(companyId, agencyId);
           allow delete: if false;
         }
 
@@ -1697,13 +2041,32 @@ match /shiftReports/{reportId} {
 
         /* Agency cash receipts (guichet encaissements) used by accounting cash dashboard. */
         match /cashReceipts/{receiptId} {
-          allow get, list, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow get, list: if isAuth() && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || canReadOwnAgencyAccountingData(companyId, agencyId)
+          );
+          allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
         /* Ledger-based cash control snapshots (no financial impact). Accountant compares physical cash vs ledger solde. */
         match /cashAudits/{auditId} {
-          allow get, list, create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow get, list: if isAuth() && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || canReadOwnAgencyAccountingData(companyId, agencyId)
+          );
+          allow create: if isAuth() && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || (
+              canReadOwnAgencyAccountingData(companyId, agencyId)
+              && request.resource.data.get('companyId', '') == companyId
+              && request.resource.data.get('agencyId', '') == agencyId
+              && request.resource.data.get('validatedBy', {}).get('id', '') == request.auth.uid
+            )
+          );
           allow update, delete: if false;
         }
 
@@ -1717,7 +2080,8 @@ match /shiftReports/{reportId} {
               && getUserAgencyId() == agencyId
             )
           );
-          allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
+            || comptaEncaissementCreateOk(companyId, agencyId);
           allow update: if false;
           /* Suppression réservée au renvoi courrier chef → comptable (doc `courier_*` uniquement). */
           allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
@@ -1728,7 +2092,12 @@ match /shiftReports/{reportId} {
 
         /* Agency cash movements (comptabilité). Authenticated read/write. */
         match /cashMovements/{movementId} {
-          allow get, list, create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow get, list: if isAuth() && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || canReadOwnAgencyAccountingData(companyId, agencyId)
+          );
+          allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
@@ -1750,7 +2119,7 @@ match /shiftReports/{reportId} {
           allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             resource.data.get('agentId', '') == request.auth.uid
-            || getUserRole() == 'agency_accountant'
+            || isComptable()
             || getUserRole() == 'admin_compagnie'
             || getUserRole() == 'admin_platforme'
           );
@@ -1776,6 +2145,7 @@ match /shiftReports/{reportId} {
       ============================================================ */
       match /financialAccounts/{accountId} {
         allow get, list: if canAccessSensitiveCompanyFinance(companyId);
+        allow get: if agencyAccountantCashMirrorReadOk(companyId, accountId);
         allow create: if canAccessSensitiveCompanyFinance(companyId)
           && request.resource.data.get('companyId', '') == companyId;
         allow update: if canAccessSensitiveCompanyFinance(companyId) && (
@@ -1784,7 +2154,8 @@ match /shiftReports/{reportId} {
           ||
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['currentBalance', 'updatedAt'])
-        );
+        )
+        || agencyAccountantCashMirrorUpdateOk(companyId, accountId);
         allow delete: if false;
       }
       /* Treasury — immutable ledger: no update/delete. Phase 6: reconciliationStatus update allowed for admin_compagnie | company_accountant only. */
@@ -1801,7 +2172,7 @@ match /shiftReports/{reportId} {
           getUserRole() == 'admin_platforme' ||
           (userCompanyId() == companyId && (
             getUserRole() == 'admin_compagnie' ||
-            ((getUserRole() == 'chefAgence' || getUserRole() == 'agency_accountant')
+            ((getUserRole() == 'chefAgence' || isComptable())
               && request.resource.data.get('agencyId', '') == getUserAgencyId()) ||
             ((getUserRole() == 'company_accountant' || getUserRole() == 'financial_director')
               && (request.resource.data.get('agencyId', '') == '' || request.resource.data.agencyId == null))
@@ -1820,7 +2191,7 @@ match /shiftReports/{reportId} {
             userAgencyBelongsToCompany(companyId) &&
             resource.data.get('agencyId', '') == getUserAgencyId() &&
             (
-              getUserRole() == 'agency_accountant' ||
+              isComptable() ||
               getUserRole() == 'chefAgence' ||
               getUserRole() == 'chefagence' ||
               getUserRole() == 'superviseur'
@@ -1834,7 +2205,7 @@ match /shiftReports/{reportId} {
             request.resource.data.get('companyId', '') == companyId
           ) ||
           (
-            getUserRole() == 'agency_accountant' &&
+            isComptable() &&
             request.resource.data.get('agencyId', '') == getUserAgencyId() &&
             request.resource.data.get('companyId', '') == companyId
           )
@@ -1891,13 +2262,24 @@ match /shiftReports/{reportId} {
          - accounts: ledger balances updated atomically by transaction service
       */
       match /financialTransactions/{transactionId} {
-        allow get, list: if canAccessSensitiveCompanyFinance(companyId)
+        allow get: if courierCashFinancialTxReadOk(companyId);
+        allow get: if canAccessSensitiveCompanyFinance(companyId)
           || (
-            canWriteAgencyScopedFinance(companyId)
+            isAuth()
+            && isComptable()
+            && userAgencyBelongsToCompany(companyId)
+            && resource.data.get('companyId', '') == companyId
+            && resource.data.get('agencyId', '') == getUserAgencyId()
+          )
+          || (
+            isAgencyAccountantDirectForCompany(companyId)
             && resource.data.get('companyId', '') == companyId
             && resource.data.get('agencyId', '') == getUserAgencyId()
           );
-        allow create: if canAccessSensitiveCompanyFinance(companyId)
+        allow list: if canAccessSensitiveCompanyFinance(companyId)
+          || agencyAccountantCanListCompanyScopedAccounting(companyId);
+        allow create: if courierCashFinancialTxCreateOk(companyId)
+          || canAccessSensitiveCompanyFinance(companyId)
           || (canWriteAgencyScopedFinance(companyId) && financialTxAgencyStaffPayload(companyId));
         allow update: if canAccessSensitiveCompanyFinance(companyId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'metadata']);
@@ -1905,8 +2287,11 @@ match /shiftReports/{reportId} {
       }
 
       match /financialTransactionIdempotency/{key} {
-        allow get: if canAccessSensitiveCompanyFinance(companyId) || canWriteAgencyScopedFinance(companyId);
-        allow create: if canAccessSensitiveCompanyFinance(companyId)
+        allow get: if canAccessSensitiveCompanyFinance(companyId)
+          || canWriteAgencyScopedFinance(companyId)
+          || (isCourierAgent() && userAgencyBelongsToCompany(companyId));
+        allow create: if courierCashFinancialIdempotencyOk(companyId)
+          || canAccessSensitiveCompanyFinance(companyId)
           || (
             canWriteAgencyScopedFinance(companyId)
             && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
@@ -1918,22 +2303,20 @@ match /shiftReports/{reportId} {
 
       match /accounts/{accountId} {
         allow get, list: if canAccessSensitiveCompanyFinance(companyId);
-        allow get: if (
-          userAgencyBelongsToCompany(companyId)
-          && (
-            hasUserRole('agency_accountant')
-            || hasUserRole('comptable')
-            || hasUserRole('chefAgence')
-            || hasUserRole('chefagence')
-            || hasUserRole('superviseur')
-          )
-          && accountId == 'agency_' + getUserAgencyId() + '_cash'
-        ) || (
+        allow get: if canAgencyAccountantReadOwnLiquidityAccount(companyId, accountId);
+        allow get: if isCourierAgent()
+          && userAgencyBelongsToCompany(companyId)
+          && courierCashLedgerAccountIdOk(accountId);
+        allow get: if canReadOwnAgencyCashAccount(companyId, accountId)
+          || canReadOwnAgencyLedgerAccount(companyId)
+          || (
           canWriteAgencyScopedFinance(companyId)
           && resource.data.get('companyId', '') == companyId
           && resource.data.get('agencyId', '') == getUserAgencyId()
         );
-        allow create: if canAccessSensitiveCompanyFinance(companyId)
+        allow list: if canReadOwnAgencyLedgerAccount(companyId);
+        allow create: if courierCashLedgerAccountCreateOk(companyId, accountId)
+          || canAccessSensitiveCompanyFinance(companyId)
           || (
             agencyAccountantCanPostCashBalance(companyId, accountId, true)
             && request.resource.data.keys().hasOnly([
@@ -1943,7 +2326,9 @@ match /shiftReports/{reportId} {
             && request.resource.data.get('type', '') == 'cash'
             && request.resource.data.get('includeInLiquidity', false) == true
           );
-        allow update: if (
+        allow update: if courierCashLedgerAccountUpdateOk(companyId, accountId)
+        || agencyAccountantRemittanceLedgerAccountUpdateOk(companyId, accountId)
+        || (
           canAccessSensitiveCompanyFinance(companyId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'balance', 'updatedAt', 'currency', 'accountType', 'type', 'label',
@@ -1961,16 +2346,19 @@ match /shiftReports/{reportId} {
           allow get: if canAccessSensitiveCompanyFinance(companyId)
             || (
               isAuth()
-              && getUserRole() == 'agency_accountant'
+              && isComptable()
               && userAgencyBelongsToCompany(companyId)
               && accountId == 'agency_' + getUserAgencyId() + '_cash'
               && ledgerId.matches('session_.+_accountant_validation')
             );
-          allow list: if false;
+          allow list: if isAuth()
+            && isComptable()
+            && userAgencyBelongsToCompany(companyId)
+            && accountId == 'agency_' + getUserAgencyId() + '_cash';
           allow create: if isAuth()
             && (
               (
-                getUserRole() == 'agency_accountant'
+                isComptable()
                 && userAgencyBelongsToCompany(companyId)
                 && request.resource.data.get('agencyId', '') == getUserAgencyId()
               )
@@ -2007,7 +2395,7 @@ match /shiftReports/{reportId} {
       match /suppliers/{supplierId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
-          getUserRole() == 'agency_accountant' ||
+          isComptable() ||
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'financial_director' ||
           getUserRole() == 'admin_compagnie'
@@ -2019,7 +2407,7 @@ match /shiftReports/{reportId} {
       match /payables/{payableId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
-          getUserRole() == 'agency_accountant' ||
+          isComptable() ||
           getUserRole() == 'chefAgence' ||
           getUserRole() == 'admin_compagnie' ||
           getUserRole() == 'company_accountant' ||
@@ -2056,7 +2444,7 @@ match /shiftReports/{reportId} {
       match /paymentProposals/{proposalId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
-          getUserRole() == 'agency_accountant' ||
+          isComptable() ||
           getUserRole() == 'company_accountant' ||
           getUserRole() == 'financial_director'
         );
@@ -2249,6 +2637,28 @@ match /shiftReports/{reportId} {
             && get(paymentPath).data.get('channel', '') == 'online'
             && get(paymentPath).data.get('status', '') in ['validated', 'rejected'];
         }
+        function agencyCourierCanCreatePaymentLog() {
+          let paymentId = request.resource.data.get('paymentId', '');
+          let paymentPath = /databases/$(database)/documents/companies/$(companyId)/payments/$(paymentId);
+          return isAuth()
+            && isCourierAgent()
+            && userAgencyBelongsToCompany(companyId)
+            && paymentId is string
+            && paymentId != ''
+            && request.resource.data.get('userId', '') == request.auth.uid
+            && request.resource.data.get('action', '') in ['confirm', 'reject']
+            && request.resource.data.keys().hasOnly([
+              'paymentId',
+              'action',
+              'userId',
+              'timestamp'
+            ])
+            && exists(paymentPath)
+            && get(paymentPath).data.get('companyId', '') == companyId
+            && get(paymentPath).data.get('agencyId', '') == getUserAgencyId()
+            && get(paymentPath).data.get('channel', '') == 'courrier'
+            && get(paymentPath).data.get('status', '') in ['validated', 'rejected'];
+        }
         allow get, list: if isAuth() && (
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
@@ -2259,6 +2669,7 @@ match /shiftReports/{reportId} {
           userCompanyId() == companyId ||
           getUserRole() == 'admin_platforme' ||
           (canWriteAgencyScopedFinance(companyId) && request.resource.data.get('userId', '') == request.auth.uid) ||
+          agencyCourierCanCreatePaymentLog() ||
           (getUserRole() == 'operator_digital' && userAgencyBelongsToCompany(companyId) && request.resource.data.get('userId', '') == request.auth.uid) ||
           operatorDigitalCanCreateOnlinePaymentLog()
         );
@@ -2291,6 +2702,7 @@ match /shiftReports/{reportId} {
             && resource.data.get('channel', '') == 'online');
         allow list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create: if visitorOnlinePendingPaymentCreate()
+          || courierCashPaymentCreateOk(companyId)
           || (
             isAuth()
             && (userCompanyId() == companyId || getUserRole() == 'admin_platforme')
@@ -2326,6 +2738,7 @@ match /shiftReports/{reportId} {
             )
           ))
           || canValidateGuichetPayment(companyId)
+          || canValidateCourierPayment(companyId)
           || (
             resource.data.get('status', '') == 'pending'
             && resource.data.get('channel', '') == 'online'
@@ -2446,9 +2859,12 @@ match /shiftReports/{reportId} {
     /* Courier shipments (courrier) live under: companies/{companyId}/logistics/data/shipments/{shipmentId}
        Firestore queries with filters require the exact sub-path to be covered. */
     match /companies/{companyId}/logistics/data/shipments/{shipmentId} {
+      allow get: if canAgencyAccountantReadOwnShipment(companyId);
+      allow list: if agencyAccountantCanListCompanyScopedAccounting(companyId);
       allow get, list: if isAuth() && (
         userCompanyId() == companyId
         || getUserRole() == 'admin_platforme'
+        || (isComptable() && userAgencyBelongsToCompany(companyId))
         || (isResponsableLogistique() && userCompanyId() == companyId)
       );
     }

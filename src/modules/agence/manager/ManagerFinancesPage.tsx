@@ -374,7 +374,7 @@ export default function ManagerFinancesPage({
   );
 
   useEffect(() => {
-    if (!companyId) return;
+    if (!companyId || !agencyId) return;
     const ids = courierSessionsForLedgerHint.map((s) => s.id).filter(Boolean);
     if (ids.length === 0) {
       setCourierExpectedBySessionId({});
@@ -385,7 +385,10 @@ export default function ManagerFinancesPage({
       const entries = await Promise.all(
         ids.map(async (id) => {
           try {
-            const total = await getCourierSessionLedgerTotal(companyId, id);
+            const total = await getCourierSessionLedgerTotal(companyId, id, {
+              agencyId,
+              paymentChannel: "courrier",
+            });
             return [id, Number(total || 0)] as const;
           } catch {
             return [id, 0] as const;
@@ -398,7 +401,7 @@ export default function ManagerFinancesPage({
     return () => {
       cancelled = true;
     };
-  }, [companyId, courierSessionsForLedgerHint]);
+  }, [companyId, agencyId, courierSessionsForLedgerHint]);
   const blockedClosedShifts = useMemo(
     () =>
       closedShifts.filter((s) => {

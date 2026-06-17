@@ -16,7 +16,8 @@ import { generateTrackingPublicId, generateTrackingToken } from "../utils/shipme
 import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 import { writeCourierActivityInTransaction } from "@/modules/compagnie/activity/activityLogsService";
-import { createPayment, getPaymentByReservationId, confirmPayment } from "@/services/paymentService";
+import { createPayment, getPaymentByReservationId } from "@/services/paymentService";
+import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import {
   assertAndIncrementOperationInTransaction,
   loadOperationPlanSettings,
@@ -237,7 +238,8 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     });
   }
 
-  // Encaissement a l'origine : le paiement courrier n'est valide que si le ledger est ecrit.
+  // Encaissement comptoir courrier : paiement espèces considéré encaissé immédiatement.
+  // Pas de workflow pending -> validated, qui appartient aux paiements à valider.
   if (params.paymentStatus === "PAID_ORIGIN") {
     const amount = Number(params.transportFee ?? 0) + Number(params.insuranceAmount ?? 0);
     if (amount > 0 && params.createdBy) {
@@ -258,16 +260,37 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
           currency: "XOF",
           channel: "courrier",
           provider: pm === "mobile_money" ? "wave" : "cash",
-          status: "pending",
+          status: "validated",
+          validatedBy: params.createdBy,
         });
-      } else if (existing.status === "pending") {
+      } else if (existing.status === "validated") {
         paymentId = existing.id;
-      } else if (existing.status !== "validated") {
-        throw new Error("Paiement courrier existant non validable.");
+      } else {
+        throw new Error("Paiement courrier existant incohérent.");
       }
 
       if (paymentId) {
-        await confirmPayment(params.companyId, paymentId, params.createdBy);
+        await createFinancialTransaction({
+          companyId: params.companyId,
+          type: "payment_received",
+          source: "courrier",
+          paymentChannel: "courrier",
+          paymentMethod: pm,
+          paymentProvider: pm === "mobile_money" ? "wave" : "cash",
+          amount,
+          currency: "XOF",
+          agencyId: params.originAgencyId,
+          reservationId: shipmentId,
+          performedAt: Timestamp.now(),
+          referenceType: "payment",
+          referenceId: paymentId,
+          metadata: {
+            provider: pm === "mobile_money" ? "wave" : "cash",
+            paymentMethod: pm,
+            shipmentId,
+            ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
+          },
+        });
       }
 
       logAgentHistoryEvent({

@@ -33,6 +33,10 @@ import {
 } from "@/modules/agence/shared";
 import { usePendingExpensesCount } from "@/shared/hooks/usePendingExpensesCount";
 import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
+import {
+  ENABLE_ADVANCED_FINANCE,
+  ENABLE_PHASE1_ONLY,
+} from "@/config/featureFlags";
 
 interface Company {
   id: string;
@@ -102,19 +106,23 @@ const CompanyAccountantLayout: React.FC = () => {
     {
       label: "Contrôle des caisses",
       icon: Wallet,
-      path: `${basePath}/cash-control`,
+      path: `${basePath}/finances`,
     },
-    {
-      label: "Trésorerie",
-      icon: Landmark,
-      path: `${basePath}/treasury`,
-    },
-    {
-      label: "Dépenses",
-      icon: Receipt,
-      path: `${basePath}/expenses`,
-      badge: pendingExpensesCount || undefined,
-    },
+    ...(!ENABLE_PHASE1_ONLY || ENABLE_ADVANCED_FINANCE
+      ? [
+          {
+            label: "Trésorerie",
+            icon: Landmark,
+            path: `${basePath}/treasury`,
+          },
+          {
+            label: "Dépenses",
+            icon: Receipt,
+            path: `${basePath}/expenses`,
+            badge: pendingExpensesCount || undefined,
+          },
+        ]
+      : []),
   ];
 
   useAgencyKeyboardShortcuts(sections);

@@ -40,6 +40,7 @@ export interface CourierWorkspaceContextValue {
   sessionId: string | null;
   shipments: Shipment[];
   ledgerSessionTotal: number | null;
+  operationalSessionTotal: number;
   agentCode: string;
   agentName: string;
   agentId: string;
@@ -259,7 +260,10 @@ export function CourierWorkspaceProvider({
     let cancelled = false;
     void (async () => {
       try {
-        const t = await getCourierSessionLedgerTotal(companyId, sessionId);
+        const t = await getCourierSessionLedgerTotal(companyId, sessionId, {
+          agencyId,
+          paymentChannel: "courrier",
+        });
         if (!cancelled) setLedgerSessionTotal(t);
       } catch {
         if (!cancelled) setLedgerSessionTotal(null);
@@ -268,7 +272,16 @@ export function CourierWorkspaceProvider({
     return () => {
       cancelled = true;
     };
-  }, [companyId, sessionId, shipments.length]);
+  }, [companyId, agencyId, sessionId, shipments.length]);
+
+  const operationalSessionTotal = useMemo(
+    () =>
+      shipments.reduce((sum, shipment) => {
+        if (shipment.paymentStatus !== "PAID_ORIGIN" && shipment.paymentStatus !== "PAID_DESTINATION") return sum;
+        return sum + Number(shipment.transportFee ?? 0) + Number(shipment.insuranceAmount ?? 0);
+      }, 0),
+    [shipments]
+  );
 
   const counterUiStatus: CourierCounterUiStatus = useMemo(() => {
     if (!session) return "closed";
@@ -332,6 +345,7 @@ export function CourierWorkspaceProvider({
       sessionId,
       shipments,
       ledgerSessionTotal,
+      operationalSessionTotal,
       agentCode,
       agentName,
       agentId,
@@ -365,6 +379,7 @@ export function CourierWorkspaceProvider({
       isSessionLoading,
       shipments,
       ledgerSessionTotal,
+      operationalSessionTotal,
       agentCode,
       agentName,
       agentId,

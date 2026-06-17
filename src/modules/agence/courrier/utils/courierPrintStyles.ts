@@ -26,6 +26,8 @@ export const COURIER_COMBINED_PRINT_CSS = `
     box-shadow: none !important;
     border: none !important;
     background: white !important;
+    padding: 0 !important;
+    gap: 0 !important;
   }
   #print-root * {
     visibility: visible !important;
@@ -35,6 +37,23 @@ export const COURIER_COMBINED_PRINT_CSS = `
   /* Ticket + étiquette toujours imprimés ensemble ; saut de page entre les deux. */
   #print-root .print-area-label {
     display: block !important;
+  }
+  #print-root .courier-print-document-card {
+    width: 100% !important;
+    max-width: none !important;
+    display: flex !important;
+    align-items: center !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 auto !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  #print-root .courier-print-document-card > div:first-child {
+    display: none !important;
   }
 
   .page-break {

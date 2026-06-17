@@ -31,15 +31,13 @@ import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { agencyChromePageRootStyle } from '@/shared/theme/agencySurfaceGradients';
 import {
   Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4, Scale,
-  Download, FileText, HandIcon, LogOut, MapPin, Package, Pause, Play, Plus, StopCircle, Bell,
-  Ticket, Wallet, Info as InfoIcon, Shield, Receipt, BarChart3,
-  RefreshCw, TrendingUp, CreditCard, Smartphone
+  Download, FileText, HandIcon, LogOut, MapPin, Package, Play, Plus, StopCircle, Bell,
+  Ticket, Wallet, BarChart3,
+  RefreshCw, TrendingUp, CreditCard, Smartphone, ArrowDownCircle, Menu, X
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { StandardLayoutWrapper, SectionCard, ActionButton, MetricCard, StatusBadge, EmptyState as UIEmptyState } from '@/ui';
-import { typography } from '@/ui/foundation';
+import { SectionCard, ActionButton, MetricCard, StatusBadge, EmptyState as UIEmptyState } from '@/ui';
 import { useFormatCurrency, useCurrencySymbol } from '@/shared/currency/CurrencyContext';
 import { useAgencyDarkMode } from '@/modules/agence/shared';
 import AgencyTreasuryNewOperationPage from '@/modules/agence/treasury/pages/AgencyTreasuryNewOperationPage';
@@ -84,6 +82,16 @@ import {
   belongsToGuichetSession,
   fetchReservationDocsForShiftSlot,
 } from '@/modules/agence/guichet/guichetSessionReservationModel';
+import { AccountantKpiCards } from '@/modules/agence/comptabilite/components/phase1/AccountantKpiCards';
+import { ActivePostsPanel } from '@/modules/agence/comptabilite/components/phase1/ActivePostsPanel';
+import { AccountantControlLayout } from '@/modules/agence/comptabilite/components/phase1/AccountantControlLayout';
+import { TodayHistoryTimeline } from '@/modules/agence/comptabilite/components/phase1/TodayHistoryTimeline';
+import {
+  CourierComptaSessionCard,
+  InfoCard,
+  Th,
+  Td,
+} from '@/modules/agence/comptabilite/components/phase1/AccountantSharedUi';
 
 /* ============================================================================
    SECTION : TYPES ET INTERFACES
@@ -273,121 +281,12 @@ const auditValidatedAtToDate = (v: unknown): Date | null => {
   return null;
 };
 
-const fmtClockFr = (v: unknown) => {
-  const d = auditValidatedAtToDate(v);
-  return d ? d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—';
-};
-
 const paymentStatusLabelFr = (s: string) => {
   const u = String(s || '').toUpperCase();
   if (u === 'UNPAID') return 'Non payé';
   if (u === 'PAID_ORIGIN') return 'Payé (origine)';
   if (u === 'PAID_DESTINATION') return 'Payé (destination)';
   return s || '—';
-};
-
-const courierStatusToBadge: Record<string, 'active' | 'pending' | 'success' | 'warning' | 'neutral'> = {
-  PENDING: 'pending',
-  ACTIVE: 'active',
-  CLOSED: 'warning',
-  VALIDATED: 'success',
-};
-
-/** Relief 3D + survol « levé » (ombres neutres, bordure / fond teintés via style) */
-const COMPTA_POST_CARD_3D = cn(
-  'group relative overflow-hidden rounded-2xl border-2 p-5 outline-none transition-all duration-300 ease-out',
-  'shadow-[0_7px_0_rgb(15_23_42/0.1),0_18px_40px_-10px_rgb(15_23_42/0.3),inset_0_2px_0_rgb(255_255_255/0.98),inset_0_-5px_14px_rgb(15_23_42/0.05)]',
-  'hover:-translate-y-1.5 hover:shadow-[0_10px_0_rgb(15_23_42/0.08),0_28px_56px_-14px_rgb(15_23_42/0.35),inset_0_2px_0_rgb(255_255_255/1),inset_0_-5px_16px_rgb(15_23_42/0.06)]',
-  'active:translate-y-0 active:scale-[0.995] active:shadow-[0_4px_0_rgb(15_23_42/0.11),0_10px_24px_-8px_rgb(15_23_42/0.22),inset_0_4px_10px_rgb(15_23_42/0.07)]'
-);
-
-function comptaPostCardTintStyle(theme: { primary: string; secondary: string }): React.CSSProperties {
-  return {
-    borderColor: `${theme.primary}7A`,
-    backgroundImage: `linear-gradient(152deg, ${theme.primary}40 0%, #ffffff 36%, ${theme.secondary}30 78%, #eef2f7 100%)`,
-  };
-}
-
-const COMPTA_AMOUNT_PANEL_3D = cn(
-  'mb-5 rounded-xl border-2 p-3',
-  'bg-gradient-to-br from-white via-white to-gray-100/95',
-  'shadow-[inset_0_4px_12px_rgb(15_23_42/0.08),inset_0_-2px_0_rgb(255_255_255/0.85),0_4px_0_rgb(15_23_42/0.07)]'
-);
-
-/**
- * Carte session courrier (compta agence) — même structure visuelle que le poste billetterie (SectionShifts).
- */
-const CourierComptaSessionCard: React.FC<{
-  session: CourierSessionDoc;
-  theme: { primary: string; secondary: string };
-  usersCache: Record<string, ComptaUserCacheEntry>;
-  stats: { total: number; paid: number };
-  ledgerAmount?: number;
-  statusLabel: string;
-  startField: unknown;
-  endField: unknown;
-  footer?: React.ReactNode;
-  afterAmountBlock?: React.ReactNode;
-}> = ({
-  session,
-  theme,
-  usersCache,
-  stats,
-  ledgerAmount,
-  statusLabel,
-  startField,
-  endField,
-  footer,
-  afterAmountBlock,
-}) => {
-  const money = useFormatCurrency();
-  const ui = usersCache[session.agentId] || {};
-  const name = (ui.name && ui.name.trim()) || session.agentId;
-  const codeRaw = String(ui.code || session.agentCode || '').trim();
-  const code = codeRaw || '—';
-  const badgeStatus = courierStatusToBadge[session.status] ?? 'neutral';
-  const amount = Number(ledgerAmount ?? 0);
-
-  return (
-    <div className={COMPTA_POST_CARD_3D} style={comptaPostCardTintStyle(theme)}>
-      <div
-        className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-        style={{
-          background: `linear-gradient(125deg, ${theme.primary}22 0%, transparent 42%, ${theme.secondary}18 100%)`,
-        }}
-      />
-      <div className="relative">
-        <div className="flex items-start justify-between gap-3 mb-4">
-          <div className="min-w-0">
-            <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Agent (courrier)</div>
-            <div className="font-semibold text-gray-900 truncate">
-              {name} <span className="text-gray-500 text-sm ml-2">({code})</span>
-            </div>
-          </div>
-          <StatusBadge status={badgeStatus}>{statusLabel}</StatusBadge>
-        </div>
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <InfoCard label="Colis (session)" value={String(stats.total)} />
-          <InfoCard label="Colis payés" value={String(stats.paid)} />
-          <InfoCard label="Début" value={fmtClockFr(startField)} />
-          <InfoCard label="Fin" value={fmtClockFr(endField)} />
-        </div>
-        <div
-          className={COMPTA_AMOUNT_PANEL_3D}
-          style={{ borderColor: `${theme.primary}55` }}
-        >
-          <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Total encaissé</div>
-          <div className="text-xl font-bold drop-shadow-sm" style={{ color: theme.primary }}>
-            {ledgerAmount === undefined ? '…' : money(amount)}
-          </div>
-        </div>
-        {afterAmountBlock}
-        {footer != null && footer !== false ? (
-          <div className="flex justify-end w-full flex-col sm:flex-row sm:items-center gap-2">{footer}</div>
-        ) : null}
-      </div>
-    </div>
-  );
 };
 
 /* ============================================================================
@@ -414,6 +313,15 @@ function resolveComptaTabParam(raw: string | null): ComptaTabKey {
   return 'ventes';
 }
 
+type AccountantPhaseView = 'dashboard' | 'postes' | 'receptions' | 'caisse' | 'historique' | 'rapports';
+
+function resolvePhaseViewFromTab(raw: string | null): AccountantPhaseView {
+  if (raw === 'versements' || raw === 'receptions') return 'receptions';
+  if (raw === 'caisse') return 'caisse';
+  if (raw === 'rapports') return 'rapports';
+  return 'dashboard';
+}
+
 const AgenceComptabilitePage: React.FC = () => {
   console.log('[AgenceCompta] Initialisation de la page de comptabilité');
   
@@ -423,7 +331,7 @@ const AgenceComptabilitePage: React.FC = () => {
   const theme = useCompanyTheme(company) || { primary: '#EA580C', secondary: '#F97316' };
   const money = useFormatCurrency();
   const currencySymbol = useCurrencySymbol();
-  const [darkMode] = useAgencyDarkMode();
+  const [darkMode, toggleDarkMode] = useAgencyDarkMode();
   const comptaRootChromeStyle = useMemo(
     () => agencyChromePageRootStyle(theme.primary, theme.secondary, darkMode),
     [theme.primary, theme.secondary, darkMode]
@@ -470,6 +378,8 @@ const AgenceComptabilitePage: React.FC = () => {
 
   const tabParam = searchParams.get('tab');
   const requestedTab = resolveComptaTabParam(tabParam);
+  const [phaseView, setPhaseView] = useState<AccountantPhaseView>(() => resolvePhaseViewFromTab(tabParam));
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const tab: ComptaTabKey = allowedTabs.includes(requestedTab)
     ? requestedTab
     : getDefaultComptaTab(allowedTabs);
@@ -881,7 +791,7 @@ const AgenceComptabilitePage: React.FC = () => {
   );
 
   useEffect(() => {
-    if (!user?.companyId) return;
+    if (!user?.companyId || !user?.agencyId) return;
     const wanted = new Set(
       courierShipmentWatchKey ? courierShipmentWatchKey.split(',').filter(Boolean) : []
     );
@@ -998,7 +908,10 @@ const AgenceComptabilitePage: React.FC = () => {
       const next: Record<string, number> = {};
       for (const id of ids) {
         try {
-          next[id] = await getCourierSessionLedgerTotal(user.companyId!, id);
+          next[id] = await getCourierSessionLedgerTotal(user.companyId!, id, {
+            agencyId: user.agencyId,
+            paymentChannel: "courrier",
+          });
         } catch {
           // fallback non bloquant : pas d’impact sur “Postes actifs”
           next[id] = 0;
@@ -1012,14 +925,23 @@ const AgenceComptabilitePage: React.FC = () => {
     };
   }, [
     user?.companyId,
+    user?.agencyId,
     closedCourierSessions,
     validatedCourierSessions,
     courierValidatedAgencySessions,
   ]);
 
   function coerceCourierShipmentAmount(d: any): number {
+    const transportFee = Number(d?.transportFee ?? 0);
+    const insuranceAmount = Number(d?.insuranceAmount ?? 0);
+    const shipmentTotal =
+      (Number.isFinite(transportFee) && transportFee > 0 ? transportFee : 0) +
+      (Number.isFinite(insuranceAmount) && insuranceAmount > 0 ? insuranceAmount : 0);
+    if (shipmentTotal > 0) return shipmentTotal;
+
     const candidates = [
       d?.paidAmount,
+      d?.destinationCollectedAmount,
       d?.amount,
       d?.totalAmount,
       d?.price,
@@ -1991,14 +1913,21 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Logo, nom d'entreprise, onglets et informations comptable
          ============================================================================ */}
       
-      <div className="sticky top-0 z-10 shadow-sm">
-        {/* Barre globale — même chrome dégradé que InternalLayout */}
+      <div className="sticky top-0 z-40 shadow-sm">
         <div
           className="h-16 border-b border-gray-200/60"
           style={{ backgroundImage: 'var(--agency-gradient-header)' }}
         >
-          <div className="max-w-7xl mx-auto min-w-0 h-full px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-3">
+          <div className="min-w-0 h-full px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-3">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 lg:hidden"
+                aria-label="Ouvrir le menu comptable"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
               {companyLogo ? (
                 <img
                   src={companyLogo}
@@ -2026,17 +1955,6 @@ const AgenceComptabilitePage: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-1 sm:gap-2">
-              {(userRole === 'agency_accountant' ||
-                userRole === 'chefAgence' ||
-                userRole === 'superviseur' ||
-                userRole === 'admin_compagnie') && (
-                <Link
-                  to="/agence/comptabilite/journal-agents"
-                  className="hidden sm:inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                >
-                  Journal agents
-                </Link>
-              )}
               <button
                 type="button"
                 className="relative inline-flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
@@ -2051,63 +1969,25 @@ const AgenceComptabilitePage: React.FC = () => {
                   </span>
                 )}
               </button>
-
-              {accountant && (
-                <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-800">
-                  <div
-                    className="h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
-                    style={{ backgroundColor: theme?.primary }}
-                  >
-                    {accountant.displayName?.charAt(0) || 'C'}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium truncate text-gray-900">
-                      {(accountant.displayName || accountant.email || '—')}
-                    </div>
-                    <div className="text-[11px] text-gray-500 truncate">
-                      {accountantCode || '—'}
-                    </div>
-                  </div>
-                </div>
-              )}
-
               <button
-                onClick={async () => {
-                  console.log('[AgenceCompta] Déconnexion du comptable');
-                  await logout();
-                  navigate('/login');
-                }}
-                className="inline-flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-                title="Déconnexion"
+                type="button"
+                onClick={toggleDarkMode}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-sm text-gray-700 transition-colors hover:bg-gray-50 sm:h-9 sm:w-9"
+                title={darkMode ? 'Mode jour' : 'Mode nuit'}
               >
-                <LogOut className="h-4 w-4" />
-                <span className="hidden lg:inline">Déconnexion</span>
+                <span aria-hidden>{darkMode ? '☀️' : '🌙'}</span>
               </button>
             </div>
           </div>
         </div>
 
-        {/* Barre de navigation module */}
-        <div
-          className="border-b border-gray-200/60"
-          style={{ backgroundImage: 'var(--agency-gradient-subheader)' }}
-        >
-          <div className="max-w-7xl mx-auto min-w-0 px-4 sm:px-6 py-2">
-            <div className="flex min-w-0 gap-2 overflow-x-auto whitespace-nowrap pb-1 [-webkit-overflow-scrolling:touch]">
-              {allowedTabs.includes('ventes') && (
-                <TabButton
-                  active={tab === 'ventes'}
-                  onClick={() => setComptaTab('ventes')}
-                  label="Ventes"
-                  icon={<Ticket className="h-4 w-4" />}
-                  theme={theme}
-                  badgeCount={
-                    userRole === 'agency_accountant' && allowedTabs.includes('ventes')
-                      ? pendingCourierSessions.length
-                      : 0
-                  }
-                />
-              )}
+        {false && tab !== 'ventes' && (
+          <div
+            className="border-b border-gray-200/60"
+            style={{ backgroundImage: 'var(--agency-gradient-subheader)' }}
+          >
+            <div className="max-w-7xl mx-auto min-w-0 px-4 sm:px-6 py-2">
+              <div className="flex min-w-0 gap-2 overflow-x-auto whitespace-nowrap pb-1 [-webkit-overflow-scrolling:touch]">
               {allowedTabs.includes('versements') && (
                 <TabButton
                   active={tab === 'versements'}
@@ -2127,65 +2007,106 @@ const AgenceComptabilitePage: React.FC = () => {
                   theme={theme}
                 />
               )}
-              {allowedTabs.includes('audit') && (
-                <TabButton
-                  active={tab === 'audit'}
-                  onClick={() => setComptaTab('audit')}
-                  label="Contrôle"
-                  icon={<Scale className="h-4 w-4" />}
-                  theme={theme}
-                />
-              )}
-              {allowedTabs.includes('corrections') && (
-                <TabButton
-                  active={tab === 'corrections'}
-                  onClick={() => setComptaTab('corrections')}
-                  label="Corrections"
-                  icon={<Shield className="h-4 w-4" />}
-                  theme={theme}
-                />
-              )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
+
+      <AccountantPhaseSidebar
+        activeView={phaseView}
+        onChange={setPhaseView}
+        theme={theme}
+        pendingPostsCount={pendingShifts.length + pendingCourierSessions.length}
+        pendingReceiptsCount={receptionsPendingTotal}
+        variant="desktop"
+        userName={accountant?.displayName || accountant?.email || user?.email || 'Utilisateur'}
+        userRoleLabel={accountantCode || 'Comptable'}
+        onLogout={async () => {
+          console.log('[AgenceCompta] Déconnexion du comptable');
+          await logout();
+          navigate('/login');
+        }}
+      />
+
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-950/40"
+            aria-label="Fermer le menu comptable"
+            onClick={() => setMobileNavOpen(false)}
+          />
+          <AccountantPhaseSidebar
+            activeView={phaseView}
+            onChange={setPhaseView}
+            theme={theme}
+            pendingPostsCount={pendingShifts.length + pendingCourierSessions.length}
+            pendingReceiptsCount={receptionsPendingTotal}
+            variant="mobile"
+            onClose={() => setMobileNavOpen(false)}
+            userName={accountant?.displayName || accountant?.email || user?.email || 'Utilisateur'}
+            userRoleLabel={accountantCode || 'Comptable'}
+            onLogout={async () => {
+              console.log('[AgenceCompta] Déconnexion du comptable');
+              await logout();
+              navigate('/login');
+            }}
+          />
+        </div>
+      )}
 
       {/* ============================================================================
          CONTENU PRINCIPAL
          Description : Contenu des différents onglets
          ============================================================================ */}
       
-      <StandardLayoutWrapper className="min-w-0">
+      <div className="min-w-0 lg:pl-72">
+        <main className="min-w-0 px-3 py-5 sm:px-6 lg:px-8">
+          <div className="mx-auto min-w-0 max-w-[1600px] space-y-6">
+            <div className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div className="min-w-0">
+                  <h1 className="break-words text-2xl font-bold tracking-normal text-slate-950 sm:text-3xl">
+                    Tableau de bord comptable
+                  </h1>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Suivi des postes, réceptions et caisse de l’agence
+                  </p>
+                </div>
+                <StatusBadge status="neutral">{ACCOUNTANT_PHASE_NAV.find((item) => item.key === phaseView)?.label}</StatusBadge>
+              </div>
+            </div>
         {userRole === 'agency_accountant' &&
           allowedTabs.includes('versements') &&
           receptionsPendingTotal > 0 &&
-          tab !== 'versements' && (
+          tab !== 'versements' &&
+          tab !== 'ventes' && (
             <div className="mb-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-start gap-3">
                 <Bell className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden />
                 <div className="min-w-0 text-sm text-amber-950">
-                  <div className="font-semibold">Versements à valider</div>
+                  <div className="font-semibold">Réceptions à valider</div>
                   <p className="mt-0.5 text-amber-900/90">
-                    {receptionsPendingTotal} session
-                    {receptionsPendingTotal > 1 ? 's' : ''} fermée
+                    {receptionsPendingTotal} réception
                     {receptionsPendingTotal > 1 ? 's' : ''} en attente
                     {receptionsBilletteriePendingCount > 0 && closedCourierSessions.length > 0
-                      ? ' (guichet et courrier)'
+                      ? ' (billetterie et courrier)'
                       : receptionsBilletteriePendingCount > 0
-                        ? ' (guichet)'
+                        ? ' (billetterie)'
                         : closedCourierSessions.length > 0
                           ? ' (courrier)'
                           : ''}
-                    . Ouvrez l’onglet <strong>Versements</strong>.
+                    . Ouvrez la section <strong>Réceptions</strong>.
                   </p>
                 </div>
               </div>
               <ActionButton
                 type="button"
                 className="w-full shrink-0 sm:w-auto"
-                onClick={() => setComptaTab('versements')}
+                onClick={() => setPhaseView('receptions')}
               >
-                Ouvrir Versements
+                Ouvrir Réceptions
               </ActionButton>
             </div>
           )}
@@ -2194,89 +2115,146 @@ const AgenceComptabilitePage: React.FC = () => {
            ONGLET : VENTES — activité du jour, postes, rapports, courrier
            ============================================================================ */}
         
-        {tab === 'ventes' && (
-          <div className="space-y-6">
-            <div className="w-full overflow-x-auto sm:overflow-x-visible pb-1 -mx-1 px-1 sm:mx-0 sm:px-0">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 lg:gap-6 min-w-0 w-full [&>*]:min-w-0">
-                <MetricCard
-                  label="Guichets en service"
-                  value={activeShifts.length.toString()}
-                  icon={Play}
-                  valueColorVar={theme?.primary}
-                  hint="Postes guichet ouverts maintenant"
-                />
-                <MetricCard
-                  label="Billets vendus (jour)"
-                  value={agencyStatsToday !== null ? agencyStatsToday.totalTickets.toString() : "—"}
-                  icon={Ticket}
-                  valueColorVar={theme?.primary}
-                  hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-                />
-                <MetricCard
-                  label="Montant des ventes (jour)"
-                  value={agencyStatsToday !== null ? money(agencyStatsToday.totalRevenue) : "—"}
-                  icon={Wallet}
-                  valueColorVar={theme?.primary}
-                  hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-                />
-                <MetricCard
-                  label="Ventes en ligne (jour)"
-                  value={agencyStatsToday !== null ? agencyStatsToday.onlineTickets.toString() : "—"}
-                  icon={Activity}
-                  valueColorVar={theme?.primary}
-                  hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-                />
-              </div>
-            </div>
+        {phaseView === 'dashboard' && (
+          <AccountantControlLayout>
+            <AccountantKpiCards
+              activeShiftsCount={activeShifts.length + activeCourierSessions.length}
+              pendingPostsCount={pendingShifts.length + pendingCourierSessions.length}
+              pendingReceiptsCount={receptionsPendingTotal}
+              dayCashIn={ledgerPeriodCash?.totalCashIn ?? totIn}
+              agencyStatsToday={agencyStatsToday}
+              money={money}
+              theme={theme}
+              onNavigate={(target) => setPhaseView(target)}
+            />
 
-            {/* Postes en service */}
-            <SectionShifts
-              title="Postes en service"
-              icon={Play}
-              list={activeShifts}
+            {(pendingShifts.length + pendingCourierSessions.length > 0 || receptionsPendingTotal > 0) && (
+              <SectionCard title="Alertes prioritaires" icon={Bell}>
+                <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2">
+                  {pendingShifts.length + pendingCourierSessions.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setPhaseView('postes')}
+                      className="min-w-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left transition hover:bg-amber-100/70"
+                    >
+                      <div className="text-sm font-semibold text-amber-950">Postes à activer</div>
+                      <div className="mt-1 text-sm text-amber-800">
+                        {pendingShifts.length + pendingCourierSessions.length} poste
+                        {pendingShifts.length + pendingCourierSessions.length > 1 ? 's' : ''} en attente.
+                      </div>
+                    </button>
+                  ) : null}
+                  {receptionsPendingTotal > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setPhaseView('receptions')}
+                      className="min-w-0 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-left transition hover:bg-rose-100/70"
+                    >
+                      <div className="text-sm font-semibold text-rose-950">Réceptions à valider</div>
+                      <div className="mt-1 text-sm text-rose-800">
+                        {receptionsPendingTotal} réception{receptionsPendingTotal > 1 ? 's' : ''} en attente.
+                      </div>
+                    </button>
+                  ) : null}
+                </div>
+              </SectionCard>
+            )}
+          </AccountantControlLayout>
+        )}
+
+        {phaseView === 'postes' && (
+          <div className="space-y-6">
+            <ActivePostsPanel
+              activeShifts={activeShifts}
+              pendingShifts={pendingShifts}
+              pausedShifts={pausedShifts}
               usersCache={usersCache}
               liveStats={liveStats}
               theme={theme}
-              actions={() => null}
+              renderPendingAction={(s) => (
+                <ActionButton onClick={() => activateShift(s.id)}>
+                  <Play className="h-4 w-4 mr-2" />
+                  Activer le poste
+                </ActionButton>
+              )}
+              renderPausedAction={(s) => (
+                <ActionButton onClick={() => continueShift(s.id)}>
+                  <Play className="h-4 w-4 mr-2" />
+                  Continuer
+                </ActionButton>
+              )}
             />
 
-            {pendingShifts.length > 0 ? (
-              <SectionShifts
-                title="Postes en attente d'activation"
-                hint="Le vendeur billetterie est connecté mais ne peut pas vendre tant que vous n'activez pas."
-                icon={Clock4}
-                list={pendingShifts}
-                usersCache={usersCache}
-                liveStats={{}}
-                theme={theme}
-                actions={(s) => (
-                  <ActionButton onClick={() => activateShift(s.id)}>
-                    <Play className="h-4 w-4 mr-2" />
-                    Activer le poste
-                  </ActionButton>
-                )}
-              />
-            ) : null}
+            <SectionCard
+              title="Service courrier actif"
+              icon={Package}
+              right={
+                <StatusBadge status="neutral">
+                  {activeCourierSessions.length} poste{activeCourierSessions.length > 1 ? 's' : ''}
+                </StatusBadge>
+              }
+            >
+              {activeCourierSessions.length === 0 ? (
+                <UIEmptyState message="Aucun poste courrier actif." />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {activeCourierSessions.map((s) => (
+                    <CourierComptaSessionCard
+                      key={s.id}
+                      session={s}
+                      theme={theme}
+                      usersCache={usersCache}
+                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0, paidAmount: 0 }}
+                      ledgerAmount={courierSessionStats[s.id]?.paidAmount}
+                      statusLabel="En service"
+                      startField={s.openedAt ?? s.createdAt}
+                      endField={null}
+                    />
+                  ))}
+                </div>
+              )}
+            </SectionCard>
 
-            {pausedShifts.length > 0 ? (
-              <SectionShifts
-                title="Postes en pause"
-                hint="Peuvent être remis en service. Clôture par le vendeur uniquement."
-                icon={Pause}
-                list={pausedShifts}
-                usersCache={usersCache}
-                liveStats={liveStats}
-                theme={theme}
-                actions={(s) => (
-                  <ActionButton onClick={() => continueShift(s.id)}>
-                    <Play className="h-4 w-4 mr-2" />
-                    Continuer
-                  </ActionButton>
-                )}
-              />
-            ) : null}
+            <SectionCard
+              title="Demandes d'ouverture"
+              icon={Clock4}
+              right={
+                <StatusBadge status="neutral">
+                  {pendingShifts.length + pendingCourierSessions.length} demande{pendingShifts.length + pendingCourierSessions.length > 1 ? 's' : ''}
+                </StatusBadge>
+              }
+            >
+              {pendingShifts.length === 0 && pendingCourierSessions.length === 0 ? (
+                <UIEmptyState message="Aucune demande d'ouverture en attente." />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {pendingCourierSessions.map((s) => (
+                    <CourierComptaSessionCard
+                      key={s.id}
+                      session={s}
+                      theme={theme}
+                      usersCache={usersCache}
+                      stats={courierSessionStats[s.id] ?? { total: 0, paid: 0, paidAmount: 0 }}
+                      ledgerAmount={courierSessionStats[s.id]?.paidAmount}
+                      statusLabel="En attente"
+                      startField={s.createdAt}
+                      endField={null}
+                      footer={
+                        <ActionButton onClick={() => activateCourierSessionAction(s.id)}>
+                          <Play className="h-4 w-4 mr-2" />
+                              Activer le poste
+                        </ActionButton>
+                      }
+                    />
+                  ))}
+                </div>
+              )}
+            </SectionCard>
+          </div>
+        )}
 
-            {/* —— Rapports détaillés (ex-onglet Rapports) —— */}
+        {phaseView === 'rapports' && (
+          <div className="hidden">
             <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-3">
                 <div className="flex items-center gap-3">
@@ -2762,15 +2740,15 @@ const AgenceComptabilitePage: React.FC = () => {
            ONGLET : VERSEMENTS — valider les sessions fermées (guichet + courrier)
            ============================================================================ */}
         
-        {tab === 'versements' && (
+        {phaseView === 'receptions' && (
           <div className="space-y-6">
             {receptionsPendingTotal > 0 && (
               <div className="rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 text-sm text-amber-950">
                 <span className="font-semibold">À traiter : </span>
                 {receptionsBilletteriePendingCount > 0 ? (
                   <span>
-                    {receptionsBilletteriePendingCount} guichet
-                    {receptionsBilletteriePendingCount > 1 ? 's' : ''} à valider
+                    {receptionsBilletteriePendingCount} réception
+                    {receptionsBilletteriePendingCount > 1 ? 's' : ''} billetterie
                   </span>
                 ) : null}
                 {receptionsBilletteriePendingCount > 0 && closedCourierSessions.length > 0 ? (
@@ -2778,7 +2756,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 ) : null}
                 {closedCourierSessions.length > 0 ? (
                   <span>
-                    {closedCourierSessions.length} session courrier clôturée
+                    {closedCourierSessions.length} réception courrier
                     {closedCourierSessions.length > 1 ? 's' : ''}
                   </span>
                 ) : null}
@@ -2793,13 +2771,13 @@ const AgenceComptabilitePage: React.FC = () => {
               return (
                 <>
                   {!hasBilletterieReception && !hasCourrierReception ? (
-                    <SectionCard title="Versements à valider" icon={HandIcon}>
-                      <UIEmptyState message="Rien à valider pour le moment — guichet et courrier sont à jour." />
+                    <SectionCard title="Réceptions à valider" icon={HandIcon}>
+                      <UIEmptyState message="Aucune réception à valider." />
                     </SectionCard>
                   ) : null}
 
                   {hasBilletterieReception ? (
-            <SectionCard title="Guichet — sessions fermées" help="Comparez le montant attendu (ventes) et le montant reçu, puis validez le versement.">
+            <SectionCard title="Réceptions billetterie">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                   {toReceive.map(s => {
                     const payBy = s.payBy || {};
@@ -2833,7 +2811,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           {/* En-tête du poste */}
                           <div className="flex items-start justify-between gap-3 mb-4">
                             <div className="min-w-0">
-                              <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Vendeur (billetterie)</div>
+                              <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Agent</div>
                               <div className="font-semibold text-gray-900 truncate">
                                 {name} 
                                 <span className="text-gray-500 text-sm ml-2">({code})</span>
@@ -2850,13 +2828,13 @@ const AgenceComptabilitePage: React.FC = () => {
                           <div className="grid grid-cols-2 gap-4 mb-4">
                             <InfoCard label="Réservations" value={reservationsAgg.toString()} />
                             <InfoCard label="Billets" value={ticketsAgg.toString()} />
-                            <InfoCard label="Total ventes (poste)" value={money(amountAgg)} emphasis />
-                            <InfoCard label="Montant attendu (ventes)" value={money(cashExpectedAgg)} emphasis />
+                            <InfoCard label="Service" value="Service billetterie" />
+                            <InfoCard label="Montant attendu" value={money(cashExpectedAgg)} emphasis />
                           </div>
 
                           {/* Période */}
                           <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50">
-                            <div className="text-xs text-gray-600 mb-1">Période de vente</div>
+                              <div className="text-xs text-gray-600 mb-1">Période</div>
                             <div className="text-sm font-medium text-gray-900">
                               {s.startTime ? fmtDT(new Date(s.startTime.toDate?.() ?? s.startTime)) : '—'} 
                               <span className="mx-2 text-gray-400">→</span>
@@ -2868,7 +2846,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           <div className="space-y-3">
                             <div>
                               <label className="block text-xs font-medium text-gray-700 mb-2">
-                                Montant reçu <span className="text-red-500">*</span>
+                                Montant versé <span className="text-red-500">*</span>
                               </label>
                               <div className="relative">
                                 <input
@@ -2906,7 +2884,7 @@ const AgenceComptabilitePage: React.FC = () => {
                             {allowedTabs.includes('ventes') && (
                             <ActionButton 
                               variant="secondary"
-                              onClick={() => { setComptaTab('ventes'); loadReportForShift(s.id); }}
+                              onClick={() => { setPhaseView('rapports'); loadReportForShift(s.id); }}
                               className="w-full sm:w-auto"
                             >
                               <FileText className="h-4 w-4 mr-2" /> 
@@ -2919,7 +2897,7 @@ const AgenceComptabilitePage: React.FC = () => {
                               className="w-full sm:w-auto"
                             >
                               <CheckCircle2 className="h-4 w-4 mr-2" /> 
-                              {savingShiftIds[s.id] ? 'Validation...' : 'Valider le versement'}
+                              {savingShiftIds[s.id] ? 'Validation...' : 'Valider'}
                             </ActionButton>
                           </div>
                         </div>
@@ -2932,9 +2910,8 @@ const AgenceComptabilitePage: React.FC = () => {
 
                   {hasCourrierReception ? (
             <SectionCard
-              title="Courrier — sessions fermées"
+              title="Réceptions courrier"
               icon={StopCircle}
-              description="Montant attendu d’après les colis payés. Le montant versé par l’agent est obligatoire avant validation. Après validation comptable, seul le chef d’agence peut finaliser ou faire corriger une erreur de processus."
               right={
                 <StatusBadge status="neutral">
                   {closedCourierSessions.length} session{closedCourierSessions.length > 1 ? 's' : ''}
@@ -2949,9 +2926,12 @@ const AgenceComptabilitePage: React.FC = () => {
                       rawIn === ''
                         ? NaN
                         : Number(rawIn.replace(/[^\d.,]/g, '').replace(',', '.'));
-                    const ledger = courierLedgerBySessionId[s.id];
-                    const ledgerNum = Number(ledger);
-                    const ecart = Number.isFinite(counted) && Number.isFinite(ledgerNum) ? counted - ledgerNum : NaN;
+                    const stats = courierSessionStats[s.id] ?? { total: 0, paid: 0, paidAmount: 0 };
+                    const paidAmount = Number(stats.paidAmount ?? 0);
+                    const ledger = Number(courierLedgerBySessionId[s.id] ?? 0);
+                    const sessionExpected = Number(s.expectedAmount ?? 0);
+                    const expectedAmount = paidAmount > 0 ? paidAmount : ledger > 0 ? ledger : sessionExpected;
+                    const ecart = Number.isFinite(counted) ? counted - expectedAmount : NaN;
                     const disableCourierValidate =
                       rawIn === '' || !Number.isFinite(counted) || counted < 0 || !!savingCourierSessionIds[s.id];
                     return (
@@ -2960,20 +2940,20 @@ const AgenceComptabilitePage: React.FC = () => {
                         session={s}
                         theme={theme}
                         usersCache={usersCache}
-                        stats={courierSessionStats[s.id] ?? { total: 0, paid: 0 }}
-                        ledgerAmount={courierLedgerBySessionId[s.id]}
+                        stats={stats}
+                        ledgerAmount={expectedAmount}
                         statusLabel="Clôturé"
                         startField={s.openedAt ?? s.createdAt}
                         endField={s.closedAt}
                         afterAmountBlock={
                           <div className="space-y-3 mb-4">
                             <InfoCard
-                              label="Écart (compté − montant attendu)"
+                              label="Écart"
                               value={Number.isFinite(ecart) ? money(ecart) : '—'}
                             />
                             <div>
                               <label className="block text-xs font-medium text-gray-700 mb-2">
-                                Montant versé (compté) <span className="text-red-500">*</span>
+                                Montant versé <span className="text-red-500">*</span>
                               </label>
                               <input
                                 type="text"
@@ -2992,7 +2972,7 @@ const AgenceComptabilitePage: React.FC = () => {
                             onClick={() => validateCourierSessionAction(s)}
                           >
                             <CheckCircle2 className="h-4 w-4 mr-2" />
-                            {savingCourierSessionIds[s.id] ? 'Validation...' : 'Valider le versement'}
+                            {savingCourierSessionIds[s.id] ? 'Validation...' : 'Valider'}
                           </ActionButton>
                         }
                       />
@@ -3051,11 +3031,54 @@ const AgenceComptabilitePage: React.FC = () => {
           </div>
         )}
 
+        {phaseView === 'historique' && (
+          <TodayHistoryTimeline
+            days={days}
+            loadingCash={loadingCash}
+            totIn={totIn}
+            totOut={totOut}
+            money={money}
+          />
+        )}
+
+        {phaseView === 'dashboard' && (
+          <SectionCard title="Résumé caisse du jour" icon={BarChart3}>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard
+                label="Ventes billets"
+                value={agencyStatsToday !== null ? money(agencyStatsToday.totalRevenue) : '—'}
+                icon={Ticket}
+                valueColorVar={theme?.primary}
+                hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
+              />
+              <MetricCard
+                label="Ventes courrier"
+                value={money(reconciliationData.courrier.montant)}
+                icon={Package}
+                valueColorVar={theme?.primary}
+                hint={AGENCY_KPI_TIME.WORKFLOW_PAIEMENT}
+              />
+              <MetricCard
+                label="Entrées"
+                value={money(ledgerPeriodCash?.totalCashIn ?? totIn)}
+                icon={Wallet}
+                valueColorVar={theme?.primary}
+              />
+              <MetricCard
+                label="Sorties"
+                value={money(ledgerPeriodCash?.totalCashOut ?? totOut)}
+                icon={AlertTriangle}
+                valueColorVar="#b91c1c"
+              />
+            </div>
+          </SectionCard>
+        )}
+
         {/* ============================================================================
            ONGLET : CONTRÔLE — caisse réelle vs solde attendu
            ============================================================================ */}
-        {tab === 'audit' && (
-          <div className="space-y-6">
+        {false && tab === 'audit' && (
+          <AccountantControlLayout>
             <div className="text-sm text-gray-700">
               Commencez par vérifier l’écart, puis validez la caisse.
             </div>
@@ -3543,7 +3566,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </div>
               </div>
             </div>
-          </div>
+          </AccountantControlLayout>
         )}
 
         {/* ============================================================================
@@ -3551,7 +3574,7 @@ const AgenceComptabilitePage: React.FC = () => {
            Description : Gestion des mouvements financiers de l'agence
            ============================================================================ */}
         
-        {tab === 'caisse' && (
+        {phaseView === 'caisse' && (
           <div className="space-y-6">
             {!canManipulateCash && (
               <div
@@ -3669,40 +3692,60 @@ const AgenceComptabilitePage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 sm:gap-6">
               <MetricCard
-                label="Caisse disponible (global)"
+                label="Fonds reçus"
                 value={
-                  loadingCash && cashGlobalPosition == null
-                    ? '…'
-                    : money(cashGlobalPosition?.soldeCash ?? 0)
+                  cashGlobalPosition == null
+                    ? loadingCash
+                      ? '…'
+                      : 'Indisponible'
+                    : money(cashGlobalPosition.totalCashIn)
                 }
-                icon={Banknote}
+                icon={HandIcon}
                 valueColorVar={theme?.primary}
               />
               <MetricCard
-                label="Entrées espèces (période)"
+                label="Encaissements"
                 value={
                   loadingCash
                     ? '…'
                     : ledgerPeriodError
-                      ? '—'
-                      : money(ledgerPeriodCash?.totalCashIn ?? 0)
+                      ? 'Indisponible'
+                      : money(ledgerPeriodCash?.totalCashIn ?? totIn)
                 }
                 icon={Wallet}
                 valueColorVar={theme?.primary}
               />
               <MetricCard
-                label="Sorties espèces (période)"
+                label="Entrées"
+                value={loadingCash ? '…' : ledgerPeriodError ? 'Indisponible' : money(totIn)}
+                icon={ArrowDownCircle}
+                valueColorVar={theme?.primary}
+              />
+              <MetricCard
+                label="Sorties"
                 value={
                   loadingCash
                     ? '…'
                     : ledgerPeriodError
-                      ? '—'
-                      : money(ledgerPeriodCash?.totalCashOut ?? 0)
+                      ? 'Indisponible'
+                      : money(ledgerPeriodCash?.totalCashOut ?? totOut)
                 }
                 icon={AlertTriangle}
                 valueColorVar="#b91c1c"
+              />
+              <MetricCard
+                label="Solde"
+                value={
+                  cashGlobalPosition == null
+                    ? loadingCash
+                      ? '…'
+                      : 'Indisponible'
+                    : money(cashGlobalPosition.soldeCash)
+                }
+                icon={Banknote}
+                valueColorVar={theme?.primary}
               />
             </div>
 
@@ -3714,7 +3757,7 @@ const AgenceComptabilitePage: React.FC = () => {
 
             {ledgerPeriodError && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
-                {ledgerPeriodError}
+                {ledgerPeriodError} Vérifiez les droits de lecture de la caisse pour ce profil.
               </div>
             )}
 
@@ -3724,78 +3767,16 @@ const AgenceComptabilitePage: React.FC = () => {
               </div>
             )}
 
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-lg font-bold text-gray-900">Historique par jour</div>
-                <div className="text-sm text-gray-600">
-                  {days.length} jour{days.length > 1 ? 's' : ''} avec activité
-                </div>
-              </div>
-              
-              {loadingCash ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="text-center">
-                    <div className="h-12 w-12 border-4 border-gray-200 border-t-emerald-500 rounded-full animate-spin mx-auto mb-3"></div>
-                    <div className="text-gray-600">Chargement des données de caisse…</div>
-                  </div>
-                </div>
-              ) : days.length === 0 ? (
-                <UIEmptyState message="Aucun mouvement enregistré sur la période sélectionnée" />
-              ) : (
-                <div className="min-w-0 overflow-hidden rounded-xl border border-gray-200">
-                  <div className="overflow-x-auto [-webkit-overflow-scrolling:touch]">
-                    <table className="w-full min-w-[28rem] text-sm">
-                      <thead className="bg-gradient-to-r from-gray-50 to-gray-100/50">
-                        <tr>
-                          <Th>Date</Th>
-                          <Th align="right">Entrées</Th>
-                          <Th align="right">Sorties</Th>
-                          <Th align="right">Net jour (période)</Th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {days.map((d, index) => (
-                          <tr key={d.dateISO} className={`hover:bg-gray-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
-                            <Td>
-                              <div className="font-medium">
-                                {new Date(d.dateISO).toLocaleDateString('fr-FR', {
-                                  weekday: 'long',
-                                  day: 'numeric',
-                                  month: 'long',
-                                  year: 'numeric'
-                                })}
-                              </div>
-                            </Td>
-                            <Td align="right">
-                              <span className="font-medium text-emerald-700">{money(d.entrees)}</span>
-                            </Td>
-                            <Td align="right">
-                              <span className="font-medium text-rose-700">{money(d.sorties)}</span>
-                            </Td>
-                            <Td align="right">
-                              <span className={`font-bold ${d.solde >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                {money(d.solde)}
-                              </span>
-                            </Td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      {/* Pied de tableau avec totaux */}
-                      <tfoot className="bg-gradient-to-r from-gray-50 to-gray-100/80 border-t-2 border-gray-300">
-                        <tr>
-                          <Td className="font-bold text-gray-900">TOTAUX (période)</Td>
-                          <Td align="right" className="font-bold text-emerald-700">{money(totIn)}</Td>
-                          <Td align="right" className="font-bold text-rose-700">{money(totOut)}</Td>
-                          <Td align="right" className="font-bold text-gray-900">
-                            {money(totIn - totOut)}
-                          </Td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
+            <TodayHistoryTimeline
+              days={days}
+              loadingCash={loadingCash}
+              totIn={totIn}
+              totOut={totOut}
+              money={money}
+              eyebrow="Période sélectionnée"
+              title="Mouvements de caisse"
+              unavailable={Boolean(ledgerPeriodError)}
+            />
           </div>
         )}
 
@@ -3803,7 +3784,7 @@ const AgenceComptabilitePage: React.FC = () => {
            ONGLET : COMPARAISON ventes (billets) et caisse guichet
            ============================================================================ */}
         
-        {false && (
+        {phaseView === 'rapports' && (
           <div className="space-y-6">
             {/* En-tête et sélecteur de date */}
             <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
@@ -4106,7 +4087,7 @@ const AgenceComptabilitePage: React.FC = () => {
           </div>
         )}
 
-        {tab === 'corrections' && (
+        {false && tab === 'corrections' && (
           <div className="space-y-6">
             <SectionCard
               title="Corrections exceptionnelles"
@@ -4119,6 +4100,10 @@ const AgenceComptabilitePage: React.FC = () => {
             </SectionCard>
           </div>
         )}
+
+          </div>
+          </main>
+        </div>
 
         {treasuryModalView && canManipulateCash && (
           <div
@@ -4149,8 +4134,6 @@ const AgenceComptabilitePage: React.FC = () => {
             </div>
           </div>
         )}
-
-    </StandardLayoutWrapper>
     </div>
   );
 };
@@ -4159,6 +4142,120 @@ const AgenceComptabilitePage: React.FC = () => {
    SECTION : COMPOSANTS UI RÉUTILISABLES
    Description : Composants d'interface utilisateur modulaires
    ============================================================================ */
+
+const ACCOUNTANT_PHASE_NAV: Array<{
+  key: AccountantPhaseView;
+  label: string;
+  icon: React.ReactNode;
+}> = [
+  { key: 'dashboard', label: 'Tableau de bord', icon: <BarChart3 className="h-4 w-4" /> },
+  { key: 'postes', label: 'Postes', icon: <Play className="h-4 w-4" /> },
+  { key: 'receptions', label: 'Réceptions', icon: <HandIcon className="h-4 w-4" /> },
+  { key: 'caisse', label: 'Caisse', icon: <Banknote className="h-4 w-4" /> },
+  { key: 'historique', label: 'Historique', icon: <Clock4 className="h-4 w-4" /> },
+  { key: 'rapports', label: 'Rapports', icon: <FileText className="h-4 w-4" /> },
+];
+
+const AccountantPhaseSidebar: React.FC<{
+  activeView: AccountantPhaseView;
+  onChange: (view: AccountantPhaseView) => void;
+  theme: { primary: string; secondary: string };
+  pendingPostsCount: number;
+  pendingReceiptsCount: number;
+  variant: 'desktop' | 'mobile';
+  onClose?: () => void;
+  userName: string;
+  userRoleLabel: string;
+  onLogout: () => Promise<void>;
+}> = ({ activeView, onChange, theme, pendingPostsCount, pendingReceiptsCount, variant, onClose, userName, userRoleLabel, onLogout }) => (
+  <aside
+    className={cn(
+      'min-w-0 bg-white shadow-xl',
+      variant === 'desktop'
+        ? 'fixed bottom-0 left-0 top-16 z-30 hidden w-72 border-r border-slate-200 lg:flex lg:flex-col'
+        : 'absolute left-0 top-0 h-full w-[min(20rem,86vw)] border-r border-slate-200'
+    )}
+  >
+    <nav className="flex min-h-0 flex-1 flex-col p-3">
+      <div className="flex items-center justify-between gap-3 px-3 py-3">
+        <div className="min-w-0">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Navigation</div>
+          <div className="truncate text-sm font-bold text-slate-950">Comptable agence</div>
+        </div>
+        {variant === 'mobile' ? (
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-600"
+            aria-label="Fermer le menu comptable"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-2 flex min-w-0 flex-1 flex-col gap-1 overflow-y-auto">
+        {ACCOUNTANT_PHASE_NAV.map((item) => {
+          const active = item.key === activeView;
+          const count =
+            item.key === 'postes'
+              ? pendingPostsCount
+              : item.key === 'receptions'
+                ? pendingReceiptsCount
+                : 0;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => {
+                onChange(item.key);
+                onClose?.();
+              }}
+              className={cn(
+                'flex w-full min-w-0 items-center gap-3 rounded-xl border px-3 py-2.5 text-left text-sm font-medium transition-colors',
+                active
+                  ? 'border-transparent text-slate-950 shadow-sm'
+                  : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950'
+              )}
+              style={active ? { backgroundColor: theme.secondary, borderColor: `${theme.primary}66` } : undefined}
+            >
+              <span className="shrink-0" style={active ? { color: theme.primary } : undefined}>
+                {item.icon}
+              </span>
+              <span className="min-w-0 truncate">{item.label}</span>
+              {count > 0 ? (
+                <span className="ml-auto shrink-0 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                  {count > 99 ? '99+' : count}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-4 border-t border-slate-200 pt-4">
+        <div className="flex min-w-0 items-center gap-3 rounded-xl bg-slate-50 px-3 py-3">
+          <div
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
+            style={{ backgroundColor: theme.primary }}
+          >
+            {(userName || 'U').charAt(0).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-950">{userName}</div>
+            <div className="truncate text-xs text-slate-500">{userRoleLabel}</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onLogout}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+        >
+          <LogOut className="h-4 w-4" />
+          Déconnexion
+        </button>
+      </div>
+    </nav>
+  </aside>
+);
 
 const TabButton: React.FC<{
   active: boolean; 
@@ -4196,142 +4293,6 @@ const TabButton: React.FC<{
   </button>
 );
 
-
-const shiftStatusToBadge: Record<string, "active" | "pending" | "success" | "warning" | "neutral"> = {
-  active: "active",
-  paused: "pending",
-  closed: "warning",
-  pending: "pending",
-  validated_agency: "success",
-  validated: "success",
-};
-
-const SectionShifts: React.FC<{
-  title: string;
-  hint?: string;
-  icon: LucideIcon;
-  list: ShiftDoc[];
-  usersCache: Record<string, ComptaUserCacheEntry>;
-  liveStats: Record<string, { reservations: number; tickets: number; amount: number }>;
-  actions: (s: ShiftDoc) => React.ReactNode;
-  theme: { primary: string; secondary: string };
-}> = ({ title, hint, icon, list, usersCache, liveStats, actions, theme }) => {
-  const money = useFormatCurrency();
-  const statusLabels: Record<string, string> = {
-    active: "En service",
-    paused: "En pause",
-    closed: "Clôturé",
-    pending: "En attente",
-    validated_agency: "Validé comptable (en attente chef d'agence)",
-    validated: "Validé",
-  };
-  return (
-    <SectionCard
-      title={title}
-      icon={icon}
-      description={hint}
-      right={<StatusBadge status="neutral">{list.length} poste{list.length > 1 ? "s" : ""}</StatusBadge>}
-    >
-      {list.length === 0 ? (
-        <UIEmptyState message={`Aucun ${title.toLowerCase()} — Aucun poste dans cet état pour le moment`} />
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {list.map((s) => {
-            const ui = usersCache[s.userId] || {};
-            const name = ui.name || s.userName || s.userEmail || s.userId;
-            const code = ui.code || s.userCode || "GUEST";
-            const live = liveStats[s.id];
-            const reservations = live?.reservations ?? s.totalReservations ?? 0;
-            const tickets = live?.tickets ?? s.totalTickets ?? 0;
-            const amount = live?.amount ?? s.totalAmount ?? 0;
-            const badgeStatus = shiftStatusToBadge[s.status] ?? "neutral";
-
-            return (
-              <div key={s.id} className={COMPTA_POST_CARD_3D} style={comptaPostCardTintStyle(theme)}>
-                <div
-                  className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-                  style={{
-                    background: `linear-gradient(125deg, ${theme.primary}22 0%, transparent 42%, ${theme.secondary}18 100%)`,
-                  }}
-                />
-                <div className="relative">
-                  <div className="flex items-start justify-between gap-3 mb-4">
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Vendeur (billetterie)</div>
-                      <div className="font-semibold text-gray-900 truncate">
-                        {name} <span className="text-gray-500 text-sm ml-2">({code})</span>
-                      </div>
-                    </div>
-                    <StatusBadge status={badgeStatus}>{statusLabels[s.status] ?? s.status}</StatusBadge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <InfoCard label="Réservations" value={reservations.toString()} />
-                    <InfoCard label="Billets" value={tickets.toString()} />
-                    <InfoCard label="Début" value={s.startTime ? new Date(s.startTime.toDate?.() ?? s.startTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
-                    <InfoCard label="Fin" value={s.endTime ? new Date(s.endTime.toDate?.() ?? s.endTime).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—"} />
-                  </div>
-                  <div
-                    className={COMPTA_AMOUNT_PANEL_3D}
-                    style={{ borderColor: `${theme.primary}55` }}
-                  >
-                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Ventes du poste</div>
-                    <div className="text-xl font-bold drop-shadow-sm" style={{ color: theme.primary }}>
-                      {money(amount)}
-                    </div>
-                  </div>
-                  <div className="flex justify-end">{actions(s)}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </SectionCard>
-  );
-};
-
-const InfoCard: React.FC<{ label: string; value: string; emphasis?: boolean }> = ({
-  label,
-  value,
-  emphasis = false,
-}) => (
-  <div>
-    <div className={cn(typography.mutedSm, "mb-1")}>{label}</div>
-    <div className={cn("font-medium", emphasis ? "text-gray-900 dark:text-gray-100" : "text-gray-700 dark:text-gray-300")}>{value}</div>
-  </div>
-);
-
-const Th: React.FC<{
-  children: React.ReactNode;
-  align?: "left" | "right";
-  className?: string;
-  colSpan?: number; // AJOUTÉ : support pour colSpan
-}> = ({ children, align = "left", className = "", colSpan }) => (
-  <th
-    colSpan={colSpan} // AJOUTÉ
-    className={`px-4 py-3 text-xs font-semibold text-gray-700 uppercase tracking-wider
-      ${align === 'right' ? 'text-right' : 'text-left'}
-      ${className}`}
-  >
-    {children}
-  </th>
-);
-
-const Td: React.FC<{
-  children: React.ReactNode;
-  align?: "left" | "right";
-  className?: string;
-  colSpan?: number; // AJOUTÉ : support pour colSpan
-}> = ({ children, align = "left", className = "", colSpan }) => (
-  <td
-    colSpan={colSpan} // AJOUTÉ
-    className={`px-4 py-3
-      ${align === 'right' ? 'text-right' : 'text-left'}
-      ${className}`}
-  >
-    {children}
-  </td>
-);
 
 /* ============================================================================
    SECTION : FONCTIONS UTILITAIRES - EXPORT CSV

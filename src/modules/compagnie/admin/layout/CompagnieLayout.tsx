@@ -36,6 +36,11 @@ import { Timestamp } from "firebase/firestore";
 import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts, AgencyHeaderExtras } from "@/modules/agence/shared";
 import { listExpenses } from "@/modules/compagnie/treasury/expenses";
 import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
+import {
+  ENABLE_ADVANCED_FINANCE,
+  ENABLE_FLEET,
+  ENABLE_PHASE1_ONLY,
+} from "@/config/featureFlags";
 
 interface Company {
   id: string;
@@ -222,8 +227,15 @@ const CompagnieLayout: React.FC = () => {
       },
       { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },
     ];
-    if (isPlateforme) return all;
-    return all
+    const phase1Filtered = ENABLE_PHASE1_ONLY
+      ? all.filter((s) => {
+          if (!ENABLE_ADVANCED_FINANCE && s.label === "Audit & contrôle") return false;
+          if (!ENABLE_FLEET && s.label === "Flotte") return false;
+          return true;
+        })
+      : all;
+    if (isPlateforme) return phase1Filtered;
+    return phase1Filtered
       .filter(
         (s) =>
           !["Validation chef d'agence", "Clients", "Avis clients"].includes(s.label),

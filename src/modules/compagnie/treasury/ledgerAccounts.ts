@@ -6,6 +6,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   limit,
   query,
@@ -93,6 +94,26 @@ export async function getLiquidityFromAccounts(
   bank: number;
   total: number;
 }> {
+  if (agencyId) {
+    const cashAccountId = agencyCashAccountDocId(agencyId);
+    const mobileMoneyAccountId = agencyMobileMoneyAccountDocId(agencyId);
+    const [cashSnap, mobileMoneySnap] = await Promise.all([
+      getDoc(ledgerAccountDocRef(companyId, cashAccountId)),
+      getDoc(ledgerAccountDocRef(companyId, mobileMoneyAccountId)),
+    ]);
+    const readBalance = (snap: Awaited<ReturnType<typeof getDoc>>) => {
+      if (!snap.exists()) return 0;
+      const raw = snap.data() as Record<string, unknown>;
+      if (!includeInLiquiditySum(raw)) return 0;
+      const accType = parseStrictLedgerAccountType(raw, snap.id);
+      if (!isLiquidityBucketType(accType)) return 0;
+      return Number(raw.balance ?? 0) || 0;
+    };
+    const cash = readBalance(cashSnap);
+    const mobileMoney = readBalance(mobileMoneySnap);
+    return { cash, mobileMoney, bank: 0, total: cash + mobileMoney };
+  }
+
   const snap = await getDocs(query(ledgerAccountsRef(companyId), limit(500)));
   let cash = 0;
   let mobileMoney = 0;

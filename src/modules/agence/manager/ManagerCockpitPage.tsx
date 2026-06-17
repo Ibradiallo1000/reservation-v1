@@ -418,7 +418,7 @@ export default function ManagerCockpitPage({
   );
 
   useEffect(() => {
-    if (!companyId) return;
+    if (!companyId || !agencyId) return;
     const wanted = new Set(courierShipmentWatchKey ? courierShipmentWatchKey.split(",").filter(Boolean) : []);
     const cur = courierShipUnsubsRef.current;
     for (const id of Object.keys(cur)) {
@@ -461,7 +461,10 @@ export default function ManagerCockpitPage({
       const next: Record<string, number> = {};
       for (const id of ids) {
         try {
-          next[id] = await getCourierSessionLedgerTotal(companyId, id);
+          next[id] = await getCourierSessionLedgerTotal(companyId, id, {
+            agencyId,
+            paymentChannel: "courrier",
+          });
         } catch {
           next[id] = 0;
         }
@@ -471,7 +474,7 @@ export default function ManagerCockpitPage({
     return () => {
       cancelled = true;
     };
-  }, [companyId, pendingCourierSessions, activeCourierSessions]);
+  }, [companyId, agencyId, pendingCourierSessions, activeCourierSessions]);
 
   const courierAgentIdsKey = useMemo(
     () =>

@@ -33,16 +33,17 @@ export function CourierPrintCombined({
       <div
         id="print-root"
         className={cn(
-          "ticket-force-light mx-auto grid w-full max-w-5xl grid-cols-1 rounded-xl border border-gray-200 bg-white shadow-md dark:border-gray-700 sm:grid-cols-2",
-          compact ? "gap-2 p-2 sm:gap-2 sm:p-2" : "gap-4 p-3 sm:gap-4 sm:p-4",
+          "ticket-force-light mx-auto grid w-full max-w-5xl grid-cols-1 items-start bg-transparent",
+          compact ? "gap-3 p-1 sm:gap-3 sm:p-2" : "gap-5 p-2 sm:gap-6 sm:p-4 lg:grid-cols-2",
           paperType === "a4" ? "print-paper-a4" : "print-paper-thermal"
         )}
       >
-        <div className="print-area-ticket page-break flex min-w-0 flex-col items-center md:items-start">
-          <span className="mb-2 w-full text-center text-xs font-semibold uppercase tracking-wide text-gray-500 md:text-left">
-            Reçu
-          </span>
-          <div className="flex w-full justify-center md:justify-start">
+        <section className="courier-print-document-card print-area-ticket page-break flex min-w-0 flex-col items-center rounded-2xl border border-gray-200 bg-white p-3 shadow-lg sm:p-4">
+          <div className="mb-3 w-full border-b border-gray-200 pb-2 text-center">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-gray-900">Reçu d'envoi</p>
+            <p className="mt-0.5 text-[11px] text-gray-500">Contrôle et suivi client</p>
+          </div>
+          <div className="flex w-full justify-center">
             <CourierReceiptTicket
               shipment={shipment}
               companyName={companyName}
@@ -54,11 +55,14 @@ export function CourierPrintCombined({
               compact={compact}
             />
           </div>
-        </div>
-        <div className="print-area-label flex min-w-0 flex-col items-center md:items-start">
-          <span className="mb-2 w-full text-center text-xs font-semibold uppercase tracking-wide text-gray-500 md:text-left">
+        </section>
+        <section className="courier-print-document-card print-area-label flex min-w-0 flex-col items-center rounded-2xl border border-gray-200 bg-white p-3 shadow-lg sm:p-4">
+          <div className="mb-3 w-full border-b border-gray-200 pb-2 text-center">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-gray-900">
             Étiquette colis
-          </span>
+            </p>
+            <p className="mt-0.5 text-[11px] text-gray-500">Scan colis et destination</p>
+          </div>
           <CourierPackageLabelBody
             shipment={shipment}
             destinationAgencyName={destinationAgencyName}
@@ -67,7 +71,7 @@ export function CourierPrintCombined({
             compact={compact}
             className="bg-white"
           />
-        </div>
+        </section>
       </div>
     </>
   );

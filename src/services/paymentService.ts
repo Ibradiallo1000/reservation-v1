@@ -168,7 +168,11 @@ export async function confirmPayment(
     console.warn("[CONFIRM_PAYMENT_OPERATOR_IDENTITY]", {
       uid: userId,
       userDocRole: userDoc.exists() ? userDoc.get("role") : null,
+      userDocAgencyId: userDoc.exists() ? userDoc.get("agencyId") : null,
+      userDocCompanyId: userDoc.exists() ? (userDoc.get("companyId") ?? userDoc.get("compagnieId")) : null,
       customClaimRole: token.claims.role ?? null,
+      customClaimAgencyId: token.claims.agencyId ?? null,
+      customClaimCompanyId: token.claims.companyId ?? token.claims.compagnieId ?? null,
     });
   } catch (identityError) {
     console.warn("[CONFIRM_PAYMENT_OPERATOR_IDENTITY] verification failed", identityError);
@@ -187,9 +191,12 @@ export async function confirmPayment(
       userId,
       paymentState: {
         companyId: data.companyId,
+        agencyId: data.agencyId,
         reservationId: data.reservationId,
         channel: data.channel,
         status: data.status,
+        amount: data.amount,
+        currency: data.currency,
       },
       error: err,
     });

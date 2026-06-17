@@ -52,6 +52,7 @@ export const CourierPosBar: React.FC<Props> = ({ onLogout }) => {
   const {
     session,
     ledgerSessionTotal,
+    operationalSessionTotal,
     shipments,
     companyLogoUrl,
     companyName,
@@ -78,6 +79,8 @@ export const CourierPosBar: React.FC<Props> = ({ onLogout }) => {
   const gradient = "linear-gradient(135deg, var(--courier-primary, #ea580c), var(--courier-secondary, #f97316))";
   const openedAt = session?.openedAt as { toDate?: () => Date } | undefined;
   const sessionStartedAt = openedAt?.toDate?.() ?? null;
+  const displayedCollectedTotal = ledgerSessionTotal ?? operationalSessionTotal;
+  const usesOperationalTotal = ledgerSessionTotal == null && operationalSessionTotal > 0;
 
   const [elapsed, setElapsed] = React.useState("");
   React.useEffect(() => {
@@ -181,16 +184,21 @@ export const CourierPosBar: React.FC<Props> = ({ onLogout }) => {
               </span>
             </div>
             <div className="flex flex-col items-end gap-0.5">
-              <div className="flex items-center gap-1.5">
-                <span className="text-gray-500 dark:text-gray-400">Encaissé</span>
+              <div
+                className="flex items-center gap-2 rounded-xl border px-3 py-1.5 shadow-sm"
+                style={{
+                  backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 92%, black)",
+                  borderColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 70%, white)",
+                  color: "#ffffff",
+                }}
+              >
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-white/85">Encaissé</span>
                 <span
-                  className="rounded-md px-2 py-0.5 font-bold"
-                  style={{
-                    backgroundColor: "color-mix(in srgb, var(--courier-primary, #ea580c) 16%, transparent)",
-                    color: "var(--courier-primary, #ea580c)",
-                  }}
+                  className="rounded-md bg-white/15 px-2 py-0.5 text-sm font-black tabular-nums text-white"
+                  title={usesOperationalTotal ? "Total calculé depuis les colis visibles, ledger non lisible ou pas encore synchronisé." : undefined}
                 >
-                  {ledgerSessionTotal == null ? "—" : money(ledgerSessionTotal)}
+                  {money(displayedCollectedTotal)}
+                  {usesOperationalTotal ? " *" : ""}
                 </span>
               </div>
             </div>

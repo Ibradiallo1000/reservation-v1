@@ -6,6 +6,7 @@
  */
 import {
   type DocumentSnapshot,
+  type QueryConstraint,
   type Transaction,
   Timestamp,
   collection,
@@ -43,6 +44,7 @@ import {
   ledgerAccountDocRef,
   ledgerAccountsRef,
   ensureLedgerAccountDocsInTransaction,
+  initialLedgerAccountPayload,
   specForLedgerDocId,
 } from "./ledgerAccounts";
 import { parseStrictLedgerAccountType } from "./ledgerAccountStrictTypes";
@@ -75,6 +77,7 @@ function idempotencyRef(companyId: string, uniqueReferenceKey: string) {
 function toSource(value: string | undefined | null): FinancialTransactionSource {
   const n = normalizeChannel(value ?? undefined);
   if (n === "guichet" || n === "cash") return "cash";
+  if (n === "courrier") return "cash";
   if (n === "online" || n === "mobile_money") return "mobile_money";
   if (n === "bank") return "bank";
   if (n === "mixed") return "mixed";
@@ -717,32 +720,39 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
     throw new Error(`[ledger] Solde insuffisant sur le compte débit ${debitId} (${debitBal} < ${ledgerAmount})`);
   }
 
-  const existingFlags = [debitSnap.exists(), creditSnap.exists()];
-  ensureLedgerAccountDocsInTransaction(
-    tx,
-    companyId,
-    currency,
-    [
-      {
-        docId: debitId,
-        type: s0.type,
+  if (debitSnap.exists()) {
+    tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
+  } else {
+    tx.set(debitRef, {
+      ...initialLedgerAccountPayload({
+        id: debitId,
+        companyId,
         agencyId: s0.agencyId,
+        type: s0.type,
         label: s0.label,
+        currency,
         includeInLiquidity: s0.includeInLiquidity,
-      },
-      {
-        docId: creditId,
-        type: s1.type,
-        agencyId: s1.agencyId,
-        label: s1.label,
-        includeInLiquidity: s1.includeInLiquidity,
-      },
-    ],
-    existingFlags
-  );
+      }),
+      balance: debitAfter,
+    });
+  }
 
-  tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
-  tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
+  if (creditSnap.exists()) {
+    tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
+  } else {
+    tx.set(creditRef, {
+      ...initialLedgerAccountPayload({
+        id: creditId,
+        companyId,
+        agencyId: s1.agencyId,
+        type: s1.type,
+        label: s1.label,
+        currency,
+        includeInLiquidity: s1.includeInLiquidity,
+      }),
+      balance: creditAfter,
+    });
+  }
 
   const newRef = doc(financialTransactionsRef(companyId));
   const kpiChannel = isGuichetChannel(params.paymentChannel, params.source) ? "guichet" : "online";
@@ -782,7 +792,8 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
     paymentProvider: paymentProviderStored,
   };
   tx.set(newRef, payload);
-  tx.set(idempotencyRef(companyId, uniqueReferenceKey), {
+  const idemWriteRef = idempotencyRef(companyId, uniqueReferenceKey);
+  tx.set(idemWriteRef, {
     transactionId: newRef.id,
     createdAt: serverTimestamp(),
   });
@@ -919,15 +930,29 @@ export function isConfirmedTransactionStatus(s: FinancialTransactionStatus | und
  */
 export async function sumPaymentReceivedForReservationIds(
   companyId: string,
-  reservationIds: string[]
+  reservationIds: string[],
+  options: { agencyId?: string | null; paymentChannel?: "courrier" | null } = {}
 ): Promise<number> {
   const unique = [...new Set(reservationIds.filter(Boolean))];
   let total = 0;
   for (const rid of unique) {
-    const q = query(
-      financialTransactionsRef(companyId),
+    const constraints: QueryConstraint[] = [
+      where("companyId", "==", companyId),
       where("type", "==", "payment_received"),
       where("reservationId", "==", rid),
+    ];
+    if (options.agencyId) {
+      constraints.push(where("agencyId", "==", options.agencyId));
+    }
+    if (options.paymentChannel) {
+      constraints.push(where("paymentChannel", "==", options.paymentChannel));
+    }
+    if (options.paymentChannel === "courrier") {
+      constraints.push(where("status", "==", "confirmed"));
+    }
+    const q = query(
+      financialTransactionsRef(companyId),
+      ...constraints,
       limit(25)
     );
     const snap = await getDocs(q);
