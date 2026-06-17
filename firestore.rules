@@ -488,7 +488,8 @@ service cloud.firestore {
         && getAfter(ledgerPath).data.get('status', '') == 'posted';
     }
     function canReadOwnAgencyCashAccount(companyId, accountId) {
-      return isAuth()
+      return resource != null
+        && isAuth()
         && userAgencyBelongsToCompany(companyId)
         && (
           hasUserRole('agency_accountant')
@@ -515,9 +516,17 @@ service cloud.firestore {
       return accountId == 'agency_' + getUserAgencyId() + '_cash'
         || accountId == 'agency_' + getUserAgencyId() + '_mobile_money';
     }
+    function isOwnAgencyRemittanceLedgerAccountId(accountId) {
+      return accountId == 'agency_' + getUserAgencyId() + '_cash'
+        || accountId == 'agency_' + getUserAgencyId() + '_pending_cash';
+    }
     function canAgencyAccountantReadOwnLiquidityAccount(companyId, accountId) {
       return isAgencyAccountantDirectForCompany(companyId)
         && isOwnAgencyLiquidityAccountId(accountId);
+    }
+    function canAgencyAccountantReadOwnRemittanceLedgerAccount(companyId, accountId) {
+      return agencyAccountantCanListCompanyScopedAccounting(companyId)
+        && isOwnAgencyRemittanceLedgerAccountId(accountId);
     }
     function canAgencyAccountantReadOwnShipment(companyId) {
       return isAgencyAccountantDirectForCompany(companyId)
@@ -542,7 +551,8 @@ service cloud.firestore {
         && agencyId == getUserAgencyId();
     }
     function canReadOwnAgencyLedgerAccount(companyId) {
-      return isAuth()
+      return resource != null
+        && isAuth()
         && isComptable()
         && userAgencyBelongsToCompany(companyId)
         && resource.data.get('companyId', companyId) == companyId
@@ -2287,11 +2297,26 @@ match /shiftReports/{reportId} {
       }
 
       match /financialTransactionIdempotency/{key} {
+        allow get: if isAuth()
+          && userAgencyBelongsToCompany(companyId)
+          && (
+            hasUserRole('agency_accountant')
+            || hasUserRole('comptable')
+            || hasUserRole('Comptable')
+          )
+          && key.matches('remittance_courier_session_.+');
         allow get: if canAccessSensitiveCompanyFinance(companyId)
           || canWriteAgencyScopedFinance(companyId)
-          || (isCourierAgent() && userAgencyBelongsToCompany(companyId));
+          || (isCourierAgent() && userAgencyBelongsToCompany(companyId))
+          || agencyAccountantCanListCompanyScopedAccounting(companyId);
         allow create: if courierCashFinancialIdempotencyOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
+          || (
+            agencyAccountantCanListCompanyScopedAccounting(companyId)
+            && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
+            && request.resource.data.get('transactionId', '').size() > 0
+            && request.resource.data.get('createdAt') is timestamp
+          )
           || (
             canWriteAgencyScopedFinance(companyId)
             && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
@@ -2302,14 +2327,28 @@ match /shiftReports/{reportId} {
       }
 
       match /accounts/{accountId} {
+        allow get: if isAuth()
+          && userAgencyBelongsToCompany(companyId)
+          && (
+            hasUserRole('agency_accountant')
+            || hasUserRole('comptable')
+            || hasUserRole('Comptable')
+          )
+          && (
+            accountId == 'agency_' + getUserAgencyId() + '_cash'
+            || accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+          );
         allow get, list: if canAccessSensitiveCompanyFinance(companyId);
         allow get: if canAgencyAccountantReadOwnLiquidityAccount(companyId, accountId);
+        allow get: if canAgencyAccountantReadOwnRemittanceLedgerAccount(companyId, accountId);
         allow get: if isCourierAgent()
           && userAgencyBelongsToCompany(companyId)
           && courierCashLedgerAccountIdOk(accountId);
         allow get: if canReadOwnAgencyCashAccount(companyId, accountId)
           || canReadOwnAgencyLedgerAccount(companyId)
           || (
+          resource != null
+          &&
           canWriteAgencyScopedFinance(companyId)
           && resource.data.get('companyId', '') == companyId
           && resource.data.get('agencyId', '') == getUserAgencyId()

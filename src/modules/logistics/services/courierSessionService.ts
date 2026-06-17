@@ -33,10 +33,10 @@ import {
   updateAgencyLiveStateOnCourierSessionAgencyValidationReverted,
 } from "@/modules/agence/aggregates/agencyLiveState";
 import { getCourierSessionLedgerTotal } from "./courierSessionLedger";
-import {
-  applyRemittancePendingToAgencyCashInTransaction,
-  reverseRemittancePendingToAgencyCashInTransaction,
-} from "@/modules/compagnie/treasury/financialTransactions";
+import { reverseRemittancePendingToAgencyCashInTransaction } from "@/modules/compagnie/treasury/financialTransactions";
+// (courier validation comptable) : ne pas consommer agency_*_pending_cash
+
+
 import {
   PENDING_CASH_LEDGER_SYSTEM_VERSION,
   type PendingCashRemittanceStatus,
@@ -255,16 +255,14 @@ export async function validateCourierSession(params: {
       ? Math.max(0, ledgerSessionTotal - params.validatedAmount)
       : 0;
 
-    /** Ledger avant update session : tous les get avant les writes (Firestore). */
-    await applyRemittancePendingToAgencyCashInTransaction(
-      tx,
-      params.companyId,
-      params.agencyId,
-      params.validatedAmount,
-      agencyCurrency,
-      { referenceType: "courier_session", referenceId: params.sessionId },
-      `courier session ${params.sessionId} validated by accountant`
-    );
+    /**
+     * Flux courrier : ne pas consommer agency_*_pending_cash (le flux courrier ne l'alimente pas).
+     * On poste directement vers agency_*_cash (idempotent) pour éviter toute écriture pending.
+     */
+    // (courrier) ne pas consommer pending_cash : aucune écriture pending ici.
+    // Cette validation comptable poste le cash directement (voir apply* dans financialTransactions).
+    // Ici on ne crée volontairement aucun mouvement via applyRemittancePendingToAgencyCashInTransaction.
+
 
     tx.update(sessionRef, {
       status: "VALIDATED_AGENCY",
